@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::descriptors::SchemaIdent;
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::Result;
 use crate::core::graph::ProcessorUniqueId;
 use serde::{Deserialize, Serialize};
@@ -267,12 +267,12 @@ pub enum RuntimeEvent {
     /// Emitted when compiler will create a processor instance
     CompilerWillCreateProcessor {
         processor_id: ProcessorUniqueId,
-        processor_type: SchemaIdent,
+        processor_type: ProcessorClassImportPath,
     },
     /// Emitted when compiler did create a processor instance
     CompilerDidCreateProcessor {
         processor_id: ProcessorUniqueId,
-        processor_type: SchemaIdent,
+        processor_type: ProcessorClassImportPath,
     },
     /// Emitted when compiler will destroy a processor instance
     CompilerWillDestroyProcessor {
@@ -317,13 +317,13 @@ pub enum RuntimeEvent {
     // ===== Factory/Registration Events =====
     /// Emitted when a new processor type is registered with the factory
     RuntimeDidRegisterProcessorType {
-        processor_type: SchemaIdent,
+        processor_type: ProcessorClassImportPath,
     },
     /// Emitted when a processor type is unregistered from the factory
     /// (`remove_module`). Additive variant — appended so existing msgpack
     /// consumers keep decoding earlier variants unchanged.
     RuntimeDidUnregisterProcessorType {
-        processor_type: SchemaIdent,
+        processor_type: ProcessorClassImportPath,
     },
 }
 

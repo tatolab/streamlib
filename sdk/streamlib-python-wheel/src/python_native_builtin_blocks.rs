@@ -13,7 +13,7 @@
 #[cfg(not(target_os = "linux"))]
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use streamlib::sdk::processors::ProcessorTypeReference;
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
 
 /// `streamlib.TestPatternSource` — SMPTE-style color bars, no hardware.
 ///
@@ -41,25 +41,25 @@ pub(crate) struct PythonCameraSourceBlock;
 #[pyclass(name = "DisplayWindow", module = "streamlib", frozen)]
 pub(crate) struct PythonDisplayWindowBlock;
 
-/// Resolve a Python object to a native built-in's type reference, if it is
+/// Resolve a Python object to a native built-in's class import path, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins
 /// crate. On a platform where a marker's native processor is not compiled
 /// in, the answer is an explicit unsupported-platform error rather than the
 /// generic "not a processor" rejection.
-pub(crate) fn native_builtin_type_reference(
+pub(crate) fn native_builtin_class_import_path(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
-) -> PyResult<Option<ProcessorTypeReference>> {
+) -> PyResult<Option<ProcessorClassImportPath>> {
     if processor_class.is(python.get_type::<PythonTestPatternSourceBlock>()) {
         return Ok(Some(
-            streamlib_media_builtins::TestPatternSource::Processor::schema_ident().into(),
+            streamlib_media_builtins::TestPatternSource::Processor::processor_class_import_path(),
         ));
     }
     if processor_class.is(python.get_type::<PythonCameraSourceBlock>()) {
         #[cfg(target_os = "linux")]
         return Ok(Some(
-            streamlib_media_builtins::CameraSource::Processor::schema_ident().into(),
+            streamlib_media_builtins::CameraSource::Processor::processor_class_import_path(),
         ));
         #[cfg(not(target_os = "linux"))]
         return Err(PyRuntimeError::new_err(
@@ -70,7 +70,7 @@ pub(crate) fn native_builtin_type_reference(
     if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {
         #[cfg(target_os = "linux")]
         return Ok(Some(
-            streamlib_media_builtins::DisplayWindow::Processor::schema_ident().into(),
+            streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path(),
         ));
         #[cfg(not(target_os = "linux"))]
         return Err(PyRuntimeError::new_err(

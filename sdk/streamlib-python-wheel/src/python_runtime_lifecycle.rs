@@ -29,7 +29,7 @@ use crate::python_processor_registration::register_processor_class;
 /// What kind of thing `Runtime.add` was handed, resolved once up front.
 enum AddedProcessorClassKind {
     /// A wheel-exported marker for a statically-linked native processor.
-    NativeBuiltin(streamlib::sdk::processors::ProcessorTypeReference),
+    NativeBuiltin(streamlib::sdk::descriptors::ProcessorClassImportPath),
     /// A class carrying the `@streamlib.processor` declaration.
     DeclaredPythonClass,
 }
@@ -39,15 +39,21 @@ fn classify_processor_class(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
 ) -> PyResult<AddedProcessorClassKind> {
-    if let Some(native_reference) =
-        crate::python_native_builtin_blocks::native_builtin_type_reference(python, processor_class)?
+    if let Some(native_class) =
+        crate::python_native_builtin_blocks::native_builtin_class_import_path(
+            python,
+            processor_class,
+        )?
     {
-        return Ok(AddedProcessorClassKind::NativeBuiltin(native_reference));
+        return Ok(AddedProcessorClassKind::NativeBuiltin(native_class));
     }
-    if let Some(harness_reference) =
-        crate::python_test_harness_endpoints::test_harness_type_reference(python, processor_class)
+    if let Some(harness_class) =
+        crate::python_test_harness_endpoints::test_harness_class_import_path(
+            python,
+            processor_class,
+        )
     {
-        return Ok(AddedProcessorClassKind::NativeBuiltin(harness_reference));
+        return Ok(AddedProcessorClassKind::NativeBuiltin(harness_class));
     }
     if crate::python_processor_declaration::is_declared_processor_class(processor_class) {
         return Ok(AddedProcessorClassKind::DeclaredPythonClass);
@@ -257,8 +263,8 @@ impl PythonRuntimeHandle {
 
         // Native built-ins were registered at module import; only a Python
         // class needs registering here.
-        let type_reference = match class_kind {
-            AddedProcessorClassKind::NativeBuiltin(native_reference) => native_reference,
+        let processor_class_import_path = match class_kind {
+            AddedProcessorClassKind::NativeBuiltin(native_class) => native_class,
             AddedProcessorClassKind::DeclaredPythonClass => {
                 register_processor_class(python, processor_class)?
             }
@@ -275,7 +281,7 @@ impl PythonRuntimeHandle {
 
         // An absent `display_name` stays absent — the graph is the only place
         // that defaults a name, and the only place that disambiguates one.
-        let mut spec = ProcessorSpec::new(type_reference, configuration);
+        let mut spec = ProcessorSpec::new(processor_class_import_path, configuration);
         spec.display_name = display_name;
 
         let (processor_id, assigned_display_name) = python

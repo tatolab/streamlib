@@ -256,7 +256,7 @@ pub(crate) async fn get_moq_catalog(
     let mut catalog = streamlib_moq::MoqBroadcastCatalog::new();
     if let Some(sessions) = streamlib_moq::try_sessions_for_runtime(&state.runtime_id) {
         for track_name in sessions.published_track_names() {
-            catalog.add_track(&track_name, None, None, &track_name);
+            catalog.add_track(&track_name, None, &track_name);
         }
     }
     Json(catalog)

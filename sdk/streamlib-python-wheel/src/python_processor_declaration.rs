@@ -7,27 +7,25 @@
 //! contract between `_processor_declaration.py` and this module; the two move
 //! together.
 
-use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
-    SchemaIdent, SemVer, TypeName,
+    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, ProcessorRuntime,
+    ProcessorScheduling, SchemaIdent, SemVer, TypeName,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
-use streamlib::sdk::processors::ProcessorTypeReference;
 
 use crate::python_processor_import_path::processor_class_import_path;
 
-/// The version every code-declared identity carries. A processor reference is
-/// version-free — the engine resolves types version-blind — so this is inert
-/// filler for the one struct that still has the field.
+/// The version the vestigial `ProcessorDescriptor::name` carries. Nothing keys
+/// on that field any more — a processor is named by its class's import path —
+/// so this is inert filler for the one struct that still has it.
 const VERSION_FREE_SENTINEL: SemVer = SemVer::new(0, 0, 0);
 
 /// Everything the engine needs to register and instantiate one Python
 /// processor class.
 pub(crate) struct PythonProcessorDeclaration {
-    pub(crate) type_reference: ProcessorTypeReference,
     pub(crate) descriptor: ProcessorDescriptor,
     pub(crate) execution_config: ExecutionConfig,
 }
@@ -35,7 +33,7 @@ pub(crate) struct PythonProcessorDeclaration {
 impl PythonProcessorDeclaration {
     /// Read the decorator's metadata off `processor_class`.
     pub(crate) fn read_from_class(processor_class: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let type_reference = read_type_reference(processor_class)?;
+        let vestigial_name = read_declared_schema_ident(processor_class)?;
         let execution_config = read_execution_config(processor_class)?;
 
         // Identity and `entrypoint` are separate contracts, but one
@@ -43,13 +41,9 @@ impl PythonProcessorDeclaration {
         let class_import_path = processor_class_import_path(processor_class)?;
 
         let mut descriptor = ProcessorDescriptor::new(
-            SchemaIdent::new(
-                type_reference.org().clone(),
-                type_reference.package().clone(),
-                type_reference.r#type().clone(),
-                VERSION_FREE_SENTINEL,
-            ),
-            class_import_path.clone(),
+            vestigial_name,
+            ProcessorClassImportPath::new(class_import_path.clone())
+                .map_err(|blank| PyValueError::new_err(blank.to_string()))?,
             read_string_attribute(processor_class, "__streamlib_processor_description__")?,
         )
         .with_runtime(ProcessorRuntime::Python)
@@ -62,7 +56,6 @@ impl PythonProcessorDeclaration {
         descriptor.outputs = read_port_descriptors(processor_class, PortDirection::Output)?;
 
         Ok(Self {
-            type_reference,
             descriptor,
             execution_config,
         })
@@ -77,7 +70,10 @@ pub(crate) fn is_declared_processor_class(candidate: &Bound<'_, PyAny>) -> bool 
             .unwrap_or(false)
 }
 
-fn read_type_reference(processor_class: &Bound<'_, PyAny>) -> PyResult<ProcessorTypeReference> {
+/// The `@org/package/Type` the decorator still records, read only to fill the
+/// descriptor's vestigial `name`. Nothing keys on it; the grammar and the field
+/// die together.
+fn read_declared_schema_ident(processor_class: &Bound<'_, PyAny>) -> PyResult<SchemaIdent> {
     let reference = processor_class
         .getattr("__streamlib_processor_type_reference__")?
         .cast_into::<PyDict>()
@@ -91,7 +87,12 @@ fn read_type_reference(processor_class: &Bound<'_, PyAny>) -> PyResult<Processor
     let org = Org::new(read_dict_string(&reference, "org")?).map_err(ident_error)?;
     let package = Package::new(read_dict_string(&reference, "package")?).map_err(ident_error)?;
     let type_name = TypeName::new(read_dict_string(&reference, "type")?).map_err(ident_error)?;
-    Ok(ProcessorTypeReference::new(org, package, type_name))
+    Ok(SchemaIdent::new(
+        org,
+        package,
+        type_name,
+        VERSION_FREE_SENTINEL,
+    ))
 }
 
 fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<ExecutionConfig> {
@@ -230,11 +231,17 @@ class BlurProcessor:
             let declaration = PythonProcessorDeclaration::read_from_class(&declared_class).unwrap();
 
             assert_eq!(
-                declaration.descriptor.processor_class_import_path,
+                declaration.descriptor.processor_class_import_path.as_str(),
                 "my_app.filters:BlurProcessor"
             );
             assert_eq!(
-                Some(declaration.descriptor.processor_class_import_path.clone()),
+                Some(
+                    declaration
+                        .descriptor
+                        .processor_class_import_path
+                        .as_str()
+                        .to_string()
+                ),
                 declaration.descriptor.entrypoint,
             );
         });

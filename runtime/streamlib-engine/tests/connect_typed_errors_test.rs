@@ -18,7 +18,8 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
+    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
+    SemVer, TypeName,
 };
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -26,35 +27,28 @@ use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::PortDirection;
 
-fn unknown_ident() -> streamlib::sdk::descriptors::SchemaIdent {
-    streamlib::sdk::schema_ident!(
-        "tatolab",
-        "ghost-package",
-        "DefinitelyNotARegisteredProcessor",
-        "9.9.9"
-    )
+fn unknown_ident() -> ProcessorClassImportPath {
+    ProcessorClassImportPath::new("ghost_package::DefinitelyNotARegisteredProcessor").unwrap()
 }
 
 /// Register a descriptor-only processor type with one real input and one real
 /// output port — enough to satisfy `connect`'s port-existence check. Idempotent
 /// under `serial_test` (a re-register returns an already-registered error we
 /// discard).
-fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
+fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let id = SchemaIdent::new(
         Org::new("tatolab").unwrap(),
         Package::new("connect-typed-errors-test").unwrap(),
         TypeName::new(short).unwrap(),
         SemVer::new(1, 0, 0),
     );
-    let descriptor = ProcessorDescriptor::new(
-        id.clone(),
-        format!("{}::{short}", module_path!()),
-        "connect typed-errors test",
-    )
-    .with_input(PortDescriptor::new(input, "", false))
-    .with_output(PortDescriptor::new(output, "", false));
+    let descriptor = ProcessorDescriptor::new(id, import_path.clone(), "connect typed-errors test")
+        .with_input(PortDescriptor::new(input, "", false))
+        .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
-    id
+    import_path
 }
 
 #[test]
@@ -90,7 +84,7 @@ fn connect_to_orphan_unknown_processor_returns_port_not_found_with_input_directi
     let nodes = graph_json["nodes"].as_array().unwrap();
     let failed_id = nodes
         .iter()
-        .find(|n| n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor"))
+        .find(|n| n["type"].as_str() == Some(unknown_ident().as_str()))
         .expect("failed node should be in graph")["id"]
         .as_str()
         .unwrap()
@@ -136,7 +130,7 @@ fn connect_with_unknown_target_processor_id_returns_processor_not_found() {
     let nodes = graph_json["nodes"].as_array().unwrap();
     let failed_id = nodes
         .iter()
-        .find(|n| n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor"))
+        .find(|n| n["type"].as_str() == Some(unknown_ident().as_str()))
         .unwrap()["id"]
         .as_str()
         .unwrap()

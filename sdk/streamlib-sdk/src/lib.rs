@@ -152,32 +152,12 @@ pub mod sdk {
     /// `#[derive(ConfigDescriptor)]` derive macro.
     pub use streamlib_engine::ConfigDescriptor;
 
-    /// `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
-    /// resolve a `SchemaIdent` **now** against the **already-registered**
-    /// processor types (the power-caller form).
-    /// Validates `(org, package, type)` at compile time; resolves the
-    /// version at runtime against the global processor registry,
-    /// picking the highest registered `SemVer` (Cargo / npm convention).
-    /// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`. For a
-    /// version-free reference, use [`processor_type_ref!`] instead.
-    pub use streamlib_engine::schema_ident_any_version;
-
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
     /// compile-time-validated short form of
-    /// [`SchemaIdent::new`](descriptors::SchemaIdent::new), for the *resolved*
-    /// identities that carry a version — registry keys. It is not how code
-    /// references a processor: pass one to `ProcessorSpec::new` and the
-    /// version is dropped. Use [`processor_type_ref!`] to name a processor.
+    /// [`SchemaIdent::new`](descriptors::SchemaIdent::new). It does not name a
+    /// processor: a processor is named by the import path of the class it is,
+    /// which the `#[processor]` macro captures.
     pub use streamlib_engine::schema_ident;
-
-    /// `streamlib::sdk::processor_type_ref!("org", "package", "Type")` — the
-    /// canonical way to name a processor. Validates `(org, package, type)` at
-    /// compile time and expands to a
-    /// [`ProcessorTypeReference`](processors::ProcessorTypeReference), which
-    /// carries no version and does **no registry lookup at the call site**, so
-    /// the reference reaches `add_processor`'s lazy hook and resolves to the
-    /// installed provider.
-    pub use streamlib_engine::processor_type_ref;
 
     /// `streamlib::sdk::module_ident!("org", "name", "^1.0.0")` —
     /// imperative-API module identifier with a pinned semver range.

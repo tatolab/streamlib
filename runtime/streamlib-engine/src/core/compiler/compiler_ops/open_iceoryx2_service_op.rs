@@ -1162,28 +1162,12 @@ mod tests {
         );
     }
 
-    /// Look up a registered mock processor's structured ident by its
-    /// PascalCase short name.
-    fn lookup_registered_ident(short: &str) -> SchemaIdent {
-        crate::core::test_support::ensure_test_mocks_registered();
-        PROCESSOR_REGISTRY
-            .list_registered()
-            .into_iter()
-            .find(|d| d.name.r#type.as_str() == short)
-            .map(|d| d.name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "processor with PascalCase short name `{}` must be in the registry",
-                    short
-                )
-            })
-    }
-
     fn add_mock_output_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                lookup_registered_ident("TestMockOutputOnlyProcessor"),
+                crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()
@@ -1193,10 +1177,11 @@ mod tests {
     }
 
     fn add_mock_input_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                lookup_registered_ident("TestMockInputOnlyProcessor"),
+                crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()
@@ -1206,10 +1191,11 @@ mod tests {
     }
 
     fn add_mock_reactive_input_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                lookup_registered_ident("TestMockReactiveInputOnlyProcessor"),
+                crate::core::test_support::MockReactiveInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()
@@ -1356,31 +1342,40 @@ mod tests {
     /// profile) and this returns `Ok(_)` — the `expect_err` fails.
     #[test]
     fn conflicting_destination_profile_is_a_configuration_error() {
-        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use crate::core::descriptors::{
+            PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor,
+        };
         use streamlib_idents::{Org, Package, SemVer, TypeName};
 
-        let register_sink = |pkg: &str, profile: &str| -> SchemaIdent {
-            let ident = SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new(pkg).unwrap(),
-                TypeName::new("ProfileSink").unwrap(),
-                SemVer::new(1, 0, 0),
-            );
+        // One sink per profile, under distinct import paths: the registry keys
+        // on the path, so two sinks sharing one would collide and the second
+        // registration — the `latest` half this test needs — would be
+        // discarded, leaving both destinations agreeing on `lossless` and no
+        // conflict to detect.
+        let register_sink = |profile: &str| -> ProcessorClassImportPath {
+            let import_path =
+                ProcessorClassImportPath::new(format!("{}::ProfileSink_{profile}", module_path!()))
+                    .unwrap();
             let mut desc = ProcessorDescriptor::new(
-                ident.clone(),
-                concat!(module_path!(), "::ProfileSink"),
+                SchemaIdent::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new("test-conflicting-profile").unwrap(),
+                    TypeName::new("ProfileSink").unwrap(),
+                    SemVer::new(1, 0, 0),
+                ),
+                import_path.clone(),
                 "conflicting-profile sink",
             );
             desc.inputs
                 .push(PortDescriptor::iceoryx2("in1", "input").with_delivery_profile(profile));
-            // Idempotent: a duplicate ident (re-run in the same process) errors;
+            // Idempotent: a duplicate path (re-run in the same process) errors;
             // the first registration is the one that stands.
             let _ = PROCESSOR_REGISTRY.register_descriptor_only(desc);
-            ident
+            import_path
         };
 
-        let lossless_ident = register_sink("test-conflicting-profile-lossless", "lossless");
-        let latest_ident = register_sink("test-conflicting-profile-latest", "latest");
+        let lossless_ident = register_sink("lossless");
+        let latest_ident = register_sink("latest");
 
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);

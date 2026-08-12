@@ -4,3 +4,5 @@
 mod add_e_op;
 mod add_v_op;
 mod drop_op;
+
+pub(crate) use add_v_op::default_display_name_for;

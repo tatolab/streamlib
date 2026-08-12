@@ -151,29 +151,21 @@ fn spawn_dedicated_thread(
     let proc_id_clone = processor_id.clone();
 
     // Create processor instance now (with lock) since factory needs node
-    // reference; read the org off the same guaranteed-present node so the
-    // isolation tier is always derived from provenance, never from node absence.
-    let (processor_arc, org) = {
+    // reference.
+    let processor_arc = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
-        let org = node.processor_type().org.clone();
-        let processor = factory.create(node)?;
-        (Arc::new(Mutex::new(processor)), org)
+        Arc::new(Mutex::new(factory.create(node)?))
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
 
-    // Resolve the isolation trust tier through the opt-in session isolation tier:
-    // trusted by default (same as installed), and a @session cdylib is eligible
-    // for Untrusted only when the operator opts in (STREAMLIB_SESSION_ISOLATION_TIER
-    // / set_session_isolation_tier). The tier gates every FullAccess mint on this
-    // thread (setup / start / stop / teardown). cdylib-residency is read off the
-    // instance after the graph lock is released, so no graph(read)→processor(mutex)
-    // lock order is introduced.
-    let cdylib_resident = processor_arc.lock().is_cdylib_resident();
-    let isolation_tier = IsolationTier::for_processor(&org, cdylib_resident);
+    // Gates every FullAccess mint on this thread (setup / start / stop /
+    // teardown). Not derived: every processor the engine can spawn is compiled
+    // into this binary.
+    let isolation_tier = IsolationTier::TrustedInstalled;
 
     // Generous 8 MB stack — processors run arbitrary codec / plugin code
     // with deep call stacks. IPC payloads are slice-based (`[u8]`) in

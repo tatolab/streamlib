@@ -11,35 +11,10 @@
 //! save walks the live graph and emits one of these, load applies it
 //! to an empty runtime. The shape is symmetric — load(save(g)) yields
 //! a graph that, when saved, byte-equals the first save.
-//!
-//! # Example snapshot
-//!
-//! ```json
-//! {
-//!   "name": "camera-display",
-//!   "processors": [
-//!     {
-//!       "alias": "camera",
-//!       "type": { "org": "tatolab", "package": "streamlib",
-//!                 "type": "CameraProcessor", "version": "1.0.0" },
-//!       "config": {}
-//!     },
-//!     {
-//!       "alias": "display",
-//!       "type": { "org": "tatolab", "package": "streamlib",
-//!                 "type": "DisplayProcessor", "version": "1.0.0" },
-//!       "config": { "width": 1920, "height": 1080 }
-//!     }
-//!   ],
-//!   "connections": [
-//!     { "from": "camera.video", "to": "display.video" }
-//!   ]
-//! }
-//! ```
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::descriptors::SchemaIdent;
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::{Error, ProcessorSpec, Result};
 
 /// Round-trippable JSON shape for a runtime's graph.
@@ -70,13 +45,9 @@ pub struct ProcessorDefinition {
     /// definitions as `"alias.port_name"`.
     pub alias: String,
 
-    /// Structured processor identity — `@org/package/Type@version`
-    /// rendered as four typed fields. The structured-everywhere rule
-    /// applies on the snapshot wire format too — bare strings like
-    /// `"CameraProcessor"` are rejected at deserialize time (no
-    /// parser shim).
+    /// The import path of the class to instantiate.
     #[serde(rename = "type")]
-    pub processor_type: SchemaIdent,
+    pub processor_type: ProcessorClassImportPath,
 
     /// Processor configuration as JSON.
     ///
@@ -251,14 +222,10 @@ impl GraphSnapshot {
 mod tests {
     use super::*;
 
-    /// Helper for tests — a structured 4-field type literal at @tatolab/streamlib.
-    /// `SemVer` deserializes from the dotted string form `"1.0.0"`, not a
-    /// `{major, minor, patch}` object — see `streamlib-idents::semver`.
-    fn structured_type(short: &str) -> String {
-        format!(
-            r#"{{ "org": "tatolab", "package": "streamlib", "type": "{}", "version": "1.0.0" }}"#,
-            short
-        )
+    /// Helper for tests — the JSON literal a snapshot's `type` field carries:
+    /// the quoted class import path.
+    fn serialized_class_import_path(short: &str) -> String {
+        format!(r#""my_app.processors:{short}""#)
     }
 
     #[test]
@@ -274,8 +241,8 @@ mod tests {
                     {{ "from": "camera.video", "to": "display.video" }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
-            structured_type("DisplayProcessor"),
+            serialized_class_import_path("CameraProcessor"),
+            serialized_class_import_path("DisplayProcessor"),
         );
 
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
@@ -284,10 +251,9 @@ mod tests {
         assert_eq!(snap.processors.len(), 2);
         assert_eq!(snap.processors[0].alias, "camera");
         assert_eq!(
-            snap.processors[0].processor_type.r#type.as_str(),
-            "CameraProcessor"
+            snap.processors[0].processor_type.as_str(),
+            "my_app.processors:CameraProcessor"
         );
-        assert_eq!(snap.processors[0].processor_type.org.as_str(), "tatolab");
         assert!(snap.processors[0].display_name.is_none());
         assert_eq!(snap.processors[1].alias, "display");
         assert_eq!(snap.connections.len(), 1);
@@ -296,41 +262,47 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_serde_preserves_structured_processor_type() {
+    fn test_round_trip_serde_preserves_the_class_import_path() {
         let json = format!(
             r#"{{
                 "processors": [
                     {{ "alias": "camera", "type": {}, "config": {{}} }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
         let back = serde_json::to_value(&snap).unwrap();
-        let proc_type = &back["processors"][0]["type"];
-        assert!(
-            proc_type.is_object(),
-            "processor_type must round-trip as a structured object, not a string"
+        assert_eq!(
+            back["processors"][0]["type"],
+            serde_json::json!("my_app.processors:CameraProcessor"),
+            "the snapshot names a class by its import path, as a plain string"
         );
-        assert_eq!(proc_type["org"], "tatolab");
-        assert_eq!(proc_type["package"], "streamlib");
-        assert_eq!(proc_type["type"], "CameraProcessor");
-        // `SemVer` serializes as the dotted string form, not a structured
-        // {major, minor, patch} object — see `streamlib-idents::semver`.
-        assert_eq!(proc_type["version"], "1.0.0");
     }
 
+    /// Pre-1.0 forbids parser shims: the three-key object the snapshot wire
+    /// used to carry must fail to deserialize rather than be accepted
+    /// alongside the string.
     #[test]
-    fn test_bare_string_processor_type_is_rejected() {
-        // Pre-1.0 forbids parser shims — a bare string `"CameraProcessor"`
-        // for the type field must fail to deserialize.
+    fn test_the_structured_processor_type_object_is_rejected() {
         let json = r#"{
             "processors": [
-                { "alias": "camera", "type": "CameraProcessor", "config": {} }
+                {
+                    "alias": "camera",
+                    "type": {
+                        "org": "tatolab",
+                        "package": "streamlib",
+                        "type": "CameraProcessor",
+                        "version": "1.0.0"
+                    },
+                    "config": {}
+                }
             ]
         }"#;
-        let res = GraphSnapshot::from_json_str(json);
-        assert!(res.is_err(), "bare string processor_type must be rejected");
+        assert!(
+            GraphSnapshot::from_json_str(json).is_err(),
+            "the old structured object must not deserialize"
+        );
     }
 
     #[test]
@@ -342,7 +314,7 @@ mod tests {
                        "display_name": "Camera A" }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
         assert_eq!(snap.processors[0].display_name.as_deref(), Some("Camera A"));
@@ -364,7 +336,7 @@ mod tests {
                 ],
                 "connections": []
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
         let json_out = snap.to_json_string().unwrap();
@@ -380,7 +352,7 @@ mod tests {
                     {{ "alias": "camera", "type": {}, "config": {{ "n": 7 }} }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
         let tmp = std::env::temp_dir().join(format!(
@@ -419,8 +391,8 @@ mod tests {
                     {{ "alias": "cam", "type": {}, "config": {{}} }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
-            structured_type("DisplayProcessor"),
+            serialized_class_import_path("CameraProcessor"),
+            serialized_class_import_path("DisplayProcessor"),
         );
 
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
@@ -438,7 +410,7 @@ mod tests {
                     {{ "from": "camera.video", "to": "unknown.video" }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
 
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
@@ -460,10 +432,7 @@ mod tests {
     /// miss. The docstring promised this; the implementation now delivers.
     #[test]
     fn test_validate_unknown_processor_type() {
-        let unknown_type = format!(
-            r#"{{ "org": "tatolab", "package": "streamlib", "type": "{}", "version": "1.0.0" }}"#,
-            "DefinitelyNotARegisteredProcessor",
-        );
+        let unknown_type = serialized_class_import_path("NotARegisteredProcessor");
         let json = format!(
             r#"{{
                 "processors": [
@@ -476,7 +445,7 @@ mod tests {
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
         match snap.validate() {
             Err(Error::UnknownProcessorType { ident }) => {
-                assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
+                assert_eq!(ident.as_str(), "my_app.processors:NotARegisteredProcessor");
             }
             other => panic!("expected UnknownProcessorType, got {:?}", other),
         }

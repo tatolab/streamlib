@@ -205,3 +205,8 @@ process boundary).
 - **Registration is idempotent per identity, and a collision is named.** Two different classes
   claiming one identity is refused with both qualified names and the fix, rather than surfacing
   the registry's generic duplicate error.
+
+  > ~~Two *different* classes claiming one identity.~~ — Superseded 2026-08-11 by #1840. A
+  > processor's identity is `__module__` + `__qualname__`, so two differently-named classes can
+  > no longer collide at all. The collision that survives is one declaration loaded twice
+  > (`importlib.reload`), and the refusal names that cause instead.

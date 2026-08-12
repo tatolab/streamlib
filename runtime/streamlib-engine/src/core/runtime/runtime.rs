@@ -149,7 +149,6 @@ impl Runner {
             }
         };
 
-
         // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
 
@@ -1135,6 +1134,7 @@ impl Runner {
     pub fn save_graph_snapshot(&self) -> Result<crate::core::graph_snapshot::GraphSnapshot> {
         use std::collections::HashMap;
 
+        use crate::core::graph::default_display_name_for;
         use crate::core::graph_snapshot::{
             ConnectionDefinition, GraphSnapshot, ProcessorDefinition,
         };
@@ -1148,8 +1148,8 @@ impl Runner {
             let mut processors: Vec<ProcessorDefinition> = Vec::new();
 
             for node in graph.traversal().v(()).iter() {
-                let short = node.processor_type.r#type.as_str();
-                let base = pascal_to_camel(short);
+                let default_name = default_display_name_for(&node.processor_type);
+                let base = pascal_to_camel(&default_name);
 
                 let count = alias_counts.entry(base.clone()).or_insert(0);
                 *count += 1;
@@ -1162,7 +1162,7 @@ impl Runner {
                 id_to_alias.insert(node.id.to_string(), alias.clone());
 
                 let display_name =
-                    (node.display_name.as_str() != short).then(|| node.display_name.clone());
+                    (node.display_name != default_name).then(|| node.display_name.clone());
 
                 processors.push(ProcessorDefinition {
                     alias,

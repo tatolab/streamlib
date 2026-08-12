@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ProcessorScheduling, SchemaIdent};
+use crate::{ProcessorClassImportPath, ProcessorScheduling, SchemaIdent};
 
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,17 +112,24 @@ impl ConfigDescriptor for () {
 /// Describes a processor with its ports and configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
-    /// Structured processor identity — `@org/package/Type@version`.
+    /// The `@org/package/Type@version` the authoring surface still declares.
+    ///
+    /// Nothing keys on it — a processor is named by
+    /// `processor_class_import_path`. Its one remaining reader is the default
+    /// display name, which the plan defines as the class's short name and
+    /// which `name.r#type` is currently the only carrier of. Deleting this
+    /// field therefore means re-homing that short name, not just removing a
+    /// field.
     pub name: SchemaIdent,
-    /// The processor class's fully-qualified import path —
-    /// `my_app.filters:BlurProcessor` in Python,
-    /// `my_app::filters::BlurProcessor` in Rust.
+    /// The processor class's fully-qualified import path — what the registry,
+    /// the control plane and helper-process spawning all name this processor
+    /// by.
     ///
     /// Derived mechanically by the authoring surface — the `#[processor]`
     /// macro captures it at the expansion site, the wheel reads it off the
     /// class — and never authored. Taken by `new` rather than by a builder so
     /// that adding a descriptor without deriving one does not compile.
-    pub processor_class_import_path: String,
+    pub processor_class_import_path: ProcessorClassImportPath,
     pub description: String,
     pub version: String,
     pub repository: String,
@@ -135,9 +142,8 @@ pub struct ProcessorDescriptor {
     /// Reference to config schema (e.g., "com.example.blur.config@1.0.0").
     #[serde(default)]
     pub config_schema: Option<String>,
-    /// Declarative scheduling intent sourced from the manifest's
-    /// `scheduling:` block. Read at thread-spawn time. Defaults to `Normal`
-    /// priority + `processor-{id}` thread name.
+    /// Declarative scheduling intent declared in the `#[processor]` attribute.
+    /// Read at thread-spawn time; defaults to `Normal` priority.
     #[serde(default)]
     pub scheduling: ProcessorScheduling,
     pub inputs: Vec<PortDescriptor>,
@@ -148,12 +154,12 @@ pub struct ProcessorDescriptor {
 impl ProcessorDescriptor {
     pub fn new(
         name: SchemaIdent,
-        processor_class_import_path: impl Into<String>,
+        processor_class_import_path: ProcessorClassImportPath,
         description: impl Into<String>,
     ) -> Self {
         Self {
             name,
-            processor_class_import_path: processor_class_import_path.into(),
+            processor_class_import_path,
             description: description.into(),
             version: String::new(),
             repository: String::new(),

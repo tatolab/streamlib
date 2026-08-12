@@ -8,16 +8,16 @@ use super::super::components::{
 };
 use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
-use crate::core::descriptors::SchemaIdent;
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::utils::compute_json_checksum;
 
 /// Node in the processor graph with embedded component storage.
 #[derive(Serialize, Deserialize)]
 pub struct ProcessorNode {
     pub id: ProcessorUniqueId,
-    /// Structured processor identity — `@org/package/Type@version`.
+    /// The import path of the class this node is an instance of.
     #[serde(rename = "type")]
-    pub processor_type: SchemaIdent,
+    pub processor_type: ProcessorClassImportPath,
     /// Display name for UI. Defaults to the processor's PascalCase short name if not overridden.
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,7 +65,7 @@ impl std::fmt::Debug for ProcessorNode {
 impl ProcessorNode {
     /// Create a new processor node. The ID is generated automatically using cuid2.
     pub fn new(
-        processor_type: SchemaIdent,
+        processor_type: ProcessorClassImportPath,
         display_name: impl Into<String>,
         config: Option<serde_json::Value>,
         inputs: Vec<PortInfo>,
@@ -90,7 +90,7 @@ impl ProcessorNode {
         self.config = Some(config);
     }
 
-    pub fn processor_type(&self) -> &SchemaIdent {
+    pub fn processor_type(&self) -> &ProcessorClassImportPath {
         &self.processor_type
     }
 

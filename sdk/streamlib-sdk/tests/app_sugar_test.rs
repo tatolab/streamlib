@@ -18,16 +18,15 @@ use std::collections::HashMap;
 
 use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::processors::{
-    Config, GeneratedProcessor, ManualProcessor, ProcessorSpec, ProcessorTypeReference,
-};
+use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
 // =============================================================================
-// Fixtures — in-crate `#[processor]` host types. No package, no streamlib.yaml,
-// no build: the macro synthesizes identity and the runtime registers them live.
-// Distinct type names per test ⇒ distinct `@session/<name>` keys ⇒ the
+// Fixtures — in-crate `#[processor]` host types. No package, no build: the
+// macro captures each type's own path and the runtime registers it live.
+// Distinct type names per test ⇒ distinct class import paths ⇒ the
 // process-global registry never collides across the (parallel) test binary.
 // =============================================================================
 
@@ -60,10 +59,10 @@ manual_fixture!(
 manual_fixture!(DisplayNamedNode, "@tatolab/app-sugar-test/DisplayNamedNode");
 
 /// Register a `#[processor]` host type on the processor registry and return
-/// the reference that resolves it — what `App::add_local` builds internally,
-/// but without instantiating, so both an `App` graph and a `Runner` graph can
-/// reference the one registered type.
-fn register_session_reference<P>(registrar: &Runner) -> ProcessorTypeReference
+/// the class import path that names it — what `App::add_local` builds
+/// internally, but without instantiating, so both an `App` graph and a
+/// `Runner` graph can reference the one registered type.
+fn register_session_reference<P>(registrar: &Runner) -> ProcessorClassImportPath
 where
     P: GeneratedProcessor + 'static,
     P::Config: Config,
@@ -160,27 +159,28 @@ fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
 /// output port — enough to satisfy `connect`'s port-existence check without
 /// instantiating. Unique short names per call keep the process-global registry
 /// collision-free across the parallel test binary.
-fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorTypeReference {
+fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
     use streamlib::sdk::descriptors::{
         Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
     };
     use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
-    let id = SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("app-sugar-test").unwrap(),
-        TypeName::new(short).unwrap(),
-        SemVer::new(1, 0, 0),
-    );
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        id.clone(),
-        format!("{}::{short}", module_path!()),
+        SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("app-sugar-test").unwrap(),
+            TypeName::new(short).unwrap(),
+            SemVer::new(1, 0, 0),
+        ),
+        import_path.clone(),
         "app-sugar connect test",
     )
     .with_input(PortDescriptor::new(input, "", false))
     .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
-    id.into()
+    import_path
 }
 
 /// End-to-end through the `App` surface: `App::add` mints default `P{cuid2}`
@@ -245,15 +245,9 @@ fn add_local_hello_world_materializes_a_real_node() {
 /// `to_config_value` error path.
 #[test]
 fn add_rejects_a_non_serializable_config() {
-    use streamlib::sdk::descriptors::{Org, Package, TypeName};
-
-    // The config is encoded before the reference is ever resolved, so any
-    // reference works — the serialization error must fire first.
-    let reference = ProcessorTypeReference::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("app-sugar-test").unwrap(),
-        TypeName::new("Whatever").unwrap(),
-    );
+    // The config is encoded before the registry is ever consulted, so any
+    // path works — the serialization error must fire first.
+    let reference = ProcessorClassImportPath::new("app_sugar_test::Whatever").unwrap();
 
     let app = App::new().expect("App::new");
     // A compound (tuple) map key cannot become a JSON object key — `to_value`

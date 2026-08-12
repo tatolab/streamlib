@@ -13,5 +13,6 @@ pub use streamlib_processor_schema::descriptors::{
     ProcessorRuntime,
 };
 pub use streamlib_processor_schema::{
-    ModuleIdent, Org, Package, ProcessorScheduling, SchemaIdent, SemVer, SemVerRange, TypeName,
+    ModuleIdent, Org, Package, ProcessorClassImportPath, ProcessorScheduling, SchemaIdent, SemVer,
+    SemVerRange, TypeName,
 };

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::descriptors::SchemaIdent;
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 
 use crate::core::processors::ProcessorState;
@@ -17,8 +17,8 @@ use crate::core::processors::ProcessorState;
 pub struct ProcessorSnapshot {
     /// Processor identifier.
     pub id: ProcessorUniqueId,
-    /// Structured processor identity — `@org/package/Type@version`.
-    pub processor_type: SchemaIdent,
+    /// The import path of the class this processor is.
+    pub processor_type: ProcessorClassImportPath,
     /// Current state.
     pub state: ProcessorState,
     /// Throughput in frames per second.

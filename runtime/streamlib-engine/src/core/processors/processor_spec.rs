@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::processors::ProcessorTypeReference;
+use crate::core::descriptors::ProcessorClassImportPath;
 
 /// Specification for creating a processor.
 ///
@@ -11,9 +11,9 @@ use crate::core::processors::ProcessorTypeReference;
 /// Internal details (id, ports) are resolved by the runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessorSpec {
-    /// How the processor type is referenced: a version-pinned [`SchemaIdent`](crate::core::descriptors::SchemaIdent)
-    /// or a version-free reference resolved to the installed provider at add time.
-    pub name: ProcessorTypeReference,
+    /// The import path of the class to instantiate — looked up in the registry
+    /// verbatim.
+    pub name: ProcessorClassImportPath,
     /// Configuration as JSON value.
     pub config: serde_json::Value,
     /// Display name override. If `None`, defaults to the processor's PascalCase short name.
@@ -22,12 +22,10 @@ pub struct ProcessorSpec {
 }
 
 impl ProcessorSpec {
-    /// Build a spec from a processor-type reference (a version-pinned
-    /// [`SchemaIdent`](crate::core::descriptors::SchemaIdent) via
-    /// [`From`], or a version-free [`ProcessorTypeReference`]) and a JSON config.
-    pub fn new(name: impl Into<ProcessorTypeReference>, config: serde_json::Value) -> Self {
+    /// Build a spec naming the class to instantiate by its import path.
+    pub fn new(name: ProcessorClassImportPath, config: serde_json::Value) -> Self {
         Self {
-            name: name.into(),
+            name,
             config,
             display_name: None,
         }
@@ -43,189 +41,95 @@ impl ProcessorSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new(org).unwrap(),
-            Package::new(pkg).unwrap(),
-            TypeName::new(ty).unwrap(),
-            v,
-        )
+    fn class_import_path(path: &str) -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(path).expect("the fixture path names a class")
     }
 
+    /// Wire-format lock — the class a spec names is a plain string on the
+    /// wire, carrying no org, package or version key, because there is no
+    /// longer anything for a reader to key on but the path itself.
     #[test]
-    fn serde_round_trip_preserves_structured_identity() {
+    fn serde_emits_the_class_import_path_as_a_plain_string() {
         let spec = ProcessorSpec::new(
-            ident(
-                "tatolab",
-                "streamlib",
-                "CameraProcessor",
-                SemVer::new(1, 0, 0),
-            ),
-            serde_json::json!({"width": 1920, "height": 1080}),
-        );
-        let json = serde_json::to_string(&spec).unwrap();
-        let back: ProcessorSpec = serde_json::from_str(&json).unwrap();
-        assert_eq!(spec.name, back.name);
-        assert_eq!(spec.config, back.config);
-        assert_eq!(spec.display_name, back.display_name);
-    }
-
-    #[test]
-    fn serde_emits_structured_name_object_not_joined_string() {
-        // Wire-format lock — the name field on the wire is a structured 3-key
-        // object, not the joined `@org/pkg/Type` form. The structured shape is
-        // the "structured-everywhere" rule from the architecture preamble
-        // (notes 1, 2 of the issue body).
-        let spec = ProcessorSpec::new(
-            ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
+            class_import_path("my_app.filters:BlurProcessor"),
             serde_json::Value::Null,
         );
         let json: serde_json::Value = serde_json::to_value(&spec).unwrap();
-        let name = &json["name"];
-        assert!(
-            name.is_object(),
-            "name must be a structured JSON object, not a string"
-        );
-        assert_eq!(name["org"], "tatolab");
-        assert_eq!(name["package"], "core");
-        assert_eq!(name["type"], "VideoFrame");
-        // Exactly those three keys — a processor reference names no version,
-        // so the `1.0.0` this spec was built from reaches no wire field.
         assert_eq!(
-            name.as_object().unwrap().len(),
-            3,
-            "the wire form is exactly `org` + `package` + `type`, got {name}"
+            json["name"],
+            serde_json::Value::String("my_app.filters:BlurProcessor".to_string())
+        );
+    }
+
+    /// Pre-1.0 forbids parser shims: the three-key `{org, package, type}`
+    /// object the wire used to carry must fail to deserialize rather than be
+    /// accepted alongside the string.
+    #[test]
+    fn deserialize_refuses_the_structured_object_the_wire_used_to_carry() {
+        let json = r#"{"name":{"org":"tatolab","package":"core","type":"Camera"},"config":null}"#;
+        let refused: Result<ProcessorSpec, _> = serde_json::from_str(json);
+        assert!(
+            refused.is_err(),
+            "the old three-key object must not deserialize — there is no back-compat shape"
         );
     }
 
     #[test]
-    fn deserialize_rejects_bare_string_name() {
-        // Pre-1.0 forbids parser shims — a bare string like `"CameraProcessor"`
-        // for the name field must fail to deserialize.
-        let json = r#"{"name":"CameraProcessor","config":null}"#;
-        let res: Result<ProcessorSpec, _> = serde_json::from_str(json);
-        assert!(res.is_err(), "bare string name must be rejected");
+    fn deserialize_refuses_a_name_that_names_no_class() {
+        let refused: Result<ProcessorSpec, _> =
+            serde_json::from_str(r#"{"name":"","config":null}"#);
+        assert!(
+            refused.is_err(),
+            "an empty class path must not reach the registry through the wire"
+        );
     }
 
     #[test]
     fn with_display_name_overrides_default() {
         let spec = ProcessorSpec::new(
-            ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
+            class_import_path("my_app.filters:BlurProcessor"),
             serde_json::Value::Null,
         )
         .with_display_name("Camera A");
         assert_eq!(spec.display_name.as_deref(), Some("Camera A"));
     }
 
-    /// A `SchemaIdent` still constructs a spec (via `From<SchemaIdent>`), and
-    /// its version is dropped on the way in: a resolved identity narrows to a
-    /// reference, and a reference names no version.
-    #[test]
-    fn schema_ident_narrows_to_a_version_free_reference() {
-        let spec = ProcessorSpec::new(
-            ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
-            serde_json::Value::Null,
-        );
-        assert_eq!(spec.name.org().as_str(), "tatolab");
-        assert_eq!(spec.name.package().as_str(), "core");
-        assert_eq!(spec.name.r#type().as_str(), "VideoFrame");
-        let value = serde_json::to_value(&spec).unwrap();
-        assert!(
-            value["name"].get("version").is_none(),
-            "a spec built from a pinned ident must still put no version on the wire"
-        );
-    }
-
-    /// A reference builds a spec that carries no version at the reference site
-    /// — the shape that reaches the lazy hook.
-    #[test]
-    fn a_reference_builds_a_spec_with_no_version_at_the_reference_site() {
-        let spec = ProcessorSpec::new(
-            ProcessorTypeReference::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("camera").unwrap(),
-                TypeName::new("Camera").unwrap(),
-            ),
-            serde_json::json!({"fps": 30}),
-        );
-        assert_eq!(spec.name.r#type().as_str(), "Camera");
-        // The wire carries the three-key form, no version key.
-        let value = serde_json::to_value(&spec).unwrap();
-        assert!(value["name"].get("version").is_none());
-        assert_eq!(value["name"]["type"], "Camera");
-    }
-
-    /// The version-free spec round-trips over msgpack (the plugin-ABI wire)
-    /// with full value equality.
-    #[test]
-    fn version_free_spec_msgpack_round_trip() {
-        let spec = ProcessorSpec::new(
-            ProcessorTypeReference::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("camera").unwrap(),
-                TypeName::new("Camera").unwrap(),
-            ),
-            serde_json::json!({"width": 1920}),
-        );
-        let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
-        let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
-        assert_eq!(spec, back);
-    }
-
-    /// msgpack `to_vec_named` → `from_slice` round-trip preserves full
-    /// value equality. Mirrors the runtime-ops-shim encode path the
-    /// plugin ABI takes when forwarding `Runtime::add_processor` calls
-    /// from cdylib code to the host.
+    /// msgpack `to_vec_named` → `from_slice` round-trip preserves full value
+    /// equality, over both identity grammars and a unicode display name.
     #[test]
     fn msgpack_round_trip_preserves_full_value() {
-        let spec = ProcessorSpec::new(
-            ident(
-                "tatolab",
-                "streamlib",
-                "CameraProcessor",
-                SemVer::new(1, 2, 3),
-            ),
-            serde_json::json!({
-                "width": 1920,
-                "height": 1080,
-                "nested": {"key": "value", "arr": [1, 2, 3]},
-            }),
-        )
-        .with_display_name("Camera A");
+        for path in [
+            "my_app.filters:BlurProcessor",
+            "my_app::filters::BlurProcessor",
+        ] {
+            let spec = ProcessorSpec::new(
+                class_import_path(path),
+                serde_json::json!({
+                    "width": 1920,
+                    "label": "カメラ — 中文 — emoji 🎥",
+                    "nested": {"key": "value", "arr": [1, 2, 3]},
+                }),
+            )
+            .with_display_name("こんにちは");
 
-        let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
-        let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
-        assert_eq!(spec, back);
+            let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
+            let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
+            assert_eq!(spec, back, "{path} lost equality over msgpack");
+        }
     }
 
     /// Empty config + absent display_name still round-trips.
     #[test]
     fn msgpack_round_trip_minimal_spec() {
         let spec = ProcessorSpec::new(
-            ident("tatolab", "core", "VideoFrame", SemVer::new(0, 1, 0)),
+            class_import_path("my_app.filters:BlurProcessor"),
             serde_json::Value::Null,
         );
         let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
         let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
         assert_eq!(spec, back);
         assert!(back.display_name.is_none());
-    }
-
-    /// Unicode in display_name + config string values survives the
-    /// msgpack wire.
-    #[test]
-    fn msgpack_round_trip_unicode_preserved() {
-        let spec = ProcessorSpec::new(
-            ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
-            serde_json::json!({"label": "カメラ — 中文 — emoji 🎥"}),
-        )
-        .with_display_name("こんにちは");
-
-        let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
-        let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
-        assert_eq!(spec, back);
     }
 
     /// Documents what the `serde_json::Value` ↔ rmp_serde round-trip
@@ -259,10 +163,7 @@ mod tests {
             ),
         ];
         for (name, payload) in cases {
-            let spec = ProcessorSpec::new(
-                ident("tatolab", "core", "T", SemVer::new(1, 0, 0)),
-                payload.clone(),
-            );
+            let spec = ProcessorSpec::new(class_import_path("my_app:T"), payload.clone());
             let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
             let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
             assert_eq!(

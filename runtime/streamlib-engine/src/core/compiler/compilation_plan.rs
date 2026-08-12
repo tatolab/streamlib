@@ -66,26 +66,18 @@ impl CompilationPlan {
 mod tests {
     use super::*;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
-    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::processors::ProcessorSpec;
 
     /// Build `source_output → target_input` between two live mock processors
     /// and return `(source_id, link_id)`.
     fn graph_with_one_link() -> (Graph, ProcessorUniqueId, LinkUniqueId) {
         crate::core::test_support::ensure_test_mocks_registered();
-        let ident = |short: &str| {
-            PROCESSOR_REGISTRY
-                .list_registered()
-                .into_iter()
-                .find(|descriptor| descriptor.name.r#type.as_str() == short)
-                .map(|descriptor| descriptor.name)
-                .expect("mock processor must be registered")
-        };
 
         let mut graph = Graph::new();
         let source_id = graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                ident("TestMockOutputOnlyProcessor"),
+                crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()
@@ -95,7 +87,7 @@ mod tests {
         let target_id = graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                ident("TestMockInputOnlyProcessor"),
+                crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()

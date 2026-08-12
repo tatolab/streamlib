@@ -30,6 +30,7 @@ from identity_stability_app import DIRECT_LAUNCH_ARGUMENT
 
 ENTRY_FILE_PROCESSOR_APP = Path(__file__).parent / "entry_file_processor_app.py"
 IDENTITY_STABILITY_APP = Path(__file__).parent / "identity_stability_app.py"
+TWO_PROCESSOR_IDENTITY_APP = Path(__file__).parent / "two_processor_identity_app.py"
 
 # The engine's own registration record. Asserting on `__module__` from the app
 # would agree with a derivation that never ran.
@@ -98,13 +99,21 @@ def _free_port() -> int:
         return probe.getsockname()[1]
 
 
+def _derived_identities(app) -> list[str]:
+    """Every identity the engine derived, read off its own log records."""
+    app.await_marker("ADDED")
+    return [
+        found.group(1)
+        for line in app.output_lines
+        if (found := DERIVED_IDENTITY_PATTERN.search(line))
+    ]
+
+
 def _derived_identity(app) -> str:
     """The identity the engine derived, read off its own log record."""
-    app.await_marker("ADDED")
-    for line in app.output_lines:
-        found = DERIVED_IDENTITY_PATTERN.search(line)
-        if found:
-            return found.group(1)
+    derived = _derived_identities(app)
+    if derived:
+        return derived[0]
     raise AssertionError(
         f"the engine logged no derived identity; output:\n{app.output}"
     )
@@ -155,3 +164,21 @@ def test_the_launch_arrangement_never_changes_the_identity(start_app_under_test)
         f"script={as_a_script!r} module={as_a_module!r} "
         f"launcher={under_the_launcher!r}"
     )
+
+
+def test_two_classes_in_one_graph_register_under_two_distinct_paths(
+    start_app_under_test,
+):
+    """A graph is keyed per class, not per app.
+
+    The registry key used to be a synthesized `@app/local/<Type>`, which two
+    classes could share; it is now each class's own module path, which they
+    cannot. Asserted as an ordered pair of literals: comparing the two to each
+    other would pass on any pair of distinct strings, including two the engine
+    derived the same wrong way.
+    """
+    app = start_app_under_test(TWO_PROCESSOR_IDENTITY_APP, launcher=start_app)
+    assert _derived_identities(app) == [
+        "identity_stable_processor:IdentityStableProcessor",
+        "second_identity_stable_processor:SecondIdentityStableProcessor",
+    ]

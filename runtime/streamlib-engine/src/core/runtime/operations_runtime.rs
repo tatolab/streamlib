@@ -48,10 +48,9 @@ async fn add_processor_impl(
         );
     };
 
-    // Hold a diagnostic ident so we can surface a typed `UnknownProcessorType`
-    // error if the registry doesn't know this type — `spec` is moved into
-    // `add_v`. A version-free reference projects to `(org, package, type)@0.0.0`.
-    let ident_for_err = spec.name.to_diagnostic_ident();
+    // Held so a typed `UnknownProcessorType` can name what was asked for —
+    // `spec` is moved into `add_v`.
+    let ident_for_err = spec.name.clone();
 
     let added = compiler.scope(|graph, tx| -> Result<(ProcessorUniqueId, String)> {
         let (node_id, assigned_display_name) = graph
@@ -547,6 +546,7 @@ mod connect_wires_without_inspecting_a_port_tests {
 
     use super::connect_impl;
     use crate::core::compiler::Compiler;
+    use crate::core::descriptors::ProcessorClassImportPath;
     use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
@@ -564,11 +564,19 @@ mod connect_wires_without_inspecting_a_port_tests {
         )
     }
 
+    fn producer_class_path() -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(format!("{}::{PRODUCER_TYPE}", module_path!())).unwrap()
+    }
+
+    fn consumer_class_path() -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(format!("{}::{CONSUMER_TYPE}", module_path!())).unwrap()
+    }
+
     /// Register the producer and consumer descriptors this module wires.
     fn register_producer_and_consumer_descriptors() {
         let mut producer = ProcessorDescriptor::new(
             ident("connectcheck", PRODUCER_TYPE),
-            concat!(module_path!(), "::ConnectCheckProducer"),
+            producer_class_path(),
             "producer",
         );
         producer
@@ -580,7 +588,7 @@ mod connect_wires_without_inspecting_a_port_tests {
 
         let mut consumer = ProcessorDescriptor::new(
             ident("connectcheck", CONSUMER_TYPE),
-            concat!(module_path!(), "::ConnectCheckConsumer"),
+            consumer_class_path(),
             "consumer",
         );
         consumer
@@ -600,20 +608,14 @@ mod connect_wires_without_inspecting_a_port_tests {
             compiler.scope(|graph, _tx| {
                 let from = graph
                     .traversal_mut()
-                    .add_v(ProcessorSpec::new(
-                        ident("connectcheck", PRODUCER_TYPE),
-                        Value::Null,
-                    ))
+                    .add_v(ProcessorSpec::new(producer_class_path(), Value::Null))
                     .first()
                     .expect("producer node must be created")
                     .id
                     .clone();
                 let to = graph
                     .traversal_mut()
-                    .add_v(ProcessorSpec::new(
-                        ident("connectcheck", CONSUMER_TYPE),
-                        Value::Null,
-                    ))
+                    .add_v(ProcessorSpec::new(consumer_class_path(), Value::Null))
                     .first()
                     .expect("consumer node must be created")
                     .id

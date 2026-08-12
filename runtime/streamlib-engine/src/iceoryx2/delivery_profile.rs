@@ -11,8 +11,8 @@
 //! ([`Overflow`]), and the ring depth. Every input port declares one and
 //! nothing is inferred — an input port without a profile is a wiring error.
 
-use streamlib_idents::SchemaIdent;
 use streamlib_processor_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
+use streamlib_processor_schema::ProcessorClassImportPath;
 
 use super::overflow::Overflow;
 use super::read_mode::ReadMode;
@@ -124,7 +124,7 @@ impl DeliveryProfile {
 /// link always resolves both — the wiring path itself reports the missing
 /// processor).
 pub(crate) fn delivery_profile_for_input_port(
-    processor_type: &SchemaIdent,
+    processor_type: &ProcessorClassImportPath,
     port_name: &str,
 ) -> Result<DeliveryProfile> {
     let Some((inputs, _outputs)) = PROCESSOR_REGISTRY.port_info(processor_type) else {
@@ -220,43 +220,45 @@ mod tests {
         //! and nothing else. There is no second source to fall back to.
 
         use super::super::{DeliveryProfile, delivery_profile_for_input_port};
-        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use crate::core::descriptors::{
+            PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor,
+        };
         use crate::core::error::Error;
         use crate::core::processors::PROCESSOR_REGISTRY;
         use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-        fn processor_ident(package: &str, type_name: &str) -> SchemaIdent {
-            SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new(package).unwrap(),
-                TypeName::new(type_name).unwrap(),
-                SemVer::new(1, 0, 0),
-            )
+        fn class_path(type_name: &str) -> ProcessorClassImportPath {
+            ProcessorClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
         }
 
         /// Registers a processor carrying one input port, optionally declaring a
-        /// delivery profile, and returns the processor's identity.
+        /// delivery profile, and returns the processor's class import path.
         fn register_processor_with_one_input_port(
             package: &str,
             type_name: &str,
             port_name: &str,
             declared_profile: Option<&str>,
-        ) -> SchemaIdent {
-            let ident = processor_ident(package, type_name);
+        ) -> ProcessorClassImportPath {
+            let import_path = class_path(type_name);
             let mut port = PortDescriptor::iceoryx2(port_name, "input");
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }
             let mut descriptor = ProcessorDescriptor::new(
-                ident.clone(),
-                format!("{}::{type_name}", module_path!()),
+                SchemaIdent::new(
+                    Org::new("tatolab").unwrap(),
+                    Package::new(package).unwrap(),
+                    TypeName::new(type_name).unwrap(),
+                    SemVer::new(1, 0, 0),
+                ),
+                import_path.clone(),
                 type_name,
             );
             descriptor.inputs.push(port);
             PROCESSOR_REGISTRY
                 .register_descriptor_only(descriptor)
                 .expect("descriptor registration");
-            ident
+            import_path
         }
 
         /// The default-fallback path: an unregistered processor type yields the
@@ -265,7 +267,7 @@ mod tests {
         /// defensively-handled cases.
         #[test]
         fn unregistered_processor_falls_back_to_latest() {
-            let unknown = processor_ident("does-not-exist-profile", "Nothing");
+            let unknown = class_path("NothingRegisteredUnderThisPath");
             assert_eq!(
                 delivery_profile_for_input_port(&unknown, "video_in").unwrap(),
                 DeliveryProfile::Latest

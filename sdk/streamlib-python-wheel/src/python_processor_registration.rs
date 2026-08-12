@@ -12,32 +12,33 @@ use std::sync::{Mutex, OnceLock};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use streamlib::sdk::descriptors::SchemaIdent;
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorTypeReference};
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
 use crate::python_helper_process_spawn_host::spawn_host_for_processor_node;
 use crate::python_processor_declaration::PythonProcessorDeclaration;
 
-/// Which Python class each registered identity was registered from.
+/// Which Python class each registered import path was registered from.
 ///
 /// A cache of *which class*, never the authority on *whether* a type is
 /// registered — that stays the engine's registry, consulted below, so this can
 /// never suppress a re-registration the engine actually needs.
-fn registered_processor_classes() -> &'static Mutex<HashMap<SchemaIdent, Py<PyAny>>> {
-    static REGISTERED_PROCESSOR_CLASSES: OnceLock<Mutex<HashMap<SchemaIdent, Py<PyAny>>>> =
-        OnceLock::new();
+fn registered_processor_classes() -> &'static Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>> {
+    static REGISTERED_PROCESSOR_CLASSES: OnceLock<
+        Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>>,
+    > = OnceLock::new();
     REGISTERED_PROCESSOR_CLASSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Register `processor_class` if this identity is not already registered.
+/// Register `processor_class` if its import path is not already registered.
 ///
-/// Returns the type reference `Runtime.add` names the processor by.
+/// Returns the class import path `Runtime.add` names the processor by.
 pub(crate) fn register_processor_class(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
-) -> PyResult<ProcessorTypeReference> {
+) -> PyResult<ProcessorClassImportPath> {
     let declaration = PythonProcessorDeclaration::read_from_class(processor_class)?;
-    let identity = declaration.descriptor.name.clone();
+    let identity = declaration.descriptor.processor_class_import_path.clone();
 
     // Held across the check and the registration, so two threads adding the
     // same class cannot both get past the engine registry's non-atomic
@@ -51,22 +52,26 @@ pub(crate) fn register_processor_class(
         .filter(|_| PROCESSOR_REGISTRY.is_registered(&identity))
     {
         return if already_registered.bind(python).is(processor_class) {
-            Ok(declaration.type_reference)
+            Ok(identity)
         } else {
+            // An import path is `__module__` + `__qualname__`, so two classes
+            // reach the same one only by being the same declaration executed
+            // twice — the module was loaded again and rebuilt its classes. Two
+            // *differently named* classes can no longer collide at all, so
+            // there is nothing to declare that would tell these apart; the fix
+            // is upstream, at the reload.
             Err(PyValueError::new_err(format!(
-                "two different classes both claim the processor identity \
-                 `@{}/{}/{}`: {} and {}. Give one of them an explicit identity — \
-                 `@processor(\"@org/package/Type\")` — so each names itself.",
-                declaration.type_reference.org().as_str(),
-                declaration.type_reference.package().as_str(),
-                declaration.type_reference.r#type().as_str(),
+                "two different class objects both identify as `{identity}`: {} and {}. One \
+                 import path names one class, so these are the same declaration loaded twice \
+                 — `importlib.reload` is the usual cause, and the class object you are adding \
+                 is not the one already registered. Add the class from the module the \
+                 interpreter currently holds, or restart the app.",
                 class_qualified_name(already_registered.bind(python)),
                 class_qualified_name(processor_class),
             )))
         };
     }
 
-    let type_reference = declaration.type_reference.clone();
     let descriptor = declaration.descriptor.clone();
     let held_processor_class = processor_class.clone().unbind();
 
@@ -101,8 +106,8 @@ pub(crate) fn register_processor_class(
         )
         .map_err(|registration_failure| PyValueError::new_err(registration_failure.to_string()))?;
 
-    registered.insert(identity, held_processor_class);
-    Ok(type_reference)
+    registered.insert(identity.clone(), held_processor_class);
+    Ok(identity)
 }
 
 fn class_qualified_name(processor_class: &Bound<'_, PyAny>) -> String {

@@ -101,6 +101,19 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - REMOVED: @app/local
   The synthesis at `_processor_declaration.py:314` and `grammar.rs:255-278`.
 - REMOVED: is_reserved_for_session
+- REMOVED: session_isolation_tier
+  Recorded 2026-08-12 during #1840, which found the scope wider than "loses its `Org`
+  parameter". `IsolationTier::for_processor` read `(org, cdylib_resident)`, and
+  `is_cdylib_resident` has returned a literal `false` since the plugin ABI died — so with
+  the org gone the derivation has exactly one reachable answer and collapses to a
+  constant. Its operator knob collapses with it: `set_session_isolation_tier`,
+  `SESSION_TIER_OVERRIDE` and the `STREAMLIB_SESSION_ISOLATION_TIER` env var only ever
+  answered "is this module `@session`?". `IsolationTier` itself, its `Untrusted` variant
+  and the `FullAccessGrant` moat survive — the moat is a compile-time guarantee about who
+  may mint an in-process `RuntimeContextFullAccess`, not a placement question, and the
+  seam an untrusted-code path returns through must be rebuilt against the helper-process
+  boundary rather than against an org.
+- REMOVED: IsolationTier::for_processor
 - REMOVED: check-no-reverse-dns
   The xtask check and its workflow. Its stated rationale is enforcing the
   `@org/package/Type@version` grammar (`check_no_reverse_dns.rs:5-9`); with that grammar
