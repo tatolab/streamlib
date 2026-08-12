@@ -160,19 +160,55 @@ class AppUnderTest:
                 pipe.close()
 
 
-def start_app(app_path: Path, *arguments: str) -> AppUnderTest:
-    """Spawn `python <app_path> <arguments...>` in its own process group.
+def start_command(command: "list[str]", *, working_directory: Path) -> AppUnderTest:
+    """Spawn `command` in its own process group, output on one pipe.
 
     Its own group so a SIGINT aimed at the app cannot reach the test runner that
     spawned it — and so the group can be checked for survivors afterwards.
     """
     process = subprocess.Popen(
-        [sys.executable, str(app_path), *arguments],
+        command,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
         start_new_session=True,
+        cwd=str(working_directory),
     )
     return AppUnderTest(process)
+
+
+def start_app(app_path: Path, *arguments: str) -> AppUnderTest:
+    """Spawn `python <app_path> <arguments...>` — the arrangement the
+    interpreter-lifecycle contract was proven against."""
+    return start_command(
+        [sys.executable, str(app_path), *arguments],
+        working_directory=app_path.parent,
+    )
+
+
+def start_app_as_module(app_path: Path, *arguments: str) -> AppUnderTest:
+    """Spawn `python -m <app> <arguments...>` from the app's own directory.
+
+    A different arrangement, not a different app: `-m` puts the *working
+    directory* on `sys.path` where a script path puts the script's own
+    directory. Naming the same file two ways is what makes them comparable.
+    """
+    return start_command(
+        [sys.executable, "-m", app_path.stem, *arguments],
+        working_directory=app_path.parent,
+    )
+
+
+def start_app_under_the_streamlib_cli(app_path: Path, *arguments: str) -> AppUnderTest:
+    """Spawn `streamlib dev -f <app_path>` — the launcher the MVP blesses.
+
+    Reached as a module rather than through the console script so the app runs
+    under the interpreter this test session is using, whether or not the venv's
+    `bin` is on PATH.
+    """
+    return start_command(
+        [sys.executable, "-m", "streamlib.cli", "dev", "-f", str(app_path), *arguments],
+        working_directory=app_path.parent,
+    )
