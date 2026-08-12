@@ -233,7 +233,6 @@ mod tests {
         /// Registers a processor carrying one input port, optionally declaring a
         /// delivery profile, and returns the processor's class import path.
         fn register_processor_with_one_input_port(
-            package: &str,
             type_name: &str,
             port_name: &str,
             declared_profile: Option<&str>,
@@ -270,12 +269,8 @@ mod tests {
 
         #[test]
         fn declared_profile_is_the_whole_answer() {
-            let ident = register_processor_with_one_input_port(
-                "test-profile-override",
-                "BlockSink",
-                "video_in",
-                Some("lossless"),
-            );
+            let ident =
+                register_processor_with_one_input_port("BlockSink", "video_in", Some("lossless"));
             assert_eq!(
                 delivery_profile_for_input_port(&ident, "video_in").unwrap(),
                 DeliveryProfile::Lossless,
@@ -287,12 +282,7 @@ mod tests {
         /// any resolution here other than an error is a regression.
         #[test]
         fn missing_declaration_is_a_wiring_error_naming_the_port() {
-            let ident = register_processor_with_one_input_port(
-                "test-profile-default",
-                "SampleSink",
-                "audio_in",
-                None,
-            );
+            let ident = register_processor_with_one_input_port("SampleSink", "audio_in", None);
             let err = delivery_profile_for_input_port(&ident, "audio_in")
                 .expect_err("an undeclared delivery profile must be a wiring error");
             let msg = err.to_string();
@@ -309,7 +299,6 @@ mod tests {
         #[test]
         fn unknown_declared_value_is_rejected_with_the_legal_values() {
             let ident = register_processor_with_one_input_port(
-                "test-profile-typo",
                 "TypoSink",
                 "video_in",
                 Some("skip_to_latest"), // retired knob, not a profile
