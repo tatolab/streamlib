@@ -58,12 +58,16 @@ fn macro_resolves_to_highest_registered_version() {
     // succeed when this test runs after a sibling has already inserted
     // the same entries. Either direction is fine — what matters is that
     // by the time the macro fires, all three versions are present.
-    let _ =
-        PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(v1.clone(), "test"));
-    let _ =
-        PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(v3.clone(), "test"));
-    let _ =
-        PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(v2.clone(), "test"));
+    // One import path across all three: three versions of one tuple are three
+    // registrations of the same class.
+    let fixture_import_path = concat!(module_path!(), "::FixtureProc");
+    for version in [&v1, &v3, &v2] {
+        let _ = PROCESSOR_REGISTRY.register_descriptor_only(ProcessorDescriptor::new(
+            version.clone(),
+            fixture_import_path,
+            "test",
+        ));
+    }
 
     let resolved: SchemaIdent = streamlib::sdk::schema_ident_any_version!(
         "schema-ident-any-version-test",

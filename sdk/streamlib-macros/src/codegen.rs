@@ -667,10 +667,24 @@ fn generate_descriptor_from_schema(
         }
     });
 
+    // The identity capture. `module_path!()` resolves here to
+    // `<the author's module>::<the authored type name>`, because this
+    // expansion lands inside the `pub mod` the macro names after the
+    // author's struct — so the generated module's own path *is* the type
+    // path, with no `stringify!` needed to append the name.
+    //
+    // Never `std::any::type_name`: its output format is documented as
+    // unspecified and free to change between compiler versions, and an
+    // identity the toolchain can silently rewrite is a registry key that
+    // breaks with no failing test. `module_path!` is specified.
     quote! {
         fn descriptor() -> Option<__streamlib_sdk::descriptors::ProcessorDescriptor> {
             Some(
-                __streamlib_sdk::descriptors::ProcessorDescriptor::new(Processor::schema_ident(), #description)
+                __streamlib_sdk::descriptors::ProcessorDescriptor::new(
+                    Processor::schema_ident(),
+                    ::core::module_path!(),
+                    #description,
+                )
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_schema

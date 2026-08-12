@@ -624,7 +624,10 @@ mod tests {
     }
 
     fn unit_descriptor(name: SchemaIdent) -> ProcessorDescriptor {
-        ProcessorDescriptor::new(name, "test")
+        // Distinct per type so these fixtures keep the property production
+        // descriptors have: one import path names one class.
+        let import_path = format!("{}::{}", module_path!(), name.r#type.as_str());
+        ProcessorDescriptor::new(name, import_path, "test")
     }
 
     #[test]

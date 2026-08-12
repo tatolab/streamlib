@@ -247,7 +247,11 @@ mod tests {
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }
-            let mut descriptor = ProcessorDescriptor::new(ident.clone(), type_name);
+            let mut descriptor = ProcessorDescriptor::new(
+                ident.clone(),
+                format!("{}::{type_name}", module_path!()),
+                type_name,
+            );
             descriptor.inputs.push(port);
             PROCESSOR_REGISTRY
                 .register_descriptor_only(descriptor)

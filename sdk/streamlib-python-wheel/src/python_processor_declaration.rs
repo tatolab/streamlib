@@ -38,6 +38,13 @@ impl PythonProcessorDeclaration {
         let type_reference = read_type_reference(processor_class)?;
         let execution_config = read_execution_config(processor_class)?;
 
+        // Derived once and spent twice. The two fields are different
+        // contracts — identity is what the registry names the type by,
+        // `entrypoint` is what the child interpreter imports — so they are
+        // separate fields, but a second derivation call is a second chance
+        // for them to disagree.
+        let class_import_path = processor_class_import_path(processor_class)?;
+
         let mut descriptor = ProcessorDescriptor::new(
             SchemaIdent::new(
                 type_reference.org().clone(),
@@ -45,13 +52,13 @@ impl PythonProcessorDeclaration {
                 type_reference.r#type().clone(),
                 VERSION_FREE_SENTINEL,
             ),
+            class_import_path.clone(),
             read_string_attribute(processor_class, "__streamlib_processor_description__")?,
         )
         .with_runtime(ProcessorRuntime::Python)
-        // The class's own import path: what the child interpreter imports to
-        // reach the class, and what refusing an unimportable class here rather
-        // than at spawn buys — the author names the class, not a pid.
-        .with_entrypoint(processor_class_import_path(processor_class)?)
+        // Refusing an unimportable class here rather than at spawn is what
+        // lets the author be told about the class they named, not about a pid.
+        .with_entrypoint(class_import_path)
         .with_scheduling(ProcessorScheduling {
             priority: read_thread_priority(processor_class)?,
         });
