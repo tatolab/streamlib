@@ -692,10 +692,7 @@ fn generate_descriptor_from_schema(
             Some(
                 __streamlib_sdk::descriptors::ProcessorDescriptor::new(
                     Processor::schema_ident(),
-                    __streamlib_sdk::descriptors::ProcessorClassImportPath::new(
-                        ::core::module_path!(),
-                    )
-                    .expect("module_path! always names the enclosing module"),
+                    Processor::processor_class_import_path(),
                     #description,
                 )
                     .with_version(#version)
@@ -1451,15 +1448,39 @@ mod processor_struct_emit_tests {
         ))
     }
 
+    /// The whole `impl Processor` block, which is where the identity accessor
+    /// the descriptor delegates to is emitted.
+    fn rendered_processor_impl() -> String {
+        render_token_stream_without_whitespace(generate_processor_impl_from_schema(
+            &minimal_schema(),
+            &probe_schema_ident(),
+            &quote! { __streamlib_sdk::processors::EmptyConfig },
+            &None,
+            &[],
+            None,
+        ))
+    }
+
     /// The mechanism, not the result — what the string comes out as is
     /// asserted where a real `#[processor]` can be expanded and read back
     /// (`streamlib-engine/tests/processor_class_import_path_test.rs`).
     #[test]
     fn the_descriptor_captures_its_identity_with_module_path() {
-        let rendered = rendered_descriptor();
+        let rendered = rendered_processor_impl();
         assert!(
             rendered.contains("module_path!()"),
             "identity must be captured at the expansion site — got: {rendered}"
+        );
+        // Captured once. The descriptor names the accessor rather than
+        // re-expanding `module_path!()`, so the two can never disagree.
+        assert_eq!(
+            rendered.matches("module_path!()").count(),
+            1,
+            "identity must be captured in exactly one place — got: {rendered}"
+        );
+        assert!(
+            rendered_descriptor().contains("Processor::processor_class_import_path()"),
+            "the descriptor must take its identity from that one capture"
         );
     }
 
@@ -1469,10 +1490,11 @@ mod processor_struct_emit_tests {
     /// to say so — which is why this is a test and not a comment.
     #[test]
     fn the_descriptor_never_reaches_for_type_name() {
-        let rendered = rendered_descriptor();
-        assert!(
-            !rendered.contains("type_name"),
-            "identity must never be reflected at runtime — got: {rendered}"
-        );
+        for rendered in [rendered_descriptor(), rendered_processor_impl()] {
+            assert!(
+                !rendered.contains("type_name"),
+                "identity must never be reflected at runtime — got: {rendered}"
+            );
+        }
     }
 }

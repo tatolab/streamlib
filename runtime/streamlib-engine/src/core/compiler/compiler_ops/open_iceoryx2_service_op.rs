@@ -1163,14 +1163,11 @@ mod tests {
     }
 
     fn add_mock_output_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                {
-                    crate::core::test_support::ensure_test_mocks_registered();
-                    crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(
-                    )
-                },
+                crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()
@@ -1180,13 +1177,11 @@ mod tests {
     }
 
     fn add_mock_input_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                {
-                    crate::core::test_support::ensure_test_mocks_registered();
-                    crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path()
-                },
+                crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()
@@ -1196,13 +1191,11 @@ mod tests {
     }
 
     fn add_mock_reactive_input_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                {
-                    crate::core::test_support::ensure_test_mocks_registered();
-                    crate::core::test_support::MockReactiveInputOnlyProcessor::processor_class_import_path()
-                },
+                crate::core::test_support::MockReactiveInputOnlyProcessor::processor_class_import_path(),
                 serde_json::Value::Null,
             ))
             .first()

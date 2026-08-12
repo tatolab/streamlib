@@ -12,26 +12,19 @@
 //! the code running it is trusted enough to hold FullAccess in-process at all*.
 //!
 //! Every processor the engine can spawn today is
-//! [`IsolationTier::TrustedInstalled`], and the tier is not derived from
-//! anything: it used to be read off a module's `@session/…` provenance, and
-//! provenance died with the identity grammar that spelled it. The separately
-//! built, dlopen'd code the [`Untrusted`](IsolationTier::Untrusted) tier
-//! existed to sandbox died earlier still, with the plugin ABI.
+//! [`IsolationTier::TrustedInstalled`], and nothing derives the tier.
 //!
 //! The moat is the [`FullAccessGrant`] token: minting a
 //! [`RuntimeContextFullAccess`](super::RuntimeContextFullAccess) requires one,
-//! and a grant is producible **only** from [`IsolationTier::TrustedInstalled`]
-//! (see [`IsolationTier::grant_full_access`]). The untrusted lifecycle dispatch
-//! has no grant to pass, so an in-process FullAccess context is unrepresentable
-//! for it — a compile-time guarantee, not a runtime check. That guarantee is
-//! what survives here, and it is why the tier is a two-variant enum rather than
-//! a constant: it is the seam an untrusted-code path returns through, and the
-//! dispatch that honours it stays compiled and tested meanwhile.
+//! and a grant is producible **only** from [`IsolationTier::TrustedInstalled`].
+//! The untrusted dispatch has no grant to pass, so an in-process FullAccess
+//! context is unrepresentable for it — a compile-time guarantee, not a runtime
+//! check, and the reason the tier stays a two-variant enum rather than a
+//! constant.
 //!
-//! Actual runtime *enforcement* of the untrusted tier — own-subprocess sandbox,
-//! cgroup-v2 limits — is a separate concern (isolation *enforcement*); this
-//! module owns only the policy model and the capability moat at the minting
-//! seam.
+//! Runtime *enforcement* of the untrusted tier — own-subprocess sandbox,
+//! cgroup-v2 limits — is a separate concern; this module owns the policy model
+//! and the capability moat at the minting seam.
 
 /// Declarative trust tier a loaded processor runs under.
 ///

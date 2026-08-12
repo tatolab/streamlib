@@ -83,8 +83,7 @@ pub(crate) fn default_display_name_for(
     processor_class_import_path: &ProcessorClassImportPath,
 ) -> String {
     PROCESSOR_REGISTRY
-        .descriptor(processor_class_import_path)
-        .map(|descriptor| descriptor.name.r#type.as_str().to_string())
+        .default_display_name(processor_class_import_path)
         .unwrap_or_else(|| processor_class_import_path.as_str().to_string())
 }
 

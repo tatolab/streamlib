@@ -162,11 +162,9 @@ fn spawn_dedicated_thread(
 
     let processor_arc_clone = Arc::clone(&processor_arc);
 
-    // The tier gates every FullAccess mint on this thread (setup / start / stop
-    // / teardown). It used to be derived from a module's `@session/…`
-    // provenance; nothing derives it now, because every processor the engine
-    // can spawn is compiled into this binary — the separately built code the
-    // untrusted tier sandboxed went with the plugin ABI.
+    // Gates every FullAccess mint on this thread (setup / start / stop /
+    // teardown). Not derived: every processor the engine can spawn is compiled
+    // into this binary.
     let isolation_tier = IsolationTier::TrustedInstalled;
 
     // Generous 8 MB stack — processors run arbitrary codec / plugin code

@@ -335,15 +335,9 @@ impl ProcessorInstanceFactory {
             RegistrationKind::LegacyDyn { constructor },
         );
 
-        // The path is emitted as a structured field, not only inside the
-        // message: it is what `test_processor_identity.py` reads back to prove
-        // a class identifies the same way however the app was launched, and a
-        // named field is a contract a message body is not.
         // Recorded as a string-valued field rather than through `Display`:
-        // `test_processor_identity.py` reads the identity back off this record
-        // to prove a class identifies the same way however the app was
-        // launched, and it matches on the quoted `field="value"` rendering that
-        // only the string path produces.
+        // `test_processor_identity.py` matches on the quoted `field="value"`
+        // rendering, which only the string path produces.
         tracing::info!(
             processor_class_import_path = processor_class_import_path.as_str(),
             "[register_dynamic] new processor type registered"
@@ -499,6 +493,22 @@ impl ProcessorInstanceFactory {
         processor_type: &ProcessorClassImportPath,
     ) -> Option<ProcessorDescriptor> {
         self.descriptors.read().get(processor_type).cloned()
+    }
+
+    /// The class's short name, as the registering surface declared it — what
+    /// an instance's display name defaults to.
+    ///
+    /// Projects the one field out under the read lock rather than going
+    /// through [`Self::descriptor`], which clones the whole descriptor: the
+    /// snapshot path asks this once per node.
+    pub(crate) fn default_display_name(
+        &self,
+        processor_type: &ProcessorClassImportPath,
+    ) -> Option<String> {
+        self.descriptors
+            .read()
+            .get(processor_type)
+            .map(|descriptor| descriptor.name.r#type.as_str().to_string())
     }
 
     /// List all registered processor types with their full descriptors.

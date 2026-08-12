@@ -107,20 +107,19 @@ fn the_read_back_name_is_the_assigned_one_not_the_requested_one() {
 #[test]
 #[serial]
 fn the_counter_never_reaches_the_processor_type() {
-    let camera_path = register_test_type("TypeUntouchedCamera");
-    let camera = camera_path.clone();
+    let camera = register_test_type("TypeUntouchedCamera");
 
     let runtime = Runner::new().unwrap();
     runtime
         .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
     runtime
-        .add_processor(ProcessorSpec::new(camera, serde_json::json!({})))
+        .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
 
     let graph = runtime.to_json().expect("graph json");
     for node in graph["nodes"].as_array().expect("nodes array") {
-        assert_eq!(node["type"], serde_json::json!(camera_path.as_str()));
+        assert_eq!(node["type"], serde_json::json!(camera.as_str()));
     }
 }
 

@@ -16,17 +16,13 @@ use crate::error::{SchemaError, SchemaResult};
 /// from Rust.
 ///
 /// Two spellings of one concept, discriminated by the descriptor's sibling
-/// `runtime` field and by nothing in the string itself. The engine stores the
-/// path verbatim and never parses it: it is the registry key, the control
-/// plane's `type`, and the name a helper process imports its class back by, and
-/// each of those wants the author's own spelling. Splitting on `:` or `::` to
-/// recover a short name re-invents the identity grammar this type replaced —
-/// the short name for display comes from the display-name path instead.
+/// `runtime` field and by nothing in the string itself. Stored verbatim and
+/// never parsed — splitting on `:` or `::` to recover a short name re-invents
+/// the identity grammar this type replaced.
 ///
-/// Every inhabitant is valid. The inner string is private, [`Self::new`] is the
+/// Every inhabitant is valid: the inner string is private, [`Self::new`] is the
 /// only constructor, there is no `Default`, and [`Deserialize`] validates
-/// rather than inheriting `String`'s — so a path that names no class cannot be
-/// built, assigned, or decoded from a wire payload.
+/// rather than inheriting `String`'s.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(transparent)]
@@ -35,10 +31,8 @@ pub struct ProcessorClassImportPath(String);
 impl ProcessorClassImportPath {
     /// Build a path, refusing one that names no class.
     ///
-    /// Emptiness is the whole rule. The path holds two grammars at once, so
-    /// there is no single one to check it against, and the plan makes the
-    /// engine's ignorance of both explicit — anything past "a class is named
-    /// here" would be the engine parsing an identity it does not own.
+    /// Emptiness is the whole rule: the path holds two grammars at once, so
+    /// there is no single one to check it against.
     pub fn new(import_path: impl Into<String>) -> SchemaResult<Self> {
         let import_path = import_path.into();
         if import_path.trim().is_empty() {
@@ -64,12 +58,6 @@ impl ProcessorClassImportPath {
 impl fmt::Display for ProcessorClassImportPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl AsRef<str> for ProcessorClassImportPath {
-    fn as_ref(&self) -> &str {
-        &self.0
     }
 }
 
