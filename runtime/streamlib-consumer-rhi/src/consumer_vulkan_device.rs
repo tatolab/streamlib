@@ -153,7 +153,9 @@ impl ConsumerVulkanDevice {
             .unwrap_or(physical_devices[0]);
 
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name = unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }
+        let device_name = device_props
+            .device_name
+            .as_cstr()
             .to_string_lossy()
             .into_owned();
 

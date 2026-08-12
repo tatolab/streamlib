@@ -419,7 +419,7 @@ impl HostVulkanDevice {
 
         let available_ext_names: Vec<&CStr> = available_extensions
             .iter()
-            .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
+            .map(|ext| ext.extension_name.as_cstr())
             .collect();
 
         // 3. Build extension list
@@ -525,7 +525,7 @@ impl HostVulkanDevice {
         if want_validation {
             let layers = unsafe { entry.enumerate_instance_layer_properties() }.unwrap_or_default();
             let layer_present = layers.iter().any(|l| {
-                let name = unsafe { CStr::from_ptr(l.layer_name.as_ptr()) };
+                let name = l.layer_name.as_cstr();
                 name == validation_layer_name.as_c_str()
             });
             if layer_present {
@@ -579,8 +579,7 @@ impl HostVulkanDevice {
             .unwrap_or(physical_devices[0]);
 
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name =
-            unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }.to_string_lossy();
+        let device_name = device_props.device_name.as_cstr().to_string_lossy();
 
         // PCI vendor IDs assigned by Khronos Vulkan registry. NVIDIA's
         // proprietary Linux driver (and currently NVK on the same
