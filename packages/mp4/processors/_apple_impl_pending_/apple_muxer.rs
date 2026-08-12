@@ -3,10 +3,10 @@
 
 //! Apple MP4 muxer using AVAssetWriter with passthrough video.
 
+use crate::_generated_::EncodedAudioFrame;
 use crate::_generated_::EncodedVideoFrame;
 use crate::core::codec::Mp4MuxerConfig;
-use crate::_generated_::EncodedAudioFrame;
-use crate::core::{Result, RuntimeContext, Error};
+use crate::core::{Error, Result, RuntimeContext};
 
 /// Apple MP4 muxer using AVAssetWriter.
 ///

@@ -3,17 +3,19 @@
 
 #![cfg(target_os = "linux")]
 
-use crate::processor_audio_converter::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crate::_generated_::AudioFrame;
+use crate::processor_audio_converter::{
+    ProcessorAudioConverter, ProcessorAudioConverterTargetFormat,
+};
 use cpal::StreamConfig;
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::{Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use crate::_generated_::AudioFrame;
-use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct LinuxAudioDevice {
@@ -62,7 +64,9 @@ struct ResolvedOutputConfig {
     buffer_size: usize,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioOutputProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for LinuxAudioOutputProcessor::Processor
+{
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.device_id = self
             .config
@@ -165,10 +169,7 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioOutput
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!(
-                                        "[AudioOutput] Audio conversion failed: {}",
-                                        e
-                                    );
+                                    tracing::error!("[AudioOutput] Audio conversion failed: {}", e);
                                 }
                             }
                         }
@@ -226,9 +227,7 @@ fn build_output_stream(
     let device = if let Some(id) = device_id {
         let devices: Vec<_> = host
             .output_devices()
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to enumerate audio devices: {}", e))
-            })?
+            .map_err(|e| Error::Configuration(format!("Failed to enumerate audio devices: {}", e)))?
             .collect();
         devices
             .get(id)
@@ -239,9 +238,9 @@ fn build_output_stream(
             .ok_or_else(|| Error::Configuration("No default audio output device".into()))?
     };
 
-    let device_config = device.default_output_config().map_err(|e| {
-        Error::Configuration(format!("Failed to get audio config: {}", e))
-    })?;
+    let device_config = device
+        .default_output_config()
+        .map_err(|e| Error::Configuration(format!("Failed to get audio config: {}", e)))?;
 
     let device_sample_rate = device_config.sample_rate().0;
     let device_channels = device_config.channels() as u32;

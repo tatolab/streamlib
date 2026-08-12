@@ -33,8 +33,7 @@ impl VideoEncoder {
         gpu_context: Option<GpuContext>,
         ctx: &RuntimeContext,
     ) -> Result<Self> {
-        let inner =
-            crate::apple::videotoolbox::VideoToolboxEncoder::new(config, gpu_context, ctx)?;
+        let inner = crate::apple::videotoolbox::VideoToolboxEncoder::new(config, gpu_context, ctx)?;
         Ok(Self { inner })
     }
 

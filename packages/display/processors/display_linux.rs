@@ -17,6 +17,7 @@ use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use streamlib_plugin_abi::{ColorTraitsRepr, HdrStaticMetadataRepr, RawWindowHandleRepr};
 use streamlib_plugin_sdk::sdk::context::{
     GpuContextFullAccess, GpuContextLimitedAccess, RuntimeContextFullAccess,
 };
@@ -29,7 +30,6 @@ use streamlib_plugin_sdk::sdk::rhi::{
     TextureSourceLayout, VertexInputState, Viewport, VulkanAccess, VulkanGraphicsKernel,
     VulkanLayout, VulkanStage,
 };
-use streamlib_plugin_abi::{ColorTraitsRepr, HdrStaticMetadataRepr, RawWindowHandleRepr};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use winit::application::ApplicationHandler;
@@ -574,7 +574,8 @@ impl ApplicationHandler for DisplayEventLoopHandler {
             if current >= limit {
                 tracing::info!(
                     "Display {}: frame limit ({}) reached — exiting",
-                    self.window_id, limit
+                    self.window_id,
+                    limit
                 );
                 self.running.store(false, Ordering::Release);
                 event_loop.exit();
@@ -660,7 +661,8 @@ impl DisplayEventLoopHandler {
                 Err(e) => {
                     tracing::warn!(
                         "Display {}: ColorInfo recreate failed (keeping previous swapchain): {}",
-                        window_id, e
+                        window_id,
+                        e
                     );
                 }
                 Ok((prior_color_format_raw, new_color_format_raw)) => {
@@ -674,7 +676,8 @@ impl DisplayEventLoopHandler {
                             None => {
                                 tracing::error!(
                                     "Display {}: recreate reported unknown color-format discriminant {}",
-                                    window_id, new_color_format_raw
+                                    window_id,
+                                    new_color_format_raw
                                 );
                                 self.frame_counter.fetch_add(1, Ordering::Relaxed);
                                 return;
@@ -688,7 +691,9 @@ impl DisplayEventLoopHandler {
                                 tracing::info!(
                                     "Display {}: rebuilt display blit kernel for new color format \
                                      {:?} (discriminant {}, was {})",
-                                    window_id, new_color_format, new_color_format_raw,
+                                    window_id,
+                                    new_color_format,
+                                    new_color_format_raw,
                                     prior_color_format_raw
                                 );
                                 self.graphics_kernel = Some(new_kernel);
@@ -700,7 +705,8 @@ impl DisplayEventLoopHandler {
                             Ok(Err(e)) => {
                                 tracing::error!(
                                     "Display {}: failed to rebuild display blit kernel: {}",
-                                    window_id, e
+                                    window_id,
+                                    e
                                 );
                                 self.frame_counter.fetch_add(1, Ordering::Relaxed);
                                 return;
@@ -708,7 +714,8 @@ impl DisplayEventLoopHandler {
                             Err(e) => {
                                 tracing::error!(
                                     "Display {}: escalate to rebuild display blit kernel failed: {}",
-                                    window_id, e
+                                    window_id,
+                                    e
                                 );
                                 self.frame_counter.fetch_add(1, Ordering::Relaxed);
                                 return;
@@ -897,11 +904,19 @@ impl DisplayEventLoopHandler {
                     match (draw_result, end_result) {
                         (Ok(()), Ok(())) => true,
                         (Err(e), _) => {
-                            tracing::warn!("Display {}: render frame draw failed: {}", window_id, e);
+                            tracing::warn!(
+                                "Display {}: render frame draw failed: {}",
+                                window_id,
+                                e
+                            );
                             false
                         }
                         (Ok(()), Err(e)) => {
-                            tracing::warn!("Display {}: present-frame end failed: {}", window_id, e);
+                            tracing::warn!(
+                                "Display {}: present-frame end failed: {}",
+                                window_id,
+                                e
+                            );
                             false
                         }
                     }
@@ -941,7 +956,9 @@ impl DisplayEventLoopHandler {
                         if let Err(e) = write_png_rgba(&path, src_width, src_height, rgba) {
                             tracing::warn!(
                                 "Display {}: PNG sample save failed at frame {}: {}",
-                                self.window_id, frame_idx, e
+                                self.window_id,
+                                frame_idx,
+                                e
                             );
                         } else {
                             self.png_samples_saved += 1;
@@ -961,12 +978,7 @@ impl DisplayEventLoopHandler {
         }
     }
 
-    fn sample_texture_to_png(
-        &mut self,
-        texture: &Texture,
-        path: &std::path::Path,
-        frame_idx: u64,
-    ) {
+    fn sample_texture_to_png(&mut self, texture: &Texture, path: &std::path::Path, frame_idx: u64) {
         let format = texture.format();
         let width = texture.width();
         let height = texture.height();
@@ -995,14 +1007,16 @@ impl DisplayEventLoopHandler {
                 Ok(Err(e)) => {
                     tracing::warn!(
                         "Display {}: PNG texture-readback handle creation failed: {}",
-                        self.window_id, e
+                        self.window_id,
+                        e
                     );
                     return;
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Display {}: escalate for PNG texture-readback creation failed: {}",
-                        self.window_id, e
+                        self.window_id,
+                        e
                     );
                     return;
                 }
@@ -1032,7 +1046,9 @@ impl DisplayEventLoopHandler {
                 Err(e) => {
                     tracing::warn!(
                         "Display {}: PNG texture-readback submit failed at frame {}: {}",
-                        self.window_id, frame_idx, e
+                        self.window_id,
+                        frame_idx,
+                        e
                     );
                     return;
                 }
@@ -1045,7 +1061,9 @@ impl DisplayEventLoopHandler {
                 Err(e) => {
                     tracing::warn!(
                         "Display {}: PNG texture-readback wait failed at frame {}: {}",
-                        self.window_id, frame_idx, e
+                        self.window_id,
+                        frame_idx,
+                        e
                     );
                     return;
                 }
@@ -1180,7 +1198,8 @@ fn run_headless_drain_loop(
             if frame_counter.load(Ordering::Relaxed) >= limit {
                 tracing::info!(
                     "Display {}: frame limit ({}) reached in headless mode — exiting",
-                    window_id, limit
+                    window_id,
+                    limit
                 );
                 running.store(false, Ordering::Release);
                 break;
@@ -1332,10 +1351,7 @@ fn build_display_kernel(
 // Minimal PNG writer (no external deps)
 // ---------------------------------------------------------------------------
 
-fn maybe_swizzle_bgra_to_rgba(
-    format: TextureFormat,
-    bytes: &[u8],
-) -> std::borrow::Cow<'_, [u8]> {
+fn maybe_swizzle_bgra_to_rgba(format: TextureFormat, bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     let needs_swizzle = matches!(
         format,
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb,

@@ -94,7 +94,9 @@ impl VideoToolboxEncoder {
     where
         F: FnMut(Vec<u8>, bool) + Send + 'static,
     {
-        let output_callback = Arc::new(Mutex::new(Box::new(callback) as Box<dyn FnMut(Vec<u8>, bool) + Send>));
+        let output_callback = Arc::new(Mutex::new(
+            Box::new(callback) as Box<dyn FnMut(Vec<u8>, bool) + Send>
+        ));
         let refcon = Arc::into_raw(output_callback.clone()) as *mut std::ffi::c_void;
 
         let mut session: *mut std::ffi::c_void = std::ptr::null_mut();
@@ -248,7 +250,7 @@ impl VideoToolboxEncoder {
             for y in 0..self.height {
                 for x in 0..self.width {
                     let offset = y * bytes_per_row + x * 4;
-                    buffer[offset] = b;     // B
+                    buffer[offset] = b; // B
                     buffer[offset + 1] = g; // G
                     buffer[offset + 2] = r; // R
                     buffer[offset + 3] = 255; // A
@@ -311,7 +313,8 @@ unsafe extern "C" fn compression_output_callback(
     }
 
     // Reconstruct Arc from raw pointer
-    let callback = Arc::from_raw(output_callback_refcon as *const Mutex<Box<dyn FnMut(Vec<u8>, bool) + Send>>);
+    let callback =
+        Arc::from_raw(output_callback_refcon as *const Mutex<Box<dyn FnMut(Vec<u8>, bool) + Send>>);
 
     // Extract H.264 NAL units from CMSampleBuffer
     if let Some(nal_data) = extract_h264_from_sample_buffer(sample_buffer) {

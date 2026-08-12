@@ -4,7 +4,9 @@
 #![cfg(target_os = "linux")]
 
 use crate::_generated_::VideoFrame;
-use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::context::{
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 
@@ -44,14 +46,15 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             // Closing stdin signals ffmpeg that input is done.
             drop(child.stdin.take());
 
-            let output = child.wait_with_output().map_err(|e| {
-                Error::Runtime(format!("Failed to wait for ffmpeg: {e}"))
-            })?;
+            let output = child
+                .wait_with_output()
+                .map_err(|e| Error::Runtime(format!("Failed to wait for ffmpeg: {e}")))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(Error::Runtime(format!(
-                    "ffmpeg exited with status {}: {stderr}", output.status
+                    "ffmpeg exited with status {}: {stderr}",
+                    output.status
                 )));
             }
 
@@ -97,8 +100,14 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
 
             tracing::info!(
                 "[LinuxMp4Writer] First frame: {}x{}, {}fps{} — spawning ffmpeg",
-                width, height, fps,
-                if frame.fps.is_some() { " from camera" } else { " from config" }
+                width,
+                height,
+                fps,
+                if frame.fps.is_some() {
+                    " from camera"
+                } else {
+                    " from config"
+                }
             );
 
             let duration_secs = self.config.duration_secs.map(|d| d.to_string());
@@ -106,29 +115,34 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             let size_str = format!("{width}x{height}");
 
             let mut args: Vec<&str> = vec![
-                "-y",
-                "-f", "rawvideo",
-                "-pix_fmt", "rgba",
-                "-s", &size_str,
-                "-r", &fps_str,
-                "-i", "pipe:0",
+                "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &size_str, "-r", &fps_str, "-i",
+                "pipe:0",
             ];
 
             // Silent audio track: fixed duration when configured; otherwise -shortest trims to video length when stdin closes.
             if let Some(ref dur) = duration_secs {
-                args.extend_from_slice(&["-f", "lavfi", "-t", dur,
-                    "-i", "anullsrc=r=48000:cl=stereo"]);
+                args.extend_from_slice(&[
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    dur,
+                    "-i",
+                    "anullsrc=r=48000:cl=stereo",
+                ]);
             } else {
-                args.extend_from_slice(&["-f", "lavfi",
-                    "-i", "anullsrc=r=48000:cl=stereo"]);
+                args.extend_from_slice(&["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]);
             }
 
             args.extend_from_slice(&[
-                "-c:v", "mpeg4",
-                "-q:v", "1",
-                "-c:a", "aac",
+                "-c:v",
+                "mpeg4",
+                "-q:v",
+                "1",
+                "-c:a",
+                "aac",
                 "-shortest",
-                "-movflags", "+faststart",
+                "-movflags",
+                "+faststart",
                 &self.config.output_path,
             ]);
 
@@ -144,23 +158,21 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         }
 
         let child = self.ffmpeg_process.as_mut().unwrap();
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            Error::Runtime("ffmpeg stdin not available".into())
-        })?;
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| Error::Runtime("ffmpeg stdin not available".into()))?;
 
-        stdin.write_all(raw_data).map_err(|e| {
-            Error::Runtime(format!("Failed to write frame to ffmpeg: {e}"))
-        })?;
+        stdin
+            .write_all(raw_data)
+            .map_err(|e| Error::Runtime(format!("Failed to write frame to ffmpeg: {e}")))?;
 
         self.frames_received += 1;
 
         if self.frames_received == 1 {
             tracing::info!("[LinuxMp4Writer] First frame written to ffmpeg");
         } else if self.frames_received % 300 == 0 {
-            tracing::info!(
-                frames = self.frames_received,
-                "[LinuxMp4Writer] Progress"
-            );
+            tracing::info!(frames = self.frames_received, "[LinuxMp4Writer] Progress");
         }
 
         Ok(())

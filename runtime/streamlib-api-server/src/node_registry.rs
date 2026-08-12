@@ -171,8 +171,8 @@ pub fn read_entry(runtime_id: &str) -> Result<Option<NodeRegistryEntry>, NodeReg
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(NodeRegistryError::EntryRead { path, source }),
     };
-    let entry: NodeRegistryEntry = serde_json::from_slice(&bytes)
-        .map_err(|source| NodeRegistryError::EntryDecode {
+    let entry: NodeRegistryEntry =
+        serde_json::from_slice(&bytes).map_err(|source| NodeRegistryError::EntryDecode {
             path: path.clone(),
             source,
         })?;

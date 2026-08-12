@@ -26,7 +26,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-
 use crate::core::rhi::Texture;
 
 #[cfg(target_os = "linux")]
@@ -159,7 +158,6 @@ impl Drop for TextureRegistration {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn texture_registration_is_send_sync() {

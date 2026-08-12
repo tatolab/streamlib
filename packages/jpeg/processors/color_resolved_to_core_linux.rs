@@ -15,7 +15,9 @@
 use crate::_generated_::tatolab__core::color_info::{
     ColorInfo, Matrix, Primaries, Range, Transfer,
 };
-use streamlib_plugin_sdk::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
+use streamlib_plugin_sdk::sdk::color::{
+    MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId,
+};
 
 /// Convert a fully-resolved engine color tuple into the on-wire
 /// `ColorInfo` schema. Every axis is `Some(_)` since

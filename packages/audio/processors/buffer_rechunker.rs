@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::AudioFrame;
-use streamlib_plugin_sdk::sdk::error::Result;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::Result;
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/audio/BufferRechunker",
@@ -21,7 +21,9 @@ pub struct BufferRechunkerProcessor {
     channels: u8,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for BufferRechunkerProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor
+    for BufferRechunkerProcessor::Processor
+{
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let target_size = self.config.target_buffer_size as usize;
         self.buffer = Vec::with_capacity(target_size * 16);

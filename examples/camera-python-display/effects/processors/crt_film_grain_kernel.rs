@@ -181,7 +181,8 @@ impl SandboxedCrtFilmGrain {
             )));
         }
 
-        self.kernel.set_sampled_texture(0, 0, inputs.input.texture)?;
+        self.kernel
+            .set_sampled_texture(0, 0, inputs.input.texture)?;
 
         let push = CrtFilmGrainPushConstants {
             width,

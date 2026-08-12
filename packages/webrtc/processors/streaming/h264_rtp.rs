@@ -126,7 +126,8 @@ impl H264RtpDepacketizer {
                     // END without START - we joined mid-stream, discard silently
                     tracing::trace!(
                         "[H264 RTP] FU-A END without START (ts={}, seq={}) - mid-stream join, discarding",
-                        timestamp, seq_num
+                        timestamp,
+                        seq_num
                     );
                     return Ok(vec![]);
                 }
@@ -171,7 +172,8 @@ impl H264RtpDepacketizer {
                     // MIDDLE without START - we joined mid-stream, discard silently
                     tracing::trace!(
                         "[H264 RTP] FU-A MIDDLE without START (ts={}, seq={}) - mid-stream join, discarding",
-                        timestamp, seq_num
+                        timestamp,
+                        seq_num
                     );
                     return Ok(vec![]);
                 }

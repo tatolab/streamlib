@@ -190,7 +190,6 @@ impl PubSub {
     /// 1. All subscribers of the specific topic
     /// 2. All subscribers of `topics::ALL` (wildcard)
     pub fn publish(&self, topic: &str, event: &Event) {
-
         let Some(runtime_id) = self.runtime_id.get() else {
             tracing::trace!(
                 "PUBSUB not initialized, dropping event: {}",

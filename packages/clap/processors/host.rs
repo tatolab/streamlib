@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #![cfg(any(target_os = "macos", target_os = "ios"))]
-
 // TODO(@jonathan): CLAP host module has unused structs/fields (HostData, HostShared)
 // Review if these are needed for future CLAP plugin features or can be removed
 #![allow(dead_code)]
@@ -19,10 +18,10 @@ use clack_host::{
 
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 
+use crate::_generated_::AudioFrame;
 use parking_lot::Mutex as ParkingLotMutex;
 use std::path::Path;
 use std::sync::Arc;
-use crate::_generated_::AudioFrame;
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 use crate::plugin_info::{ParameterInfo, PluginInfo};
@@ -120,10 +119,7 @@ impl ClapPluginHost {
             descriptors
                 .nth(index)
                 .ok_or_else(|| {
-                    Error::Configuration(format!(
-                        "Plugin index {} not found in bundle",
-                        index
-                    ))
+                    Error::Configuration(format!("Plugin index {} not found in bundle", index))
                 })
                 .cloned()
         })
@@ -219,9 +215,9 @@ impl ClapPluginHost {
             })?
         };
 
-        let factory = bundle.get_plugin_factory().ok_or_else(|| {
-            Error::Configuration("CLAP plugin has no plugin factory".into())
-        })?;
+        let factory = bundle
+            .get_plugin_factory()
+            .ok_or_else(|| Error::Configuration("CLAP plugin has no plugin factory".into()))?;
 
         let descriptor = filter(factory.plugin_descriptors())?;
 
@@ -358,9 +354,7 @@ impl ClapPluginHost {
             &self.plugin_id,
             &host_info,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Failed to create plugin instance: {:?}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Failed to create plugin instance: {:?}", e)))?;
 
         {
             let mut main_thread_handle = instance.plugin_handle();
@@ -454,9 +448,9 @@ impl ClapPluginHost {
             max_frames_count: max_frames as u32,
         };
 
-        let activated = instance.activate(|_, _| (), audio_config).map_err(|e| {
-            Error::Configuration(format!("Failed to activate plugin: {:?}", e))
-        })?;
+        let activated = instance
+            .activate(|_, _| (), audio_config)
+            .map_err(|e| Error::Configuration(format!("Failed to activate plugin: {:?}", e)))?;
 
         let audio_processor = activated.start_processing().map_err(|e| {
             Error::Configuration(format!("Failed to start audio processing: {:?}", e))

@@ -5,12 +5,12 @@
 
 //! V4L2 camera capture processor.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use streamlib_plugin_sdk::sdk::color::{
-    resolve_color_defaults, ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId,
+    ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId, resolve_color_defaults,
 };
 use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
@@ -21,10 +21,10 @@ use streamlib_plugin_sdk::sdk::rhi::{
     VulkanStage,
 };
 
+use v4l::FourCC;
 use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
-use v4l::FourCC;
 
 /// Number of ring textures for GPU-resident pipeline (matches MAX_FRAMES_IN_FLIGHT).
 const RING_TEXTURE_COUNT: usize = 2;
@@ -102,7 +102,10 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxCameraProce
 
         // Open the V4L2 device
         let mut dev = v4l::Device::with_path(&device_path).map_err(|e| {
-            Error::Configuration(format!("Failed to open V4L2 device '{}': {}", device_path, e))
+            Error::Configuration(format!(
+                "Failed to open V4L2 device '{}': {}",
+                device_path, e
+            ))
         })?;
 
         // Query device capabilities
@@ -118,9 +121,9 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxCameraProce
         );
 
         // Read the device's current format as a fallback baseline
-        let current_fmt = dev.format().map_err(|e| {
-            Error::Configuration(format!("Failed to read current format: {}", e))
-        })?;
+        let current_fmt = dev
+            .format()
+            .map_err(|e| Error::Configuration(format!("Failed to read current format: {}", e)))?;
 
         // Negotiate format + resolution: enumerate frame sizes for NV12 (preferred) or
         // YUYV, pick the highest resolution, then set_format with those parameters.
@@ -176,7 +179,10 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxCameraProce
 
             // If NV12 didn't work, try YUYV with highest available resolution
             if negotiated.is_none() {
-                tracing::info!("Camera {}: NV12 not available, trying YUYV", self.camera_name);
+                tracing::info!(
+                    "Camera {}: NV12 not available, trying YUYV",
+                    self.camera_name
+                );
 
                 let (best_w, best_h) = if let Ok(framesizes) = dev.enum_framesizes(yuyv_fourcc) {
                     let mut best_pixels = 0u64;
@@ -342,9 +348,7 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxCameraProce
                     capture_fps,
                 );
             })
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to spawn capture thread: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to spawn capture thread: {}", e)))?;
 
         self.capture_thread_handle = Some(handle);
 
@@ -569,7 +573,9 @@ fn capture_thread_loop(
         // rather than `None` so the structured log reads cleanly for
         // operators (and matches the H.273 wire-level term).
         fn axis<T: std::fmt::Debug>(v: &Option<T>) -> String {
-            v.as_ref().map(|v| format!("{:?}", v)).unwrap_or_else(|| "unspecified".to_string())
+            v.as_ref()
+                .map(|v| format!("{:?}", v))
+                .unwrap_or_else(|| "unspecified".to_string())
         }
         tracing::info!(
             camera = camera_name,
@@ -608,178 +614,173 @@ fn capture_thread_loop(
         _ => unreachable!("input_byte_size match above rejects other fourccs"),
     };
 
-    let setup_result = gpu_context.escalate(|full| {
-        // Read-once capability snapshot — the FullAccess device handle must
-        // not cross the plugin ABI into this cdylib-loaded processor.
-        let caps = full.gpu_capabilities()?;
-        let vulkan_device_name = caps.device_name.clone();
+    let setup_result = gpu_context
+        .escalate(|full| {
+            // Read-once capability snapshot — the FullAccess device handle must
+            // not cross the plugin ABI into this cdylib-loaded processor.
+            let caps = full.gpu_capabilities()?;
+            let vulkan_device_name = caps.device_name.clone();
 
-        let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
+            let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
 
-        let recorder = full.create_command_recorder("camera_capture")?;
+            let recorder = full.create_command_recorder("camera_capture")?;
 
-        // Host-readback / display-wait timeline. Exportable is the only
-        // engine-free timeline primitive; the camera only ever waits on it
-        // host-side, so the extra OPAQUE_FD capability is harmless.
-        let timeline = full.create_exportable_timeline_semaphore(0)?;
+            // Host-readback / display-wait timeline. Exportable is the only
+            // engine-free timeline primitive; the camera only ever waits on it
+            // host-side, so the extra OPAQUE_FD capability is harmless.
+            let timeline = full.create_exportable_timeline_semaphore(0)?;
 
-        // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
-        let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
-        let mut input_mapped_ptrs: [*mut u8; 2] = [std::ptr::null_mut(); 2];
-        for i in 0..2 {
-            let buf = full.acquire_storage_buffer(input_alloc_size)?;
-            input_mapped_ptrs[i] = buf.mapped_ptr();
-            input_storage_buffers.push(buf);
-        }
+            // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
+            let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
+            let mut input_mapped_ptrs: [*mut u8; 2] = [std::ptr::null_mut(); 2];
+            for i in 0..2 {
+                let buf = full.acquire_storage_buffer(input_alloc_size)?;
+                input_mapped_ptrs[i] = buf.mapped_ptr();
+                input_storage_buffers.push(buf);
+            }
 
-        // 2-texture DEVICE_LOCAL ring via the FullAccess render-target
-        // DMA-BUF allocation slot. Picks an EGL-probe
-        // tiled DRM modifier; the resulting Texture carries
-        // STORAGE_BINDING | TEXTURE_BINDING | COPY_SRC | COPY_DST |
-        // RENDER_ATTACHMENT — a superset of the camera's
-        // STORAGE_BINDING|TEXTURE_BINDING|COPY_SRC needs. The extra
-        // RENDER_ATTACHMENT|COPY_DST bits are additive and harmless
-        // (the camera writes via storage-image, never as a render
-        // target). The engine's host RHI texture constructor rides the
-        // pre-warmed VMA pool from `HostVulkanDevice::new()`, so the
-        // NVIDIA post-swapchain export cap doesn't bite (see
-        // `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
-        let mut ring_textures: Vec<Texture> = Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_produce_done: Vec<HostTimelineSemaphore> =
-            Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_consume_done: Vec<HostTimelineSemaphore> =
-            Vec::with_capacity(RING_TEXTURE_COUNT);
-        // Per-ring-slot exportable timelines for single-writer-per-edge
-        // surface-share registration (see
-        // `docs/architecture/adapter-timeline-single-writer.md`).
-        for _ in 0..RING_TEXTURE_COUNT {
-            let stream_texture = full.acquire_render_target_dma_buf_image(
-                width,
-                height,
-                TextureFormat::Rgba8Unorm,
-            )?;
-            let texture_id = uuid::Uuid::new_v4().to_string();
-            let produce_done = full.create_exportable_timeline_semaphore(0)?;
-            let consume_done = full.create_exportable_timeline_semaphore(0)?;
-            ring_texture_ids.push(texture_id);
-            ring_textures.push(stream_texture);
-            ring_produce_done.push(produce_done);
-            ring_consume_done.push(consume_done);
-        }
+            // 2-texture DEVICE_LOCAL ring via the FullAccess render-target
+            // DMA-BUF allocation slot. Picks an EGL-probe
+            // tiled DRM modifier; the resulting Texture carries
+            // STORAGE_BINDING | TEXTURE_BINDING | COPY_SRC | COPY_DST |
+            // RENDER_ATTACHMENT — a superset of the camera's
+            // STORAGE_BINDING|TEXTURE_BINDING|COPY_SRC needs. The extra
+            // RENDER_ATTACHMENT|COPY_DST bits are additive and harmless
+            // (the camera writes via storage-image, never as a render
+            // target). The engine's host RHI texture constructor rides the
+            // pre-warmed VMA pool from `HostVulkanDevice::new()`, so the
+            // NVIDIA post-swapchain export cap doesn't bite (see
+            // `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
+            let mut ring_textures: Vec<Texture> = Vec::with_capacity(RING_TEXTURE_COUNT);
+            let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
+            let mut ring_produce_done: Vec<HostTimelineSemaphore> =
+                Vec::with_capacity(RING_TEXTURE_COUNT);
+            let mut ring_consume_done: Vec<HostTimelineSemaphore> =
+                Vec::with_capacity(RING_TEXTURE_COUNT);
+            // Per-ring-slot exportable timelines for single-writer-per-edge
+            // surface-share registration (see
+            // `docs/architecture/adapter-timeline-single-writer.md`).
+            for _ in 0..RING_TEXTURE_COUNT {
+                let stream_texture = full.acquire_render_target_dma_buf_image(
+                    width,
+                    height,
+                    TextureFormat::Rgba8Unorm,
+                )?;
+                let texture_id = uuid::Uuid::new_v4().to_string();
+                let produce_done = full.create_exportable_timeline_semaphore(0)?;
+                let consume_done = full.create_exportable_timeline_semaphore(0)?;
+                ring_texture_ids.push(texture_id);
+                ring_textures.push(stream_texture);
+                ring_produce_done.push(produce_done);
+                ring_consume_done.push(consume_done);
+            }
 
-        // DMA-BUF probe — VIDIOC_EXPBUF on each V4L2 buffer + Vulkan
-        // import. The import side is privileged (allocates VkDeviceMemory
-        // + binds), so it stays inside the escalation. Failure falls
-        // through to the HOST_VISIBLE MMAP path above.
-        let supports_cross_device_dma_buf_probe =
-            caps.supports_cross_device_dma_buf_probe;
-        let probe_skipped = !supports_cross_device_dma_buf_probe;
-        let mut use_dmabuf = false;
-        let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] =
-            [-1; V4L2_BUFFER_COUNT as usize];
-        let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
-        if caps.supports_external_memory
-            && !is_virtual_device
-            && supports_cross_device_dma_buf_probe
-        {
-            let mut imported: Vec<Option<StorageBuffer>> =
-                (0..V4L2_BUFFER_COUNT as usize).map(|_| None).collect();
-            let mut all_imported = true;
-            for i in 0..V4L2_BUFFER_COUNT as usize {
-                let fd: i32 = unsafe {
-                    let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
-                    expbuf.type_ = v4l::buffer::Type::VideoCapture as u32;
-                    expbuf.index = i as u32;
-                    expbuf.flags = libc::O_CLOEXEC as u32;
-                    let r = libc::ioctl(
-                        device_fd,
-                        v4l::v4l2::vidioc::VIDIOC_EXPBUF as libc::c_ulong,
-                        &mut expbuf,
-                    );
-                    if r != 0 {
-                        -1
-                    } else {
-                        expbuf.fd
-                    }
-                };
-                if fd < 0 {
-                    if i == 0 {
-                        tracing::info!(
-                            camera = camera_name,
-                            "VIDIOC_EXPBUF not supported — using MMAP path"
+            // DMA-BUF probe — VIDIOC_EXPBUF on each V4L2 buffer + Vulkan
+            // import. The import side is privileged (allocates VkDeviceMemory
+            // + binds), so it stays inside the escalation. Failure falls
+            // through to the HOST_VISIBLE MMAP path above.
+            let supports_cross_device_dma_buf_probe = caps.supports_cross_device_dma_buf_probe;
+            let probe_skipped = !supports_cross_device_dma_buf_probe;
+            let mut use_dmabuf = false;
+            let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] =
+                [-1; V4L2_BUFFER_COUNT as usize];
+            let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
+            if caps.supports_external_memory
+                && !is_virtual_device
+                && supports_cross_device_dma_buf_probe
+            {
+                let mut imported: Vec<Option<StorageBuffer>> =
+                    (0..V4L2_BUFFER_COUNT as usize).map(|_| None).collect();
+                let mut all_imported = true;
+                for i in 0..V4L2_BUFFER_COUNT as usize {
+                    let fd: i32 = unsafe {
+                        let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
+                        expbuf.type_ = v4l::buffer::Type::VideoCapture as u32;
+                        expbuf.index = i as u32;
+                        expbuf.flags = libc::O_CLOEXEC as u32;
+                        let r = libc::ioctl(
+                            device_fd,
+                            v4l::v4l2::vidioc::VIDIOC_EXPBUF as libc::c_ulong,
+                            &mut expbuf,
                         );
-                    }
-                    all_imported = false;
-                    break;
-                }
-                match full.import_dma_buf_storage_buffer(fd, input_alloc_size) {
-                    Ok(buf) => {
-                        dmabuf_fds[i] = fd;
-                        imported[i] = Some(buf);
-                    }
-                    Err(e) => {
+                        if r != 0 { -1 } else { expbuf.fd }
+                    };
+                    if fd < 0 {
                         if i == 0 {
-                            if vulkan_device_name.contains("NVIDIA")
-                                || vulkan_device_name.contains("nvidia")
-                            {
-                                tracing::info!(
-                                    "Camera {}: DMA-BUF import failed on NVIDIA GPU \
-                                     (cross-device DMA-BUF limitation). Falling back to \
-                                     MMAP + memcpy. This is expected and performant with \
-                                     GPU compute.",
-                                    camera_name
-                                );
-                            } else {
-                                tracing::warn!(
-                                    "Camera {}: DMA-BUF import failed (unexpected on {}): \
-                                     {}. Falling back to MMAP + memcpy.",
-                                    camera_name,
-                                    vulkan_device_name,
-                                    e
-                                );
-                            }
+                            tracing::info!(
+                                camera = camera_name,
+                                "VIDIOC_EXPBUF not supported — using MMAP path"
+                            );
                         }
-                        unsafe { libc::close(fd) };
                         all_imported = false;
                         break;
                     }
+                    match full.import_dma_buf_storage_buffer(fd, input_alloc_size) {
+                        Ok(buf) => {
+                            dmabuf_fds[i] = fd;
+                            imported[i] = Some(buf);
+                        }
+                        Err(e) => {
+                            if i == 0 {
+                                if vulkan_device_name.contains("NVIDIA")
+                                    || vulkan_device_name.contains("nvidia")
+                                {
+                                    tracing::info!(
+                                        "Camera {}: DMA-BUF import failed on NVIDIA GPU \
+                                     (cross-device DMA-BUF limitation). Falling back to \
+                                     MMAP + memcpy. This is expected and performant with \
+                                     GPU compute.",
+                                        camera_name
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        "Camera {}: DMA-BUF import failed (unexpected on {}): \
+                                     {}. Falling back to MMAP + memcpy.",
+                                        camera_name,
+                                        vulkan_device_name,
+                                        e
+                                    );
+                                }
+                            }
+                            unsafe { libc::close(fd) };
+                            all_imported = false;
+                            break;
+                        }
+                    }
                 }
-            }
-            if all_imported {
-                dmabuf_imported_buffers =
-                    imported.into_iter().map(|o| o.unwrap()).collect();
-                use_dmabuf = true;
-            } else {
-                for fd in &mut dmabuf_fds {
-                    if *fd >= 0 {
-                        unsafe { libc::close(*fd) };
-                        *fd = -1;
+                if all_imported {
+                    dmabuf_imported_buffers = imported.into_iter().map(|o| o.unwrap()).collect();
+                    use_dmabuf = true;
+                } else {
+                    for fd in &mut dmabuf_fds {
+                        if *fd >= 0 {
+                            unsafe { libc::close(*fd) };
+                            *fd = -1;
+                        }
                     }
                 }
             }
-        }
 
-        Ok(CameraGpuResources {
-            color_converter,
-            recorder,
-            timeline,
-            ring_produce_done,
-            ring_consume_done,
-            input_storage_buffers,
-            input_mapped_ptrs,
-            ring_textures,
-            ring_texture_ids,
-            use_dmabuf,
-            dmabuf_imported_buffers,
-            dmabuf_fds,
-            vulkan_device_name,
-            probe_skipped,
+            Ok(CameraGpuResources {
+                color_converter,
+                recorder,
+                timeline,
+                ring_produce_done,
+                ring_consume_done,
+                input_storage_buffers,
+                input_mapped_ptrs,
+                ring_textures,
+                ring_texture_ids,
+                use_dmabuf,
+                dmabuf_imported_buffers,
+                dmabuf_fds,
+                vulkan_device_name,
+                probe_skipped,
+            })
         })
-    })
-    // `escalate` wraps the closure's own `Result` — flatten the
-    // `Result<Result<_>>` (the SDK does not auto-flatten a fallible closure).
-    .and_then(std::convert::identity);
+        // `escalate` wraps the closure's own `Result` — flatten the
+        // `Result<Result<_>>` (the SDK does not auto-flatten a fallible closure).
+        .and_then(std::convert::identity);
 
     let CameraGpuResources {
         color_converter,
@@ -842,8 +843,10 @@ fn capture_thread_loop(
     // Dual-registration for the Path-1 / Path-2 contract, and
     // `docs/architecture/adapter-timeline-single-writer.md` for the
     // timeline pair semantics.
-    for (i, (texture_id, stream_texture)) in
-        ring_texture_ids.iter().zip(ring_textures.iter()).enumerate()
+    for (i, (texture_id, stream_texture)) in ring_texture_ids
+        .iter()
+        .zip(ring_textures.iter())
+        .enumerate()
     {
         let store = gpu_context.surface_store();
         if !store.is_none() {
@@ -1002,25 +1005,28 @@ fn capture_thread_loop(
         // ---- Step 2: Select ring texture + acquire pixel buffer for IPC ----
         let ring_index = (frame_num as usize) % RING_TEXTURE_COUNT;
 
-        let (pool_id, pooled_buffer) =
-            match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32) {
-                Ok(result) => result,
-                Err(e) => {
-                    if frame_num == 0 {
-                        tracing::error!(camera = camera_name, error = %e, "failed to acquire pixel buffer");
-                    }
-                    if let Some(mut v4l2_buf) = v4l2_requeue_buf {
-                        unsafe {
-                            libc::ioctl(
-                                device_fd,
-                                v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                                &mut v4l2_buf,
-                            );
-                        }
-                    }
-                    continue;
+        let (pool_id, pooled_buffer) = match gpu_context.acquire_pixel_buffer(
+            width,
+            height,
+            PixelFormat::Rgba32,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                if frame_num == 0 {
+                    tracing::error!(camera = camera_name, error = %e, "failed to acquire pixel buffer");
                 }
-            };
+                if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                    unsafe {
+                        libc::ioctl(
+                            device_fd,
+                            v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                            &mut v4l2_buf,
+                        );
+                    }
+                }
+                continue;
+            }
+        };
 
         // Register ring texture in cache under the pixel buffer's pool_id so
         // display resolves the texture via the same surface_id used for
@@ -1181,8 +1187,7 @@ fn capture_thread_loop(
         // wait on a monotonically advancing counter), then wait so the
         // pixel buffer is host-readable for the IPC write below.
         timeline_signal_value = frame_num + 1;
-        if let Err(e) =
-            recorder.submit_signaling_timeline(&camera_timeline, timeline_signal_value)
+        if let Err(e) = recorder.submit_signaling_timeline(&camera_timeline, timeline_signal_value)
         {
             if frame_num == 0 {
                 tracing::error!(camera = camera_name, error = %e, "failed to submit compute dispatch");
@@ -1245,7 +1250,11 @@ fn capture_thread_loop(
         }
 
         if frame_num == 0 {
-            let mode = if use_dmabuf { "DMA-BUF zero-copy" } else { "MMAP + memcpy" };
+            let mode = if use_dmabuf {
+                "DMA-BUF zero-copy"
+            } else {
+                "MMAP + memcpy"
+            };
             tracing::info!(
                 camera = camera_name,
                 mode,
@@ -1302,9 +1311,9 @@ impl LinuxCameraProcessor::Processor {
         let mut devices = Vec::new();
 
         // Scan /dev/video* devices
-        for entry in std::fs::read_dir("/dev").map_err(|e| {
-            Error::Configuration(format!("Failed to read /dev: {}", e))
-        })? {
+        for entry in std::fs::read_dir("/dev")
+            .map_err(|e| Error::Configuration(format!("Failed to read /dev: {}", e)))?
+        {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,

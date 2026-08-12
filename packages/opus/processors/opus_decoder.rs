@@ -206,11 +206,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for OpusDecoderPro
 
         let decoder = OpusDecoder::new(sample_rate, channels)?;
 
-        tracing::info!(
-            sample_rate,
-            channels,
-            "[OpusDecoder] Initialized"
-        );
+        tracing::info!(sample_rate, channels, "[OpusDecoder] Initialized");
 
         self.opus_decoder = Some(decoder);
         Ok(())
@@ -244,7 +240,10 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for OpusDecoderPro
         if self.frames_decoded == 1 {
             tracing::info!("[OpusDecoder] First frame decoded");
         } else if self.frames_decoded % 500 == 0 {
-            tracing::info!(frames = self.frames_decoded, "[OpusDecoder] Decode progress");
+            tracing::info!(
+                frames = self.frames_decoded,
+                "[OpusDecoder] Decode progress"
+            );
         }
 
         Ok(())

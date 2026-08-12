@@ -86,7 +86,9 @@ impl Clone for IndexBuffer {
             // SAFETY: `handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`
             // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                Arc::increment_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+                Arc::increment_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanBuffer,
+                );
             }
         }
         Self {
@@ -104,7 +106,9 @@ impl Drop for IndexBuffer {
             // SAFETY: matched with `Arc::into_raw` in `from_arc_into_raw`
             // and any `Clone` increment.
             unsafe {
-                Arc::decrement_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+                Arc::decrement_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanBuffer,
+                );
             }
         }
     }

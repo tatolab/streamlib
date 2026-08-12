@@ -101,7 +101,7 @@ unsafe impl Sync for VulkanCommandQueue {}
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::vulkan::rhi::HostVulkanDevice;
 
     #[cfg_attr(

@@ -10,12 +10,12 @@
 //! `./setup.sh`), and the runtime lazily discovers + loads it on the first
 //! `processor_type_ref!` reference. The reference sites carry no version.
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
 
 fn main() -> Result<()> {
     println!("\n🎵 Audio Mixer Demo - Mixing Multiple Tones\n");

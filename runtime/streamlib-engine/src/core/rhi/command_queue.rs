@@ -15,7 +15,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-
 use crate::core::Result;
 
 use super::CommandBuffer;
@@ -157,7 +156,6 @@ impl std::fmt::Debug for RhiCommandQueue {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn rhi_command_queue_is_send_sync() {

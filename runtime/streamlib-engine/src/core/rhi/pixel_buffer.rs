@@ -9,7 +9,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-
 use super::{PixelBufferRef, PixelFormat};
 
 /// Pixel buffer with cached dimensions.

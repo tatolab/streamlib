@@ -8,8 +8,8 @@
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::apple::PixelTransferSession;
-use crate::core::rhi::{PixelBufferPoolId, PixelBuffer};
-use crate::core::{GpuContext, Result, RuntimeContext, Error, VideoEncoderConfig};
+use crate::core::rhi::{PixelBuffer, PixelBufferPoolId};
+use crate::core::{Error, GpuContext, Result, RuntimeContext, VideoEncoderConfig};
 use objc2_core_video::CVPixelBuffer;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -229,23 +229,21 @@ impl VideoToolboxEncoder {
     }
 
     /// Convert PixelBuffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
-    fn convert_buffer_to_pixel_buffer(
-        &self,
-        buffer: &PixelBuffer,
-    ) -> Result<*mut CVPixelBuffer> {
+    fn convert_buffer_to_pixel_buffer(&self, buffer: &PixelBuffer) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
-        let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
-            Error::Configuration("PixelTransferSession not initialized".into())
-        })?;
+        let pixel_transfer = self
+            .pixel_transfer
+            .as_ref()
+            .ok_or_else(|| Error::Configuration("PixelTransferSession not initialized".into()))?;
 
         pixel_transfer.convert_buffer_to_nv12(buffer)
     }
 
     /// Encode a video frame.
     pub fn encode(&mut self, frame: &VideoFrame, gpu: &GpuContext) -> Result<EncodedVideoFrame> {
-        let session = self.compression_session.ok_or_else(|| {
-            Error::Configuration("Compression session not initialized".into())
-        })?;
+        let session = self
+            .compression_session
+            .ok_or_else(|| Error::Configuration("Compression session not initialized".into()))?;
 
         // Resolve buffer from surface_id
         let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
@@ -336,13 +334,9 @@ impl VideoToolboxEncoder {
         let mut encoded_frame = self
             .encoded_frames
             .lock()
-            .map_err(|e| {
-                Error::Runtime(format!("Failed to lock encoded frames queue: {}", e))
-            })?
+            .map_err(|e| Error::Runtime(format!("Failed to lock encoded frames queue: {}", e)))?
             .pop_front()
-            .ok_or_else(|| {
-                Error::Runtime("No encoded frame available after encoding".into())
-            })?;
+            .ok_or_else(|| Error::Runtime("No encoded frame available after encoding".into()))?;
 
         // Step 7: Update frame metadata
         encoded_frame.timestamp_ns = timestamp_ns.to_string();
@@ -580,7 +574,7 @@ extern "C" fn compression_output_callback(
 
         let encoded_frame = EncodedVideoFrame {
             data: final_data,
-            fps: None, // Set by caller from VideoFrame metadata
+            fps: None,                   // Set by caller from VideoFrame metadata
             timestamp_ns: String::new(), // Will be set by caller
             is_keyframe,
             frame_number: String::new(), // Will be set by caller

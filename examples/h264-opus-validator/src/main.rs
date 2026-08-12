@@ -27,13 +27,20 @@ fn main() -> Result<()> {
     let video_status = Command::new("ffmpeg")
         .args(&[
             "-y",
-            "-f", "lavfi",
-            "-i", "testsrc=duration=4:size=1280x720:rate=30",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-b:v", "2M",
-            "-g", "30", // Keyframe every 30 frames (1 second)
-            "-pix_fmt", "yuv420p",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=4:size=1280x720:rate=30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-b:v",
+            "2M",
+            "-g",
+            "30", // Keyframe every 30 frames (1 second)
+            "-pix_fmt",
+            "yuv420p",
             "temp_video.mp4",
         ])
         .status()
@@ -69,9 +76,12 @@ fn main() -> Result<()> {
     let mux_status = Command::new("ffmpeg")
         .args(&[
             "-y",
-            "-i", "temp_video.mp4",
-            "-i", "temp_audio.aac",
-            "-c", "copy",
+            "-i",
+            "temp_video.mp4",
+            "-i",
+            "temp_audio.aac",
+            "-c",
+            "copy",
             "-shortest",
             output_path,
         ])
@@ -87,10 +97,13 @@ fn main() -> Result<()> {
     println!("🔍 Step 4: Verifying MP4...\n");
     let ffprobe_output = Command::new("ffprobe")
         .args(&[
-            "-v", "quiet",
+            "-v",
+            "quiet",
             "-show_streams",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate,bit_rate",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name,width,height,r_frame_rate,bit_rate",
             output_path,
         ])
         .output()
@@ -109,10 +122,13 @@ fn main() -> Result<()> {
 
     let ffprobe_audio = Command::new("ffprobe")
         .args(&[
-            "-v", "quiet",
+            "-v",
+            "quiet",
             "-show_streams",
-            "-select_streams", "a:0",
-            "-show_entries", "stream=codec_name,sample_rate,channels,bit_rate",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels,bit_rate",
             output_path,
         ])
         .output()
@@ -133,10 +149,14 @@ fn main() -> Result<()> {
     println!("🔑 Keyframe analysis:");
     let keyframe_output = Command::new("ffprobe")
         .args(&[
-            "-v", "quiet",
-            "-select_streams", "v:0",
-            "-show_entries", "frame=pict_type,pts_time",
-            "-of", "csv=p=0",
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "frame=pict_type,pts_time",
+            "-of",
+            "csv=p=0",
             output_path,
         ])
         .output()

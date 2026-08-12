@@ -2,17 +2,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::rhi::{PixelFormat, RhiTextureCache};
-use crate::core::{Result, RuntimeContextFullAccess, Error};
+use crate::core::{Error, Result, RuntimeContextFullAccess};
 use crossbeam_channel::{Receiver, Sender};
 use metal;
-use objc2::{rc::Retained, MainThreadMarker};
+use objc2::{MainThreadMarker, rc::Retained};
 use objc2_app_kit::{NSApplication, NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use objc2_metal::MTLPixelFormat;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -204,9 +204,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         let render_pipeline = self
             .metal_render_pipeline
             .as_ref()
-            .ok_or_else(|| {
-                Error::Configuration("Metal render pipeline not initialized".into())
-            })?
+            .ok_or_else(|| Error::Configuration("Metal render pipeline not initialized".into()))?
             .clone();
 
         let sampler = self

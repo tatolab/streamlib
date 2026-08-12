@@ -11,7 +11,6 @@ use std::ffi::c_void;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-
 /// Vertex buffer for graphics pipeline vertex input.
 ///
 /// Linux-only. Graphics kernels bind it via `set_vertex_buffer`,
@@ -89,7 +88,9 @@ impl Clone for VertexBuffer {
             // SAFETY: `handle` is `Arc::into_raw(Arc<crate::vulkan::rhi::HostVulkanBuffer>)`
             // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                Arc::increment_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+                Arc::increment_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanBuffer,
+                );
             }
         }
         Self {
@@ -107,7 +108,9 @@ impl Drop for VertexBuffer {
             // SAFETY: matched with the `Arc::into_raw` in
             // `from_arc_into_raw` and any `Clone` increment.
             unsafe {
-                Arc::decrement_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+                Arc::decrement_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanBuffer,
+                );
             }
         }
     }
@@ -125,7 +128,6 @@ impl std::fmt::Debug for VertexBuffer {
 #[cfg(all(test, target_pointer_width = "64", target_os = "linux"))]
 mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn vertex_buffer_is_send_sync() {

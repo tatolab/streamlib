@@ -247,10 +247,18 @@ impl SandboxedBlendingCompositor {
         self.kernel.set_sampled_texture(0, 3, pip)?;
 
         let mut flags = 0u32;
-        if inputs.video.is_some()       { flags |= flag_bits::HAS_VIDEO; }
-        if inputs.lower_third.is_some() { flags |= flag_bits::HAS_LOWER_THIRD; }
-        if inputs.watermark.is_some()   { flags |= flag_bits::HAS_WATERMARK; }
-        if inputs.pip.is_some()         { flags |= flag_bits::HAS_PIP; }
+        if inputs.video.is_some() {
+            flags |= flag_bits::HAS_VIDEO;
+        }
+        if inputs.lower_third.is_some() {
+            flags |= flag_bits::HAS_LOWER_THIRD;
+        }
+        if inputs.watermark.is_some() {
+            flags |= flag_bits::HAS_WATERMARK;
+        }
+        if inputs.pip.is_some() {
+            flags |= flag_bits::HAS_PIP;
+        }
 
         let push = BlendingCompositorPushConstants {
             width,
@@ -355,7 +363,10 @@ impl SandboxedBlendingCompositor {
         layer: Option<BlendingLayer<'a>>,
     ) -> (&'a Texture, VulkanLayout) {
         match layer {
-            Some(BlendingLayer { texture, current_layout }) => (texture, current_layout),
+            Some(BlendingLayer {
+                texture,
+                current_layout,
+            }) => (texture, current_layout),
             None => (&self.placeholder, VulkanLayout::SHADER_READ_ONLY_OPTIMAL),
         }
     }

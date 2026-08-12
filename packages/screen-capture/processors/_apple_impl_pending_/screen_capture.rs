@@ -7,7 +7,7 @@ use crate::_apple_impl_pending_::corevideo_ffi::{
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::{define_class, msg_send, AllocAnyThread, ClassType};
+use objc2::{AllocAnyThread, ClassType, define_class, msg_send};
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
@@ -17,8 +17,8 @@ use objc2_screen_capture_kit::{
 };
 use parking_lot::Mutex;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
@@ -286,7 +286,9 @@ pub struct AppleScreenCaptureProcessor {
     capture_init_state: Option<Arc<ScreenCaptureInitState>>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleScreenCaptureProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for AppleScreenCaptureProcessor::Processor
+{
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("ScreenCapture: setup() complete");
@@ -369,10 +371,7 @@ impl AppleScreenCaptureProcessor::Processor {
                     if !error.is_null() {
                         let error = Retained::retain(error).unwrap();
                         let msg = error.localizedDescription().to_string();
-                        tracing::warn!(
-                            "[ScreenCapture] Failed to get shareable content: {}",
-                            msg
-                        );
+                        tracing::warn!("[ScreenCapture] Failed to get shareable content: {}", msg);
                         init_state_for_completion.mark_failed(msg);
                         return;
                     }
@@ -585,9 +584,8 @@ impl AppleScreenCaptureProcessor::Processor {
             }
         }
 
-        let app = found_app.ok_or_else(|| {
-            Error::Configuration(format!("Application not found: {}", bundle_id))
-        })?;
+        let app = found_app
+            .ok_or_else(|| Error::Configuration(format!("Application not found: {}", bundle_id)))?;
 
         let display_index = config.app_display_index.unwrap_or(0) as usize;
         if display_index >= displays.len() {

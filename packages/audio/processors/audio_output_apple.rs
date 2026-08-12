@@ -3,16 +3,18 @@
 
 #![cfg(any(target_os = "macos", target_os = "ios"))]
 
-use crate::processor_audio_converter::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
+use crate::_generated_::AudioFrame;
+use crate::processor_audio_converter::{
+    ProcessorAudioConverter, ProcessorAudioConverterTargetFormat,
+};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use rtrb::{Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use crate::_generated_::AudioFrame;
-use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 /// Wrapper for InputMailboxes pointer that is Send.
 struct SendableInputsPtr(*const streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes);
@@ -74,7 +76,9 @@ pub struct AppleAudioOutputProcessor {
     audio: Option<ProcessorAudioConverter>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for AppleAudioOutputProcessor::Processor
+{
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.device_id = self
             .config
@@ -119,19 +123,16 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleAudioOutput
                 .collect();
             devices
                 .get(id)
-                .ok_or_else(|| {
-                    Error::Configuration(format!("Audio device {} not found", id))
-                })?
+                .ok_or_else(|| Error::Configuration(format!("Audio device {} not found", id)))?
                 .clone()
         } else {
-            host.default_output_device().ok_or_else(|| {
-                Error::Configuration("No default audio output device".into())
-            })?
+            host.default_output_device()
+                .ok_or_else(|| Error::Configuration("No default audio output device".into()))?
         };
 
-        let device_config = device.default_output_config().map_err(|e| {
-            Error::Configuration(format!("Failed to get audio config: {}", e))
-        })?;
+        let device_config = device
+            .default_output_config()
+            .map_err(|e| Error::Configuration(format!("Failed to get audio config: {}", e)))?;
 
         let device_sample_rate = device_config.sample_rate().0;
         let device_channels = device_config.channels() as u32;
@@ -194,9 +195,7 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleAudioOutput
                 },
                 None,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to build audio stream: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to build audio stream: {}", e)))?;
 
         tracing::info!("AudioOutput: Starting cpal stream playback");
         stream

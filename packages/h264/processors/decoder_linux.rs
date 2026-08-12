@@ -19,7 +19,6 @@
 // hand-off the camera uses. No engine-only `TextureRing` /
 // `copy_pixel_buffer_to_slot` reach from the cdylib.
 
-
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::color_vui_translate_linux::decoded_vui_to_color_info;
 use streamlib_plugin_sdk::sdk::context::{
@@ -200,7 +199,10 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H264DecoderPro
         }
 
         if self.frames_decoded % 300 == 0 && self.frames_decoded > 0 {
-            tracing::info!(frames = self.frames_decoded, "[H264Decoder] Decode progress");
+            tracing::info!(
+                frames = self.frames_decoded,
+                "[H264Decoder] Decode progress"
+            );
         }
 
         Ok(())

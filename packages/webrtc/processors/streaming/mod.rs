@@ -11,7 +11,7 @@ pub mod whep_client;
 pub mod whip_client;
 
 pub use h264_rtp::H264RtpDepacketizer;
-pub use rtp::{convert_audio_to_sample, convert_video_to_samples, RtpTimestampCalculator};
+pub use rtp::{RtpTimestampCalculator, convert_audio_to_sample, convert_video_to_samples};
 pub use session::WebRtcSession;
 pub use whep_client::{RtpSample, WhepClient, WhepConfig};
 pub use whip_client::{WhipClient, WhipConfig};

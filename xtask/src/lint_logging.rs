@@ -51,9 +51,10 @@ const fn python_logging_lint_target(name: &'static str, root_relative: &'static 
     }
 }
 
-pub const TARGETS: &[LintTarget] = &[
-    python_logging_lint_target("python", "sdk/streamlib-python-wheel/python"),
-];
+pub const TARGETS: &[LintTarget] = &[python_logging_lint_target(
+    "python",
+    "sdk/streamlib-python-wheel/python",
+)];
 
 #[derive(Debug)]
 pub struct Violation {
@@ -987,9 +988,6 @@ mod tests {
         assert_eq!(v[0].matched_pattern, "logging.basicConfig");
     }
 
-
-
-
     #[test]
     fn accepts_streamlib_log_python() {
         let v = scan_fixture_tree(
@@ -1000,7 +998,6 @@ mod tests {
         assert!(v.is_empty(), "streamlib.log.* should pass: {:?}", v);
     }
 
-
     #[test]
     fn skips_comment_lines_python() {
         let v = scan_fixture_tree(
@@ -1010,7 +1007,6 @@ mod tests {
         );
         assert!(v.is_empty(), "commented-out print should not flag: {:?}", v);
     }
-
 
     #[test]
     fn excludes_tests_directory_python() {
@@ -1048,7 +1044,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn allow_line_pragma_skips_single_line_python() {
         let v = scan_fixture_tree(
@@ -1059,7 +1054,6 @@ mod tests {
         assert_eq!(v.len(), 1, "only the non-allowed line should flag: {:?}", v);
         assert_eq!(v[0].matched_pattern, "print(");
     }
-
 
     // ----- Rust target -------------------------------------------------------
 

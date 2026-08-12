@@ -159,9 +159,10 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for CrtFilmGrainPr
             .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?
             .clone();
 
-        let backend = self.backend.as_mut().ok_or_else(|| {
-            Error::Configuration("CrtFilmGrain: backend not initialized".into())
-        })?;
+        let backend = self
+            .backend
+            .as_mut()
+            .ok_or_else(|| Error::Configuration("CrtFilmGrain: backend not initialized".into()))?;
 
         // Resolve input texture + its current_layout via Path 1 / Path 2
         // (the upstream BlendingCompositor publishes a texture-backed
@@ -205,7 +206,9 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for CrtFilmGrainPr
                 texture: &input_texture,
                 current_layout: input_layout,
             },
-            output: CrtFilmGrainOutput { texture: &slot.texture },
+            output: CrtFilmGrainOutput {
+                texture: &slot.texture,
+            },
             time_seconds: elapsed,
             crt_curve: self.config.crt_curve,
             scanline_intensity: self.config.scanline_intensity,

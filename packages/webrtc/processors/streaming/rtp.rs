@@ -15,9 +15,7 @@ pub fn convert_video_to_samples(
     let nal_units = parse_nal_units(&frame.data);
 
     if nal_units.is_empty() {
-        return Err(Error::Runtime(
-            "No NAL units found in H.264 frame".into(),
-        ));
+        return Err(Error::Runtime("No NAL units found in H.264 frame".into()));
     }
 
     // Calculate frame duration
@@ -96,7 +94,10 @@ fn parse_nal_units_annex_b(data: &[u8]) -> Vec<Vec<u8>> {
     let mut i = 0;
     while i < data.len() {
         let start_code_len = if i + 3 < data.len()
-            && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1
+            && data[i] == 0
+            && data[i + 1] == 0
+            && data[i + 2] == 0
+            && data[i + 3] == 1
         {
             4
         } else if i + 2 < data.len() && data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
@@ -108,10 +109,13 @@ fn parse_nal_units_annex_b(data: &[u8]) -> Vec<Vec<u8>> {
         let mut nal_end = i + start_code_len;
         while nal_end < data.len() {
             if (nal_end + 3 < data.len()
-                && data[nal_end] == 0 && data[nal_end + 1] == 0
-                && data[nal_end + 2] == 0 && data[nal_end + 3] == 1)
+                && data[nal_end] == 0
+                && data[nal_end + 1] == 0
+                && data[nal_end + 2] == 0
+                && data[nal_end + 3] == 1)
                 || (nal_end + 2 < data.len()
-                    && data[nal_end] == 0 && data[nal_end + 1] == 0
+                    && data[nal_end] == 0
+                    && data[nal_end + 1] == 0
                     && data[nal_end + 2] == 1)
             {
                 break;

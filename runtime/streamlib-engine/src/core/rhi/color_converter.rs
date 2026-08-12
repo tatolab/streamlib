@@ -498,7 +498,9 @@ impl Clone for RhiColorConverter {
             // SAFETY: `handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`;
             // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                std::sync::Arc::increment_strong_count(self.handle as *const RhiColorConverterInner);
+                std::sync::Arc::increment_strong_count(
+                    self.handle as *const RhiColorConverterInner,
+                );
             }
         }
         Self {
@@ -515,7 +517,9 @@ impl Drop for RhiColorConverter {
             // SAFETY: `handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`;
             // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                std::sync::Arc::decrement_strong_count(self.handle as *const RhiColorConverterInner);
+                std::sync::Arc::decrement_strong_count(
+                    self.handle as *const RhiColorConverterInner,
+                );
             }
         }
     }
@@ -546,7 +550,6 @@ impl RhiColorConverterInner {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn rhi_color_converter_is_send_sync() {

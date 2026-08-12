@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::tatolab__audio::audio_mixer_config::Strategy;
 use crate::_generated_::AudioFrame;
-use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use crate::_generated_::tatolab__audio::audio_mixer_config::Strategy;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/audio/AudioMixer",

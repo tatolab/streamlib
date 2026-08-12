@@ -4,10 +4,6 @@
 use crate::_apple_impl_pending_::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -19,8 +15,12 @@ use objc2_core_video::CVPixelBuffer;
 use objc2_foundation::{MainThreadMarker, NSArray, NSObject, NSObjectProtocol, NSString};
 use parking_lot::Mutex;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
 
 // Config type is generated from JTD schema
 pub use crate::_generated_::CameraConfig;
@@ -81,7 +81,6 @@ impl CMTime {
         }
     }
 }
-
 
 /// Shared state for AVFoundation initialization (async pattern).
 struct CaptureSessionInitState {
@@ -249,7 +248,11 @@ define_class!(
                 width,
                 height,
                 timestamp_ns: timestamp_ns.to_string(),
-                fps: if capture_fps > 0 { Some(capture_fps) } else { None },
+                fps: if capture_fps > 0 {
+                    Some(capture_fps)
+                } else {
+                    None
+                },
                 // Per-frame override is opt-in (#633); per-surface
                 // `current_image_layout` from surface-share is the default.
                 texture_layout: None,
@@ -474,9 +477,8 @@ impl AppleCameraProcessor::Processor {
                 }
                 dev.unwrap()
             } else {
-                let media_type = AVMediaTypeVideo.ok_or_else(|| {
-                    Error::Configuration("AVMediaTypeVideo not available".into())
-                })?;
+                let media_type = AVMediaTypeVideo
+                    .ok_or_else(|| Error::Configuration("AVMediaTypeVideo not available".into()))?;
 
                 AVCaptureDevice::defaultDeviceWithMediaType(media_type)
                     .ok_or_else(|| Error::Configuration("No camera found".into()))?
@@ -544,9 +546,12 @@ impl AppleCameraProcessor::Processor {
 
             eprintln!(
                 "[Camera] Frame rate: requested {:.0}-{:.0} fps, camera supports {:.0}-{:.0} fps, using {:.0}-{:.0} fps{}",
-                requested_min_fps, requested_max_fps,
-                camera_min_fps, camera_max_fps,
-                min_fps, max_fps,
+                requested_min_fps,
+                requested_max_fps,
+                camera_min_fps,
+                camera_max_fps,
+                min_fps,
+                max_fps,
                 if is_discrete { " (discrete)" } else { "" }
             );
 
@@ -595,8 +600,8 @@ impl AppleCameraProcessor::Processor {
         let pixel_format_key = unsafe { objc2_core_video::kCVPixelBufferPixelFormatTypeKey };
         let pixel_format_value = NSNumber::new_u32(0x42475241); // BGRA
 
-        use objc2::runtime::AnyClass;
         use objc2::ClassType;
+        use objc2::runtime::AnyClass;
         let dict_cls: &AnyClass = objc2_foundation::NSDictionary::<
             objc2::runtime::AnyObject,
             objc2::runtime::AnyObject,
@@ -626,9 +631,7 @@ impl AppleCameraProcessor::Processor {
 
         let can_add_output = unsafe { session.canAddOutput(&output) };
         if !can_add_output {
-            return Err(Error::Configuration(
-                "Cannot add camera output".into(),
-            ));
+            return Err(Error::Configuration("Cannot add camera output".into()));
         }
 
         unsafe {
@@ -658,9 +661,8 @@ impl AppleCameraProcessor::Processor {
             use objc2_av_foundation::AVCaptureDeviceDiscoverySession;
             use objc2_foundation::NSArray;
 
-            let media_type = AVMediaTypeVideo.ok_or_else(|| {
-                Error::Configuration("AVMediaTypeVideo not available".into())
-            })?;
+            let media_type = AVMediaTypeVideo
+                .ok_or_else(|| Error::Configuration("AVMediaTypeVideo not available".into()))?;
 
             let builtin_wide =
                 objc2_foundation::ns_string!("AVCaptureDeviceTypeBuiltInWideAngleCamera");

@@ -4,9 +4,9 @@
 //! MoQ Publish Track — forwards raw bytes from a graph input to a named MoQ track.
 
 use crate::_generated_::EncodedVideoFrame;
-use streamlib_moq::{sessions_for_runtime, MoqPublishSession, SharedMoqSessions};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use streamlib_moq::{MoqPublishSession, SharedMoqSessions, sessions_for_runtime};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
@@ -28,7 +28,9 @@ pub struct MoqPublishTrackProcessor {
     tokio_runtime: Option<tokio::runtime::Runtime>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor
+    for MoqPublishTrackProcessor::Processor
+{
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)

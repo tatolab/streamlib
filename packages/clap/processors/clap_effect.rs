@@ -7,16 +7,16 @@
 //! processor lifecycle. Polls the input mailbox on a dedicated audio
 //! thread and dispatches converted stereo frames into the plugin.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use crate::_generated_::AudioFrame;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use streamlib_audio::processor_audio_converter::{
+    ProcessorAudioConverter, ProcessorAudioConverterTargetFormat,
+};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes;
 use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
-use streamlib_audio::processor_audio_converter::{
-    ProcessorAudioConverter, ProcessorAudioConverterTargetFormat,
-};
 
 use crate::host::ClapPluginHost;
 use crate::parameter_automation::ClapParameterControl;
@@ -153,12 +153,7 @@ impl ManualProcessor for ClapEffectProcessor::Processor {
         // Load CLAP plugin with placeholder sample_rate — activate() will set the real rate
         // when the first input frame arrives in the polling thread
         let host = if let Some(name) = self.config.plugin_name.as_deref() {
-            ClapPluginHost::load_by_name(
-                &self.config.plugin_path,
-                name,
-                48000,
-                self.buffer_size,
-            )?
+            ClapPluginHost::load_by_name(&self.config.plugin_path, name, 48000, self.buffer_size)?
         } else if let Some(index) = self.config.plugin_index {
             ClapPluginHost::load_by_index(
                 &self.config.plugin_path,

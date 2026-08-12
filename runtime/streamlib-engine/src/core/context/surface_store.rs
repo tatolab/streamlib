@@ -2161,7 +2161,13 @@ impl SurfaceStore {
                 "SurfaceStore::register_texture: null handle".into(),
             ));
         }
-        self.host_inner().register_texture(surface_id, texture, produce_done, consume_done, current_image_layout)
+        self.host_inner().register_texture(
+            surface_id,
+            texture,
+            produce_done,
+            consume_done,
+            current_image_layout,
+        )
     }
 
     /// **Engine-only** — public surface lives on the
@@ -2181,7 +2187,12 @@ impl SurfaceStore {
                 "SurfaceStore::register_pixel_buffer_with_timeline: null handle".into(),
             ));
         }
-        self.host_inner().register_pixel_buffer_with_timeline(surface_id, pixel_buffer, produce_done, consume_done)
+        self.host_inner().register_pixel_buffer_with_timeline(
+            surface_id,
+            pixel_buffer,
+            produce_done,
+            consume_done,
+        )
     }
 
     /// Look up a registered texture by surface_id (Linux).

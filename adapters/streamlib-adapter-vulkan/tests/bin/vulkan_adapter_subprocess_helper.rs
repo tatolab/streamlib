@@ -182,31 +182,27 @@ fn run() -> ExitCode {
 
     // Import both timeline semaphores. Vulkan takes ownership of each
     // fd on success; we close every other fd ourselves.
-    let produce_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-        &device,
-        produce_done_fd,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            for f in &dma_buf_fds {
-                unsafe { libc::close(*f) };
+    let produce_done =
+        match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(&device, produce_done_fd) {
+            Ok(t) => t,
+            Err(e) => {
+                for f in &dma_buf_fds {
+                    unsafe { libc::close(*f) };
+                }
+                unsafe { libc::close(consume_done_fd) };
+                return die(Some(&socket), format!("import produce_done_fd: {e}"));
             }
-            unsafe { libc::close(consume_done_fd) };
-            return die(Some(&socket), format!("import produce_done_fd: {e}"));
-        }
-    };
-    let consume_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-        &device,
-        consume_done_fd,
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            for f in &dma_buf_fds {
-                unsafe { libc::close(*f) };
+        };
+    let consume_done =
+        match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(&device, consume_done_fd) {
+            Ok(t) => t,
+            Err(e) => {
+                for f in &dma_buf_fds {
+                    unsafe { libc::close(*f) };
+                }
+                return die(Some(&socket), format!("import consume_done_fd: {e}"));
             }
-            return die(Some(&socket), format!("import consume_done_fd: {e}"));
-        }
-    };
+        };
 
     // dma_buf_fds were dup'd by the kernel during SCM_RIGHTS; the
     // VkImage import does NOT take ownership in our import path (the
@@ -257,9 +253,7 @@ fn run() -> ExitCode {
                 );
             }
             let color = req.clear_color.unwrap_or([1.0, 0.5, 0.25, 1.0]);
-            if let Err(e) =
-                subprocess_clear_image(&device, texture.image(), color)
-            {
+            if let Err(e) = subprocess_clear_image(&device, texture.image(), color) {
                 return die(Some(&socket), format!("subprocess_clear_image: {e}"));
             }
             let signal_value = match produce_done.current_value() {
@@ -288,15 +282,11 @@ fn run() -> ExitCode {
                     format!("produce_done.wait({wait_target}): {e}"),
                 );
             }
-            let bytes = match subprocess_readback_image(
-                &device,
-                texture.image(),
-                req.width,
-                req.height,
-            ) {
-                Ok(b) => b,
-                Err(e) => return die(Some(&socket), format!("subprocess_readback_image: {e}")),
-            };
+            let bytes =
+                match subprocess_readback_image(&device, texture.image(), req.width, req.height) {
+                    Ok(b) => b,
+                    Err(e) => return die(Some(&socket), format!("subprocess_readback_image: {e}")),
+                };
             let signal_value = match consume_done.current_value() {
                 Ok(v) => v.saturating_add(1),
                 Err(e) => return die(Some(&socket), format!("consume_done.current_value: {e}")),

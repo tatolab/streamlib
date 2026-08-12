@@ -6,9 +6,9 @@
 //! Type-agnostic: uses `write_raw()` to pass through bytes without
 //! deserialization. Reconnects on connection loss with exponential backoff.
 
-use streamlib_moq::{sessions_for_runtime, MoqTrackReader};
 use std::sync::Arc;
 use std::time::Duration;
+use streamlib_moq::{MoqTrackReader, sessions_for_runtime};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
@@ -35,7 +35,9 @@ pub struct MoqSubscribeTrackProcessor {
     shutdown_signal_sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for MoqSubscribeTrackProcessor::Processor
+{
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -99,7 +101,10 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for MoqSubscribeTrac
 
         handle.clone().spawn(async move {
             run_moq_subscribe_track_receive_loop_with_retry(
-                track_name, runtime_id, outputs, shutdown_rx,
+                track_name,
+                runtime_id,
+                outputs,
+                shutdown_rx,
             )
             .await;
         });

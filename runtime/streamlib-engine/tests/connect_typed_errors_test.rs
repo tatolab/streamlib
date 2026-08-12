@@ -39,9 +39,12 @@ fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassI
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let class_short_name = ProcessorClassShortName::new(short).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        class_short_name, import_path.clone(), "connect typed-errors test")
-        .with_input(PortDescriptor::new(input, "", false))
-        .with_output(PortDescriptor::new(output, "", false));
+        class_short_name,
+        import_path.clone(),
+        "connect typed-errors test",
+    )
+    .with_input(PortDescriptor::new(input, "", false))
+    .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

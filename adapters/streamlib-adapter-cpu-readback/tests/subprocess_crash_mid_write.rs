@@ -22,8 +22,6 @@
 #[path = "common.rs"]
 mod common;
 
-
-
 #[test]
 fn panic_mid_write_releases_lock_for_next_acquire() {
     let fixture = match common::HostFixture::try_new() {

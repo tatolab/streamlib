@@ -8,7 +8,7 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use webrtc::track::track_local::TrackLocalWriter;
 
 #[tokio::main]
@@ -33,7 +33,9 @@ pub async fn main() -> Result<()> {
                 mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
                 clock_rate: 90000,
                 channels: 0,
-                sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f".to_owned(),
+                sdp_fmtp_line:
+                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
+                        .to_owned(),
                 ..Default::default()
             },
             payload_type: 96,
@@ -62,7 +64,10 @@ pub async fn main() -> Result<()> {
     // Step 2: Create InterceptorRegistry for RTCP
     tracing::info!("📦 Step 2: Creating InterceptorRegistry...");
     let mut registry = webrtc::interceptor::registry::Registry::new();
-    registry = webrtc::api::interceptor_registry::register_default_interceptors(registry, &mut media_engine)?;
+    registry = webrtc::api::interceptor_registry::register_default_interceptors(
+        registry,
+        &mut media_engine,
+    )?;
     tracing::info!("✅ InterceptorRegistry created with default interceptors (NACK, RTCP reports)");
 
     // Step 3: Create API
@@ -116,20 +121,27 @@ pub async fn main() -> Result<()> {
 
                 // Send candidate via PATCH if we have a session URL (WHIP trickle-ice)
                 if let Some(url) = session_url.lock().await.as_ref() {
-                    let mid_line = format!("a=mid:{}", json.sdp_mid.clone().unwrap_or("0".to_string()));
+                    let mid_line =
+                        format!("a=mid:{}", json.sdp_mid.clone().unwrap_or("0".to_string()));
                     let mline_index = json.sdp_mline_index.unwrap_or(0);
 
                     // WHIP trickle-ice format: SDP fragment with candidate
-                    let sdp_frag = format!("m-line-index:{}\n{}\na={}\n",
-                        mline_index, mid_line, json.candidate);
+                    let sdp_frag = format!(
+                        "m-line-index:{}\n{}\na={}\n",
+                        mline_index, mid_line, json.candidate
+                    );
 
                     tracing::debug!("🧊 [TRICKLE ICE] Sending candidate via PATCH to {}", url);
                     match send_ice_candidate(url, &sdp_frag).await {
                         Ok(()) => tracing::info!("✅ [TRICKLE ICE] Candidate sent successfully"),
-                        Err(e) => tracing::error!("❌ [TRICKLE ICE] Failed to send candidate: {:?}", e),
+                        Err(e) => {
+                            tracing::error!("❌ [TRICKLE ICE] Failed to send candidate: {:?}", e)
+                        }
                     }
                 } else {
-                    tracing::debug!("🧊 [TRICKLE ICE] Session URL not yet available, candidate queued");
+                    tracing::debug!(
+                        "🧊 [TRICKLE ICE] Session URL not yet available, candidate queued"
+                    );
                 }
             } else {
                 tracing::info!("🧊 [ICE] Candidate gathering COMPLETE");
@@ -260,7 +272,11 @@ pub async fn main() -> Result<()> {
     // 5.6: Track handler (data channel, etc.)
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
         Box::pin(async move {
-            tracing::info!("📻 [TRACK] New track: id={}, kind={:?}", track.id(), track.kind());
+            tracing::info!(
+                "📻 [TRACK] New track: id={}, kind={:?}",
+                track.id(),
+                track.kind()
+            );
         })
     }));
 
@@ -308,7 +324,8 @@ pub async fn main() -> Result<()> {
         mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
         clock_rate: 90000,
         channels: 0,
-        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f".to_owned(),
+        sdp_fmtp_line: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
+            .to_owned(),
         ..Default::default()
     };
 
@@ -325,13 +342,15 @@ pub async fn main() -> Result<()> {
     tracing::info!("📦 Step 7: Adding video + audio tracks to PeerConnection...");
 
     let video_sender = peer_connection
-        .add_track(Arc::clone(&video_track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
+        .add_track(Arc::clone(&video_track)
+            as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
         .await?;
     tracing::info!("✅ Video track added");
     tracing::debug!("🔍 [TRACK] Video RTPSender created: {:?}", video_sender);
 
     let audio_sender = peer_connection
-        .add_track(Arc::clone(&audio_track) as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
+        .add_track(Arc::clone(&audio_track)
+            as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
         .await?;
     tracing::info!("✅ Audio track added");
     tracing::debug!("🔍 [TRACK] Audio RTPSender created: {:?}", audio_sender);
@@ -366,12 +385,17 @@ pub async fn main() -> Result<()> {
     tracing::info!("✅ ICE gathering completed");
 
     // Step 12: Get updated SDP with ICE candidates
-    let final_offer = peer_connection.local_description().await
+    let final_offer = peer_connection
+        .local_description()
+        .await
         .expect("Local description should be set");
     tracing::info!("📦 Step 12: Retrieved final SDP offer with ICE candidates");
 
     let candidate_count = final_offer.sdp.matches("a=candidate:").count();
-    tracing::info!("🧊 [ICE] Final offer contains {} candidates", candidate_count);
+    tracing::info!(
+        "🧊 [ICE] Final offer contains {} candidates",
+        candidate_count
+    );
 
     // Step 13: Send WHIP request with candidates included
     tracing::info!("📦 Step 13: Sending WHIP POST request...");
@@ -383,7 +407,9 @@ pub async fn main() -> Result<()> {
 
     // Step 13: Set remote description
     tracing::info!("📦 Step 15: Setting remote description...");
-    let answer = webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(answer_sdp)?;
+    let answer = webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(
+        answer_sdp,
+    )?;
     peer_connection.set_remote_description(answer).await?;
     tracing::info!("✅ Remote description set - ICE checks starting");
 
@@ -405,11 +431,14 @@ pub async fn main() -> Result<()> {
 
     // Step 17: SKIP track binding check - we're using TrackLocalStaticRTP with manual PT=96/111
     tracing::info!("📦 Step 17: Skipping track binding check (using manual RTP with PT=96/111)");
-    tracing::info!("🔍 [TRACK BINDING] TrackLocalStaticRTP doesn't need binding - PT set manually in packets");
+    tracing::info!(
+        "🔍 [TRACK BINDING] TrackLocalStaticRTP doesn't need binding - PT set manually in packets"
+    );
 
     // Step 18: Initialize Opus encoder for audio
     tracing::info!("📦 Step 18: Initializing Opus encoder...");
-    let mut audio_encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio)?;
+    let mut audio_encoder =
+        opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio)?;
     audio_encoder.set_bitrate(opus::Bitrate::Bits(128_000))?;
     audio_encoder.set_vbr(false)?; // CBR for consistent streaming
     audio_encoder.set_inband_fec(true)?;
@@ -471,13 +500,17 @@ pub async fn main() -> Result<()> {
                 encoded.truncate(encoded_len);
 
                 if frame_count % 50 == 0 {
-                    tracing::info!("🎵 [AUDIO] Frame {}: {} samples → {} bytes Opus",
-                        frame_count, frame_size * 2, encoded_len);
+                    tracing::info!(
+                        "🎵 [AUDIO] Frame {}: {} samples → {} bytes Opus",
+                        frame_count,
+                        frame_size * 2,
+                        encoded_len
+                    );
                 }
 
                 // Construct RTP packet with PT=111
-                use webrtc::rtp::packet::Packet as RtpPacket;
                 use webrtc::rtp::header::Header as RtpHeader;
+                use webrtc::rtp::packet::Packet as RtpPacket;
 
                 let rtp_packet = RtpPacket {
                     header: RtpHeader {
@@ -485,7 +518,7 @@ pub async fn main() -> Result<()> {
                         padding: false,
                         extension: false,
                         marker: false,
-                        payload_type: 111,  // Opus
+                        payload_type: 111, // Opus
                         sequence_number: (frame_count & 0xFFFF) as u16,
                         timestamp: (sample_index * 48000 / frame_size as u64) as u32,
                         ssrc: 0,
@@ -498,8 +531,12 @@ pub async fn main() -> Result<()> {
                     Ok(bytes_written) => {
                         let count = audio_packets_sent.fetch_add(1, Ordering::SeqCst) + 1;
                         if count % 50 == 0 {
-                            tracing::info!("📤 [AUDIO RTP] Sent packet {} with PT=111 ({} bytes, {} total)",
-                                           frame_count, bytes_written, count);
+                            tracing::info!(
+                                "📤 [AUDIO RTP] Sent packet {} with PT=111 ({} bytes, {} total)",
+                                frame_count,
+                                bytes_written,
+                                count
+                            );
                         }
                     }
                     Err(e) => {
@@ -552,21 +589,25 @@ pub async fn main() -> Result<()> {
 
                 if frame_count % 30 == 0 {
                     let frame_type = if is_keyframe { "IDR" } else { "P" };
-                    tracing::info!("📹 [VIDEO] Frame {}: {} frame, {} bytes",
-                        frame_count, frame_type, nal_unit.len());
+                    tracing::info!(
+                        "📹 [VIDEO] Frame {}: {} frame, {} bytes",
+                        frame_count,
+                        frame_type,
+                        nal_unit.len()
+                    );
                 }
 
                 // Construct RTP packet with PT=96
-                use webrtc::rtp::packet::Packet as RtpPacket;
                 use webrtc::rtp::header::Header as RtpHeader;
+                use webrtc::rtp::packet::Packet as RtpPacket;
 
                 let rtp_packet = RtpPacket {
                     header: RtpHeader {
                         version: 2,
                         padding: false,
                         extension: false,
-                        marker: true,  // Mark end of frame
-                        payload_type: 96,  // H.264
+                        marker: true,     // Mark end of frame
+                        payload_type: 96, // H.264
                         sequence_number: (frame_count & 0xFFFF) as u16,
                         timestamp: (frame_count * timestamp_increment as u64) as u32,
                         ssrc: 0,
@@ -579,8 +620,12 @@ pub async fn main() -> Result<()> {
                     Ok(bytes_written) => {
                         let count = video_packets_sent.fetch_add(1, Ordering::SeqCst) + 1;
                         if count % 30 == 0 {
-                            tracing::info!("📤 [VIDEO RTP] Sent packet {} with PT=96 ({} bytes, {} total)",
-                                           frame_count, bytes_written, count);
+                            tracing::info!(
+                                "📤 [VIDEO RTP] Sent packet {} with PT=96 ({} bytes, {} total)",
+                                frame_count,
+                                bytes_written,
+                                count
+                            );
                         }
                     }
                     Err(e) => {
@@ -589,7 +634,8 @@ pub async fn main() -> Result<()> {
                 }
 
                 frame_count += 1;
-                if frame_count >= 7200 { // 7200 frames @ 30fps = 240 seconds (4 minutes)
+                if frame_count >= 7200 {
+                    // 7200 frames @ 30fps = 240 seconds (4 minutes)
                     tracing::info!("✅ [VIDEO] Complete: sent {} frames", frame_count);
                     break;
                 }
@@ -614,7 +660,10 @@ pub async fn main() -> Result<()> {
     tracing::info!("📊 FINAL STATS:");
     tracing::info!("   Audio RTP packets sent: {}", total_audio_sent);
     tracing::info!("   Video RTP packets sent: {}", total_video_sent);
-    tracing::info!("   Total RTP packets: {}", total_audio_sent + total_video_sent);
+    tracing::info!(
+        "   Total RTP packets: {}",
+        total_audio_sent + total_video_sent
+    );
 
     // Cleanup
     tracing::info!("🧹 Closing peer connection...");
@@ -626,8 +675,8 @@ pub async fn main() -> Result<()> {
 
 /// Sends WHIP POST request to create session
 async fn whip_publish(endpoint_url: &str, offer_sdp: &str) -> Result<(String, String)> {
-    use hyper::{Request, header, StatusCode};
     use http_body_util::{BodyExt, Full};
+    use hyper::{Request, StatusCode, header};
     use hyper_util::client::legacy::Client;
     use hyper_util::rt::TokioExecutor;
 
@@ -652,12 +701,9 @@ async fn whip_publish(endpoint_url: &str, offer_sdp: &str) -> Result<(String, St
 
     tracing::info!("🌐 [WHIP] Sending POST to {}", endpoint_url);
 
-    let response = tokio::time::timeout(
-        Duration::from_secs(10),
-        client.request(req),
-    )
-    .await
-    .context("WHIP POST timeout")??;
+    let response = tokio::time::timeout(Duration::from_secs(10), client.request(req))
+        .await
+        .context("WHIP POST timeout")??;
 
     let status = response.status();
     tracing::info!("🌐 [WHIP] Response status: {}", status);
@@ -688,8 +734,8 @@ async fn whip_publish(endpoint_url: &str, offer_sdp: &str) -> Result<(String, St
 
     // Extract SDP answer from body
     let body_bytes = response.into_body().collect().await?.to_bytes();
-    let answer_sdp = String::from_utf8(body_bytes.to_vec())
-        .context("Invalid UTF-8 in SDP answer")?;
+    let answer_sdp =
+        String::from_utf8(body_bytes.to_vec()).context("Invalid UTF-8 in SDP answer")?;
 
     tracing::debug!("🌐 [WHIP] Received {} bytes SDP answer", answer_sdp.len());
 
@@ -698,8 +744,8 @@ async fn whip_publish(endpoint_url: &str, offer_sdp: &str) -> Result<(String, St
 
 /// Sends ICE candidate via PATCH request (WHIP trickle-ice)
 async fn send_ice_candidate(session_url: &str, sdp_fragment: &str) -> Result<()> {
-    use hyper::{Request, header, StatusCode};
     use http_body_util::{BodyExt, Full};
+    use hyper::{Request, StatusCode, header};
     use hyper_util::client::legacy::Client;
     use hyper_util::rt::TokioExecutor;
 
@@ -720,12 +766,9 @@ async fn send_ice_candidate(session_url: &str, sdp_fragment: &str) -> Result<()>
         .header(header::CONTENT_TYPE, "application/trickle-ice-sdpfrag")
         .body(body)?;
 
-    let response = tokio::time::timeout(
-        Duration::from_secs(5),
-        client.request(req),
-    )
-    .await
-    .context("PATCH timeout")??;
+    let response = tokio::time::timeout(Duration::from_secs(5), client.request(req))
+        .await
+        .context("PATCH timeout")??;
 
     let status = response.status();
 

@@ -5830,7 +5830,6 @@ mod tests {
                 dispatch_log(py_log);
                 py_seq += 1;
                 std::thread::sleep(Duration::from_micros(50));
-
             }
 
             drop(guard);
@@ -5840,8 +5839,7 @@ mod tests {
             let merged: Vec<&RuntimeLogEvent> = events
                 .iter()
                 .filter(|e| {
-                    e.message.starts_with("rust-merged")
-                        || e.message.starts_with("py-merged-")
+                    e.message.starts_with("rust-merged") || e.message.starts_with("py-merged-")
                 })
                 .collect();
             assert_eq!(

@@ -61,18 +61,18 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::engine::HostSurfaceStoreExt;
 use streamlib::sdk::engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostSurfaceStoreExt;
 use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
-use streamlib::sdk::rhi::TextureFormat;
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::error::Result;
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::RunnerAutoBuild;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -144,8 +144,7 @@ pub fn main() -> Result<()> {
         Arc<HostVulkanTimelineSemaphore>,
         Arc<HostVulkanTimelineSemaphore>,
     );
-    let timeline_slots: Arc<Mutex<Vec<TimelinePair>>> =
-        Arc::new(Mutex::new(Vec::with_capacity(4)));
+    let timeline_slots: Arc<Mutex<Vec<TimelinePair>>> = Arc::new(Mutex::new(Vec::with_capacity(4)));
     let timeline_slots_hook = Arc::clone(&timeline_slots);
     runtime.install_setup_hook(move |gpu| {
         let avatar_timelines = register_render_target_surface(
@@ -253,11 +252,7 @@ pub fn main() -> Result<()> {
     // opengl DMA-BUF surface, emits the surface UUID downstream.
     println!("🐍 Adding Python avatar character (subprocess, PyTorch pose + ModernGL)...");
     let avatar = runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!(
-            "tatolab",
-            "cyberpunk-processor",
-            "AvatarCharacter"
-        ),
+        processor_type_ref!("tatolab", "cyberpunk-processor", "AvatarCharacter"),
         serde_json::json!({
             "cuda_camera_surface_id": AVATAR_CAMERA_CUDA_SURFACE_ID,
             "opengl_output_surface_uuid": AVATAR_OUTPUT_SURFACE_UUID,
@@ -273,11 +268,7 @@ pub fn main() -> Result<()> {
     // SkiaContext.acquire_write.
     println!("🐍 Adding Python cyberpunk lower third (subprocess, Skia-on-GL)...");
     let lower_third = runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!(
-            "tatolab",
-            "cyberpunk-processor",
-            "CyberpunkLowerThird"
-        ),
+        processor_type_ref!("tatolab", "cyberpunk-processor", "CyberpunkLowerThird"),
         serde_json::json!({
             "output_surface_uuid": LOWER_THIRD_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -290,11 +281,7 @@ pub fn main() -> Result<()> {
     // as lower-third — distinct UUID, same allocation pattern.
     println!("🐍 Adding Python cyberpunk watermark (subprocess, Skia-on-GL)...");
     let watermark = runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!(
-            "tatolab",
-            "cyberpunk-processor",
-            "CyberpunkWatermark"
-        ),
+        processor_type_ref!("tatolab", "cyberpunk-processor", "CyberpunkWatermark"),
         serde_json::json!({
             "output_surface_uuid": WATERMARK_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -321,11 +308,7 @@ pub fn main() -> Result<()> {
     // CrtFilmGrain — Rust ReactiveProcessor from the effects package.
     println!("📺 Adding CRT/film-grain post-effect...");
     let crt = runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!(
-            "tatolab",
-            "camera-python-display-effects",
-            "CrtFilmGrain"
-        ),
+        processor_type_ref!("tatolab", "camera-python-display-effects", "CrtFilmGrain"),
         serde_json::Value::Null,
     ))?;
     println!("✓ CRT/film-grain added: {crt}\n");
@@ -337,11 +320,7 @@ pub fn main() -> Result<()> {
     // into the host-pre-registered GLITCH_OUTPUT_SURFACE_UUID.
     println!("🐍 Adding Python cyberpunk glitch (subprocess, OpenGL fragment shader)...");
     let glitch = runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!(
-            "tatolab",
-            "cyberpunk-processor",
-            "CyberpunkGlitch"
-        ),
+        processor_type_ref!("tatolab", "cyberpunk-processor", "CyberpunkGlitch"),
         serde_json::json!({
             "output_surface_uuid": GLITCH_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -416,7 +395,9 @@ pub fn main() -> Result<()> {
     println!("▶️  Starting pipeline...");
     println!("   Architecture (Linux):");
     println!("     Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐");
-    println!("                                   ├──────────────────────┴── BlendingCompositor ──→ CrtFilmGrain ──→ Glitch ──→ Display");
+    println!(
+        "                                   ├──────────────────────┴── BlendingCompositor ──→ CrtFilmGrain ──→ Glitch ──→ Display"
+    );
     println!("                                   │   LowerThird ───────────/");
     println!("                                   │   Watermark ───────────/");
     println!("                (cuda OPAQUE_FD + opengl DMA-BUF + skia-on-GL DMA-BUFs)");
@@ -446,7 +427,10 @@ fn register_render_target_surface(
     uuid: &str,
     label: &str,
 ) -> std::result::Result<
-    (Arc<HostVulkanTimelineSemaphore>, Arc<HostVulkanTimelineSemaphore>),
+    (
+        Arc<HostVulkanTimelineSemaphore>,
+        Arc<HostVulkanTimelineSemaphore>,
+    ),
     String,
 > {
     // `acquire_render_target_dma_buf_image` picks a tiled DRM modifier
@@ -472,16 +456,14 @@ fn register_render_target_surface(
     // forward-compatible when OpenGL/Skia gain dual-timeline support.
     let host_device = Arc::clone(gpu.device().vulkan_device());
     let produce_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| format!(
-                "{label}: HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}"
-            ))?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("{label}: HostVulkanTimelineSemaphore::new_exportable (produce_done): {e}")
+        })?,
     );
     let consume_done = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| format!(
-                "{label}: HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}"
-            ))?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
+            format!("{label}: HostVulkanTimelineSemaphore::new_exportable (consume_done): {e}")
+        })?,
     );
 
     let surface_store = gpu
@@ -516,11 +498,7 @@ fn register_render_target_surface(
     // on release; DMA-BUF kernel-fence semantics carry data visibility,
     // but Vulkan's layout tracker stays at the image's `initialLayout`
     // which is `UNDEFINED` from `acquire_render_target_dma_buf_image`).
-    gpu.register_texture_with_layout(
-        uuid,
-        texture,
-        VulkanLayout::UNDEFINED,
-    );
+    gpu.register_texture_with_layout(uuid, texture, VulkanLayout::UNDEFINED);
 
     Ok((produce_done, consume_done))
 }

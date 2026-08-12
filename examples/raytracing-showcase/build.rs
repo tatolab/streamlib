@@ -9,9 +9,21 @@
 
 fn main() {
     let shaders: &[(&str, &str, &str)] = &[
-        ("shaders/raytracing_showcase.rgen", "raytracing_showcase.rgen.spv", "rgen"),
-        ("shaders/raytracing_showcase.rmiss", "raytracing_showcase.rmiss.spv", "rmiss"),
-        ("shaders/raytracing_showcase.rchit", "raytracing_showcase.rchit.spv", "rchit"),
+        (
+            "shaders/raytracing_showcase.rgen",
+            "raytracing_showcase.rgen.spv",
+            "rgen",
+        ),
+        (
+            "shaders/raytracing_showcase.rmiss",
+            "raytracing_showcase.rmiss.spv",
+            "rmiss",
+        ),
+        (
+            "shaders/raytracing_showcase.rchit",
+            "raytracing_showcase.rchit.spv",
+            "rchit",
+        ),
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");

@@ -5,8 +5,8 @@
 
 //! Opus audio encoder — libopus codec + reactive processor wrapper.
 
-use serde::{Deserialize, Serialize};
 use crate::_generated_::{AudioFrame, EncodedAudioFrame};
+use serde::{Deserialize, Serialize};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
@@ -98,9 +98,7 @@ impl OpusEncoder {
             opus::Channels::Stereo,
             opus::Application::Audio, // Use Audio for best quality (music/broadcast)
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Failed to create Opus encoder: {:?}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Failed to create Opus encoder: {:?}", e)))?;
 
         // Configure encoder
         encoder
@@ -137,12 +135,10 @@ impl AudioEncoderOpus for OpusEncoder {
     fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame> {
         // Validate sample rate
         if frame.sample_rate != 48000 {
-            return Err(Error::Configuration(
-                format!(
-                    "Expected 48kHz, got {}Hz. Use AudioResamplerProcessor upstream to convert to 48kHz.",
-                    frame.sample_rate
-                )
-            ));
+            return Err(Error::Configuration(format!(
+                "Expected 48kHz, got {}Hz. Use AudioResamplerProcessor upstream to convert to 48kHz.",
+                frame.sample_rate
+            )));
         }
 
         // Validate frame size (should be exactly 960 samples per channel for 20ms @ 48kHz)
@@ -150,12 +146,10 @@ impl AudioEncoderOpus for OpusEncoder {
         let actual_samples = frame.samples.len() / frame.channels as usize;
 
         if actual_samples != expected_samples {
-            return Err(Error::Configuration(
-                format!(
-                    "Expected {} samples (20ms @ 48kHz), got {}. Use BufferRechunkerProcessor(960) upstream.",
-                    expected_samples, actual_samples
-                )
-            ));
+            return Err(Error::Configuration(format!(
+                "Expected {} samples (20ms @ 48kHz), got {}. Use BufferRechunkerProcessor(960) upstream.",
+                expected_samples, actual_samples
+            )));
         }
 
         // Encode (opus expects interleaved f32, which is what AudioFrame uses)
@@ -262,7 +256,10 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for OpusEncoderPro
         if self.frames_encoded == 1 {
             tracing::info!("[OpusEncoder] First frame encoded");
         } else if self.frames_encoded % 500 == 0 {
-            tracing::info!(frames = self.frames_encoded, "[OpusEncoder] Encode progress");
+            tracing::info!(
+                frames = self.frames_encoded,
+                "[OpusEncoder] Encode progress"
+            );
         }
 
         Ok(())
