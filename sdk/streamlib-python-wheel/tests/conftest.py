@@ -4,10 +4,9 @@
 """Fixtures shared by the suites that drive an app out of process."""
 
 from pathlib import Path
+from typing import Callable
 
 import pytest
-
-from typing import Callable
 
 from app_under_test import AppUnderTest, start_app
 
