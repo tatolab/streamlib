@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod check_boundaries;
 pub mod check_device_wait_idle;
@@ -41,6 +41,158 @@ pub fn ensure_source_walking_gate_read_source(
         "{gate_name} scanned 0 files under {scan_roots_description} — the scan roots \
          moved out from under the gate, which would let {unnoticed_consequence} unnoticed"
     );
+    Ok(())
+}
+
+/// Every source-walking gate, paired with the subcommand name that runs it alone.
+///
+/// Each gate reads the tree and reports; none builds the workspace. That is what
+/// lets one process run all eight in well under a second, and why CI runs them as
+/// a single job rather than one runner per gate.
+const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
+    ("lint-logging", lint_logging::run),
+    ("check-boundaries", check_boundaries::run),
+    ("check-vendored-vulkanalia", check_vendored_vulkanalia::run),
+    (
+        "check-no-in-process-placement",
+        check_no_in_process_placement::run,
+    ),
+    ("check-no-inventory-submit", check_no_inventory_submit::run),
+    (
+        "check-no-escalate-in-lifecycle",
+        check_no_escalate_in_lifecycle::run,
+    ),
+    ("check-device-wait-idle", check_device_wait_idle::run),
+    (
+        "check-no-unbounded-cstr-from-ptr",
+        check_no_unbounded_cstr_from_ptr::run,
+    ),
+];
+
+/// Run every source-walking gate, reporting all failures rather than the first.
+///
+/// A gate that bails on first failure hides the rest behind a re-run, which is the
+/// one thing a consolidated job must not reintroduce: eight separate jobs at least
+/// told you about eight separate breakages at once.
+fn run_all_source_walking_gates(workspace_root: &Path) -> Result<()> {
+    let mut failed_gate_names: Vec<&str> = Vec::new();
+
+    for (gate_name, run_gate) in ALL_SOURCE_WALKING_GATES {
+        match run_gate(workspace_root) {
+            Ok(()) => tracing::info!("PASS  {gate_name}"),
+            Err(gate_failure) => {
+                tracing::error!("FAIL  {gate_name}: {gate_failure:#}");
+                failed_gate_names.push(gate_name);
+            }
+        }
+    }
+
+    anyhow::ensure!(
+        failed_gate_names.is_empty(),
+        "{} of {} source-walking gates failed: {}",
+        failed_gate_names.len(),
+        ALL_SOURCE_WALKING_GATES.len(),
+        failed_gate_names.join(", ")
+    );
+
+    tracing::info!(
+        "all {} source-walking gates passed",
+        ALL_SOURCE_WALKING_GATES.len()
+    );
+    Ok(())
+}
+
+/// Run one command from the workspace root, failing on a non-zero exit status.
+fn run_local_ci_gate_command(
+    workspace_root: &Path,
+    gate_name: &str,
+    program: &str,
+    arguments: &[&str],
+) -> Result<()> {
+    let exit_status = std::process::Command::new(program)
+        .args(arguments)
+        .current_dir(workspace_root)
+        .status()
+        .with_context(|| format!("failed to spawn `{program}` for {gate_name}"))?;
+
+    anyhow::ensure!(exit_status.success(), "{gate_name} failed ({exit_status})");
+    Ok(())
+}
+
+/// Run the gates CI runs, in the order CI runs them, reporting every failure.
+///
+/// The point is that a green run here means a green run on the PR. Any gate added
+/// to CI without being added here breaks that promise, so the two lists are meant
+/// to be read side by side against `.github/workflows/`.
+fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
+    let mut failed_gate_names: Vec<&str> = Vec::new();
+
+    if let Err(gate_failure) = run_all_source_walking_gates(workspace_root) {
+        tracing::error!("{gate_failure:#}");
+        failed_gate_names.push("source-walking gates");
+    }
+
+    let shelled_out_gates: &[(&str, &str, &[&str])] = &[
+        (
+            "license headers",
+            "bash",
+            &["scripts/check-license-headers.sh"],
+        ),
+        (
+            "ship-change removed gate tests",
+            "bash",
+            &[".claude/scripts/tests/ship-change-removed-gate.test.sh"],
+        ),
+        (
+            "xtask gate fixture tests",
+            "cargo",
+            &["test", "--locked", "-p", "xtask"],
+        ),
+        (
+            "SDK + macros unit tests",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib",
+                "-p",
+                "streamlib-macros",
+                "--lib",
+            ],
+        ),
+        (
+            "processor-macro emission locks",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "attribute_macro_test",
+            ],
+        ),
+    ];
+
+    for (gate_name, program, arguments) in shelled_out_gates {
+        tracing::info!("running {gate_name}");
+        if let Err(gate_failure) =
+            run_local_ci_gate_command(workspace_root, gate_name, program, arguments)
+        {
+            tracing::error!("{gate_failure:#}");
+            failed_gate_names.push(gate_name);
+        }
+    }
+
+    anyhow::ensure!(
+        failed_gate_names.is_empty(),
+        "{} local CI gate(s) failed: {}",
+        failed_gate_names.len(),
+        failed_gate_names.join(", ")
+    );
+
+    tracing::info!("all local CI gates passed");
     Ok(())
 }
 
@@ -119,6 +271,15 @@ enum Commands {
     /// recorded hashes in the same commit per
     /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredVulkanalia,
+
+    /// Run every source-walking gate in one process and report all failures.
+    /// This is what CI's `source-gates` job runs; the per-gate subcommands stay
+    /// for narrowing down a failure locally.
+    CheckAllSourceGates,
+
+    /// Run the gates CI runs, so a green run here predicts a green PR. Builds
+    /// the workspace, so it is slower than `check-all-source-gates` alone.
+    RunLocalCiGates,
 }
 
 fn main() -> Result<()> {
@@ -148,6 +309,8 @@ fn main() -> Result<()> {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
+        Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
+        Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
     }
 
     Ok(())

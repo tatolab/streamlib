@@ -1,0 +1,48 @@
+name: Repo Gates
+
+# The toolchain-free gates: bash and git only, no Rust, no Python, no network.
+# Both ran as their own workflow; together they finish in seconds, so they share
+# one runner rather than two.
+#
+# - License headers: every Rust and Python file carries the BUSL header. The
+#   implementation is `scripts/check-license-headers.sh` rather than inline YAML
+#   so that `cargo xtask run-local-ci-gates` runs the identical check — inline
+#   workflow bash is, by construction, something no one can run before pushing.
+# - ship-change-removed-gate: unit tests for the only mechanism that proves a
+#   change's REMOVED inventory actually left the tree before the change may
+#   archive. The gate shipped without tests and was green on 25 of 36 bullets
+#   whose artifacts were all still on disk. Only the gate's own tests run here —
+#   active change files legitimately fail the gate, since their removals have
+#   not happened yet, so CI never runs it against them.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  repo-gates:
+    name: License headers + ship-change removed gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ship-change gate tests run over throwaway repos they create
+          # themselves — no authenticated git operation, so the checkout token
+          # has no business in the local git config.
+          persist-credentials: false
+          # `check-license-headers.sh` discovers files with `git ls-files`, which
+          # needs the work tree but not its history.
+          fetch-depth: 1
+
+      - name: License headers (Rust + Python)
+        run: bash scripts/check-license-headers.sh
+
+      - name: ship-change-removed-gate tests
+        run: bash .claude/scripts/tests/ship-change-removed-gate.test.sh

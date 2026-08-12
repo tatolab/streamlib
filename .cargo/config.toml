@@ -2,3 +2,17 @@
 
 [alias]
 xtask = "run --package xtask --"
+# The local mirror of CI. A green run here means a green run on the PR — the gate
+# list is `run_local_ci_gates` in xtask/src/main.rs, kept alongside the workflows
+# in .github/workflows/ so the two can be read against each other.
+ci = "run --package xtask -- run-local-ci-gates"
+# Just the source-walking gates: no workspace build, so it is the fast pre-commit
+# check. `cargo ci` is the full one.
+gates = "run --package xtask -- check-all-source-gates"
+
+[build]
+# Incremental artifacts had reached 411 GB in this workspace's target/ — cargo
+# keeps a separate incremental tree per crate per profile/feature permutation and
+# never collects across them, so on a workspace this wide the disk churn costs
+# more than the rebuild it saves. Delete `incremental = false` to get it back.
+incremental = false

@@ -1,0 +1,78 @@
+name: Source Gates
+
+# Every source-walking gate, in one job, in one process.
+#
+# These ran as seven separate workflows. Each paid ~26s compiling the xtask
+# binary and ~13s compiling its test binary to do a few seconds of file walking,
+# and all seven shared one cache key — so they raced, and six of every seven
+# cache saves were discarded. One job compiles xtask once and runs all eight
+# gates plus the whole fixture suite.
+#
+# `check-all-source-gates` runs every gate before reporting, so one job still
+# surfaces every breakage at once. The per-gate subcommands remain for narrowing
+# a failure down locally; the gate list itself lives in `xtask/src/main.rs`
+# (`ALL_SOURCE_WALKING_GATES`), and each gate's contract is documented on its
+# `Commands` variant there.
+#
+# Two things worth keeping in view:
+# - lint-logging deliberately does not shell out to `cargo clippy --workspace`.
+#   That would transitively compile `libs/vulkan-video`, whose build.rs needs
+#   `glslc`. A syn-based AST walk keeps this job compile-free apart from xtask
+#   itself, and honors `#[allow(clippy::disallowed_macros)]`, `#[cfg(test)]` and
+#   platform cfg gates exactly as clippy would on ubuntu-latest.
+# - check-no-in-process-placement gates *vocabulary*, not behaviour. The
+#   behavioural proof that the parent never hosts a processor class is
+#   `sdk/streamlib-python-wheel/tests/test_helper_placement.py`. Markdown and
+#   Rust doc comments are in scope on purpose: the shipped violation announced
+#   itself in a `//!` line that three review rounds read past.
+#
+# No path filter. These gates scan `docs/` and Markdown as well as source, so a
+# docs-only change is exactly when some of them earn their keep.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # CI never rebuilds after an edit, so incremental artifacts are pure cache
+  # weight — locally they had grown to 411 GB.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  source-gates:
+    name: xtask source gates + fixture tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Replaces a raw `actions/cache` over `target/`. That cached every
+      # intermediate artifact including the workspace's own crates, which are
+      # invalid on the next commit anyway; rust-cache keeps dependency artifacts
+      # and drops the rest.
+      #
+      # `save-if` on main is the fix for cache eviction. Actions caches are
+      # ref-scoped: a PR's save is unreadable by every other PR, so each PR was
+      # minting its own multi-GB entry and evicting main's. PRs now restore from
+      # main and save nothing.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: xtask
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: cargo xtask check-all-source-gates
+        run: cargo run --locked -q -p xtask -- check-all-source-gates
+
+      - name: cargo test -p xtask (all gate fixture tests)
+        run: cargo test --locked -p xtask

@@ -3,16 +3,37 @@ name: Test
 on:
   pull_request:
     branches: [main]
+    # Prose changes cannot break a Rust unit test, and this job is ~2.5 minutes.
+    # `main` carries no required status checks, so a skipped run blocks nothing.
+    # `.github/**` is deliberately absent: a workflow edit must run the workflow.
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'LICENSES/**'
   push:
     branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.claude/**'
+      - 'LICENSE'
+      - 'LICENSES/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   rust-tests-linux:
     name: Rust Tests (Linux)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -33,18 +54,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache Cargo
-        # A cache-service flake must never fail the job; a miss just means a cold build.
-        continue-on-error: true
-        uses: actions/cache@v4
+      # Was a raw `actions/cache` over `target/`, which had grown to a 3.72 GB
+      # entry taking 66s to restore — longer than the 53s of tests it existed to
+      # accelerate, so it was a net loss. rust-cache keeps dependency artifacts
+      # and drops the workspace's own, which are invalid next commit anyway.
+      #
+      # `save-if` on main stops PRs minting their own ref-scoped copies. Repo
+      # cache had reached 11.76 GB against GitHub's 10 GB cap, so every save was
+      # evicting something — including the entry the next run needed.
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-
+          shared-key: rust-tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Unit-test gate. Runs the facade + macros lib tests plus the
       # `#[processor]` emission locks. streamlib-macros carries the
@@ -57,4 +79,3 @@ jobs:
         run: |
           cargo test --locked -p streamlib -p streamlib-macros --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
-
