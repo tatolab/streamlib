@@ -1,7 +1,7 @@
 # Texture rings — single canonical abstraction
 
-> **Living document.** Validate, update, critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## What this is
 
@@ -19,8 +19,9 @@ CPU-staged bytes into a ring slot's pre-allocated texture without
 escalation — the queue submit goes through the shared
 mutex-protected command queue.
 
-This is engine-model territory ([CLAUDE.md "The StreamLib Engine
-Model"](../../CLAUDE.md#the-streamlib-engine-model)). The shape
+This is engine-model territory
+([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md)).
+The shape
 exists once; every decode-output / CPU-upload-style hot path uses
 it. Hand-rolling a parallel ring inside a consumer is the
 anti-pattern this abstraction exists to prevent.
@@ -255,8 +256,9 @@ contract).
 
 Engine-model rule: the RHI is the single gateway for GPU work;
 core systems live once and grow via extension, never via parallel
-implementations ([CLAUDE.md "Before Creating Any New
-Abstraction"](../../CLAUDE.md#before-creating-any-new-abstraction)).
+implementations
+([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md)
+— "search first, extend never parallel").
 Decode-output texture rings were the *unspoken* shape across
 H.264 / H.265 / `bgra_file_source` / future JPEG / camera —
 every consumer hand-rolled the same pattern (or worse, the
@@ -267,7 +269,7 @@ decoders escalated every frame and allocated a fresh
   `processor_setup_lock` and `vkDeviceWaitIdle()`s the device
   after — that's a full GPU sync on the per-frame critical path.
   The AGP drone-racing vision pipeline (`docs/architecture/`-
-  adjacent VADR-TS-002, 30 Hz JPEG-over-UDP, latency-critical
+  30 Hz JPEG-over-UDP, latency-critical
   control loop) cannot afford that stall. See the [Honest
   accounting](#honest-accounting-of-whats-eliminated-vs-residual)
   section above for what specifically goes away and what residual

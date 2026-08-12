@@ -52,20 +52,17 @@ finished). At guard drop, the adapter signals the release-side value
 (`UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`, etc.) live inside the same
 scope. None of this surfaces in the customer's API.
 
-In Python and Deno the same shape uses the language's idiomatic
-scope binding:
+In Python the same shape uses the language's idiomatic scope
+binding:
 
 ```python
-with adapter.acquire_write(surface) as view:
-    view.draw_into(...)
+with ctx.gpu_limited_access.acquire_pixel_buffer(width, height) as surface:
+    surface.lock(read_only=False)
 ```
 
-```typescript
-{
-  using guard = adapter.acquireWrite(surface);
-  guard.view.draw(...);
-}  // [Symbol.dispose] runs here
-```
+> A "Deno scope binding" example was removed here: the TypeScript `using
+> guard = adapter.acquireWrite(surface)` snippet — the Deno SDK and its
+> native cdylib are gone, and Python is the only authoring runtime.
 
 ### Blocking vs. non-blocking acquire
 
@@ -108,17 +105,14 @@ level-count / queue-family / memory-binding / ycbcr-conversion plus
 reserved bytes for additive ABI extensions:
 
 ```rust
-impl<Inner> SurfaceAdapter for SkiaAdapter<Inner>
-where
-    Inner: SurfaceAdapter,
-    for<'g> Inner::WriteView<'g>: VulkanImageInfoExt,
-{
-    type WriteView<'g> = SkiaWriteView<'g, Inner>;
-    // inner.view().vk_image_info() fills the entire GrVkImageInfo.
+impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for SkiaSurfaceAdapter<D> {
+    type ReadView<'g> = SkiaReadView<'g, D>;
+    type WriteView<'g> = SkiaWriteView<'g, D>;
+    // build_skia_image_info::<V: VulkanImageInfoExt> fills the entire GrVkImageInfo.
 }
 ```
 
-The customer of `SkiaAdapter` only ever sees `SkSurface`. The inner
+The customer of `SkiaSurfaceAdapter` only ever sees `SkSurface`. The inner
 view is a private detail of the outer adapter.
 
 Other capability markers:
@@ -140,10 +134,11 @@ runtime error.
 
 ## Subprocess lifetime
 
-Polyglot subprocesses (Python, Deno) hold an `OwnedFd`-bound
-`StreamlibSurface`. When the subprocess exits cleanly, `Drop` sends
-a `release` (a.k.a. `unregister`) request through
-`streamlib-surface-client`. When the subprocess crashes mid-write,
+Helper processes hold a `StreamlibSurface` whose transport handle
+carries the DMA-BUF fds checked out over the per-runtime Unix socket.
+A clean release travels back over that socket as a `release` (a.k.a.
+`unregister`) request framed by `streamlib-surface-client`. When a
+helper crashes mid-write,
 the kernel closes the per-subprocess Unix socket; the host's
 surface-share watchdog observes the disconnect (kernel-side
 equivalent of `EPOLLHUP`) and releases every surface registered
@@ -151,34 +146,32 @@ under that subprocess's `runtime_id`. The double-release case is
 idempotent — a polite `release` followed by a crash leaves nothing
 for the watchdog to do.
 
-Subprocess Python/Deno code MUST NOT create its own `VkDevice` —
-dual `VkDevice` on NVIDIA Linux SIGSEGVs (see
-[`docs/learnings/nvidia-dual-vulkan-device-crash.md`](../learnings/nvidia-dual-vulkan-device-crash.md)).
-The surface-share IPC hands subprocess code FD-imported memory it
-binds onto the host's `VkDevice` via `VkImportMemoryFdInfoKHR` —
-that's the only legal Vulkan allocation path on the subprocess side.
+A helper process builds its own `VkInstance` + `VkDevice` through
+`ConsumerVulkanDevice` — it never holds a reference to the host's
+logical device, which is what makes the capability boundary
+type-enforced. The two devices target the same physical GPU without
+tripping the NVIDIA dual-`VkDevice` crash (see
+[`docs/learnings/nvidia-dual-vulkan-device-crash.md`](../learnings/nvidia-dual-vulkan-device-crash.md)),
+which is a same-process failure and stays out of reach while the
+carve-out has the consumer submitting only at acquire/release
+boundaries. Vulkan on the helper side is import-side only:
+FD-imported memory via `VkImportMemoryFdInfoKHR` is the sole legal
+allocation path, and everything privileged escalates to the parent.
 
-## ABI version gate
-
-`STREAMLIB_ADAPTER_ABI_VERSION` (currently `1`) is the major-version
-constant. Adding methods to the trait is non-breaking and does NOT
-bump it; renaming or removing a method, or changing an existing
-signature or `#[repr(C)]` field, is a major bump.
-
-The trait does not carry a `trait_version()` method — Rust's vtable
-layout already enforces in-process compatibility at compile time. A
-mismatched `streamlib-surface-adapter` rlib version cannot link into the
-runtime in the first place. The constant is load-bearing at any
-future cdylib boundary; `streamlib-plugin-abi`'s `PluginDeclaration`
-is the precedent shape for that check.
+> An "ABI version gate" section was removed here:
+> `STREAMLIB_ADAPTER_ABI_VERSION` and the `streamlib-plugin-abi`
+> `PluginDeclaration` precedent — the constant exists nowhere in the tree
+> and the plugin-ABI crate was deleted with the plugin cdylibs.
 
 ## Where the code lives
 
 - `adapters/streamlib-surface-adapter/` — the contract crate. Trait,
   descriptor, errors, guards, mock, conformance suite, subprocess
   crash harness.
-- `sdk/streamlib-python/python/streamlib/surface_adapter.py` —
-  Python mirror.
+> A "Python mirror" bullet was removed here: `sdk/streamlib-
+> python/python/streamlib/surface_adapter.py` — that SDK path is gone (it is
+> `sdk/streamlib-python-wheel/` now) and the wheel ships no
+> `surface_adapter` module.
 - `runtime/streamlib-engine/src/linux/surface_share/` — host-side backing
   store and the Unix-socket service that hands DMA-BUF fds to
   subprocesses.

@@ -1,12 +1,11 @@
 # Adapter runtime integration
 
-> **Living document.** Validate, update, and critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation):
-> use Opus, show your work, treat this academically, not dogmatically.
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## Overview
 
-A subprocess customer (Python, Deno) obtains a usable
+A Python helper-process customer obtains a usable
 `VulkanContext` / `OpenGlContext` / `SkiaContext` /
 `CpuReadbackContext` / `CudaContext` instance against StreamLib's
 host-side surface adapters via two IPC seams plus the
@@ -18,13 +17,14 @@ RHI patterns and without breaking the `LimitedAccess` /
 A Python customer writing
 
 ```python
-with skia_adapter.acquire_write(surface) as guard:
-    sk_surface = guard.view
-    # draw stuff
+with ctx.gpu_limited_access.resolve_surface(surface_id) as surface:
+    surface.lock(read_only=False)
+    # write pixels through surface.base_address
+    surface.unlock()
 ```
 
-works the same way it works in-process Rust — same trait shape,
-same resource semantics, same scope-bound synchronization.
+gets the same host-allocated backing an in-process Rust adapter
+sees — same resource semantics, same scope-bound synchronization.
 
 ## The two IPC seams
 
@@ -50,30 +50,31 @@ Metadata travels alongside FDs: `width`, `height`, `format`,
 extensible — additional JSON fields can be added without breaking
 existing clients.
 
-Already used by `examples/polyglot-dma-buf-consumer/runner/` from both
-Python and Deno via `ctx.gpu_limited_access.resolve_surface(id)`,
-which under the hood does a `check_out` and hands back a handle
-the subprocess can `lock` / read / `unlock` / `release`.
+Reached from a Python helper process via
+`ctx.gpu_limited_access.resolve_surface(id)`, which under the hood
+does a `check_out` and hands back a handle the helper can `lock` /
+read / `unlock` / `close`.
 
 ### Seam 2 — escalate IPC
 
 `runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
-typed by JTD schemas at
-`packages/escalate/schemas/escalate_{request,response}.yaml` (the
-`@tatolab/escalate` peer protocol package).
-Length-prefixed JSON request/response over the subprocess's
-stdin/stdout pipes, with a discriminator-tagged op enum covering
+typed by the hand-written serde structs in
+`subprocess_escalate_wire_types/`.
+Length-prefixed JSON request/response over a dedicated `UnixStream`
+socketpair the child inherits as `STREAMLIB_ESCALATE_FD` (fd1/fd2
+stay free for intercepted log capture), with a discriminator-tagged
+op enum covering
 the surface-acquire ops (`AcquireImage`, `AcquirePixelBuffer`,
 `AcquireTexture`), `Log`, `ReleaseHandle`, the cpu-readback
 trigger (`RunCpuReadbackCopy`, `TryRunCpuReadbackCopy`), the
 compute / graphics / ray-tracing register + run ops, and
 `RegisterAccelerationStructureBlas` / `Tlas`. See
-`escalate_request.yaml` for the canonical list.
+the `EscalateRequest` enum in `escalate_request.rs` for the canonical list.
 
 Each request carries a UUID `request_id`; responses echo it.
-Adding a new op means updating the schema YAML alongside the
-hand-written wire types in `subprocess_escalate_wire_types/` and the
-helper-side encoder in the wheel's `_helper.py`. The host side
+Adding a new op means updating the hand-written wire types in
+`subprocess_escalate_wire_types/` and the helper-side encoder in the
+wheel's `_helper.py`. The host side
 holds resources alive on behalf of the subprocess via
 `EscalateHandleRegistry`; subprocess crash drops them.
 
@@ -85,8 +86,9 @@ surface-share.
 
 ## The single-pattern shape
 
-Every surface adapter rides the same shape, per the engine-model
-principle in CLAUDE.md ("the RHI is the single gateway"):
+Every surface adapter rides the same shape, per the RHI boundary
+rule in `.claude/rules/rhi.md` ("nothing outside the RHI touches
+`vulkanalia`"):
 pre-register resources via surface-share, import them through
 `consumer-rhi`, run the adapter generic over
 `D: VulkanRhiDevice`. Per-acquire IPC, when host work is needed
@@ -100,8 +102,8 @@ Concretely:
 | Adapter | Pattern (single shape) |
 |---|---|
 | `streamlib-adapter-vulkan` | Generic over `D: VulkanRhiDevice`. Host pre-registers `VkImage` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanTexture` + a pair of `ConsumerVulkanTimelineSemaphore`s. Per-acquire is layout-transition + `produce_done` wait, no IPC. The writer process signals `produce_done` in `end_write_access`; the reader process signals `consume_done` in `end_read_access`. Both edges typically use host CPU `signal_host`. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
-| `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md); will migrate in a separate issue.) |
-| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path (and also offers a GL backend that composes on the opengl adapter). (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md); will migrate in a separate issue.) |
+| `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md).) |
+| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path (and also offers a GL backend that composes on the opengl adapter). (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md).) |
 | `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanBuffer` + a pair of `ConsumerVulkanTimelineSemaphore`s. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and signals `produce_done` via the trigger's `vkQueueSubmit2::pSignalSemaphoreInfos` slot; the subprocess waits on `produce_done`, mmaps the pre-imported staging buffer, then signals `consume_done` via CPU `signal_host` in `end_read_access`. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 | `streamlib-adapter-cuda` | Same shape with one twist on the FD wire — two resource flavors: **(a)** the flat-tensor DLPack path: host pre-registers a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` (`HostVulkanBuffer::new_opaque_fd_export`) + two OPAQUE_FD-exportable timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanBuffer::from_opaque_fd` + a pair of `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`, then maps the same FDs into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` + `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The OPAQUE_FD handle type (rather than DMA-BUF) is forced by the DLPack zero-copy contract: PyTorch / JAX / NumPy `from_dlpack` consume `DLTensor.data` as a flat `void*`, and only `cudaExternalMemoryGetMappedBuffer` (which requires the source memory to be a `VkBuffer` exported as OPAQUE_FD) yields the flat pointer. **(b)** the tiled-image path: host pre-registers a DEVICE_LOCAL OPAQUE_FD-exportable `VkImage` (`HostVulkanTexture::new_opaque_fd_export`) — `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier, format restricted to the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`) — and the subprocess imports through `ConsumerVulkanTexture::from_opaque_fd`. The same FD is then handed to CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for `cudaSurfaceObject_t` / `cudaTextureObject_t` backings. The mipmapped-array handle is opaque (not DLPack-compatible) but unlocks hardware-bilinear sampling, mipmap LOD selection, and surface-write writes from CUDA kernels — the texture-shaped slice that complements (a)'s flat-tensor slice. The host-side trigger that produces frames into the staging buffer signals `produce_done` via `vkQueueSubmit2::pSignalSemaphoreInfos`; the subprocess waits on `produce_done` before consuming and signals `consume_done` via CPU `signal_host` in `end_read_access`. No per-acquire IPC, no CUDA bridge trait. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 
@@ -120,18 +122,14 @@ let view = guard.view_mut();
 ```
 
 ```python
-# Python subprocess
-with adapter.acquire_write(surface) as guard:
-    view = guard.view
+# Python helper process
+with ctx.gpu_limited_access.resolve_surface(surface_id) as surface:
+    surface.lock(read_only=False)
 ```
 
-```typescript
-// Deno subprocess
-{
-  using guard = adapter.acquireWrite(surface);
-  const view = guard.view;
-}
-```
+> A "Deno subprocess" code sample was removed here: it showed a TypeScript
+> `adapter.acquireWrite` scope — the Deno SDK and its native cdylib are gone
+> and Python is the only authoring runtime.
 
 The customer never sees DMA-BUF FDs, DRM modifiers, timeline
 semaphores, queue family ownership transitions, or escalate
@@ -140,13 +138,15 @@ request IDs. That's the whole point of the adapter pattern.
 ## Layered architecture
 
 ```
-Customer code (Rust processor / Python script / Deno script)
+Customer code (Rust processor / Python processor in its helper process)
   └── adapter.acquire_write(surface)              ← public API, uniform
-      └── streamlib-{python,deno} adapter Protocol ← type stub
-          └── streamlib-{python,deno}-native FFI   ← runtime impl
-              └── streamlib-adapter-* (vulkan, opengl, skia,
+      └── streamlib Python surface                ← type stub (_engine.pyi)
+          └── streamlib._engine (the wheel)       ← statically linked
+              └── streamlib-adapter-* (vulkan, opengl,
                                        cpu-readback, cuda)
-                  ↳ generic over D: VulkanRhiDevice
+                  ↳ the Vulkan-device ones are generic over
+                    D: VulkanRhiDevice; opengl imports via EGL
+                  ↳ skia is host-side composition, not in the wheel
                   ↳ pre-registered resources via surface-share
                   ↳ imports via streamlib-consumer-rhi (Consumer*)
                   ↳ per-acquire: layout transitions + timeline waits;
@@ -278,7 +278,7 @@ The shape of what the hook does varies by seam:
   consumers](#dual-registration-for-in-process-consumers) below. No
   bridge — every subprocess acquire is a one-shot `check_out`.
   (Vulkan rides the dual-timeline shape today; OpenGL and Skia
-  haven't lifted yet and will migrate in a separate issue.)
+  haven't lifted yet.)
 - **Escalate-IPC seam** (cpu-readback). The hook constructs the
   `CpuReadbackSurfaceAdapter`, allocates + registers the host
   surface(s) it serves (passing both `produce_done` and `consume_done`
@@ -312,9 +312,9 @@ shape (`gpu.set_compute_kernel_bridge`, `set_graphics_kernel_bridge`,
 dispatch through the host RHI.
 
 Reference implementation:
-`examples/polyglot-cpu-readback-blur/runner/src/main.rs`. That example shows
-the cpu-readback case (which exercises the bridge path); the GPU
-adapters use the same hook but skip the `set_*_bridge` step.
+`examples/camera-python-display/src/linux.rs`. That example shows
+the surface-share seam; adapters that need per-acquire host work
+use the same hook plus a `set_*_bridge` step.
 
 The hook is the canonical opt-in registration point. Adapters that
 need pre-start GpuContext access use it; adapters that need
@@ -388,10 +388,9 @@ sides.
 When the surface is consumed **only** by subprocess customers (or
 by a post-stop one-shot like `gpu.create_texture_readback`), the
 in-process call is redundant — Path 1 is never consulted. The
-canonical example is
-[`examples/polyglot-opengl-fragment-shader/runner/src/main.rs`](../../examples/polyglot-opengl-fragment-shader/runner/src/main.rs):
-the host registers via `surface_store.register_texture` only and
-relies on `gpu.create_texture_readback` for its post-stop pixel
+canonical shape is a host that registers via
+`surface_store.register_texture` only and relies on
+`gpu.create_texture_readback` for its post-stop pixel
 capture. Don't dual-register surfaces with no in-process hot-path
 consumer — every entry in `texture_cache` lives until the
 producer explicitly unregisters, and over-populating it muddies
@@ -461,11 +460,12 @@ What that cost buys:
   are a compile error. A feature-flag-driven registration would
   funnel everything through a generic registry and lose that.
 
-A per-adapter `install_default` convenience helper (e.g.
-`streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`)
-that internally calls `install_setup_hook` with sensible defaults
-is a clean opt-in escape from the boilerplate; the underlying
-explicit API stays as the explicit form. Don't replace explicit
+> A "per-adapter install_default" paragraph was removed here: it proposed
+> `streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`
+> — no adapter crate defines any `install_default`, and architecture docs
+> carry no proposed work.
+
+Don't replace explicit
 registration with implicit feature-flag discovery — the auditability
 property is load-bearing.
 

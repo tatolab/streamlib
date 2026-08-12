@@ -1,7 +1,7 @@
 # Vendored vulkanalia fork — `vendor/tatolab-vulkanalia*`
 
-> **Living document.** Validate, update, critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## What this is
 

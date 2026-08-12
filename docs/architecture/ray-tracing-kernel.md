@@ -189,12 +189,12 @@ binding declaration, the kernel:
   the pipeline create call is well-formed, but the kernel builds
   every pipeline as monolithic — extend when the first consumer
   actually uses libraries.
-- **Subprocess support.** The kernel is host-only; subprocess
-  customers (Python / Deno cdylibs) escalate via IPC, mirroring the
-  compute / graphics escalate ops (the
-  `register_acceleration_structure_blas` / `_tlas`,
+- **Subprocess support.** The kernel is host-only; helper-process
+  customers escalate via IPC, mirroring the compute / graphics
+  escalate ops (the `register_acceleration_structure_blas` / `_tlas`,
   `register_ray_tracing_kernel`, and `run_ray_tracing_kernel`
-  request shapes carry the dispatch from cdylib to host).
+  request shapes carry the dispatch from the helper process to the
+  host).
 
 ## Why this shape
 

@@ -1,8 +1,7 @@
 # Authoring a new surface adapter
 
-> **Living document.** Validate, update, and critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Verify against current code before generalizing.
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 This doc is the implementation contract for writing a new
 `SurfaceAdapter`. It codifies the patterns the in-tree adapters
@@ -22,8 +21,8 @@ deviation but don't.
 ## The single-pattern principle
 
 Every surface adapter rides the same shape. The shape is a
-deliberate engine-model invariant ([CLAUDE.md → engine
-model](../../CLAUDE.md#the-streamlib-engine-model)) — the RHI is
+deliberate engine-model invariant
+([`.claude/rules/rhi.md`](../../.claude/rules/rhi.md)) — the RHI is
 the single gateway to the GPU, and surface adapters are the
 single gateway from a host-allocated GPU resource to a customer's
 framework-native handle.
@@ -91,7 +90,7 @@ Mechanical steps — work top-to-bottom.
 
 ### 1. Crate layout
 
-Create three crates under `adapters/`:
+Create one crate under `adapters/`:
 
 - `streamlib-adapter-<name>/` — the adapter implementation. Runtime
   dep graph: `streamlib-surface-adapter` + `streamlib-consumer-rhi` +
@@ -100,16 +99,19 @@ Create three crates under `adapters/`:
   cdylib's dep graph and breaks the FullAccess capability boundary.
   `streamlib` is allowed as a dev-dependency only.
 
-- `streamlib-adapter-<name>-helpers/` (optional but standard) —
-  test-helper bin(s) that need `streamlib`. Held in a separate
-  crate so the adapter's runtime dep graph stays `streamlib`-free
-  even when its tests bring up a `HostVulkanDevice`. Mirror the
-  existing helpers crates' shape; mark `publish = false`.
+- The subprocess test helper is an in-crate `[[bin]]` at
+  `tests/bin/<name>_adapter_subprocess_helper.rs`, not a separate
+  crate. It imports through `streamlib-consumer-rhi` only, so the
+  crate's runtime dep graph stays `streamlib`-free even though the
+  tests that spawn it bring up a `HostVulkanDevice` from
+  `[dev-dependencies]`. Cargo's `[[bin]]` targets don't see
+  dev-deps, so anything the helper itself needs goes under regular
+  `[dependencies]` — see `streamlib-adapter-skia/Cargo.toml`.
 
-- The framework-native helper crate, if the adapter needs one
-  (e.g. `streamlib-adapter-skia` would have a Skia-binding helper
-  crate). Same dep-graph rules apply: anything cdylibs link must
-  not pull `streamlib`.
+- A framework binding comes from a published crate (`skia-safe` for
+  `-skia`) plus an in-crate glue module, not a companion crate.
+  Same dep-graph rule applies: nothing the adapter links at runtime
+  may pull `streamlib`.
 
 ### 2. Module layout in the adapter crate
 
@@ -171,7 +173,7 @@ Pick the markers your view exposes from
 
 | Marker | When to impl | Reference adapter |
 |---|---|---|
-| `VulkanWritable` (image + layout) | Always, if the view is a `VkImage` | `-vulkan`, `-opengl`'s inner-vulkan view path |
+| `VulkanWritable` (image + layout) | Always, if the view is a `VkImage` | `-vulkan` |
 | `VulkanImageInfoExt` (full `VkImageInfo`) | If a Skia-style outer adapter could compose on this | `-vulkan` |
 | `GlWritable` (`gl_texture_id`) | OpenGL texture views | `-opengl` |
 | `CpuReadable` / `CpuWritable` | **Only** for `-cpu-readback` (architectural — switching to cpu-readback is the contractual signal that the customer opted into a host-side copy) | `-cpu-readback` |
@@ -263,19 +265,18 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
-streamlib-surface-client = { path = "../streamlib-surface-client" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.17.0" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.17.0" }
 vulkanalia.workspace = true
 libc.workspace = true
 
 # `streamlib` is dev-only. The runtime crate above does NOT pull
-# `streamlib`, so subprocess cdylibs depending on this adapter get
-# the consumer-rhi carve-out only and `streamlib` is absent from
-# their dep graph (asserted by `cargo tree -p streamlib-{python,deno}-native
-# | grep -c "^streamlib v"` returning 0).
+# `streamlib`, so subprocess code depending on this adapter gets the
+# consumer-rhi carve-out only and `streamlib` is absent from its dep
+# graph (enforced by `cargo xtask check-boundaries`).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-streamlib = { path = "../streamlib" }
-streamlib-adapter-<name>-helpers = { path = "../streamlib-adapter-<name>-helpers" }
+streamlib-engine = { path = "../../runtime/streamlib-engine" }
+streamlib = { path = "../../sdk/streamlib-sdk" }
 tracing-subscriber.workspace = true
 
 [[test]]
@@ -468,9 +469,9 @@ has created the live `GpuContext`, before any processor's `setup()`
 runs — the window where adapter bridges and pre-allocated host
 surfaces have to be in place.
 
-See `examples/polyglot-cpu-readback-blur/runner/src/main.rs` for the
-canonical reference (it exercises the bridge path; GPU adapters
-omit the `set_*_bridge` step).
+The bridge contract the hook wires is documented on
+`runtime/streamlib-engine/src/core/context/cpu_readback_bridge.rs`;
+GPU adapters omit the `set_*_bridge` step.
 
 The trade-off discussion (explicit registration vs. Cargo-feature
 ambient availability) lives in the *Trade-off* section of
@@ -555,52 +556,12 @@ The `initial_layout` becomes the Vulkan adapter's `current_layout`
 at registration time on the cdylib side, so the QFOT release
 barrier issues from the right source layout.
 
-**Subprocess customer** — obtain both contexts from the same
-runtime in `setup`, then call the producer adapter's
-`release_for_cross_process` after the write block exits:
-
-```python
-# Python
-self._opengl = OpenGLContext.from_runtime(ctx)
-self._vulkan = VulkanContext.from_runtime(ctx)
-# ...
-with self._opengl.acquire_write(uuid) as view:
-    # ... GL writes ...
-# acquire_write's __exit__ runs glFinish — writes drained.
-self._opengl.release_for_cross_process(uuid, self._vulkan, VkImageLayout.GENERAL)
-```
-
-```typescript
-// Deno
-this.opengl = OpenGLContext.fromRuntime(ctx);
-this.vulkan = VulkanContext.fromRuntime(ctx);
-// ...
-{
-  using guard = this.opengl.acquireWrite(uuid);
-  // ... GL writes ...
-}  // dispose runs glFinish — writes drained.
-this.opengl.releaseForCrossProcess(uuid, this.vulkan, VkImageLayout.General);
-```
-
-**Producer adapter SDK method** — a thin delegating wrapper:
-
-```python
-def release_for_cross_process(self, surface, vulkan_ctx, post_release_layout):
-    vulkan_ctx.release_for_cross_process(surface, post_release_layout)
-```
-
-That's the entire implementation. The adapter crate (Rust) doesn't
-change.
-
-**`VulkanContext.release_for_cross_process` lazily registers** the
-surface on its first reference, so the customer doesn't need a
-no-op `acquire_*` first to populate the cdylib's surface-id map.
-The Vulkan adapter's `register_host_surface` consumes the sync_fd
-from the resolved SurfaceHandle and dups its own copies of the
-DMA-BUF FDs — the producer adapter's earlier registration is not
-disturbed (`SurfaceHandle::sync_fd` is `take`n by the Vulkan
-register; the OpenGL register reads only the DMA-BUF FDs and never
-touches the sync_fd).
+> A "Subprocess customer / producer adapter SDK method" passage was removed
+> here: the Python and Deno `release_for_cross_process` snippets, the thin
+> delegating SDK wrapper, and the `VulkanContext` lazy-registration note —
+> no crate or stub defines `release_for_cross_process`, the wheel exposes no
+> `OpenGLContext` / `VulkanContext`, the Deno SDK is deleted, and there is
+> no `SurfaceHandle` type.
 
 ### Why not add a Vulkan device handle to the producer adapter
 
@@ -656,13 +617,10 @@ pattern (cross-process publish + same-process Path-1 entry when an
 in-process hot-path consumer also reads the surface) applies
 unchanged.
 
-### Reference
-
-Implementation: `examples/polyglot-opengl-fragment-shader/runner/`
-demonstrates the pattern end-to-end for both Python and Deno
-runtimes. The host main.rs allocates and registers the timeline;
-the python/deno scenario binaries dual-register and call
-`release_for_cross_process` after each GL write block.
+> > A "Reference" section was removed here: `examples/polyglot-opengl-
+> fragment-shader/runner/`, its Python and Deno scenario binaries, and their
+> `release_for_cross_process` calls — the example directory is gone, the
+> Deno SDK is deleted, and no crate defines `release_for_cross_process`.
 
 ## Conformance & tests
 
@@ -767,74 +725,10 @@ believe the single-pattern principle is wrong for it, **stop and
 surface the disagreement before building a parallel shape.** That
 conversation belongs in an issue, not in code.
 
-## Hypothetical walkthrough — Metal on macOS via MoltenVK
-
-Sanity check: applying the checklist to an adapter not yet shipped.
-The exercise is to confirm the checklist would produce the right
-shape mechanically.
-
-**Goal**: `streamlib-adapter-metal` exposes a host-allocated
-`VkImage` (allocated through the macOS-flavor `HostVulkanDevice`
-running on MoltenVK) as an `MTLTexture` for customers writing
-Metal-native code.
-
-Walking the checklist:
-
-1. **Crate layout** — three crates: `streamlib-adapter-metal`,
-   `streamlib-adapter-metal-helpers` (test-only), and (likely) a
-   `streamlib-adapter-metal-mtltexture-bridge` crate that holds
-   the unsafe Objective-C bridging code. Same dep-graph rules:
-   the runtime adapter crate depends on `streamlib-surface-adapter`
-   + `streamlib-consumer-rhi` + `streamlib-surface-client` +
-   `vulkanalia`, but **not** `streamlib`.
-
-2. **Module layout** — same five files (`lib.rs`, `adapter.rs`,
-   `context.rs`, `state.rs`, `view.rs`) plus a sixth `mtl.rs` for
-   the MoltenVK ↔ Metal handle conversion (analogous to
-   `-opengl/src/egl.rs`).
-
-3. **The trait impl is generic over `D: VulkanRhiDevice`.**
-   `MetalSurfaceAdapter<HostVulkanDevice>` runs in-process Rust;
-   `MetalSurfaceAdapter<ConsumerVulkanDevice>` runs cdylib-side.
-   Per-acquire is a timeline wait + a layout transition into
-   `VK_IMAGE_LAYOUT_GENERAL` plus a MoltenVK-specific call to
-   surface the underlying `id<MTLTexture>` — but the `MTLTexture`
-   handle is read-only metadata on the imported `VkImage`, not a
-   privileged op.
-
-4. **Capability marker** — a new `MetalWritable` marker exposing
-   `mtl_texture(&self) -> *const MTLTexture` (or analogous Rust-
-   side handle type). Lives in `streamlib-surface-adapter`. Existing
-   markers (`VulkanWritable`, `GlWritable`) stay untouched — the
-   adapter can also impl `VulkanWritable` if customers want to
-   issue MoltenVK Vulkan calls against the same image.
-
-5. **Tests** — conformance suite + macOS-specific round-trips.
-   Per [`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md),
-   cross-compile verification on Linux is required; the
-   walkthrough lands the cross-compile + native-macOS CI lane in
-   the same milestone.
-
-6. **Runtime wiring** — `runtime.install_setup_hook` allocates a
-   host `VkImage` via `gpu.acquire_render_target_image` (the
-   macOS analog of `_dma_buf_image`), registers via surface-share,
-   no bridge needed because there's no per-acquire host work.
-
-7. **Polyglot** — both Python and Deno subprocesses get the
-   `MetalContext` + scope-bound acquire shape. Schemas don't
-   change (no new escalate op).
-
-The checklist produced the right shape: the adapter is a thin
-Metal-binding layer on top of the existing single-pattern
-surface-share shape. The MoltenVK / Metal handle conversion is
-genuinely framework-specific (lives in `mtl.rs` / the bridge
-crate); everything else is mechanical.
-
-Trip-wires that **didn't** fire: no subprocess-side allocation, no
-subprocess-side compute kernel, no per-acquire FD passing, no
-custom synchronization. If any of those had been needed, that
-would have been the signal to stop and surface the disagreement —
-but they weren't.
+> A "Hypothetical walkthrough — Metal on macOS via MoltenVK" section was
+> removed here: 70 lines applying the checklist to `streamlib-adapter-
+> metal`, an adapter its own text calls "not yet shipped". Apple support is
+> post-MVP and undesigned, and architecture docs carry no proposed work.
 
 ## Reference adapters
 

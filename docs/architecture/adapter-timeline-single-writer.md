@@ -1,8 +1,7 @@
 # Single-writer-per-edge surface-adapter timelines
 
-> **Living document.** Validate, update, critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Verify against current code before generalizing.
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## What this is
 
