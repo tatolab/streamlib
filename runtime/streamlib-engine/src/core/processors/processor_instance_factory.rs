@@ -339,6 +339,9 @@ impl ProcessorInstanceFactory {
 
         let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
+        // Read before the descriptor moves into the map.
+        let processor_class_import_path = descriptor.processor_class_import_path.clone();
+
         self.port_info
             .write()
             .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
@@ -352,7 +355,12 @@ impl ProcessorInstanceFactory {
             RegistrationKind::LegacyDyn { constructor },
         );
 
+        // A processor's class is reached by import and nothing else, so
+        // "which class is this?" is a question the record has to answer; a
+        // display name cannot, and by the time a helper fails to import one
+        // the app is long past `add`.
         tracing::info!(
+            %processor_class_import_path,
             "[register_dynamic] new processor type registered '{}'",
             type_name
         );
@@ -624,7 +632,10 @@ mod tests {
     }
 
     fn unit_descriptor(name: SchemaIdent) -> ProcessorDescriptor {
-        ProcessorDescriptor::new(name, "test")
+        // Distinct per type so these fixtures keep the property production
+        // descriptors have: one import path names one class.
+        let import_path = format!("{}::{}", module_path!(), name.r#type.as_str());
+        ProcessorDescriptor::new(name, import_path, "test")
     }
 
     #[test]

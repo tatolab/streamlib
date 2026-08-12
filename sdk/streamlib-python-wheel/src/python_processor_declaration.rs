@@ -38,6 +38,10 @@ impl PythonProcessorDeclaration {
         let type_reference = read_type_reference(processor_class)?;
         let execution_config = read_execution_config(processor_class)?;
 
+        // Identity and `entrypoint` are separate contracts, but one
+        // derivation: a second call is a second chance for them to disagree.
+        let class_import_path = processor_class_import_path(processor_class)?;
+
         let mut descriptor = ProcessorDescriptor::new(
             SchemaIdent::new(
                 type_reference.org().clone(),
@@ -45,13 +49,11 @@ impl PythonProcessorDeclaration {
                 type_reference.r#type().clone(),
                 VERSION_FREE_SENTINEL,
             ),
+            class_import_path.clone(),
             read_string_attribute(processor_class, "__streamlib_processor_description__")?,
         )
         .with_runtime(ProcessorRuntime::Python)
-        // The class's own import path: what the child interpreter imports to
-        // reach the class, and what refusing an unimportable class here rather
-        // than at spawn buys — the author names the class, not a pid.
-        .with_entrypoint(processor_class_import_path(processor_class)?)
+        .with_entrypoint(class_import_path)
         .with_scheduling(ProcessorScheduling {
             priority: read_thread_priority(processor_class)?,
         });
@@ -195,4 +197,46 @@ fn read_dict_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<Strin
 
 fn ident_error(failure: impl std::fmt::Display) -> PyErr {
     PyTypeError::new_err(failure.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::python_class_from_source_for_tests::class_from_source;
+
+    /// A class carrying what `@streamlib.processor` attaches.
+    const DECLARED_CLASS_SOURCE: &str = "\
+__name__ = 'my_app.filters'
+
+
+class BlurProcessor:
+    __streamlib_processor_type_reference__ = {
+        'org': 'app', 'package': 'local', 'type': 'BlurProcessor'
+    }
+    __streamlib_processor_description__ = 'blurs'
+    __streamlib_processor_execution__ = {'mode': 'reactive'}
+    __streamlib_processor_scheduling_priority__ = None
+    __streamlib_processor_input_ports__ = []
+    __streamlib_processor_output_ports__ = []
+";
+
+    /// A class that drifted between the two fields would be a processor
+    /// registered under a name its own helper process cannot import.
+    #[test]
+    fn the_identity_and_the_entrypoint_are_the_same_derived_string() {
+        Python::initialize();
+        Python::attach(|python| {
+            let declared_class = class_from_source(python, DECLARED_CLASS_SOURCE, "BlurProcessor");
+            let declaration = PythonProcessorDeclaration::read_from_class(&declared_class).unwrap();
+
+            assert_eq!(
+                declaration.descriptor.processor_class_import_path,
+                "my_app.filters:BlurProcessor"
+            );
+            assert_eq!(
+                Some(declaration.descriptor.processor_class_import_path.clone()),
+                declaration.descriptor.entrypoint,
+            );
+        });
+    }
 }

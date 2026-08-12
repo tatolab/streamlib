@@ -1366,7 +1366,11 @@ mod tests {
                 TypeName::new("ProfileSink").unwrap(),
                 SemVer::new(1, 0, 0),
             );
-            let mut desc = ProcessorDescriptor::new(ident.clone(), "conflicting-profile sink");
+            let mut desc = ProcessorDescriptor::new(
+                ident.clone(),
+                concat!(module_path!(), "::ProfileSink"),
+                "conflicting-profile sink",
+            );
             desc.inputs
                 .push(PortDescriptor::iceoryx2("in1", "input").with_delivery_profile(profile));
             // Idempotent: a duplicate ident (re-run in the same process) errors;

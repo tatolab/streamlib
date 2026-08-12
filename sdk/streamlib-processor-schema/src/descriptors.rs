@@ -114,6 +114,15 @@ impl ConfigDescriptor for () {
 pub struct ProcessorDescriptor {
     /// Structured processor identity — `@org/package/Type@version`.
     pub name: SchemaIdent,
+    /// The processor class's fully-qualified import path —
+    /// `my_app.filters:BlurProcessor` in Python,
+    /// `my_app::filters::BlurProcessor` in Rust.
+    ///
+    /// Derived mechanically by the authoring surface — the `#[processor]`
+    /// macro captures it at the expansion site, the wheel reads it off the
+    /// class — and never authored. Taken by `new` rather than by a builder so
+    /// that adding a descriptor without deriving one does not compile.
+    pub processor_class_import_path: String,
     pub description: String,
     pub version: String,
     pub repository: String,
@@ -137,9 +146,14 @@ pub struct ProcessorDescriptor {
 }
 
 impl ProcessorDescriptor {
-    pub fn new(name: SchemaIdent, description: impl Into<String>) -> Self {
+    pub fn new(
+        name: SchemaIdent,
+        processor_class_import_path: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             name,
+            processor_class_import_path: processor_class_import_path.into(),
             description: description.into(),
             version: String::new(),
             repository: String::new(),

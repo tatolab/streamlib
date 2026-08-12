@@ -38,9 +38,13 @@ fn ident(short: &str) -> SchemaIdent {
 /// `connect`'s port existence check. Idempotent under `serial_test`.
 fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
     let id = ident(short);
-    let descriptor = ProcessorDescriptor::new(id.clone(), "snapshot round-trip test")
-        .with_input(PortDescriptor::new(input, "", false))
-        .with_output(PortDescriptor::new(output, "", false));
+    let descriptor = ProcessorDescriptor::new(
+        id.clone(),
+        format!("{}::{short}", module_path!()),
+        "snapshot round-trip test",
+    )
+    .with_input(PortDescriptor::new(input, "", false))
+    .with_output(PortDescriptor::new(output, "", false));
     // Idempotent across `serial_test` runs — second register returns
     // `Error::Configuration("Processor 'X' already registered")` which
     // we ignore.

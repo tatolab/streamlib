@@ -667,10 +667,18 @@ fn generate_descriptor_from_schema(
         }
     });
 
+    // `module_path!()` resolves here to `<author's module>::<authored type>`,
+    // because this expansion lands inside the `pub mod` the macro names after
+    // the author's struct — the generated module's own path *is* the type
+    // path, with no `stringify!` needed to append the name.
     quote! {
         fn descriptor() -> Option<__streamlib_sdk::descriptors::ProcessorDescriptor> {
             Some(
-                __streamlib_sdk::descriptors::ProcessorDescriptor::new(Processor::schema_ident(), #description)
+                __streamlib_sdk::descriptors::ProcessorDescriptor::new(
+                    Processor::schema_ident(),
+                    ::core::module_path!(),
+                    #description,
+                )
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_schema
@@ -1413,5 +1421,39 @@ mod processor_struct_emit_tests {
                 );
             }
         }
+    }
+
+    fn rendered_descriptor() -> String {
+        render_token_stream_without_whitespace(generate_descriptor_from_schema(
+            &minimal_schema(),
+            "a probe",
+            "0.0.0",
+            None,
+        ))
+    }
+
+    /// The mechanism, not the result — what the string comes out as is
+    /// asserted where a real `#[processor]` can be expanded and read back
+    /// (`streamlib-engine/tests/processor_class_import_path_test.rs`).
+    #[test]
+    fn the_descriptor_captures_its_identity_with_module_path() {
+        let rendered = rendered_descriptor();
+        assert!(
+            rendered.contains("module_path!()"),
+            "identity must be captured at the expansion site — got: {rendered}"
+        );
+    }
+
+    /// `std::any::type_name`'s output format is documented as unspecified and
+    /// free to change between compiler versions. Keying a registry on it means
+    /// a toolchain bump silently renames every processor, with nothing failing
+    /// to say so — which is why this is a test and not a comment.
+    #[test]
+    fn the_descriptor_never_reaches_for_type_name() {
+        let rendered = rendered_descriptor();
+        assert!(
+            !rendered.contains("type_name"),
+            "identity must never be reflected at runtime — got: {rendered}"
+        );
     }
 }

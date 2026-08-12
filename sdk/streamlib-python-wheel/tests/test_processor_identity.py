@@ -8,13 +8,32 @@ Every Python processor runs in its own child process, which reaches the class by
 importing it. A class the child cannot import has no host anywhere, so the
 refusal belongs at `add` — where the author is naming the class — rather than at
 spawn, where it would surface as a failed child.
+
+The other half is that an accepted name does not move. Identity is what the
+registry, the control plane and the helper spawn all agree on, so one that
+varied with how the user happened to start their app would be three processors
+wearing one name.
 """
 
+import re
+import socket
 from pathlib import Path
 
 import pytest
 
+from app_under_test import (
+    start_app,
+    start_app_as_module,
+    start_app_under_the_streamlib_cli,
+)
+from identity_stability_app import DIRECT_LAUNCH_ARGUMENT
+
 ENTRY_FILE_PROCESSOR_APP = Path(__file__).parent / "entry_file_processor_app.py"
+IDENTITY_STABILITY_APP = Path(__file__).parent / "identity_stability_app.py"
+
+# The engine's own registration record. Asserting on `__module__` from the app
+# would agree with a derivation that never ran.
+DERIVED_IDENTITY_PATTERN = re.compile(r'processor_class_import_path="([^"]+)"')
 
 
 @pytest.fixture
@@ -68,4 +87,71 @@ def test_the_same_class_in_an_importable_module_is_accepted(entry_file_processor
 
     assert not [marker for marker in app.markers() if marker.startswith("REFUSED=")], (
         f"an importable class must not be refused; output:\n{app.output}"
+    )
+
+
+def _free_port() -> int:
+    """A port the OS reports free. The control plane increments on collision,
+    so a caller that loses the race still binds nearby."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _derived_identity(app) -> str:
+    """The identity the engine derived, read off its own log record."""
+    app.await_marker("ADDED")
+    for line in app.output_lines:
+        found = DERIVED_IDENTITY_PATTERN.search(line)
+        if found:
+            return found.group(1)
+    raise AssertionError(
+        f"the engine logged no derived identity; output:\n{app.output}"
+    )
+
+
+def _identity_under(launcher, start_app_under_test, *arguments: str) -> str:
+    app = start_app_under_test(
+        IDENTITY_STABILITY_APP, *arguments, launcher=launcher
+    )
+    return _derived_identity(app)
+
+
+# Every arm is observed at `add`, which is where identity is derived — well
+# before `run()` would initialize a GPU context. That is what keeps the launcher
+# arm, which does go on to boot a node, off the rig: the fixture reaps its
+# process group, so nothing here waits for a device or a clean exit.
+def test_a_class_run_as_a_script_identifies_by_its_module(start_app_under_test):
+    assert (
+        _identity_under(start_app, start_app_under_test, DIRECT_LAUNCH_ARGUMENT)
+        == "identity_stable_processor:IdentityStableProcessor"
+    )
+
+
+def test_the_launch_arrangement_never_changes_the_identity(start_app_under_test):
+    """`python app.py`, `python -m app`, and `streamlib dev` — one name.
+
+    Three arrangements that put a different thing on `sys.path` and give the
+    entry file a different provenance. What must not move is the *processor's*
+    module, because that is what the helper imports and what the registry keys
+    on — and the class lives in an importable module in all three, which is the
+    property the entry-file refusal above exists to guarantee.
+    """
+    as_a_script = _identity_under(
+        start_app, start_app_under_test, DIRECT_LAUNCH_ARGUMENT
+    )
+    as_a_module = _identity_under(
+        start_app_as_module, start_app_under_test, DIRECT_LAUNCH_ARGUMENT
+    )
+    under_the_launcher = _identity_under(
+        start_app_under_the_streamlib_cli,
+        start_app_under_test,
+        "--port",
+        str(_free_port()),
+    )
+
+    assert as_a_script == as_a_module == under_the_launcher, (
+        f"one class, three launch arrangements, three names: "
+        f"script={as_a_script!r} module={as_a_module!r} "
+        f"launcher={under_the_launcher!r}"
     )

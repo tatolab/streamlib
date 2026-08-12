@@ -29,9 +29,13 @@ fn register_test_type(short: &str) -> SchemaIdent {
         TypeName::new(short).unwrap(),
         SemVer::new(1, 0, 0),
     );
-    let descriptor = ProcessorDescriptor::new(id.clone(), "display-name disambiguation test")
-        .with_input(PortDescriptor::new("_unused_in", "", false))
-        .with_output(PortDescriptor::new("_unused_out", "", false));
+    let descriptor = ProcessorDescriptor::new(
+        id.clone(),
+        format!("{}::{short}", module_path!()),
+        "display-name disambiguation test",
+    )
+    .with_input(PortDescriptor::new("_unused_in", "", false))
+    .with_output(PortDescriptor::new("_unused_out", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id
 }

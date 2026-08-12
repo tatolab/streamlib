@@ -44,9 +44,16 @@ the engine disambiguating duplicates within one graph.
   read at `python_processor_registration.rs:90-100`, but only to format an error.
 - **Rust identity is captured by the macro, not `std::any::type_name`.** `type_name`'s
   output format is explicitly unspecified across compiler versions and must not key a
-  registry. The `#[processor]` macro captures
-  `concat!(module_path!(), "::", stringify!(Type))` at the expansion site. Resolved by
-  reading — the plan says "derived mechanically" and this is the only stable mechanism.
+  registry. The `#[processor]` macro captures the type path at the expansion site.
+  Resolved by reading — the plan says "derived mechanically" and this is the only stable
+  mechanism.
+
+  > ~~The macro captures `concat!(module_path!(), "::", stringify!(Type))`.~~ — Superseded
+  > 2026-08-11 by #1839. The macro wraps its whole expansion in `pub mod <AuthoredType>`
+  > (`codegen.rs` binds the module name to `item.ident`), so the descriptor is emitted
+  > *inside* a module already named for the author's type: a bare `module_path!()` is the
+  > full type path, and the form above would double the type name. Asserted as literals in
+  > `runtime/streamlib-engine/tests/processor_class_import_path_test.rs`.
 
 ## Processors defined in `__main__` — REVERSED by owner, 2026-08-04
 

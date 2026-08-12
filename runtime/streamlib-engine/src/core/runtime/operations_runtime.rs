@@ -566,8 +566,11 @@ mod connect_wires_without_inspecting_a_port_tests {
 
     /// Register the producer and consumer descriptors this module wires.
     fn register_producer_and_consumer_descriptors() {
-        let mut producer =
-            ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "producer");
+        let mut producer = ProcessorDescriptor::new(
+            ident("connectcheck", PRODUCER_TYPE),
+            concat!(module_path!(), "::ConnectCheckProducer"),
+            "producer",
+        );
         producer
             .outputs
             .push(PortDescriptor::iceoryx2("out", "output"));
@@ -575,8 +578,11 @@ mod connect_wires_without_inspecting_a_port_tests {
             .register_descriptor_only(producer)
             .expect("register producer descriptor");
 
-        let mut consumer =
-            ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "consumer");
+        let mut consumer = ProcessorDescriptor::new(
+            ident("connectcheck", CONSUMER_TYPE),
+            concat!(module_path!(), "::ConnectCheckConsumer"),
+            "consumer",
+        );
         consumer
             .inputs
             .push(PortDescriptor::iceoryx2("in", "input").with_delivery_profile("latest"));
