@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 pub mod check_boundaries;
+pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
@@ -47,7 +48,7 @@ pub fn ensure_source_walking_gate_read_source(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all eight in well under a second, and why CI runs them as
+/// lets one process run all nine in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -67,6 +68,7 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         "check-no-unbounded-cstr-from-ptr",
         check_no_unbounded_cstr_from_ptr::run,
     ),
+    ("check-clock-usage", check_clock_usage::run),
 ];
 
 /// Run every source-walking gate, reporting all failures rather than the first.
@@ -263,6 +265,18 @@ enum Commands {
     /// external API is not flagged.
     CheckNoUnboundedCstrFromPtr,
 
+    /// CI gate for the wall-clock allowlist. Fails on a wall-clock read
+    /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
+    /// anywhere under `runtime/ sdk/ adapters/ xtask/` outside the four
+    /// observability surfaces the plan permits it on: log record `host_ts`
+    /// and `source_ts`, log file naming, and the control-plane pubsub event
+    /// timestamp. Monotonic is the only legal clock on the data plane — a
+    /// wall-clock value and a media timestamp share a unit and are different
+    /// quantities, so subtracting across them is always a bug. There is no
+    /// per-line pragma: widening the list is a plan change. See
+    /// `docs/decisions/one-monotonic-clock.md`.
+    CheckClockUsage,
+
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
@@ -308,6 +322,7 @@ fn main() -> Result<()> {
         Commands::CheckNoUnboundedCstrFromPtr => {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
+        Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,

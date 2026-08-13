@@ -5,7 +5,7 @@ name: Source Gates
 # These ran as seven separate workflows. Each paid ~26s compiling the xtask
 # binary and ~13s compiling its test binary to do a few seconds of file walking,
 # and all seven shared one cache key — so they raced, and six of every seven
-# cache saves were discarded. One job compiles xtask once and runs all eight
+# cache saves were discarded. One job compiles xtask once and runs all nine
 # gates plus the whole fixture suite.
 #
 # `check-all-source-gates` runs every gate before reporting, so one job still
