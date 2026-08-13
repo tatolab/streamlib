@@ -9,12 +9,10 @@
 //! the pid was recycled — surfaces as `DoesNotSupportRequestedMinBufferSize`
 //! against the wrong service, not as a clean failure.
 //!
-//! This job used to reach for `SystemTime::now()`, which is a wall clock and
-//! therefore banned (`cargo xtask check-clock-usage`). Nothing minted here is a
-//! timestamp: the monotonic read only has to differ between two runs on one
-//! boot, the pid only has to differ between concurrent processes, and the
-//! sequence makes two mints in the same nanosecond distinct — which a clock
-//! read alone never guaranteed.
+//! Nothing minted here is a timestamp: the monotonic read only has to differ
+//! between two runs on one boot, the pid only has to differ between concurrent
+//! processes, and the sequence makes two mints in the same nanosecond distinct —
+//! which a clock read alone never guarantees.
 //!
 //! The suffix carries no separator a path or a file name would reject, so the
 //! caller composes it into whatever naming convention its namespace uses.

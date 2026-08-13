@@ -34,10 +34,11 @@ use std::path::{Path, PathBuf};
 /// `examples/` are downstream consumers and lag the engine by design.
 const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters", "xtask"];
 
-/// This gate's own source, which spells every banned pattern as a constant.
-/// The only file exempt from the scan, and not an allowlist entry — the
-/// permitted-surface list stays exactly the four the plan names.
-const GATE_SOURCE_FILE: &str = "xtask/src/check_clock_usage.rs";
+/// Files whose *source text* spells a banned pattern without reading a clock —
+/// this gate's own constants and fixtures. Not allowlist entries: the
+/// permitted-surface list stays exactly the four the plan names, and nothing
+/// here is licensed to read a wall clock.
+const SCAN_EXEMPT_FILES: &[&str] = &["xtask/src/check_clock_usage.rs"];
 
 /// The four surfaces the plan permits a wall-clock read on. Adding a fifth is a
 /// plan change, so it is a variant here before it is a line in the allowlist.
@@ -109,8 +110,9 @@ pub struct ClockUsageLanguage {
     pub name: &'static str,
     pub extension: &'static str,
     /// Blanks comments and string prose while preserving line count, so a
-    /// reported line number still points at the source.
-    pub blank_out_prose: fn(&str) -> String,
+    /// reported line number still points at the source. Fails on prose this arm
+    /// cannot delimit, rather than blanking what it could not parse.
+    pub blank_out_prose: fn(&str) -> Result<String>,
     pub banned_wall_clock_reads: &'static [&'static str],
 }
 
@@ -256,7 +258,10 @@ pub fn scan_files(
     };
 
     for relative_path in relative_paths {
-        if relative_path == Path::new(GATE_SOURCE_FILE) {
+        if SCAN_EXEMPT_FILES
+            .iter()
+            .any(|exempt| relative_path == Path::new(exempt))
+        {
             continue;
         }
         let Some(language) = language_of(relative_path) else {
@@ -275,7 +280,9 @@ pub fn scan_files(
         if is_permitted_wall_clock_surface(relative_path) {
             continue;
         }
-        for (line, matched_pattern, line_text) in wall_clock_reads(&body, language) {
+        let reads = wall_clock_reads(&body, language)
+            .with_context(|| format!("failed to scan {}", relative_path.display()))?;
+        for (line, matched_pattern, line_text) in reads {
             report.violations.push(WallClockReadViolation {
                 path: relative_path.clone(),
                 line,
@@ -316,21 +323,37 @@ fn is_permitted_wall_clock_surface(relative_path: &Path) -> bool {
 fn wall_clock_reads(
     body: &str,
     language: &'static ClockUsageLanguage,
-) -> Vec<(usize, &'static str, String)> {
-    let code = (language.blank_out_prose)(body);
-    let mut reads = Vec::new();
-    for (index, line) in code.lines().enumerate() {
-        for pattern in language.banned_wall_clock_reads {
-            if line.contains(pattern) {
-                reads.push((index + 1, *pattern, line.to_string()));
-            }
-        }
-    }
-    reads
+) -> Result<Vec<(usize, &'static str, String)>> {
+    let code = (language.blank_out_prose)(body)?;
+    Ok(banned_reads_in(&code, language)
+        .map(|(line, pattern, text)| (line, pattern, text.to_string()))
+        .collect())
 }
 
-fn blank_out_rust_prose(body: &str) -> String {
-    body.lines()
+/// Answers the allowlist-liveness question without building a violation list.
+fn contains_wall_clock_read(body: &str, language: &'static ClockUsageLanguage) -> Result<bool> {
+    let code = (language.blank_out_prose)(body)?;
+    Ok(banned_reads_in(&code, language).next().is_some())
+}
+
+fn banned_reads_in<'a>(
+    code: &'a str,
+    language: &'static ClockUsageLanguage,
+) -> impl Iterator<Item = (usize, &'static str, &'a str)> {
+    code.lines().enumerate().flat_map(move |(index, line)| {
+        language
+            .banned_wall_clock_reads
+            .iter()
+            .filter_map(move |pattern| {
+                line.contains(pattern)
+                    .then_some((index + 1, *pattern, line))
+            })
+    })
+}
+
+fn blank_out_rust_prose(body: &str) -> Result<String> {
+    Ok(body
+        .lines()
         .map(|line| {
             if line.trim_start().starts_with("//") {
                 ""
@@ -339,12 +362,16 @@ fn blank_out_rust_prose(body: &str) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n"))
 }
 
 /// Blanks `#` comment lines and every triple-quoted span, which is where the
 /// wheel's own `clock.py` names the banned APIs to warn readers off them.
-fn blank_out_python_prose(body: &str) -> String {
+///
+/// A span that never closes is refused rather than scanned: it would blank every
+/// line after it, and this gate's only failure mode is reading nothing and
+/// reporting clean.
+fn blank_out_python_prose(body: &str) -> Result<String> {
     const TRIPLE_QUOTES: [&str; 2] = ["\"\"\"", "'''"];
     let mut open_quote: Option<&str> = None;
     let mut code_lines: Vec<String> = Vec::new();
@@ -388,7 +415,12 @@ fn blank_out_python_prose(body: &str) -> String {
         code_lines.push(code);
     }
 
-    code_lines.join("\n")
+    anyhow::ensure!(
+        open_quote.is_none(),
+        "unterminated triple-quoted span — every line after it would be hidden from \
+         check-clock-usage"
+    );
+    Ok(code_lines.join("\n"))
 }
 
 /// A scan arm that read nothing is indistinguishable from a clean one, so the
@@ -433,7 +465,8 @@ fn ensure_every_permitted_surface_still_reads_a_wall_clock(workspace_root: &Path
         })?;
 
         anyhow::ensure!(
-            !wall_clock_reads(&body, language).is_empty(),
+            contains_wall_clock_read(&body, language)
+                .with_context(|| format!("failed to scan {}", permitted.path))?,
             "check-clock-usage permits {} for {} ({}), but it reads no wall clock — drop the \
              entry so the allowlist stays exactly the permitted set",
             permitted.path,
@@ -448,6 +481,15 @@ fn ensure_every_permitted_surface_still_reads_a_wall_clock(workspace_root: &Path
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    /// The family idiom for the workspace root in a gate's tests: free, and it
+    /// needs neither cargo on PATH nor the package lock.
+    fn workspace_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
 
     /// Both language arms and every scan root get a file, so a fixture tree
     /// satisfies the same read-source contract the real run asserts.
@@ -575,6 +617,26 @@ mod tests {
     }
 
     #[test]
+    fn refuses_a_python_file_whose_triple_quoted_span_never_closes() {
+        let unterminated =
+            blank_out_python_prose("\"\"\"doc that never closes\nstamp = time.time()\n");
+        let err = unterminated.unwrap_err();
+        assert!(err.to_string().contains("unterminated"), "got {err}");
+    }
+
+    #[test]
+    fn an_unterminated_span_fails_the_scan_rather_than_hiding_the_file() {
+        let tmp = TempDir::new().unwrap();
+        let relative_path = "sdk/streamlib-python-wheel/python/streamlib/broken.py";
+        let path = tmp.path().join(relative_path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "'''never closed\nstamp = time.time_ns()\n").unwrap();
+
+        let err = scan_files(tmp.path(), &[PathBuf::from(relative_path)]).unwrap_err();
+        assert!(err.to_string().contains("broken.py"), "got {err:#}");
+    }
+
+    #[test]
     fn accepts_the_monotonic_spellings() {
         let (_tmp, report) = scan_fixture(&[
             (
@@ -602,7 +664,8 @@ mod tests {
 
     #[test]
     fn never_scans_its_own_source() {
-        let (_tmp, report) = scan_fixture(&[(GATE_SOURCE_FILE, "let a = SystemTime::now();\n")]);
+        let (_tmp, report) =
+            scan_fixture(&[(SCAN_EXEMPT_FILES[0], "let a = SystemTime::now();\n")]);
         assert!(report.violations.is_empty(), "got {:?}", report.violations);
     }
 
@@ -662,14 +725,12 @@ mod tests {
 
     #[test]
     fn the_real_tree_permits_only_files_that_still_read_a_wall_clock() {
-        let workspace_root = crate::workspace_root().unwrap();
-        ensure_every_permitted_surface_still_reads_a_wall_clock(&workspace_root).unwrap();
+        ensure_every_permitted_surface_still_reads_a_wall_clock(&workspace_root()).unwrap();
     }
 
     #[test]
     fn discovery_skips_virtualenv_and_build_trees() {
-        let workspace_root = crate::workspace_root().unwrap();
-        let tracked = tracked_files_under_scan_roots(&workspace_root).unwrap();
+        let tracked = tracked_files_under_scan_roots(&workspace_root()).unwrap();
 
         assert!(
             tracked

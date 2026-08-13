@@ -87,10 +87,7 @@ const NOUNS: &[&str] = &[
 
 /// Generate a Docker-style random name (adjective-noun).
 fn generate_runtime_name() -> String {
-    // The OS CSPRNG this crate already links for bearer tokens. The previous
-    // seed was a wall-clock reading, which is banned outside the observability
-    // surfaces (`cargo xtask check-clock-usage`) and was the weaker source
-    // anyway: two runtimes starting in the same nanosecond drew the same name.
+    // The OS CSPRNG this crate already links for bearer tokens.
     let mut seed_bytes = [0u8; 8];
     if let Err(csprng_unavailable) = getrandom::getrandom(&mut seed_bytes) {
         // A display name is not worth failing a runtime over, and the pid still
@@ -100,8 +97,10 @@ fn generate_runtime_name() -> String {
     }
     let seed = u64::from_ne_bytes(seed_bytes);
 
+    // Both indices come from the low half: a pid fallback leaves the high half
+    // zero, which would pin every degraded runtime to the same noun.
     let adj = ADJECTIVES[(seed as usize) % ADJECTIVES.len()];
-    let noun = NOUNS[((seed >> 32) as usize) % NOUNS.len()];
+    let noun = NOUNS[((seed >> 16) as usize) % NOUNS.len()];
     format!("{}-{}", adj, noun)
 }
 

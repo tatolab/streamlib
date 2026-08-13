@@ -62,6 +62,9 @@ serial_test = "3.2"
 # The OPAQUE_FD round-trip tests drive the surface-share daemon directly
 # so they exercise the same wire format helper processes consume.
 serde_json.workspace = true
+# Each test socket gets a directory of its own: the kernel answers uniqueness,
+# and the socket is unlinked on drop instead of littering /tmp.
+tempfile.workspace = true
 
 [[test]]
 name = "conformance"

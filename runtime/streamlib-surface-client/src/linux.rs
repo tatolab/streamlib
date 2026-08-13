@@ -314,9 +314,9 @@ mod tests {
     use tempfile::TempDir;
 
     /// A socket path in a directory of its own, so uniqueness is the kernel's
-    /// answer rather than a clock reading, and the socket is unlinked on drop.
-    /// The returned [`TempDir`] owns that lifetime — dropping it early removes
-    /// the socket out from under a live listener.
+    /// answer and the socket is unlinked on drop. The returned [`TempDir`] owns
+    /// that lifetime — dropping it early removes the socket out from under the
+    /// raw `UnixListener` these tests bind, which has no owner to unlink it.
     fn tmp_socket_path(label: &str) -> (TempDir, PathBuf) {
         let dir = TempDir::new().expect("temp dir for test socket");
         let path = dir.path().join(format!("{label}.sock"));

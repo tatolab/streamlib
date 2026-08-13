@@ -54,7 +54,6 @@ use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, Vulkan
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
 };
-use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
@@ -62,6 +61,7 @@ use streamlib_surface_adapter::{
 use streamlib_surface_client::{
     MAX_DMA_BUF_PLANES, connect_to_surface_share_socket, send_request_with_fds,
 };
+use tempfile::TempDir;
 
 const W: u32 = 32;
 const H: u32 = 32;
@@ -69,13 +69,13 @@ const BPP: u32 = 4;
 const SURFACE_ID: &str = "stage6-opaque-fd-round-trip";
 const RUNTIME_ID: &str = "stage6-test-runtime";
 
-fn tmp_socket_path() -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "streamlib-stage6-{}.sock",
-        mint_machine_global_unique_name_suffix()
-    ));
-    p
+/// A socket path in a directory of its own, so uniqueness is the kernel's answer.
+/// The returned [`TempDir`] owns that lifetime — dropping it early removes the
+/// socket out from under the running daemon.
+fn tmp_socket_path() -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("temp dir for surface-share socket");
+    let path = dir.path().join("stage6.sock");
+    (dir, path)
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
 
     // ── Phase 2: stand up surface-share daemon ──────────────────────────
     let state = SurfaceShareState::new();
-    let socket_path = tmp_socket_path();
+    let (_socket_dir, socket_path) = tmp_socket_path();
     let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
     service.start().expect("surface-share service start");
     std::thread::sleep(Duration::from_millis(50));
