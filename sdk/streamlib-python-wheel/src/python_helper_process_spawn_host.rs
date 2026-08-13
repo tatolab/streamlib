@@ -607,18 +607,19 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     /// the desync `exchange_with_child_expecting` warns about.
     ///
     /// A child that is not there needs no telling, and that is the ordinary
-    /// case rather than a failure: there is no bridge before `setup` or after
-    /// `teardown` took it, and a link disconnected in either window is one
-    /// whose ports the child either never opened or already released by
-    /// exiting. Reporting those as a refused reclaim would put the warning in
-    /// front of an operator on a clean shutdown.
+    /// case rather than a failure — its ports went with the process, or were
+    /// never opened. Three windows: before `setup` builds the bridge, after
+    /// `teardown` takes it, and any point a child died on its own, which
+    /// leaves the bridge in place and is noticed only by its reader thread
+    /// seeing EOF. Reporting any of them as a refused reclaim would put a
+    /// leak warning in front of an operator on a clean shutdown.
     fn unwire_out_of_process_link(
         &mut self,
         port_direction: streamlib::sdk::error::PortDirection,
         local_port_name: &str,
         link_id: &str,
     ) -> Result<()> {
-        if self.child_is_gone || self.bridge.is_none() {
+        if self.has_failed_unrecoverably() || self.bridge.is_none() {
             return Ok(());
         }
         self.send_to_child(&serde_json::json!({

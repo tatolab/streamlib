@@ -282,8 +282,9 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
 
     Fail-without-fix: route the unknown direction to `unwire_input_link`
     instead of warning (the plausible mis-implementation, since the child's
-    plane is fully built either way) and the still-wired link stops
-    delivering — the read below returns `None`.
+    plane is fully built either way) and the read below raises
+    `RuntimeError: Link error: Unknown input port` — the mailbox went with
+    the subscriber that was dropped out from under it.
     """
     from streamlib import ProcessorLinkDataAccess
 

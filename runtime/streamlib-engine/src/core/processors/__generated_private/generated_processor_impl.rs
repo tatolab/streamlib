@@ -171,8 +171,7 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// [`PortDirection::Input`].
     ///
     /// The default refuses rather than succeeding quietly. Only a processor
-    /// already classified out-of-process — one that answered
-    /// [`out_of_process_link_wiring`] with `Some` — ever reaches this, so
+    /// the compiler op already classified out-of-process ever reaches this, so
     /// arriving at the default means a host takes the wiring and leaves the
     /// reclaim, which is the exact leak this exists to close. A silent `Ok`
     /// would have the engine log a reclaim that never happened.

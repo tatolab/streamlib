@@ -257,4 +257,18 @@ mod tests {
             "no install fix-it survives the module-system removal: {msg}"
         );
     }
+
+    /// These two words cross the helper-process boundary: the engine writes
+    /// one into the `unwire_link` command and the child branches on it to pick
+    /// which of its own ports to release. A drift here is silent on both sides
+    /// — the child logs an unknown direction and the port stays leaked — so
+    /// the spelling is pinned literally rather than derived from the variant.
+    #[test]
+    fn port_direction_wire_spelling_is_pinned() {
+        assert_eq!(PortDirection::Input.as_wire_str(), "input");
+        assert_eq!(PortDirection::Output.as_wire_str(), "output");
+        // Display is the same words, so a log and a frame never disagree.
+        assert_eq!(PortDirection::Input.to_string(), "input");
+        assert_eq!(PortDirection::Output.to_string(), "output");
+    }
 }
