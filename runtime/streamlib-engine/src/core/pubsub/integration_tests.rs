@@ -30,6 +30,7 @@ use super::events::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
     RuntimeEvent, topics,
 };
+use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use crate::iceoryx2::{Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -181,7 +182,10 @@ fn test_iceoryx2_direct_delivery() {
     // Bypass PubSub layer entirely — verify iceoryx2 pub/sub works in-process
     let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
 
-    let service_name = format!("streamlib/diag-{}/events/test", uuid::Uuid::new_v4());
+    let service_name = format!(
+        "streamlib/diag-{}/events/test",
+        mint_machine_global_unique_name_suffix()
+    );
 
     // Create subscriber FIRST (must exist before publisher sends)
     let sub_service = node
