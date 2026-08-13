@@ -103,6 +103,18 @@ impl ProcessorInstance {
         self.0.out_of_process_link_wiring()
     }
 
+    /// Ask a processor whose ports live outside the engine to reclaim one
+    /// disconnected link. A no-op for every processor the engine wires itself.
+    pub fn unwire_out_of_process_link(
+        &mut self,
+        port_direction: crate::core::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> crate::core::Result<()> {
+        self.0
+            .unwire_out_of_process_link(port_direction, local_port_name, link_id)
+    }
+
     /// Borrow the host-side `OutputWriterInner` Arc this processor
     /// instance is wired to. Returns `None` if the processor has no
     /// output ports.

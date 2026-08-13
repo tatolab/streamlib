@@ -36,6 +36,20 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Forget one link, in both directions, on disconnect.
+    ///
+    /// A reconnect re-records the link from scratch, so an entry left here
+    /// would be sent again the next time the far side is set up — a second
+    /// subscriber or notifier for one link, which is what exhausts the notify
+    /// service's create-time `max_notifiers` cap.
+    pub fn remove_link(&mut self, link_id: &str) {
+        let carries_link = |link_wiring: &JsonValue| {
+            link_wiring.get("link_id").and_then(JsonValue::as_str) == Some(link_id)
+        };
+        self.input_links.retain(|link| !carries_link(link));
+        self.output_links.retain(|link| !carries_link(link));
+    }
+
     /// The `ports` payload of the setup command, as the far side reads it.
     pub fn as_setup_command_ports(&self) -> JsonValue {
         serde_json::json!({
@@ -126,8 +140,38 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// learns what to wire itself — a graph that compiles, comes up, reports
     /// healthy, and moves no frames. One method, so it cannot be half
     /// implemented.
+    ///
+    /// Its counterpart on disconnect is [`unwire_out_of_process_link`]: a host
+    /// that records wiring here and never reclaims it there accumulates a port
+    /// per reconnect.
+    ///
+    /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
     fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
         None
+    }
+
+    /// Reclaim one disconnected link on a processor whose iceoryx2 ports live
+    /// outside the engine's address space.
+    ///
+    /// The engine cannot drop those ports itself — they belong to the far side,
+    /// which opened them from the envelope — so this asks their owner to, and
+    /// to forget the envelope entry that would otherwise be re-sent on the next
+    /// setup. `local_port_name` is the port on *this* processor: the source
+    /// output port for [`PortDirection::Output`], the destination input port
+    /// for [`PortDirection::Input`].
+    ///
+    /// Defaults to a no-op for every processor the engine wires itself, which
+    /// reclaims through its own writer and mailboxes instead.
+    ///
+    /// [`PortDirection::Output`]: crate::core::PortDirection::Output
+    /// [`PortDirection::Input`]: crate::core::PortDirection::Input
+    fn unwire_out_of_process_link(
+        &mut self,
+        _port_direction: crate::core::PortDirection,
+        _local_port_name: &str,
+        _link_id: &str,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// Apply a JSON config update at runtime.
@@ -229,5 +273,60 @@ where
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::PortDirection;
+
+    fn link_wiring_entry(link_id: &str, port_name: &str) -> JsonValue {
+        serde_json::json!({ "name": port_name, "link_id": link_id })
+    }
+
+    /// A disconnected link leaves the envelope in both directions, and only
+    /// that link does. Leave it behind and the next setup re-sends it beside
+    /// the reconnect's own entry — two subscribers, two notifiers, one link.
+    #[test]
+    fn a_removed_link_leaves_the_envelope_and_its_neighbours_stay() {
+        let mut envelope = OutOfProcessLinkWiringEnvelope::default();
+        envelope.record(PortDirection::Input, link_wiring_entry("L-gone", "in1"));
+        envelope.record(PortDirection::Input, link_wiring_entry("L-stays", "in1"));
+        envelope.record(PortDirection::Output, link_wiring_entry("L-gone", "out1"));
+        envelope.record(PortDirection::Output, link_wiring_entry("L-stays", "out1"));
+
+        envelope.remove_link("L-gone");
+
+        let ports = envelope.as_setup_command_ports();
+        let surviving_link_ids = |direction: &str| -> Vec<String> {
+            ports[direction]
+                .as_array()
+                .expect("the envelope renders both directions as arrays")
+                .iter()
+                .map(|link| link["link_id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(surviving_link_ids("inputs"), ["L-stays"]);
+        assert_eq!(surviving_link_ids("outputs"), ["L-stays"]);
+    }
+
+    /// Removing a link the envelope never carried changes nothing — the
+    /// compiler reclaims every link it closes, including ones whose far side
+    /// was never wired.
+    #[test]
+    fn removing_an_unknown_link_leaves_the_envelope_alone() {
+        let mut envelope = OutOfProcessLinkWiringEnvelope::default();
+        envelope.record(PortDirection::Output, link_wiring_entry("L-only", "out1"));
+
+        envelope.remove_link("L-never-recorded");
+
+        assert_eq!(
+            envelope.as_setup_command_ports()["outputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
