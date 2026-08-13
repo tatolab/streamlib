@@ -33,6 +33,7 @@ pub mod execution;
 pub mod graph;
 pub mod graph_snapshot;
 pub mod json_schema;
+pub mod machine_global_unique_name;
 pub mod media_clock;
 pub mod prelude;
 pub mod processors;

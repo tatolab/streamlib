@@ -750,6 +750,7 @@ mod tests {
     use super::*;
     use crate::core::execution::ExecutionConfig;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::processors::{DynGeneratedProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
@@ -984,13 +985,8 @@ mod tests {
     /// the stale service, not as a clean failure.
     fn unique_service_name(tag: &str) -> String {
         format!(
-            "test/wiring/{}/{}/{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "test/wiring/{tag}/{}",
+            mint_machine_global_unique_name_suffix()
         )
     }
 

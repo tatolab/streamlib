@@ -321,19 +321,15 @@ mod tests {
     use iceoryx2::prelude::*;
     use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::iceoryx2::{FRAME_HEADER_SIZE, Iceoryx2Node, Iceoryx2Service};
 
     const RING_DEPTH: usize = 16;
 
     fn unique_channel_name(tag: &str) -> String {
         format!(
-            "test/tap/{}/{}/{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "test/tap/{tag}/{}",
+            mint_machine_global_unique_name_suffix()
         )
     }
 

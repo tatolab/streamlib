@@ -18,5 +18,10 @@ path = "src/lib.rs"
 libc.workspace = true
 serde_json.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Each test socket gets a directory of its own: the kernel answers uniqueness,
+# and the socket is unlinked on drop instead of littering /tmp.
+tempfile.workspace = true
+
 [lints]
 workspace = true

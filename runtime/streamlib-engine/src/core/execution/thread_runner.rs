@@ -576,18 +576,14 @@ fn dispatch_on_resume(
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use iceoryx2::prelude::*;
     use std::os::fd::{AsRawFd, FromRawFd};
 
     fn unique_suffix(tag: &str) -> String {
         format!(
-            "test/runner/{}/{}/{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "test/runner/{tag}/{}",
+            mint_machine_global_unique_name_suffix()
         )
     }
 

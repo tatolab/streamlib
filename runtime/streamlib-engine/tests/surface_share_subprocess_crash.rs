@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
@@ -47,15 +48,9 @@ fn locate_helper_binary() -> PathBuf {
 
 fn tmp_socket_path(label: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
     p.push(format!(
-        "streamlib-surface-share-watchdog-{}-{}-{}.sock",
-        label,
-        std::process::id(),
-        nanos
+        "streamlib-surface-share-watchdog-{label}-{}.sock",
+        mint_machine_global_unique_name_suffix()
     ));
     p
 }

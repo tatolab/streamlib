@@ -498,18 +498,14 @@ impl Drop for OutputWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
     /// Each test gets a unique service-name prefix so parallel invocations
     /// don't collide on iceoryx2's machine-global `/dev/shm` namespace.
     fn unique_suffix(tag: &str) -> String {
         format!(
-            "test/output/{}/{}/{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "test/output/{tag}/{}",
+            mint_machine_global_unique_name_suffix()
         )
     }
 

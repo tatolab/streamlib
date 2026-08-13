@@ -942,6 +942,7 @@ unsafe impl Sync for UnixSocketSurfaceService {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use std::os::unix::io::FromRawFd;
     use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
@@ -974,14 +975,9 @@ mod tests {
 
     fn tmp_socket_path() -> PathBuf {
         let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
         p.push(format!(
-            "streamlib-runtime-surface-share-test-{}-{}.sock",
-            std::process::id(),
-            nanos
+            "streamlib-runtime-surface-share-test-{}.sock",
+            mint_machine_global_unique_name_suffix()
         ));
         p
     }

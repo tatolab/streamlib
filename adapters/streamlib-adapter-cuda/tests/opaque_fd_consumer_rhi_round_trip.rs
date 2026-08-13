@@ -54,6 +54,7 @@ use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, Vulkan
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
 };
+use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
@@ -70,11 +71,10 @@ const RUNTIME_ID: &str = "stage6-test-runtime";
 
 fn tmp_socket_path() -> PathBuf {
     let mut p = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    p.push(format!("streamlib-stage6-{nanos}.sock"));
+    p.push(format!(
+        "streamlib-stage6-{}.sock",
+        mint_machine_global_unique_name_suffix()
+    ));
     p
 }
 

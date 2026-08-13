@@ -55,6 +55,7 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
+use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// Env var that overrides the default pipeline-cache directory. Shared with
 /// [`super::vulkan_compute_kernel`] so cached pipelines for both kernel
@@ -2273,14 +2274,7 @@ fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let suffix = format!(
-        "tmp.{}.{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    let suffix = format!("tmp.{}", mint_machine_global_unique_name_suffix());
     let mut tmp = path.to_path_buf();
     tmp.set_extension(format!("gfx.bin.{suffix}"));
     std::fs::write(&tmp, data)?;

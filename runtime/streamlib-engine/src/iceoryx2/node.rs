@@ -287,16 +287,12 @@ impl Iceoryx2EventService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
     fn unique_service_name(tag: &str) -> String {
         format!(
-            "test/node/{}/{}/{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "test/node/{tag}/{}",
+            mint_machine_global_unique_name_suffix()
         )
     }
 

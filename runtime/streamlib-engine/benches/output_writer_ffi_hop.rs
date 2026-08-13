@@ -43,6 +43,7 @@ use std::sync::Arc;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use iceoryx2::prelude::*;
 
+use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, OutputWriter, OutputWriterInner,
     TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
@@ -52,13 +53,8 @@ use streamlib_engine::iceoryx2::{
 /// don't collide on iceoryx2's machine-global `/dev/shm` namespace.
 fn unique_suffix(tag: &str) -> String {
     format!(
-        "bench/output_writer/{}/{}/{}",
-        tag,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        "bench/output_writer/{tag}/{}",
+        mint_machine_global_unique_name_suffix()
     )
 }
 

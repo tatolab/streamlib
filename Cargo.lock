@@ -4966,6 +4966,7 @@ version = "0.17.1"
 dependencies = [
  "libc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -87,22 +87,21 @@ const NOUNS: &[&str] = &[
 
 /// Generate a Docker-style random name (adjective-noun).
 fn generate_runtime_name() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    // The OS CSPRNG this crate already links for bearer tokens. The previous
+    // seed was a wall-clock reading, which is banned outside the observability
+    // surfaces (`cargo xtask check-clock-usage`) and was the weaker source
+    // anyway: two runtimes starting in the same nanosecond drew the same name.
+    let mut seed_bytes = [0u8; 8];
+    if let Err(csprng_unavailable) = getrandom::getrandom(&mut seed_bytes) {
+        // A display name is not worth failing a runtime over, and the pid still
+        // separates concurrent runtimes on one host.
+        tracing::warn!("OS CSPRNG unavailable for runtime naming: {csprng_unavailable}");
+        seed_bytes = (std::process::id() as u64).to_ne_bytes();
+    }
+    let seed = u64::from_ne_bytes(seed_bytes);
 
-    // Use time + pid for randomness without adding fastrand dependency
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
-        ^ (std::process::id() as u64);
-    let mut hasher = DefaultHasher::new();
-    seed.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];
-    let noun = NOUNS[((hash >> 32) as usize) % NOUNS.len()];
+    let adj = ADJECTIVES[(seed as usize) % ADJECTIVES.len()];
+    let noun = NOUNS[((seed >> 32) as usize) % NOUNS.len()];
     format!("{}-{}", adj, noun)
 }
 
