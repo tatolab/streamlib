@@ -139,11 +139,12 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   > job. **No `Date.now` arm** — the Deno SDK is deleted and the engine tree holds no
   > `.ts`/`.js` source, so that scan root does not exist; Rust and Python only.
   >
-  > The unique-name uses are **all converted, none allowlisted** — 16 sites across 13 files.
+  > The unique-name uses are **all converted, none allowlisted** — 16 sites across 15 files.
   > The allowlist is per-file, so an entry for `iceoryx2/output.rs` or `thread_runner.rs`
   > would have licensed a wall-clock read in the exact data-plane files the guard exists to
   > protect. `mint_machine_global_unique_name_suffix()` (`core/machine_global_unique_name.rs`)
-  > is the one primitive; `streamlib-surface-client`'s test sockets take a `TempDir`, the
+  > is the one primitive, built on the `uuid` the engine already links; the test sockets in
+  > `streamlib-surface-client` and in the cuda adapter's round-trip test take a `TempDir`, the
   > api-server's name seed takes the OS CSPRNG, and the dead `apple/time.rs::system_time_to_ns`
   > was deleted. The permitted list holds exactly the four surfaces, as five files
   > (`host_ts` has two readers).

@@ -22,6 +22,13 @@
 //! or module docstring naming a banned API is not a violation. A *trailing*
 //! comment naming one still is: put such a note on its own line.
 //!
+//! Being a substring scan, it reads one line at a time and takes each banned
+//! spelling literally. A call split across lines at the `::`, or a wall clock
+//! renamed at the import (`use std::time::SystemTime as Elsewhere`), walks past
+//! it. That is the accepted floor: this gate exists to stop the reflexive
+//! `SystemTime::now()` and the one-token slip from the engine's own
+//! `clock_gettime(CLOCK_MONOTONIC)`, not to beat someone working around it.
+//!
 //! Discovery is `git ls-files`, not a filesystem walk. The scan roots hold
 //! virtualenvs and build trees carrying tens of thousands of third-party
 //! sources that are not ours to gate.
@@ -30,9 +37,21 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Workspace trees whose clock usage this gate owns. `packages/` and
-/// `examples/` are downstream consumers and lag the engine by design.
-const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters", "xtask"];
+/// Workspace trees whose clock usage this gate owns.
+///
+/// `packages/test-fixtures` is in because it is engine-side test infrastructure
+/// compiled into the engine's own runs, not a consumer. The rest of `packages/`
+/// and all of `examples/` are downstream consumers that lag the engine by
+/// design. `packages/escalate` and `packages/core` are engine-side too but hold
+/// schemas only — no source this gate reads, and a root that contributes no
+/// files fails [`ensure_every_arm_read_source`].
+const SCAN_ROOTS: &[&str] = &[
+    "runtime",
+    "sdk",
+    "adapters",
+    "xtask",
+    "packages/test-fixtures",
+];
 
 /// Files whose *source text* spells a banned pattern without reading a clock —
 /// this gate's own constants and fixtures. Not allowlist entries: the
@@ -121,7 +140,13 @@ const LANGUAGES: &[ClockUsageLanguage] = &[
         name: "rust",
         extension: "rs",
         blank_out_prose: blank_out_rust_prose,
-        banned_wall_clock_reads: &["SystemTime::now", "Utc::now", "Local::now"],
+        banned_wall_clock_reads: &[
+            "SystemTime::now",
+            "Utc::now",
+            "Local::now",
+            "UNIX_EPOCH.elapsed",
+            "CLOCK_REALTIME",
+        ],
     },
     ClockUsageLanguage {
         name: "python",
@@ -133,6 +158,7 @@ const LANGUAGES: &[ClockUsageLanguage] = &[
             "datetime.now(",
             "datetime.utcnow(",
             "datetime.today(",
+            "CLOCK_REALTIME",
         ],
     },
 ];
@@ -506,6 +532,10 @@ mod tests {
                 "pub fn ok() {}\n",
             ),
             ("xtask/src/ok.rs", "pub fn ok() {}\n"),
+            (
+                "packages/test-fixtures/processors/ok.rs",
+                "pub fn ok() {}\n",
+            ),
         ];
         tree.extend_from_slice(files);
 
@@ -530,6 +560,38 @@ mod tests {
         assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
         assert_eq!(report.violations[0].line, 2);
         assert_eq!(report.violations[0].matched_pattern, "SystemTime::now");
+    }
+
+    /// The engine's own canonical clock read is
+    /// `libc::clock_gettime(libc::CLOCK_MONOTONIC, ..)`; flipping one token
+    /// yields a wall-clock read, and the gate's failure message points readers
+    /// straight at that file.
+    #[test]
+    fn flags_the_raw_syscall_a_session_gets_by_copying_media_clock() {
+        let (_tmp, report) = scan_fixture(&[(
+            "runtime/streamlib-engine/src/iceoryx2/output.rs",
+            "unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut timespec) };\n",
+        )]);
+        assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
+        assert_eq!(report.violations[0].matched_pattern, "CLOCK_REALTIME");
+    }
+
+    #[test]
+    fn flags_the_python_realtime_clock_id() {
+        let (_tmp, report) = scan_fixture(&[(
+            "sdk/streamlib-python-wheel/python/streamlib/stamp.py",
+            "stamp = time.clock_gettime_ns(time.CLOCK_REALTIME)\n",
+        )]);
+        assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
+    }
+
+    #[test]
+    fn flags_reading_the_wall_clock_through_the_epoch() {
+        let (_tmp, report) = scan_fixture(&[(
+            "runtime/streamlib-engine/src/iceoryx2/output.rs",
+            "let since_epoch = std::time::UNIX_EPOCH.elapsed().unwrap();\n",
+        )]);
+        assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
     }
 
     #[test]
