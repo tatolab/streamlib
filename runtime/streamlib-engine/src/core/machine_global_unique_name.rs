@@ -9,19 +9,22 @@
 //! the pid was recycled — surfaces as `DoesNotSupportRequestedMinBufferSize`
 //! against the wrong service, not as a clean failure.
 //!
-//! Nothing minted here is a timestamp. A v4 UUID's 122 random bits make every
-//! mint distinct across processes, across runs and across reboots, so no clock
-//! is read and no counter is kept. The pid prefix is diagnostic: it is what lets
-//! someone reading a stale `/dev/shm` entry or a leftover `/tmp` file name the
-//! process that left it.
+//! Nothing minted here is a timestamp. A v4 UUID's 122 random bits make a
+//! collision between two mints vanishingly improbable — not impossible, but far
+//! below the rate at which the namespace itself fails — across processes, runs
+//! and reboots alike, so no clock is read and no counter is kept. The version
+//! matters: `now_v7` and friends are timestamp-based, and reaching for one would
+//! put a wall-clock read back into this module. The pid prefix is diagnostic —
+//! it is what lets someone reading a stale `/dev/shm` entry or a leftover `/tmp`
+//! file name the process that left it.
 //!
 //! The suffix carries no separator a path or a file name would reject, so the
 //! caller composes it into whatever naming convention its namespace uses.
 
 use uuid::Uuid;
 
-/// A `<pid>-<uuid>` suffix no concurrent process, and no earlier run, can
-/// collide with.
+/// A `<pid>-<uuid v4>` suffix that no concurrent process, and no earlier run,
+/// will collide with short of exhausting 122 bits of randomness.
 pub fn mint_machine_global_unique_name_suffix() -> String {
     format!("{}-{}", std::process::id(), Uuid::new_v4())
 }
@@ -52,9 +55,15 @@ mod tests {
         let second_uuid = second.strip_prefix(&pid_prefix).expect(&second);
 
         assert_ne!(first_uuid, second_uuid);
-        assert!(
-            Uuid::parse_str(first_uuid).is_ok(),
-            "a stale entry stays traceable only while the suffix parses: {first}"
+
+        let parsed = Uuid::parse_str(first_uuid).expect(&first);
+        assert_eq!(
+            parsed.get_version_num(),
+            4,
+            "randomness is the whole contract: the timestamp-based versions would put a \
+             wall-clock read back into this mint. The `uuid` dependency enabling only `v4` \
+             is the first guard and the compiler enforces it; this is the one that survives \
+             another feature being switched on for an unrelated reason"
         );
     }
 

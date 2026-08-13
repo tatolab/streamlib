@@ -942,9 +942,9 @@ unsafe impl Sync for UnixSocketSurfaceService {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use std::os::unix::io::FromRawFd;
     use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
+    use tempfile::TempDir;
 
     fn make_memfd_with(contents: &[u8]) -> RawFd {
         use std::io::{Seek, SeekFrom, Write};
@@ -973,19 +973,20 @@ mod tests {
         buf
     }
 
-    fn tmp_socket_path() -> PathBuf {
-        let mut p = std::env::temp_dir();
-        p.push(format!(
-            "streamlib-runtime-surface-share-test-{}.sock",
-            mint_machine_global_unique_name_suffix()
-        ));
-        p
+    /// A socket path in a directory of its own. `sun_path` is 108 bytes and a
+    /// unique name in a shared temp dir spends most of that budget before
+    /// `TMPDIR` is even accounted for; a private dir keeps the path short and
+    /// unlinks it on drop. The returned [`TempDir`] owns that lifetime.
+    fn tmp_socket_path() -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("temp dir for test socket");
+        let path = dir.path().join("surface-share.sock");
+        (dir, path)
     }
 
     #[test]
     fn check_in_check_out_roundtrip_preserves_fd_content() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
 
@@ -1054,7 +1055,7 @@ mod tests {
     #[test]
     fn check_out_unknown_surface_id_returns_error_no_fd() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1080,7 +1081,7 @@ mod tests {
     #[test]
     fn check_in_check_out_multi_fd_roundtrip() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1178,7 +1179,7 @@ mod tests {
     #[test]
     fn handle_type_round_trips_explicit_opaque_fd_and_default_dma_buf() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1297,7 +1298,7 @@ mod tests {
     #[test]
     fn drm_format_modifier_and_strides_round_trip() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1381,7 +1382,7 @@ mod tests {
     #[test]
     fn same_process_disconnect_does_not_trigger_watchdog() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1512,7 +1513,7 @@ mod tests {
     #[test]
     fn oversize_fd_vec_rejected() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1565,7 +1566,7 @@ mod tests {
         // also work but introduces ordering noise; the unit-level helper
         // gate is the narrowest test.
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1626,7 +1627,7 @@ mod tests {
     #[test]
     fn vk_image_create_info_round_trip_through_register_lookup() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1739,7 +1740,7 @@ mod tests {
     #[test]
     fn vk_image_create_info_absent_fields_surface_documented_defaults() {
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1845,7 +1846,7 @@ mod tests {
     fn current_image_layout_round_trip_through_register_lookup_update() {
         // VK_IMAGE_LAYOUT_GENERAL = 1, SHADER_READ_ONLY_OPTIMAL = 5.
         let state = SurfaceShareState::new();
-        let socket_path = tmp_socket_path();
+        let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));

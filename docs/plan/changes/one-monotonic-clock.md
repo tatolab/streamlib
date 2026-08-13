@@ -143,10 +143,11 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   > The allowlist is per-file, so an entry for `iceoryx2/output.rs` or `thread_runner.rs`
   > would have licensed a wall-clock read in the exact data-plane files the guard exists to
   > protect. `mint_machine_global_unique_name_suffix()` (`core/machine_global_unique_name.rs`)
-  > is the one primitive, built on the `uuid` the engine already links; the test sockets in
-  > `streamlib-surface-client` and in the cuda adapter's round-trip test take a `TempDir`, the
-  > api-server's name seed takes the OS CSPRNG, and the dead `apple/time.rs::system_time_to_ns`
-  > was deleted. The permitted list holds exactly the four surfaces, as five files
+  > is the one primitive for machine-global namespaces, built on the `uuid` the engine already
+  > links. Every test *socket* path takes a `TempDir` instead — `sun_path` is 108 bytes, and a
+  > unique name in a shared temp dir spends most of that budget before `TMPDIR` is accounted
+  > for. The api-server's name seed takes the OS CSPRNG, and the dead
+  > `apple/time.rs::system_time_to_ns` was deleted. The permitted list holds exactly the four surfaces, as five files
   > (`host_ts` has two readers).
 - ADDED: an epoch-parity test asserting `MediaClock::now()` and the wheel's
   `monotonic_now_ns` land in the same domain as a directly-read

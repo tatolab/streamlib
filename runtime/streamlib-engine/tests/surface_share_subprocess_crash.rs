@@ -18,10 +18,10 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
+use tempfile::TempDir;
 
 /// Locate the test helper binary built by `cargo test` under `target/<profile>/`.
 fn locate_helper_binary() -> PathBuf {
@@ -46,13 +46,14 @@ fn locate_helper_binary() -> PathBuf {
     panic!("surface_share_crash_helper binary not built");
 }
 
-fn tmp_socket_path(label: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    p.push(format!(
-        "streamlib-surface-share-watchdog-{label}-{}.sock",
-        mint_machine_global_unique_name_suffix()
-    ));
-    p
+/// A socket path in a directory of its own. `sun_path` is 108 bytes and a unique
+/// name in a shared temp dir spends most of that budget before `TMPDIR` is even
+/// accounted for; a private dir keeps the path short and unlinks it on drop. The
+/// returned [`TempDir`] owns that lifetime.
+fn tmp_socket_path(label: &str) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().expect("temp dir for test socket");
+    let path = dir.path().join(format!("{label}.sock"));
+    (dir, path)
 }
 
 /// Live fd count for the current process — `/proc/self/fd` entries.
@@ -86,7 +87,7 @@ fn watchdog_cleans_up_surface_after_subprocess_sigkill() {
     assert!(helper.exists(), "helper binary missing: {:?}", helper);
 
     let state = SurfaceShareState::new();
-    let socket_path = tmp_socket_path("crash");
+    let (_socket_dir, socket_path) = tmp_socket_path("crash");
     let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
     service.start().expect("service start");
     // Give the listener thread a tick to bind before any subprocess connects.
