@@ -17,15 +17,17 @@
 //! Synchronization strategy:
 //! - Uses `std::sync::mpsc` channels for delivery notification (no
 //!   sleep-based waits)
-//! - Uses retry-publish pattern to handle the race between subscriber
-//!   thread startup and the first publish (PubSub provides no
-//!   readiness signal)
+//! - Waits on the signal `subscribe` returns before the first publish.
+//!   These tests used to retry-publish in a loop instead, because
+//!   PubSub reported nothing about when a subscription went live; a
+//!   test that publishes once and asserts delivery is what proves the
+//!   signal, so the loops are gone rather than merely unused.
 //!
 //! Lives in-source (rather than `tests/`) to access `super::bus::PubSub`
 //! directly — the tests construct ad-hoc `PubSub` instances per case
 //! for isolation, which is not exposed through the public surface.
 
-use super::bus::PubSub;
+use super::bus::{PubSub, PubSubSubscriptionLiveSignal};
 use super::events::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
     RuntimeEvent, topics,
@@ -86,27 +88,34 @@ fn create_initialized_bus(test_name: &str) -> PubSub {
     bus
 }
 
-/// Publish an event in a retry loop until the channel receives it (or timeout).
+/// How long a subscription gets to go live before a test calls it a failure.
 ///
-/// Handles the race between subscriber thread startup and the first publish.
-/// PubSub's subscribe() spawns a thread that creates the iceoryx2 subscriber
-/// asynchronously — this function retries until the subscriber is ready.
-fn publish_until_received(
+/// `subscribe`'s service-open retry budget is 10 attempts at 20 ms, so the
+/// floor is ~200 ms plus subscriber creation; this leaves an order of magnitude
+/// of headroom for a loaded CI box without letting a genuinely dead
+/// subscription hang the suite.
+const SUBSCRIPTION_LIVE_BUDGET: Duration = Duration::from_secs(2);
+
+/// Wait for a subscription to go live, failing the test if it never does.
+fn await_subscription_live(signal: PubSubSubscriptionLiveSignal) {
+    signal
+        .wait_until_subscription_is_live(SUBSCRIPTION_LIVE_BUDGET)
+        .expect("subscription should go live");
+}
+
+/// Publish one event and return what the listener received.
+///
+/// One publish, not a retry loop: every caller has already waited on the
+/// subscribe signal, so a miss here is a real delivery failure and must fail
+/// the test rather than be retried away.
+fn publish_once_and_receive(
     bus: &PubSub,
     event: &Event,
     rx: &mpsc::Receiver<Event>,
     timeout: Duration,
 ) -> Option<Event> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        bus.publish(&event.topic(), event);
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(received) => return Some(received),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
-        }
-    }
-    None
+    bus.publish(&event.topic(), event);
+    rx.recv_timeout(timeout).ok()
 }
 
 // ===========================================================================
@@ -128,9 +137,19 @@ fn test_pre_init_subscribe_buffers() {
     let bus = PubSub::new();
     let concrete = Arc::new(Mutex::new(CountingListener::new()));
     let listener: Arc<Mutex<dyn EventListener>> = concrete.clone();
-    bus.subscribe(topics::KEYBOARD, listener);
+    let signal = bus.subscribe(topics::KEYBOARD, listener);
     // Subscription is buffered, no events delivered yet
     assert_eq!(concrete.lock().count(), 0);
+
+    // A buffered subscription is not live, and must not claim to be: nothing
+    // has opened a service or created a subscriber, so an event published now
+    // would be lost exactly as if the socket had never subscribed.
+    assert!(
+        signal
+            .wait_until_subscription_is_live(Duration::from_millis(100))
+            .is_err(),
+        "a subscription buffered before init() must not report itself live"
+    );
 }
 
 #[test]
@@ -527,15 +546,42 @@ fn test_publish_delivers_to_subscriber() {
     let (tx, rx) = mpsc::channel();
     let listener = ChannelListener { sender: tx };
     let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener.clone()));
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     assert!(
         received.is_some(),
         "Subscriber should have received at least one event"
     );
+
+    drop(listener);
+}
+
+/// The contract the live signal exists for: one publish, issued the instant the
+/// signal reports live, is delivered.
+///
+/// iceoryx2 does not replay samples published before its subscriber existed, so
+/// this is precisely what `subscribe` returning cannot promise — the publish
+/// below has no retry behind it, and a signal that fires even slightly early
+/// loses the event and fails here.
+#[test]
+fn test_event_published_the_moment_the_subscription_is_live_is_delivered() {
+    let bus = create_initialized_bus("live_signal_precedes_delivery");
+
+    let (tx, rx) = mpsc::channel();
+    let listener: Arc<Mutex<dyn EventListener>> =
+        Arc::new(Mutex::new(ChannelListener { sender: tx }));
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener.clone()));
+
+    let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
+    bus.publish(&event.topic(), &event);
+
+    let received = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("an event published after the live signal must be delivered");
+    assert_eq!(received.topic(), topics::KEYBOARD);
 
     drop(listener);
 }
@@ -551,35 +597,19 @@ fn test_publish_delivers_to_multiple_subscribers_on_same_topic() {
     let listener_b: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_b }));
 
-    bus.subscribe(topics::KEYBOARD, listener_a.clone());
-    bus.subscribe(topics::KEYBOARD, listener_b.clone());
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener_a.clone()));
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener_b.clone()));
 
+    // Both subscriptions are live, so one publish reaches both.
     let event = Event::keyboard(KeyCode::B, Modifiers::default(), KeyState::Pressed);
-
-    // Retry publish until BOTH subscribers receive
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut a_received = false;
-    let mut b_received = false;
-    while Instant::now() < deadline && !(a_received && b_received) {
-        bus.publish(&event.topic(), &event);
-        // Drain both channels
-        while rx_a.try_recv().is_ok() {
-            a_received = true;
-        }
-        while rx_b.try_recv().is_ok() {
-            b_received = true;
-        }
-        if !(a_received && b_received) {
-            std::thread::yield_now();
-        }
-    }
+    bus.publish(&event.topic(), &event);
 
     assert!(
-        a_received,
+        rx_a.recv_timeout(Duration::from_secs(5)).is_ok(),
         "First subscriber should have received the event"
     );
     assert!(
-        b_received,
+        rx_b.recv_timeout(Duration::from_secs(5)).is_ok(),
         "Second subscriber should have received the event"
     );
 
@@ -599,15 +629,16 @@ fn test_publish_does_not_cross_topics() {
     let mouse_listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_mouse }));
 
-    bus.subscribe(topics::KEYBOARD, kb_listener.clone());
-    bus.subscribe(topics::MOUSE, mouse_listener.clone());
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, kb_listener.clone()));
+    await_subscription_live(bus.subscribe(topics::MOUSE, mouse_listener.clone()));
 
-    // Publish a MOUSE event — only the mouse subscriber should receive it
+    // Publish a MOUSE event — only the mouse subscriber should receive it.
+    // Both subscriptions are live, so the keyboard listener's silence below is
+    // a routing fact rather than a subscriber that had not come up yet.
     let mouse_event = Event::mouse(MouseButton::Left, (10.0, 20.0), MouseState::Pressed);
 
-    // Use retry loop to ensure the mouse subscriber is ready
     let received_mouse =
-        publish_until_received(&bus, &mouse_event, &rx_mouse, Duration::from_secs(5));
+        publish_once_and_receive(&bus, &mouse_event, &rx_mouse, Duration::from_secs(5));
     assert!(
         received_mouse.is_some(),
         "Mouse subscriber should receive mouse events"
@@ -630,39 +661,30 @@ fn test_wildcard_subscriber_receives_all_topics() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::ALL, listener.clone());
+    await_subscription_live(bus.subscribe(topics::ALL, listener.clone()));
 
     let keyboard_event = Event::keyboard(KeyCode::C, Modifiers::default(), KeyState::Pressed);
     let mouse_event = Event::mouse(MouseButton::Right, (5.0, 10.0), MouseState::Released);
     let processor_event = Event::processor("test-proc", ProcessorEvent::Started);
 
-    // Ensure wildcard subscriber is ready by retrying first event
-    let first = publish_until_received(&bus, &keyboard_event, &rx, Duration::from_secs(5));
-    assert!(
-        first.is_some(),
-        "Wildcard subscriber should receive keyboard event"
-    );
-
-    // Now publish remaining events (subscriber is ready)
+    // Three publishes on three different topics, none retried: the wildcard
+    // subscription is live, so every one of them must land on the `/all`
+    // service this listener reads.
+    bus.publish(&keyboard_event.topic(), &keyboard_event);
     bus.publish(&mouse_event.topic(), &mouse_event);
     bus.publish(&processor_event.topic(), &processor_event);
 
-    // Wait for remaining events
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut received_count = 1; // already got first
-    while Instant::now() < deadline && received_count < 3 {
-        match rx.recv_timeout(Duration::from_millis(50)) {
+    let mut received_count = 0;
+    while received_count < 3 {
+        match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(_) => received_count += 1,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(_) => break,
         }
     }
 
-    // The wildcard subscriber receives the event from BOTH the specific topic service
-    // AND the /all service, so we expect at least 3 events (may receive duplicates)
-    assert!(
-        received_count >= 3,
-        "Wildcard subscriber should receive at least 3 events, got {}",
+    assert_eq!(
+        received_count, 3,
+        "Wildcard subscriber should receive all 3 events, got {}",
         received_count
     );
 
@@ -676,7 +698,7 @@ fn test_subscriber_receives_correct_event_data() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener.clone()));
 
     let modifiers = Modifiers {
         shift: true,
@@ -685,7 +707,7 @@ fn test_subscriber_receives_correct_event_data() {
         meta: false,
     };
     let event = Event::keyboard(KeyCode::Z, modifiers, KeyState::Released);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     let received = received.expect("Should have received the event");
 
@@ -715,13 +737,18 @@ fn test_subscribe_before_init_receives_events_after_init() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    let signal = bus.subscribe(topics::KEYBOARD, listener.clone());
 
     // Now init — pending subscription should be replayed
     bus.init(&runtime_id, node);
 
+    // The signal handed out before init() is the one the replayed subscription
+    // fires: a caller must not have to re-subscribe after init to learn it went
+    // live.
+    await_subscription_live(signal);
+
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     assert!(
         received.is_some(),
@@ -748,47 +775,40 @@ fn test_multiple_subscribes_before_init_all_replayed() {
     let rt_handle: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_rt }));
 
-    bus.subscribe(topics::KEYBOARD, kb_handle.clone());
-    bus.subscribe(topics::MOUSE, mouse_handle.clone());
-    bus.subscribe(topics::RUNTIME_GLOBAL, rt_handle.clone());
+    let kb_signal = bus.subscribe(topics::KEYBOARD, kb_handle.clone());
+    let mouse_signal = bus.subscribe(topics::MOUSE, mouse_handle.clone());
+    let rt_signal = bus.subscribe(topics::RUNTIME_GLOBAL, rt_handle.clone());
 
     // Init replays all 3 pending subscriptions
     bus.init(&runtime_id, node);
+
+    // Every replayed subscription fires its own signal — a replay that dropped
+    // one on the floor would leave that caller waiting out its whole budget.
+    await_subscription_live(kb_signal);
+    await_subscription_live(mouse_signal);
+    await_subscription_live(rt_signal);
 
     let kb_event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let mouse_event = Event::mouse(MouseButton::Left, (0.0, 0.0), MouseState::Pressed);
     let rt_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
 
-    // Retry until all 3 subscribers receive
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut kb_ok = false;
-    let mut mouse_ok = false;
-    let mut rt_ok = false;
-    while Instant::now() < deadline && !(kb_ok && mouse_ok && rt_ok) {
-        if !kb_ok {
-            bus.publish(topics::KEYBOARD, &kb_event);
-        }
-        if !mouse_ok {
-            bus.publish(topics::MOUSE, &mouse_event);
-        }
-        if !rt_ok {
-            bus.publish(topics::RUNTIME_GLOBAL, &rt_event);
-        }
-        if rx_kb.try_recv().is_ok() {
-            kb_ok = true;
-        }
-        if rx_mouse.try_recv().is_ok() {
-            mouse_ok = true;
-        }
-        if rx_rt.try_recv().is_ok() {
-            rt_ok = true;
-        }
-        std::thread::yield_now();
-    }
+    bus.publish(topics::KEYBOARD, &kb_event);
+    bus.publish(topics::MOUSE, &mouse_event);
+    bus.publish(topics::RUNTIME_GLOBAL, &rt_event);
 
-    assert!(kb_ok, "Keyboard listener should receive events");
-    assert!(mouse_ok, "Mouse listener should receive events");
-    assert!(rt_ok, "Runtime listener should receive events");
+    let budget = Duration::from_secs(5);
+    assert!(
+        rx_kb.recv_timeout(budget).is_ok(),
+        "Keyboard listener should receive events"
+    );
+    assert!(
+        rx_mouse.recv_timeout(budget).is_ok(),
+        "Mouse listener should receive events"
+    );
+    assert!(
+        rx_rt.recv_timeout(budget).is_ok(),
+        "Runtime listener should receive events"
+    );
 
     drop(kb_handle);
     drop(mouse_handle);
@@ -803,11 +823,11 @@ fn test_listener_drop_stops_subscriber_thread() {
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
 
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener.clone()));
 
     // Verify subscriber is working first
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
     assert!(
         received.is_some(),
         "Should receive events before dropping listener"
@@ -842,14 +862,12 @@ fn test_runtime_event_delivery() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
+    await_subscription_live(bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone()));
 
-    // Ensure subscriber is ready with first event
-    let first = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
-    let received = publish_until_received(&bus, &first, &rx, Duration::from_secs(5));
-    assert!(received.is_some(), "Should receive RuntimeStarted event");
-
-    // Send remaining runtime events
+    bus.publish(
+        topics::RUNTIME_GLOBAL,
+        &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
+    );
     bus.publish(
         topics::RUNTIME_GLOBAL,
         &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
@@ -859,19 +877,16 @@ fn test_runtime_event_delivery() {
         &Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown),
     );
 
-    // Wait for remaining events
-    let mut count = 1;
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline && count < 3 {
-        match rx.recv_timeout(Duration::from_millis(50)) {
+    let mut count = 0;
+    while count < 3 {
+        match rx.recv_timeout(Duration::from_secs(5)) {
             Ok(_) => count += 1,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(_) => break,
         }
     }
 
-    assert!(
-        count >= 3,
+    assert_eq!(
+        count, 3,
         "Should receive all 3 runtime events, got {}",
         count
     );
@@ -889,10 +904,10 @@ fn test_processor_event_delivery() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(&topic, listener.clone());
+    await_subscription_live(bus.subscribe(&topic, listener.clone()));
 
     let event = Event::processor(processor_id, ProcessorEvent::Started);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     assert!(
         received.is_some(),
@@ -910,11 +925,11 @@ fn test_custom_event_delivery() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(custom_topic, listener.clone());
+    await_subscription_live(bus.subscribe(custom_topic, listener.clone()));
 
     let payload = serde_json::json!({"key": "value", "count": 42});
     let event = Event::custom(custom_topic, payload);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     let received = received.expect("Custom event should be delivered");
     assert_eq!(received.topic(), custom_topic);
@@ -941,15 +956,12 @@ fn test_oversized_event_is_dropped() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe("big-topic", listener.clone());
+    await_subscription_live(bus.subscribe("big-topic", listener.clone()));
 
     // First verify the subscriber is working with a normal-sized event
     let normal_event = Event::custom("big-topic", serde_json::json!({"ok": true}));
-    let received = publish_until_received(&bus, &normal_event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &normal_event, &rx, Duration::from_secs(5));
     assert!(received.is_some(), "Normal event should be delivered first");
-
-    // Drain any extra events from the retry loop
-    while rx.try_recv().is_ok() {}
 
     // Now try an oversized event — should be silently dropped
     let large_string = "x".repeat(MAX_EVENT_PAYLOAD_SIZE + 1);
@@ -975,15 +987,7 @@ fn test_concurrent_publish_from_multiple_threads() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
-
-    // Ensure subscriber is ready
-    let probe = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &probe, &rx, Duration::from_secs(5));
-    assert!(received.is_some(), "Subscriber should be ready");
-
-    // Drain probe events
-    while rx.try_recv().is_ok() {}
+    await_subscription_live(bus.subscribe(topics::KEYBOARD, listener.clone()));
 
     // Each thread's first publish creates a new thread-local iceoryx2 publisher.
     // iceoryx2's subscriber needs a beat to establish its receive-side connection
@@ -1060,12 +1064,14 @@ fn test_separate_pubsub_instances_are_isolated() {
     let handle_b: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_b }));
 
-    bus_a.subscribe(topics::KEYBOARD, handle_a.clone());
-    bus_b.subscribe(topics::KEYBOARD, handle_b.clone());
+    await_subscription_live(bus_a.subscribe(topics::KEYBOARD, handle_a.clone()));
+    // bus_b's subscription is waited on too, so its silence below is isolation
+    // rather than a subscriber that had not finished starting.
+    await_subscription_live(bus_b.subscribe(topics::KEYBOARD, handle_b.clone()));
 
     // Verify bus_a's subscriber is working
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received_a = publish_until_received(&bus_a, &event, &rx_a, Duration::from_secs(5));
+    let received_a = publish_once_and_receive(&bus_a, &event, &rx_a, Duration::from_secs(5));
     assert!(
         received_a.is_some(),
         "bus_a subscriber should receive the event"

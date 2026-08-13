@@ -4,9 +4,12 @@
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::sync::{Arc, LazyLock, OnceLock, Weak};
+use std::time::Duration;
 
 use super::events::{Event, EventListener, topics};
+use crate::core::error::{Error, Result};
 use crate::iceoryx2::{EventPayload, Iceoryx2EventService, Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 
 type EventPublisher =
@@ -26,13 +29,51 @@ thread_local! {
 /// Process-wide pub/sub handle.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
+/// Reports when a subscription registered by [`PubSub::subscribe`] has become
+/// live, or why it never got there.
+///
+/// `subscribe` returning means only that a subscriber thread was spawned. That
+/// thread still has to open its iceoryx2 service and create its subscriber, and
+/// iceoryx2 does not replay samples published before a subscriber existed — so
+/// anything published in between is lost, with nothing on either side to say so.
+/// A caller that publishes, or hands a socket to a client that can cause a
+/// publish, waits on this first.
+pub struct PubSubSubscriptionLiveSignal {
+    topic: String,
+    became_live: Receiver<Result<()>>,
+}
+
+impl PubSubSubscriptionLiveSignal {
+    /// Block until the subscription is live, giving up after `timeout`.
+    pub fn wait_until_subscription_is_live(self, timeout: Duration) -> Result<()> {
+        match self.became_live.recv_timeout(timeout) {
+            Ok(outcome) => outcome,
+            Err(RecvTimeoutError::Timeout) => Err(Error::Runtime(format!(
+                "subscription to topic '{}' was not live within {timeout:?}",
+                self.topic
+            ))),
+            Err(RecvTimeoutError::Disconnected) => Err(Error::Runtime(format!(
+                "subscriber thread for topic '{}' ended before its subscription went live",
+                self.topic
+            ))),
+        }
+    }
+}
+
+/// A subscription registered before [`PubSub::init`], replayed once it lands.
+struct PendingSubscriptionAwaitingInit {
+    topic: String,
+    listener: Arc<Mutex<dyn EventListener>>,
+    became_live_sender: SyncSender<Result<()>>,
+}
+
 /// iceoryx2-backed pub/sub for runtime events.
 pub struct PubSub {
     // Set once via init()
     runtime_id: OnceLock<String>,
     node: OnceLock<Iceoryx2Node>,
     // Subscriptions registered before init() — replayed when init() is called
-    pending_subscriptions: Mutex<Vec<(String, Arc<Mutex<dyn EventListener>>)>>,
+    pending_subscriptions: Mutex<Vec<PendingSubscriptionAwaitingInit>>,
 }
 
 impl Default for PubSub {
@@ -61,27 +102,35 @@ impl PubSub {
 
         // Replay pending subscriptions
         let pending = std::mem::take(&mut *self.pending_subscriptions.lock());
-        for (topic, listener) in pending {
-            tracing::debug!("Replaying pending subscription for topic '{}'", topic);
-            self.subscribe_inner(&topic, listener);
+        for subscription in pending {
+            tracing::debug!(
+                "Replaying pending subscription for topic '{}'",
+                subscription.topic
+            );
+            self.subscribe_inner(
+                &subscription.topic,
+                subscription.listener,
+                subscription.became_live_sender,
+            );
         }
     }
 
-    /// Subscribe a listener to a topic.
+    /// Subscribe a listener to a topic, returning the signal that reports when
+    /// the subscription is live.
     ///
-    /// The subscriber thread holds only a Weak reference to the listener.
-    /// The caller MUST keep the Arc alive for the lifetime of the subscription.
-    /// When the Arc is dropped, the subscriber thread exits automatically.
+    /// The subscriber thread holds only a Weak reference to the listener. The
+    /// caller MUST keep the Arc alive for the lifetime of the subscription;
+    /// when the Arc is dropped, the subscriber thread exits automatically.
     ///
-    /// ```ignore
-    /// // WRONG — Arc dropped immediately, listener never receives events:
-    /// PUBSUB.subscribe(topic, Arc::new(Mutex::new(listener)));
-    ///
-    /// // RIGHT — Arc stored, subscription lives until variable is dropped:
-    /// let sub = Arc::new(Mutex::new(listener));
-    /// PUBSUB.subscribe(topic, Arc::clone(&sub));
-    /// ```
-    pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
+    /// Returning does not mean the subscription can receive anything yet — see
+    /// [`PubSubSubscriptionLiveSignal`]. Ignoring the signal is legitimate for a
+    /// caller that cannot lose an event by missing early ones (one that polls a
+    /// latch as well, say), and wrong for anything else.
+    pub fn subscribe(
+        &self,
+        topic: &str,
+        listener: Arc<Mutex<dyn EventListener>>,
+    ) -> PubSubSubscriptionLiveSignal {
         // Caller must keep a strong Arc — we only store a Weak in the
         // subscriber thread.  strong_count == 1 means this parameter is the
         // only reference and will be dropped when this call returns.
@@ -100,6 +149,15 @@ impl PubSub {
             );
         }
 
+        // Depth 1: exactly one outcome is ever sent, and the subscriber thread
+        // must never block handing it over — a caller that gave up on its
+        // timeout has already dropped the receiver.
+        let (became_live_sender, became_live) = sync_channel(1);
+        let signal = PubSubSubscriptionLiveSignal {
+            topic: topic.to_string(),
+            became_live,
+        };
+
         if self.runtime_id.get().is_none() {
             // Not yet initialized — buffer for replay
             tracing::debug!(
@@ -108,14 +166,24 @@ impl PubSub {
             );
             self.pending_subscriptions
                 .lock()
-                .push((topic.to_string(), listener));
-            return;
+                .push(PendingSubscriptionAwaitingInit {
+                    topic: topic.to_string(),
+                    listener,
+                    became_live_sender,
+                });
+            return signal;
         }
 
-        self.subscribe_inner(topic, listener);
+        self.subscribe_inner(topic, listener, became_live_sender);
+        signal
     }
 
-    fn subscribe_inner(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
+    fn subscribe_inner(
+        &self,
+        topic: &str,
+        listener: Arc<Mutex<dyn EventListener>>,
+        became_live_sender: SyncSender<Result<()>>,
+    ) {
         let runtime_id = self.runtime_id.get().unwrap().clone();
         let node = self.node.get().unwrap().clone();
         let weak_listener = Arc::downgrade(&listener);
@@ -127,6 +195,11 @@ impl PubSub {
         // Spawn a dedicated OS thread for polling.
         // iceoryx2 Subscriber uses Rc internally (!Send), so it must be
         // created and used on the same thread.
+        //
+        // A failed spawn drops the closure, and with it the sender it owns, so
+        // the outcome has to be reported through a sender that never entered
+        // the closure.
+        let became_live_sender_if_thread_never_starts = became_live_sender.clone();
         let builder = std::thread::Builder::new().name(format!("pubsub-{}", topic));
         if let Err(e) = builder.spawn(move || {
             // Retry `open_or_create` — iceoryx2 can transiently report
@@ -157,6 +230,9 @@ impl PubSub {
                     "Giving up after 10 attempts to create event service '{}'",
                     service_name
                 );
+                let _ = became_live_sender.send(Err(Error::Runtime(format!(
+                    "event service '{service_name}' could not be opened in 10 attempts"
+                ))));
                 return;
             };
 
@@ -164,9 +240,18 @@ impl PubSub {
                 Ok(s) => s,
                 Err(e) => {
                     tracing::error!("Failed to create subscriber for '{}': {}", service_name, e);
+                    let _ = became_live_sender.send(Err(Error::Runtime(format!(
+                        "subscriber for event service '{service_name}' could not be created: {e}"
+                    ))));
                     return;
                 }
             };
+
+            // Live from here and not one statement earlier: the service is open
+            // and the subscriber exists, so iceoryx2 will hold anything
+            // published from now on. Reporting before this point would report
+            // "subscribe was called", which is the state that loses events.
+            let _ = became_live_sender.send(Ok(()));
 
             subscriber_poll_loop(&subscriber, &weak_listener, &topic_owned);
         }) {
@@ -175,6 +260,9 @@ impl PubSub {
                 service_name_for_log,
                 e
             );
+            let _ = became_live_sender_if_thread_never_starts.send(Err(Error::Runtime(format!(
+                "subscriber thread for topic '{topic}' could not be spawned: {e}"
+            ))));
         } else {
             tracing::debug!(
                 "Listener subscribed to topic '{}' (service: {})",
