@@ -46,7 +46,6 @@ __all__ = [
     "close_test_harness_channel",
     "feed_test_harness_bag",
     "log_event",
-    "media_clock_now_ns",
     "monotonic_now_ns",
     "open_test_harness_channel",
     "runtime_log_directory",
@@ -520,14 +519,6 @@ def monotonic_now_ns() -> int:
 
 def runtime_log_directory() -> Path:
     """The directory the engine writes its per-runtime JSONL logs into."""
-
-def media_clock_now_ns() -> int:
-    """The clock the engine stamps bags with, in nanoseconds.
-
-    The machine's monotonic clock — `CLOCK_MONOTONIC` on Linux,
-    `mach_absolute_time` on Apple — so a value is comparable across every
-    process on the host.
-    """
 
 def open_test_harness_channel(channel: str) -> None:
     """Open a test-harness channel; raises if the name is already in use."""
