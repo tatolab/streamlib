@@ -64,4 +64,6 @@ tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"
 # Real WebSocket client for the /ws/events frame-ordering test: `tower::oneshot`
 # drives a router but never completes an upgrade, so it cannot observe frames.
-tokio-tungstenite = "0.26"
+# Pinned to the generation axum itself speaks, so the test client and the server
+# under test share one tungstenite rather than forking a second into the lock.
+tokio-tungstenite = "0.29"

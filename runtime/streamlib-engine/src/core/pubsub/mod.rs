@@ -7,5 +7,5 @@ mod events;
 #[cfg(test)]
 mod integration_tests;
 
-pub use bus::{PUBSUB, PubSub, PubSubSubscriptionLiveSignal};
+pub use bus::{DEFAULT_SUBSCRIPTION_LIVE_BUDGET, PUBSUB, PubSub, PubSubSubscriptionLiveSignal};
 pub use events::{Event, EventListener, ProcessorEvent, RuntimeEvent, topics};

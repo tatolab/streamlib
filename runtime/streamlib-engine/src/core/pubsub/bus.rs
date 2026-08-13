@@ -29,6 +29,22 @@ thread_local! {
 /// Process-wide pub/sub handle.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
+/// Attempts [`PubSub::subscribe`]'s subscriber thread makes to open its
+/// iceoryx2 service, and the pause between them.
+///
+/// iceoryx2 can transiently report `ServiceInCorruptedState` while a concurrent
+/// node scans dead-node state; it settles within a few tens of milliseconds.
+const SERVICE_OPEN_ATTEMPTS: u32 = 10;
+const SERVICE_OPEN_RETRY_PAUSE: Duration = Duration::from_millis(20);
+
+/// How long a caller should give a subscription to go live.
+///
+/// Derived from the retry budget above — [`SERVICE_OPEN_ATTEMPTS`] ×
+/// [`SERVICE_OPEN_RETRY_PAUSE`] is a ~200 ms floor before subscriber creation —
+/// with an order of magnitude of headroom for a loaded machine, and short enough
+/// that a subscription which is never coming up fails rather than hangs.
+pub const DEFAULT_SUBSCRIPTION_LIVE_BUDGET: Duration = Duration::from_secs(2);
+
 /// Reports when a subscription registered by [`PubSub::subscribe`] has become
 /// live, or why it never got there.
 ///
@@ -38,6 +54,13 @@ pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 /// anything published in between is lost, with nothing on either side to say so.
 /// A caller that publishes, or hands a socket to a client that can cause a
 /// publish, waits on this first.
+///
+/// What it promises is that the subscriber exists, so no sample is dropped for
+/// want of one. It is not a promise that the very next sample arrives: a
+/// publisher created *after* this fires still has its own connection to
+/// establish, and iceoryx2 can drop its first sends until that completes.
+#[must_use = "a subscription is not live when subscribe returns — wait on this, \
+              or bind it to `_` to record that missing early events is acceptable"]
 pub struct PubSubSubscriptionLiveSignal {
     topic: String,
     became_live: Receiver<Result<()>>,
@@ -58,10 +81,28 @@ impl PubSubSubscriptionLiveSignal {
             ))),
         }
     }
+
+    /// Await the subscription going live from a tokio task, giving up after
+    /// `timeout`.
+    ///
+    /// The wait is blocking, so it is held off the async worker here rather than
+    /// at each call site — the same arrangement `RuntimeOperations::tap_async`
+    /// uses for its own subscribe outcome.
+    pub async fn wait_until_subscription_is_live_async(self, timeout: Duration) -> Result<()> {
+        let topic = self.topic.clone();
+        tokio::task::spawn_blocking(move || self.wait_until_subscription_is_live(timeout))
+            .await
+            .unwrap_or_else(|join_error| {
+                Err(Error::Runtime(format!(
+                    "subscription wait for topic '{topic}' failed to join: {join_error}"
+                )))
+            })
+    }
 }
 
-/// A subscription registered before [`PubSub::init`], replayed once it lands.
-struct PendingSubscriptionAwaitingInit {
+/// A listener registered with a topic, and the sender its subscriber thread
+/// reports liveness through.
+struct PubSubSubscriptionRegistration {
     topic: String,
     listener: Arc<Mutex<dyn EventListener>>,
     became_live_sender: SyncSender<Result<()>>,
@@ -73,7 +114,7 @@ pub struct PubSub {
     runtime_id: OnceLock<String>,
     node: OnceLock<Iceoryx2Node>,
     // Subscriptions registered before init() — replayed when init() is called
-    pending_subscriptions: Mutex<Vec<PendingSubscriptionAwaitingInit>>,
+    pending_subscriptions: Mutex<Vec<PubSubSubscriptionRegistration>>,
 }
 
 impl Default for PubSub {
@@ -95,23 +136,26 @@ impl PubSub {
     ///
     /// Replays any subscriptions that were registered before initialization.
     pub fn init(&self, runtime_id: &str, node: Iceoryx2Node) {
-        let _ = self.runtime_id.set(runtime_id.to_string());
-        let _ = self.node.set(node);
+        // Publishing `runtime_id` and draining the buffer under one lock, which
+        // `subscribe` also takes across its own check: otherwise a subscribe
+        // that read "not initialized" could push after this drain and never be
+        // replayed, leaving its caller to wait out a whole budget for a
+        // subscription nothing will ever start.
+        let pending = {
+            let mut pending_subscriptions = self.pending_subscriptions.lock();
+            let _ = self.runtime_id.set(runtime_id.to_string());
+            let _ = self.node.set(node);
+            std::mem::take(&mut *pending_subscriptions)
+        };
 
         tracing::info!("PUBSUB initialized for runtime '{}'", runtime_id);
 
-        // Replay pending subscriptions
-        let pending = std::mem::take(&mut *self.pending_subscriptions.lock());
         for subscription in pending {
             tracing::debug!(
                 "Replaying pending subscription for topic '{}'",
                 subscription.topic
             );
-            self.subscribe_inner(
-                &subscription.topic,
-                subscription.listener,
-                subscription.became_live_sender,
-            );
+            self.subscribe_inner(subscription);
         }
     }
 
@@ -157,39 +201,43 @@ impl PubSub {
             topic: topic.to_string(),
             became_live,
         };
+        let registration = PubSubSubscriptionRegistration {
+            topic: topic.to_string(),
+            listener,
+            became_live_sender,
+        };
 
+        // Held across the check so `init` cannot drain the buffer between it
+        // and the push below.
+        let mut pending_subscriptions = self.pending_subscriptions.lock();
         if self.runtime_id.get().is_none() {
             // Not yet initialized — buffer for replay
             tracing::debug!(
                 "PUBSUB not initialized, buffering subscription for '{}'",
                 topic
             );
-            self.pending_subscriptions
-                .lock()
-                .push(PendingSubscriptionAwaitingInit {
-                    topic: topic.to_string(),
-                    listener,
-                    became_live_sender,
-                });
+            pending_subscriptions.push(registration);
             return signal;
         }
+        drop(pending_subscriptions);
 
-        self.subscribe_inner(topic, listener, became_live_sender);
+        self.subscribe_inner(registration);
         signal
     }
 
-    fn subscribe_inner(
-        &self,
-        topic: &str,
-        listener: Arc<Mutex<dyn EventListener>>,
-        became_live_sender: SyncSender<Result<()>>,
-    ) {
+    fn subscribe_inner(&self, registration: PubSubSubscriptionRegistration) {
+        let PubSubSubscriptionRegistration {
+            topic,
+            listener,
+            became_live_sender,
+        } = registration;
+
         let runtime_id = self.runtime_id.get().unwrap().clone();
         let node = self.node.get().unwrap().clone();
         let weak_listener = Arc::downgrade(&listener);
-        let topic_owned = topic.to_string();
+        let topic_owned = topic.clone();
 
-        let service_name = topic_to_service_name(&runtime_id, topic);
+        let service_name = topic_to_service_name(&runtime_id, &topic);
         let service_name_for_log = service_name.clone();
 
         // Spawn a dedicated OS thread for polling.
@@ -206,9 +254,8 @@ impl PubSub {
             // `ServiceInCorruptedState` when a concurrent node (e.g. another
             // streamlib process or another test binary on the same machine)
             // is scanning/cleaning dead-node state under `/tmp/iceoryx2/`.
-            // The state stabilizes within a few tens of milliseconds.
             let mut service = None;
-            for attempt in 0..10 {
+            for attempt in 0..SERVICE_OPEN_ATTEMPTS {
                 match node.open_or_create_event_service(&service_name) {
                     Ok(s) => {
                         service = Some(s);
@@ -221,17 +268,19 @@ impl PubSub {
                             attempt + 1,
                             e
                         );
-                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        std::thread::sleep(SERVICE_OPEN_RETRY_PAUSE);
                     }
                 }
             }
             let Some(service) = service else {
                 tracing::error!(
-                    "Giving up after 10 attempts to create event service '{}'",
+                    "Giving up after {} attempts to create event service '{}'",
+                    SERVICE_OPEN_ATTEMPTS,
                     service_name
                 );
                 let _ = became_live_sender.send(Err(Error::Runtime(format!(
-                    "event service '{service_name}' could not be opened in 10 attempts"
+                    "event service '{service_name}' could not be opened in \
+                     {SERVICE_OPEN_ATTEMPTS} attempts"
                 ))));
                 return;
             };
@@ -247,10 +296,10 @@ impl PubSub {
                 }
             };
 
-            // Live from here and not one statement earlier: the service is open
-            // and the subscriber exists, so iceoryx2 will hold anything
-            // published from now on. Reporting before this point would report
-            // "subscribe was called", which is the state that loses events.
+            // Live from here and not one statement earlier: the subscriber
+            // exists, so no sample is dropped for want of one. Reporting before
+            // this point would report "subscribe was called", which is the
+            // state that loses events.
             let _ = became_live_sender.send(Ok(()));
 
             subscriber_poll_loop(&subscriber, &weak_listener, &topic_owned);

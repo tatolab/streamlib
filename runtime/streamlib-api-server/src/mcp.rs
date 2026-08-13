@@ -37,7 +37,9 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use streamlib::sdk::error::Result;
-use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
+use streamlib::sdk::pubsub::{
+    DEFAULT_SUBSCRIPTION_LIVE_BUDGET, Event, EventListener, PUBSUB, topics,
+};
 use streamlib::sdk::runtime::RuntimeOperations;
 
 use crate::state::{AppState, RuntimeShutdownRequest};
@@ -344,23 +346,13 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
     let listener = Arc::new(Mutex::new(McpEventForwarder { tx }));
     let subscription_live_signal = PUBSUB.subscribe(topics::ALL, listener.clone());
 
-    // The sample window starts once the subscription can actually receive.
-    // Started at `subscribe` instead, subscription startup would be spent out of
-    // the window this tool reports back, and the events it ate would be missing
-    // from the sample with nothing to say so.
-    let became_live = tokio::task::spawn_blocking(move || {
-        subscription_live_signal
-            .wait_until_subscription_is_live(crate::handlers::WEBSOCKET_SUBSCRIPTION_LIVE_BUDGET)
-    })
-    .await;
-    match became_live {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return tool_error(format!("event subscription never went live: {e}")),
-        Err(join_error) => {
-            return tool_error(format!(
-                "event-subscription wait task failed to join: {join_error}"
-            ));
-        }
+    // The sample window starts once the subscription can actually receive, so
+    // the window this tool reports back is the window it actually sampled.
+    if let Err(e) = subscription_live_signal
+        .wait_until_subscription_is_live_async(DEFAULT_SUBSCRIPTION_LIVE_BUDGET)
+        .await
+    {
+        return tool_error(format!("event subscription never went live: {e}"));
     }
 
     let mut events: Vec<Value> = Vec::with_capacity(sample);
@@ -911,11 +903,10 @@ mod tests {
         // delivery rides iceoryx2 and is exercised by the engine's pubsub
         // integration tests, not here.
         //
-        // The bus is live rather than absent because the tool now reports an
-        // un-live subscription as an error — an empty sample would otherwise
-        // read as "the node was quiet" when the truth is that nothing was ever
-        // listening. `#[serial]` keeps another test's publish out of this
-        // window.
+        // The bus must be live for the empty sample to mean "the node was
+        // quiet" — against an absent bus the tool reports an error instead, so
+        // the two would be indistinguishable. `#[serial]` keeps another test's
+        // publish out of this window.
         crate::control_plane_stub_support::initialize_process_global_pubsub_for_tests();
 
         let started = tokio::time::Instant::now();

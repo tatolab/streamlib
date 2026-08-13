@@ -17,11 +17,12 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
-use std::time::Duration;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
+use streamlib::sdk::pubsub::{
+    DEFAULT_SUBSCRIPTION_LIVE_BUDGET, Event, EventListener, PUBSUB, topics,
+};
 use streamlib::sdk::runtime::RuntimeOperations;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
@@ -267,15 +268,6 @@ pub(crate) async fn get_moq_catalog(
 // WebSocket subscription-live contract
 // ============================================================================
 
-/// How long a WebSocket handler waits for its subscription to go live before
-/// giving up on the client.
-///
-/// `PubSub::subscribe`'s service-open retry budget is 10 attempts at 20 ms, so
-/// the floor is ~200 ms plus subscriber creation. An order of magnitude of
-/// headroom absorbs a loaded box without holding a client open on a
-/// subscription that is never coming up.
-pub(crate) const WEBSOCKET_SUBSCRIPTION_LIVE_BUDGET: Duration = Duration::from_secs(2);
-
 /// Close code for a socket whose subscription never went live. App codes live
 /// in the 4000–4999 private range, alongside the tap's 4404 / 4409.
 const WS_CLOSE_CODE_SUBSCRIPTION_NOT_LIVE: u16 = 4503;
@@ -297,16 +289,15 @@ pub(crate) enum ControlPlaneWebSocketSubscriptionLiveFrame {
 }
 
 impl ControlPlaneWebSocketSubscriptionLiveFrame {
-    /// Render as the text frame to put on the wire, or `None` if it could not
-    /// be serialized.
-    fn to_websocket_text_frame(&self) -> Option<Message> {
-        match serde_json::to_string(self) {
-            Ok(json) => Some(Message::Text(json.into())),
-            Err(e) => {
-                tracing::error!("Failed to serialize subscription-live frame: {}", e);
-                None
-            }
-        }
+    /// Render as the text frame to put on the wire.
+    fn to_websocket_text_frame(&self) -> Result<Message> {
+        serde_json::to_string(self)
+            .map(|json| Message::Text(json.into()))
+            .map_err(|e| {
+                Error::Runtime(format!(
+                    "subscription-live frame could not be serialized: {e}"
+                ))
+            })
     }
 }
 
@@ -330,49 +321,40 @@ async fn handle_websocket(socket: WebSocket) {
     // Subscribe to ALL topics via wildcard
     let subscription_live_signal = PUBSUB.subscribe(topics::ALL, listener.clone());
 
-    // The client is told the subscription is live, and told it before any event
-    // frame. iceoryx2 does not replay samples published before its subscriber
-    // existed, so a client that acts on the 101 alone can cause an event that is
-    // simply lost: the upgrade says the socket is open, never that the
-    // subscription behind it can receive. The wait blocks — the signal comes off
-    // an OS thread — so it runs on the blocking pool, the same shape `tap_async`
-    // uses for its own subscribe outcome.
-    let became_live = tokio::task::spawn_blocking(move || {
-        subscription_live_signal.wait_until_subscription_is_live(WEBSOCKET_SUBSCRIPTION_LIVE_BUDGET)
-    })
-    .await
-    .unwrap_or_else(|join_error| {
-        Err(Error::Runtime(format!(
-            "event-subscription wait task failed to join: {join_error}"
-        )))
-    });
-
-    if let Err(e) = became_live {
-        tracing::warn!("WebSocket event subscription never went live: {e}");
-        let _ = sender
-            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                code: WS_CLOSE_CODE_SUBSCRIPTION_NOT_LIVE,
-                reason: truncate_on_char_boundary(
-                    format!("event subscription never went live: {e}"),
-                    MAX_WS_CLOSE_REASON_BYTES,
-                )
-                .into(),
-            })))
-            .await;
-        return;
-    }
-
-    let live_frame = ControlPlaneWebSocketSubscriptionLiveFrame::EventStreamSubscriptionLive {
-        topic: topics::ALL.to_string(),
-    }
-    .to_websocket_text_frame();
-    match live_frame {
-        Some(live_frame) => {
-            if sender.send(live_frame).await.is_err() {
-                return;
+    // iceoryx2 does not replay samples published before its subscriber existed,
+    // so a client that acts on the 101 alone can cause an event that is simply
+    // lost: the upgrade says the socket is open, never that the subscription
+    // behind it can receive. Nothing goes out until it can.
+    let ready_to_stream = subscription_live_signal
+        .wait_until_subscription_is_live_async(DEFAULT_SUBSCRIPTION_LIVE_BUDGET)
+        .await
+        .and_then(|()| {
+            ControlPlaneWebSocketSubscriptionLiveFrame::EventStreamSubscriptionLive {
+                topic: topics::ALL.to_string(),
             }
+            .to_websocket_text_frame()
+        });
+
+    let live_frame = match ready_to_stream {
+        Ok(live_frame) => live_frame,
+        Err(e) => {
+            tracing::warn!("WebSocket event stream could not start: {e}");
+            let _ = sender
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: WS_CLOSE_CODE_SUBSCRIPTION_NOT_LIVE,
+                    reason: truncate_on_char_boundary(
+                        format!("event stream could not start: {e}"),
+                        MAX_WS_CLOSE_REASON_BYTES,
+                    )
+                    .into(),
+                })))
+                .await;
+            return;
         }
-        None => return,
+    };
+
+    if sender.send(live_frame).await.is_err() {
+        return;
     }
 
     tracing::info!("WebSocket client connected, subscription to all events is live");
@@ -497,37 +479,43 @@ async fn handle_tap_websocket(
     // `tap_async` resolves only once the tap's subscriber exists, so this frame
     // reports an attach that has already happened — a client that acts on it
     // cannot race the attach, and can tell "attached" from "attached but idle".
-    let live_frame = ControlPlaneWebSocketSubscriptionLiveFrame::TapSubscriptionLive {
-        channel: channel.clone(),
-    }
-    .to_websocket_text_frame();
-    let client_is_still_connected = match live_frame {
-        Some(live_frame) => sender.send(live_frame).await.is_ok(),
-        None => false,
-    };
+    let live_frame_was_sent =
+        match (ControlPlaneWebSocketSubscriptionLiveFrame::TapSubscriptionLive {
+            channel: channel.clone(),
+        })
+        .to_websocket_text_frame()
+        {
+            Ok(live_frame) => sender.send(live_frame).await.is_ok(),
+            Err(e) => {
+                tracing::error!(channel = %channel, "tap live frame could not be sent: {e}");
+                false
+            }
+        };
 
-    // Own the subscription in this scope: forward bags until the tap ends
-    // (bounded count reached / channel gone) or the client disconnects. Falling
-    // through rather than returning early keeps the detach below on the path
-    // out — dropping the subscription here would join an OS thread on an async
-    // worker.
-    while client_is_still_connected {
-        tokio::select! {
-            maybe_bag = subscription.recv() => match maybe_bag {
-                Some(bytes) => {
-                    if sender.send(Message::Binary(bytes.into())).await.is_err() {
+    // Forwarding is skipped by falling through rather than returning: the
+    // detach below must stay on the path out, because dropping the subscription
+    // here would join an OS thread on an async worker.
+    if live_frame_was_sent {
+        // Own the subscription in this scope: forward bags until the tap ends
+        // (bounded count reached / channel gone) or the client disconnects.
+        loop {
+            tokio::select! {
+                maybe_bag = subscription.recv() => match maybe_bag {
+                    Some(bytes) => {
+                        if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => {
+                        let _ = sender.send(Message::Close(None)).await;
                         break;
                     }
-                }
-                None => {
-                    let _ = sender.send(Message::Close(None)).await;
-                    break;
-                }
-            },
-            maybe_msg = receiver.next() => match maybe_msg {
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                _ => {}
-            },
+                },
+                maybe_msg = receiver.next() => match maybe_msg {
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    _ => {}
+                },
+            }
         }
     }
 
@@ -948,14 +936,14 @@ mod router_surface_and_auth_gate_tests {
 mod websocket_subscription_live_frame_tests {
     //! The subscription-live contract on the control plane's WebSockets.
     //!
-    //! `GET /ws/events` used to upgrade to 101 and return with the subscription
-    //! behind it not yet live. iceoryx2 does not replay samples published before
-    //! its subscriber existed, so a client that acted on the upgrade alone could
-    //! cause an event and never see it, with nothing on the wire to say so.
-    //! These lock the two halves of the fix: the frame is unambiguously not an
+    //! iceoryx2 does not replay samples published before its subscriber
+    //! existed, so a 101 alone tells a client nothing about whether the
+    //! subscription behind its socket can receive. These cover the two halves
+    //! of what the socket now says: the live frame is unambiguously not an
     //! `Event`, and it arrives before any event does.
 
     use super::*;
+    use std::time::Duration;
     use streamlib::sdk::pubsub::RuntimeEvent;
     use streamlib::sdk::runtime::BoxFuture;
 
@@ -1043,9 +1031,13 @@ mod websocket_subscription_live_frame_tests {
         assert_eq!(decoded, event);
     }
 
-    /// The ordering the ticket is about, over a real socket: the live frame
-    /// arrives first, and an event published only after it is received is
-    /// delivered — with no retry and no guessed sleep anywhere in the test.
+    /// The frame ordering on a real socket: a live frame arrives, and it
+    /// precedes every event frame.
+    ///
+    /// It locks the wiring, not the wait — a WebSocket round trip is slow
+    /// enough that deleting the subscription wait entirely leaves this green.
+    /// What the wait itself is worth is locked in the engine, by
+    /// `core::pubsub::integration_tests`.
     ///
     /// `#[serial]`: this test publishes, and `PUBSUB` is process-global — an
     /// unserialized publish here lands inside the sample window of any other
@@ -1091,9 +1083,6 @@ mod websocket_subscription_live_frame_tests {
             "first frame must be the subscription-live frame, got {first}"
         );
 
-        // Publishing only now is the whole point: before this change the
-        // subscription behind the socket might not have existed yet, and this
-        // event would have been dropped with no way for either side to tell.
         let published = Event::RuntimeGlobal(RuntimeEvent::GraphDidChange);
         PUBSUB.publish(&published.topic(), &published);
 

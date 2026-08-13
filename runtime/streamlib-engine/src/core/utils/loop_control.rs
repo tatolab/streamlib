@@ -52,7 +52,9 @@ where
     // IMPORTANT: We must keep the Arc alive for the duration of the loop!
     // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
+    // The live signal is dropped: the loop below polls the latch as well, so a
+    // shutdown requested before the subscription came up is still observed.
+    let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
 
     tracing::info!(
         "Shutdown-aware loop started, subscribed to {}",

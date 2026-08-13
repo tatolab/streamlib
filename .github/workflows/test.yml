@@ -79,7 +79,14 @@ jobs:
       # and cannot live in the proc-macro crate's own lib tests.
       # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a
       # tracked follow-up, pending a fix to a parallel-run test flake.
+      # streamlib-api-server carries the control plane's route-surface, auth-gate
+      # and WebSocket frame locks, and ran nowhere in CI before.
+      # core::pubsub is named explicitly for the same reason python-wheel.yml
+      # names core::signals: the engine lib tests are excluded wholesale, and
+      # without this the subscription-live locks run nowhere.
       - name: Run unit tests
         run: |
           cargo test --locked -p streamlib -p streamlib-macros --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
+          cargo test --locked -p streamlib-api-server --lib
+          cargo test --locked -p streamlib-engine --lib -- core::pubsub

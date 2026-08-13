@@ -17,17 +17,15 @@
 //! Synchronization strategy:
 //! - Uses `std::sync::mpsc` channels for delivery notification (no
 //!   sleep-based waits)
-//! - Waits on the signal `subscribe` returns before the first publish.
-//!   These tests used to retry-publish in a loop instead, because
-//!   PubSub reported nothing about when a subscription went live; a
-//!   test that publishes once and asserts delivery is what proves the
-//!   signal, so the loops are gone rather than merely unused.
+//! - Waits on the signal `subscribe` returns before the first publish,
+//!   then publishes exactly once. A retry loop would pass whether or
+//!   not the signal means anything, so there are none here.
 //!
 //! Lives in-source (rather than `tests/`) to access `super::bus::PubSub`
 //! directly — the tests construct ad-hoc `PubSub` instances per case
 //! for isolation, which is not exposed through the public surface.
 
-use super::bus::{PubSub, PubSubSubscriptionLiveSignal};
+use super::bus::{DEFAULT_SUBSCRIPTION_LIVE_BUDGET, PubSub, PubSubSubscriptionLiveSignal};
 use super::events::{
     Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState, ProcessorEvent,
     RuntimeEvent, topics,
@@ -88,18 +86,10 @@ fn create_initialized_bus(test_name: &str) -> PubSub {
     bus
 }
 
-/// How long a subscription gets to go live before a test calls it a failure.
-///
-/// `subscribe`'s service-open retry budget is 10 attempts at 20 ms, so the
-/// floor is ~200 ms plus subscriber creation; this leaves an order of magnitude
-/// of headroom for a loaded CI box without letting a genuinely dead
-/// subscription hang the suite.
-const SUBSCRIPTION_LIVE_BUDGET: Duration = Duration::from_secs(2);
-
 /// Wait for a subscription to go live, failing the test if it never does.
 fn await_subscription_live(signal: PubSubSubscriptionLiveSignal) {
     signal
-        .wait_until_subscription_is_live(SUBSCRIPTION_LIVE_BUDGET)
+        .wait_until_subscription_is_live(DEFAULT_SUBSCRIPTION_LIVE_BUDGET)
         .expect("subscription should go live");
 }
 
@@ -562,20 +552,26 @@ fn test_publish_delivers_to_subscriber() {
 /// The contract the live signal exists for: one publish, issued the instant the
 /// signal reports live, is delivered.
 ///
-/// iceoryx2 does not replay samples published before its subscriber existed, so
-/// this is precisely what `subscribe` returning cannot promise — the publish
-/// below has no retry behind it, and a signal that fires even slightly early
-/// loses the event and fails here.
+/// The pre-warm publish is what makes this a lock rather than a coincidence.
+/// `publish` creates its thread-local iceoryx2 publisher on first use for a
+/// service, and that publisher needs its own beat to connect — so a cold
+/// post-signal publish is slow enough that a subscriber created slightly late
+/// still catches it, and the test passes no matter when the signal fires.
+/// Publishing first makes the measured publish instantaneous, which leaves the
+/// subscriber's existence as the only thing that can make it arrive: move the
+/// signal ahead of `create_subscriber` and this goes red.
 #[test]
 fn test_event_published_the_moment_the_subscription_is_live_is_delivered() {
     let bus = create_initialized_bus("live_signal_precedes_delivery");
+
+    let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
+    bus.publish(&event.topic(), &event);
 
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
     await_subscription_live(bus.subscribe(topics::KEYBOARD, listener.clone()));
 
-    let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     bus.publish(&event.topic(), &event);
 
     let received = rx

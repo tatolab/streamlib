@@ -219,8 +219,14 @@ impl Runner {
         );
         let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
 
-        // Subscribe to graph changes
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+        // Subscribe to graph changes.
+        //
+        // The live signal is dropped rather than waited on: this runs inside
+        // `Runner::new`, and blocking construction for up to a subscription
+        // budget to close a window in which no graph exists yet — nothing can
+        // publish a graph change before `new` returns — would cost every caller
+        // a real delay for a theoretical event.
+        let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         Ok(Arc::new(Self {
             runtime_id,
@@ -915,7 +921,10 @@ impl Runner {
             Arc::new(parking_lot::Mutex::new(ShutdownListener {
                 flag: shutdown_flag_clone.clone(),
             }));
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener));
+        // The live signal is dropped: the run loop polls `shutdown_flag` and the
+        // process-wide shutdown latch as well, so a request that beat the
+        // subscription is still observed.
+        let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener));
 
         // On macOS, run the NSApplication event loop (required for GUI)
         #[cfg(target_os = "macos")]
@@ -1650,7 +1659,9 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn stopping_an_already_stopped_runtime_is_a_no_op() {
-        use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+        use crate::core::pubsub::{
+            DEFAULT_SUBSCRIPTION_LIVE_BUDGET, Event, EventListener, PUBSUB, RuntimeEvent, topics,
+        };
 
         #[derive(Default)]
         struct StopTransitionCounter {
@@ -1676,7 +1687,13 @@ mod tests {
         let counts = Arc::new(Mutex::new(StopTransitionCounter::default()));
         let listener: Arc<Mutex<dyn EventListener>> =
             Arc::new(Mutex::new(CountingListener(Arc::clone(&counts))));
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+        // `stop()` publishes immediately below, so this must not race the
+        // subscription coming up — the counts would read as "published once"
+        // when the first pair was simply never subscribed for.
+        PUBSUB
+            .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))
+            .wait_until_subscription_is_live(DEFAULT_SUBSCRIPTION_LIVE_BUDGET)
+            .expect("the counting subscription goes live");
 
         runner.stop().expect("the first stop succeeds");
         runner.stop().expect("the second stop succeeds");
