@@ -17,6 +17,7 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
@@ -271,6 +272,19 @@ pub(crate) async fn get_moq_catalog(
 /// private range, alongside the tap's 4404 / 4409.
 const WS_CLOSE_CODE_STREAM_UNAVAILABLE: u16 = 4503;
 
+/// Close code for a client that fell too far behind its event stream. Distinct
+/// from every other close so a client knows the cure is to reconnect and read
+/// the fresh snapshot, not to retry blindly.
+const WS_CLOSE_CODE_CLIENT_LAGGED: u16 = 4504;
+
+/// Events a client may fall behind by before it is closed as lagged.
+///
+/// Bounded rather than unbounded because `publish` runs on the engine's threads:
+/// an unbounded queue makes a slow socket the node's memory problem. Dropping the
+/// client is acceptable only because reconnecting is lossless — it opens with a
+/// fresh snapshot — which is the whole reason the stream leads with state.
+const MAX_BUFFERED_EVENTS_PER_CLIENT: usize = 1024;
+
 /// The non-`Event` frame a control-plane WebSocket opens with. It precedes every
 /// data frame on the socket.
 ///
@@ -319,10 +333,14 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
     let (mut sender, mut receiver) = socket.split();
 
     // Channel to bridge sync EventListener -> async WebSocket
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(MAX_BUFFERED_EVENTS_PER_CLIENT);
+    let client_lagged = Arc::new(AtomicBool::new(false));
 
     // Listener that forwards events to channel
-    let listener = Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
+    let listener = Arc::new(Mutex::new(WebSocketEventForwarder {
+        tx,
+        client_lagged: Arc::clone(&client_lagged),
+    }));
 
     // Subscribe to ALL topics via wildcard. Registration is synchronous, so
     // every event caused from here on is queued for this socket — including any
@@ -366,6 +384,16 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
     // Task: forward channel events to WebSocket
     let send_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
+            if client_lagged.load(Ordering::Acquire) {
+                tracing::info!("WebSocket client fell behind its event stream, closing");
+                let _ = sender
+                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                        code: WS_CLOSE_CODE_CLIENT_LAGGED,
+                        reason: "client lagged; reconnect for a fresh snapshot".into(),
+                    })))
+                    .await;
+                break;
+            }
             match serde_json::to_string(&event) {
                 Ok(json) => {
                     if sender.send(Message::Text(json.into())).await.is_err() {
@@ -401,12 +429,19 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
 }
 
 struct WebSocketEventForwarder {
-    tx: tokio::sync::mpsc::UnboundedSender<Event>,
+    tx: tokio::sync::mpsc::Sender<Event>,
+    client_lagged: Arc<AtomicBool>,
 }
 
 impl EventListener for WebSocketEventForwarder {
+    /// Hands the event to the socket's send task without blocking: `on_event`
+    /// runs on the engine thread that published, so it must never wait on a
+    /// client. A full queue latches the lag rather than dropping the event
+    /// quietly — the socket then closes and the client re-snapshots.
     fn on_event(&mut self, event: &Event) -> Result<()> {
-        let _ = self.tx.send(event.clone());
+        if self.tx.try_send(event.clone()).is_err() {
+            self.client_lagged.store(true, Ordering::Release);
+        }
         Ok(())
     }
 }
