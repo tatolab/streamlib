@@ -125,20 +125,40 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 
 ## ADDED
 
-- ADDED: `cargo xtask check-clock-usage` + its workflow — the mechanical guard that keeps
+- ADDED: `cargo xtask check-clock-usage` ~~+ its workflow~~ — the mechanical guard that keeps
   the wall-clock list from growing by accident. It bans wall-clock reads
-  (`SystemTime::now`, `chrono::Utc::now`, `time.time_ns`, `Date.now`) outside an explicit
+  (`SystemTime::now`, `chrono::Utc::now`, `time.time_ns`, ~~`Date.now`~~) outside an explicit
   file allowlist holding exactly the four surfaces above, in the shape of the existing
   `lint-logging` / `check-no-escalate-in-lifecycle` checks. Recon found a set of
   `SystemTime` uses that mint *unique names*, not timestamps (`vulkan_graphics_kernel.rs:3119`,
   `surface_share/unix_socket_service.rs:977`, several test helpers); those either move to
   a counter/uuid or join the allowlist with a stated reason — final at implementation.
+
+  > Landed 2026-08-12 (#1728). **No workflow** — #1857 consolidated the per-gate workflows,
+  > so the guard is an entry in `ALL_SOURCE_WALKING_GATES` run by the existing `source-gates`
+  > job. **No `Date.now` arm** — the Deno SDK is deleted and the engine tree holds no
+  > `.ts`/`.js` source, so that scan root does not exist; Rust and Python only.
+  >
+  > The unique-name uses are **all converted, none allowlisted** — 16 sites across 13 files.
+  > The allowlist is per-file, so an entry for `iceoryx2/output.rs` or `thread_runner.rs`
+  > would have licensed a wall-clock read in the exact data-plane files the guard exists to
+  > protect. `mint_machine_global_unique_name_suffix()` (`core/machine_global_unique_name.rs`)
+  > is the one primitive; `streamlib-surface-client`'s test sockets take a `TempDir`, the
+  > api-server's name seed takes the OS CSPRNG, and the dead `apple/time.rs::system_time_to_ns`
+  > was deleted. The permitted list holds exactly the four surfaces, as five files
+  > (`host_ts` has two readers).
 - ADDED: an epoch-parity test asserting `MediaClock::now()` and the wheel's
   `monotonic_now_ns` land in the same domain as a directly-read
   `clock_gettime(CLOCK_MONOTONIC)`. The natural home is the existing cross-process gate
   `tests/polyglot_linux_monotonic_clock_parity.rs:112`, which today does **not** include
   `MediaClock` — but its Python/Deno subprocess arms are doomed with the ripout, so the
   surviving shape is host + wheel.
+
+  > Landed as the anticipated host + wheel pair, not one cross-process test: the Rust half is
+  > `core/media_clock.rs::now_lands_in_the_kernel_monotonic_domain` (#1725), which brackets
+  > `MediaClock::now()` between two direct `clock_gettime(CLOCK_MONOTONIC)` reads, and the
+  > Python half is `tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_kernel_monotonic_clock`.
+  > `polyglot_linux_monotonic_clock_parity.rs` went with the ripout.
 
 ## Notes (not tickets)
 
