@@ -311,20 +311,16 @@ mod tests {
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
 
-    /// Build a temp socket path unique to this process + monotonic nanos.
-    fn tmp_socket_path(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        p.push(format!(
-            "streamlib-surface-client-test-{}-{}-{}.sock",
-            label,
-            std::process::id(),
-            nanos
-        ));
-        p
+    use tempfile::TempDir;
+
+    /// A socket path in a directory of its own, so uniqueness is the kernel's
+    /// answer and the socket is unlinked on drop. The returned [`TempDir`] owns
+    /// that lifetime — dropping it early removes the socket out from under the
+    /// raw `UnixListener` these tests bind, which has no owner to unlink it.
+    fn tmp_socket_path(label: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("temp dir for test socket");
+        let path = dir.path().join(format!("{label}.sock"));
+        (dir, path)
     }
 
     /// Create an anonymous kernel fd (memfd) seeded with `contents`.
@@ -359,7 +355,7 @@ mod tests {
     /// subprocess consumer — the protocol has no version handshake.
     #[test]
     fn wire_format_is_big_endian_u32_length_prefix_plus_payload() {
-        let socket_path = tmp_socket_path("wire-format");
+        let (_socket_dir, socket_path) = tmp_socket_path("wire-format");
         let listener = UnixListener::bind(&socket_path).expect("bind");
 
         let server = std::thread::spawn(move || {
@@ -390,7 +386,7 @@ mod tests {
     /// protects the regression gate.
     #[test]
     fn send_recv_preserves_fd_content_via_scm_rights() {
-        let socket_path = tmp_socket_path("fd-roundtrip");
+        let (_socket_dir, socket_path) = tmp_socket_path("fd-roundtrip");
         let listener = UnixListener::bind(&socket_path).expect("bind");
 
         let server = std::thread::spawn(move || {
@@ -436,7 +432,7 @@ mod tests {
     /// consumer has to pair an fd with its `plane_sizes[i]`/`plane_offsets[i]`.
     #[test]
     fn send_recv_preserves_multi_fd_order_and_content_via_scm_rights() {
-        let socket_path = tmp_socket_path("multi-fd-roundtrip");
+        let (_socket_dir, socket_path) = tmp_socket_path("multi-fd-roundtrip");
         let listener = UnixListener::bind(&socket_path).expect("bind");
 
         let server = std::thread::spawn(move || {
@@ -498,7 +494,7 @@ mod tests {
     /// budget is `MAX_DMA_BUF_PLANES` plane fds + 1 optional sync-fd slot.
     #[test]
     fn send_rejects_oversize_fd_vec_without_closing_caller_fds() {
-        let socket_path = tmp_socket_path("oversize");
+        let (_socket_dir, socket_path) = tmp_socket_path("oversize");
         let listener = UnixListener::bind(&socket_path).expect("bind");
         let client = UnixStream::connect(&socket_path).expect("connect");
         let _accepted = listener.accept().expect("accept");
@@ -527,7 +523,7 @@ mod tests {
     /// see identical serialization + deserialization behavior.
     #[test]
     fn send_request_round_trips_json_and_returns_response_fds() {
-        let socket_path = tmp_socket_path("send-request");
+        let (_socket_dir, socket_path) = tmp_socket_path("send-request");
         let listener = UnixListener::bind(&socket_path).expect("bind");
 
         let server = std::thread::spawn(move || {
@@ -592,7 +588,7 @@ mod tests {
     /// (buffer overrun on send, `MSG_CTRUNC` error on recv).
     #[test]
     fn send_recv_round_trip_at_max_scm_rights_cap() {
-        let socket_path = tmp_socket_path("cap-edge");
+        let (_socket_dir, socket_path) = tmp_socket_path("cap-edge");
         let listener = UnixListener::bind(&socket_path).expect("bind");
 
         let server = std::thread::spawn(move || {

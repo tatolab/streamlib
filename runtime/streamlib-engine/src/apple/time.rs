@@ -5,8 +5,6 @@
 // Review if these high-precision timing functions are needed or can be removed
 #![allow(dead_code)]
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 #[link(name = "CoreServices", kind = "framework")]
 extern "C" {
     fn mach_absolute_time() -> u64;
@@ -34,10 +32,6 @@ pub fn mach_now_ns() -> i64 {
     }
 }
 
-pub fn system_time_to_ns(time: SystemTime) -> i64 {
-    time.duration_since(UNIX_EPOCH).unwrap().as_nanos() as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,12 +46,5 @@ mod tests {
         assert!(ns2 > ns1);
         let elapsed = ns2 - ns1;
         assert!((10_000_000..20_000_000).contains(&elapsed));
-    }
-
-    #[test]
-    fn test_system_time_conversion() {
-        let now = SystemTime::now();
-        let ns = system_time_to_ns(now);
-        assert!(ns > 0);
     }
 }

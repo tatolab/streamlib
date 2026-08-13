@@ -79,8 +79,13 @@ pub struct RuntimeLogEvent {
     /// Schema version of this record. Bumped on breaking changes.
     pub schema_version: u32,
 
-    /// Host monotonic receipt timestamp, nanoseconds since UNIX epoch.
+    /// Host receipt wall-clock timestamp, nanoseconds since the UNIX epoch.
     /// Authoritative sort key across the merged stream.
+    ///
+    /// Wall clock, not monotonic: a log record's job is correlating StreamLib
+    /// with the outside world and with other hosts' logs, which monotonic time
+    /// cannot do. Never compare or subtract this against a media timestamp —
+    /// they share a unit and are different quantities.
     pub host_ts: u64,
 
     /// Unique runtime identifier (from [`RuntimeUniqueId`]).

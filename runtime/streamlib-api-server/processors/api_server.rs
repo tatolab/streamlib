@@ -89,16 +89,21 @@ const NOUNS: &[&str] = &[
 fn generate_runtime_name() -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    // Use time + pid for randomness without adding fastrand dependency
-    let seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos() as u64
-        ^ (std::process::id() as u64);
+    // The OS CSPRNG this crate already links for bearer tokens.
+    let mut seed_bytes = [0u8; 8];
+    if let Err(csprng_unavailable) = getrandom::getrandom(&mut seed_bytes) {
+        // A display name is not worth failing a runtime over, and the pid still
+        // separates concurrent runtimes on one host.
+        tracing::warn!("OS CSPRNG unavailable for runtime naming: {csprng_unavailable}");
+        seed_bytes = (std::process::id() as u64).to_ne_bytes();
+    }
+
+    // The two indices read disjoint halves, so the seed has to be diffused
+    // across all 64 bits first: a pid is well under 2^32, which would otherwise
+    // leave the high half zero and pin every degraded runtime to one noun.
     let mut hasher = DefaultHasher::new();
-    seed.hash(&mut hasher);
+    seed_bytes.hash(&mut hasher);
     let hash = hasher.finish();
 
     let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];

@@ -683,17 +683,13 @@ impl Drop for InputMailboxes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::iceoryx2::PortKey;
 
     fn unique_suffix(tag: &str) -> String {
         format!(
-            "test/input/{}/{}/{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "test/input/{tag}/{}",
+            mint_machine_global_unique_name_suffix()
         )
     }
 

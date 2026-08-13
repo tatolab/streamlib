@@ -34,6 +34,7 @@ use crate::core::{Error, Result};
 pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
 use super::HostVulkanDevice;
+use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
 ///
@@ -1504,17 +1505,10 @@ fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> 
         std::fs::create_dir_all(parent)?;
     }
     // Same-directory temp file → POSIX rename is atomic on the same
-    // filesystem. PID + nanos disambiguates concurrent writers; the loser
-    // of the race just overwrites the winner, which is fine — both blobs
-    // are equally valid and the driver re-validates on next load.
-    let suffix = format!(
-        "tmp.{}.{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
+    // filesystem. The loser of a race just overwrites the winner, which is
+    // fine — both blobs are equally valid and the driver re-validates on
+    // next load.
+    let suffix = format!("tmp.{}", mint_machine_global_unique_name_suffix());
     let mut tmp = path.to_path_buf();
     tmp.set_extension(format!("bin.{suffix}"));
     std::fs::write(&tmp, data)?;
@@ -2005,14 +1999,9 @@ mod tests {
     use serial_test::serial;
 
     fn unique_cache_dir(label: &str) -> PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
         std::env::temp_dir().join(format!(
-            "streamlib-pipeline-cache-{label}-{}-{}",
-            std::process::id(),
-            nanos
+            "streamlib-pipeline-cache-{label}-{}",
+            mint_machine_global_unique_name_suffix()
         ))
     }
 

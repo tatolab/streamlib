@@ -4666,6 +4666,7 @@ dependencies = [
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
@@ -4966,6 +4967,7 @@ version = "0.17.1"
 dependencies = [
  "libc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
