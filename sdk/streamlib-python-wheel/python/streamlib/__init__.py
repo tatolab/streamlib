@@ -31,7 +31,6 @@ from ._engine import Runtime as _NativeRuntime
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
 from ._engine import TestPatternSource as TestPatternSource
-from ._engine import media_clock_now_ns as media_clock_now_ns
 from ._engine import monotonic_now_ns as monotonic_now_ns
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
@@ -67,7 +66,6 @@ __all__ = [
     "clock",
     "input",
     "log",
-    "media_clock_now_ns",
     "monotonic_now_ns",
     "output",
     "processor",

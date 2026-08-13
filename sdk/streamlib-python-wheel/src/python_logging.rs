@@ -16,19 +16,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::logging::{LogLevel, emit_app_process_python_log_record, log_dir};
-use streamlib::sdk::media_clock::MediaClock;
 
 use crate::python_bag_conversion::python_object_to_json_value;
-
-/// The clock the engine stamps bags with, in nanoseconds.
-///
-/// The machine's monotonic clock — `CLOCK_MONOTONIC` on Linux,
-/// `mach_absolute_time` on Apple — so a value is comparable across every
-/// process on the host.
-#[pyfunction]
-pub(crate) fn media_clock_now_ns() -> u64 {
-    MediaClock::now().as_nanos() as u64
-}
 
 /// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
 ///
