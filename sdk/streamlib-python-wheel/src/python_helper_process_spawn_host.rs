@@ -598,6 +598,34 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         Some(&mut self.link_wiring)
     }
 
+    /// Forget a disconnected link and tell the child to drop the port it
+    /// opened for it.
+    ///
+    /// Unanswered, like `run`. The compiler calls this holding the graph's
+    /// write lock, so waiting out `REPLY_DEADLINE` on a child that is busy in
+    /// a callback would park every other graph operation behind it — and a
+    /// reply nobody reads is read as the answer to the next command, which is
+    /// the desync `exchange_with_child_expecting` warns about.
+    ///
+    /// A child that is already gone needs no telling: its ports went with it.
+    fn unwire_out_of_process_link(
+        &mut self,
+        port_direction: streamlib::sdk::error::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> Result<()> {
+        self.link_wiring.remove_link(link_id);
+        if self.child_is_gone {
+            return Ok(());
+        }
+        self.send_to_child(&serde_json::json!({
+            "cmd": "unwire_link",
+            "direction": port_direction.to_string(),
+            "port": local_port_name,
+            "link_id": link_id,
+        }))
+    }
+
     fn set_iceoryx2_resources(
         &mut self,
         _output_writer: Option<streamlib::sdk::iceoryx2::OutputWriter>,

@@ -403,6 +403,30 @@ def wire_link_data_access(
         )
 
 
+def unwire_link_data_access(
+    link_data_access: ProcessorLinkDataAccess, command: "dict[str, Any]"
+) -> None:
+    """Release this processor's own port for one link the engine disconnected.
+
+    The engine reclaims what it holds and cannot reach what this process opened
+    from the envelope, so it names the local port and direction and this side
+    drops it. Left open, the port is still counted against its channel when the
+    same link reconnects.
+    """
+    link_id = command["link_id"]
+    direction = command["direction"]
+    if direction == "output":
+        link_data_access.unwire_output_link(command["port"], link_id)
+    elif direction == "input":
+        link_data_access.unwire_input_link(link_id)
+    else:
+        log.warn(
+            "the parent asked to unwire a link in an unknown direction",
+            direction=direction,
+            link_id=link_id,
+        )
+
+
 # =============================================================================
 # The lifecycle loop
 # =============================================================================
@@ -539,6 +563,12 @@ class HelperProcessLifecycle:
             self._note_pause(verb)
         elif verb == "update_config":
             self._update_config(command)
+        elif verb == "unwire_link":
+            # Deliberately unanswered, like `run`: the parent sends this from
+            # its compiler while it holds the graph write lock, so it cannot
+            # wait, and a reply nobody reads becomes the answer to whatever it
+            # sends next.
+            self._unwire_link(command)
         else:
             log.warn("the parent sent an unknown lifecycle command", cmd=verb)
 
@@ -659,6 +689,19 @@ class HelperProcessLifecycle:
             )
             self._hosted.call_hook(verb, self._hosted.limited_access_context)
         self._bridge.send({"rpc": "ok"})
+
+    def _unwire_link(self, command: "dict[str, Any]") -> None:
+        try:
+            unwire_link_data_access(self._link_data_access, command)
+        except Exception as unwire_failure:
+            # The link is going away either way, and this processor's own
+            # callbacks are unaffected — the cost of failing is a port that
+            # stays counted against its channel until this process exits.
+            log.error(
+                "this processor could not release a disconnected link's port",
+                link_id=command.get("link_id"),
+                error=str(unwire_failure),
+            )
 
     def _update_config(self, command: "dict[str, Any]") -> None:
         if self._hosted is not None:

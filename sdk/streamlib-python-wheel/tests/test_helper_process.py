@@ -219,6 +219,74 @@ def test_a_helper_publishes_to_a_destination_that_wants_no_notification():
     }
 
 
+def test_a_disconnected_links_ports_are_free_for_its_reconnect():
+    """The child half of #1554: a disconnect must release the ports this
+    process opened, or the same link cannot be wired a second time.
+
+    The envelope caps the notify service at one notifier (`notify_max_notifiers`
+    is the destination's fan-in), so a notifier still held from the first
+    connect makes the reconnect's `create_notifier` the second on a max-1
+    service — `ExceedsMaxSupportedNotifiers`. The engine cannot reclaim these
+    from the parent: the publisher, notifier and subscriber all belong here.
+
+    Fail-without-fix: make `unwire_output_link` / `unwire_input_link` no-ops
+    (the behaviour before this fix, when `close_iceoryx2_service` skipped
+    out-of-process endpoints entirely) and the second `connect()` raises.
+
+    The Python-surface mirror of the engine's
+    `disconnect_reconnect_cycle_reclaims_notifier_and_data_service`.
+    """
+    from streamlib import ProcessorLinkDataAccess
+
+    link_id = "L-reconnect-cycle"
+    destination = ProcessorLinkDataAccess()
+    source = ProcessorLinkDataAccess()
+
+    # The destination is wired first both times: a send with no subscriber
+    # attached is dropped.
+    def connect() -> None:
+        _helper.wire_link_data_access(
+            destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
+        )
+        _helper.wire_link_data_access(
+            source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
+        )
+
+    def disconnect() -> None:
+        _helper.unwire_link_data_access(
+            source,
+            {
+                "direction": "output",
+                "port": "frames_to_downstream",
+                "link_id": link_id,
+            },
+        )
+        _helper.unwire_link_data_access(
+            destination, {"direction": "input", "link_id": link_id}
+        )
+
+    connect()
+    disconnect()
+    connect()
+
+    source.write_to_output_port("frames_to_downstream", {"frame_index": 13})
+    assert destination.read_from_input_port("frames_from_upstream") == {
+        "frame_index": 13
+    }, "the reconnected link must carry data through freshly opened ports"
+
+
+def test_unwiring_a_link_in_an_unknown_direction_is_survived():
+    """A direction this side does not know is a parent that has drifted from
+    this protocol. It must not take the processor down — the port it names is
+    the only thing at stake."""
+    from streamlib import ProcessorLinkDataAccess
+
+    _helper.unwire_link_data_access(
+        ProcessorLinkDataAccess(),
+        {"direction": "sideways", "port": "frames_to_downstream", "link_id": "L-x"},
+    )
+
+
 # =============================================================================
 # The framed socket
 # =============================================================================
@@ -370,6 +438,43 @@ def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_pa
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
+
+
+def test_unwire_link_is_dispatched_mid_run_and_answers_nothing(stand_in_parent):
+    """The parent sends this from its compiler while it holds the graph write
+    lock, so it cannot wait for a reply — and a reply nobody reads would be
+    taken as the answer to the next command, exactly like one to `run`.
+
+    It must also reach a child that is already in its execution loop, which is
+    the only state a disconnect can arrive in.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
+
+    stand_in_parent.send(
+        {
+            "cmd": "unwire_link",
+            "direction": "output",
+            "port": "frames_to_downstream",
+            "link_id": "L-mid-run",
+        }
+    )
+    assert stand_in_parent.receive(timeout_seconds=0.5) is None
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done", (
+        "an unanswered unwire must leave the next command's reply the next thing "
+        "the parent reads"
+    )
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
 
 
 def test_an_unknown_lifecycle_command_is_survived(stand_in_parent):
