@@ -37,9 +37,7 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use streamlib::sdk::error::Result;
-use streamlib::sdk::pubsub::{
-    DEFAULT_SUBSCRIPTION_LIVE_BUDGET, Event, EventListener, PUBSUB, topics,
-};
+use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::RuntimeOperations;
 
 use crate::state::{AppState, RuntimeShutdownRequest};
@@ -344,16 +342,9 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let listener = Arc::new(Mutex::new(McpEventForwarder { tx }));
-    let subscription_live_signal = PUBSUB.subscribe(topics::ALL, listener.clone());
-
-    // The sample window starts once the subscription can actually receive, so
-    // the window this tool reports back is the window it actually sampled.
-    if let Err(e) = subscription_live_signal
-        .wait_until_subscription_is_live_async(DEFAULT_SUBSCRIPTION_LIVE_BUDGET)
-        .await
-    {
-        return tool_error(format!("event subscription never went live: {e}"));
-    }
+    // Registration is synchronous, so the sample window below starts against a
+    // subscription that can already receive.
+    PUBSUB.subscribe(topics::ALL, listener.clone());
 
     let mut events: Vec<Value> = Vec::with_capacity(sample);
     let deadline = tokio::time::Instant::now() + LOGS_SAMPLE_WINDOW;
@@ -897,18 +888,10 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn tools_call_logs_returns_bounded_window_sample() {
-        // A live bus that nobody publishes to: the tool waits for its
-        // subscription to go live, then collects nothing, and the monotonic
-        // sample window bounds the wait rather than letting it hang. Live event
-        // delivery rides iceoryx2 and is exercised by the engine's pubsub
-        // integration tests, not here.
-        //
-        // The bus must be live for the empty sample to mean "the node was
-        // quiet" — against an absent bus the tool reports an error instead, so
-        // the two would be indistinguishable. `#[serial]` keeps another test's
-        // publish out of this window.
-        crate::control_plane_stub_support::initialize_process_global_pubsub_for_tests();
-
+        // Nobody publishes during this window, so the tool collects nothing and
+        // the monotonic sample window bounds the wait rather than letting it
+        // hang. `#[serial]` keeps another test's publish out of the window —
+        // `PUBSUB` is process-global.
         let started = tokio::time::Instant::now();
         let (status, body) = mcp_call(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
@@ -930,12 +913,8 @@ mod tests {
             sample["window_ms"].as_u64().unwrap(),
             LOGS_SAMPLE_WINDOW.as_millis() as u64
         );
-        // The budget names the subscription wait because the measured span now
-        // contains it: the tool waits for its subscription before the window
-        // starts, so a slow iceoryx2 open is time this assertion must allow
-        // rather than a hang it should catch.
         assert!(
-            elapsed < LOGS_SAMPLE_WINDOW * 4 + DEFAULT_SUBSCRIPTION_LIVE_BUDGET,
+            elapsed < LOGS_SAMPLE_WINDOW * 4,
             "logs must return within its sample window, not hang; took {elapsed:?}"
         );
     }

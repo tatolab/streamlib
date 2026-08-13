@@ -28,17 +28,13 @@ pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;
-pub use node::{
-    ChannelTapSubscribeError, Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService,
-    Iceoryx2Service,
-};
+pub use node::{ChannelTapSubscribeError, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use overflow::Overflow;
 pub use payload::{
-    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES, EventPayload,
-    FRAME_HEADER_SIZE, FrameHeader, MAX_EVENT_PAYLOAD_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
-    MAX_TOPIC_KEY_SIZE, PortKey, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES, TopicKey,
+    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES,
+    FRAME_HEADER_SIZE, FrameHeader, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
     UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 pub use read_mode::ReadMode;

@@ -195,10 +195,6 @@ impl Runner {
         let iceoryx2_node = Iceoryx2Node::new()?;
         tracing::info!("[new] iceoryx2 Node created");
 
-        // Initialize global PUBSUB with iceoryx2 backend.
-        // Must happen before any subscribe() calls (GraphChangeListener below).
-        PUBSUB.init(&runtime_id, iceoryx2_node.clone());
-
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket at $XDG_RUNTIME_DIR/streamlib-<uuid>.sock that
         // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET.
@@ -220,13 +216,7 @@ impl Runner {
         let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
 
         // Subscribe to graph changes.
-        //
-        // The live signal is dropped rather than waited on: `GraphChangeListener`
-        // is inert until `RuntimeStatus::Started`, and `start()` commits pending
-        // operations directly instead of relying on the event — so a
-        // `GraphDidChange` lost while this subscription comes up is one the
-        // listener would have ignored anyway.
-        let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         Ok(Arc::new(Self {
             runtime_id,
@@ -429,7 +419,6 @@ impl Runner {
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
 
-        // Clone iceoryx2 Node (created in new() for early PUBSUB initialization)
         let iceoryx2_node = self.iceoryx2_node.clone();
 
         // Create audio clock - platform-specific for best precision
@@ -921,10 +910,7 @@ impl Runner {
             Arc::new(parking_lot::Mutex::new(ShutdownListener {
                 flag: shutdown_flag_clone.clone(),
             }));
-        // The live signal is dropped: the run loop polls `shutdown_flag` and the
-        // process-wide shutdown latch as well, so a request that beat the
-        // subscription is still observed.
-        let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener));
 
         // On macOS, run the NSApplication event loop (required for GUI)
         #[cfg(target_os = "macos")]
@@ -1659,9 +1645,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn stopping_an_already_stopped_runtime_is_a_no_op() {
-        use crate::core::pubsub::{
-            DEFAULT_SUBSCRIPTION_LIVE_BUDGET, Event, EventListener, PUBSUB, RuntimeEvent, topics,
-        };
+        use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 
         #[derive(Default)]
         struct StopTransitionCounter {
@@ -1687,13 +1671,7 @@ mod tests {
         let counts = Arc::new(Mutex::new(StopTransitionCounter::default()));
         let listener: Arc<Mutex<dyn EventListener>> =
             Arc::new(Mutex::new(CountingListener(Arc::clone(&counts))));
-        // `stop()` publishes immediately below, so this must not race the
-        // subscription coming up — the counts would read as "published once"
-        // when the first pair was simply never subscribed for.
-        PUBSUB
-            .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))
-            .wait_until_subscription_is_live(DEFAULT_SUBSCRIPTION_LIVE_BUDGET)
-            .expect("the counting subscription goes live");
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         runner.stop().expect("the first stop succeeds");
         runner.stop().expect("the second stop succeeds");

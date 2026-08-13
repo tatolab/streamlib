@@ -87,21 +87,3 @@ macro_rules! graph_mutation_ops_are_unreachable {
 }
 
 pub(crate) use graph_mutation_ops_are_unreachable;
-
-/// Initialize the process-global `PUBSUB` for this test binary, once.
-///
-/// `PUBSUB` is process-global and initialized through a `OnceLock`, so a test
-/// binary cannot hold both a live bus and a dead one — whichever a test sees
-/// depends on what ran before it. Every test whose behaviour depends on the bus
-/// calls this and carries `#[serial]`: the bus is always live, and a publish in
-/// one test can never land inside another's sample window.
-pub(crate) fn initialize_process_global_pubsub_for_tests() {
-    use std::sync::Once;
-    static INITIALIZED: Once = Once::new();
-
-    INITIALIZED.call_once(|| {
-        let node = ::streamlib::sdk::iceoryx2::Iceoryx2Node::new()
-            .expect("iceoryx2 node for the control-plane test bus");
-        ::streamlib::sdk::pubsub::PUBSUB.init("test-api-server-control-plane", node);
-    });
-}

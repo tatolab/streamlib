@@ -234,11 +234,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
   and ALSA driver stamps carry, comparable across every node on a host. No
   process-relative epoch anywhere, and each language exports exactly one name for it.
-  Wall clock is permitted on exactly four observability surfaces and nowhere else: log
-  record `host_ts` and `source_ts`, log file naming, and the control-plane pubsub event
-  timestamp — their job is correlating with the outside world, which monotonic time
-  cannot do. A wall-clock value never enters the data plane and is never compared against
-  a media timestamp; a fifth surface is a plan change, not a judgement call.
+  Wall clock is permitted on exactly three observability surfaces and nowhere else: log
+  record `host_ts` and `source_ts`, and log file naming — their job is correlating with
+  the outside world, which monotonic time cannot do. A wall-clock value never enters the
+  data plane and is never compared against a media timestamp; a further surface is a plan
+  change, not a judgement call.
+  ~~The control-plane pubsub event timestamp is a fourth permitted surface.~~ — Superseded
+  2026-08-13 by #1783: the control-plane event bus became an in-process registry, so its
+  events no longer cross a wire and carry no timestamp to stamp. The surface ceased to
+  exist rather than being retracted; the rule it was an instance of is unchanged.
   [one-monotonic-clock]
 - **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
   CPAL → ALSA path is interim); do not build until a research memo settles it. A/V

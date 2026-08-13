@@ -29,7 +29,12 @@ pub mod topics {
     }
 }
 
-/// Trait for objects that can receive events
+/// Trait for objects that can receive events.
+///
+/// `on_event` runs on the publishing thread, holding this listener's lock, so it
+/// must be a short handoff — set a flag, send on a channel, spawn a task — and
+/// must never publish. Publishing from inside it re-enters the bus and deadlocks
+/// against the lock the dispatch already holds.
 pub trait EventListener: Send {
     fn on_event(&mut self, event: &Event) -> Result<()>;
 }

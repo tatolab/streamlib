@@ -11,7 +11,7 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
+use super::{FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
 use crate::core::error::{Error, Result};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -35,26 +35,6 @@ impl Iceoryx2Node {
         })
     }
 
-    /// Open or create a publish-subscribe service for EventPayload.
-    ///
-    /// The service name should follow the format: "streamlib/{runtime_id}/events/{topic}"
-    pub fn open_or_create_event_service(&self, service_name: &str) -> Result<Iceoryx2EventService> {
-        let node = self.inner.lock();
-        let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
-        })?;
-
-        let service = node
-            .service_builder(&service_name)
-            .publish_subscribe::<EventPayload>()
-            .max_publishers(16)
-            .subscriber_max_buffer_size(64)
-            .open_or_create()
-            .map_err(|e| Error::Runtime(format!("Failed to open/create event service: {:?}", e)))?;
-
-        Ok(Iceoryx2EventService { inner: service })
-    }
-
     /// Open or create an iceoryx2 Event service for fd-multiplexed wakeups.
     ///
     /// Pairs with a destination's data channels for fd-multiplexed wakeups: the
@@ -62,8 +42,7 @@ impl Iceoryx2Node {
     /// destination waits on ONE `Listener` fd regardless of fan-in, while every
     /// upstream source publishing into one of its channels holds a `Notifier`
     /// here. `max_notifiers` is the destination's compile-time fan-in (the count
-    /// of inbound links). Distinct from [`Iceoryx2EventService`] which is a typed
-    /// pub/sub for runtime events.
+    /// of inbound links).
     pub fn open_or_create_notify_service(
         &self,
         service_name: &str,
@@ -227,8 +206,7 @@ pub enum ChannelTapSubscribeError {
 
 /// Handle to an iceoryx2 Event service used for fd-multiplexed wakeups.
 ///
-/// Distinct from [`Iceoryx2EventService`] (which is a typed pub/sub for runtime events).
-/// This wraps iceoryx2's `MessagingPattern::Event` — `Notifier::notify()` causes any
+/// Wraps iceoryx2's `MessagingPattern::Event` — `Notifier::notify()` causes any
 /// `Listener` on the same service to become readable on its underlying fd.
 pub struct Iceoryx2NotifyService {
     inner: iceoryx2::service::port_factory::event::PortFactory<ipc::Service>,
@@ -249,38 +227,6 @@ impl Iceoryx2NotifyService {
             .listener_builder()
             .create()
             .map_err(|e| Error::Runtime(format!("Failed to create listener: {:?}", e)))
-    }
-}
-
-/// Handle to an iceoryx2 publish-subscribe service for events.
-pub struct Iceoryx2EventService {
-    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
-        ipc::Service,
-        EventPayload,
-        (),
-    >,
-}
-
-impl Iceoryx2EventService {
-    /// Create a publisher for this event service.
-    pub fn create_publisher(
-        &self,
-    ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, EventPayload, ()>> {
-        self.inner
-            .publisher_builder()
-            .create()
-            .map_err(|e| Error::Runtime(format!("Failed to create event publisher: {:?}", e)))
-    }
-
-    /// Create a subscriber for this event service.
-    pub fn create_subscriber(
-        &self,
-    ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, EventPayload, ()>> {
-        self.inner
-            .subscriber_builder()
-            .buffer_size(64)
-            .create()
-            .map_err(|e| Error::Runtime(format!("Failed to create event subscriber: {:?}", e)))
     }
 }
 

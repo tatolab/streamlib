@@ -27,8 +27,6 @@ use iceoryx2::prelude::*;
 /// multi-MB keyframe) free to grow rather than crash.
 pub const DEFAULT_EXPECTED_PAYLOAD_BYTES: usize = 65536;
 pub const MAX_PORT_KEY_SIZE: usize = 64;
-pub const MAX_EVENT_PAYLOAD_SIZE: usize = 8192;
-pub const MAX_TOPIC_KEY_SIZE: usize = 128;
 
 /// Per-channel payload ceiling for a trusted (in-process host) data channel —
 /// the graceful, observable layer in front of the subprocess cgroup
@@ -443,100 +441,6 @@ impl FrameHeader {
     /// Get the port key as a string.
     pub fn port(&self) -> &str {
         self.port_key.as_str()
-    }
-}
-
-/// Fixed-size topic name for event pub/sub IPC.
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, ZeroCopySend)]
-#[repr(C)]
-pub struct TopicKey {
-    len: u8,
-    name: [u8; MAX_TOPIC_KEY_SIZE - 1],
-}
-
-impl TopicKey {
-    pub fn new(name: &str) -> Self {
-        let bytes = name.as_bytes();
-        let len = bytes.len().min(MAX_TOPIC_KEY_SIZE - 1) as u8;
-        let mut key = Self {
-            len,
-            name: [0u8; MAX_TOPIC_KEY_SIZE - 1],
-        };
-        key.name[..len as usize].copy_from_slice(&bytes[..len as usize]);
-        key
-    }
-
-    pub fn as_str(&self) -> &str {
-        std::str::from_utf8(&self.name[..self.len as usize]).unwrap_or("")
-    }
-}
-
-impl Default for TopicKey {
-    fn default() -> Self {
-        Self {
-            len: 0,
-            name: [0u8; MAX_TOPIC_KEY_SIZE - 1],
-        }
-    }
-}
-
-/// Event payload for iceoryx2 pub/sub communication.
-///
-/// Carries serialized runtime events (lifecycle, graph changes, compiler, input)
-/// between components via iceoryx2 shared memory.
-#[derive(Clone, Copy, ZeroCopySend)]
-#[type_name("EventPayload")]
-#[repr(C)]
-pub struct EventPayload {
-    pub topic_key: TopicKey,
-    pub timestamp_ns: i64,
-    pub len: u32,
-    pub data: [u8; MAX_EVENT_PAYLOAD_SIZE],
-}
-
-impl EventPayload {
-    /// Create a new event payload with the given topic and serialized data.
-    pub fn new(topic: &str, timestamp_ns: i64, data: &[u8]) -> Self {
-        let len = data.len().min(MAX_EVENT_PAYLOAD_SIZE) as u32;
-        let mut payload = Self {
-            topic_key: TopicKey::new(topic),
-            timestamp_ns,
-            len,
-            data: [0u8; MAX_EVENT_PAYLOAD_SIZE],
-        };
-        payload.data[..len as usize].copy_from_slice(&data[..len as usize]);
-        payload
-    }
-
-    /// Get the actual data slice (excluding padding).
-    pub fn data(&self) -> &[u8] {
-        &self.data[..self.len as usize]
-    }
-
-    /// Get the topic key as a string.
-    pub fn topic(&self) -> &str {
-        self.topic_key.as_str()
-    }
-}
-
-impl Default for EventPayload {
-    fn default() -> Self {
-        Self {
-            topic_key: TopicKey::default(),
-            timestamp_ns: 0,
-            len: 0,
-            data: [0u8; MAX_EVENT_PAYLOAD_SIZE],
-        }
-    }
-}
-
-impl std::fmt::Debug for EventPayload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EventPayload")
-            .field("topic_key", &self.topic_key.as_str())
-            .field("timestamp_ns", &self.timestamp_ns)
-            .field("len", &self.len)
-            .finish()
     }
 }
 

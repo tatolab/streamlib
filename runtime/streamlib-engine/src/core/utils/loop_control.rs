@@ -31,11 +31,6 @@ impl EventListener for ShutdownListener {
 }
 
 /// Run a loop that automatically exits on shutdown events.
-///
-/// Host-only: both of its shutdown sources are inert inside a plugin cdylib —
-/// the plugin image's `PUBSUB` is never `init()`ed (so the subscription below
-/// never delivers) and the funnel's cdylib arm deliberately latches nothing in
-/// the plugin image's copy of the engine.
 pub fn shutdown_aware_loop<F, E>(mut f: F) -> std::result::Result<(), E>
 where
     F: FnMut() -> std::result::Result<LoopControl, E>,
@@ -48,13 +43,10 @@ where
         shutdown_flag: Arc::clone(&shutdown_flag),
     };
 
-    // Subscribe to runtime global events (includes shutdown)
-    // IMPORTANT: We must keep the Arc alive for the duration of the loop!
-    // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
+    // The Arc must outlive the loop: the bus stores only a Weak, so dropping it
+    // unsubscribes.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    // The live signal is dropped: the loop below polls the latch as well, so a
-    // shutdown requested before the subscription came up is still observed.
-    let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
+    PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
 
     tracing::info!(
         "Shutdown-aware loop started, subscribed to {}",
@@ -64,7 +56,7 @@ where
     // Main loop
     loop {
         // The latch is polled as well as the event because a request latched
-        // before the subscribe above leaves no event to receive.
+        // before this loop started leaves no event to receive.
         if shutdown_flag.load(Ordering::Relaxed)
             || crate::core::runtime::is_runtime_shutdown_requested()
         {
@@ -141,52 +133,46 @@ mod tests {
     #[test]
     #[serial]
     fn test_shutdown_event_exits_loop() {
-        use crate::iceoryx2::Iceoryx2Node;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::mpsc;
         use std::time::Duration;
 
-        // Ensure PUBSUB has an iceoryx2 backend. Use a process-unique runtime_id
-        // so iceoryx2's persistent service state under /tmp/iceoryx2/ doesn't
-        // collide with stale state left by crashed prior cargo-test invocations
-        // (which surfaced as PublishSubscribeOpenError(ServiceInCorruptedState)).
-        // If PUBSUB was already initialized by another test in this process,
-        // init() is a no-op (OnceLock), and the existing runtime_id is used.
-        if let Ok(node) = Iceoryx2Node::new() {
-            let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
-            PUBSUB.init(&runtime_id, node);
-        }
-
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
         let (done_tx, done_rx) = mpsc::channel::<std::result::Result<(), ()>>();
+        let (entered_loop_tx, entered_loop_rx) = mpsc::channel::<()>();
 
         std::thread::spawn(move || {
             let result = shutdown_aware_loop(|| {
-                counter_clone.fetch_add(1, Ordering::Relaxed);
+                // The callback runs only after `shutdown_aware_loop` has
+                // subscribed, so the first invocation is the handshake this
+                // thread owes the publisher below.
+                if counter_clone.fetch_add(1, Ordering::Relaxed) == 0 {
+                    let _ = entered_loop_tx.send(());
+                }
                 std::thread::sleep(Duration::from_millis(10));
                 Ok::<LoopControl, ()>(LoopControl::Continue)
             });
             done_tx.send(result).ok();
         });
 
-        // Give the iceoryx2 subscriber thread time to open the service and
-        // start polling before we send the shutdown event.
-        std::thread::sleep(Duration::from_millis(150));
+        // Synchronising on the loop having started, not on a duration: the
+        // subscription is live the moment `shutdown_aware_loop` registers it, so
+        // the entry handshake is the only thing left to wait for.
+        entered_loop_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the loop thread entered its callback");
 
-        // Publish shutdown event
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
         PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
 
-        // Wait for loop to exit with a hard timeout so the test fails clearly
-        // rather than hanging indefinitely when PUBSUB is not functional.
+        // Bounded so a regression fails by name rather than hanging the suite.
         match done_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(result) => assert!(result.is_ok(), "Loop returned an error"),
             Err(_) => panic!(
                 "test_shutdown_event_exits_loop: loop did not exit within 5 s \
-                 after shutdown event — PUBSUB may be uninitialized or the \
-                 iceoryx2 subscriber thread failed to open its service"
+                 after the shutdown event"
             ),
         }
 

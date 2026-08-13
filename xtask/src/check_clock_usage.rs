@@ -55,18 +55,17 @@ const SCAN_ROOTS: &[&str] = &[
 
 /// Files whose *source text* spells a banned pattern without reading a clock —
 /// this gate's own constants and fixtures. Not allowlist entries: the
-/// permitted-surface list stays exactly the four the plan names, and nothing
+/// permitted-surface list stays exactly the ones the plan names, and nothing
 /// here is licensed to read a wall clock.
 const SCAN_EXEMPT_FILES: &[&str] = &["xtask/src/check_clock_usage.rs"];
 
-/// The four surfaces the plan permits a wall-clock read on. Adding a fifth is a
-/// plan change, so it is a variant here before it is a line in the allowlist.
+/// The surfaces the plan permits a wall-clock read on. Adding one is a plan
+/// change, so it is a variant here before it is a line in the allowlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObservabilitySurface {
     LogRecordHostTimestamp,
     LogRecordSourceTimestamp,
     LogFileName,
-    ControlPlaneEventTimestamp,
 }
 
 impl ObservabilitySurface {
@@ -74,7 +73,6 @@ impl ObservabilitySurface {
         ObservabilitySurface::LogRecordHostTimestamp,
         ObservabilitySurface::LogRecordSourceTimestamp,
         ObservabilitySurface::LogFileName,
-        ObservabilitySurface::ControlPlaneEventTimestamp,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -82,9 +80,6 @@ impl ObservabilitySurface {
             ObservabilitySurface::LogRecordHostTimestamp => "log record `host_ts`",
             ObservabilitySurface::LogRecordSourceTimestamp => "log record `source_ts`",
             ObservabilitySurface::LogFileName => "log file naming",
-            ObservabilitySurface::ControlPlaneEventTimestamp => {
-                "control-plane pubsub event `timestamp_ns`"
-            }
         }
     }
 }
@@ -117,11 +112,6 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         path: "runtime/streamlib-engine/src/core/logging/init.rs",
         surface: ObservabilitySurface::LogFileName,
         reason: "mints `started_at_millis`, which humans read off the JSONL file name",
-    },
-    PermittedWallClockSurface {
-        path: "runtime/streamlib-engine/src/core/pubsub/bus.rs",
-        surface: ObservabilitySurface::ControlPlaneEventTimestamp,
-        reason: "stamps control-plane events, which are correlated against outside-world clocks",
     },
 ];
 
