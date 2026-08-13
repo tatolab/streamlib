@@ -87,3 +87,31 @@ macro_rules! graph_mutation_ops_are_unreachable {
 }
 
 pub(crate) use graph_mutation_ops_are_unreachable;
+
+/// Implement the observation half of [`RuntimeOperations`] — the ops every stub
+/// answers the same way — with an empty graph and an unreachable shutdown
+/// naming `$who`.
+///
+/// Paired with [`graph_mutation_ops_are_unreachable`]: between them a new
+/// `RuntimeOperations` method is one edit here rather than several
+/// near-identical stubs drifting apart across the crate's test modules.
+macro_rules! observation_ops_answer_an_empty_graph {
+    ($who:literal) => {
+        fn to_json_async(
+            &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
+            '_,
+            ::streamlib::sdk::error::Result<::serde_json::Value>,
+        > {
+            Box::pin(async { Ok(::serde_json::json!({})) })
+        }
+        fn to_json(&self) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
+            Ok(::serde_json::json!({}))
+        }
+        fn request_runtime_shutdown(&self, _reason: &str) -> ::streamlib::sdk::error::Result<()> {
+            unreachable!(concat!($who, " never shuts the runtime down"))
+        }
+    };
+}
+
+pub(crate) use observation_ops_answer_an_empty_graph;

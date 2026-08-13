@@ -70,10 +70,14 @@ driver stamp. Rust reaches it through `MediaClock`; Python through `monotonic_no
    siblings).
 3. Log file naming — `started_at_millis` (`core/logging/init.rs:185`,
    `core/logging/paths.rs:22`) and the CLI's rendering of both (`commands/logs.rs:222`).
-4. Control-plane pubsub event `timestamp_ns` (`core/pubsub/bus.rs:263-268`).
+4. ~~Control-plane pubsub event `timestamp_ns` (`core/pubsub/bus.rs:263-268`).~~ —
+   Superseded 2026-08-13 by #1783: the control-plane event bus became an in-process
+   registry, so its events no longer cross a wire and carry no timestamp to stamp. The
+   surface ceased to exist rather than being retracted; `check-clock-usage` now permits
+   three.
 
 Their job is correlating StreamLib with the outside world and with other hosts' logs — a
-job monotonic time cannot do. Adding a fifth surface is a plan change, not a judgement
+job monotonic time cannot do. Adding a further surface is a plan change, not a judgement
 call.
 
 ### The rule that keeps the two from mixing

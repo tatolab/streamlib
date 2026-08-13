@@ -442,8 +442,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     hex
 }
 
-/// Forwards runtime events into the `logs` tool's bounded collection channel,
-/// mirroring the REST WebSocket event forwarder.
+/// Forwards runtime events into the `logs` tool's bounded collection channel.
+///
+/// Unbounded, unlike the WebSocket forwarder: this listener is drained
+/// continuously for one bounded sample window and then dropped, so its queue
+/// cannot outlive the call the way a long-lived socket's can.
 struct McpEventForwarder {
     tx: tokio::sync::mpsc::UnboundedSender<Event>,
 }

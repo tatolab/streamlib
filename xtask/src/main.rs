@@ -268,10 +268,10 @@ enum Commands {
     /// CI gate for the wall-clock allowlist. Fails on a wall-clock read
     /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
     /// anywhere under `runtime/ sdk/ adapters/ xtask/ packages/test-fixtures/`
-    /// outside the four
+    /// outside the three
     /// observability surfaces the plan permits it on: log record `host_ts`
-    /// and `source_ts`, log file naming, and the control-plane pubsub event
-    /// timestamp. Monotonic is the only legal clock on the data plane — a
+    /// and `source_ts`, and log file naming. Monotonic is the only legal clock
+    /// on the data plane — a
     /// wall-clock value and a media timestamp share a unit and are different
     /// quantities, so subtracting across them is always a bug. There is no
     /// per-line pragma: widening the list is a plan change. See

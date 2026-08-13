@@ -31,10 +31,15 @@ pub mod topics {
 
 /// Trait for objects that can receive events.
 ///
-/// `on_event` runs on the publishing thread, holding this listener's lock, so it
-/// must be a short handoff — set a flag, send on a channel, spawn a task — and
-/// must never publish. Publishing from inside it re-enters the bus and deadlocks
-/// against the lock the dispatch already holds.
+/// `on_event` runs inline on the thread that published, so it must be a short
+/// handoff — set a flag, send on a channel, spawn a task — and must take no
+/// engine lock and make no runtime call.
+///
+/// The hazard is not only re-publishing. The engine publishes from inside its
+/// own graph write lock (`Compiler::scope` holds it across the closure that
+/// emits add/remove events), so a listener that merely reads the graph —
+/// `runtime.to_json()`, say — would take a read on an `RwLock` its own thread
+/// already holds for writing, and hard-deadlock.
 pub trait EventListener: Send {
     fn on_event(&mut self, event: &Event) -> Result<()>;
 }
@@ -325,8 +330,7 @@ pub enum RuntimeEvent {
         processor_type: ProcessorClassImportPath,
     },
     /// Emitted when a processor type is unregistered from the factory
-    /// (`remove_module`). Additive variant — appended so existing msgpack
-    /// consumers keep decoding earlier variants unchanged.
+    /// (`remove_module`).
     RuntimeDidUnregisterProcessorType {
         processor_type: ProcessorClassImportPath,
     },
@@ -668,12 +672,10 @@ mod tests {
 
     #[test]
     fn test_event_serialization_roundtrip() {
-        // Verify events can be serialized/deserialized via MessagePack
-        // (critical for iceoryx2 transport). Locks **full** value
-        // equality, not just topic/log_name — a regression where a
-        // discriminator is lost on the wire but topic()/log_name() are
-        // computed from a fallback variant would slip past the older
-        // assertion.
+        // Locks **full** value equality, not just topic/log_name: a
+        // regression where a discriminator is lost on the wire but
+        // topic()/log_name() are computed from a fallback variant would slip
+        // past the weaker assertion.
         let events = vec![
             Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
             Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),

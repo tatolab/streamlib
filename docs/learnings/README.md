@@ -67,8 +67,11 @@ Avoid the two failure modes:
   Validate camera→display end-to-end via virtual camera + PNG sampling
 - [@docs/learnings/vulkanalia-empty-slice-cast.md](vulkanalia-empty-slice-cast.md) —
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
-- [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
-  Test hangs indefinitely because PUBSUB silently no-ops without `init()`
+- ~~`pubsub-lazy-init-silent-noop.md`~~ — Removed 2026-08-13 by #1783. It taught that
+  `PUBSUB` silently no-ops until `init()` and prescribed a 150 ms sleep before publishing
+  in tests; the control-plane bus became an in-process registry with no `init`, no
+  buffering and no subscriber thread, so every instruction in it was wrong and the failure
+  it described cannot recur.
 - [@docs/learnings/cdylib-make-borrow-cached-fields.md](cdylib-make-borrow-cached-fields.md) —
   Plugin pipeline runs end-to-end clean but produces zero/black output
   when host-side `make_*_borrow` helpers leave the PluginAbiObject's cached

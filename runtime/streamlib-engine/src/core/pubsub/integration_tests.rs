@@ -217,21 +217,50 @@ fn dropping_the_listener_unsubscribes_it() {
 
 /// Dropping a listener leaves a dead registration behind; the next publish that
 /// finds it removes it, so a long-lived bus does not accumulate them.
+///
+/// The count is asserted, not inferred from delivery: a dead entry is skipped
+/// whether or not it is ever pruned, so delivery alone proves nothing about the
+/// registry shrinking.
 #[test]
 fn a_dropped_listeners_registration_is_pruned_by_the_next_publish() {
     let bus = PubSub::new();
     let (listener, _received) = subscribe_recorder(&bus, topics::KEYBOARD);
     let (_survivor, survivor_received) = subscribe_recorder(&bus, topics::KEYBOARD);
+    assert_eq!(bus.registration_count(), 2);
 
     drop(listener);
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+
+    assert_eq!(
+        bus.registration_count(),
+        1,
+        "the dead registration is gone, not merely skipped"
+    );
+    assert_eq!(
+        survivor_received.lock().len(),
+        1,
+        "pruning a dead entry must not disturb a live one"
+    );
+}
+
+/// A subscriber on a topic nothing publishes to is still pruned — liveness is
+/// checked on every registration, not only the ones a publish routes to.
+#[test]
+fn a_dropped_listener_is_pruned_even_on_a_topic_nothing_publishes_to() {
+    let bus = PubSub::new();
+    let (quiet_listener, _quiet) = subscribe_recorder(&bus, &topics::processor("never-published"));
+    let (_active, _active_received) = subscribe_recorder(&bus, topics::KEYBOARD);
+    assert_eq!(bus.registration_count(), 2);
+
+    drop(quiet_listener);
+    let event = keyboard_event();
     bus.publish(&event.topic(), &event);
 
     assert_eq!(
-        survivor_received.lock().len(),
-        2,
-        "pruning a dead entry must not disturb a live one"
+        bus.registration_count(),
+        1,
+        "a dead registration on an unpublished topic must not accumulate"
     );
 }
 

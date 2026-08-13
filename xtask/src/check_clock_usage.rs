@@ -1,21 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bans wall-clock reads outside the four observability surfaces the plan
+//! Bans wall-clock reads outside the three observability surfaces the plan
 //! permits them on (`docs/plan/ARCHITECTURE.md` §Media I/O
 //! `[one-monotonic-clock]`; rationale in `docs/decisions/one-monotonic-clock.md`).
 //!
 //! Monotonic is the only legal clock on the data plane. A wall-clock value and a
 //! media timestamp share a unit and are different quantities, so a subtraction
 //! across them is always a bug — and it is an easy bug to write, because
-//! `SystemTime::now()` is the reflexive spelling for "what time is it". The four
+//! `SystemTime::now()` is the reflexive spelling for "what time is it". The
 //! surfaces that keep wall clock correlate StreamLib with the outside world and
 //! with other hosts' logs, a job monotonic time cannot do.
 //!
 //! There is no per-line pragma and no opt-out attribute. The file allowlist is
-//! the only way past this gate, every entry names one of exactly four
-//! [`ObservabilitySurface`] variants, and a fifth surface is a plan change — so
-//! widening the list means adding a variant, which no one does by accident.
+//! the only way past this gate, every entry names an [`ObservabilitySurface`]
+//! variant, and a further surface is a plan change — so widening the list means
+//! adding a variant, which no one does by accident.
 //!
 //! Cheap substring scan, no `syn` and no compile. Whole-line `//` and `#`
 //! comments and Python triple-quoted spans are blanked first, so a doc comment

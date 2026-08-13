@@ -9,6 +9,10 @@ use super::events::{Event, EventListener, topics};
 /// Process-wide pub/sub handle.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
+/// Stated once so the release log and the debug assertion cannot drift apart.
+const TEMPORARY_ARC_SUBSCRIBE_DIAGNOSIS: &str = "the listener will be dropped immediately and never receive events. Store the Arc \
+     in a variable that outlives the subscription.";
+
 /// One listener's registration: the topic it asked for, and a weak handle to it.
 ///
 /// Weak, so dropping the caller's `Arc` unsubscribes with no bookkeeping — the
@@ -65,18 +69,16 @@ impl PubSub {
         // Caller must keep a strong Arc — the registry stores only a Weak.
         // strong_count == 1 means this parameter is the only reference and will
         // be dropped when this call returns.
-        debug_assert!(
-            Arc::strong_count(&listener) > 1,
-            "PUBSUB.subscribe() called with a temporary Arc for topic '{}' — \
-             the listener will be dropped immediately and never receive events. \
-             Store the Arc in a variable that outlives the subscription.",
-            topic,
-        );
         if Arc::strong_count(&listener) <= 1 {
             tracing::error!(
-                "PUBSUB.subscribe() called with a temporary Arc for topic '{}' — \
-                 the listener will be dropped immediately and never receive events",
+                "PUBSUB.subscribe() called with a temporary Arc for topic '{}' — {}",
                 topic,
+                TEMPORARY_ARC_SUBSCRIBE_DIAGNOSIS,
+            );
+            debug_assert!(
+                false,
+                "PUBSUB.subscribe() called with a temporary Arc for topic '{}' — {}",
+                topic, TEMPORARY_ARC_SUBSCRIBE_DIAGNOSIS,
             );
         }
 
@@ -86,6 +88,12 @@ impl PubSub {
         });
 
         tracing::debug!("Listener subscribed to topic '{}'", topic);
+    }
+
+    /// How many registrations the bus is holding, live or not yet pruned.
+    #[cfg(test)]
+    pub(crate) fn registration_count(&self) -> usize {
+        self.subscriptions.read().len()
     }
 
     /// Publish an event to every listener subscribed to `topic` or to
@@ -98,10 +106,17 @@ impl PubSub {
         let mut found_dead_subscription = false;
         {
             let subscriptions = self.subscriptions.read();
-            for subscription in subscriptions.iter().filter(|s| s.receives(topic)) {
-                match subscription.listener_weak.upgrade() {
-                    Some(listener) => recipients.push(listener),
-                    None => found_dead_subscription = true,
+            for subscription in subscriptions.iter() {
+                // Liveness is checked on every entry, not only the matching
+                // ones: a subscription on a topic nothing publishes to would
+                // otherwise never be visited, and so never pruned.
+                match (
+                    subscription.receives(topic),
+                    subscription.listener_weak.upgrade(),
+                ) {
+                    (true, Some(listener)) => recipients.push(listener),
+                    (false, Some(_)) => {}
+                    (_, None) => found_dead_subscription = true,
                 }
             }
         }

@@ -8,7 +8,7 @@ use axum::{
     extract::Path,
     extract::Query,
     extract::State,
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -267,6 +267,19 @@ pub(crate) async fn get_moq_catalog(
 // WebSocket subscription-live contract
 // ============================================================================
 
+/// Build a close frame, truncating the reason to what RFC 6455 permits.
+///
+/// Every close on these sockets goes through here: the cap is a wire invariant
+/// (tungstenite refuses an over-length control frame and the client gets an
+/// abnormal close with no reason at all), and a per-site `truncate` call is an
+/// invariant held by memory.
+fn websocket_close_frame(code: u16, reason: impl Into<String>) -> Message {
+    Message::Close(Some(CloseFrame {
+        code,
+        reason: truncate_on_char_boundary(reason.into(), MAX_WS_CLOSE_REASON_BYTES).into(),
+    }))
+}
+
 /// Close code for a socket that could not be opened — the graph snapshot its
 /// first frame carries could not be produced. App codes live in the 4000–4999
 /// private range, alongside the tap's 4404 / 4409.
@@ -304,7 +317,7 @@ const MAX_BUFFERED_EVENTS_PER_CLIENT: usize = 1024;
 /// On `/ws/tap/{channel}` the separation is stronger still — this is the only
 /// text frame that socket carries, and every bag stays a verbatim binary frame.
 #[derive(serde::Serialize)]
-pub(crate) enum ControlPlaneWebSocketOpeningFrame {
+enum ControlPlaneWebSocketOpeningFrame {
     EventStreamSnapshot { graph: serde_json::Value },
     TapSubscriptionLive { channel: String },
 }
@@ -322,6 +335,15 @@ impl ControlPlaneWebSocketOpeningFrame {
 // WebSocket Event Streaming
 // ============================================================================
 
+/// `GET /ws/events` — stream the node's runtime events, opening with the graph.
+#[utoipa::path(
+    get,
+    path = "/ws/events",
+    tag = "events",
+    responses(
+        (status = 101, description = "WebSocket upgraded. The first frame is text — {\"EventStreamSnapshot\":{\"graph\":{…}}} — carrying the same graph GET /api/graph serves; every frame after it is one runtime Event as JSON. The stream is level-triggered: read state first and deltas after, so an event missed by connecting late, lagging, or disconnecting is recovered by reconnecting rather than lost. The snapshot is taken after the subscription is registered, so an event it already reflects may also arrive as a delta — treat the stream as convergent, not as an exact ledger. Frames are discriminated by their single top-level key: an opening frame's key is never an Event variant name (RuntimeGlobal / ProcessorEvent / Custom), so a strict Event decoder rejects it rather than mis-reading it. A client that falls more than 1024 events behind is closed with 4504 and should reconnect for a fresh snapshot; a snapshot that cannot be produced closes with 4503.")
+    )
+)]
 pub(crate) async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
@@ -338,7 +360,7 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
 
     // Listener that forwards events to channel
     let listener = Arc::new(Mutex::new(WebSocketEventForwarder {
-        tx,
+        tx: Some(tx),
         client_lagged: Arc::clone(&client_lagged),
     }));
 
@@ -351,25 +373,19 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
     // the client reconciles away, where the other order would leave a gap it
     // could not detect. Nothing goes out until the snapshot is in hand, so the
     // client's first frame is always state.
-    let opening_frame = match runtime.to_json_async().await {
-        Ok(graph) => ControlPlaneWebSocketOpeningFrame::EventStreamSnapshot { graph }
-            .to_websocket_text_frame(),
-        Err(e) => Err(e),
-    };
+    let opening_frame = runtime.to_json_async().await.and_then(|graph| {
+        ControlPlaneWebSocketOpeningFrame::EventStreamSnapshot { graph }.to_websocket_text_frame()
+    });
 
     let opening_frame = match opening_frame {
         Ok(opening_frame) => opening_frame,
         Err(e) => {
             tracing::warn!("WebSocket event stream could not start: {e}");
             let _ = sender
-                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                    code: WS_CLOSE_CODE_STREAM_UNAVAILABLE,
-                    reason: truncate_on_char_boundary(
-                        format!("event stream could not start: {e}"),
-                        MAX_WS_CLOSE_REASON_BYTES,
-                    )
-                    .into(),
-                })))
+                .send(websocket_close_frame(
+                    WS_CLOSE_CODE_STREAM_UNAVAILABLE,
+                    format!("event stream could not start: {e}"),
+                ))
                 .await;
             return;
         }
@@ -384,20 +400,10 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
     // Task: forward channel events to WebSocket
     let send_task = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            if client_lagged.load(Ordering::Acquire) {
-                tracing::info!("WebSocket client fell behind its event stream, closing");
-                let _ = sender
-                    .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                        code: WS_CLOSE_CODE_CLIENT_LAGGED,
-                        reason: "client lagged; reconnect for a fresh snapshot".into(),
-                    })))
-                    .await;
-                break;
-            }
             match serde_json::to_string(&event) {
                 Ok(json) => {
                     if sender.send(Message::Text(json.into())).await.is_err() {
-                        break;
+                        return;
                     }
                 }
                 Err(e) => {
@@ -405,20 +411,41 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
                 }
             }
         }
+
+        // The loop ends only when every sender is gone, and the forwarder drops
+        // its sender exactly when it latches the lag — so the flag is read after
+        // the fact rather than raced against the drain.
+        if client_lagged.load(Ordering::Relaxed) {
+            tracing::info!("WebSocket client fell behind its event stream, closing");
+            let _ = sender
+                .send(websocket_close_frame(
+                    WS_CLOSE_CODE_CLIENT_LAGGED,
+                    "client lagged; reconnect for a fresh snapshot",
+                ))
+                .await;
+        }
     });
 
-    // Receive loop (keep-alive, handle close)
-    while let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(Message::Close(_)) => {
-                tracing::info!("WebSocket client closed connection");
-                break;
-            }
-            Err(e) => {
-                tracing::warn!("WebSocket error: {}", e);
-                break;
-            }
-            _ => {} // axum handles ping/pong automatically
+    // Keep-alive / close, raced against the send task: that task ends when it
+    // has closed the socket itself, and a client closed for lagging is exactly
+    // the one that may never answer the close handshake — waiting only on the
+    // client would keep this subscription alive cloning events for a corpse.
+    let mut send_task = send_task;
+    loop {
+        tokio::select! {
+            _ = &mut send_task => break,
+            message = receiver.next() => match message {
+                Some(Ok(Message::Close(_))) | None => {
+                    tracing::info!("WebSocket client closed connection");
+                    break;
+                }
+                Some(Err(e)) => {
+                    tracing::warn!("WebSocket error: {}", e);
+                    break;
+                }
+                // axum handles ping/pong automatically
+                Some(Ok(_)) => {}
+            },
         }
     }
 
@@ -429,7 +456,9 @@ async fn handle_websocket(socket: WebSocket, runtime: Arc<dyn RuntimeOperations>
 }
 
 struct WebSocketEventForwarder {
-    tx: tokio::sync::mpsc::Sender<Event>,
+    /// Taken when the client is found lagging, which closes the channel and
+    /// ends the send task's drain — the signal the task acts on.
+    tx: Option<tokio::sync::mpsc::Sender<Event>>,
     client_lagged: Arc<AtomicBool>,
 }
 
@@ -439,8 +468,23 @@ impl EventListener for WebSocketEventForwarder {
     /// client. A full queue latches the lag rather than dropping the event
     /// quietly — the socket then closes and the client re-snapshots.
     fn on_event(&mut self, event: &Event) -> Result<()> {
-        if self.tx.try_send(event.clone()).is_err() {
-            self.client_lagged.store(true, Ordering::Release);
+        // Reserve before cloning: a lagging client would otherwise pay a full
+        // Event clone per publish only to have it dropped. The borrow on `tx`
+        // ends with the permit, so the sender can be taken below.
+        let queue_is_full = match self.tx.as_ref() {
+            Some(tx) => match tx.try_reserve() {
+                Ok(permit) => {
+                    permit.send(event.clone());
+                    false
+                }
+                Err(_) => true,
+            },
+            None => return Ok(()),
+        };
+
+        if queue_is_full {
+            self.client_lagged.store(true, Ordering::Relaxed);
+            self.tx = None;
         }
         Ok(())
     }
@@ -568,7 +612,7 @@ async fn handle_tap_websocket(
     tracing::info!(channel = %channel, "tap client detached");
 }
 
-/// Longest tap close reason RFC 6455 permits: a control frame caps its payload
+/// Longest close reason RFC 6455 permits: a control frame caps its payload
 /// at 125 bytes and the 2-byte close code consumes the first two, leaving 123
 /// for the UTF-8 reason. tungstenite refuses to write an over-length close
 /// frame, so an untruncated tap error string (`NotSupported` runs ~180 bytes)
@@ -974,13 +1018,14 @@ mod router_surface_and_auth_gate_tests {
 mod websocket_subscription_live_frame_tests {
     //! The subscription-live contract on the control plane's WebSockets.
     //!
-    //! iceoryx2 does not replay samples published before its subscriber
-    //! existed, so a 101 alone tells a client nothing about whether the
-    //! subscription behind its socket can receive. These cover the two halves
-    //! of what the socket now says: the live frame is unambiguously not an
-    //! `Event`, and it arrives before any event does.
+    //! axum runs the upgrade callback after the 101, so the upgrade alone tells
+    //! a client nothing about whether anything is listening on its behalf yet.
+    //! These cover what the socket says instead: an opening frame that is
+    //! unambiguously not an `Event`, arriving before any event does, and
+    //! carrying the state a client would otherwise have to infer from deltas.
 
     use super::*;
+    use crate::control_plane_stub_support::observation_ops_answer_an_empty_graph;
     use std::time::Duration;
     use streamlib::sdk::pubsub::RuntimeEvent;
     use streamlib::sdk::runtime::{BoxFuture, TapSubscription};
@@ -990,21 +1035,19 @@ mod websocket_subscription_live_frame_tests {
     const EVENT_VARIANT_KEYS: &[&str] = &["RuntimeGlobal", "ProcessorEvent", "Custom"];
 
     /// Hands out one preset `TapSubscription`, so `/ws/tap/{channel}` can be
-    /// driven over a real socket with no engine and no iceoryx2 behind it.
+    /// driven over a real socket with no engine behind it.
+    ///
+    /// Separate from [`EventStreamStubRuntime`] for its `tap_async` alone; the
+    /// observation ops both answer come from one macro so a new
+    /// `RuntimeOperations` method is one edit rather than several diverging
+    /// ones.
     struct TapStubRuntime {
         subscription: Mutex<Option<TapSubscription>>,
     }
 
     impl RuntimeOperations for TapStubRuntime {
-        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
-            Box::pin(async { Ok(serde_json::json!({})) })
-        }
-        fn to_json(&self) -> Result<serde_json::Value> {
-            Ok(serde_json::json!({}))
-        }
-        fn request_runtime_shutdown(&self, _reason: &str) -> Result<()> {
-            unreachable!("the tap test never shuts the runtime down")
-        }
+        observation_ops_answer_an_empty_graph!("the tap test");
+
         fn tap_async(
             &self,
             channel: String,
@@ -1050,15 +1093,27 @@ mod websocket_subscription_live_frame_tests {
     /// names the frame that never came.
     const FRAME_ARRIVAL_BUDGET: Duration = Duration::from_secs(5);
 
-    /// `/ws/events` reads nothing off the runtime — it subscribes to `PUBSUB`
-    /// directly — but `build_router` needs one, so this answers the observation
-    /// ops and refuses everything else.
+    /// Answers `to_json_async` with an empty graph, and optionally publishes an
+    /// event while producing it.
+    ///
+    /// That publish is the point: it lands in the window between the handler
+    /// subscribing and its snapshot being ready, which is the window the
+    /// subscribe-then-snapshot order exists to cover. Swap the two statements in
+    /// `handle_websocket` and the event is lost, which is a red test rather than
+    /// a silent gap.
     #[derive(Default)]
-    struct EventStreamStubRuntime;
+    struct EventStreamStubRuntime {
+        publish_while_snapshotting: Option<Event>,
+    }
 
     impl RuntimeOperations for EventStreamStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
-            Box::pin(async { Ok(serde_json::json!({})) })
+            Box::pin(async {
+                if let Some(event) = &self.publish_while_snapshotting {
+                    PUBSUB.publish(&event.topic(), event);
+                }
+                Ok(serde_json::json!({}))
+            })
         }
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
@@ -1070,7 +1125,7 @@ mod websocket_subscription_live_frame_tests {
             &self,
             channel: String,
             _count: Option<usize>,
-        ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
+        ) -> BoxFuture<'_, Result<TapSubscription>> {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
 
@@ -1146,7 +1201,7 @@ mod websocket_subscription_live_frame_tests {
     async fn ws_events_sends_the_graph_snapshot_before_any_event() {
         use tokio_tungstenite::tungstenite::Message as ClientMessage;
 
-        let (port, server) = serve_on_ephemeral_port(Arc::new(EventStreamStubRuntime));
+        let (port, server) = serve_on_ephemeral_port(Arc::new(EventStreamStubRuntime::default()));
 
         let (mut socket, _) =
             tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws/events"))
@@ -1183,6 +1238,57 @@ mod websocket_subscription_live_frame_tests {
         };
         let received: Event = serde_json::from_str(&next)
             .expect("the frame after the live frame decodes as an Event");
+        assert_eq!(received, published);
+
+        let _ = socket.close(None).await;
+        server.abort();
+    }
+
+    /// An event caused while the snapshot is being produced is still delivered.
+    ///
+    /// This is the ordering guarantee the ticket is about, and the only test
+    /// that exercises the subscribe→snapshot window: the stub publishes from
+    /// inside `to_json_async`, so the event exists before the client has its
+    /// first frame. Subscribing after the snapshot instead would drop it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn an_event_published_while_snapshotting_still_reaches_the_client() {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+        let published = Event::RuntimeGlobal(RuntimeEvent::GraphDidChange);
+        let (port, server) = serve_on_ephemeral_port(Arc::new(EventStreamStubRuntime {
+            publish_while_snapshotting: Some(published.clone()),
+        }));
+
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws/events"))
+                .await
+                .expect("WebSocket upgrade on /ws/events");
+
+        let first = tokio::time::timeout(FRAME_ARRIVAL_BUDGET, socket.next())
+            .await
+            .expect("a first frame within the budget")
+            .expect("a first frame")
+            .expect("first frame is not an error");
+        let ClientMessage::Text(first) = first else {
+            panic!("the first frame must be text, got {first:?}");
+        };
+        let first: serde_json::Value = serde_json::from_str(&first).expect("first frame is JSON");
+        assert!(
+            first.get("EventStreamSnapshot").is_some(),
+            "first frame must be the graph snapshot, got {first}"
+        );
+
+        let next = tokio::time::timeout(FRAME_ARRIVAL_BUDGET, socket.next())
+            .await
+            .expect("the event published during the snapshot must follow it")
+            .expect("a second frame")
+            .expect("second frame is not an error");
+        let ClientMessage::Text(next) = next else {
+            panic!("an event frame must be text, got {next:?}");
+        };
+        let received: Event =
+            serde_json::from_str(&next).expect("the frame after the snapshot decodes as an Event");
         assert_eq!(received, published);
 
         let _ = socket.close(None).await;
