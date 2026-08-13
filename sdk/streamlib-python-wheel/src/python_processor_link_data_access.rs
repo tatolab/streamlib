@@ -259,7 +259,12 @@ impl PythonProcessorLinkDataAccess {
     /// reconnect.
     ///
     /// [`wire_output_link`]: PythonProcessorLinkDataAccess::wire_output_link
-    fn unwire_output_link(&self, python: Python<'_>, port_name: &str, link_id: &str) -> PyResult<()> {
+    fn unwire_output_link(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        link_id: &str,
+    ) -> PyResult<()> {
         let (_, output_writer) = self.helper_process_output_plane()?;
         python.detach(|| output_writer.remove_channel_link(port_name, link_id));
         Ok(())
