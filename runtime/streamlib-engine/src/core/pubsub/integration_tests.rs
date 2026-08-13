@@ -4,11 +4,10 @@
 //! Tests for the in-process event bus.
 //!
 //! Every test here is deterministic and free of sleeps, retries and timeouts,
-//! and that is the point rather than a nicety: `subscribe` registers a listener
-//! synchronously, so an event published after it returns must be delivered by
-//! the time `publish` returns. Any reintroduced asynchrony — a transport, a
-//! dispatch thread, a buffer — makes these flake immediately, which is the
-//! regression they exist to lock.
+//! and that is the point rather than a nicety. `subscribe` registers a listener
+//! synchronously, so an event published after it returns is addressed to that
+//! listener; `flush` then blocks until the FIFO ahead of it has drained. Neither
+//! step involves a duration, so a regression fails rather than flakes.
 //!
 //! The one bounded wait is the re-entrancy test, where a bound is the only way
 //! to turn a deadlock into a named failure instead of a hung suite.
@@ -87,6 +86,7 @@ fn an_event_published_after_subscribe_is_delivered_before_publish_returns() {
 
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(received.lock().len(), 1, "delivery is synchronous");
     assert_eq!(received.lock()[0].topic(), topics::KEYBOARD);
@@ -100,6 +100,7 @@ fn every_subscriber_on_a_topic_receives_one_copy() {
 
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(first_received.lock().len(), 1);
     assert_eq!(second_received.lock().len(), 1);
@@ -113,6 +114,7 @@ fn an_event_reaches_only_its_own_topic() {
 
     let event = Event::mouse(MouseButton::Left, (10.0, 20.0), MouseState::Pressed);
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(mouse_received.lock().len(), 1);
     assert!(
@@ -136,6 +138,7 @@ fn a_wildcard_subscriber_receives_every_topic_exactly_once() {
     ];
     for event in &events {
         bus.publish(&event.topic(), event);
+        bus.flush();
     }
 
     assert_eq!(received.lock().len(), events.len());
@@ -157,6 +160,7 @@ fn a_delivered_event_is_identical_to_the_one_published() {
         KeyState::Released,
     );
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(received.lock()[0], event);
 }
@@ -168,6 +172,7 @@ fn a_custom_event_carries_its_payload_intact() {
 
     let event = Event::custom("my-custom-topic", serde_json::json!({"key": "value"}));
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(received.lock()[0], event);
 }
@@ -185,6 +190,7 @@ fn a_fresh_bus_delivers_with_no_initialization_step() {
 
     let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(received.lock().len(), 1);
 }
@@ -194,6 +200,7 @@ fn publishing_with_no_subscribers_is_a_no_op() {
     let bus = PubSub::new();
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+    bus.flush();
 }
 
 #[test]
@@ -203,10 +210,12 @@ fn dropping_the_listener_unsubscribes_it() {
 
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+    bus.flush();
     assert_eq!(received.lock().len(), 1);
 
     drop(listener);
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(
         received.lock().len(),
@@ -231,6 +240,7 @@ fn a_dropped_listeners_registration_is_pruned_by_the_next_publish() {
     drop(listener);
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(
         bus.registration_count(),
@@ -256,6 +266,7 @@ fn a_dropped_listener_is_pruned_even_on_a_topic_nothing_publishes_to() {
     drop(quiet_listener);
     let event = keyboard_event();
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(
         bus.registration_count(),
@@ -274,8 +285,154 @@ fn two_buses_are_isolated() {
     let event = keyboard_event();
     first_bus.publish(&event.topic(), &event);
 
+    // Both are flushed, so the second bus's silence is isolation rather than an
+    // event still sitting in its queue.
+    first_bus.flush();
+    second_bus.flush();
+
     assert_eq!(first_received.lock().len(), 1);
     assert!(second_received.lock().is_empty());
+}
+
+// ===========================================================================
+// C. Ordering
+// ===========================================================================
+
+/// Every listener observes one order, and it is publish order.
+///
+/// The property a topic owes its subscribers: two observers of the same stream
+/// must never disagree about what happened first. Dispatching inline on whoever
+/// published cannot promise this — two publisher threads would each walk the
+/// listener list independently, so one listener could see A then B while another
+/// saw B then A.
+#[test]
+fn every_listener_sees_events_in_publish_order() {
+    const EVENTS: usize = 200;
+
+    let bus = PubSub::new();
+    let (_first, first_received) = subscribe_recorder(&bus, topics::ALL);
+    let (_second, second_received) = subscribe_recorder(&bus, topics::ALL);
+
+    let published: Vec<Event> = (0..EVENTS)
+        .map(|sequence| Event::custom("ordering", serde_json::json!({ "sequence": sequence })))
+        .collect();
+    for event in &published {
+        bus.publish(&event.topic(), event);
+    }
+    bus.flush();
+
+    assert_eq!(*first_received.lock(), published, "publish order, exactly");
+    assert_eq!(*second_received.lock(), published);
+}
+
+/// A listener never runs on the thread that published.
+///
+/// This is what the FIFO buys beyond ordering, and it is the half a test can
+/// pin exactly. The engine publishes from inside its own graph write lock, so
+/// inline dispatch would put listener code underneath a lock it knows nothing
+/// about; delivery on a thread of the bus's own makes that structurally
+/// impossible rather than a rule listeners have to remember.
+#[test]
+fn a_listener_never_runs_on_the_publishing_thread() {
+    struct ThreadRecordingListener {
+        delivered_on: Arc<Mutex<Vec<std::thread::ThreadId>>>,
+    }
+    impl EventListener for ThreadRecordingListener {
+        fn on_event(&mut self, _event: &Event) -> crate::core::error::Result<()> {
+            self.delivered_on.lock().push(std::thread::current().id());
+            Ok(())
+        }
+    }
+
+    let bus = PubSub::new();
+    let delivered_on = Arc::new(Mutex::new(Vec::new()));
+    let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(ThreadRecordingListener {
+        delivered_on: Arc::clone(&delivered_on),
+    }));
+    bus.subscribe(topics::ALL, Arc::clone(&listener));
+
+    let event = keyboard_event();
+    bus.publish(&event.topic(), &event);
+    bus.flush();
+
+    let publishing_thread = std::thread::current().id();
+    let delivered_on = delivered_on.lock();
+    assert_eq!(delivered_on.len(), 1);
+    assert_ne!(
+        delivered_on[0], publishing_thread,
+        "delivery must not run on the publisher's thread"
+    );
+}
+
+/// Concurrent publishers still produce ONE order that both listeners agree on.
+///
+/// The interleaving is whatever the threads race to, and that is fine — what is
+/// not fine is two listeners disagreeing about it, which is what a per-publisher
+/// dispatch would allow.
+#[test]
+fn concurrent_publishers_produce_one_order_all_listeners_agree_on() {
+    const PUBLISHER_THREADS: usize = 4;
+    const PUBLISHES_PER_THREAD: usize = 50;
+
+    let bus = Arc::new(PubSub::new());
+    let (_first, first_received) = subscribe_recorder(&bus, topics::ALL);
+    let (_second, second_received) = subscribe_recorder(&bus, topics::ALL);
+
+    let publishers: Vec<_> = (0..PUBLISHER_THREADS)
+        .map(|publisher| {
+            let bus = Arc::clone(&bus);
+            std::thread::spawn(move || {
+                for sequence in 0..PUBLISHES_PER_THREAD {
+                    let event = Event::custom(
+                        "ordering",
+                        serde_json::json!({ "publisher": publisher, "sequence": sequence }),
+                    );
+                    bus.publish(&event.topic(), &event);
+                }
+            })
+        })
+        .collect();
+    for publisher in publishers {
+        publisher.join().expect("publisher thread panicked");
+    }
+    bus.flush();
+
+    let first = first_received.lock().clone();
+    let second = second_received.lock().clone();
+    assert_eq!(
+        first.len(),
+        PUBLISHER_THREADS * PUBLISHES_PER_THREAD,
+        "every publish is delivered"
+    );
+    assert_eq!(
+        first, second,
+        "two listeners must never disagree about the order events arrived in"
+    );
+}
+
+/// Each publisher's own events keep their relative order inside that agreed one.
+#[test]
+fn a_publishers_own_events_stay_in_order_relative_to_each_other() {
+    const PUBLISHES: usize = 100;
+
+    let bus = PubSub::new();
+    let (_listener, received) = subscribe_recorder(&bus, topics::ALL);
+
+    for sequence in 0..PUBLISHES {
+        let event = Event::custom("ordering", serde_json::json!({ "sequence": sequence }));
+        bus.publish(&event.topic(), &event);
+    }
+    bus.flush();
+
+    let sequences: Vec<u64> = received
+        .lock()
+        .iter()
+        .filter_map(|event| match event {
+            Event::Custom { data, .. } => data.get("sequence")?.as_u64(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sequences, (0..PUBLISHES as u64).collect::<Vec<_>>());
 }
 
 // ===========================================================================
@@ -314,6 +471,7 @@ fn concurrent_publishes_are_all_delivered() {
                 for _ in 0..PUBLISHES_PER_THREAD {
                     let event = keyboard_event();
                     bus.publish(&event.topic(), &event);
+                    bus.flush();
                 }
             })
         })
@@ -363,6 +521,7 @@ fn a_listener_that_subscribes_from_on_event_does_not_deadlock() {
     std::thread::spawn(move || {
         let event = keyboard_event();
         bus.publish(&event.topic(), &event);
+        bus.flush();
         let _ = done_tx.send(());
     });
 
@@ -402,6 +561,7 @@ fn a_processor_event_reaches_a_subscriber_on_that_processors_topic() {
 
     let event = Event::processor(processor_id, ProcessorEvent::Started);
     bus.publish(&event.topic(), &event);
+    bus.flush();
 
     assert_eq!(received.lock()[0], event);
 }

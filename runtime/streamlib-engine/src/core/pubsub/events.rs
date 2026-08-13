@@ -31,15 +31,11 @@ pub mod topics {
 
 /// Trait for objects that can receive events.
 ///
-/// `on_event` runs inline on the thread that published, so it must be a short
-/// handoff — set a flag, send on a channel, spawn a task — and must take no
-/// engine lock and make no runtime call.
-///
-/// The hazard is not only re-publishing. The engine publishes from inside its
-/// own graph write lock (`Compiler::scope` holds it across the closure that
-/// emits add/remove events), so a listener that merely reads the graph —
-/// `runtime.to_json()`, say — would take a read on an `RwLock` its own thread
-/// already holds for writing, and hard-deadlock.
+/// `on_event` runs on the bus's single dispatch thread, never on the thread that
+/// published, so it holds no engine lock and cannot stall the engine. It must
+/// still be a short handoff — set a flag, send on a channel, spawn a task —
+/// because that one thread delivers every listener's events in order, so a slow
+/// callback delays everyone's.
 pub trait EventListener: Send {
     fn on_event(&mut self, event: &Event) -> Result<()>;
 }
