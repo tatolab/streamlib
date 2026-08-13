@@ -1139,6 +1139,94 @@ mod tests {
         ));
     }
 
+    /// A link with one endpoint in each world reclaims each end its own way —
+    /// the branch is per endpoint, not per link. This is the shape the MVP
+    /// graph is actually made of: a Python helper wired to a native built-in.
+    ///
+    /// Revert lock: key either branch off the *other* endpoint (or off
+    /// `source_is_subprocess || dest_is_subprocess`) and one side is reclaimed
+    /// through machinery it does not own — the engine-side publisher survives,
+    /// or the helper is never told.
+    #[test]
+    fn a_link_between_an_engine_endpoint_and_a_helper_reclaims_each_its_own_way() {
+        use crate::core::test_support::MockOutputOnlyProcessor;
+
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let (source, source_output, _) =
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let source_output = source_output.expect("an output-only mock holds an output writer");
+
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest_reclaims: Arc<Mutex<Vec<ReclaimedLink>>> = Arc::default();
+        attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
+                reclaimed_links: dest_reclaims.clone(),
+                ..Default::default()
+            })),
+        );
+
+        let link_id = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(&source_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            )
+            .first()
+            .expect("the link must exist")
+            .id
+            .clone();
+
+        let (channel, notify_service) = open_test_link_services("mixed-endpoints", true);
+        wire_rust_source(
+            &source,
+            "out1",
+            &link_id,
+            &channel,
+            notify_service.as_ref(),
+            ChannelEgressConfig {
+                service_name: unique_service_name("mixed-endpoints"),
+                trust_tier: ChannelTrustTier::UntrustedSession,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        )
+        .expect("the engine-side source wires");
+        wire_subprocess_dest(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "in1",
+            "pabc/out1",
+            "pdef/notify",
+            crate::iceoryx2::ReadMode::SkipToLatest,
+            8,
+            2,
+            1,
+            true,
+            &link_id,
+        )
+        .expect("recording dest wiring must succeed");
+        assert!(source_output.has_channel_publisher("out1"));
+
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
+
+        assert!(
+            !source_output.has_channel_publisher("out1"),
+            "the engine-side source must be reclaimed through its own writer, as it always was",
+        );
+        assert_eq!(
+            *dest_reclaims.lock(),
+            [ReclaimedLink {
+                port_direction: crate::core::PortDirection::Input,
+                local_port_name: "in1".to_string(),
+                link_id: link_id.to_string(),
+            }],
+            "the helper destination must be asked to drop the subscriber it opened itself",
+        );
+    }
+
     /// Attach a live instance of `P` to `proc_id`, holding the iceoryx2
     /// resources its declared ports call for — the state the factory leaves a
     /// host-run processor in before the wiring op reaches it.

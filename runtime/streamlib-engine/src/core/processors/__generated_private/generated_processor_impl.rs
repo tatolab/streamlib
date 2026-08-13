@@ -149,7 +149,11 @@ pub trait DynGeneratedProcessor: Send + 'static {
     ///
     /// Both the record and the erase run through this one accessor, from the
     /// compiler op alone — a host supplies the envelope and never writes to it,
-    /// so it cannot forget half of the bookkeeping.
+    /// so it cannot forget half of the bookkeeping. Answering `Some` here is
+    /// also what commits a host to [`unwire_out_of_process_link`], which is
+    /// why that one refuses rather than defaulting quietly.
+    ///
+    /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
     fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
         None
     }
@@ -166,8 +170,12 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// port for [`PortDirection::Output`], the destination input port for
     /// [`PortDirection::Input`].
     ///
-    /// Defaults to a no-op for every processor the engine wires itself, which
-    /// reclaims through its own writer and mailboxes instead.
+    /// The default refuses rather than succeeding quietly. Only a processor
+    /// already classified out-of-process — one that answered
+    /// [`out_of_process_link_wiring`] with `Some` — ever reaches this, so
+    /// arriving at the default means a host takes the wiring and leaves the
+    /// reclaim, which is the exact leak this exists to close. A silent `Ok`
+    /// would have the engine log a reclaim that never happened.
     ///
     /// [`out_of_process_link_wiring`]: DynGeneratedProcessor::out_of_process_link_wiring
     /// [`PortDirection::Output`]: crate::core::PortDirection::Output
@@ -178,7 +186,12 @@ pub trait DynGeneratedProcessor: Send + 'static {
         _local_port_name: &str,
         _link_id: &str,
     ) -> Result<()> {
-        Ok(())
+        Err(crate::core::error::Error::Configuration(format!(
+            "processor '{}' records out-of-process link wiring but implements no \
+             reclaim for it, so every disconnected link leaks the port its far side \
+             opened; implement `unwire_out_of_process_link`",
+            self.name()
+        )))
     }
 
     /// Apply a JSON config update at runtime.

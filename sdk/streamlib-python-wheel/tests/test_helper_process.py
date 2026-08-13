@@ -275,16 +275,44 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     }, "the reconnected link must carry data through freshly opened ports"
 
 
-def test_unwiring_a_link_in_an_unknown_direction_is_survived():
+def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     """A direction this side does not know is a parent that has drifted from
-    this protocol. It must not take the processor down — the port it names is
-    the only thing at stake."""
+    this protocol. It must take nothing down and release nothing — guessing a
+    direction would drop a port that is still carrying frames.
+
+    Fail-without-fix: route the unknown direction to `unwire_input_link`
+    instead of warning (the plausible mis-implementation, since the child's
+    plane is fully built either way) and the still-wired link stops
+    delivering — the read below returns `None`.
+    """
     from streamlib import ProcessorLinkDataAccess
 
-    _helper.unwire_link_data_access(
-        ProcessorLinkDataAccess(),
-        {"direction": "sideways", "port": "frames_to_downstream", "link_id": "L-x"},
+    link_id = "L-unknown-direction"
+    destination = ProcessorLinkDataAccess()
+    _helper.wire_link_data_access(
+        destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
+    source = ProcessorLinkDataAccess()
+    _helper.wire_link_data_access(
+        source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
+    )
+
+    _helper.unwire_link_data_access(
+        source,
+        {
+            "direction": "sideways",
+            "port": "frames_to_downstream",
+            "link_id": link_id,
+        },
+    )
+    _helper.unwire_link_data_access(
+        destination, {"direction": "sideways", "link_id": link_id}
+    )
+
+    source.write_to_output_port("frames_to_downstream", {"frame_index": 14})
+    assert destination.read_from_input_port("frames_from_upstream") == {
+        "frame_index": 14
+    }, "an unrecognised direction must leave both ends of the link wired"
 
 
 # =============================================================================
@@ -473,6 +501,60 @@ def test_unwire_link_is_dispatched_mid_run_and_answers_nothing(stand_in_parent):
         "an unanswered unwire must leave the next command's reply the next thing "
         "the parent reads"
     )
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_parent):
+    """Unwiring a reactive processor's LAST inbound link closes the very fd its
+    loop is selecting on — the listener owns it, and dropping the last
+    subscriber drops the listener.
+
+    Fail-without-fix: cache `input_listener_fd()` outside the loop (as
+    `_run_reactive` did before this change) and the next `select` raises
+    `OSError: [Errno 9] Bad file descriptor`, killing the child mid-run — or,
+    once the OS recycles the number, silently waits on an unrelated object.
+    Nothing between `_run_reactive` and `main()` catches it.
+
+    A processor left with no inputs has nothing to wake it but the parent,
+    which is exactly what it must fall back to.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+
+    link_id = "L-reactive-unwire"
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {},
+            "ports": {"inputs": [engine_shaped_link_wiring("input", link_id)]},
+        }
+    )
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
+
+    stand_in_parent.send(
+        {"cmd": "unwire_link", "direction": "input", "link_id": link_id}
+    )
+    # The wait is load-bearing, not just the unanswered-command assertion: it
+    # is what lets the loop go round again on the fd the unwire just closed,
+    # several times over at a 0.1s poll interval. Send `teardown` immediately
+    # instead and both commands drain in one batch, the loop leaves before it
+    # ever selects again, and the bug hides.
+    assert stand_in_parent.receive(timeout_seconds=0.5) is None
+
+    # A loop that died of EBADF answers nothing from here on.
+    stand_in_parent.send({"cmd": "on_pause", "capability": "limited"})
+    assert stand_in_parent.receive() == {"rpc": "ok"}, (
+        "the loop must survive losing the fd it was waiting on"
+    )
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
 

@@ -613,19 +613,26 @@ class HelperProcessLifecycle:
 
     def _run_reactive(self) -> None:
         assert self._hosted is not None
-        listener_fd = self._link_data_access.input_listener_fd()
         while self._running and not self._torn_down:
             if self._link_data_access.any_input_port_has_data():
                 self._hosted.call_hook("process", self._hosted.limited_access_context)
-            elif listener_fd is not None and listener_fd >= 0:
+                self._drain_commands_arriving_mid_run()
+                continue
+            # Re-read before every wait, never cached across one: the listener
+            # owns this fd, and an `unwire_link` taking this processor's last
+            # inbound link drops the listener and closes it. Selecting on the
+            # stale number raises EBADF — or, once the OS recycles it, waits on
+            # something else entirely.
+            listener_fd = self._link_data_access.input_listener_fd()
+            if listener_fd is not None and listener_fd >= 0:
                 readable, _, _ = select.select(
                     [listener_fd], [], [], LIFECYCLE_POLL_INTERVAL_SECONDS
                 )
                 if readable:
                     self._link_data_access.drain_input_listener()
             else:
-                # No inputs at all: nothing will ever wake this loop, so the
-                # only thing left to wait on is the parent.
+                # No inputs left: nothing will ever wake this loop, so the only
+                # thing left to wait on is the parent.
                 self._park_until_a_command_arrives()
             self._drain_commands_arriving_mid_run()
 
