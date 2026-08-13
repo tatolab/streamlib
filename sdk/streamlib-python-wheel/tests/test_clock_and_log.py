@@ -59,13 +59,20 @@ def test_python_exports_exactly_one_name_for_the_monotonic_clock():
 
     A second name for the same number reads as a second epoch, which is the
     confusion the one-clock rule exists to kill. Checked on the native module
-    as well as the package, because a re-export is not the only way one can
-    reappear.
+    and on both re-export surfaces above it, because a re-export is not the
+    only way a second name can reappear.
+
+    Matched by suffix rather than named outright: `ship-change-removed-gate.sh`
+    content-greps `sdk/` for each `REMOVED:` pattern a change file declares, so
+    spelling the deleted export here would hold `one-monotonic-clock` red for
+    good.
     """
-    for surface in (_engine, streamlib):
-        assert {name for name in dir(surface) if name.endswith("_now_ns")} == {
-            "monotonic_now_ns"
-        }, f"{surface.__name__} exports more than one monotonic-clock name"
+    for exporting_module in (_engine, streamlib, clock):
+        assert {
+            name for name in dir(exporting_module) if name.endswith("_now_ns")
+        } == {"monotonic_now_ns"}, (
+            f"{exporting_module.__name__} exports more than one monotonic-clock name"
+        )
 
 
 def test_a_timer_ticks_at_roughly_its_interval():
