@@ -182,12 +182,24 @@ pub enum PortDirection {
     Output,
 }
 
+impl PortDirection {
+    /// The direction's spelling on the helper-process wire, which every SDK
+    /// matches on to pick which of its own ports a command names. Changing
+    /// either string is a protocol break, so it is spelled here rather than
+    /// taken from [`Display`], whose job is prose.
+    ///
+    /// [`Display`]: std::fmt::Display
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+        }
+    }
+}
+
 impl std::fmt::Display for PortDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Input => f.write_str("input"),
-            Self::Output => f.write_str("output"),
-        }
+        f.write_str(self.as_wire_str())
     }
 }
 
@@ -244,5 +256,19 @@ mod tests {
             !msg.contains("streamlib add"),
             "no install fix-it survives the module-system removal: {msg}"
         );
+    }
+
+    /// These two words cross the helper-process boundary: the engine writes
+    /// one into the `unwire_link` command and the child branches on it to pick
+    /// which of its own ports to release. A drift here is silent on both sides
+    /// — the child logs an unknown direction and the port stays leaked — so
+    /// the spelling is pinned literally rather than derived from the variant.
+    #[test]
+    fn port_direction_wire_spelling_is_pinned() {
+        assert_eq!(PortDirection::Input.as_wire_str(), "input");
+        assert_eq!(PortDirection::Output.as_wire_str(), "output");
+        // Display is the same words, so a log and a frame never disagree.
+        assert_eq!(PortDirection::Input.to_string(), "input");
+        assert_eq!(PortDirection::Output.to_string(), "output");
     }
 }

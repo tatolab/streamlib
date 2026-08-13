@@ -36,6 +36,26 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
+    /// Forget one link, in both directions, on disconnect.
+    ///
+    /// A reconnect re-records the link from scratch, so an entry left here
+    /// would be sent again the next time the far side is set up — a second
+    /// subscriber or notifier for one link, which is what exhausts the notify
+    /// service's create-time `max_notifiers` cap.
+    ///
+    /// Crate-internal for the same reason [`record`] is only ever called by the
+    /// compiler op: the engine owns both sides of this bookkeeping, so no host
+    /// can forget to do it.
+    ///
+    /// [`record`]: OutOfProcessLinkWiringEnvelope::record
+    pub(crate) fn remove_link(&mut self, link_id: &str) {
+        let carries_link = |link_wiring: &JsonValue| {
+            link_wiring.get("link_id").and_then(JsonValue::as_str) == Some(link_id)
+        };
+        self.input_links.retain(|link| !carries_link(link));
+        self.output_links.retain(|link| !carries_link(link));
+    }
+
     /// The `ports` payload of the setup command, as the far side reads it.
     pub fn as_setup_command_ports(&self) -> JsonValue {
         serde_json::json!({
@@ -126,8 +146,51 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// learns what to wire itself — a graph that compiles, comes up, reports
     /// healthy, and moves no frames. One method, so it cannot be half
     /// implemented.
+    ///
+    /// Both the record and the erase run through this one accessor, from the
+    /// compiler op alone — a host supplies the envelope and never writes to it,
+    /// so it cannot forget half of the bookkeeping. Answering `Some` here is
+    /// also what commits a host to [`unwire_out_of_process_link`], which is
+    /// why that one refuses rather than defaulting quietly.
+    ///
+    /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
     fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
         None
+    }
+
+    /// Ask the far side to drop the iceoryx2 port it opened for one link the
+    /// engine is disconnecting.
+    ///
+    /// The engine cannot drop that port itself — it belongs to the process that
+    /// opened it from the envelope — so this is the one part of the reclaim its
+    /// owner has to do. The envelope entry is pruned by the compiler op
+    /// through [`out_of_process_link_wiring`], not here.
+    ///
+    /// `local_port_name` is the port on *this* processor: the source output
+    /// port for [`PortDirection::Output`], the destination input port for
+    /// [`PortDirection::Input`].
+    ///
+    /// The default refuses rather than succeeding quietly. Only a processor
+    /// the compiler op already classified out-of-process ever reaches this, so
+    /// arriving at the default means a host takes the wiring and leaves the
+    /// reclaim, which is the exact leak this exists to close. A silent `Ok`
+    /// would have the engine log a reclaim that never happened.
+    ///
+    /// [`out_of_process_link_wiring`]: DynGeneratedProcessor::out_of_process_link_wiring
+    /// [`PortDirection::Output`]: crate::core::PortDirection::Output
+    /// [`PortDirection::Input`]: crate::core::PortDirection::Input
+    fn unwire_out_of_process_link(
+        &mut self,
+        _port_direction: crate::core::PortDirection,
+        _local_port_name: &str,
+        _link_id: &str,
+    ) -> Result<()> {
+        Err(crate::core::error::Error::Configuration(format!(
+            "processor '{}' records out-of-process link wiring but implements no \
+             reclaim for it, so every disconnected link leaks the port its far side \
+             opened; implement `unwire_out_of_process_link`",
+            self.name()
+        )))
     }
 
     /// Apply a JSON config update at runtime.
@@ -229,5 +292,60 @@ where
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::PortDirection;
+
+    fn link_wiring_entry(link_id: &str, port_name: &str) -> JsonValue {
+        serde_json::json!({ "name": port_name, "link_id": link_id })
+    }
+
+    /// A disconnected link leaves the envelope in both directions, and only
+    /// that link does. Leave it behind and the next setup re-sends it beside
+    /// the reconnect's own entry — two subscribers, two notifiers, one link.
+    #[test]
+    fn a_removed_link_leaves_the_envelope_and_its_neighbours_stay() {
+        let mut envelope = OutOfProcessLinkWiringEnvelope::default();
+        envelope.record(PortDirection::Input, link_wiring_entry("L-gone", "in1"));
+        envelope.record(PortDirection::Input, link_wiring_entry("L-stays", "in1"));
+        envelope.record(PortDirection::Output, link_wiring_entry("L-gone", "out1"));
+        envelope.record(PortDirection::Output, link_wiring_entry("L-stays", "out1"));
+
+        envelope.remove_link("L-gone");
+
+        let ports = envelope.as_setup_command_ports();
+        let surviving_link_ids = |direction: &str| -> Vec<String> {
+            ports[direction]
+                .as_array()
+                .expect("the envelope renders both directions as arrays")
+                .iter()
+                .map(|link| link["link_id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(surviving_link_ids("inputs"), ["L-stays"]);
+        assert_eq!(surviving_link_ids("outputs"), ["L-stays"]);
+    }
+
+    /// Removing a link the envelope never carried changes nothing — the
+    /// compiler reclaims every link it closes, including ones whose far side
+    /// was never wired.
+    #[test]
+    fn removing_an_unknown_link_leaves_the_envelope_alone() {
+        let mut envelope = OutOfProcessLinkWiringEnvelope::default();
+        envelope.record(PortDirection::Output, link_wiring_entry("L-only", "out1"));
+
+        envelope.remove_link("L-never-recorded");
+
+        assert_eq!(
+            envelope.as_setup_command_ports()["outputs"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

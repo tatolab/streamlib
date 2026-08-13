@@ -250,6 +250,39 @@ impl PythonProcessorLinkDataAccess {
             })
     }
 
+    /// Release this processor's egress for one disconnected link out of
+    /// `port_name`, dropping the channel publisher with the port's last link.
+    ///
+    /// The mirror of [`wire_output_link`]. The engine cannot do this from the
+    /// parent — the publisher and notifier are this process's — so it asks, and
+    /// a link left behind here is one this child re-opens a second port for on
+    /// reconnect.
+    ///
+    /// [`wire_output_link`]: PythonProcessorLinkDataAccess::wire_output_link
+    fn unwire_output_link(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        link_id: &str,
+    ) -> PyResult<()> {
+        let (_, output_writer) = self.helper_process_output_plane()?;
+        python.detach(|| output_writer.remove_channel_link(port_name, link_id));
+        Ok(())
+    }
+
+    /// Release this processor's subscriber for one disconnected link, dropping
+    /// its input port's mailbox and the shared listener with the last one.
+    ///
+    /// The mirror of [`wire_input_link`]. Keyed on the link alone: a subscriber
+    /// already knows which local input port it was bound to.
+    ///
+    /// [`wire_input_link`]: PythonProcessorLinkDataAccess::wire_input_link
+    fn unwire_input_link(&self, python: Python<'_>, link_id: &str) -> PyResult<()> {
+        let (_, input_mailboxes) = self.helper_process_input_plane()?;
+        python.detach(|| input_mailboxes.remove_channel_link(link_id));
+        Ok(())
+    }
+
     /// The fd that becomes readable when any upstream publishes.
     ///
     /// Owned by the listener: the caller must not close it, and must stop

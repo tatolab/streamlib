@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::error::{Error, Result};
+use crate::core::error::{Error, PortDirection, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
@@ -101,6 +101,22 @@ impl ProcessorInstance {
         &mut self,
     ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
         self.0.out_of_process_link_wiring()
+    }
+
+    /// Ask a processor whose ports live outside the engine to reclaim one
+    /// disconnected link.
+    ///
+    /// Only for a processor the compiler op already classified out of process.
+    /// One the engine wires itself keeps the trait default, which refuses
+    /// rather than answering `Ok` to a reclaim nobody performed.
+    pub fn unwire_out_of_process_link(
+        &mut self,
+        port_direction: PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> Result<()> {
+        self.0
+            .unwire_out_of_process_link(port_direction, local_port_name, link_id)
     }
 
     /// Borrow the host-side `OutputWriterInner` Arc this processor

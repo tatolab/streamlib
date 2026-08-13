@@ -598,6 +598,38 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         Some(&mut self.link_wiring)
     }
 
+    /// Tell the child to drop the port it opened for a disconnected link.
+    ///
+    /// Unanswered, like `run`. The compiler calls this holding the graph's
+    /// write lock, so waiting out `REPLY_DEADLINE` on a child that is busy in
+    /// a callback would park every other graph operation behind it — and a
+    /// reply nobody reads is read as the answer to the next command, which is
+    /// the desync `exchange_with_child_expecting` warns about.
+    ///
+    /// A child that is not there needs no telling, and that is the ordinary
+    /// case rather than a failure — its ports went with the process, or were
+    /// never opened. Three windows: before `setup` builds the bridge, after
+    /// `teardown` takes it, and any point a child died on its own, which
+    /// leaves the bridge in place and is noticed only by its reader thread
+    /// seeing EOF. Reporting any of them as a refused reclaim would put a
+    /// leak warning in front of an operator on a clean shutdown.
+    fn unwire_out_of_process_link(
+        &mut self,
+        port_direction: streamlib::sdk::error::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> Result<()> {
+        if self.has_failed_unrecoverably() || self.bridge.is_none() {
+            return Ok(());
+        }
+        self.send_to_child(&serde_json::json!({
+            "cmd": "unwire_link",
+            "direction": port_direction.as_wire_str(),
+            "port": local_port_name,
+            "link_id": link_id,
+        }))
+    }
+
     fn set_iceoryx2_resources(
         &mut self,
         _output_writer: Option<streamlib::sdk::iceoryx2::OutputWriter>,
