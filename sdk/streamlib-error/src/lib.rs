@@ -182,12 +182,24 @@ pub enum PortDirection {
     Output,
 }
 
+impl PortDirection {
+    /// The direction's spelling on the helper-process wire, which every SDK
+    /// matches on to pick which of its own ports a command names. Changing
+    /// either string is a protocol break, so it is spelled here rather than
+    /// taken from [`Display`], whose job is prose.
+    ///
+    /// [`Display`]: std::fmt::Display
+    pub fn as_wire_str(&self) -> &'static str {
+        match self {
+            Self::Input => "input",
+            Self::Output => "output",
+        }
+    }
+}
+
 impl std::fmt::Display for PortDirection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Input => f.write_str("input"),
-            Self::Output => f.write_str("output"),
-        }
+        f.write_str(self.as_wire_str())
     }
 }
 

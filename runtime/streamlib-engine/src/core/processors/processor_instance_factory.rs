@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::error::{Error, Result};
+use crate::core::error::{Error, PortDirection, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
@@ -107,10 +107,10 @@ impl ProcessorInstance {
     /// disconnected link. A no-op for every processor the engine wires itself.
     pub fn unwire_out_of_process_link(
         &mut self,
-        port_direction: crate::core::PortDirection,
+        port_direction: PortDirection,
         local_port_name: &str,
         link_id: &str,
-    ) -> crate::core::Result<()> {
+    ) -> Result<()> {
         self.0
             .unwire_out_of_process_link(port_direction, local_port_name, link_id)
     }

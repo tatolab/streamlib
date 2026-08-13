@@ -598,8 +598,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         Some(&mut self.link_wiring)
     }
 
-    /// Forget a disconnected link and tell the child to drop the port it
-    /// opened for it.
+    /// Tell the child to drop the port it opened for a disconnected link.
     ///
     /// Unanswered, like `run`. The compiler calls this holding the graph's
     /// write lock, so waiting out `REPLY_DEADLINE` on a child that is busy in
@@ -614,13 +613,12 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         local_port_name: &str,
         link_id: &str,
     ) -> Result<()> {
-        self.link_wiring.remove_link(link_id);
         if self.child_is_gone {
             return Ok(());
         }
         self.send_to_child(&serde_json::json!({
             "cmd": "unwire_link",
-            "direction": port_direction.to_string(),
+            "direction": port_direction.as_wire_str(),
             "port": local_port_name,
             "link_id": link_id,
         }))

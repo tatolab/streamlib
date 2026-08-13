@@ -42,7 +42,13 @@ impl OutOfProcessLinkWiringEnvelope {
     /// would be sent again the next time the far side is set up — a second
     /// subscriber or notifier for one link, which is what exhausts the notify
     /// service's create-time `max_notifiers` cap.
-    pub fn remove_link(&mut self, link_id: &str) {
+    ///
+    /// Crate-internal for the same reason [`record`] is only ever called by the
+    /// compiler op: the engine owns both sides of this bookkeeping, so no host
+    /// can forget to do it.
+    ///
+    /// [`record`]: OutOfProcessLinkWiringEnvelope::record
+    pub(crate) fn remove_link(&mut self, link_id: &str) {
         let carries_link = |link_wiring: &JsonValue| {
             link_wiring.get("link_id").and_then(JsonValue::as_str) == Some(link_id)
         };
@@ -141,28 +147,29 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// healthy, and moves no frames. One method, so it cannot be half
     /// implemented.
     ///
-    /// Its counterpart on disconnect is [`unwire_out_of_process_link`]: a host
-    /// that records wiring here and never reclaims it there accumulates a port
-    /// per reconnect.
-    ///
-    /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
+    /// Both the record and the erase run through this one accessor, from the
+    /// compiler op alone — a host supplies the envelope and never writes to it,
+    /// so it cannot forget half of the bookkeeping.
     fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
         None
     }
 
-    /// Reclaim one disconnected link on a processor whose iceoryx2 ports live
-    /// outside the engine's address space.
+    /// Ask the far side to drop the iceoryx2 port it opened for one link the
+    /// engine is disconnecting.
     ///
-    /// The engine cannot drop those ports itself — they belong to the far side,
-    /// which opened them from the envelope — so this asks their owner to, and
-    /// to forget the envelope entry that would otherwise be re-sent on the next
-    /// setup. `local_port_name` is the port on *this* processor: the source
-    /// output port for [`PortDirection::Output`], the destination input port
-    /// for [`PortDirection::Input`].
+    /// The engine cannot drop that port itself — it belongs to the process that
+    /// opened it from the envelope — so this is the one part of the reclaim its
+    /// owner has to do. The envelope entry is pruned by the compiler op
+    /// through [`out_of_process_link_wiring`], not here.
+    ///
+    /// `local_port_name` is the port on *this* processor: the source output
+    /// port for [`PortDirection::Output`], the destination input port for
+    /// [`PortDirection::Input`].
     ///
     /// Defaults to a no-op for every processor the engine wires itself, which
     /// reclaims through its own writer and mailboxes instead.
     ///
+    /// [`out_of_process_link_wiring`]: DynGeneratedProcessor::out_of_process_link_wiring
     /// [`PortDirection::Output`]: crate::core::PortDirection::Output
     /// [`PortDirection::Input`]: crate::core::PortDirection::Input
     fn unwire_out_of_process_link(

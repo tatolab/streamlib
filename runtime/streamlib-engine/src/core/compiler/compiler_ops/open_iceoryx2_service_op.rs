@@ -246,61 +246,46 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     // Source side: drop this link's destination notifier (and the channel
     // publisher when this was the source port's last outbound link).
-    match get_single_processor(graph, &source_proc_id) {
-        Ok(source_processor) => {
-            let mut source_guard = source_processor.lock();
-            if source_is_subprocess {
-                unwire_out_of_process_endpoint(
-                    &mut source_guard,
-                    crate::core::PortDirection::Output,
-                    &source_proc_id,
-                    &source_port,
-                    link_id,
-                );
-            } else if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-                let channel_released =
-                    output_inner.remove_channel_link(&source_port, link_id.as_str());
-                tracing::debug!(
-                    source = %source_proc_id,
-                    port = %source_port,
-                    channel_released,
-                    "Reclaimed source-side egress for disconnected link"
-                );
-            }
+    if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
+        let mut source_guard = source_processor.lock();
+        if source_is_subprocess {
+            unwire_out_of_process_endpoint(
+                &mut source_guard,
+                crate::core::PortDirection::Output,
+                &source_proc_id,
+                &source_port,
+                link_id,
+            );
+        } else if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+            let channel_released = output_inner.remove_channel_link(&source_port, link_id.as_str());
+            tracing::debug!(
+                source = %source_proc_id,
+                port = %source_port,
+                channel_released,
+                "Reclaimed source-side egress for disconnected link"
+            );
         }
-        Err(error) => tracing::warn!(
-            proc_id = %source_proc_id,
-            error = %error,
-            "close_iceoryx2_service: processor missing; port not reclaimed"
-        ),
     }
 
     // Destination side: drop this link's channel subscriber (and the port
     // mailbox / shared listener when their last inbound link went away).
-    match get_single_processor(graph, &dest_proc_id) {
-        Ok(dest_processor) => {
-            let mut dest_guard = dest_processor.lock();
-            if dest_is_subprocess {
-                unwire_out_of_process_endpoint(
-                    &mut dest_guard,
-                    crate::core::PortDirection::Input,
-                    &dest_proc_id,
-                    &dest_port,
-                    link_id,
-                );
-            } else if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
-                input_inner.remove_channel_link(link_id.as_str());
-                tracing::debug!(
-                    dest = %dest_proc_id,
-                    "Reclaimed destination-side ports for disconnected link"
-                );
-            }
+    if let Some(dest_processor) = processor_to_reclaim_from(graph, &dest_proc_id) {
+        let mut dest_guard = dest_processor.lock();
+        if dest_is_subprocess {
+            unwire_out_of_process_endpoint(
+                &mut dest_guard,
+                crate::core::PortDirection::Input,
+                &dest_proc_id,
+                &dest_port,
+                link_id,
+            );
+        } else if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
+            input_inner.remove_channel_link(link_id.as_str());
+            tracing::debug!(
+                dest = %dest_proc_id,
+                "Reclaimed destination-side ports for disconnected link"
+            );
         }
-        Err(error) => tracing::warn!(
-            proc_id = %dest_proc_id,
-            error = %error,
-            "close_iceoryx2_service: processor missing; port not reclaimed"
-        ),
     }
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
@@ -575,7 +560,13 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
     false
 }
 
-/// Ask an endpoint that owns its ports out of process to reclaim one link.
+/// Reclaim one link on an endpoint that owns its ports out of process: forget
+/// the wiring the far side would be set up with again, then ask it to drop the
+/// port it opened from that wiring.
+///
+/// The envelope is pruned here rather than by the host, so the record and the
+/// erase stay on the same side of the seam — a host supplies the envelope and
+/// the compiler op is the only thing that ever writes to it.
 ///
 /// A failure is reported and swallowed, like every other reclaim failure here:
 /// the disconnect is already happening, the other endpoint still has ports to
@@ -588,6 +579,9 @@ fn unwire_out_of_process_endpoint(
     local_port_name: &str,
     link_id: &LinkUniqueId,
 ) {
+    if let Some(link_wiring) = processor.out_of_process_link_wiring() {
+        link_wiring.remove_link(link_id.as_str());
+    }
     match processor.unwire_out_of_process_link(port_direction, local_port_name, link_id.as_str()) {
         Ok(()) => tracing::debug!(
             proc_id = %proc_id,
@@ -604,6 +598,27 @@ fn unwire_out_of_process_endpoint(
              a reconnect of this link may exhaust its channel's notifier or subscriber slots"
         ),
     }
+}
+
+/// The processor whose ports one side of a disconnect must release, or `None`
+/// with the reason said out loud.
+///
+/// A missing processor is not an error worth failing the disconnect over — the
+/// link is going away regardless — but it does mean a port stays held, which is
+/// only ever visible in the log.
+fn processor_to_reclaim_from(
+    graph: &mut Graph,
+    proc_id: &ProcessorUniqueId,
+) -> Option<Arc<Mutex<ProcessorInstance>>> {
+    get_single_processor(graph, proc_id)
+        .inspect_err(|error| {
+            tracing::warn!(
+                proc_id = %proc_id,
+                error = %error,
+                "close_iceoryx2_service: processor missing; port not reclaimed"
+            )
+        })
+        .ok()
 }
 
 fn get_single_processor(
@@ -802,8 +817,15 @@ mod tests {
     use crate::core::processors::{DynGeneratedProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-    /// One reclaim the engine asked an out-of-process endpoint for.
-    type ReclaimedLink = (crate::core::PortDirection, String, String);
+    /// One reclaim the engine asked an out-of-process endpoint for. Named
+    /// rather than a tuple so a swapped port and link id fails the assert
+    /// instead of passing it.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ReclaimedLink {
+        port_direction: crate::core::PortDirection,
+        local_port_name: String,
+        link_id: String,
+    }
 
     /// A host whose transport lives out of process and which is neither of the
     /// engine's own subprocess hosts — the shape the wheel's helper spawn host
@@ -879,12 +901,11 @@ mod tests {
             local_port_name: &str,
             link_id: &str,
         ) -> Result<()> {
-            self.reclaimed_links.lock().push((
+            self.reclaimed_links.lock().push(ReclaimedLink {
                 port_direction,
-                local_port_name.to_string(),
-                link_id.to_string(),
-            ));
-            self.link_wiring.remove_link(link_id);
+                local_port_name: local_port_name.to_string(),
+                link_id: link_id.to_string(),
+            });
             Ok(())
         }
         fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
@@ -918,6 +939,50 @@ mod tests {
         instance
     }
 
+    /// Record one link's wiring on both out-of-process endpoints, exactly as
+    /// the compiler op's subprocess branches do.
+    ///
+    /// Shared so the wiring a disconnect has to undo is byte-for-byte the
+    /// wiring the connect laid down; the arguments are positional and both
+    /// helpers carry `#[allow(clippy::too_many_arguments)]`, so a second copy
+    /// is a slip waiting to happen.
+    fn record_wiring_for_both_out_of_process_endpoints(
+        graph: &mut Graph,
+        source_id: &str,
+        dest_id: &str,
+        link_id: &LinkUniqueId,
+    ) {
+        wire_subprocess_source(
+            graph,
+            &source_id.into(),
+            "out1",
+            "pabc/out1",
+            "pdef/notify",
+            4096,
+            1 << 20,
+            8,
+            2,
+            1,
+            true,
+            link_id,
+        )
+        .expect("recording source wiring must succeed");
+        wire_subprocess_dest(
+            graph,
+            &dest_id.into(),
+            "in1",
+            "pabc/out1",
+            "pdef/notify",
+            crate::iceoryx2::ReadMode::SkipToLatest,
+            8,
+            2,
+            1,
+            true,
+            link_id,
+        )
+        .expect("recording dest wiring must succeed");
+    }
+
     /// The wiring path reaches a host it cannot name — the whole point of the
     /// seam. Mentally revert `wire_subprocess_source` / `wire_subprocess_dest`
     /// to downcasting on the two engine-side host types and both vectors stay
@@ -939,35 +1004,7 @@ mod tests {
         );
         let link_id: LinkUniqueId = "L-seam-test".into();
 
-        wire_subprocess_source(
-            &mut graph,
-            &source_id.as_str().into(),
-            "out1",
-            "pabc/out1",
-            "pdef/notify",
-            4096,
-            1 << 20,
-            8,
-            2,
-            1,
-            true,
-            &link_id,
-        )
-        .expect("recording source wiring must succeed");
-        wire_subprocess_dest(
-            &mut graph,
-            &dest_id.as_str().into(),
-            "in1",
-            "pabc/out1",
-            "pdef/notify",
-            crate::iceoryx2::ReadMode::SkipToLatest,
-            8,
-            2,
-            1,
-            true,
-            &link_id,
-        )
-        .expect("recording dest wiring must succeed");
+        record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
 
         let recorded_source_ports = source_instance
             .lock()
@@ -1041,54 +1078,26 @@ mod tests {
             .id
             .clone();
 
-        wire_subprocess_source(
-            &mut graph,
-            &source_id.as_str().into(),
-            "out1",
-            "pabc/out1",
-            "pdef/notify",
-            4096,
-            1 << 20,
-            8,
-            2,
-            1,
-            true,
-            &link_id,
-        )
-        .expect("recording source wiring must succeed");
-        wire_subprocess_dest(
-            &mut graph,
-            &dest_id.as_str().into(),
-            "in1",
-            "pabc/out1",
-            "pdef/notify",
-            crate::iceoryx2::ReadMode::SkipToLatest,
-            8,
-            2,
-            1,
-            true,
-            &link_id,
-        )
-        .expect("recording dest wiring must succeed");
+        record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
 
         close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
 
         assert_eq!(
             *source_reclaims.lock(),
-            [(
-                crate::core::PortDirection::Output,
-                "out1".to_string(),
-                link_id.to_string()
-            )],
+            [ReclaimedLink {
+                port_direction: crate::core::PortDirection::Output,
+                local_port_name: "out1".to_string(),
+                link_id: link_id.to_string(),
+            }],
             "the source host must be asked to drop its publisher-side link, by its own port",
         );
         assert_eq!(
             *dest_reclaims.lock(),
-            [(
-                crate::core::PortDirection::Input,
-                "in1".to_string(),
-                link_id.to_string()
-            )],
+            [ReclaimedLink {
+                port_direction: crate::core::PortDirection::Input,
+                local_port_name: "in1".to_string(),
+                link_id: link_id.to_string(),
+            }],
             "the destination host must be asked to drop its subscriber, by its own port",
         );
 
