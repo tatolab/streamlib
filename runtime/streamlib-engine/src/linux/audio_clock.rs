@@ -4,17 +4,19 @@
 #![allow(dead_code)]
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
+use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
-/// Linux audio clock using `timerfd_create(CLOCK_MONOTONIC)` for drift-free timing.
+/// Linux audio clock pacing ticks from a `timerfd_create(CLOCK_MONOTONIC)` timer.
 ///
-/// Uses kernel-managed timers via timerfd for high-precision, absolute-time
-/// scheduling without cumulative drift. A dedicated thread reads from the
-/// timerfd and invokes registered callbacks on each tick.
+/// `TFD_TIMER_ABSTIME` keeps the schedule free of cumulative drift against the
+/// machine clock. The clock is free-running — no audio device paces it — so it
+/// drifts against any real device's sample clock. A dedicated thread reads from
+/// the timerfd and invokes registered callbacks on each tick.
 pub struct LinuxTimerFdAudioClock {
     config: AudioClockConfig,
     callbacks: Arc<Mutex<Vec<AudioTickCallback>>>,
@@ -165,9 +167,6 @@ fn run_timerfd_loop(
     }
     start_sec += interval_sec;
 
-    // Record the start time in nanoseconds for timestamp calculation
-    let start_time_ns = now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64;
-
     // Set timerfd with TFD_TIMER_ABSTIME for drift-free repeats
     let timer_spec = libc::itimerspec {
         it_interval: libc::timespec {
@@ -273,14 +272,15 @@ fn run_timerfd_loop(
             return Err(Error::Runtime(format!("timerfd read failed: {}", err)));
         }
 
-        // Get current time for timestamp
-        let mut current_time = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut current_time) };
-        let current_ns = current_time.tv_sec as i64 * 1_000_000_000 + current_time.tv_nsec as i64;
-        let elapsed_ns = current_ns - start_time_ns;
+        // FIXME(audio-backend): one read stamps every tick in a catch-up burst, so
+        // N blocks of samples claim the same instant, and the value is the wake
+        // time rather than the expiration the timerfd was programmed for. Both
+        // follow from the timer's own absolute schedule. Deferred because a
+        // free-running clock's tick time is meaningless until a device paces it:
+        // the audio backend is OPEN (docs/plan/ARCHITECTURE.md §Media I/O), and it
+        // also owns the capture path's discarded driver stamp
+        // (cpal `InputCallbackInfo::timestamp().capture`).
+        let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
         if expirations > 1 {
             tracing::warn!(
@@ -294,7 +294,7 @@ fn run_timerfd_loop(
             let tick_num = tick_count.fetch_add(1, Ordering::SeqCst);
 
             let ctx = AudioTickContext {
-                timestamp_ns: elapsed_ns,
+                timestamp_ns,
                 samples_needed: config.buffer_size,
                 sample_rate: config.sample_rate,
                 tick_number: tick_num,

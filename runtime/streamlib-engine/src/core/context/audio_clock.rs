@@ -6,6 +6,7 @@
 //! Provides a timing source for audio processors to produce samples at the correct rate.
 //! The clock is device-independent - sinks handle resampling to their specific devices.
 
+use crate::core::media_clock::MediaClock;
 use std::sync::Arc;
 
 /// Configuration for an audio clock.
@@ -49,7 +50,7 @@ impl AudioClockConfig {
 /// Context passed to audio clock tick callbacks.
 #[derive(Debug, Clone, Copy)]
 pub struct AudioTickContext {
-    /// Monotonic timestamp in nanoseconds.
+    /// Machine monotonic timestamp in nanoseconds, the epoch a frame timestamp carries.
     pub timestamp_ns: i64,
     /// Number of samples to produce this tick (per channel).
     pub samples_needed: usize,
@@ -187,19 +188,16 @@ impl AudioClock for SoftwareAudioClock {
                     tick_duration
                 );
 
-                let start_time = Instant::now();
-                let mut next_tick = start_time + tick_duration;
+                let mut next_tick = Instant::now() + tick_duration;
 
                 while running.load(Ordering::SeqCst) {
                     let now = Instant::now();
 
                     if now >= next_tick {
                         let tick_num = tick_count.fetch_add(1, Ordering::SeqCst);
-                        let elapsed = start_time.elapsed();
-                        let timestamp_ns = elapsed.as_nanos() as i64;
 
                         let ctx = AudioTickContext {
-                            timestamp_ns,
+                            timestamp_ns: MediaClock::now().as_nanos() as i64,
                             samples_needed: config.buffer_size,
                             sample_rate: config.sample_rate,
                             tick_number: tick_num,
@@ -232,8 +230,6 @@ impl AudioClock for SoftwareAudioClock {
                     // Sleep until next tick (with some margin for wakeup latency)
                     let sleep_time = next_tick.saturating_duration_since(Instant::now());
                     if !sleep_time.is_zero() {
-                        // Use spin_sleep for sub-millisecond precision if available
-                        // Otherwise fall back to std::thread::sleep
                         thread::sleep(sleep_time);
                     }
                 }
@@ -272,5 +268,127 @@ impl AudioClock for SoftwareAudioClock {
 impl Drop for SoftwareAudioClock {
     fn drop(&mut self) {
         let _ = self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AudioClock, AudioClockConfig, AudioTickContext, SoftwareAudioClock};
+    use crate::core::media_clock::MediaClock;
+    #[cfg(not(target_os = "macos"))]
+    use crate::core::media_clock::clock_gettime_monotonic_ns;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    const FIRST_TICK_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+    const MAX_FRAME_MINUS_TICK_SKEW_FOR_COMPARABILITY: Duration = Duration::from_secs(1);
+
+    fn run_until_first_tick_then_stop(clock: &dyn AudioClock) -> i64 {
+        let first_tick_timestamp_ns: Arc<Mutex<Option<i64>>> = Arc::new(Mutex::new(None));
+        let recorder = Arc::clone(&first_tick_timestamp_ns);
+        clock.on_tick(Box::new(move |tick: AudioTickContext| {
+            let mut recorded = recorder.lock();
+            if recorded.is_none() {
+                *recorded = Some(tick.timestamp_ns);
+            }
+        }));
+
+        clock.start().expect("audio clock failed to start");
+        let deadline = Instant::now() + FIRST_TICK_WAIT_TIMEOUT;
+        let observed = loop {
+            if let Some(timestamp_ns) = *first_tick_timestamp_ns.lock() {
+                break Some(timestamp_ns);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        clock.stop().expect("audio clock failed to stop");
+
+        observed.unwrap_or_else(|| panic!("no audio tick fired within {FIRST_TICK_WAIT_TIMEOUT:?}"))
+    }
+
+    // Darwin's `CLOCK_MONOTONIC` advances across system sleep and the
+    // `mach_absolute_time` domain `MediaClock` reads there does not, so the
+    // kernel bracket only holds on the platforms whose two clocks are one clock.
+    #[cfg(not(target_os = "macos"))]
+    fn assert_tick_timestamps_land_in_the_kernel_monotonic_domain(
+        clock: &dyn AudioClock,
+        clock_name: &str,
+    ) {
+        let before = clock_gettime_monotonic_ns();
+        let sampled = run_until_first_tick_then_stop(clock);
+        let after = clock_gettime_monotonic_ns();
+
+        assert!(
+            before <= sampled && sampled <= after,
+            "{clock_name} stamped a tick at {sampled} ns, outside the CLOCK_MONOTONIC \
+             bracket [{before}, {after}] — it is rebasing to its own start, not carrying \
+             the machine epoch"
+        );
+    }
+
+    fn assert_a_tick_timestamp_is_comparable_with_a_frame_timestamp(
+        clock: &dyn AudioClock,
+        clock_name: &str,
+    ) {
+        let tick_timestamp_ns = run_until_first_tick_then_stop(clock);
+        // The call the engine's default frame stamp makes (`iceoryx2/output.rs`).
+        let frame_timestamp_ns = MediaClock::now().as_nanos() as i64;
+
+        let frame_minus_tick_ns = frame_timestamp_ns - tick_timestamp_ns;
+        assert!(
+            (0..MAX_FRAME_MINUS_TICK_SKEW_FOR_COMPARABILITY.as_nanos() as i64)
+                .contains(&frame_minus_tick_ns),
+            "a frame stamped at {frame_timestamp_ns} ns is {frame_minus_tick_ns} ns after a \
+             {clock_name} tick stamped at {tick_timestamp_ns} ns — the two are not on one \
+             timebase, so subtracting them is meaningless"
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn software_audio_clock_ticks_land_in_the_kernel_monotonic_domain() {
+        assert_tick_timestamps_land_in_the_kernel_monotonic_domain(
+            &SoftwareAudioClock::new(AudioClockConfig::default()),
+            "SoftwareAudioClock",
+        );
+    }
+
+    #[test]
+    fn a_software_audio_clock_tick_is_comparable_with_a_frame_timestamp() {
+        assert_a_tick_timestamp_is_comparable_with_a_frame_timestamp(
+            &SoftwareAudioClock::new(AudioClockConfig::default()),
+            "SoftwareAudioClock",
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_timerfd_audio_clock_ticks_land_in_the_kernel_monotonic_domain() {
+        assert_tick_timestamps_land_in_the_kernel_monotonic_domain(
+            &crate::linux::LinuxTimerFdAudioClock::new(AudioClockConfig::default()),
+            "LinuxTimerFdAudioClock",
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linux_timerfd_audio_clock_tick_is_comparable_with_a_frame_timestamp() {
+        assert_a_tick_timestamp_is_comparable_with_a_frame_timestamp(
+            &crate::linux::LinuxTimerFdAudioClock::new(AudioClockConfig::default()),
+            "LinuxTimerFdAudioClock",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_core_audio_clock_tick_is_comparable_with_a_frame_timestamp() {
+        assert_a_tick_timestamp_is_comparable_with_a_frame_timestamp(
+            &crate::apple::CoreAudioClock::new(AudioClockConfig::default()),
+            "CoreAudioClock",
+        );
     }
 }
