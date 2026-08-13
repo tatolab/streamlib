@@ -221,11 +221,11 @@ impl Runner {
 
         // Subscribe to graph changes.
         //
-        // The live signal is dropped rather than waited on: this runs inside
-        // `Runner::new`, and blocking construction for up to a subscription
-        // budget to close a window in which no graph exists yet — nothing can
-        // publish a graph change before `new` returns — would cost every caller
-        // a real delay for a theoretical event.
+        // The live signal is dropped rather than waited on: `GraphChangeListener`
+        // is inert until `RuntimeStatus::Started`, and `start()` commits pending
+        // operations directly instead of relying on the event — so a
+        // `GraphDidChange` lost while this subscription comes up is one the
+        // listener would have ignored anyway.
         let _ = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
 
         Ok(Arc::new(Self {

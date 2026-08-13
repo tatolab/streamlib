@@ -930,8 +930,12 @@ mod tests {
             sample["window_ms"].as_u64().unwrap(),
             LOGS_SAMPLE_WINDOW.as_millis() as u64
         );
+        // The budget names the subscription wait because the measured span now
+        // contains it: the tool waits for its subscription before the window
+        // starts, so a slow iceoryx2 open is time this assertion must allow
+        // rather than a hang it should catch.
         assert!(
-            elapsed < LOGS_SAMPLE_WINDOW * 4,
+            elapsed < LOGS_SAMPLE_WINDOW * 4 + DEFAULT_SUBSCRIPTION_LIVE_BUDGET,
             "logs must return within its sample window, not hang; took {elapsed:?}"
         );
     }

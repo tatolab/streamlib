@@ -945,11 +945,72 @@ mod websocket_subscription_live_frame_tests {
     use super::*;
     use std::time::Duration;
     use streamlib::sdk::pubsub::RuntimeEvent;
-    use streamlib::sdk::runtime::BoxFuture;
+    use streamlib::sdk::runtime::{BoxFuture, TapSubscription};
 
     /// The `Event` variant names an event frame can be keyed by. A live frame
     /// keyed by any of these would be ambiguous with a real event.
     const EVENT_VARIANT_KEYS: &[&str] = &["RuntimeGlobal", "ProcessorEvent", "Custom"];
+
+    /// Hands out one preset `TapSubscription`, so `/ws/tap/{channel}` can be
+    /// driven over a real socket with no engine and no iceoryx2 behind it.
+    struct TapStubRuntime {
+        subscription: Mutex<Option<TapSubscription>>,
+    }
+
+    impl RuntimeOperations for TapStubRuntime {
+        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+            Box::pin(async { Ok(serde_json::json!({})) })
+        }
+        fn to_json(&self) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+        fn request_runtime_shutdown(&self, _reason: &str) -> Result<()> {
+            unreachable!("the tap test never shuts the runtime down")
+        }
+        fn tap_async(
+            &self,
+            channel: String,
+            _count: Option<usize>,
+        ) -> BoxFuture<'_, Result<TapSubscription>> {
+            let taken = self.subscription.lock().take();
+            Box::pin(async move { taken.ok_or(Error::TapSlotOccupied(channel)) })
+        }
+
+        crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
+    }
+
+    /// Serve the real router on a loopback ephemeral port, returning the port
+    /// and the task to abort when done.
+    ///
+    /// A real bind rather than `tower::oneshot`, which drives a router but never
+    /// completes an upgrade — so it can never observe a frame.
+    fn serve_on_ephemeral_port(
+        runtime: Arc<dyn RuntimeOperations>,
+    ) -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        listener
+            .set_nonblocking(true)
+            .expect("the tokio listener needs a non-blocking socket");
+        let port = listener.local_addr().expect("local addr").port();
+        let listener =
+            tokio::net::TcpListener::from_std(listener).expect("adopt the bound listener");
+
+        let router = build_router(
+            runtime,
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        );
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        (port, server)
+    }
+
+    /// How long a test waits for a frame the server should already be sending.
+    /// Every read is bounded by it: a hung suite reports nothing, a red one
+    /// names the frame that never came.
+    const FRAME_ARRIVAL_BUDGET: Duration = Duration::from_secs(5);
 
     /// `/ws/events` reads nothing off the runtime — it subscribes to `PUBSUB`
     /// directly — but `build_router` needs one, so this answers the observation
@@ -1049,19 +1110,7 @@ mod websocket_subscription_live_frame_tests {
 
         crate::control_plane_stub_support::initialize_process_global_pubsub_for_tests();
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind ephemeral port");
-        let port = listener.local_addr().expect("local addr").port();
-        let router = build_router(
-            Arc::new(EventStreamStubRuntime),
-            None,
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        );
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
+        let (port, server) = serve_on_ephemeral_port(Arc::new(EventStreamStubRuntime));
 
         let (mut socket, _) =
             tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws/events"))
@@ -1069,9 +1118,11 @@ mod websocket_subscription_live_frame_tests {
                 .expect("WebSocket upgrade on /ws/events");
 
         // Frame 1 is the live signal, before anything has been published.
-        let first = socket
-            .next()
+        // Bounded like every other read here: a regression that stops the frame
+        // being sent must name itself, not hang the suite until the job's cap.
+        let first = tokio::time::timeout(FRAME_ARRIVAL_BUDGET, socket.next())
             .await
+            .expect("a first frame within the budget")
             .expect("a first frame")
             .expect("first frame is not an error");
         let ClientMessage::Text(first) = first else {
@@ -1086,7 +1137,7 @@ mod websocket_subscription_live_frame_tests {
         let published = Event::RuntimeGlobal(RuntimeEvent::GraphDidChange);
         PUBSUB.publish(&published.topic(), &published);
 
-        let next = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        let next = tokio::time::timeout(FRAME_ARRIVAL_BUDGET, socket.next())
             .await
             .expect("an event frame within the budget")
             .expect("a second frame")
@@ -1097,6 +1148,69 @@ mod websocket_subscription_live_frame_tests {
         let received: Event = serde_json::from_str(&next)
             .expect("the frame after the live frame decodes as an Event");
         assert_eq!(received, published);
+
+        let _ = socket.close(None).await;
+        server.abort();
+    }
+
+    /// The tap socket's half of the same contract: a text live frame, then the
+    /// bag — verbatim and binary.
+    ///
+    /// The OpenAPI 101 description promises exactly this shape, and nothing
+    /// else proves the server sends it: the frame-grammar test only serializes
+    /// the enum, and the MCP tap tool never touches this route.
+    #[tokio::test]
+    async fn ws_tap_sends_the_live_frame_before_any_bag() {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+        const BAG: &[u8] = b"\x00\x01\x02 not-an-event";
+
+        let (bag_sender, bag_receiver) = tokio::sync::mpsc::channel(1);
+        bag_sender.send(BAG.to_vec()).await.expect("queue one bag");
+
+        let (port, server) = serve_on_ephemeral_port(Arc::new(TapStubRuntime {
+            subscription: Mutex::new(Some(TapSubscription::from_forward_channel(
+                "some-processor/some-output".to_string(),
+                bag_receiver,
+                0,
+            ))),
+        }));
+
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+            "ws://127.0.0.1:{port}/ws/tap/some-processor%2Fsome-output"
+        ))
+        .await
+        .expect("WebSocket upgrade on /ws/tap/{channel}");
+
+        let first = tokio::time::timeout(FRAME_ARRIVAL_BUDGET, socket.next())
+            .await
+            .expect("a first frame within the budget")
+            .expect("a first frame")
+            .expect("first frame is not an error");
+        let ClientMessage::Text(first) = first else {
+            panic!("the tap's first frame must be text, got {first:?}");
+        };
+        let first: serde_json::Value = serde_json::from_str(&first).expect("first frame is JSON");
+        assert_eq!(
+            first
+                .get("TapSubscriptionLive")
+                .and_then(|live| live.get("channel"))
+                .and_then(serde_json::Value::as_str),
+            Some("some-processor/some-output"),
+            "first frame must be the tap's subscription-live frame, got {first}"
+        );
+
+        // The bag is binary and byte-identical: the live frame is prepended to
+        // the stream, never wrapped around what the channel carries.
+        let next = tokio::time::timeout(FRAME_ARRIVAL_BUDGET, socket.next())
+            .await
+            .expect("a bag frame within the budget")
+            .expect("a second frame")
+            .expect("second frame is not an error");
+        let ClientMessage::Binary(bag) = next else {
+            panic!("a bag must arrive as a binary frame, got {next:?}");
+        };
+        assert_eq!(bag.as_ref(), BAG, "the bag must be forwarded verbatim");
 
         let _ = socket.close(None).await;
         server.abort();
