@@ -17,6 +17,7 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::time::Duration;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
@@ -263,6 +264,53 @@ pub(crate) async fn get_moq_catalog(
 }
 
 // ============================================================================
+// WebSocket subscription-live contract
+// ============================================================================
+
+/// How long a WebSocket handler waits for its subscription to go live before
+/// giving up on the client.
+///
+/// `PubSub::subscribe`'s service-open retry budget is 10 attempts at 20 ms, so
+/// the floor is ~200 ms plus subscriber creation. An order of magnitude of
+/// headroom absorbs a loaded box without holding a client open on a
+/// subscription that is never coming up.
+pub(crate) const WEBSOCKET_SUBSCRIPTION_LIVE_BUDGET: Duration = Duration::from_secs(2);
+
+/// Close code for a socket whose subscription never went live. App codes live
+/// in the 4000–4999 private range, alongside the tap's 4404 / 4409.
+const WS_CLOSE_CODE_SUBSCRIPTION_NOT_LIVE: u16 = 4503;
+
+/// The non-`Event` frame a control-plane WebSocket sends to say the
+/// subscription behind the socket is live. It precedes every data frame.
+///
+/// Wire contract: `Event` is an externally tagged enum, so an event frame is
+/// always a single-key JSON object keyed by a variant name (`RuntimeGlobal`,
+/// `ProcessorEvent`, `Custom`). These variants keep that grammar with keys that
+/// are none of them, so a client discriminates on the key alone and a strict
+/// `Event` decoder rejects one as an unknown variant rather than mis-reading it.
+/// On `/ws/tap/{channel}` the separation is stronger still — this is the only
+/// text frame that socket carries, and every bag stays a verbatim binary frame.
+#[derive(serde::Serialize)]
+pub(crate) enum ControlPlaneWebSocketSubscriptionLiveFrame {
+    EventStreamSubscriptionLive { topic: String },
+    TapSubscriptionLive { channel: String },
+}
+
+impl ControlPlaneWebSocketSubscriptionLiveFrame {
+    /// Render as the text frame to put on the wire, or `None` if it could not
+    /// be serialized.
+    fn to_websocket_text_frame(&self) -> Option<Message> {
+        match serde_json::to_string(self) {
+            Ok(json) => Some(Message::Text(json.into())),
+            Err(e) => {
+                tracing::error!("Failed to serialize subscription-live frame: {}", e);
+                None
+            }
+        }
+    }
+}
+
+// ============================================================================
 // WebSocket Event Streaming
 // ============================================================================
 
@@ -280,9 +328,54 @@ async fn handle_websocket(socket: WebSocket) {
     let listener = Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
 
     // Subscribe to ALL topics via wildcard
-    PUBSUB.subscribe(topics::ALL, listener.clone());
+    let subscription_live_signal = PUBSUB.subscribe(topics::ALL, listener.clone());
 
-    tracing::info!("WebSocket client connected, subscribed to all events");
+    // The client is told the subscription is live, and told it before any event
+    // frame. iceoryx2 does not replay samples published before its subscriber
+    // existed, so a client that acts on the 101 alone can cause an event that is
+    // simply lost: the upgrade says the socket is open, never that the
+    // subscription behind it can receive. The wait blocks — the signal comes off
+    // an OS thread — so it runs on the blocking pool, the same shape `tap_async`
+    // uses for its own subscribe outcome.
+    let became_live = tokio::task::spawn_blocking(move || {
+        subscription_live_signal.wait_until_subscription_is_live(WEBSOCKET_SUBSCRIPTION_LIVE_BUDGET)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        Err(Error::Runtime(format!(
+            "event-subscription wait task failed to join: {join_error}"
+        )))
+    });
+
+    if let Err(e) = became_live {
+        tracing::warn!("WebSocket event subscription never went live: {e}");
+        let _ = sender
+            .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                code: WS_CLOSE_CODE_SUBSCRIPTION_NOT_LIVE,
+                reason: truncate_on_char_boundary(
+                    format!("event subscription never went live: {e}"),
+                    MAX_WS_CLOSE_REASON_BYTES,
+                )
+                .into(),
+            })))
+            .await;
+        return;
+    }
+
+    let live_frame = ControlPlaneWebSocketSubscriptionLiveFrame::EventStreamSubscriptionLive {
+        topic: topics::ALL.to_string(),
+    }
+    .to_websocket_text_frame();
+    match live_frame {
+        Some(live_frame) => {
+            if sender.send(live_frame).await.is_err() {
+                return;
+            }
+        }
+        None => return,
+    }
+
+    tracing::info!("WebSocket client connected, subscription to all events is live");
 
     // Task: forward channel events to WebSocket
     let send_task = tokio::spawn(async move {
@@ -360,7 +453,7 @@ pub(crate) struct TapQuery {
         ("count" = Option<usize>, Query, description = "Stream exactly this many bags then close; absent streams live until the client disconnects")
     ),
     responses(
-        (status = 101, description = "WebSocket upgraded. Read-only observability tap: each channel bag is forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/MoQ/display processors)."),
+        (status = 101, description = "WebSocket upgraded. The first frame is text — {\"TapSubscriptionLive\":{\"channel\":\"…\"}} — sent once the tap is attached, so a client can act without racing the attach; it is the only text frame the socket carries. Every frame after it is a channel bag forwarded verbatim (FrameHeader-framed) as a binary WS frame with no encode, containerize, or transcode — decoding is the client's concern. To observe a viewable video feed, tap an encoded (h264/h265/jpeg) or container (CMAF/fMP4) channel; a raw video channel carries zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels, and this is not a realtime-video transport (use the WebRTC/MoQ/display processors)."),
         (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
         (status = 403, description = "Invalid bearer token", body = ForbiddenResponse)
     )
@@ -401,9 +494,24 @@ async fn handle_tap_websocket(
 
     tracing::info!(channel = %channel, "tap client attached");
 
+    // `tap_async` resolves only once the tap's subscriber exists, so this frame
+    // reports an attach that has already happened — a client that acts on it
+    // cannot race the attach, and can tell "attached" from "attached but idle".
+    let live_frame = ControlPlaneWebSocketSubscriptionLiveFrame::TapSubscriptionLive {
+        channel: channel.clone(),
+    }
+    .to_websocket_text_frame();
+    let client_is_still_connected = match live_frame {
+        Some(live_frame) => sender.send(live_frame).await.is_ok(),
+        None => false,
+    };
+
     // Own the subscription in this scope: forward bags until the tap ends
-    // (bounded count reached / channel gone) or the client disconnects.
-    loop {
+    // (bounded count reached / channel gone) or the client disconnects. Falling
+    // through rather than returning early keeps the detach below on the path
+    // out — dropping the subscription here would join an OS thread on an async
+    // worker.
+    while client_is_still_connected {
         tokio::select! {
             maybe_bag = subscription.recv() => match maybe_bag {
                 Some(bytes) => {
@@ -833,5 +941,175 @@ mod router_surface_and_auth_gate_tests {
             StatusCode::UNAUTHORIZED,
             "GET /ws/tap/{{channel}} must be reachable with auth off (no token)"
         );
+    }
+}
+
+#[cfg(test)]
+mod websocket_subscription_live_frame_tests {
+    //! The subscription-live contract on the control plane's WebSockets.
+    //!
+    //! `GET /ws/events` used to upgrade to 101 and return with the subscription
+    //! behind it not yet live. iceoryx2 does not replay samples published before
+    //! its subscriber existed, so a client that acted on the upgrade alone could
+    //! cause an event and never see it, with nothing on the wire to say so.
+    //! These lock the two halves of the fix: the frame is unambiguously not an
+    //! `Event`, and it arrives before any event does.
+
+    use super::*;
+    use streamlib::sdk::pubsub::RuntimeEvent;
+    use streamlib::sdk::runtime::BoxFuture;
+
+    /// The `Event` variant names an event frame can be keyed by. A live frame
+    /// keyed by any of these would be ambiguous with a real event.
+    const EVENT_VARIANT_KEYS: &[&str] = &["RuntimeGlobal", "ProcessorEvent", "Custom"];
+
+    /// `/ws/events` reads nothing off the runtime — it subscribes to `PUBSUB`
+    /// directly — but `build_router` needs one, so this answers the observation
+    /// ops and refuses everything else.
+    #[derive(Default)]
+    struct EventStreamStubRuntime;
+
+    impl RuntimeOperations for EventStreamStubRuntime {
+        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+            Box::pin(async { Ok(serde_json::json!({})) })
+        }
+        fn to_json(&self) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+        fn request_runtime_shutdown(&self, _reason: &str) -> Result<()> {
+            unreachable!("the event-stream test never shuts the runtime down")
+        }
+        fn tap_async(
+            &self,
+            channel: String,
+            _count: Option<usize>,
+        ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
+            Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
+        }
+
+        crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
+    }
+
+    fn live_frame_json(frame: &ControlPlaneWebSocketSubscriptionLiveFrame) -> serde_json::Value {
+        serde_json::to_value(frame).expect("live frame serializes")
+    }
+
+    /// The wire contract that lets a client tell the live frame from an event
+    /// without out-of-band knowledge: both are single-key objects, and the live
+    /// frame's key is none of `Event`'s.
+    #[test]
+    fn a_subscription_live_frame_is_never_mistakable_for_an_event() {
+        let frames = [
+            ControlPlaneWebSocketSubscriptionLiveFrame::EventStreamSubscriptionLive {
+                topic: topics::ALL.to_string(),
+            },
+            ControlPlaneWebSocketSubscriptionLiveFrame::TapSubscriptionLive {
+                channel: "some-processor/some-output".to_string(),
+            },
+        ];
+
+        for frame in &frames {
+            let json = live_frame_json(frame);
+            let object = json.as_object().expect("live frame is a JSON object");
+            assert_eq!(
+                object.len(),
+                1,
+                "a live frame keeps Event's single-key grammar: {json}"
+            );
+
+            let key = object.keys().next().expect("single key");
+            assert!(
+                !EVENT_VARIANT_KEYS.contains(&key.as_str()),
+                "live frame key '{key}' collides with an Event variant"
+            );
+
+            // The other direction: a strict `Event` decoder must reject it
+            // outright rather than mis-read it as some event.
+            assert!(
+                serde_json::from_value::<Event>(json.clone()).is_err(),
+                "a live frame must not deserialize as an Event: {json}"
+            );
+        }
+    }
+
+    /// Every event frame stays decodable as an `Event` — the live frame is
+    /// prepended, and no envelope is wrapped around the events themselves.
+    #[test]
+    fn an_event_frame_is_unchanged_by_the_live_frame() {
+        let event = Event::RuntimeGlobal(RuntimeEvent::GraphDidChange);
+        let encoded = serde_json::to_string(&event).expect("event serializes");
+
+        let decoded: Event = serde_json::from_str(&encoded).expect("event frame decodes as Event");
+        assert_eq!(decoded, event);
+    }
+
+    /// The ordering the ticket is about, over a real socket: the live frame
+    /// arrives first, and an event published only after it is received is
+    /// delivered — with no retry and no guessed sleep anywhere in the test.
+    ///
+    /// `#[serial]`: this test publishes, and `PUBSUB` is process-global — an
+    /// unserialized publish here lands inside the sample window of any other
+    /// test reading the same bus.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn ws_events_sends_the_live_frame_before_any_event() {
+        use tokio_tungstenite::tungstenite::Message as ClientMessage;
+
+        crate::control_plane_stub_support::initialize_process_global_pubsub_for_tests();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        let router = build_router(
+            Arc::new(EventStreamStubRuntime),
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        );
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws/events"))
+                .await
+                .expect("WebSocket upgrade on /ws/events");
+
+        // Frame 1 is the live signal, before anything has been published.
+        let first = socket
+            .next()
+            .await
+            .expect("a first frame")
+            .expect("first frame is not an error");
+        let ClientMessage::Text(first) = first else {
+            panic!("the first frame must be text, got {first:?}");
+        };
+        let first: serde_json::Value = serde_json::from_str(&first).expect("first frame is JSON");
+        assert!(
+            first.get("EventStreamSubscriptionLive").is_some(),
+            "first frame must be the subscription-live frame, got {first}"
+        );
+
+        // Publishing only now is the whole point: before this change the
+        // subscription behind the socket might not have existed yet, and this
+        // event would have been dropped with no way for either side to tell.
+        let published = Event::RuntimeGlobal(RuntimeEvent::GraphDidChange);
+        PUBSUB.publish(&published.topic(), &published);
+
+        let next = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("an event frame within the budget")
+            .expect("a second frame")
+            .expect("second frame is not an error");
+        let ClientMessage::Text(next) = next else {
+            panic!("an event frame must be text, got {next:?}");
+        };
+        let received: Event = serde_json::from_str(&next)
+            .expect("the frame after the live frame decodes as an Event");
+        assert_eq!(received, published);
+
+        let _ = socket.close(None).await;
+        server.abort();
     }
 }

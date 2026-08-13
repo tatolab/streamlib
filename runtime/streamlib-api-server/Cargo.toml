@@ -62,3 +62,6 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.17.0", features = [
 tempfile = "3"
 tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"
+# Real WebSocket client for the /ws/events frame-ordering test: `tower::oneshot`
+# drives a router but never completes an upgrade, so it cannot observe frames.
+tokio-tungstenite = "0.26"
