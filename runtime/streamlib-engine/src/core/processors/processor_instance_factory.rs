@@ -104,7 +104,11 @@ impl ProcessorInstance {
     }
 
     /// Ask a processor whose ports live outside the engine to reclaim one
-    /// disconnected link. A no-op for every processor the engine wires itself.
+    /// disconnected link.
+    ///
+    /// Only for a processor the compiler op already classified out of process.
+    /// One the engine wires itself keeps the trait default, which refuses
+    /// rather than answering `Ok` to a reclaim nobody performed.
     pub fn unwire_out_of_process_link(
         &mut self,
         port_direction: PortDirection,
