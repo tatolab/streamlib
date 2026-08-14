@@ -7,6 +7,13 @@
 //! helper child holding the same surface bumps nothing, so its checkout records
 //! a lease here instead. Rationale:
 //! `docs/decisions/surface-id-lifetime-contract.md`.
+//!
+//! What the guard below buys is that a checkout cannot interleave with the
+//! pool's decision. It does not make the publish-to-checkout transit safe: a
+//! child that has been sent a bag but has not yet checked its surface out
+//! holds nothing, so the pool may rehand that slot and the checkout land a
+//! moment later against a frame the producer is already overwriting. Only pool
+//! depth bounds that window.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,7 +118,7 @@ impl SurfaceCheckOutLeaseRegistry {
         let Some(outstanding) = holders.get_mut(&holder) else {
             return Ok(false);
         };
-        *outstanding -= 1;
+        *outstanding = outstanding.saturating_sub(1);
         if *outstanding == 0 {
             holders.remove(&holder);
         }

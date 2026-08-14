@@ -105,13 +105,13 @@ describe the same frame, and that frame is the one the bag delivered.
   > only the escalate / lifecycle socket, and bags arrive over iceoryx2, pulled
   > synchronously on the processor's own thread by `InputMailboxesInner::receive_pending`
   > (`runtime/streamlib-engine/src/iceoryx2/input.rs`, called from `read_raw` /
-  > `has_data` / `any_port_has_data` and nowhere else). The decided *what* — the
-  > consumer's host checks out at receipt rather than at first touch — stands; the
-  > stated *how* did not exist. As built, the mailbox reports every bag that enters
-  > and leaves, the helper host claims a queued bag's surfaces on entry, and
-  > queueing is two-stage (the iceoryx2 subscriber queue, then the per-port
-  > mailbox), so the residual unprotected window is transit plus the remainder of
-  > the current callback.
+  > `has_data` / `any_port_has_data` and nowhere else). Queueing is two-stage — the
+  > iceoryx2 subscriber queue, then the per-port mailbox — so "bag receipt" is the
+  > mailbox push, not an arrival anything is woken for. The decided *what* stands;
+  > the stated *how* did not exist, and what replaced it is not stated here: the
+  > seam it needs, and how a host learns which surfaces a bag names, are OPEN and
+  > go to the owner (#1866).
+
 - ADDED: an engine-level rotating-producer fixture and ground-truth test: a synthetic
   producer replicating the camera's shape (pool surface + transient ring texture
   registered under the pool id, counter-stamped pixels), asserting (a) a device

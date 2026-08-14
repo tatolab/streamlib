@@ -392,6 +392,19 @@ impl HelperProcessQueuedBagSurfaceClaims {
 }
 
 #[cfg(target_os = "linux")]
+impl Drop for HelperProcessQueuedBagSurfaceClaims {
+    /// Teardown owes a release for everything still held, whether or not the
+    /// mailboxes got to report their departures first.
+    fn drop(&mut self) {
+        self.release_every_claim_the_processor_has_finished_with();
+        let still_queued = std::mem::take(&mut self.ledger.lock().on_queued_bags);
+        for surface_id in still_queued {
+            self.release_one_claim(&surface_id);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
     fn bag_queued(&self, wire_frame: &[u8]) {
         for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
@@ -419,16 +432,30 @@ impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
     }
 
     fn bag_departed(&self, wire_frame: &[u8], departure: QueuedBagDeparture) {
-        for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
-            match departure {
-                QueuedBagDeparture::DeliveredToProcessor => self
-                    .ledger
-                    .lock()
-                    .move_queued_claim_to_the_processor(&surface_id),
-                // A bag the queue threw away owes its release now — nobody
-                // will ever read it, and an unreleased claim pins a
-                // producer's slot until this helper's connection closes.
-                QueuedBagDeparture::DiscardedUnread => {
+        match departure {
+            QueuedBagDeparture::DeliveredToProcessor => {
+                // Asking for another bag means the processor is done with the
+                // last one. This is the release point every execution mode
+                // reaches: a manual-mode processor drives itself and runs no
+                // host loop, so nothing sweeps after a callback it never
+                // makes, and without this its claims would pin the
+                // producer's slots for the child's whole life.
+                //
+                // The cost is that a callback reading two ports releases the
+                // first bag's claim at the second read. That bag has already
+                // been handed over, so it is back to the protection it had
+                // before any of this — never worse.
+                self.release_every_claim_the_processor_has_finished_with();
+                let mut ledger = self.ledger.lock();
+                for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
+                    ledger.move_queued_claim_to_the_processor(&surface_id);
+                }
+            }
+            // A bag the queue threw away owes its release now — nobody will
+            // ever read it, and an unreleased claim pins a producer's slot
+            // until this helper's connection closes.
+            QueuedBagDeparture::DiscardedUnread => {
+                for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
                     if self.ledger.lock().take_queued_claim(&surface_id) {
                         self.release_one_claim(&surface_id);
                     }
@@ -454,6 +481,16 @@ fn surface_ids_named_by_wire_frame(wire_frame: &[u8]) -> Vec<String> {
     let Some(bag_bytes) = wire_frame.get(FRAME_HEADER_SIZE..) else {
         return Vec::new();
     };
+    // msgpack stores a map key as its literal bytes, so a bag whose encoding
+    // does not contain them cannot name a surface however it is shaped. Most
+    // bags on most ports carry no surface at all, and this spares them the
+    // walk entirely.
+    if !bag_bytes
+        .windows(SURFACE_ID_BAG_KEY.len())
+        .any(|window| window == SURFACE_ID_BAG_KEY.as_bytes())
+    {
+        return Vec::new();
+    }
     let Ok(bag) = rmpv::decode::read_value_ref(&mut &bag_bytes[..]) else {
         return Vec::new();
     };
@@ -1094,5 +1131,256 @@ mod tests {
         let mut not_msgpack = vec![0u8; FRAME_HEADER_SIZE];
         not_msgpack.extend_from_slice(&[0xc1, 0xc1, 0xc1]);
         assert!(surface_ids_named_by_wire_frame(&not_msgpack).is_empty());
+    }
+}
+
+/// The claim ledger against a real surface-share service.
+///
+/// Every path here is one a rig test cannot reach: the wheel's GPU tests are
+/// `requires_gpu` and CI declares no GPU runner, so the ledger's balance —
+/// every claim taken answered exactly once — has to be provable without a
+/// device. Nothing below imports a surface or touches a GPU; the service is
+/// the only thing under test alongside the ledger.
+#[cfg(all(test, target_os = "linux"))]
+mod claim_ledger_tests {
+    use super::*;
+    use std::os::unix::io::{FromRawFd as _, IntoRawFd as _};
+    use streamlib::sdk::engine::linux_surface_share::{
+        SurfaceShareState, UnixSocketSurfaceService,
+    };
+
+    /// A service, and the lease table the pool would read.
+    struct SurfaceShareUnderTest {
+        _service: UnixSocketSurfaceService,
+        socket_path: std::path::PathBuf,
+        check_out_leases: Arc<streamlib::sdk::context::SurfaceCheckOutLeaseRegistry>,
+        _socket_dir: std::path::PathBuf,
+    }
+
+    impl Drop for SurfaceShareUnderTest {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self._socket_dir);
+        }
+    }
+
+    fn start_surface_share(label: &str) -> SurfaceShareUnderTest {
+        let socket_dir = std::env::temp_dir().join(format!(
+            "streamlib-claim-ledger-{}-{}",
+            label,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&socket_dir);
+        std::fs::create_dir_all(&socket_dir).expect("a directory for the test socket");
+        let socket_path = socket_dir.join("surface-share.sock");
+
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("the surface-share service starts");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        SurfaceShareUnderTest {
+            _service: service,
+            socket_path,
+            check_out_leases,
+            _socket_dir: socket_dir,
+        }
+    }
+
+    /// Publish one surface into the service and return the id it lives under.
+    fn publish_one_surface(share: &SurfaceShareUnderTest) -> String {
+        let name = std::ffi::CString::new("streamlib-claim-ledger-test").unwrap();
+        let raw_fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+        assert!(raw_fd >= 0, "memfd_create failed");
+        let backing = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+        backing.set_len(4096).expect("size the backing memfd");
+        let backing_fd = backing.into_raw_fd();
+
+        let publisher =
+            streamlib_surface_client::connect_to_surface_share_socket(&share.socket_path)
+                .expect("a publisher connection");
+        let (response, _no_reply_fds) = streamlib_surface_client::send_request_with_fds(
+            &publisher,
+            &serde_json::json!({
+                "op": "check_in",
+                "runtime_id": "claim-ledger-test-runtime",
+                "width": 32,
+                "height": 32,
+                "format": "bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[backing_fd],
+            0,
+        )
+        .expect("check_in");
+        unsafe { libc::close(backing_fd) };
+        // Held open deliberately: closing it would take the surface with it.
+        std::mem::forget(publisher);
+        response
+            .get("surface_id")
+            .and_then(|value| value.as_str())
+            .expect("the service minted a surface id")
+            .to_string()
+    }
+
+    fn wire_frame_naming(surface_id: &str) -> Vec<u8> {
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE];
+        rmpv::encode::write_value(
+            &mut frame,
+            &rmpv::Value::Map(vec![(
+                rmpv::Value::from("surface_id"),
+                rmpv::Value::from(surface_id),
+            )]),
+        )
+        .expect("encode the bag");
+        frame
+    }
+
+    /// The client the claims check out through. Returned alongside so the
+    /// connection outlives the ledger — a dropped connection would reclaim
+    /// every lease and hide whatever the ledger got wrong.
+    fn claims_against(
+        share: &SurfaceShareUnderTest,
+    ) -> (
+        Arc<HelperProcessGpuExchangeClient>,
+        HelperProcessQueuedBagSurfaceClaims,
+    ) {
+        // The client needs an escalate callable it never uses here — the
+        // claim path speaks only to the surface-share socket.
+        Python::initialize();
+        let client = Python::attach(|python| {
+            Arc::new(HelperProcessGpuExchangeClient::new(
+                python.None(),
+                share.socket_path.clone(),
+            ))
+        });
+        let claims = HelperProcessQueuedBagSurfaceClaims::new(Arc::clone(&client));
+        (client, claims)
+    }
+
+    fn outstanding(share: &SurfaceShareUnderTest, surface_id: &str) -> u32 {
+        share
+            .check_out_leases
+            .outstanding_check_out_count(surface_id)
+            .expect("the lease table stays readable")
+    }
+
+    /// The whole point: a queued bag's frame is claimed before anyone reads
+    /// it, stays claimed while the processor has it, and is let go after.
+    #[test]
+    fn a_queued_bag_is_claimed_on_arrival_and_released_after_the_callback() {
+        let share = start_surface_share("callback");
+        let surface_id = publish_one_surface(&share);
+        let (_client, claims) = claims_against(&share);
+        let frame = wire_frame_naming(&surface_id);
+
+        claims.bag_queued(&frame);
+        assert_eq!(
+            outstanding(&share, &surface_id),
+            1,
+            "a bag waiting its turn must already be protected"
+        );
+
+        claims.bag_departed(&frame, QueuedBagDeparture::DeliveredToProcessor);
+        assert_eq!(
+            outstanding(&share, &surface_id),
+            1,
+            "the claim outlives the read, so user code can resolve the surface after it"
+        );
+
+        claims.release_every_claim_the_processor_has_finished_with();
+        assert_eq!(outstanding(&share, &surface_id), 0);
+    }
+
+    /// A bag the queue threw away is never read, so its claim owes an
+    /// immediate release — the leak that would otherwise cost one pinned slot
+    /// per dropped frame on a lagging latest-wins port.
+    #[test]
+    fn a_bag_discarded_unread_releases_its_claim_at_once() {
+        let share = start_surface_share("discarded");
+        let surface_id = publish_one_surface(&share);
+        let (_client, claims) = claims_against(&share);
+        let frame = wire_frame_naming(&surface_id);
+
+        claims.bag_queued(&frame);
+        claims.bag_departed(&frame, QueuedBagDeparture::DiscardedUnread);
+        assert_eq!(outstanding(&share, &surface_id), 0);
+    }
+
+    /// A manual-mode processor drives itself and runs no host loop, so
+    /// nothing ever sweeps after a callback. Its claims must still balance,
+    /// or its producer's pool fills to the cap and never recovers.
+    ///
+    /// Mental-revert: release only from the host loop's post-`process()`
+    /// sweep and the first frame's claim is still outstanding here.
+    #[test]
+    fn a_processor_that_never_sweeps_still_lets_go_of_the_bag_before_last() {
+        let share = start_surface_share("manual");
+        let first_surface_id = publish_one_surface(&share);
+        let second_surface_id = publish_one_surface(&share);
+        let (_client, claims) = claims_against(&share);
+        let first = wire_frame_naming(&first_surface_id);
+        let second = wire_frame_naming(&second_surface_id);
+
+        claims.bag_queued(&first);
+        claims.bag_departed(&first, QueuedBagDeparture::DeliveredToProcessor);
+        claims.bag_queued(&second);
+        claims.bag_departed(&second, QueuedBagDeparture::DeliveredToProcessor);
+
+        assert_eq!(
+            outstanding(&share, &first_surface_id),
+            0,
+            "asking for another bag means the processor is done with the last one"
+        );
+        assert_eq!(
+            outstanding(&share, &second_surface_id),
+            1,
+            "the bag it is reading now stays protected"
+        );
+    }
+
+    /// Teardown owes a release for everything still held, on both sides of
+    /// the ledger.
+    #[test]
+    fn dropping_the_ledger_releases_everything_it_was_holding() {
+        let share = start_surface_share("teardown");
+        let queued_surface_id = publish_one_surface(&share);
+        let reading_surface_id = publish_one_surface(&share);
+        let (_client, claims) = claims_against(&share);
+        let queued = wire_frame_naming(&queued_surface_id);
+        let being_read = wire_frame_naming(&reading_surface_id);
+
+        claims.bag_queued(&being_read);
+        claims.bag_departed(&being_read, QueuedBagDeparture::DeliveredToProcessor);
+        claims.bag_queued(&queued);
+        assert_eq!(outstanding(&share, &queued_surface_id), 1);
+        assert_eq!(outstanding(&share, &reading_surface_id), 1);
+
+        drop(claims);
+        assert_eq!(outstanding(&share, &queued_surface_id), 0);
+        assert_eq!(outstanding(&share, &reading_surface_id), 0);
+    }
+
+    /// A bag naming no surface costs the service nothing — the common case on
+    /// an audio or control port, which must not pay for the GPU path.
+    #[test]
+    fn a_bag_naming_no_surface_claims_nothing() {
+        let share = start_surface_share("surfaceless");
+        let surface_id = publish_one_surface(&share);
+        let (_client, claims) = claims_against(&share);
+
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE];
+        rmpv::encode::write_value(
+            &mut frame,
+            &rmpv::Value::Map(vec![(
+                rmpv::Value::from("samples"),
+                rmpv::Value::from(48_000),
+            )]),
+        )
+        .expect("encode the bag");
+
+        claims.bag_queued(&frame);
+        claims.bag_departed(&frame, QueuedBagDeparture::DeliveredToProcessor);
+        assert_eq!(outstanding(&share, &surface_id), 0);
     }
 }
