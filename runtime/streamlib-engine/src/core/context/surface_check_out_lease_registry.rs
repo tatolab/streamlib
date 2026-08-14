@@ -3,18 +3,10 @@
 
 //! The cross-process half of the pixel-buffer pool's taken-until-released test.
 //!
-//! In one address space a held surface is visible as an `Arc` refcount and the
-//! pool skips any slot whose count is above its baseline. A helper child
-//! holding the same surface bumps nothing the parent can see, so its checkout
-//! records a lease here and the pool reads both answers together — see
+//! In one address space a held surface is an `Arc` refcount the pool can see; a
+//! helper child holding the same surface bumps nothing, so its checkout records
+//! a lease here instead. Rationale:
 //! `docs/decisions/surface-id-lifetime-contract.md`.
-//!
-//! The pool's availability test and its slot hand-off run under one guard
-//! ([`SurfaceCheckOutLeaseRegistry::hold_for_pool_slot_hand_off`]), which the
-//! minting side takes too. A checkout therefore serializes strictly before the
-//! test or strictly after the hand-off, never between them: without that, a
-//! checkout landing mid-decision leases a slot the pool has already promised
-//! to a producer, and the frame changes under the reader.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -161,11 +153,12 @@ impl SurfaceCheckOutLeaseRegistry {
     }
 
     /// Take the table for the length of one pool availability test and the
-    /// slot hand-off that follows it.
+    /// slot hand-off that follows it, so a checkout — which takes the same
+    /// lock — lands strictly before or strictly after, never between them
+    /// where it would lease a slot already promised to a producer.
     ///
-    /// `None` when the table cannot be read — a panic left the lock poisoned.
-    /// The pool must then skip reuse entirely rather than guess: a slot it
-    /// cannot prove is free may be under a consumer's eye.
+    /// `None` when the table cannot be read: a panic left the lock poisoned,
+    /// and the pool must then skip reuse rather than guess.
     pub fn hold_for_pool_slot_hand_off(&self) -> Option<SurfaceCheckOutLeaseHandOff<'_>> {
         self.table
             .lock()

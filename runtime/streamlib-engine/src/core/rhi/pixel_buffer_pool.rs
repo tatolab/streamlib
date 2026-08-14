@@ -110,8 +110,10 @@ impl RhiPixelBufferPool {
     ///
     /// What a manager calls when every existing slot is held — by an
     /// in-process reader or by a cross-process checkout lease — and the
-    /// producer still needs somewhere to write. Distinct from
-    /// [`Self::acquire`], which only ever recycles.
+    /// producer still needs somewhere to write. What comes back is always a
+    /// slot no caller has seen before, which on Linux means a fresh
+    /// allocation ([`Self::acquire`] there only recycles) and on macOS is
+    /// what `CVPixelBufferPool` already does per call.
     pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         #[cfg(target_os = "macos")]
         {

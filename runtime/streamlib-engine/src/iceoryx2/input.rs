@@ -460,6 +460,12 @@ impl InputMailboxesInner {
             })
         } else {
             let required_bytes = candidate.0.len();
+            // The pop above already reported this frame as delivered, so a
+            // queued-bag observer counts it as the processor's before the
+            // caller resizes and actually receives it. Unreachable from the
+            // one path that installs an observer — the wheel reads unbounded
+            // — but a bounded reader that installs one needs a departure
+            // reason of its own here.
             port_config.staged_oversized = Some(candidate);
             Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
         }

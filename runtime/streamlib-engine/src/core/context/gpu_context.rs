@@ -109,6 +109,30 @@ struct PixelBufferPoolManager {
     device: Arc<GpuDevice>,
 }
 
+/// What one `acquire` is allowed to conclude about reusing an existing slot.
+///
+/// Held for the whole ring scan, so the answer a slot is tested against is
+/// still the answer when that slot is handed over.
+enum PoolSlotReuse<'leases> {
+    /// No surface-share service, so no cross-process consumer can exist.
+    RefcountIsTheWholeAnswer,
+    /// Leases are readable and pinned for the length of this decision.
+    LeaseAware(super::SurfaceCheckOutLeaseHandOff<'leases>),
+    /// The lease table could not be read, so no slot can be shown to be free
+    /// and none may be reused. Growth still serves the producer.
+    NothingCanBeProvenFree,
+}
+
+impl PoolSlotReuse<'_> {
+    fn permits(&self, pool_id: &str) -> bool {
+        match self {
+            Self::RefcountIsTheWholeAnswer => true,
+            Self::LeaseAware(hand_off) => !hand_off.is_checked_out_by_any_holder(pool_id),
+            Self::NothingCanBeProvenFree => false,
+        }
+    }
+}
+
 impl PixelBufferPoolManager {
     fn new(device: Arc<GpuDevice>) -> Self {
         Self {
@@ -259,7 +283,21 @@ impl PixelBufferPoolManager {
         // nobody holds it out of one. The first is an Arc refcount, the second
         // a checkout lease — see
         // `docs/decisions/surface-id-lifetime-contract.md`.
-        let check_out_leases = surface_store.and_then(SurfaceStore::check_out_leases);
+        //
+        // Held for the whole scan, so the lease answer a slot is tested
+        // against is still the answer when that slot is handed over: a
+        // checkout takes the same lock, and therefore lands strictly before
+        // the test or strictly after the clone, never between them where it
+        // would lease a slot already promised to the producer.
+        let reuse = match surface_store.and_then(SurfaceStore::check_out_leases) {
+            // No service, so no cross-process consumer can exist and the
+            // refcount is the whole answer.
+            None => PoolSlotReuse::RefcountIsTheWholeAnswer,
+            Some(leases) => match leases.hold_for_pool_slot_hand_off() {
+                Some(hand_off) => PoolSlotReuse::LeaseAware(hand_off),
+                None => PoolSlotReuse::NothingCanBeProvenFree,
+            },
+        };
 
         // Ring buffer: try each buffer starting from next_index, skip if in use
         for _ in 0..buffer_count {
@@ -267,29 +305,11 @@ impl PixelBufferPoolManager {
             ring_pool.next_index = (ring_pool.next_index + 1) % buffer_count;
 
             let entry = &ring_pool.buffers[idx];
+            if !reuse.permits(entry.pool_id.as_str()) {
+                continue;
+            }
 
-            let handed_off = match check_out_leases {
-                // No service, so no cross-process consumer can exist and the
-                // refcount is the whole answer.
-                None => Self::hand_off_if_unheld_in_process(entry),
-                Some(leases) => match leases.hold_for_pool_slot_hand_off() {
-                    // The availability test and the hand-off both happen under
-                    // this guard, and a checkout takes the same lock: it
-                    // therefore lands strictly before the test or strictly
-                    // after the clone, never between them, where it would
-                    // lease a slot already promised to the producer.
-                    Some(hand_off) => (!hand_off
-                        .is_checked_out_by_any_holder(entry.pool_id.as_str()))
-                    .then(|| Self::hand_off_if_unheld_in_process(entry))
-                    .flatten(),
-                    // Fail closed. A slot whose lease state cannot be read may
-                    // be under a consumer's eye, and rehanding it there is the
-                    // silent corruption this whole mechanism removes.
-                    None => None,
-                },
-            };
-
-            if let Some(handed_off) = handed_off {
+            if let Some(handed_off) = Self::hand_off_if_unheld_in_process(entry) {
                 tracing::trace!(
                     "PixelBufferPoolManager: acquired buffer {} (idx {})",
                     entry.pool_id,
@@ -298,6 +318,9 @@ impl PixelBufferPoolManager {
                 return Ok(handed_off);
             }
         }
+        // Nothing was reusable; growth below allocates instead, which needs no
+        // lease answer — a slot that has never existed cannot be checked out.
+        drop(reuse);
 
         // All buffers in use - try to expand the pool up to POOL_MAX_BUFFER_COUNT
         if buffer_count < POOL_MAX_BUFFER_COUNT {

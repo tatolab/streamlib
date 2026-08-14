@@ -79,6 +79,17 @@ impl PortMailbox {
         }
     }
 
+    /// Pop one entry and report it leaving — the shape every exit but
+    /// `pop_latest` takes, which reports a bag only once it knows a newer one
+    /// displaced it.
+    fn pop_reporting(&self, departure: QueuedBagDeparture) -> Option<Vec<u8>> {
+        let popped = self.queue.pop();
+        if let Some(leaving) = &popped {
+            self.report_departure(leaving, departure);
+        }
+        popped
+    }
+
     /// Push a raw frame slice into the mailbox.
     ///
     /// If the mailbox is full, the oldest entry is dropped to make room.
@@ -90,19 +101,12 @@ impl PortMailbox {
             observer.bag_queued(&payload);
         }
 
-        // If full, pop oldest to make room
-        while self.queue.is_full() {
-            if let Some(evicted) = self.queue.pop() {
-                self.report_departure(&evicted, QueuedBagDeparture::DiscardedUnread);
-            }
-        }
-        // Push should succeed now (may fail if another thread filled it, retry)
+        // Evict the oldest and retry until it fits — which also covers a full
+        // queue, so there is no separate pre-drain to keep in step with this.
         let mut val = payload;
         while let Err(v) = self.queue.push(val) {
             val = v;
-            if let Some(evicted) = self.queue.pop() {
-                self.report_departure(&evicted, QueuedBagDeparture::DiscardedUnread);
-            }
+            self.pop_reporting(QueuedBagDeparture::DiscardedUnread);
         }
     }
 
@@ -110,17 +114,15 @@ impl PortMailbox {
     ///
     /// Thread-safe: can be called from any thread.
     pub fn pop(&self) -> Option<Vec<u8>> {
-        let popped = self.queue.pop();
-        if let Some(delivered) = &popped {
-            self.report_departure(delivered, QueuedBagDeparture::DeliveredToProcessor);
-        }
-        popped
+        self.pop_reporting(QueuedBagDeparture::DeliveredToProcessor)
     }
 
     /// Drain buffer and return only the newest entry.
     ///
     /// Thread-safe: can be called from any thread.
     pub fn pop_latest(&self) -> Option<Vec<u8>> {
+        // A bag is reported discarded only once a newer one displaces it, so
+        // the last one out is delivered rather than skipped past.
         let mut latest = None;
         while let Some(value) = self.queue.pop() {
             if let Some(skipped_past) = latest.replace(value) {
@@ -152,13 +154,7 @@ impl PortMailbox {
     ///
     /// Thread-safe: can be called from any thread.
     pub fn drain(&self) -> impl Iterator<Item = Vec<u8>> + '_ {
-        std::iter::from_fn(move || {
-            let popped = self.queue.pop();
-            if let Some(delivered) = &popped {
-                self.report_departure(delivered, QueuedBagDeparture::DeliveredToProcessor);
-            }
-            popped
-        })
+        std::iter::from_fn(move || self.pop_reporting(QueuedBagDeparture::DeliveredToProcessor))
     }
 }
 
@@ -169,9 +165,10 @@ impl Drop for PortMailbox {
         if self.queued_bag_observer.get().is_none() {
             return;
         }
-        while let Some(abandoned) = self.queue.pop() {
-            self.report_departure(&abandoned, QueuedBagDeparture::DiscardedUnread);
-        }
+        while self
+            .pop_reporting(QueuedBagDeparture::DiscardedUnread)
+            .is_some()
+        {}
     }
 }
 

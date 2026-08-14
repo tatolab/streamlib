@@ -120,7 +120,9 @@ impl VulkanPixelBufferPool {
         let pool_id = PixelBufferPoolId::new();
         self.buffer_to_pool_id
             .lock()
-            .unwrap()
+            .map_err(|_| {
+                Error::BufferError("VulkanPixelBufferPool: the pool-id map is poisoned".into())
+            })?
             .insert(index, pool_id.clone());
 
         Ok((

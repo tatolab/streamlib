@@ -50,6 +50,17 @@ use crate::python_cuda_pixel_exchange::CudaImportedSurface;
 
 use streamlib::sdk::rhi::PixelFormat;
 
+/// Warn through the child's own log module.
+///
+/// This process installs no tracing subscriber, so `tracing` here reaches
+/// nobody; `streamlib.log` rides the escalate `Log` op into the unified JSONL.
+#[cfg(target_os = "linux")]
+fn warn_through_the_childs_log_module(python: Python<'_>, message: String) {
+    let _ = python
+        .import("streamlib.log")
+        .and_then(|log_module| log_module.call_method1("warn", (message,)));
+}
+
 /// One escalate round trip to the parent, called with the GIL attached.
 ///
 /// The callable is the bridge's `request_from_parent`, whose wait on the
@@ -238,36 +249,26 @@ impl Drop for HelperSurfaceReleaseDebt {
                 Ok(())
             })();
             if let Err(release_failure) = release_outcome {
-                // This process installs no tracing subscriber; the one
-                // observable route is the child's own log module, which
-                // rides the escalate `Log` op into the unified JSONL.
-                let _ = python.import("streamlib.log").and_then(|log_module| {
-                    log_module.call_method1(
-                        "warn",
-                        (format!(
-                            "releasing surface {} to the parent failed ({release_failure}); \
-                             its pool slot returns at teardown",
-                            self.handle_id
-                        ),),
-                    )
-                });
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "releasing surface {} to the parent failed ({release_failure}); its pool \
+                         slot returns at teardown",
+                        self.handle_id
+                    ),
+                );
             }
         });
     }
 }
 
 /// The checkout lease a surface owes the surface-share service: one
-/// `release_check_out`, over the same connection the checkout was minted on.
+/// `release_check_out`, over the connection the checkout was minted on.
 ///
-/// Distinct from [`HelperSurfaceReleaseDebt`], which unregisters a buffer this
-/// child asked the parent to allocate. This one says only "I am done reading";
-/// the surface belongs to its producer either way, and until it is paid the
-/// producer's pool will not recycle the slot underneath it.
-///
-/// Owned by the surface, so it is settled when the surface's
-/// `GpuSurfaceOwnedMemory` loses its last share — handle *and* every exported
-/// view. Paying it at `close()` would return the slot while a live tensor
-/// still addresses it.
+/// Unlike [`HelperSurfaceReleaseDebt`] this unregisters nothing — it says only
+/// "I am done reading". Owned by the surface, so it settles when the surface's
+/// `GpuSurfaceOwnedMemory` loses its last share, handle *and* every exported
+/// view: paying it at `close()` would return the slot under a live tensor.
 #[cfg(target_os = "linux")]
 pub(crate) struct HelperSurfaceCheckOutLeaseDebt {
     exchange_client: Arc<HelperProcessGpuExchangeClient>,
@@ -283,27 +284,17 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
         Python::attach(|python| {
             // The round trip blocks, so it runs detached — this can be a
             // capsule deleter running under the child's GIL.
-            let released = python.detach(|| {
-                self.exchange_client
-                    .surface_share_request(&serde_json::json!({
-                        "op": "release_check_out",
-                        "surface_id": self.surface_id,
-                    }))
-            });
+            let released =
+                python.detach(|| self.exchange_client.release_check_out(&self.surface_id));
             if let Err(release_failure) = released {
-                // This process installs no tracing subscriber; the one
-                // observable route is the child's own log module, which rides
-                // the escalate `Log` op into the unified JSONL.
-                let _ = python.import("streamlib.log").and_then(|log_module| {
-                    log_module.call_method1(
-                        "warn",
-                        (format!(
-                            "releasing the checkout of surface {} failed ({release_failure}); its \
-                             pool slot returns when this helper's connection closes",
-                            self.surface_id
-                        ),),
-                    )
-                });
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "releasing the checkout of surface {} failed ({release_failure}); its pool \
+                         slot returns when this helper's connection closes",
+                        self.surface_id
+                    ),
+                );
             }
         });
     }
@@ -324,13 +315,41 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
 #[cfg(target_os = "linux")]
 pub(crate) struct HelperProcessQueuedBagSurfaceClaims {
     exchange_client: Arc<HelperProcessGpuExchangeClient>,
-    /// Claims on bags still in the queue.
-    on_queued_bags: Mutex<Vec<String>>,
-    /// Claims on bags already handed to the processor. Released when the
-    /// callback returns rather than at the read, so user code that reads a
-    /// bag and resolves its surface a moment later never falls into a gap
-    /// between the two.
-    on_bags_the_processor_is_reading: Mutex<Vec<String>>,
+    ledger: Mutex<HelperProcessSurfaceClaimLedger>,
+}
+
+/// Which claims are on bags still queued and which are on the bag the
+/// processor is reading, under one lock so a claim is never in neither.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct HelperProcessSurfaceClaimLedger {
+    on_queued_bags: Vec<String>,
+    /// Released when the callback returns rather than at the read, so user
+    /// code that reads a bag and resolves its surface a moment later never
+    /// falls into a gap between the two.
+    on_bags_the_processor_is_reading: Vec<String>,
+}
+
+#[cfg(target_os = "linux")]
+impl HelperProcessSurfaceClaimLedger {
+    fn take_queued_claim(&mut self, surface_id: &str) -> bool {
+        let Some(position) = self
+            .on_queued_bags
+            .iter()
+            .position(|claimed| claimed == surface_id)
+        else {
+            return false;
+        };
+        self.on_queued_bags.swap_remove(position);
+        true
+    }
+
+    fn move_queued_claim_to_the_processor(&mut self, surface_id: &str) {
+        if self.take_queued_claim(surface_id) {
+            self.on_bags_the_processor_is_reading
+                .push(surface_id.to_string());
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -338,56 +357,37 @@ impl HelperProcessQueuedBagSurfaceClaims {
     pub(crate) fn new(exchange_client: Arc<HelperProcessGpuExchangeClient>) -> Self {
         Self {
             exchange_client,
-            on_queued_bags: Mutex::new(Vec::new()),
-            on_bags_the_processor_is_reading: Mutex::new(Vec::new()),
+            ledger: Mutex::new(HelperProcessSurfaceClaimLedger::default()),
         }
     }
 
     /// Release every claim taken for a bag the processor has now finished
     /// with. Called once per `process()` return.
     pub(crate) fn release_every_claim_the_processor_has_finished_with(&self) {
-        let finished_with = std::mem::take(&mut *self.on_bags_the_processor_is_reading.lock());
+        // Taken out from under the lock first: each release is a socket round
+        // trip, and none of them belongs inside it.
+        let finished_with = {
+            let mut ledger = self.ledger.lock();
+            std::mem::take(&mut ledger.on_bags_the_processor_is_reading)
+        };
         for surface_id in finished_with {
             self.release_one_claim(&surface_id);
         }
     }
 
     fn release_one_claim(&self, surface_id: &str) {
-        let released = self
-            .exchange_client
-            .surface_share_request(&serde_json::json!({
-                "op": "release_check_out",
-                "surface_id": surface_id,
-            }));
-        if let Err(release_failure) = released {
-            tracing::debug!(
-                surface_id,
-                error = %release_failure,
-                "releasing a queued bag's surface claim failed; the slot returns when this \
-                 helper's surface-share connection closes"
-            );
+        if let Err(release_failure) = self.exchange_client.release_check_out(surface_id) {
+            Python::attach(|python| {
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "releasing the claim on queued surface {surface_id} failed \
+                         ({release_failure}); its pool slot returns when this helper's \
+                         surface-share connection closes"
+                    ),
+                );
+            });
         }
-    }
-
-    /// Move one claim on `surface_id` out of `from` and into `into`, or drop
-    /// it entirely when `into` is `None`. Returns whether a claim was found:
-    /// a bag whose surfaces were never claimed (the service did not know
-    /// them) owes nothing on the way out.
-    fn transfer_one_claim(
-        surface_id: &str,
-        from: &Mutex<Vec<String>>,
-        into: Option<&Mutex<Vec<String>>>,
-    ) -> bool {
-        let mut held = from.lock();
-        let Some(position) = held.iter().position(|held_id| held_id == surface_id) else {
-            return false;
-        };
-        let claim = held.swap_remove(position);
-        drop(held);
-        if let Some(into) = into {
-            into.lock().push(claim);
-        }
-        true
     }
 }
 
@@ -395,27 +395,25 @@ impl HelperProcessQueuedBagSurfaceClaims {
 impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
     fn bag_queued(&self, wire_frame: &[u8]) {
         for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
-            let checked_out = self
-                .exchange_client
-                .surface_share_request(&serde_json::json!({
-                    "op": "check_out",
-                    "surface_id": surface_id,
-                }));
-            // A refusal is the ordinary answer for a string that merely looks
-            // like a surface id, so it is not worth a log line. The fds a
-            // successful checkout returns close with the response: this claim
-            // is about the frame staying still, not about reading it.
-            match checked_out {
+            // The fds a successful checkout returns close with the response:
+            // this claim is about the frame staying still, not about reading
+            // it.
+            match self.exchange_client.check_out_surface(&surface_id) {
                 Ok((response, _plane_fds_closed_by_scope)) if response.get("error").is_none() => {
-                    self.on_queued_bags.lock().push(surface_id);
+                    self.ledger.lock().on_queued_bags.push(surface_id);
                 }
+                // A refusal is the ordinary answer for a string that merely
+                // looks like a surface id.
                 Ok(_) => {}
-                Err(checkout_failure) => tracing::debug!(
-                    surface_id,
-                    error = %checkout_failure,
-                    "could not claim a queued bag's surface; its producer may recycle the \
-                     frame before this processor reads it"
-                ),
+                Err(checkout_failure) => Python::attach(|python| {
+                    warn_through_the_childs_log_module(
+                        python,
+                        format!(
+                            "could not claim queued surface {surface_id} ({checkout_failure}); \
+                             its producer may recycle the frame before this processor reads it"
+                        ),
+                    );
+                }),
             }
         }
     }
@@ -423,15 +421,15 @@ impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
     fn bag_departed(&self, wire_frame: &[u8], departure: QueuedBagDeparture) {
         for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
             match departure {
-                QueuedBagDeparture::DeliveredToProcessor => {
-                    Self::transfer_one_claim(
-                        &surface_id,
-                        &self.on_queued_bags,
-                        Some(&self.on_bags_the_processor_is_reading),
-                    );
-                }
+                QueuedBagDeparture::DeliveredToProcessor => self
+                    .ledger
+                    .lock()
+                    .move_queued_claim_to_the_processor(&surface_id),
+                // A bag the queue threw away owes its release now — nobody
+                // will ever read it, and an unreleased claim pins a
+                // producer's slot until this helper's connection closes.
                 QueuedBagDeparture::DiscardedUnread => {
-                    if Self::transfer_one_claim(&surface_id, &self.on_queued_bags, None) {
+                    if self.ledger.lock().take_queued_claim(&surface_id) {
                         self.release_one_claim(&surface_id);
                     }
                 }
@@ -440,11 +438,15 @@ impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
     }
 }
 
-/// The surface ids a wire frame's bag names, in the order they appear.
+/// The surface ids a wire frame's bag names, in no particular order.
 ///
 /// Reads the bag as msgpack and collects every string under a `surface_id`
 /// key, at any depth. Nothing else in the bag is examined and no type is
 /// inferred — this is the handoff key, not a schema.
+///
+/// Borrows rather than decoding: a bag may carry inline `bytes`, and this runs
+/// twice per bag on the receive path, so materializing the tree would copy
+/// every payload just to find a string.
 #[cfg(target_os = "linux")]
 fn surface_ids_named_by_wire_frame(wire_frame: &[u8]) -> Vec<String> {
     const SURFACE_ID_BAG_KEY: &str = "surface_id";
@@ -452,18 +454,26 @@ fn surface_ids_named_by_wire_frame(wire_frame: &[u8]) -> Vec<String> {
     let Some(bag_bytes) = wire_frame.get(FRAME_HEADER_SIZE..) else {
         return Vec::new();
     };
-    let Ok(bag) = rmpv::decode::read_value(&mut &bag_bytes[..]) else {
+    let Ok(bag) = rmpv::decode::read_value_ref(&mut &bag_bytes[..]) else {
         return Vec::new();
     };
+
+    fn utf8_of<'value>(value: &'value rmpv::ValueRef<'_>) -> Option<&'value str> {
+        match value {
+            rmpv::ValueRef::String(text) => text.as_str(),
+            _ => None,
+        }
+    }
 
     let mut named = Vec::new();
     let mut unvisited = vec![bag];
     while let Some(value) = unvisited.pop() {
         match value {
-            rmpv::Value::Map(entries) => {
+            rmpv::ValueRef::Map(entries) => {
                 for (key, entry) in entries {
-                    if key.as_str() == Some(SURFACE_ID_BAG_KEY) {
-                        if let Some(surface_id) = entry.as_str() {
+                    let names_a_surface = utf8_of(&key) == Some(SURFACE_ID_BAG_KEY);
+                    if names_a_surface {
+                        if let Some(surface_id) = utf8_of(&entry) {
                             named.push(surface_id.to_string());
                             continue;
                         }
@@ -471,7 +481,7 @@ fn surface_ids_named_by_wire_frame(wire_frame: &[u8]) -> Vec<String> {
                     unvisited.push(entry);
                 }
             }
-            rmpv::Value::Array(entries) => unvisited.extend(entries),
+            rmpv::ValueRef::Array(entries) => unvisited.extend(entries),
             _ => {}
         }
     }
@@ -583,8 +593,7 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
-        let request = serde_json::json!({"op": "check_out", "surface_id": surface_id});
-        let (response, received_fds) = self.surface_share_request(&request)?;
+        let (response, received_fds) = self.check_out_surface(surface_id)?;
         self.import_checked_out_surface(surface_id, &response, received_fds)
     }
 
@@ -693,8 +702,11 @@ impl HelperProcessGpuExchangeClient {
         described: &DeviceExportStagingDescription,
     ) -> PyResult<HelperDeviceExport> {
         let staging_share_id = described.staging_share_id.as_str();
-        let request = serde_json::json!({"op": "check_out", "surface_id": staging_share_id});
-        let (response, received_fds) = self.surface_share_request(&request)?;
+        // The staging's own claim is never released: it is memoised for this
+        // child's lifetime and is escalate-allocated rather than pool-backed,
+        // so the lease pins no producer's slot. A pool-backed staging would
+        // owe a debt here.
+        let (response, received_fds) = self.check_out_surface(staging_share_id)?;
         if let Some(checkout_error) = response.get("error").and_then(|value| value.as_str()) {
             return Err(crate::python_processor_context::gpu_operation_error(
                 format!(
@@ -808,6 +820,27 @@ impl HelperProcessGpuExchangeClient {
             .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
             .collect();
         Ok((response, received_fds))
+    }
+
+    /// Claim a surface against producer reuse and take its plane fds.
+    ///
+    /// The one place this op is spelled: a checkout is what pins the frame,
+    /// and every caller owes the matching [`Self::release_check_out`].
+    #[cfg(target_os = "linux")]
+    fn check_out_surface(&self, surface_id: &str) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+        self.surface_share_request(&serde_json::json!({
+            "op": "check_out",
+            "surface_id": surface_id,
+        }))
+    }
+
+    /// Let go of one claim on a surface, freeing its slot for its producer.
+    #[cfg(target_os = "linux")]
+    fn release_check_out(&self, surface_id: &str) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+        self.surface_share_request(&serde_json::json!({
+            "op": "release_check_out",
+            "surface_id": surface_id,
+        }))
     }
 
     /// Validate the checkout metadata and turn the plane fds into mapped
@@ -1038,6 +1071,18 @@ mod tests {
 
         let wrong_type = wire_frame_carrying(map(vec![("surface_id", rmpv::Value::from(7))]));
         assert!(surface_ids_named_by_wire_frame(&wrong_type).is_empty());
+    }
+
+    /// Inline `bytes` in a bag are the reason this borrows rather than
+    /// decoding — the scan runs twice per bag and must not copy a payload to
+    /// find a string.
+    #[test]
+    fn a_bag_carrying_inline_bytes_still_names_its_surface() {
+        let frame = wire_frame_carrying(map(vec![
+            ("surface_id", rmpv::Value::from("frame-7")),
+            ("thumbnail", rmpv::Value::Binary(vec![0xab; 4096])),
+        ]));
+        assert_eq!(surface_ids_named_by_wire_frame(&frame), vec!["frame-7"]);
     }
 
     /// A frame too short to hold a header, or carrying bytes that are not

@@ -155,7 +155,8 @@ fn run_listener(
                     {
                         Ok(0) => {}
                         Ok(freed) => tracing::debug!(
-                            "[Surface share] {} released {} surface(s) it still held",
+                            "[Surface share] {} dropped its claims, freeing {} slot(s) for \
+                             their producers",
                             lease_holder,
                             freed
                         ),
@@ -641,16 +642,17 @@ fn handle_check_out(
     request: &serde_json::Value,
     lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> (serde_json::Value, Vec<RawFd>) {
+    let Some(surface_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
+    };
+
     let (response, reply_fds) = handle_lookup(state, request);
     if response.get("error").is_some() {
         return (response, reply_fds);
     }
-
-    // `handle_lookup` cannot succeed without one.
-    let surface_id = request
-        .get("surface_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
 
     if let Err(unrecordable) = state
         .check_out_leases()
@@ -690,14 +692,11 @@ fn handle_release_check_out(
     request: &serde_json::Value,
     lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> (serde_json::Value, Vec<RawFd>) {
-    let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return (
-                serde_json::json!({"error": "missing surface_id"}),
-                Vec::new(),
-            );
-        }
+    let Some(surface_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
     };
 
     match state
@@ -715,18 +714,20 @@ fn handle_release_check_out(
     }
 }
 
+/// The surface a request names, or `None` when it names none.
+fn requested_surface_id(request: &serde_json::Value) -> Option<&str> {
+    request.get("surface_id").and_then(|v| v.as_str())
+}
+
 fn handle_lookup(
     state: &SurfaceShareState,
     request: &serde_json::Value,
 ) -> (serde_json::Value, Vec<RawFd>) {
-    let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return (
-                serde_json::json!({"error": "missing surface_id"}),
-                Vec::new(),
-            );
-        }
+    let Some(surface_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
     };
 
     let checkout = match state.get_surface_planes(surface_id) {
