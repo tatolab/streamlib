@@ -443,12 +443,6 @@ struct CameraGpuResources {
     color_converter: RhiColorConverter,
     recorder: RhiCommandRecorder,
     timeline: Arc<HostVulkanTimelineSemaphore>,
-    // Per-ring-slot single-writer-per-edge exportable timeline pairs —
-    // `produce_done` signaled by the camera capture path, `consume_done` by
-    // cross-process consumers. See
-    // `docs/architecture/adapter-timeline-single-writer.md`.
-    ring_produce_done: Vec<Arc<HostVulkanTimelineSemaphore>>,
-    ring_consume_done: Vec<Arc<HostVulkanTimelineSemaphore>>,
     input_storage_buffers: Vec<StorageBuffer>,
     input_mapped_ptrs: [*mut u8; 2],
     ring_textures: Vec<Texture>,
@@ -637,15 +631,11 @@ fn capture_thread_loop(
         // allocation slot (tiled DRM modifier; usage superset is harmless).
         let mut ring_textures: Vec<Texture> = Vec::with_capacity(RING_TEXTURE_COUNT);
         let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_produce_done = Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_consume_done = Vec::with_capacity(RING_TEXTURE_COUNT);
         for _ in 0..RING_TEXTURE_COUNT {
             let stream_texture =
                 full.acquire_render_target_dma_buf_image(width, height, TextureFormat::Rgba8Unorm)?;
             ring_texture_ids.push(uuid::Uuid::new_v4().to_string());
             ring_textures.push(stream_texture);
-            ring_produce_done.push(full.create_exportable_timeline_semaphore(0)?);
-            ring_consume_done.push(full.create_exportable_timeline_semaphore(0)?);
         }
 
         // DMA-BUF probe — VIDIOC_EXPBUF on each V4L2 buffer + Vulkan import.
@@ -722,8 +712,6 @@ fn capture_thread_loop(
             color_converter,
             recorder,
             timeline,
-            ring_produce_done,
-            ring_consume_done,
             input_storage_buffers,
             input_mapped_ptrs,
             ring_textures,
@@ -739,8 +727,6 @@ fn capture_thread_loop(
         color_converter,
         mut recorder,
         timeline: camera_timeline,
-        ring_produce_done,
-        ring_consume_done,
         input_storage_buffers,
         input_mapped_ptrs,
         ring_textures,
@@ -773,8 +759,7 @@ fn capture_thread_loop(
         );
     }
 
-    // Each ring slot carries a per-slot single-writer-per-edge exportable
-    // timeline pair; the post-compute barrier transitions the ring to
+    // The post-compute barrier transitions the ring to
     // `SHADER_READ_ONLY_OPTIMAL` before publish, so the registered layout
     // matches contents by the time any consumer dereferences `surface_id`.
     for (i, (texture_id, stream_texture)) in ring_texture_ids
@@ -782,12 +767,17 @@ fn capture_thread_loop(
         .zip(ring_textures.iter())
         .enumerate()
     {
+        // No `produce_done` / `consume_done` pair: this camera orders its
+        // own ring reuse on its private timeline, and no cross-process
+        // consumer reads the ring — a device export sources the frame's
+        // pooled backing. Publishing fences nothing signals would promise
+        // an edge that does not exist.
         if let Some(store) = gpu_context.surface_store()
             && let Err(e) = store.register_texture(
                 texture_id,
                 stream_texture,
-                Some(&ring_produce_done[i]),
-                Some(&ring_consume_done[i]),
+                None,
+                None,
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             )
         {
@@ -1219,8 +1209,6 @@ fn capture_thread_loop(
     // ownership); dropping the buffers frees them through Vulkan.
     drop(dmabuf_imported_buffers);
     drop(ring_textures);
-    drop(ring_produce_done);
-    drop(ring_consume_done);
     drop(input_storage_buffers);
     drop(recorder);
     drop(color_converter);

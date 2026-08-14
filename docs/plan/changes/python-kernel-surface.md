@@ -169,9 +169,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   (`_engine.pyi:343`, `:365`).
 - REMOVED: importing a foreign DMA-BUF is not reachable from a Python processor yet
   The refusal (`python_processor_context.rs:745-759`) and its stub entry (`_engine.pyi:381`).
-- REMOVED: this surface's device export is read-only
-  The texture-backed write-back refusal (`device_export_staging.rs:512-518`) and the
-  `writable = false` texture arm (`:224`).
+- REMOVED: device export is read-only
+  The write-back refusal (`device_export_staging.rs:571-576`) and the `writable: false`
+  texture arm (`:265`). Only the texture arm retires here. surface-id-lifetime-contract
+  (#1865) routed dual-backed pool surfaces through that same refusal, so it now also enforces
+  the `[surface-id-lifetime-contract]` rule that a pool member its producer still owns exports
+  read-only — deleting the refusal wholesale would delete that rule's enforcement.
+  The literal above is shared by both halves and the surviving half keeps it in the tree, so
+  this bullet cannot go clean as written: re-cut it to an anchor unique to the texture arm
+  when this change is implemented.
 
 ## MODIFIED
 
