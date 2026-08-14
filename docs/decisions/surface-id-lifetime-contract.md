@@ -14,7 +14,12 @@ someone asks why a Python processor's frame cannot change under it.
 ## The decision
 
 1. A published surface id names an immutable frame: from publish until every holder
-   releases it, the pixels under that id do not change. This is not a new semantic — it
+   releases it, the pixels under that id do not change. Immutability binds the
+   producer and the pool — a slot is never recycled or rewritten under a holder. It
+   does not ban the surface's own write-back protocol: a writable buffer-only export
+   publishing an explicit in-place edit other holders are meant to observe, ordered
+   by the engine, is part of the contract — mutation through the surface's protocol,
+   never covert reuse. This is not a new semantic — it
    is the pool's original CVPixelBufferPool / IOSurface-lineage model
    (taken-until-released, skip-if-held, grow-on-pressure), which the engine has always
    implemented in-process via an Arc refcount, extended to where consumers now live.
@@ -25,7 +30,9 @@ someone asks why a Python processor's frame cannot change under it.
    frame: a slow consumer costs memory, then its own frames, never another processor's
    cadence.
 4. A cross-process export is sourced from the surface's pooled backing whenever one
-   exists, read-only. Texture-first export survives only for surfaces with no pooled
+   exists. A dual-backed surface (registered texture + pool member — the
+   producer-published shape) exports read-only; a buffer-only surface keeps its
+   writable semantics. Texture-first export survives only for surfaces with no pooled
    backing (kernel outputs, whose id↔backing binding is stable).
 
 ## Why

@@ -18,9 +18,10 @@ Recon verified at HEAD `d14f9be3` on 2026-08-13, by two independent code sweeps
 ## Behavior after this change
 
 A published surface id names an immutable frame. From publish until every holder
-releases it, the pixels under that id do not change: the pool slot backing a held
+releases it, the pixels under that id change only through the surface's own explicit
+write-back protocol, never through producer reuse: the pool slot backing a held
 surface is never rehanded to the producer — in-process via the existing refcount,
-cross-process via a checkout lease. The producer never waits on a consumer: the pool
+cross-process via a checkout lease the consumer's host takes at bag receipt. The producer never waits on a consumer: the pool
 skips leased slots and grows to its cap, and at cap the producer drops its own frame.
 A producer-internal transient (the camera's frames-in-flight ring texture) never backs
 a cross-process export; the export blit sources the surface's pooled backing whenever
@@ -62,11 +63,15 @@ describe the same frame, and that frame is the one the bag delivered.
   primitive surface entry:
 
   > **DECIDED** — A published surface id names an immutable frame: from publish until
-  > every holder releases it, the pixels under that id do not change. The pool slot
+  > every holder releases it, the pixels under that id change only through the
+  > surface's own write-back protocol (an explicit, engine-ordered edit other holders
+  > are meant to observe) — never through producer reuse. The pool slot
   > backing a held surface is never rehanded to a producer — in-process via the
   > existing refcount, cross-process via a checkout lease minted by the surface-share
   > service at checkout, released explicitly by the consumer and reclaimed on
-  > connection drop. The producer never waits on a consumer: the pool skips leased
+  > connection drop. The consumer's host performs that checkout eagerly at bag
+  > receipt, not when user code first touches the surface, so the guarantee runs
+  > from delivery; the publish-to-checkout transit is protected by pool depth. The producer never waits on a consumer: the pool skips leased
   > slots and grows to its cap; at cap the producer drops its own frame — a slow
   > consumer costs memory, then its own frames, never another processor's cadence. A
   > producer-internal transient (a frames-in-flight ring texture) never backs a
@@ -75,17 +80,31 @@ describe the same frame, and that frame is the one the bag delivered.
   > no pooled backing (kernel outputs). [surface-id-lifetime-contract]
 
 - ADDED: a surface-share release verb — the wheel releases a checked-out surface when
-  its handle closes (or its owning frame scope ends), unpinning the lease; the
-  existing EPOLLHUP watchdog (`state.rs:438-446`, `surface_ids_by_runtime`) is the
-  backstop for a child that dies holding one. The release-debt bookkeeping extends
-  the shape `EscalateHandleRegistry` already carries for *acquired* buffers
-  (`python_helper_process_pixel_exchange.rs:212-248`) to *resolved* ones.
+  the **last share of its `GpuSurfaceOwnedMemory` drops**: handle close releases only
+  the handle's share, and every exported view (DLPack capsule, numpy view) holds its
+  own until its deleter runs — the ownership contract the wheel already implements
+  (`python_gpu_surface_pixel_exchange.rs:12-14`, `:69` — release runs in `Drop`, never
+  on `close()`, so a tensor outliving its handle keeps live memory). The lease rides
+  that same last-share drop; releasing at handle close alone would let the pool
+  recycle a slot under a live view. The existing EPOLLHUP watchdog
+  (`state.rs:438-446`, `surface_ids_by_runtime`) is the backstop for a child that
+  dies holding one. The release-debt bookkeeping extends the shape
+  `EscalateHandleRegistry` already carries for *acquired* buffers
+  (`python_helper_process_pixel_exchange.rs:212-248`) to *resolved* ones. The
+  checkout moves to the child host's bag-receipt path: today `resolve_surface` is a
+  user-facing call (`python_processor_context.rs:596-607`), so the lease could not
+  begin until user code touched the surface, leaving a queued bag unprotected for
+  its whole queue time; the host's reader thread checks out on arrival instead
+  (user-visible behavior unchanged — the handle the callback gets is already
+  checked out).
 - ADDED: an engine-level rotating-producer fixture and ground-truth test: a synthetic
   producer replicating the camera's shape (pool surface + transient ring texture
   registered under the pool id, counter-stamped pixels), asserting (a) a device
   export refilled after the producer has advanced ≥2 frames still returns the pixels
-  the bag was published with, and (b) a leased slot is never re-acquired while held,
-  and the pool grows then drops at cap. The exact test spelling is implementation's;
+  the bag was published with, and (b) a leased slot is never re-acquired while held —
+  including by a view that outlives its closed handle (close the handle, keep the
+  tensor, assert the slot stays leased until the view's deleter runs) — and the pool
+  grows then drops at cap. The exact test spelling is implementation's;
   the obligation is ground truth against the published frame, not view-identity.
 - ADDED: `test_camera_device_pixels_match_host_across_ring_cycles` unskips, rewritten
   per the ruling: on the rig it asserts the two views' identity across ring cycles
@@ -111,10 +130,19 @@ describe the same frame, and that frame is the one the bag delivered.
   a host→VRAM upload (~0.3–0.5 ms at 1080p, PCIe 4.0), paid only when a consumer
   takes a device tensor; the producer pays nothing new
   (`camera_source.rs:1078-1085` is unconditional today).
-- MODIFIED: pool acquire (`gpu_context.rs:256-290`) — availability becomes
-  refcount-free **and** lease-free; the surface-share service owns the lease set
-  (checkout pins, release/EPOLLHUP unpins), and the pool consults it through the
-  `surface_store` handle acquire already receives (`gpu_context.rs:126-131`).
+- MODIFIED: pool acquire (`gpu_context.rs:256-290`) — availability stays
+  refcount-aware in-process and becomes lease-aware across processes: a slot is
+  available only when it is neither held by an in-process refcount nor leased by a
+  checkout. The surface-share service owns the lease set (checkout pins,
+  release/EPOLLHUP unpins), and the pool consults it through the `surface_store`
+  handle acquire already receives (`gpu_context.rs:126-131`). The availability
+  check and the slot hand-off are one atomic operation with respect to the lease
+  set — a concurrent checkout cannot land between the check and the hand-off (the
+  pool lock at `gpu_context.rs:103` and the lease state at `state.rs:188` are
+  separate today; the claim mechanism is implementation's, the no-interleaving
+  invariant is not). When a surface-share service is running but its lease state
+  cannot be read, acquire fails closed and skips reuse; when no service is running,
+  no cross-process consumer can exist and the refcount check alone is complete.
 - MODIFIED: the camera loses nothing and waits on nothing new; on pool-exhausted it
   already drops the frame through the existing error path
   (`camera_source.rs:1132-1150`).
