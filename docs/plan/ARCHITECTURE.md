@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library, surface-id-lifetime-contract)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
