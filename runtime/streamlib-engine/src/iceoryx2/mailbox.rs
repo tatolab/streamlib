@@ -3,7 +3,7 @@
 
 //! Per-port mailbox using crossbeam ArrayQueue for thread-safe access.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crossbeam_queue::ArrayQueue;
 
@@ -46,20 +46,24 @@ pub trait QueuedBagObserver: Send + Sync {
 pub struct PortMailbox {
     queue: ArrayQueue<Vec<u8>>,
     capacity: usize,
-    queued_bag_observer: Option<Arc<dyn QueuedBagObserver>>,
+    /// Shared with the destination that owns this mailbox, so an observer
+    /// installed after the ports are wired reaches every one of them. A
+    /// `OnceLock` rather than a lock because this is read on the receive path
+    /// and written at most once, while the processor is being set up.
+    queued_bag_observer: Arc<OnceLock<Arc<dyn QueuedBagObserver>>>,
 }
 
 impl PortMailbox {
     /// Create a new mailbox with the given history depth.
     pub fn new(history: usize) -> Self {
-        Self::new_observed_by(history, None)
+        Self::new_observed_by(history, Arc::new(OnceLock::new()))
     }
 
     /// As [`Self::new`], but reporting every bag that enters and leaves to
-    /// `queued_bag_observer`.
+    /// whatever observer `queued_bag_observer` ends up holding.
     pub fn new_observed_by(
         history: usize,
-        queued_bag_observer: Option<Arc<dyn QueuedBagObserver>>,
+        queued_bag_observer: Arc<OnceLock<Arc<dyn QueuedBagObserver>>>,
     ) -> Self {
         let capacity = history.max(1);
         Self {
@@ -70,7 +74,7 @@ impl PortMailbox {
     }
 
     fn report_departure(&self, wire_frame: &[u8], departure: QueuedBagDeparture) {
-        if let Some(observer) = &self.queued_bag_observer {
+        if let Some(observer) = self.queued_bag_observer.get() {
             observer.bag_departed(wire_frame, departure);
         }
     }
@@ -82,7 +86,7 @@ impl PortMailbox {
     pub fn push(&self, payload: Vec<u8>) {
         // Announced before it is reachable, so a bag is never readable ahead
         // of the claim protecting it.
-        if let Some(observer) = &self.queued_bag_observer {
+        if let Some(observer) = self.queued_bag_observer.get() {
             observer.bag_queued(&payload);
         }
 
@@ -162,7 +166,7 @@ impl Drop for PortMailbox {
     /// A port unwired with bags still queued owes a departure for each of
     /// them, or their claims outlive the queue that made them.
     fn drop(&mut self) {
-        if self.queued_bag_observer.is_none() {
+        if self.queued_bag_observer.get().is_none() {
             return;
         }
         while let Some(abandoned) = self.queue.pop() {
@@ -200,11 +204,30 @@ mod tests {
 
     fn observed_mailbox(history: usize) -> (Arc<RecordingQueuedBagObserver>, PortMailbox) {
         let observer = Arc::new(RecordingQueuedBagObserver::default());
-        let mailbox = PortMailbox::new_observed_by(
-            history,
-            Some(Arc::clone(&observer) as Arc<dyn QueuedBagObserver>),
-        );
-        (observer, mailbox)
+        let slot: Arc<OnceLock<Arc<dyn QueuedBagObserver>>> = Arc::new(OnceLock::new());
+        slot.set(Arc::clone(&observer) as Arc<dyn QueuedBagObserver>)
+            .ok()
+            .expect("the observer slot is empty");
+        (observer, PortMailbox::new_observed_by(history, slot))
+    }
+
+    /// The install order the helper host actually uses: links are wired
+    /// before the processor's contexts are built, so the observer arrives
+    /// after the mailboxes do and must still reach them.
+    #[test]
+    fn an_observer_installed_after_the_mailbox_still_sees_its_bags() {
+        let observer = Arc::new(RecordingQueuedBagObserver::default());
+        let slot: Arc<OnceLock<Arc<dyn QueuedBagObserver>>> = Arc::new(OnceLock::new());
+        let mailbox = PortMailbox::new_observed_by(4, Arc::clone(&slot));
+
+        slot.set(Arc::clone(&observer) as Arc<dyn QueuedBagObserver>)
+            .ok()
+            .expect("the observer slot is empty");
+
+        mailbox.push(vec![9]);
+        mailbox.pop();
+        assert_eq!(*observer.queued.lock(), vec![9]);
+        assert_eq!(observer.unanswered_claims(), 0);
     }
 
     /// The pairing invariant, on the read path.

@@ -823,6 +823,16 @@ impl PythonRuntimeContextFullAccess {
             }
             _ => None,
         };
+        // The links are already wired by the time this runs, so the claims
+        // reach mailboxes that exist. Installed here because this is where
+        // the exchange client they check out through is built.
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &helper_process_exchange_client {
+            link_data_access
+                .bind(python)
+                .get()
+                .claim_queued_bag_surfaces_through(Arc::clone(exchange_client));
+        }
         Ok(Self {
             runtime_id,
             processor_id,

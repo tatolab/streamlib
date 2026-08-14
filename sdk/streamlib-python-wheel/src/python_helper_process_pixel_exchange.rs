@@ -43,6 +43,9 @@ use streamlib_consumer_rhi::{
 };
 
 #[cfg(target_os = "linux")]
+use streamlib::sdk::iceoryx2::{FRAME_HEADER_SIZE, QueuedBagDeparture, QueuedBagObserver};
+
+#[cfg(target_os = "linux")]
 use crate::python_cuda_pixel_exchange::CudaImportedSurface;
 
 use streamlib::sdk::rhi::PixelFormat;
@@ -281,10 +284,11 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
             // The round trip blocks, so it runs detached — this can be a
             // capsule deleter running under the child's GIL.
             let released = python.detach(|| {
-                self.exchange_client.surface_share_request(&serde_json::json!({
-                    "op": "release_check_out",
-                    "surface_id": self.surface_id,
-                }))
+                self.exchange_client
+                    .surface_share_request(&serde_json::json!({
+                        "op": "release_check_out",
+                        "surface_id": self.surface_id,
+                    }))
             });
             if let Err(release_failure) = released {
                 // This process installs no tracing subscriber; the one
@@ -303,6 +307,175 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
             }
         });
     }
+}
+
+/// The claims a helper child holds on the GPU surfaces its queued bags name.
+///
+/// `resolve_surface` is user-facing, so without this the claim on a delivered
+/// frame could not begin until user code reached for it — a bag waiting its
+/// turn behind a slow callback was unprotected for the whole wait, and the
+/// producer's pool recycled its slot underneath. Installed on the child's
+/// input mailboxes, which report every bag that enters and leaves.
+///
+/// The bag's own keys are the only place a surface can be named: the wire
+/// carries no type information by design, so this reads the one key the
+/// handoff contract fixes — `surface_id` — and a value the service does not
+/// know is simply not a surface.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperProcessQueuedBagSurfaceClaims {
+    exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    /// Claims on bags still in the queue.
+    on_queued_bags: Mutex<Vec<String>>,
+    /// Claims on bags already handed to the processor. Released when the
+    /// callback returns rather than at the read, so user code that reads a
+    /// bag and resolves its surface a moment later never falls into a gap
+    /// between the two.
+    on_bags_the_processor_is_reading: Mutex<Vec<String>>,
+}
+
+#[cfg(target_os = "linux")]
+impl HelperProcessQueuedBagSurfaceClaims {
+    pub(crate) fn new(exchange_client: Arc<HelperProcessGpuExchangeClient>) -> Self {
+        Self {
+            exchange_client,
+            on_queued_bags: Mutex::new(Vec::new()),
+            on_bags_the_processor_is_reading: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Release every claim taken for a bag the processor has now finished
+    /// with. Called once per `process()` return.
+    pub(crate) fn release_every_claim_the_processor_has_finished_with(&self) {
+        let finished_with = std::mem::take(&mut *self.on_bags_the_processor_is_reading.lock());
+        for surface_id in finished_with {
+            self.release_one_claim(&surface_id);
+        }
+    }
+
+    fn release_one_claim(&self, surface_id: &str) {
+        let released = self
+            .exchange_client
+            .surface_share_request(&serde_json::json!({
+                "op": "release_check_out",
+                "surface_id": surface_id,
+            }));
+        if let Err(release_failure) = released {
+            tracing::debug!(
+                surface_id,
+                error = %release_failure,
+                "releasing a queued bag's surface claim failed; the slot returns when this \
+                 helper's surface-share connection closes"
+            );
+        }
+    }
+
+    /// Move one claim on `surface_id` out of `from` and into `into`, or drop
+    /// it entirely when `into` is `None`. Returns whether a claim was found:
+    /// a bag whose surfaces were never claimed (the service did not know
+    /// them) owes nothing on the way out.
+    fn transfer_one_claim(
+        surface_id: &str,
+        from: &Mutex<Vec<String>>,
+        into: Option<&Mutex<Vec<String>>>,
+    ) -> bool {
+        let mut held = from.lock();
+        let Some(position) = held.iter().position(|held_id| held_id == surface_id) else {
+            return false;
+        };
+        let claim = held.swap_remove(position);
+        drop(held);
+        if let Some(into) = into {
+            into.lock().push(claim);
+        }
+        true
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
+    fn bag_queued(&self, wire_frame: &[u8]) {
+        for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
+            let checked_out = self
+                .exchange_client
+                .surface_share_request(&serde_json::json!({
+                    "op": "check_out",
+                    "surface_id": surface_id,
+                }));
+            // A refusal is the ordinary answer for a string that merely looks
+            // like a surface id, so it is not worth a log line. The fds a
+            // successful checkout returns close with the response: this claim
+            // is about the frame staying still, not about reading it.
+            match checked_out {
+                Ok((response, _plane_fds_closed_by_scope)) if response.get("error").is_none() => {
+                    self.on_queued_bags.lock().push(surface_id);
+                }
+                Ok(_) => {}
+                Err(checkout_failure) => tracing::debug!(
+                    surface_id,
+                    error = %checkout_failure,
+                    "could not claim a queued bag's surface; its producer may recycle the \
+                     frame before this processor reads it"
+                ),
+            }
+        }
+    }
+
+    fn bag_departed(&self, wire_frame: &[u8], departure: QueuedBagDeparture) {
+        for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
+            match departure {
+                QueuedBagDeparture::DeliveredToProcessor => {
+                    Self::transfer_one_claim(
+                        &surface_id,
+                        &self.on_queued_bags,
+                        Some(&self.on_bags_the_processor_is_reading),
+                    );
+                }
+                QueuedBagDeparture::DiscardedUnread => {
+                    if Self::transfer_one_claim(&surface_id, &self.on_queued_bags, None) {
+                        self.release_one_claim(&surface_id);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The surface ids a wire frame's bag names, in the order they appear.
+///
+/// Reads the bag as msgpack and collects every string under a `surface_id`
+/// key, at any depth. Nothing else in the bag is examined and no type is
+/// inferred — this is the handoff key, not a schema.
+#[cfg(target_os = "linux")]
+fn surface_ids_named_by_wire_frame(wire_frame: &[u8]) -> Vec<String> {
+    const SURFACE_ID_BAG_KEY: &str = "surface_id";
+
+    let Some(bag_bytes) = wire_frame.get(FRAME_HEADER_SIZE..) else {
+        return Vec::new();
+    };
+    let Ok(bag) = rmpv::decode::read_value(&mut &bag_bytes[..]) else {
+        return Vec::new();
+    };
+
+    let mut named = Vec::new();
+    let mut unvisited = vec![bag];
+    while let Some(value) = unvisited.pop() {
+        match value {
+            rmpv::Value::Map(entries) => {
+                for (key, entry) in entries {
+                    if key.as_str() == Some(SURFACE_ID_BAG_KEY) {
+                        if let Some(surface_id) = entry.as_str() {
+                            named.push(surface_id.to_string());
+                            continue;
+                        }
+                    }
+                    unvisited.push(entry);
+                }
+            }
+            rmpv::Value::Array(entries) => unvisited.extend(entries),
+            _ => {}
+        }
+    }
+    named
 }
 
 /// The child-side client that fulfills `ctx.gpu_limited_access` calls by
@@ -804,5 +977,77 @@ impl HelperProcessGpuExchangeClient {
         })?);
         *device = Some(Arc::clone(&created));
         Ok(created)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    fn wire_frame_carrying(bag: rmpv::Value) -> Vec<u8> {
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE];
+        rmpv::encode::write_value(&mut frame, &bag).expect("encode the bag");
+        frame
+    }
+
+    fn map(entries: Vec<(&str, rmpv::Value)>) -> rmpv::Value {
+        rmpv::Value::Map(
+            entries
+                .into_iter()
+                .map(|(key, value)| (rmpv::Value::from(key), value))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_video_frame_bag_names_its_surface() {
+        let frame = wire_frame_carrying(map(vec![
+            ("surface_id", rmpv::Value::from("frame-7")),
+            ("width", rmpv::Value::from(1920)),
+            ("height", rmpv::Value::from(1080)),
+        ]));
+        assert_eq!(surface_ids_named_by_wire_frame(&frame), vec!["frame-7"]);
+    }
+
+    /// A bag is a self-describing map with no schema, so a producer may nest
+    /// or repeat the handoff key. Every one is a frame somebody will read.
+    #[test]
+    fn nested_and_repeated_surface_keys_are_all_claimed() {
+        let frame = wire_frame_carrying(map(vec![
+            ("surface_id", rmpv::Value::from("frame-7")),
+            (
+                "frames",
+                rmpv::Value::Array(vec![
+                    map(vec![("surface_id", rmpv::Value::from("frame-8"))]),
+                    map(vec![("surface_id", rmpv::Value::from("frame-9"))]),
+                ]),
+            ),
+        ]));
+        let mut named = surface_ids_named_by_wire_frame(&frame);
+        named.sort();
+        assert_eq!(named, vec!["frame-7", "frame-8", "frame-9"]);
+    }
+
+    /// Nothing else in the bag is examined, and no type is inferred: a bag
+    /// with no handoff key names no surface, and a non-string under one is
+    /// not an id.
+    #[test]
+    fn a_bag_without_a_string_surface_key_names_nothing() {
+        let no_key = wire_frame_carrying(map(vec![("samples", rmpv::Value::from(48_000))]));
+        assert!(surface_ids_named_by_wire_frame(&no_key).is_empty());
+
+        let wrong_type = wire_frame_carrying(map(vec![("surface_id", rmpv::Value::from(7))]));
+        assert!(surface_ids_named_by_wire_frame(&wrong_type).is_empty());
+    }
+
+    /// A frame too short to hold a header, or carrying bytes that are not
+    /// msgpack, claims nothing rather than panicking on the receive path.
+    #[test]
+    fn an_unreadable_frame_claims_nothing() {
+        assert!(surface_ids_named_by_wire_frame(&[0u8; 4]).is_empty());
+
+        let mut not_msgpack = vec![0u8; FRAME_HEADER_SIZE];
+        not_msgpack.extend_from_slice(&[0xc1, 0xc1, 0xc1]);
+        assert!(surface_ids_named_by_wire_frame(&not_msgpack).is_empty());
     }
 }

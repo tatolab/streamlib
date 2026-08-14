@@ -23,7 +23,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
@@ -218,7 +218,7 @@ pub struct InputMailboxesInner {
     /// Installed by a host that needs to know when a bag is queued and when
     /// it leaves — the helper-process host claims the GPU surfaces a queued
     /// bag names. Unset for native in-process processors.
-    queued_bag_observer: parking_lot::Mutex<Option<Arc<dyn QueuedBagObserver>>>,
+    queued_bag_observer: Arc<OnceLock<Arc<dyn QueuedBagObserver>>>,
 }
 
 impl InputMailboxesInner {
@@ -228,7 +228,7 @@ impl InputMailboxesInner {
             ports: parking_lot::Mutex::new(HashMap::new()),
             subscribers: SendableChannelSubscribers::new(),
             listener: SendableListener::new(),
-            queued_bag_observer: parking_lot::Mutex::new(None),
+            queued_bag_observer: Arc::new(OnceLock::new()),
         }
     }
 
@@ -238,10 +238,12 @@ impl InputMailboxesInner {
     }
 
     /// Report every bag that enters and leaves this destination's mailboxes
-    /// to `observer`. Ports added after this call carry it; set it while
-    /// wiring, before the first link opens.
+    /// to `observer`. Reaches ports wired before this call as well as after,
+    /// because the helper host wires its links before it builds the contexts
+    /// the observer comes from. Later calls are ignored — one destination has
+    /// one host.
     pub fn set_queued_bag_observer(&self, observer: Arc<dyn QueuedBagObserver>) {
-        *self.queued_bag_observer.lock() = Some(observer);
+        let _ = self.queued_bag_observer.set(observer);
     }
 
     /// Add a mailbox for the given port with the specified buffer
@@ -253,7 +255,7 @@ impl InputMailboxesInner {
             read_mode = ?read_mode,
             "InputMailboxes: add_port"
         );
-        let queued_bag_observer = self.queued_bag_observer.lock().clone();
+        let queued_bag_observer = Arc::clone(&self.queued_bag_observer);
         self.ports.lock().insert(
             port.to_string(),
             PortConfig {
