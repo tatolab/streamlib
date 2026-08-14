@@ -444,7 +444,9 @@ impl QueuedBagObserver for HelperProcessQueuedBagSurfaceClaims {
                 // The cost is that a callback reading two ports releases the
                 // first bag's claim at the second read. That bag has already
                 // been handed over, so it is back to the protection it had
-                // before any of this — never worse.
+                // before any of this — never worse — but it does mean a
+                // multi-port callback should resolve each surface before
+                // reading the next port.
                 self.release_every_claim_the_processor_has_finished_with();
                 let mut ledger = self.ledger.lock();
                 for surface_id in surface_ids_named_by_wire_frame(wire_frame) {
@@ -1144,7 +1146,6 @@ mod tests {
 #[cfg(all(test, target_os = "linux"))]
 mod claim_ledger_tests {
     use super::*;
-    use std::os::unix::io::{FromRawFd as _, IntoRawFd as _};
     use streamlib::sdk::engine::linux_surface_share::{
         SurfaceShareState, UnixSocketSurfaceService,
     };

@@ -421,17 +421,28 @@ impl InputMailboxesInner {
     pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
-        let mut ports = self.ports.lock();
-        let port_config = ports
-            .get_mut(port)
-            .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+        // Taken under the lock, popped without it: a departure can block — the
+        // helper host settles the bag's surface claims over the surface-share
+        // socket — and no IPC round trip belongs inside this lock, the same
+        // rule `receive_pending` follows on the push side.
+        let (mailbox, read_mode, staged_oversized) = {
+            let mut ports = self.ports.lock();
+            let port_config = ports
+                .get_mut(port)
+                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            (
+                Arc::clone(&port_config.mailbox),
+                port_config.read_mode,
+                port_config.staged_oversized.take(),
+            )
+        };
 
-        let candidate: (Vec<u8>, i64) = if let Some(staged) = port_config.staged_oversized.take() {
+        let candidate: (Vec<u8>, i64) = if let Some(staged) = staged_oversized {
             staged
         } else {
-            let raw = match port_config.read_mode {
-                ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
-                ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
+            let raw = match read_mode {
+                ReadMode::SkipToLatest => mailbox.pop_latest(),
+                ReadMode::ReadNextInOrder => mailbox.pop(),
             };
             match raw {
                 None => return Ok(BoundedReadOutcome::Empty),
@@ -466,7 +477,9 @@ impl InputMailboxesInner {
             // one path that installs an observer — the wheel reads unbounded
             // — but a bounded reader that installs one needs a departure
             // reason of its own here.
-            port_config.staged_oversized = Some(candidate);
+            if let Some(port_config) = self.ports.lock().get_mut(port) {
+                port_config.staged_oversized = Some(candidate);
+            }
             Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
         }
     }
