@@ -1093,8 +1093,14 @@ impl SurfaceStoreInner {
             surface_id
         );
 
+        // `lookup`, not `check_out`: this store is the service owner's own
+        // process, and the cached `PixelBuffer` clone it takes below IS its
+        // protection — the pool's in-process refcount. A `check_out` here
+        // would mint a lease on the host's own long-lived connection that
+        // nothing ever releases (the host's `release` op unregisters, it
+        // does not unlease), pinning the slot for the runtime's life.
         let request = serde_json::json!({
-            "op": "check_out",
+            "op": "lookup",
             "surface_id": surface_id,
         });
 

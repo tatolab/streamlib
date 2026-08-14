@@ -21,7 +21,9 @@ A published surface id names an immutable frame. From publish until every holder
 releases it, the pixels under that id change only through the surface's own explicit
 write-back protocol, never through producer reuse: the pool slot backing a held
 surface is never rehanded to the producer — in-process via the existing refcount,
-cross-process via a checkout lease the consumer's host takes at bag receipt. The producer never waits on a consumer: the pool
+cross-process via a checkout lease ~~the consumer's host takes at bag receipt~~
+(ruled 2026-08-14 on #1866: taken at the typed cast, released when the frame
+object drops — #1870). The producer never waits on a consumer: the pool
 skips leased slots and grows to its cap, and at cap the producer drops its own frame.
 A producer-internal transient (the camera's frames-in-flight ring texture) never backs
 a cross-process export; the export blit sources the surface's pooled backing whenever
@@ -69,9 +71,12 @@ describe the same frame, and that frame is the one the bag delivered.
   > backing a held surface is never rehanded to a producer — in-process via the
   > existing refcount, cross-process via a checkout lease minted by the surface-share
   > service at checkout, released explicitly by the consumer and reclaimed on
-  > connection drop. The consumer's host performs that checkout eagerly at bag
+  > connection drop. ~~The consumer's host performs that checkout eagerly at bag
   > receipt, not when user code first touches the surface, so the guarantee runs
-  > from delivery; the publish-to-checkout transit is protected by pool depth. The producer never waits on a consumer: the pool skips leased
+  > from delivery; the publish-to-checkout transit is protected by pool depth.~~
+  > (Ruled 2026-08-14 on #1866: the claim is taken at the typed cast and released
+  > when the frame object drops; publish-to-claim transit rides pool depth. The
+  > amended entry rides #1870.) The producer never waits on a consumer: the pool skips leased
   > slots and grows to its cap; at cap the producer drops its own frame — a slow
   > consumer costs memory, then its own frames, never another processor's cadence. A
   > producer-internal transient (a frames-in-flight ring texture) never backs a
@@ -95,9 +100,10 @@ describe the same frame, and that frame is the one the bag delivered.
   user-facing call (`python_processor_context.rs:596-607`), so the lease could not
   begin until user code touched the surface, leaving a queued bag unprotected for
   its whole queue time; ~~the host's reader thread checks out on arrival instead~~
-  the host checks out on arrival instead
-  (user-visible behavior unchanged — the handle the callback gets is already
-  checked out).
+  ~~the host checks out on arrival instead~~ (superseded by the option-D ruling
+  below: the claim is taken at the typed cast, #1870)
+  ~~(user-visible behavior unchanged — the handle the callback gets is already
+  checked out)~~.
 
   > ~~the host's reader thread checks out on arrival~~ — Corrected 2026-08-14 by
   > the #1866 implementation, verified at `origin/main` 53d5410f. No thread in the
