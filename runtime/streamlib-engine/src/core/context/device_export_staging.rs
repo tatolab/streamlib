@@ -562,8 +562,14 @@ impl GpuContext {
     /// registration test is re-run here. The two can disagree — pool
     /// slots keep their ids across reuse, so a surface that was pool-only
     /// when a consumer opened its export can be re-acquired by a
-    /// texture-registering producer while that consumer still holds it,
-    /// and only the live test keeps the edit out of the new owner's slot.
+    /// texture-registering producer while that consumer still holds it.
+    ///
+    /// That live test narrows the window; it does not close it. Nothing
+    /// holds the registration and this write-back together, so a producer
+    /// registering between the test and the submit still gets its slot
+    /// written. Closing it takes the checkout lease, whose claim is
+    /// atomic against pool acquire by construction — which a test here
+    /// cannot be.
     pub fn copy_device_export_staging_back_to_surface(
         &self,
         staging: &SurfaceDeviceExportStaging,
