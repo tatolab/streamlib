@@ -130,6 +130,12 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// Present only on an acquired surface — a resolved one belongs to its
     /// acquirer, and releasing it here would evict somebody else's frame.
     pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
+    /// The checkout lease this surface owes, whoever owns the surface itself.
+    #[expect(
+        dead_code,
+        reason = "settled by its own Drop; nothing reads it, and that is the point"
+    )]
+    pub(crate) release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
     /// The plane fds this checkout was delivered, kept so
     /// `export_dma_buf` can answer from them. They are the same fds a
     /// host-side export would mint — the check-out is a kernel dup of
@@ -239,6 +245,58 @@ impl Drop for HelperSurfaceReleaseDebt {
                             "releasing surface {} to the parent failed ({release_failure}); \
                              its pool slot returns at teardown",
                             self.handle_id
+                        ),),
+                    )
+                });
+            }
+        });
+    }
+}
+
+/// The checkout lease a surface owes the surface-share service: one
+/// `release_check_out`, over the same connection the checkout was minted on.
+///
+/// Distinct from [`HelperSurfaceReleaseDebt`], which unregisters a buffer this
+/// child asked the parent to allocate. This one says only "I am done reading";
+/// the surface belongs to its producer either way, and until it is paid the
+/// producer's pool will not recycle the slot underneath it.
+///
+/// Owned by the surface, so it is settled when the surface's
+/// `GpuSurfaceOwnedMemory` loses its last share — handle *and* every exported
+/// view. Paying it at `close()` would return the slot while a live tensor
+/// still addresses it.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperSurfaceCheckOutLeaseDebt {
+    exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    surface_id: String,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HelperSurfaceCheckOutLeaseDebt {
+    /// Best-effort: a parent that is already gone dropped this connection, and
+    /// the service reclaims every lease on a connection's socket closing — so
+    /// a failure here is logged, never raised.
+    fn drop(&mut self) {
+        Python::attach(|python| {
+            // The round trip blocks, so it runs detached — this can be a
+            // capsule deleter running under the child's GIL.
+            let released = python.detach(|| {
+                self.exchange_client.surface_share_request(&serde_json::json!({
+                    "op": "release_check_out",
+                    "surface_id": self.surface_id,
+                }))
+            });
+            if let Err(release_failure) = released {
+                // This process installs no tracing subscriber; the one
+                // observable route is the child's own log module, which rides
+                // the escalate `Log` op into the unified JSONL.
+                let _ = python.import("streamlib.log").and_then(|log_module| {
+                    log_module.call_method1(
+                        "warn",
+                        (format!(
+                            "releasing the checkout of surface {} failed ({release_failure}); its \
+                             pool slot returns when this helper's connection closes",
+                            self.surface_id
                         ),),
                     )
                 });
@@ -724,6 +782,10 @@ impl HelperProcessGpuExchangeClient {
             format,
             bytes_per_row,
             release_to_parent: None,
+            release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
+                exchange_client: Arc::clone(self),
+                surface_id: surface_id.to_string(),
+            },
             exported_plane_fds: plane_fds,
             exchange_client: Arc::clone(self),
         })

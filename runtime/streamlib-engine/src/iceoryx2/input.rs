@@ -30,7 +30,7 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
-use super::mailbox::PortMailbox;
+use super::mailbox::{PortMailbox, QueuedBagObserver};
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
@@ -194,7 +194,7 @@ pub enum BoundedReadOutcome {
 /// `parking_lot::Mutex<HashMap>` for `ports` rather than threading
 /// `&mut self` through `Arc<...>`.
 struct PortConfig {
-    mailbox: PortMailbox,
+    mailbox: Arc<PortMailbox>,
     read_mode: ReadMode,
     /// A frame popped by [`InputMailboxesInner::read_raw_bounded`] that did not
     /// fit the caller's buffer. It is stashed here (not lost) and re-delivered
@@ -215,6 +215,10 @@ pub struct InputMailboxesInner {
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
     subscribers: SendableChannelSubscribers,
     listener: SendableListener,
+    /// Installed by a host that needs to know when a bag is queued and when
+    /// it leaves — the helper-process host claims the GPU surfaces a queued
+    /// bag names. Unset for native in-process processors.
+    queued_bag_observer: parking_lot::Mutex<Option<Arc<dyn QueuedBagObserver>>>,
 }
 
 impl InputMailboxesInner {
@@ -224,12 +228,20 @@ impl InputMailboxesInner {
             ports: parking_lot::Mutex::new(HashMap::new()),
             subscribers: SendableChannelSubscribers::new(),
             listener: SendableListener::new(),
+            queued_bag_observer: parking_lot::Mutex::new(None),
         }
     }
 
     /// Check if a port has already been configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.ports.lock().contains_key(port)
+    }
+
+    /// Report every bag that enters and leaves this destination's mailboxes
+    /// to `observer`. Ports added after this call carry it; set it while
+    /// wiring, before the first link opens.
+    pub fn set_queued_bag_observer(&self, observer: Arc<dyn QueuedBagObserver>) {
+        *self.queued_bag_observer.lock() = Some(observer);
     }
 
     /// Add a mailbox for the given port with the specified buffer
@@ -241,10 +253,14 @@ impl InputMailboxesInner {
             read_mode = ?read_mode,
             "InputMailboxes: add_port"
         );
+        let queued_bag_observer = self.queued_bag_observer.lock().clone();
         self.ports.lock().insert(
             port.to_string(),
             PortConfig {
-                mailbox: PortMailbox::new(buffer_size),
+                mailbox: Arc::new(PortMailbox::new_observed_by(
+                    buffer_size,
+                    queued_bag_observer,
+                )),
                 read_mode,
                 staged_oversized: None,
             },
@@ -361,15 +377,23 @@ impl InputMailboxesInner {
                             );
                             continue;
                         }
-                        let ports = self.ports.lock();
-                        if let Some(port_config) = ports.get(&bound.local_port) {
-                            port_config.mailbox.push(slice.to_vec());
-                        } else {
-                            tracing::warn!(
+                        // The mailbox Arc is taken under the lock and the push
+                        // happens without it: a queued-bag observer can block
+                        // (the helper host claims the bag's surfaces over the
+                        // surface-share socket), and no IPC round trip belongs
+                        // inside this lock.
+                        let mailbox = self
+                            .ports
+                            .lock()
+                            .get(&bound.local_port)
+                            .map(|port_config| Arc::clone(&port_config.mailbox));
+                        match mailbox {
+                            Some(mailbox) => mailbox.push(slice.to_vec()),
+                            None => tracing::warn!(
                                 port = %bound.local_port,
                                 "InputMailboxes: channel delivered a frame but its bound \
                                  local port has no mailbox"
-                            );
+                            ),
                         }
                     }
                     Ok(None) => break, // no more samples on this subscriber

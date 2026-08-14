@@ -27,7 +27,7 @@ pub use channel_name::{
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
-pub use mailbox::PortMailbox;
+pub use mailbox::{PortMailbox, QueuedBagDeparture, QueuedBagObserver};
 pub use node::{
     ChannelTapSubscribeError, Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService,
     Iceoryx2Service,
