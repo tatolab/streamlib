@@ -151,8 +151,9 @@ pub(crate) struct EscalateRequestCopyDeviceExportStagingBackToSurface {
     /// a device-side edit: the host copies the staging buffer back into the
     /// surface's own allocation so every other holder observes it, and signals
     /// `refill_done` at end-of-submit. Refused when the surface's export is
-    /// read-only — a texture-backed export has no write-back path. Answers with
-    /// the signalled `timeline_value`.
+    /// read-only — the write-back path belongs to surfaces whose only backing
+    /// is their own pooled allocation. Answers with the signalled
+    /// `timeline_value`.
     pub(crate) surface_id: String,
 }
 

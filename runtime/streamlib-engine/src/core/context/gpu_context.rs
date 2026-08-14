@@ -733,6 +733,19 @@ impl GpuContext {
         self.evict_device_export_staging(id);
     }
 
+    /// Whether a producer registered a texture of its own under
+    /// `surface_id` in this process.
+    ///
+    /// Deliberately not [`Self::resolve_texture_registration_by_surface_id`]:
+    /// that call's Path 3 synthesizes a texture *from* the pooled
+    /// backing, so a surface with no producer texture at all would still
+    /// answer yes. Only a real registration distinguishes a frame its
+    /// producer still owns from one whose only backing is its pool
+    /// member.
+    pub(crate) fn has_producer_registered_texture_for_surface_id(&self, surface_id: &str) -> bool {
+        self.texture_cache.lock().unwrap().contains_key(surface_id)
+    }
+
     /// Refresh the registration's `current_layout` for a given
     /// `surface_id`. No-op if the surface_id isn't in the cache.
     /// Used by producers after a layout transition (e.g.
