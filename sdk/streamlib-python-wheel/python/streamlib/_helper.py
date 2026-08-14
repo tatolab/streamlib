@@ -616,7 +616,6 @@ class HelperProcessLifecycle:
         while self._running and not self._torn_down:
             if self._link_data_access.any_input_port_has_data():
                 self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._link_data_access.release_surface_claims_for_bags_the_processor_has_read()
                 self._drain_commands_arriving_mid_run()
                 continue
             # Re-read before every wait, never cached across one: the listener
@@ -642,13 +641,11 @@ class HelperProcessLifecycle:
         if interval_ms <= 0:
             while self._running:
                 self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._link_data_access.release_surface_claims_for_bags_the_processor_has_read()
                 self._drain_commands_arriving_mid_run()
             return
         with MonotonicTimer(interval_ms * 1_000_000) as timer:
             while self._running:
                 self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._link_data_access.release_surface_claims_for_bags_the_processor_has_read()
                 # A tick already consumed by this iteration is not caught up
                 # on — drift-free pacing, not backlog replay.
                 if timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS) < 0:

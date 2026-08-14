@@ -23,14 +23,14 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
-use super::mailbox::{PortMailbox, QueuedBagObserver};
+use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
@@ -194,7 +194,7 @@ pub enum BoundedReadOutcome {
 /// `parking_lot::Mutex<HashMap>` for `ports` rather than threading
 /// `&mut self` through `Arc<...>`.
 struct PortConfig {
-    mailbox: Arc<PortMailbox>,
+    mailbox: PortMailbox,
     read_mode: ReadMode,
     /// A frame popped by [`InputMailboxesInner::read_raw_bounded`] that did not
     /// fit the caller's buffer. It is stashed here (not lost) and re-delivered
@@ -215,10 +215,6 @@ pub struct InputMailboxesInner {
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
     subscribers: SendableChannelSubscribers,
     listener: SendableListener,
-    /// Installed by a host that needs to know when a bag is queued and when
-    /// it leaves — the helper-process host claims the GPU surfaces a queued
-    /// bag names. Unset for native in-process processors.
-    queued_bag_observer: Arc<OnceLock<Arc<dyn QueuedBagObserver>>>,
 }
 
 impl InputMailboxesInner {
@@ -228,22 +224,12 @@ impl InputMailboxesInner {
             ports: parking_lot::Mutex::new(HashMap::new()),
             subscribers: SendableChannelSubscribers::new(),
             listener: SendableListener::new(),
-            queued_bag_observer: Arc::new(OnceLock::new()),
         }
     }
 
     /// Check if a port has already been configured.
     pub fn has_port(&self, port: &str) -> bool {
         self.ports.lock().contains_key(port)
-    }
-
-    /// Report every bag that enters and leaves this destination's mailboxes
-    /// to `observer`. Reaches ports wired before this call as well as after,
-    /// because the helper host wires its links before it builds the contexts
-    /// the observer comes from. Later calls are ignored — one destination has
-    /// one host.
-    pub fn set_queued_bag_observer(&self, observer: Arc<dyn QueuedBagObserver>) {
-        let _ = self.queued_bag_observer.set(observer);
     }
 
     /// Add a mailbox for the given port with the specified buffer
@@ -255,14 +241,10 @@ impl InputMailboxesInner {
             read_mode = ?read_mode,
             "InputMailboxes: add_port"
         );
-        let queued_bag_observer = Arc::clone(&self.queued_bag_observer);
         self.ports.lock().insert(
             port.to_string(),
             PortConfig {
-                mailbox: Arc::new(PortMailbox::new_observed_by(
-                    buffer_size,
-                    queued_bag_observer,
-                )),
+                mailbox: PortMailbox::new(buffer_size),
                 read_mode,
                 staged_oversized: None,
             },
@@ -379,23 +361,15 @@ impl InputMailboxesInner {
                             );
                             continue;
                         }
-                        // The mailbox Arc is taken under the lock and the push
-                        // happens without it: a queued-bag observer can block
-                        // (the helper host claims the bag's surfaces over the
-                        // surface-share socket), and no IPC round trip belongs
-                        // inside this lock.
-                        let mailbox = self
-                            .ports
-                            .lock()
-                            .get(&bound.local_port)
-                            .map(|port_config| Arc::clone(&port_config.mailbox));
-                        match mailbox {
-                            Some(mailbox) => mailbox.push(slice.to_vec()),
-                            None => tracing::warn!(
+                        let ports = self.ports.lock();
+                        if let Some(port_config) = ports.get(&bound.local_port) {
+                            port_config.mailbox.push(slice.to_vec());
+                        } else {
+                            tracing::warn!(
                                 port = %bound.local_port,
                                 "InputMailboxes: channel delivered a frame but its bound \
                                  local port has no mailbox"
-                            ),
+                            );
                         }
                     }
                     Ok(None) => break, // no more samples on this subscriber
@@ -421,28 +395,17 @@ impl InputMailboxesInner {
     pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
-        // Taken under the lock, popped without it: a departure can block — the
-        // helper host settles the bag's surface claims over the surface-share
-        // socket — and no IPC round trip belongs inside this lock, the same
-        // rule `receive_pending` follows on the push side.
-        let (mailbox, read_mode, staged_oversized) = {
-            let mut ports = self.ports.lock();
-            let port_config = ports
-                .get_mut(port)
-                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
-            (
-                Arc::clone(&port_config.mailbox),
-                port_config.read_mode,
-                port_config.staged_oversized.take(),
-            )
-        };
+        let mut ports = self.ports.lock();
+        let port_config = ports
+            .get_mut(port)
+            .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
 
-        let candidate: (Vec<u8>, i64) = if let Some(staged) = staged_oversized {
+        let candidate: (Vec<u8>, i64) = if let Some(staged) = port_config.staged_oversized.take() {
             staged
         } else {
-            let raw = match read_mode {
-                ReadMode::SkipToLatest => mailbox.pop_latest(),
-                ReadMode::ReadNextInOrder => mailbox.pop(),
+            let raw = match port_config.read_mode {
+                ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
+                ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
             };
             match raw {
                 None => return Ok(BoundedReadOutcome::Empty),
@@ -471,15 +434,7 @@ impl InputMailboxesInner {
             })
         } else {
             let required_bytes = candidate.0.len();
-            // The pop above already reported this frame as delivered, so a
-            // queued-bag observer counts it as the processor's before the
-            // caller resizes and actually receives it. Unreachable from the
-            // one path that installs an observer — the wheel reads unbounded
-            // — but a bounded reader that installs one needs a departure
-            // reason of its own here.
-            if let Some(port_config) = self.ports.lock().get_mut(port) {
-                port_config.staged_oversized = Some(candidate);
-            }
+            port_config.staged_oversized = Some(candidate);
             Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
         }
     }

@@ -107,10 +107,15 @@ describe the same frame, and that frame is the one the bag delivered.
   > (`runtime/streamlib-engine/src/iceoryx2/input.rs`, called from `read_raw` /
   > `has_data` / `any_port_has_data` and nowhere else). Queueing is two-stage — the
   > iceoryx2 subscriber queue, then the per-port mailbox — so "bag receipt" is the
-  > mailbox push, not an arrival anything is woken for. The decided *what* stands;
-  > the stated *how* did not exist, and what replaced it is not stated here: the
-  > seam it needs, and how a host learns which surfaces a bag names, are OPEN and
-  > go to the owner (#1866).
+  > mailbox push, not an arrival anything is woken for. The stated *how* did not
+  > exist, and the owner re-ruled the *what* on 2026-08-14 (#1866, option D):
+  > receipt-time eager checkout is retracted. The claim is taken at the typed
+  > cast — `read(port, into=VideoFrame)`, the moment the consumer names what it
+  > is holding — and released when the frame object drops, the same last-share
+  > RAII the resolved handle already carries. Queue-time transit is bounded by
+  > pool depth; an untyped dict read gets depth-only protection. The engine
+  > inspects no bag content anywhere. The cast-claim implementation and this
+  > entry's plan amendment ride the follow-up ticket.
 
 - ADDED: an engine-level rotating-producer fixture and ground-truth test: a synthetic
   producer replicating the camera's shape (pool surface + transient ring texture

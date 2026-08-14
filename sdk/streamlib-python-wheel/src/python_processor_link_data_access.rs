@@ -20,16 +20,9 @@ use std::sync::{Arc, OnceLock};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::error::Error;
-#[cfg(target_os = "linux")]
-use streamlib::sdk::iceoryx2::QueuedBagObserver;
 use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InputMailboxesInner, OutputWriterInner,
     ReadMode,
-};
-
-#[cfg(target_os = "linux")]
-use crate::python_helper_process_pixel_exchange::{
-    HelperProcessGpuExchangeClient, HelperProcessQueuedBagSurfaceClaims,
 };
 
 use crate::python_bag_conversion::{
@@ -50,11 +43,6 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// itself. The parent's copy is wired by the compiler op and leaves this
     /// empty — the node it would name belongs to the engine.
     iceoryx2_node: OnceLock<Iceoryx2Node>,
-    /// The claims this child holds on the GPU surfaces its queued bags name.
-    /// Empty on the parent's copy, whose processors hold their surfaces by
-    /// refcount and need no lease.
-    #[cfg(target_os = "linux")]
-    queued_bag_surface_claims: OnceLock<Arc<HelperProcessQueuedBagSurfaceClaims>>,
 }
 
 impl PythonProcessorLinkDataAccess {
@@ -63,8 +51,6 @@ impl PythonProcessorLinkDataAccess {
             input_mailboxes: OnceLock::new(),
             output_writer: OnceLock::new(),
             iceoryx2_node: OnceLock::new(),
-            #[cfg(target_os = "linux")]
-            queued_bag_surface_claims: OnceLock::new(),
         }
     }
 
@@ -80,27 +66,6 @@ impl PythonProcessorLinkDataAccess {
             (Some(node), Some(input_mailboxes)) => Ok((node, input_mailboxes)),
             _ => Err(not_a_helper_process_data_plane_error()),
         }
-    }
-
-    /// Claim the GPU surfaces every queued bag names, through
-    /// `exchange_client`, so a bag waiting its turn cannot have its frame
-    /// recycled underneath it.
-    ///
-    /// Called once while the helper builds its contexts — after the links are
-    /// wired, which is why the observer reaches mailboxes that already exist.
-    /// A parent-side copy of this object has no input plane and installs
-    /// nothing: the engine's own processors hold their surfaces by refcount.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn claim_queued_bag_surfaces_through(
-        &self,
-        exchange_client: Arc<HelperProcessGpuExchangeClient>,
-    ) {
-        let Some(input_mailboxes) = self.input_mailboxes.get() else {
-            return;
-        };
-        let claims = Arc::new(HelperProcessQueuedBagSurfaceClaims::new(exchange_client));
-        input_mailboxes.set_queued_bag_observer(Arc::clone(&claims) as Arc<dyn QueuedBagObserver>);
-        let _ = self.queued_bag_surface_claims.set(claims);
     }
 }
 
@@ -324,23 +289,6 @@ impl PythonProcessorLinkDataAccess {
     /// selecting on it before this object is dropped.
     fn input_listener_fd(&self) -> Option<i32> {
         self.input_mailboxes.get()?.listener_fd()
-    }
-
-    /// Release the surface claims taken for the bags this processor has just
-    /// finished reading.
-    ///
-    /// The helper host calls this once each `process()` returns, rather than
-    /// at the read itself: user code that reads a bag and resolves its
-    /// surface a moment later would otherwise fall into a gap where the
-    /// producer can recycle the frame between the two.
-    fn release_surface_claims_for_bags_the_processor_has_read(&self, python: Python<'_>) {
-        #[cfg(target_os = "linux")]
-        if let Some(claims) = self.queued_bag_surface_claims.get() {
-            // Each release is a surface-share round trip, so it runs detached.
-            python.detach(|| claims.release_every_claim_the_processor_has_finished_with());
-            return;
-        }
-        let _ = python;
     }
 
     /// Clear the listener's pending events so its fd goes not-readable again.
