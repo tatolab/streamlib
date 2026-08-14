@@ -14,7 +14,12 @@ someone asks why a Python processor's frame cannot change under it.
 ## The decision
 
 1. A published surface id names an immutable frame: from publish until every holder
-   releases it, the pixels under that id do not change. This is not a new semantic — it
+   releases it, the pixels under that id do not change. Immutability binds the
+   producer and the pool — a slot is never recycled or rewritten under a holder. It
+   does not ban the surface's own write-back protocol: a writable buffer-only export
+   publishing an explicit in-place edit other holders are meant to observe, ordered
+   by the engine, is part of the contract — mutation through the surface's protocol,
+   never covert reuse. This is not a new semantic — it
    is the pool's original CVPixelBufferPool / IOSurface-lineage model
    (taken-until-released, skip-if-held, grow-on-pressure), which the engine has always
    implemented in-process via an Arc refcount, extended to where consumers now live.
