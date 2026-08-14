@@ -121,6 +121,13 @@ pub(crate) struct EscalateResponseOk {
     /// texture-backed export has no write-back path at all. A subprocess
     /// that takes a write lock over a read-only export is refused rather
     /// than silently dropping the edit at unlock.
+    ///
+    /// This is the capability at open time, and it is revocable: pool slots
+    /// keep their ids across reuse, so a slot that was the surface's sole
+    /// backing here can be re-acquired by a texture-registering producer
+    /// while this export is still held. The host re-tests when the
+    /// write-back is asked for, and refuses then — so `true` promises the
+    /// write-back was available, never that it still is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) writable: Option<bool>,
 }

@@ -754,6 +754,12 @@ impl GpuContext {
 
     /// The pooled allocation this process holds for `surface_id`, if any
     /// — the pool's own cache, with no surface-share round trip.
+    ///
+    /// "Held", not "produced": [`Self::get_pixel_buffer`] caches a
+    /// successful cross-process lookup into this same cache, so a buffer
+    /// another process produced answers here from the second resolution
+    /// on. That is the intent — what matters is that the surface has a
+    /// pooled backing reachable without asking the service again.
     pub(crate) fn pooled_backing_held_in_this_process(
         &self,
         surface_id: &str,
