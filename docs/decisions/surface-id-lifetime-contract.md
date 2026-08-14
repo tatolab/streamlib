@@ -25,7 +25,9 @@ someone asks why a Python processor's frame cannot change under it.
    frame: a slow consumer costs memory, then its own frames, never another processor's
    cadence.
 4. A cross-process export is sourced from the surface's pooled backing whenever one
-   exists, read-only. Texture-first export survives only for surfaces with no pooled
+   exists. A dual-backed surface (registered texture + pool member — the
+   producer-published shape) exports read-only; a buffer-only surface keeps its
+   writable semantics. Texture-first export survives only for surfaces with no pooled
    backing (kernel outputs, whose id↔backing binding is stable).
 
 ## Why
