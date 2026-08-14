@@ -767,6 +767,11 @@ fn capture_thread_loop(
         .zip(ring_textures.iter())
         .enumerate()
     {
+        // No `produce_done` / `consume_done` pair: this camera orders its
+        // own ring reuse on its private timeline, and no cross-process
+        // consumer reads the ring — a device export sources the frame's
+        // pooled backing. Publishing fences nothing signals would promise
+        // an edge that does not exist.
         if let Some(store) = gpu_context.surface_store()
             && let Err(e) = store.register_texture(
                 texture_id,

@@ -733,17 +733,32 @@ impl GpuContext {
         self.evict_device_export_staging(id);
     }
 
-    /// Whether a producer registered a texture of its own under
-    /// `surface_id` in this process.
+    /// The texture a producer registered of its own under `surface_id`
+    /// in this process, if any.
     ///
     /// Deliberately not [`Self::resolve_texture_registration_by_surface_id`]:
     /// that call's Path 3 synthesizes a texture *from* the pooled
     /// backing, so a surface with no producer texture at all would still
     /// answer yes. Only a real registration distinguishes a frame its
     /// producer still owns from one whose only backing is its pool
-    /// member.
-    pub(crate) fn has_producer_registered_texture_for_surface_id(&self, surface_id: &str) -> bool {
-        self.texture_cache.lock().unwrap().contains_key(surface_id)
+    /// member. Same-process only — a producer that registered a texture
+    /// with the surface-share service alone is invisible here, which no
+    /// producer in this tree is: cross-process registrations mint their
+    /// own handle id rather than a pool id.
+    pub(crate) fn producer_registered_texture_for_surface_id(
+        &self,
+        surface_id: &str,
+    ) -> Option<TextureRegistration> {
+        self.texture_cache.lock().unwrap().get(surface_id).cloned()
+    }
+
+    /// The pooled allocation this process holds for `surface_id`, if any
+    /// — the pool's own cache, with no surface-share round trip.
+    pub(crate) fn pooled_backing_held_in_this_process(
+        &self,
+        surface_id: &str,
+    ) -> Option<PixelBuffer> {
+        self.pixel_buffer_pool_manager.get_from_cache(surface_id)
     }
 
     /// Refresh the registration's `current_layout` for a given

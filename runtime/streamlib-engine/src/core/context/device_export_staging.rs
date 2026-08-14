@@ -185,6 +185,19 @@ enum ResolvedBlitSource {
     PixelBuffer(crate::core::rhi::PixelBuffer),
 }
 
+/// The geometry and capability a staging is minted with, read off
+/// whichever backing answered for the surface.
+struct DeviceExportStagingShape {
+    staging_byte_size: u64,
+    surface_width: u32,
+    surface_height: u32,
+    pixel_format: PixelFormat,
+    /// The advertised write-back capability. A snapshot: the write-back
+    /// itself re-tests, because a producer can register a texture under
+    /// this id after the staging was minted.
+    writable: bool,
+}
+
 impl GpuContext {
     /// Resolve the current blit source for `surface_id` — the surface's
     /// pooled backing whenever it has one, the registered texture only
@@ -197,7 +210,19 @@ impl GpuContext {
     /// a producer-internal texture never backs a cross-process export.
     /// Texture-first survives for surfaces with no pooled member — kernel
     /// outputs, whose id↔backing binding is stable.
+    /// Both same-process caches are consulted first, in that same
+    /// priority order. Either composite lookup below would find them,
+    /// but each reaches the surface-share service on the way — and a
+    /// miss there is a blocking socket round trip, which for a
+    /// texture-only surface would be paid on every refill to learn what
+    /// the local pool already knows.
     fn resolve_device_export_source(&self, surface_id: &str) -> Result<ResolvedBlitSource> {
+        if let Some(pixel_buffer) = self.pooled_backing_held_in_this_process(surface_id) {
+            return Ok(ResolvedBlitSource::PixelBuffer(pixel_buffer));
+        }
+        if let Some(registration) = self.producer_registered_texture_for_surface_id(surface_id) {
+            return Ok(ResolvedBlitSource::RegisteredTexture(registration));
+        }
         match self.resolve_pixel_buffer_by_surface_id(surface_id) {
             Ok(pixel_buffer) => Ok(ResolvedBlitSource::PixelBuffer(pixel_buffer)),
             Err(buffer_miss) => {
@@ -224,24 +249,27 @@ impl GpuContext {
             return Ok(Arc::clone(existing));
         }
 
-        let (staging_byte_size, surface_width, surface_height, pixel_format, writable) = match self
-            .resolve_device_export_source(surface_id)?
-        {
+        let shape = match self.resolve_device_export_source(surface_id)? {
             ResolvedBlitSource::RegisteredTexture(registration) => {
                 let texture = registration.texture();
-                let pixel_shape = export_pixel_shape_for_texture(texture.format())?;
-                let (width, height) = (texture.width(), texture.height());
-                // 4-byte color by `export_pixel_shape_for_texture`'s
-                // restriction — the same arithmetic the refill guard and
-                // the copy region assume.
-                let byte_size = u64::from(width) * u64::from(height) * 4;
-                (byte_size, width, height, Some(pixel_shape), false)
+                let pixel_format = export_pixel_shape_for_texture(texture.format())?;
+                let (surface_width, surface_height) = (texture.width(), texture.height());
+                DeviceExportStagingShape {
+                    // 4-byte color by `export_pixel_shape_for_texture`'s
+                    // restriction — the same arithmetic the refill guard
+                    // and the copy region assume.
+                    staging_byte_size: u64::from(surface_width) * u64::from(surface_height) * 4,
+                    surface_width,
+                    surface_height,
+                    pixel_format,
+                    writable: false,
+                }
             }
             ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
-                let format = pixel_buffer.format();
-                export_bytes_per_pixel_for_pixel_format(format)?;
-                let byte_size = pixel_buffer.plane_size(0);
-                if byte_size == 0 {
+                let pixel_format = pixel_buffer.format();
+                export_bytes_per_pixel_for_pixel_format(pixel_format)?;
+                let staging_byte_size = pixel_buffer.plane_size(0);
+                if staging_byte_size == 0 {
                     return Err(Error::GpuError(format!(
                         "surface {surface_id} resolves to a zero-byte plane; nothing to export"
                     )));
@@ -251,21 +279,23 @@ impl GpuContext {
                 // member a producer also published as a registered
                 // texture is a frame that producer still owns, and an
                 // in-place device edit would land in a live pool slot.
-                let sole_backing = !self.has_producer_registered_texture_for_surface_id(surface_id);
-                (
-                    byte_size,
-                    pixel_buffer.width,
-                    pixel_buffer.height,
-                    Some(format),
-                    sole_backing,
-                )
+                let pooled_allocation_is_the_only_backing = self
+                    .producer_registered_texture_for_surface_id(surface_id)
+                    .is_none();
+                DeviceExportStagingShape {
+                    staging_byte_size,
+                    surface_width: pixel_buffer.width,
+                    surface_height: pixel_buffer.height,
+                    pixel_format,
+                    writable: pooled_allocation_is_the_only_backing,
+                }
             }
         };
 
         let vulkan_device = self.device().vulkan_device();
         let staging_buffer = Arc::new(HostVulkanBuffer::new_opaque_fd_export_device_local(
             vulkan_device,
-            staging_byte_size,
+            shape.staging_byte_size,
         )?);
         let refill_done_timeline = self.create_exportable_timeline_semaphore(0)?;
         let refill_submission = Mutex::new(RefillSubmission {
@@ -278,11 +308,11 @@ impl GpuContext {
             staging_buffer,
             refill_done_timeline,
             refill_submission,
-            staging_byte_size,
-            surface_width,
-            surface_height,
-            pixel_format,
-            writable,
+            staging_byte_size: shape.staging_byte_size,
+            surface_width: shape.surface_width,
+            surface_height: shape.surface_height,
+            pixel_format: Some(shape.pixel_format),
+            writable: shape.writable,
             #[cfg(target_os = "linux")]
             surface_share_registration_id: Mutex::new(None),
         });
@@ -522,10 +552,18 @@ impl GpuContext {
     /// in-place device-side edit is visible to every other holder.
     ///
     /// Only for a surface whose sole backing is its own pooled
-    /// allocation — the `writable` the staging was minted with. A frame
-    /// its producer also published as a registered texture is still the
-    /// producer's, and a texture-backed export has no write-back path at
-    /// all (buffer→image plus the layout dance has no consumer).
+    /// allocation. A frame its producer also published as a registered
+    /// texture is still the producer's, and a texture-backed export has
+    /// no write-back path at all (buffer→image plus the layout dance has
+    /// no consumer).
+    ///
+    /// Tested twice: the staging's `writable` is the capability the
+    /// consumer was told about when it opened the export, and the
+    /// registration test is re-run here. The two can disagree — pool
+    /// slots keep their ids across reuse, so a surface that was pool-only
+    /// when a consumer opened its export can be re-acquired by a
+    /// texture-registering producer while that consumer still holds it,
+    /// and only the live test keeps the edit out of the new owner's slot.
     pub fn copy_device_export_staging_back_to_surface(
         &self,
         staging: &SurfaceDeviceExportStaging,
@@ -534,6 +572,17 @@ impl GpuContext {
             return Err(Error::GpuError(format!(
                 "surface {}'s device export is read-only: the write-back path belongs to \
                  surfaces whose only backing is their own pooled allocation",
+                staging.surface_id
+            )));
+        }
+        if self
+            .producer_registered_texture_for_surface_id(&staging.surface_id)
+            .is_some()
+        {
+            return Err(Error::GpuError(format!(
+                "surface {} has gained a producer's registered texture since its device \
+                 export was opened read-write; the pooled allocation now backs someone \
+                 else's frame and the staged edit cannot be published into it",
                 staging.surface_id
             )));
         }
@@ -664,31 +713,61 @@ mod tests {
         }
     }
 
-    fn stamp_every_pixel(buffer: &PixelBuffer, stamp: u8) {
+    fn pooled_backing_host_mapping(buffer: &PixelBuffer) -> (*mut u8, usize) {
         let base_address = buffer.plane_base_address(0);
         assert!(
             !base_address.is_null(),
-            "a pooled buffer must be host-mapped for this fixture to stamp it"
+            "a pooled buffer must be host-mapped for this fixture to reach its pixels"
         );
-        unsafe { std::ptr::write_bytes(base_address, stamp, buffer.plane_size(0) as usize) };
+        (base_address, buffer.plane_size(0) as usize)
     }
 
-    fn assert_every_byte_is(bytes: &[u8], expected: u8, what: &str) {
-        assert!(!bytes.is_empty(), "{what} came back empty");
+    fn stamp_every_byte_of_pooled_backing(buffer: &PixelBuffer, stamp: u8) {
+        let (base_address, byte_count) = pooled_backing_host_mapping(buffer);
+        unsafe { std::ptr::write_bytes(base_address, stamp, byte_count) };
+    }
+
+    fn read_pooled_backing_bytes(buffer: &PixelBuffer) -> Vec<u8> {
+        let (base_address, byte_count) = pooled_backing_host_mapping(buffer);
+        unsafe { std::slice::from_raw_parts(base_address, byte_count) }.to_vec()
+    }
+
+    fn assert_every_byte_is(bytes: &[u8], expected: u8, asserted_subject: &str) {
+        assert!(!bytes.is_empty(), "{asserted_subject} came back empty");
         if let Some((index, found)) = bytes
             .iter()
             .copied()
             .enumerate()
             .find(|(_, byte)| *byte != expected)
         {
-            panic!("{what}: byte {index} is {found:#04x}, expected {expected:#04x}");
+            panic!("{asserted_subject}: byte {index} is {found:#04x}, expected {expected:#04x}");
         }
+    }
+
+    /// A DEVICE_LOCAL texture a producer renders into and registers under
+    /// a surface id — the camera's ring slot and a kernel's output are
+    /// both this shape.
+    fn create_producer_owned_texture(gpu: &GpuContext) -> Texture {
+        let descriptor =
+            TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba8Unorm)
+                .with_usage(
+                    TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::STORAGE_BINDING,
+                );
+        gpu.device()
+            .create_texture(&descriptor)
+            .expect("producer-owned texture")
     }
 
     /// The staging is DEVICE_LOCAL OPAQUE_FD memory, so the host reaches
     /// its bytes only through a copy into a mapped allocation — the same
     /// hop a CUDA consumer's device-to-host copy makes.
-    fn read_staging_bytes(gpu: &GpuContext, staging: &SurfaceDeviceExportStaging) -> Vec<u8> {
+    fn read_device_export_staging_into_host_bytes(
+        gpu: &GpuContext,
+        staging: &SurfaceDeviceExportStaging,
+    ) -> Vec<u8> {
         let byte_size = staging.staging_byte_size();
         let host_readback = gpu
             .acquire_storage_buffer(byte_size)
@@ -722,7 +801,11 @@ mod tests {
 
     /// The device-side write a consumer would make through a writable
     /// export, before asking for it to be published back.
-    fn write_staging_bytes(gpu: &GpuContext, staging: &SurfaceDeviceExportStaging, stamp: u8) {
+    fn stamp_every_byte_of_device_export_staging(
+        gpu: &GpuContext,
+        staging: &SurfaceDeviceExportStaging,
+        stamp: u8,
+    ) {
         let byte_size = staging.staging_byte_size();
         let host_upload = gpu
             .acquire_storage_buffer(byte_size)
@@ -766,20 +849,9 @@ mod tests {
                 .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
                 .expect("acquire the frame's pooled backing");
             let surface_id = pool_id.to_string();
-            stamp_every_pixel(&pooled_backing, stamp);
+            stamp_every_byte_of_pooled_backing(&pooled_backing, stamp);
 
-            let descriptor =
-                TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba8Unorm)
-                    .with_usage(
-                        TextureUsages::COPY_SRC
-                            | TextureUsages::COPY_DST
-                            | TextureUsages::TEXTURE_BINDING
-                            | TextureUsages::STORAGE_BINDING,
-                    );
-            let producer_ring_texture = gpu
-                .device()
-                .create_texture(&descriptor)
-                .expect("producer ring texture");
+            let producer_ring_texture = create_producer_owned_texture(gpu);
             let (_, ring_upload_source) = gpu
                 .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
                 .expect("acquire the ring's upload source");
@@ -802,7 +874,7 @@ mod tests {
         /// The producer comes around to this ring slot again: the slot is
         /// rewritten in place, the pooled backing the bag named is not.
         fn advance_ring_texture_to(&self, gpu: &GpuContext, stamp: u8) {
-            stamp_every_pixel(&self.ring_upload_source, stamp);
+            stamp_every_byte_of_pooled_backing(&self.ring_upload_source, stamp);
             gpu.copy_pixel_buffer_to_texture(
                 &self.ring_upload_source,
                 &self.producer_ring_texture,
@@ -839,7 +911,7 @@ mod tests {
         gpu.refill_device_export_staging(&staging)
             .expect("refill the device export");
         assert_every_byte_is(
-            &read_staging_bytes(&gpu, &staging),
+            &read_device_export_staging_into_host_bytes(&gpu, &staging),
             PUBLISHED_FRAME_STAMP,
             "the device export of a frame the producer has run past",
         );
@@ -885,7 +957,7 @@ mod tests {
             .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
             .expect("acquire the frame's pooled backing");
         let surface_id = pool_id.to_string();
-        stamp_every_pixel(&pooled_backing, PUBLISHED_FRAME_STAMP);
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
 
         let staging = gpu
             .surface_device_export_staging(&surface_id)
@@ -898,25 +970,73 @@ mod tests {
         gpu.refill_device_export_staging(&staging)
             .expect("refill the device export");
         assert_every_byte_is(
-            &read_staging_bytes(&gpu, &staging),
+            &read_device_export_staging_into_host_bytes(&gpu, &staging),
             PUBLISHED_FRAME_STAMP,
             "the device export of a pool-only surface",
         );
 
-        write_staging_bytes(&gpu, &staging, CONSUMER_EDIT_STAMP);
+        stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
         gpu.copy_device_export_staging_back_to_surface(&staging)
             .expect("publish the device-side edit back to the surface");
 
-        let published_pixels = unsafe {
-            std::slice::from_raw_parts(
-                pooled_backing.plane_base_address(0),
-                pooled_backing.plane_size(0) as usize,
-            )
-        };
         assert_every_byte_is(
-            published_pixels,
+            &read_pooled_backing_bytes(&pooled_backing),
             CONSUMER_EDIT_STAMP,
             "the surface's own allocation after the edit was published",
+        );
+    }
+
+    /// The advertised capability is a snapshot; the write-back is not.
+    ///
+    /// A pool slot keeps its id across reuse, so a surface that was
+    /// pool-only when a consumer opened its export read-write can be
+    /// handed back out to a texture-registering producer while that
+    /// consumer still holds the staging. The export keeps saying
+    /// writable — it is what the consumer was told — and the write-back
+    /// refuses anyway.
+    ///
+    /// Mental-revert: gate the write-back on `staging.writable` alone
+    /// and the staged edit lands in the new owner's live pool slot.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_write_back_refuses_once_a_producer_registers_a_texture_over_the_slot() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame's pooled backing");
+        let surface_id = pool_id.to_string();
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+
+        let staging = gpu
+            .surface_device_export_staging(&surface_id)
+            .expect("device-export staging for the published frame");
+        assert!(
+            staging.writable(),
+            "the surface was pool-only when the export was opened"
+        );
+        gpu.refill_device_export_staging(&staging)
+            .expect("refill the device export");
+        stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
+
+        gpu.register_texture_with_layout(
+            &surface_id,
+            create_producer_owned_texture(&gpu),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        let refusal = gpu
+            .copy_device_export_staging_back_to_surface(&staging)
+            .expect_err("the write-back must refuse a slot a producer has taken over");
+        assert!(
+            refusal.to_string().contains("registered texture"),
+            "the refusal must name the registration that took the slot, got: {refusal}"
+        );
+        assert_every_byte_is(
+            &read_pooled_backing_bytes(&pooled_backing),
+            PUBLISHED_FRAME_STAMP,
+            "the pooled allocation after the refused write-back",
         );
     }
 
@@ -929,18 +1049,7 @@ mod tests {
             return;
         };
         let surface_id = uuid::Uuid::new_v4().to_string();
-        let descriptor =
-            TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba8Unorm)
-                .with_usage(
-                    TextureUsages::COPY_SRC
-                        | TextureUsages::COPY_DST
-                        | TextureUsages::TEXTURE_BINDING
-                        | TextureUsages::STORAGE_BINDING,
-                );
-        let kernel_output_texture = gpu
-            .device()
-            .create_texture(&descriptor)
-            .expect("kernel output texture");
+        let kernel_output_texture = create_producer_owned_texture(&gpu);
         gpu.register_texture_with_layout(
             &surface_id,
             kernel_output_texture.clone(),
@@ -950,7 +1059,7 @@ mod tests {
         let (_, upload_source) = gpu
             .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
             .expect("acquire the kernel output's upload source");
-        stamp_every_pixel(&upload_source, KERNEL_OUTPUT_STAMP);
+        stamp_every_byte_of_pooled_backing(&upload_source, KERNEL_OUTPUT_STAMP);
         gpu.copy_pixel_buffer_to_texture(
             &upload_source,
             &kernel_output_texture,
@@ -971,7 +1080,7 @@ mod tests {
         gpu.refill_device_export_staging(&staging)
             .expect("refill the device export");
         assert_every_byte_is(
-            &read_staging_bytes(&gpu, &staging),
+            &read_device_export_staging_into_host_bytes(&gpu, &staging),
             KERNEL_OUTPUT_STAMP,
             "the device export of a surface with no pooled backing",
         );
