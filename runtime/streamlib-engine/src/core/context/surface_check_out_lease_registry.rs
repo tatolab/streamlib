@@ -324,6 +324,47 @@ mod tests {
         assert!(hand_off.is_checked_out_by_any_holder("frame-8"));
     }
 
+    /// The no-interleaving invariant. A checkout cannot land between the
+    /// pool's availability test and its slot hand-off: both run under this
+    /// guard and the minting side takes the same lock, so what the pool reads
+    /// at the top of the decision is still true when it hands the slot over.
+    ///
+    /// Mental-revert: give the mint path a lock of its own and the spawned
+    /// checkout lands mid-guard, so the pool promises a producer a slot a
+    /// child has just started reading.
+    #[test]
+    fn a_checkout_cannot_land_inside_the_pools_hand_off() {
+        let registry = std::sync::Arc::new(SurfaceCheckOutLeaseRegistry::new());
+        let child = registry.mint_holder_id();
+
+        let hand_off = registry.hold_for_pool_slot_hand_off().unwrap();
+        assert!(!hand_off.is_checked_out_by_any_holder("frame-7"));
+
+        let checking_out = std::sync::Arc::clone(&registry);
+        let racing_checkout = std::thread::spawn(move || {
+            checking_out
+                .record_check_out_lease("frame-7", child)
+                .unwrap();
+        });
+
+        for _ in 0..10_000 {
+            assert!(
+                !hand_off.is_checked_out_by_any_holder("frame-7"),
+                "a checkout landed inside the pool's hand-off"
+            );
+        }
+
+        drop(hand_off);
+        racing_checkout.join().unwrap();
+        assert!(
+            registry
+                .hold_for_pool_slot_hand_off()
+                .unwrap()
+                .is_checked_out_by_any_holder("frame-7"),
+            "the checkout must land the moment the pool is done deciding"
+        );
+    }
+
     /// Fail closed: a poisoned table is unreadable, and an unreadable table
     /// must not answer "free" for anything.
     #[test]

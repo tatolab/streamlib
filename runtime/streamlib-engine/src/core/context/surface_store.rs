@@ -23,6 +23,8 @@ use crate::core::rhi::PixelBuffer;
 #[cfg(target_os = "linux")]
 use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
+
+use super::surface_check_out_lease_registry::SurfaceCheckOutLeaseRegistry;
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
 
@@ -279,6 +281,15 @@ pub(crate) struct SurfaceStoreInner {
 
     /// Runtime ID for tracking which surfaces belong to this runtime.
     runtime_id: String,
+
+    /// The surfaces cross-process consumers hold checked out, when a
+    /// surface-share service backs this store. The pixel-buffer pool reads it
+    /// to decide whether a slot may be rehanded to its producer.
+    ///
+    /// `None` for a store built without one: no service means no
+    /// cross-process consumer can exist, and the pool's in-process refcount
+    /// test alone is a complete answer.
+    check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
 }
 
 impl SurfaceStoreInner {
@@ -286,6 +297,17 @@ impl SurfaceStoreInner {
     /// `Arc<SurfaceStoreInner>` so the engine can store it directly
     /// and hand [`SurfaceStore`] handles to consumers on demand.
     pub fn new(service_name: String, runtime_id: String) -> Arc<Self> {
+        Self::new_reading_check_out_leases(service_name, runtime_id, None)
+    }
+
+    /// As [`Self::new`], but reading the checkout leases of the service this
+    /// store connects to. The runtime's `start()` path uses this so the
+    /// pixel-buffer pool can see cross-process holders.
+    pub fn new_reading_check_out_leases(
+        service_name: String,
+        runtime_id: String,
+        check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
+    ) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             connection: Mutex::new(None),
@@ -293,7 +315,13 @@ impl SurfaceStoreInner {
             checked_in: Mutex::new(CheckedInSurfaces::new()),
             service_name,
             runtime_id,
+            check_out_leases,
         })
+    }
+
+    /// The checkout leases backing this store, if a service owns any.
+    pub fn check_out_leases(&self) -> Option<&Arc<SurfaceCheckOutLeaseRegistry>> {
+        self.check_out_leases.as_ref()
     }
 
     /// Connect to the macOS XPC surface-share service.
@@ -2046,6 +2074,32 @@ impl SurfaceStore {
     /// with `GpuContext::set_surface_store`.
     pub fn new(service_name: String, runtime_id: String) -> Self {
         Self::from_arc_into_raw(SurfaceStoreInner::new(service_name, runtime_id))
+    }
+
+    /// As [`Self::new`], but reading the checkout leases of the service this
+    /// store connects to — the shape the runtime's `start()` builds, and the
+    /// one that lets the pixel-buffer pool see cross-process holders.
+    pub fn new_reading_check_out_leases(
+        service_name: String,
+        runtime_id: String,
+        check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
+    ) -> Self {
+        Self::from_arc_into_raw(SurfaceStoreInner::new_reading_check_out_leases(
+            service_name,
+            runtime_id,
+            Some(check_out_leases),
+        ))
+    }
+
+    /// The checkout leases backing this store, if a service owns any.
+    ///
+    /// `None` also for the null-handle sentinel — nothing is checked out of a
+    /// store that does not exist.
+    pub fn check_out_leases(&self) -> Option<&Arc<SurfaceCheckOutLeaseRegistry>> {
+        if self.is_none() {
+            return None;
+        }
+        self.host_inner().check_out_leases()
     }
 
     /// Internal helper: leak an initial Arc strong count via

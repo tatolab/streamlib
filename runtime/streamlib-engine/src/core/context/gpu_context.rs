@@ -255,6 +255,12 @@ impl PixelBufferPoolManager {
             return Err(Error::Configuration("No buffers available in pool".into()));
         }
 
+        // A slot is free only when nobody holds it in this address space and
+        // nobody holds it out of one. The first is an Arc refcount, the second
+        // a checkout lease — see
+        // `docs/decisions/surface-id-lifetime-contract.md`.
+        let check_out_leases = surface_store.and_then(SurfaceStore::check_out_leases);
+
         // Ring buffer: try each buffer starting from next_index, skip if in use
         for _ in 0..buffer_count {
             let idx = ring_pool.next_index % buffer_count;
@@ -262,17 +268,34 @@ impl PixelBufferPoolManager {
 
             let entry = &ring_pool.buffers[idx];
 
-            // Check if buffer is available (only our permanent references exist)
-            // PixelBuffer holds an opaque handle to a host-side
-            // Arc<PixelBufferRef>; strong_count > 2 means in use
-            // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap).
-            if entry.buffer.strong_count() <= 2 {
+            let handed_off = match check_out_leases {
+                // No service, so no cross-process consumer can exist and the
+                // refcount is the whole answer.
+                None => Self::hand_off_if_unheld_in_process(entry),
+                Some(leases) => match leases.hold_for_pool_slot_hand_off() {
+                    // The availability test and the hand-off both happen under
+                    // this guard, and a checkout takes the same lock: it
+                    // therefore lands strictly before the test or strictly
+                    // after the clone, never between them, where it would
+                    // lease a slot already promised to the producer.
+                    Some(hand_off) => (!hand_off
+                        .is_checked_out_by_any_holder(entry.pool_id.as_str()))
+                    .then(|| Self::hand_off_if_unheld_in_process(entry))
+                    .flatten(),
+                    // Fail closed. A slot whose lease state cannot be read may
+                    // be under a consumer's eye, and rehanding it there is the
+                    // silent corruption this whole mechanism removes.
+                    None => None,
+                },
+            };
+
+            if let Some(handed_off) = handed_off {
                 tracing::trace!(
                     "PixelBufferPoolManager: acquired buffer {} (idx {})",
                     entry.pool_id,
                     idx
                 );
-                return Ok((entry.pool_id.clone(), entry.buffer.clone()));
+                return Ok(handed_off);
             }
         }
 
@@ -288,12 +311,9 @@ impl PixelBufferPoolManager {
                 expand_count
             );
 
-            let surface_store_guard = self.buffer_cache.lock().unwrap();
-            drop(surface_store_guard);
-
             let mut newly_added = 0;
             for _ in 0..expand_count {
-                match ring_pool.pool.acquire() {
+                match ring_pool.pool.allocate_additional_buffer() {
                     Ok((pool_id, buffer)) => {
                         // Register with the surface-share service if available
                         if let Some(store) = surface_store {
@@ -344,7 +364,9 @@ impl PixelBufferPoolManager {
         }
 
         tracing::error!(
-            "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?} (max {})",
+            "PixelBufferPoolManager: all {} buffers in use for {}x{} {:?} (max {}) — a consumer \
+             is holding frames faster than the producer can recycle them; the producer drops \
+             this frame rather than overwriting one somebody is reading",
             buffer_count,
             width,
             height,
@@ -354,6 +376,19 @@ impl PixelBufferPoolManager {
         Err(Error::Configuration(
             "All pixel buffers are currently in use".into(),
         ))
+    }
+
+    /// Hand the slot over if no in-process holder has it.
+    ///
+    /// `PixelBuffer` holds an opaque handle to a host-side `Arc`; the baseline
+    /// is 2 — one share in the ring pool's Vec, one in `buffer_cache` — so
+    /// anything above that is a live reader. Taking the clone here rather than
+    /// at the call site is what keeps the test and the hand-off inside the
+    /// caller's lease guard.
+    fn hand_off_if_unheld_in_process(
+        entry: &PixelBufferRingEntry,
+    ) -> Option<(PixelBufferPoolId, PixelBuffer)> {
+        (entry.buffer.strong_count() <= 2).then(|| (entry.pool_id.clone(), entry.buffer.clone()))
     }
 
     /// Get a buffer by its UUID from local cache.
@@ -4284,5 +4319,202 @@ mod tests {
             "GpuContextLimitedAccess::acquire_storage_buffer: {} bytes; FullAccess mirror also OK",
             byte_size
         );
+    }
+
+    // =====================================================================
+    // The pool's cross-process taken-until-released test
+    //
+    // In-process, a held slot is an Arc above its baseline. These cover the
+    // other holder the pool could not see until #1866: a helper child that
+    // checked the surface out over the surface-share socket. See
+    // `docs/decisions/surface-id-lifetime-contract.md`.
+    // =====================================================================
+
+    #[cfg(target_os = "linux")]
+    const LEASE_TEST_SURFACE_WIDTH: u32 = 32;
+    #[cfg(target_os = "linux")]
+    const LEASE_TEST_SURFACE_HEIGHT: u32 = 32;
+
+    /// A context whose pool can see cross-process holders.
+    ///
+    /// The store is deliberately never connected: the pool reads the lease
+    /// table in this address space, and the socket exists only to carry the
+    /// checkouts that write it. Registration warns and moves on, which is the
+    /// same path a store whose service died already takes.
+    #[cfg(target_os = "linux")]
+    fn gpu_context_reading_check_out_leases_or_skip() -> Option<(
+        GpuContext,
+        Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    )> {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            println!("Skipping - no GPU device available");
+            return None;
+        };
+        let check_out_leases = Arc::new(crate::core::context::SurfaceCheckOutLeaseRegistry::new());
+        gpu.set_surface_store(SurfaceStore::new_reading_check_out_leases(
+            "the-pool-reads-this-lease-table-in-process".to_string(),
+            "surface-check-out-lease-test-runtime".to_string(),
+            Arc::clone(&check_out_leases),
+        ));
+        Some((gpu, check_out_leases))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn acquire_one_pool_slot_id(gpu: &GpuContext) -> Result<String> {
+        // The handle is dropped here on purpose: from this point the slot is
+        // free as far as the in-process refcount is concerned, so anything
+        // that keeps the pool off it is a lease and nothing else.
+        gpu.acquire_pixel_buffer(
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+            PixelFormat::Rgba32,
+        )
+        .map(|(pool_id, _returned_to_the_pool_immediately)| pool_id.to_string())
+    }
+
+    /// The ids of the pool's pre-allocated slots, learned by cycling the ring
+    /// once.
+    #[cfg(target_os = "linux")]
+    fn pool_slot_ids_in_ring_order(gpu: &GpuContext) -> Vec<String> {
+        (0..POOL_PRE_ALLOCATE_COUNT)
+            .map(|_| {
+                acquire_one_pool_slot_id(gpu).expect("the pool hands out a slot when none is held")
+            })
+            .collect()
+    }
+
+    /// The contract itself: a frame a child holds is never handed back to the
+    /// producer to overwrite, and comes back the moment the child lets go.
+    ///
+    /// Mental-revert: dropping the lease consult from `acquire` makes the
+    /// first loop rehand the leased slot on its very next ring cycle — #1755's
+    /// reproduction, at pool level.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_leased_slot_is_never_rehanded_to_its_producer() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let ring = pool_slot_ids_in_ring_order(&gpu);
+        let held_by_a_child = ring[0].clone();
+        let child = check_out_leases.mint_holder_id();
+        check_out_leases
+            .record_check_out_lease(&held_by_a_child, child)
+            .expect("the child checks the frame out");
+
+        for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2) {
+            let handed = acquire_one_pool_slot_id(&gpu).expect("free slots remain");
+            assert_ne!(
+                handed, held_by_a_child,
+                "the producer was handed back the slot a child is still reading"
+            );
+        }
+
+        check_out_leases
+            .release_one_check_out_lease(&held_by_a_child, child)
+            .expect("the child releases the frame");
+        let comes_back = (0..(POOL_PRE_ALLOCATE_COUNT * 4))
+            .any(|_| acquire_one_pool_slot_id(&gpu).is_ok_and(|handed| handed == held_by_a_child));
+        assert!(
+            comes_back,
+            "a released slot must return to the producer, or the lease is a leak"
+        );
+    }
+
+    /// Under lease pressure the pool grows rather than making the producer
+    /// wait or making a consumer's frame change — the "slow consumer costs
+    /// memory first" half of the ruling.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_pool_grows_rather_than_rehanding_any_leased_slot() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let ring = pool_slot_ids_in_ring_order(&gpu);
+        let child = check_out_leases.mint_holder_id();
+        for slot in &ring {
+            check_out_leases
+                .record_check_out_lease(slot, child)
+                .expect("the child checks every published frame out");
+        }
+
+        let grown_slot = acquire_one_pool_slot_id(&gpu)
+            .expect("with every slot leased the pool grows instead of refusing");
+        assert!(
+            !ring.contains(&grown_slot),
+            "the pool handed back a leased slot instead of growing"
+        );
+    }
+
+    /// At the cap the producer drops its own frame. The consumer's cost is
+    /// memory and then its own frames — never the producer's cadence, which
+    /// is why this surfaces as an acquire error the camera already handles
+    /// rather than as a wait.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn at_the_cap_the_producer_is_refused_rather_than_made_to_wait() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let child = check_out_leases.mint_holder_id();
+        let mut leased_slot_count = 0usize;
+
+        let refusal = loop {
+            match acquire_one_pool_slot_id(&gpu) {
+                Ok(slot) => {
+                    check_out_leases
+                        .record_check_out_lease(&slot, child)
+                        .expect("the child holds on to every frame it is given");
+                    leased_slot_count += 1;
+                    assert!(
+                        leased_slot_count <= POOL_MAX_BUFFER_COUNT,
+                        "the pool grew past its own cap"
+                    );
+                }
+                Err(refusal) => break refusal,
+            }
+        };
+
+        assert_eq!(
+            leased_slot_count, POOL_MAX_BUFFER_COUNT,
+            "the pool must grow all the way to its cap before refusing"
+        );
+        assert!(
+            refusal.to_string().contains("in use"),
+            "the refusal must name what happened, got: {refusal}"
+        );
+    }
+
+    /// Fail closed. A lease table that cannot be read cannot prove any slot is
+    /// free, and a slot reused on a guess is a frame changing under a reader.
+    /// Growth still serves the producer — a slot that has never existed cannot
+    /// be checked out — so the observable rule is "never reuse", not "never
+    /// acquire".
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_unreadable_lease_table_stops_the_pool_reusing_any_slot() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+        let ring = pool_slot_ids_in_ring_order(&gpu);
+
+        let poisoning = Arc::clone(&check_out_leases);
+        let _ = std::thread::spawn(move || {
+            let _held = poisoning.hold_for_pool_slot_hand_off().unwrap();
+            panic!("poison the lease table");
+        })
+        .join();
+
+        for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2) {
+            let handed = acquire_one_pool_slot_id(&gpu).expect("growth still serves the producer");
+            assert!(
+                !ring.contains(&handed),
+                "a slot was reused while the lease table was unreadable"
+            );
+        }
     }
 }

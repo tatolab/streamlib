@@ -105,6 +105,29 @@ impl RhiPixelBufferPool {
             ))
         }
     }
+
+    /// Grow the pool by one buffer and hand it out.
+    ///
+    /// What a manager calls when every existing slot is held — by an
+    /// in-process reader or by a cross-process checkout lease — and the
+    /// producer still needs somewhere to write. Distinct from
+    /// [`Self::acquire`], which only ever recycles.
+    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+        #[cfg(target_os = "macos")]
+        {
+            self.inner.acquire()
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.allocate_additional_buffer()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            Err(crate::core::Error::Configuration(
+                "RhiPixelBufferPool not implemented for this platform".into(),
+            ))
+        }
+    }
 }
 
 impl std::fmt::Debug for RhiPixelBufferPool {
