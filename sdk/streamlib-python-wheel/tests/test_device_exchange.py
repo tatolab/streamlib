@@ -155,35 +155,41 @@ def test_the_host_side_stays_reachable_on_explicit_request(start_app_under_test)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason=(
-        "asserts view-identity only, which cannot fail for the reason #1755 exists: two "
-        "views of one recycled slot agree by construction. Unskips rewritten to ground "
-        "truth — a deliberately lagged consumer still reading its delivered frame — with "
-        "the checkout lease that makes that true, per the #1755 ruling"
-    )
-)
 def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test):
-    """Regression lock on the stale-blit-source bug.
+    """Regression lock on the stale-blit-source bug, and on the frame itself.
 
-    The camera registers its transient ring texture under each frame's surface
-    id, and the export used to resolve texture-first — so a cross-process GPU
-    view read the slot the camera had already overwritten while the CPU view
-    read the pooled member. Routing the export to the pooled backing is the fix;
-    this asserts identity across 12 consecutive frames.
+    Two claims. The camera registers its transient ring texture under each
+    frame's surface id, and the export used to resolve texture-first — so a
+    cross-process GPU view read the slot the camera had already overwritten
+    while the CPU view read the pooled member. The two views must agree.
 
-    Skipped rather than deleted: identity is necessary but not sufficient — a
-    consumer lagging past the pool's own depth reads a newer frame in both
-    views, consistently. Proving the delivered frame needs the lease.
+    Agreement is necessary and not sufficient, which is why this test was
+    skipped rather than trusted: two views of one recycled slot agree by
+    construction, so identity alone cannot fail for the reason #1755 exists.
+    The second claim is the real one — a consumer holding a frame while the
+    producer runs 16 frames past it still reads the pixels it was delivered,
+    because the checkout lease keeps the pool off that slot.
     """
     if not Path("/dev/video0").exists():
         pytest.skip("no camera on this rig")
     observation = run_probe(start_app_under_test, "camera")
     skip_without_cuda(observation)
+
     mismatches = [i for i, ok in enumerate(observation["comparisons"]) if not ok]
     assert not mismatches, (
         f"device pixels diverged from host pixels on frames {mismatches} — the blit "
         f"exported a stale ring texture"
+    )
+
+    if not observation["a_later_frame_differed"]:
+        pytest.skip(
+            "every frame this camera produced was identical, so a frame staying still "
+            "proves nothing — point the rig at a scene that moves"
+        )
+    assert observation["held_frame_unchanged"], (
+        f"the pixels under a held surface id changed while the producer ran "
+        f"{observation['frames_the_producer_ran_ahead']} frames past it — its pool slot "
+        f"was rehanded despite the checkout lease"
     )
 
 

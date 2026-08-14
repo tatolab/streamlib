@@ -94,9 +94,24 @@ describe the same frame, and that frame is the one the bag delivered.
   checkout moves to the child host's bag-receipt path: today `resolve_surface` is a
   user-facing call (`python_processor_context.rs:596-607`), so the lease could not
   begin until user code touched the surface, leaving a queued bag unprotected for
-  its whole queue time; the host's reader thread checks out on arrival instead
+  its whole queue time; ~~the host's reader thread checks out on arrival instead~~
+  the host checks out on arrival instead
   (user-visible behavior unchanged — the handle the callback gets is already
   checked out).
+
+  > ~~the host's reader thread checks out on arrival~~ — Corrected 2026-08-14 by
+  > the #1866 implementation, verified at `origin/main` 53d5410f. No thread in the
+  > wheel receives bags: `ParentProcessBridge._reader` (`_helper.py:116-120`) serves
+  > only the escalate / lifecycle socket, and bags arrive over iceoryx2, pulled
+  > synchronously on the processor's own thread by `InputMailboxesInner::receive_pending`
+  > (`runtime/streamlib-engine/src/iceoryx2/input.rs`, called from `read_raw` /
+  > `has_data` / `any_port_has_data` and nowhere else). The decided *what* — the
+  > consumer's host checks out at receipt rather than at first touch — stands; the
+  > stated *how* did not exist. As built, the mailbox reports every bag that enters
+  > and leaves, the helper host claims a queued bag's surfaces on entry, and
+  > queueing is two-stage (the iceoryx2 subscriber queue, then the per-port
+  > mailbox), so the residual unprotected window is transit plus the remainder of
+  > the current callback.
 - ADDED: an engine-level rotating-producer fixture and ground-truth test: a synthetic
   producer replicating the camera's shape (pool surface + transient ring texture
   registered under the pool id, counter-stamped pixels), asserting (a) a device
