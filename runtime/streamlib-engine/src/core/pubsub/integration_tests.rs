@@ -17,9 +17,10 @@
 //! Synchronization strategy:
 //! - Uses `std::sync::mpsc` channels for delivery notification (no
 //!   sleep-based waits)
-//! - Uses retry-publish pattern to handle the race between subscriber
-//!   thread startup and the first publish (PubSub provides no
-//!   readiness signal)
+//! - Publishes each event exactly once: `subscribe()` returns only once
+//!   its subscriber is registered, so there is no startup race to retry
+//!   around. A test that needs a retry loop to see its event is
+//!   reporting a regression, not tolerating a known race.
 //!
 //! Lives in-source (rather than `tests/`) to access `super::bus::PubSub`
 //! directly — the tests construct ad-hoc `PubSub` instances per case
@@ -86,27 +87,18 @@ fn create_initialized_bus(test_name: &str) -> PubSub {
     bus
 }
 
-/// Publish an event in a retry loop until the channel receives it (or timeout).
+/// Publish an event once and wait for the subscriber to deliver it.
 ///
-/// Handles the race between subscriber thread startup and the first publish.
-/// PubSub's subscribe() spawns a thread that creates the iceoryx2 subscriber
-/// asynchronously — this function retries until the subscriber is ready.
-fn publish_until_received(
+/// One publish is enough by contract — `subscribe()` does not return until its
+/// subscriber is registered — so a `None` here is a real delivery failure.
+fn publish_once_and_receive(
     bus: &PubSub,
     event: &Event,
     rx: &mpsc::Receiver<Event>,
     timeout: Duration,
 ) -> Option<Event> {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        bus.publish(&event.topic(), event);
-        match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(received) => return Some(received),
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
-        }
-    }
-    None
+    bus.publish(&event.topic(), event);
+    rx.recv_timeout(timeout).ok()
 }
 
 // ===========================================================================
@@ -530,7 +522,7 @@ fn test_publish_delivers_to_subscriber() {
     bus.subscribe(topics::KEYBOARD, listener.clone());
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     assert!(
         received.is_some(),
@@ -607,7 +599,7 @@ fn test_publish_does_not_cross_topics() {
 
     // Use retry loop to ensure the mouse subscriber is ready
     let received_mouse =
-        publish_until_received(&bus, &mouse_event, &rx_mouse, Duration::from_secs(5));
+        publish_once_and_receive(&bus, &mouse_event, &rx_mouse, Duration::from_secs(5));
     assert!(
         received_mouse.is_some(),
         "Mouse subscriber should receive mouse events"
@@ -637,7 +629,7 @@ fn test_wildcard_subscriber_receives_all_topics() {
     let processor_event = Event::processor("test-proc", ProcessorEvent::Started);
 
     // Ensure wildcard subscriber is ready by retrying first event
-    let first = publish_until_received(&bus, &keyboard_event, &rx, Duration::from_secs(5));
+    let first = publish_once_and_receive(&bus, &keyboard_event, &rx, Duration::from_secs(5));
     assert!(
         first.is_some(),
         "Wildcard subscriber should receive keyboard event"
@@ -685,7 +677,7 @@ fn test_subscriber_receives_correct_event_data() {
         meta: false,
     };
     let event = Event::keyboard(KeyCode::Z, modifiers, KeyState::Released);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     let received = received.expect("Should have received the event");
 
@@ -752,7 +744,7 @@ fn test_subscribe_before_init_receives_events_after_init() {
     bus.init(&runtime_id, node);
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     assert!(
         received.is_some(),
@@ -838,7 +830,7 @@ fn test_listener_drop_stops_subscriber_thread() {
 
     // Verify subscriber is working first
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
     assert!(
         received.is_some(),
         "Should receive events before dropping listener"
@@ -877,7 +869,7 @@ fn test_runtime_event_delivery() {
 
     // Ensure subscriber is ready with first event
     let first = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
-    let received = publish_until_received(&bus, &first, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &first, &rx, Duration::from_secs(5));
     assert!(received.is_some(), "Should receive RuntimeStarted event");
 
     // Send remaining runtime events
@@ -923,7 +915,7 @@ fn test_processor_event_delivery() {
     bus.subscribe(&topic, listener.clone());
 
     let event = Event::processor(processor_id, ProcessorEvent::Started);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     assert!(
         received.is_some(),
@@ -945,7 +937,7 @@ fn test_custom_event_delivery() {
 
     let payload = serde_json::json!({"key": "value", "count": 42});
     let event = Event::custom(custom_topic, payload);
-    let received = publish_until_received(&bus, &event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
 
     let received = received.expect("Custom event should be delivered");
     assert_eq!(received.topic(), custom_topic);
@@ -976,7 +968,7 @@ fn test_oversized_event_is_dropped() {
 
     // First verify the subscriber is working with a normal-sized event
     let normal_event = Event::custom("big-topic", serde_json::json!({"ok": true}));
-    let received = publish_until_received(&bus, &normal_event, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &normal_event, &rx, Duration::from_secs(5));
     assert!(received.is_some(), "Normal event should be delivered first");
 
     // Drain any extra events from the retry loop
@@ -1010,7 +1002,7 @@ fn test_concurrent_publish_from_multiple_threads() {
 
     // Ensure subscriber is ready
     let probe = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_until_received(&bus, &probe, &rx, Duration::from_secs(5));
+    let received = publish_once_and_receive(&bus, &probe, &rx, Duration::from_secs(5));
     assert!(received.is_some(), "Subscriber should be ready");
 
     // Drain probe events
@@ -1096,7 +1088,7 @@ fn test_separate_pubsub_instances_are_isolated() {
 
     // Verify bus_a's subscriber is working
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received_a = publish_until_received(&bus_a, &event, &rx_a, Duration::from_secs(5));
+    let received_a = publish_once_and_receive(&bus_a, &event, &rx_a, Duration::from_secs(5));
     assert!(
         received_a.is_some(),
         "bus_a subscriber should receive the event"

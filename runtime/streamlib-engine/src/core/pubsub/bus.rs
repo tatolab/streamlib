@@ -26,6 +26,14 @@ thread_local! {
 /// Process-wide pub/sub handle.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
+/// How long [`PubSub::subscribe`] waits for its subscriber to register before
+/// giving up and returning anyway.
+///
+/// Generous against the establishment path's own bound (ten `open_or_create`
+/// attempts, 20ms apart): elapsing means iceoryx2 is wedged, not merely slow,
+/// and blocking the caller forever is worse than a logged loss of events.
+const SUBSCRIBER_ESTABLISHMENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// iceoryx2-backed pub/sub for runtime events.
 pub struct PubSub {
     // Set once via init()
@@ -67,7 +75,13 @@ impl PubSub {
         }
     }
 
-    /// Subscribe a listener to a topic.
+    /// Subscribe a listener to a topic, returning once the subscriber is
+    /// registered — an event published after this returns is delivered.
+    ///
+    /// Blocks for as long as establishment takes because the event service
+    /// carries no history: a sample sent before the subscriber registers reaches
+    /// nobody and cannot be replayed. Before `init()` the subscription is
+    /// buffered instead, and establishment happens during the replay.
     ///
     /// The subscriber thread holds only a Weak reference to the listener.
     /// The caller MUST keep the Arc alive for the lifetime of the subscription.
@@ -124,6 +138,12 @@ impl PubSub {
         let service_name = topic_to_service_name(&runtime_id, topic);
         let service_name_for_log = service_name.clone();
 
+        // The event service carries no history, so iceoryx2 hands a sample only
+        // to subscribers already registered when `send()` runs. Returning before
+        // this subscriber is registered would silently lose every event
+        // published in the gap, with no trace and no way to recover it.
+        let (subscriber_ready_sender, subscriber_ready_receiver) = std::sync::mpsc::sync_channel(1);
+
         // Spawn a dedicated OS thread for polling.
         // iceoryx2 Subscriber uses Rc internally (!Send), so it must be
         // created and used on the same thread.
@@ -168,6 +188,10 @@ impl PubSub {
                 }
             };
 
+            // Registered in the service's dynamic config: every publisher picks
+            // this port up on its next `send()`, so the caller may publish now.
+            let _ = subscriber_ready_sender.send(());
+
             subscriber_poll_loop(&subscriber, &weak_listener, &topic_owned);
         }) {
             tracing::error!(
@@ -175,12 +199,35 @@ impl PubSub {
                 service_name_for_log,
                 e
             );
-        } else {
-            tracing::debug!(
-                "Listener subscribed to topic '{}' (service: {})",
-                topic,
-                service_name_for_log
-            );
+            return;
+        }
+
+        // The sender is owned by the spawned thread, so a give-up path drops it
+        // and disconnects rather than stranding this caller until the timeout.
+        match subscriber_ready_receiver.recv_timeout(SUBSCRIBER_ESTABLISHMENT_TIMEOUT) {
+            Ok(()) => {
+                tracing::debug!(
+                    "Listener subscribed to topic '{}' (service: {})",
+                    topic,
+                    service_name_for_log
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::error!(
+                    "Subscriber for '{}' never came up; events on topic '{}' will be missed",
+                    service_name_for_log,
+                    topic
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                tracing::error!(
+                    "Subscriber for '{}' was still coming up after {:?}; \
+                     events on topic '{}' published now may be missed",
+                    service_name_for_log,
+                    SUBSCRIBER_ESTABLISHMENT_TIMEOUT,
+                    topic
+                );
+            }
         }
     }
 
