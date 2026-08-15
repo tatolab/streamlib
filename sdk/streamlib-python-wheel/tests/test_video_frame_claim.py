@@ -19,11 +19,18 @@ point: nothing about the frame is bound to our implementation of it.
 from __future__ import annotations
 
 import gc
+import os
 import weakref
 
 import pytest
 
-from streamlib import ColorInfo, ContentLight, VideoFrame
+from streamlib import (
+    ColorInfo,
+    ContentLight,
+    ProcessorLinkDataAccess,
+    RuntimeContextFullAccess,
+    VideoFrame,
+)
 from streamlib import video_frame as video_frame_module
 
 FRAME_BAG = {
@@ -34,6 +41,8 @@ FRAME_BAG = {
 }
 
 CLAIM_FIELD = "_check_out_lease_on_this_frames_surface"
+OUTPUT_PORT = "frames_to_downstream"
+INPUT_PORT = "frames_from_upstream"
 
 
 class ClaimStandingInForALease:
@@ -173,3 +182,58 @@ def test_already_cast_metadata_survives_construction():
     passes real `ColorInfo`, and re-casting must not mangle it."""
     frame = VideoFrame(**FRAME_BAG, color_info=ColorInfo(matrix="bt709"))
     assert frame.color_info == ColorInfo(matrix="bt709")
+
+
+# ---- the spelling itself, over a real link ---------------------------------
+
+
+def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu():
+    """`ctx.inputs.read(port, into=VideoFrame)` end to end: a bag crosses real
+    iceoryx2 ports and arrives as a frame with its metadata cast.
+
+    This context is built without an escalate bridge, so its GPU capability
+    reaches nothing — which is the case that matters here. The read still
+    offers that capability, the frame still tries to claim, and the refusal
+    leaves an ordinary frame rather than an exception at the read. What the
+    claim does when the route *is* live needs a surface-share service, and is
+    proven in the wheel's Rust tests.
+    """
+    unique = f"framecast{os.getpid()}"
+    channel_service_name = f"{unique}/frames"
+    notify_service_name = f"{unique}_dest/notify"
+    link_id = f"L-{unique}"
+
+    # The destination subscribes first: iceoryx2 drops a send with no
+    # subscriber attached. Both planes live on this thread — its ports are
+    # `!Send`.
+    destination = ProcessorLinkDataAccess()
+    destination.wire_input_link(
+        INPUT_PORT, channel_service_name, notify_service_name,
+        "read_next_in_order", 8, 2, 1, True, link_id,
+    )  # fmt: skip
+    source = ProcessorLinkDataAccess()
+    source.wire_output_link(
+        OUTPUT_PORT, channel_service_name, notify_service_name,
+        1024, 1 << 20, 8, 2, 1, True, link_id,
+    )  # fmt: skip
+
+    ctx = RuntimeContextFullAccess.open_for_helper_process(
+        {}, destination, "runtime-under-test", "processor-under-test"
+    )
+    source.write_to_output_port(
+        OUTPUT_PORT,
+        {**FRAME_BAG, "fps": 30, "color_info": {"primaries": "bt709"}},
+    )
+
+    frame = ctx.inputs.read(INPUT_PORT, into=VideoFrame)
+
+    assert frame is not None, "the wired input received nothing"
+    assert frame.surface_id == "surface-7"
+    assert frame.color_info == ColorInfo(primaries="bt709")
+    assert getattr(frame, CLAIM_FIELD) is None, (
+        "a capability that reaches nothing claims nothing"
+    )
+    # Which is a refusal the frame swallowed, not an offer that never happened:
+    # this is the capability the read offers, and this is what it answers.
+    with pytest.raises(RuntimeError, match="not reachable"):
+        ctx.gpu_limited_access.claim_surface_against_producer_reuse("surface-7")
