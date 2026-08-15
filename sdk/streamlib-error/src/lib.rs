@@ -90,6 +90,18 @@ pub enum Error {
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 
+    #[error(
+        "surface '{surface_id}' names a recycled frame: its pool slot has been rehanded to \
+         the producer since (this id published generation {published_generation}, the slot \
+         is on generation {current_generation}), so the frame this id named no longer \
+         exists — hold frames with a typed cast (`read(port, into=...)`) to keep them"
+    )]
+    SurfaceFrameRecycled {
+        surface_id: String,
+        published_generation: u64,
+        current_generation: u64,
+    },
+
     #[error("Clock synchronization error: {0}")]
     ClockError(String),
 
