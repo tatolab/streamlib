@@ -143,7 +143,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::mpsc;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         // Ensure PUBSUB has an iceoryx2 backend. Use a process-unique runtime_id
         // so iceoryx2's persistent service state under /tmp/iceoryx2/ doesn't
@@ -169,9 +169,19 @@ mod tests {
             done_tx.send(result).ok();
         });
 
-        // Give the iceoryx2 subscriber thread time to open the service and
-        // start polling before we send the shutdown event.
-        std::thread::sleep(Duration::from_millis(150));
+        // `shutdown_aware_loop` subscribes before its first callback, and
+        // `subscribe` returns only once its subscriber is registered — so one
+        // observed iteration proves the loop is listening. Waiting on that
+        // rather than on a duration is what keeps this deterministic on a
+        // loaded machine.
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        while counter.load(Ordering::Relaxed) == 0 {
+            assert!(
+                Instant::now() < ready_deadline,
+                "shutdown_aware_loop never reached its first iteration",
+            );
+            std::thread::yield_now();
+        }
 
         // Publish shutdown event
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);

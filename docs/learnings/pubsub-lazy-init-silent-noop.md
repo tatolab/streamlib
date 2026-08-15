@@ -65,10 +65,17 @@ match done_rx.recv_timeout(Duration::from_secs(5)) {
 }
 ```
 
-3. **Allow setup time** — `std::thread::sleep(Duration::from_millis(150))`
-   between spawning the subscriber thread and publishing. The iceoryx2
-   service open is async; publishing before the subscriber is listening
-   loses the event.
+3. > ~~**Allow setup time** — `std::thread::sleep(Duration::from_millis(150))`
+   > between spawning the subscriber thread and publishing. The iceoryx2
+   > service open is async; publishing before the subscriber is listening
+   > loses the event.~~ — Superseded 2026-08-15 by #1873. `PUBSUB.subscribe()`
+   > now returns only once its subscriber is registered, so no sleep is needed
+   > between subscribing and publishing. What still needs waiting on is a
+   > *spawned thread reaching* its `subscribe()` call — wait on an observable
+   > effect of the thread having got there, never on a duration. The async-open
+   > premise does still hold for a hand-rolled subscriber built directly on
+   > `Iceoryx2Node` below `PubSub`, as in sections B and C of the pubsub
+   > integration tests.
 
 ## Where this hits
 
@@ -78,5 +85,5 @@ of a full `StreamRuntime`. Currently:
 
 ## Reference
 - Fix commit in #252 (ash → vulkanalia migration branch)
-- PUBSUB implementation: `runtime/streamlib-engine/src/core/pubsub.rs`
+- PUBSUB implementation: `runtime/streamlib-engine/src/core/pubsub/bus.rs`
 - iceoryx2 node: `runtime/streamlib-engine/src/iceoryx2/mod.rs`
