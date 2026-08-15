@@ -4,7 +4,7 @@
 use crate::core::context::TextureRegistration;
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{
-    CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat,
+    CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolSlotId, PixelFormat,
     RhiBlitter, RhiColorConverter, RhiCommandQueue, RhiPixelBufferPool, Texture, TextureDescriptor,
     TextureFormat, TextureUsages,
 };
@@ -75,7 +75,7 @@ struct PixelBufferPoolKey {
 
 /// A single entry in the ring pool.
 struct PixelBufferRingEntry {
-    pool_id: PixelBufferPoolId,
+    pool_id: PixelBufferPoolSlotId,
     buffer: PixelBuffer,
 }
 
@@ -153,7 +153,7 @@ impl PixelBufferPoolManager {
         height: u32,
         format: PixelFormat,
         surface_store: Option<&SurfaceStore>,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         let key = PixelBufferPoolKey {
             width,
             height,
@@ -410,7 +410,7 @@ impl PixelBufferPoolManager {
     /// caller's lease guard.
     fn hand_off_if_unheld_in_process(
         entry: &PixelBufferRingEntry,
-    ) -> Option<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Option<(PixelBufferPoolSlotId, PixelBuffer)> {
         (entry.buffer.strong_count() <= 2).then(|| (entry.pool_id.clone(), entry.buffer.clone()))
     }
 
@@ -686,7 +686,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         tracing::debug!(
             rhi_op = "acquire_pixel_buffer",
             width,
@@ -703,7 +703,7 @@ impl GpuContext {
     ///
     /// First checks local cache, then falls back to surface-share service lookup for cross-process sharing.
     /// Returns the buffer if found, or an error if not found anywhere.
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolSlotId) -> Result<PixelBuffer> {
         // Check local cache first
         if let Some(buffer) = self
             .pixel_buffer_pool_manager
@@ -735,7 +735,7 @@ impl GpuContext {
 
     /// Resolve a VideoFrame's buffer from its surface_id.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        let pool_id = PixelBufferPoolId::from_str(surface_id);
+        let pool_id = PixelBufferPoolSlotId::from_str(surface_id);
         self.get_pixel_buffer(&pool_id)
     }
 
@@ -2714,7 +2714,7 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         self.host_inner()
             .acquire_pixel_buffer(width, height, format)
     }
@@ -2754,7 +2754,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Get a pixel buffer by its pool id (Split: local cache).
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolSlotId) -> Result<PixelBuffer> {
         self.host_inner().get_pixel_buffer(pool_id)
     }
 
@@ -2979,7 +2979,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         self.host_inner()
             .acquire_pixel_buffer(width, height, format)
     }
@@ -3030,7 +3030,7 @@ impl GpuContextFullAccess {
     }
 
     /// Get a pixel buffer by its pool id.
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolSlotId) -> Result<PixelBuffer> {
         self.host_inner().get_pixel_buffer(pool_id)
     }
 

@@ -809,7 +809,7 @@ fn now_ns() -> u64 {
 #[allow(unused_variables)]
 fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
-    pool_id: &crate::core::rhi::PixelBufferPoolId,
+    pool_id: &crate::core::rhi::PixelBufferPoolSlotId,
     buffer: &PixelBuffer,
 ) -> crate::core::error::Result<String> {
     #[cfg(target_os = "linux")]

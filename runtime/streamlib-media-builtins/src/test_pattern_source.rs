@@ -9,7 +9,7 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::Result;
 use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ContinuousProcessor;
-use streamlib::sdk::rhi::{PixelBuffer, PixelBufferPoolId, PixelFormat};
+use streamlib::sdk::rhi::{PixelBuffer, PixelBufferPoolSlotId, PixelFormat};
 
 use crate::video_frame::{ColorInfo, Primaries, Range, Transfer, VideoFrame};
 
@@ -77,7 +77,7 @@ enum TestPatternSurfaceState {
     #[default]
     NotYetAcquired,
     Ready {
-        pool_id: PixelBufferPoolId,
+        pool_id: PixelBufferPoolSlotId,
         /// Held for the processor's lifetime: the [`PixelBuffer`] keeps the
         /// pool slot (and thus the surface id) alive.
         _pixel_buffer: PixelBuffer,

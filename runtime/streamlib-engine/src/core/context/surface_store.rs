@@ -671,7 +671,7 @@ impl SurfaceStoreInner {
 
     /// Register a buffer with the surface-share service using the new protocol.
     ///
-    /// The client provides the UUID (PixelBufferPoolId) and the buffer.
+    /// The client provides the UUID (PixelBufferPoolSlotId) and the buffer.
     /// This is used for pre-registering pooled buffers.
     #[cfg(target_os = "macos")]
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {

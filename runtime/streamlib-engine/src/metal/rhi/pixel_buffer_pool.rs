@@ -25,7 +25,7 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetIOSurface, CVPixelBufferRef, IOSurfaceGetID, kCVReturnSuccess,
 };
 use crate::core::rhi::{
-    PixelBuffer, PixelBufferDescriptor, PixelBufferPoolId, PixelBufferRef, PixelFormat,
+    PixelBuffer, PixelBufferDescriptor, PixelBufferPoolSlotId, PixelBufferRef, PixelFormat,
     RhiPixelBufferPool,
 };
 use crate::core::{Error, Result};
@@ -33,9 +33,9 @@ use crate::core::{Error, Result};
 /// macOS pixel buffer pool wrapping CVPixelBufferPool.
 pub struct PixelBufferPoolMacOS {
     pool: *mut CVPixelBufferPool,
-    /// Maps IOSurfaceID -> PixelBufferPoolId for recycled buffer tracking.
+    /// Maps IOSurfaceID -> PixelBufferPoolSlotId for recycled buffer tracking.
     /// When CVPixelBufferPool returns a recycled buffer, we return the same UUID.
-    iosurface_to_pool_id: RwLock<HashMap<u32, PixelBufferPoolId>>,
+    iosurface_to_pool_id: RwLock<HashMap<u32, PixelBufferPoolSlotId>>,
 }
 
 impl PixelBufferPoolMacOS {
@@ -81,7 +81,7 @@ impl PixelBufferPoolMacOS {
     ///
     /// Returns (id, buffer) where id is a stable UUID for this physical buffer.
     /// If CVPixelBufferPool returns a recycled buffer, the same UUID is returned.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    pub fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         tracing::trace!("PixelBufferPoolMacOS::acquire: requesting buffer");
         let mut pixel_buffer: CVPixelBufferRef = std::ptr::null_mut();
 
@@ -134,7 +134,7 @@ impl PixelBufferPoolMacOS {
                 existing_id.clone()
             } else {
                 drop(read_guard);
-                let new_id = PixelBufferPoolId::new();
+                let new_id = PixelBufferPoolSlotId::new();
                 self.iosurface_to_pool_id
                     .write()
                     .insert(iosurface_id, new_id.clone());
@@ -147,7 +147,7 @@ impl PixelBufferPoolMacOS {
             }
         } else {
             // No IOSurface backing - generate new ID each time
-            let new_id = PixelBufferPoolId::new();
+            let new_id = PixelBufferPoolSlotId::new();
             tracing::warn!(
                 "PixelBufferPoolMacOS::acquire: buffer has no IOSurface backing, new id={}",
                 new_id

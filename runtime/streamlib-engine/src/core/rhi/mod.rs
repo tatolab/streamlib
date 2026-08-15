@@ -55,7 +55,10 @@ pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(target_os = "linux")]
 pub use index_buffer::IndexBuffer;
 pub use pixel_buffer::PixelBuffer;
-pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};
+pub use pixel_buffer_pool::{
+    pool_slot_key_of_surface_id, PixelBufferDescriptor, PixelBufferPoolSlotId,
+    PublishedPixelBufferFrameId,
+};
 pub use ray_tracing_kernel::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingPushConstants, RayTracingShaderGroup, RayTracingShaderStage,
