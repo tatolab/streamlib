@@ -35,7 +35,9 @@ use crate::python_gpu_surface_pixel_exchange::{
     publish_device_write_back_to_surface,
 };
 #[cfg(target_os = "linux")]
-use crate::python_helper_process_pixel_exchange::HelperCheckedOutPixelSurface;
+use crate::python_helper_process_pixel_exchange::{
+    HelperCheckedOutPixelSurface, HelperSurfaceCheckOutLeaseDebt,
+};
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -487,6 +489,38 @@ impl PythonGpuSurfaceHandle {
 }
 
 // =============================================================================
+// Surface checkout lease
+// =============================================================================
+
+/// A claim on a published surface, held for exactly as long as this object is.
+///
+/// While a claim is outstanding the pool never rehands that surface's slot to
+/// its producer, and dropping this object is the release — there is nothing to
+/// call. Ownership being the whole protocol is what lets any object that holds
+/// one in a field inherit the behaviour: the frame stops moving while the
+/// object that named it lives.
+///
+/// Claims are counted, so holding one and resolving the same surface for its
+/// pixels are independent — neither releases the other's.
+#[pyclass(name = "GpuSurfaceCheckOutLease", module = "streamlib", frozen)]
+pub(crate) struct PythonGpuSurfaceCheckOutLease {
+    claimed_surface_id: String,
+    /// Settled by its own `Drop`; nothing reads it, and that is the point.
+    #[cfg(target_os = "linux")]
+    #[expect(dead_code, reason = "the field is the claim; its Drop is the release")]
+    release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+}
+
+#[pymethods]
+impl PythonGpuSurfaceCheckOutLease {
+    /// The surface this claim holds still.
+    #[getter]
+    fn surface_id(&self) -> String {
+        self.claimed_surface_id.clone()
+    }
+}
+
+// =============================================================================
 // GPU capability views
 // =============================================================================
 
@@ -604,6 +638,33 @@ impl PythonGpuContextLimitedAccess {
             return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
                 checked_out,
             ));
+        }
+        let _ = (python, surface_id);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Claim a published surface against producer reuse until the returned
+    /// lease is dropped.
+    ///
+    /// The cheap half of [`resolve_surface`]: it holds the frame still without
+    /// importing its memory, so an object that wants only the pixels it was
+    /// handed to stay put can keep the lease in a field and let its own
+    /// lifetime do the releasing.
+    ///
+    /// [`resolve_surface`]: PythonGpuContextLimitedAccess::resolve_surface
+    fn claim_surface_against_producer_reuse(
+        &self,
+        python: Python<'_>,
+        surface_id: &str,
+    ) -> PyResult<PythonGpuSurfaceCheckOutLease> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let claimed = python
+                .detach(|| exchange_client.claim_surface_against_producer_reuse(surface_id))?;
+            return Ok(PythonGpuSurfaceCheckOutLease {
+                claimed_surface_id: surface_id.to_string(),
+                release_check_out_to_surface_share: claimed,
+            });
         }
         let _ = (python, surface_id);
         Err(gpu_unreachable_from_a_helper_process_error())
@@ -823,6 +884,14 @@ impl PythonRuntimeContextFullAccess {
             }
             _ => None,
         };
+        // Built before the reader, which carries it: a typed read offers this
+        // very capability to whatever it constructs.
+        let gpu_limited_access_context = Py::new(
+            python,
+            PythonGpuContextLimitedAccess::new_for_helper_process(
+                helper_process_exchange_client.clone(),
+            ),
+        )?;
         Ok(Self {
             runtime_id,
             processor_id,
@@ -831,6 +900,7 @@ impl PythonRuntimeContextFullAccess {
                 python,
                 PythonLinkInputDataReader {
                     link_data_access: link_data_access.clone_ref(python),
+                    gpu_limited_access_context: gpu_limited_access_context.clone_ref(python),
                 },
             )?,
             link_output_data_writer: Py::new(
@@ -839,12 +909,7 @@ impl PythonRuntimeContextFullAccess {
                     link_data_access: link_data_access.clone_ref(python),
                 },
             )?,
-            gpu_limited_access_context: Py::new(
-                python,
-                PythonGpuContextLimitedAccess::new_for_helper_process(
-                    helper_process_exchange_client.clone(),
-                ),
-            )?,
+            gpu_limited_access_context,
             gpu_full_access_context: Py::new(
                 python,
                 PythonGpuContextFullAccess {
@@ -1016,9 +1081,15 @@ fn configuration_as_python_dict<'py>(
 // =============================================================================
 
 /// A processor's input ports, as `ctx.inputs`.
+///
+/// It carries the same GPU capability the context exposes as
+/// `ctx.gpu_limited_access` because this is where the two knowledges meet: the
+/// consumer names the type it is reading into, and the context holds the route
+/// to the engine's surfaces.
 #[pyclass(name = "LinkInputDataReader", module = "streamlib", frozen)]
 pub(crate) struct PythonLinkInputDataReader {
     link_data_access: Py<PythonProcessorLinkDataAccess>,
+    gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
 }
 
 #[pymethods]
@@ -1028,6 +1099,9 @@ impl PythonLinkInputDataReader {
     /// `into` is the opt-in strictness dial: a TypedDict casts for free, a
     /// dataclass or pydantic model constructs and validates, and a bag that
     /// does not fit raises here rather than travelling on.
+    ///
+    /// A constructing target is offered this processor's GPU capability while
+    /// it builds — see `gpu_limited_access_of_the_typed_read_in_progress`.
     #[pyo3(signature = (port_name, *, into = None))]
     fn read<'py>(
         &self,
@@ -1037,7 +1111,12 @@ impl PythonLinkInputDataReader {
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         self.link_data_access
             .get()
-            .read_from_input_port(python, port_name, into)
+            .read_from_input_port_offering_gpu_access(
+                python,
+                port_name,
+                into,
+                Some(self.gpu_limited_access_context.bind(python).as_any()),
+            )
     }
 
     /// The next bag with its stamp, or `(None, None)` when empty.

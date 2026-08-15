@@ -8,6 +8,8 @@
 //! rebuilds ordinary Python data. Pixels never travel this way — a frame crosses
 //! as a handle, and the payload here is the named map describing it.
 
+use std::cell::RefCell;
+
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -56,10 +58,16 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
 /// constructed from the bag's entries as keyword arguments, and whatever the
 /// constructor raises is what the author sees: a pydantic `ValidationError`
 /// says more about the mismatch than any wrapper here could.
+///
+/// `offered_gpu_limited_access` is what the constructing type may reach for
+/// through [`gpu_limited_access_of_the_typed_read_in_progress`] — offered for
+/// the construction and withdrawn the moment it returns. Nothing here knows
+/// which types want it or what they do with it.
 pub(crate) fn cast_decoded_bag_into_read_target<'py>(
     port_name: &str,
     decoded_bag: Bound<'py, PyAny>,
     read_target_type: &Bound<'py, PyAny>,
+    offered_gpu_limited_access: Option<&Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let named_map = decoded_bag.cast::<PyDict>().map_err(|_| {
         PyTypeError::new_err(format!(
@@ -69,8 +77,11 @@ pub(crate) fn cast_decoded_bag_into_read_target<'py>(
         ))
     })?;
     if read_target_is_a_typed_dict(read_target_type)? {
+        // Nothing is constructed, so there is no constructor to offer
+        // anything to: the bag arrives as itself.
         return Ok(decoded_bag);
     }
+    let _offer = TypedReadGpuAccessOffer::open(offered_gpu_limited_access);
     read_target_type
         .call((), Some(named_map))
         .map_err(|construction_failure| {
@@ -83,6 +94,72 @@ pub(crate) fn cast_decoded_bag_into_read_target<'py>(
                 python_type_name_for_error_message(read_target_type, "value")
             ))
         })
+}
+
+// =============================================================================
+// What a typed read offers the type it is constructing
+// =============================================================================
+
+thread_local! {
+    /// The GPU capability the typed read running on this thread is offering,
+    /// and only while it is constructing.
+    ///
+    /// Thread-local rather than passed: `read(port, into=T)` builds `T` by
+    /// calling it with the bag's entries, which is the whole contract — an
+    /// argument the engine added would be one every target had to accept, and
+    /// most targets are ordinary dataclasses that want nothing to do with a
+    /// GPU. A processor's callbacks run on its own thread, and construction
+    /// cannot yield to another read on that thread, so the window is exactly
+    /// one constructor call deep.
+    static GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ: RefCell<Option<Py<PyAny>>> =
+        const { RefCell::new(None) };
+}
+
+/// Opens the offer for one construction and withdraws it on drop, whether the
+/// constructor returned or raised.
+struct TypedReadGpuAccessOffer {
+    /// Restored rather than cleared: a target whose constructor reads its own
+    /// input ports would otherwise leave the outer read's offer withdrawn.
+    offer_this_read_displaced: Option<Py<PyAny>>,
+}
+
+impl TypedReadGpuAccessOffer {
+    fn open(offered_gpu_limited_access: Option<&Bound<'_, PyAny>>) -> Self {
+        let offered = offered_gpu_limited_access.map(|capability| capability.clone().unbind());
+        Self {
+            offer_this_read_displaced: GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ
+                .with(|offer| offer.replace(offered)),
+        }
+    }
+}
+
+impl Drop for TypedReadGpuAccessOffer {
+    fn drop(&mut self) {
+        let restored = self.offer_this_read_displaced.take();
+        GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ.with(|offer| {
+            *offer.borrow_mut() = restored;
+        });
+    }
+}
+
+/// The GPU capability of the `read(port, into=T)` currently constructing an
+/// object, or `None` when nothing is being read into a type.
+///
+/// The same capability as `ctx.gpu_limited_access`, offered so a type can do
+/// per-frame work at construction that needs the engine — claiming the frame's
+/// surface against producer reuse is what the shipped `VideoFrame` does with
+/// it. Any class reachable through `into=` may call this; there is no
+/// registration, no marker and no privileged type.
+#[pyfunction]
+pub(crate) fn gpu_limited_access_of_the_typed_read_in_progress(
+    python: Python<'_>,
+) -> Option<Py<PyAny>> {
+    GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ.with(|offer| {
+        offer
+            .borrow()
+            .as_ref()
+            .map(|capability| capability.clone_ref(python))
+    })
 }
 
 /// Whether `read_target_type` is a TypedDict class.
@@ -464,7 +541,7 @@ mod tests {
                 "Detection",
             );
             let bag = bag_with_one_name(python, "cat");
-            let read = cast_decoded_bag_into_read_target("detections", bag.clone(), &target)
+            let read = cast_decoded_bag_into_read_target("detections", bag.clone(), &target, None)
                 .expect("a TypedDict target validates nothing, so a partial bag must read");
             assert!(read.is(&bag), "the free cast must not copy the bag");
         });
@@ -500,7 +577,7 @@ mod tests {
 
             let bag = bag_with_one_name(python, "cat");
             let read =
-                cast_decoded_bag_into_read_target("detections", bag.clone(), &target).unwrap();
+                cast_decoded_bag_into_read_target("detections", bag.clone(), &target, None).unwrap();
 
             assert!(read.is(&bag), "the free cast must not copy the bag");
         });
@@ -521,6 +598,7 @@ mod tests {
                 "detections",
                 bag_with_one_name(python, "cat"),
                 &target,
+                None,
             )
             .unwrap();
             assert!(read.is_instance(&target).unwrap());
@@ -544,7 +622,7 @@ mod tests {
             );
             let bag = PyDict::new(python);
             bag.set_item("label", "cat").unwrap();
-            let refusal = cast_decoded_bag_into_read_target("detections", bag.into_any(), &target)
+            let refusal = cast_decoded_bag_into_read_target("detections", bag.into_any(), &target, None)
                 .unwrap_err();
             assert!(
                 refusal.to_string().contains("label"),
@@ -567,7 +645,7 @@ mod tests {
             );
             let not_a_bag = PyList::new(python, [1i64, 2, 3]).unwrap().into_any();
             let refusal =
-                cast_decoded_bag_into_read_target("detections", not_a_bag, &target).unwrap_err();
+                cast_decoded_bag_into_read_target("detections", not_a_bag, &target, None).unwrap_err();
             assert!(
                 refusal.to_string().contains("detections")
                     && refusal.to_string().contains("named map"),
@@ -587,6 +665,7 @@ mod tests {
                 "detections",
                 bag_with_one_name(python, "cat"),
                 &not_a_class,
+                None,
             )
             .unwrap_err();
             assert!(

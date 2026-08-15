@@ -67,6 +67,42 @@ impl PythonProcessorLinkDataAccess {
             _ => Err(not_a_helper_process_data_plane_error()),
         }
     }
+
+    /// The next bag on `port_name`, offering `offered_gpu_limited_access` to
+    /// whatever `into` constructs.
+    ///
+    /// The one read body; the context-carrying reader passes its capability
+    /// and the bare data plane passes nothing.
+    pub(crate) fn read_from_input_port_offering_gpu_access<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+        offered_gpu_limited_access: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let Some(input_mailboxes) = self.input_mailboxes.get() else {
+            return Err(unwired_port_error("input", port_name));
+        };
+        let read = python
+            .detach(|| input_mailboxes.read_raw(port_name))
+            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
+        match read {
+            Some((encoded, _timestamp_ns)) => {
+                let bag = decode_msgpack_to_python_object(python, &encoded)?;
+                match into {
+                    Some(read_target_type) => cast_decoded_bag_into_read_target(
+                        port_name,
+                        bag,
+                        read_target_type,
+                        offered_gpu_limited_access,
+                    )
+                    .map(Some),
+                    None => Ok(Some(bag)),
+                }
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 #[pymethods]
@@ -317,32 +353,18 @@ impl PythonProcessorLinkDataAccess {
     /// `into` is the opt-in strictness dial: without it the bag arrives as a
     /// mapping, and with it the bag is cast or constructed into the type named
     /// — so a mismatch surfaces here, at the consuming read, and nowhere else.
+    ///
+    /// This is the plumbing a helper process wires by hand; it holds no
+    /// context, so a type it constructs is offered no GPU capability. The read
+    /// a processor writes is `ctx.inputs.read`, which does.
     #[pyo3(signature = (port_name, *, into = None))]
-    pub(crate) fn read_from_input_port<'py>(
+    fn read_from_input_port<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
         into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        let Some(input_mailboxes) = self.input_mailboxes.get() else {
-            return Err(unwired_port_error("input", port_name));
-        };
-        let read = python
-            .detach(|| input_mailboxes.read_raw(port_name))
-            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        match read {
-            Some((encoded, _timestamp_ns)) => {
-                let bag = decode_msgpack_to_python_object(python, &encoded)?;
-                match into {
-                    Some(read_target_type) => {
-                        cast_decoded_bag_into_read_target(port_name, bag, read_target_type)
-                            .map(Some)
-                    }
-                    None => Ok(Some(bag)),
-                }
-            }
-            None => Ok(None),
-        }
+        self.read_from_input_port_offering_gpu_access(python, port_name, into, None)
     }
 
     /// The next bag on `port_name` with its stamp, or `(None, None)` when the
