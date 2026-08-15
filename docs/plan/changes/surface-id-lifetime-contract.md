@@ -119,7 +119,8 @@ describe the same frame, and that frame is the one the bag delivered.
   > read, and is unprovable without a GPU — CI declares no GPU runner and the #1869
   > harness publishes a memfd, which no import accepts. The rest of that comment stands:
   > the destructor is field ownership, and the pattern is open.
- The lease is bookkeeping over an id, so
+
+  The lease is bookkeeping over an id, so
   the resolve path's Vulkan import is not owed by a holder that only needs the
   frame to hold still; claims are counted, so a cast-claim and that holder's own
   later `resolve_surface` coexist without either releasing the other. It is also

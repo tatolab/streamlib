@@ -48,6 +48,13 @@ def _write_png(path: str, rgba: "numpy.ndarray") -> None:
     The rig's venv carries no image library, and a reviewer looking at whether
     the pixels are a real camera scene should not have to take a checksum's
     word for it."""
+    # Refused rather than written wrong: these files are the evidence, and a
+    # PNG whose rows do not match its header opens as garbage without ever
+    # raising — which would discredit the run rather than fail it.
+    if rgba.dtype != numpy.uint8 or rgba.ndim != 3 or rgba.shape[2] < 4:
+        raise ValueError(
+            f"the PNG writer takes 8-bit RGBA, got dtype={rgba.dtype} shape={rgba.shape}"
+        )
     height, width = rgba.shape[0], rgba.shape[1]
     raw = b"".join(b"\x00" + rgba[row, :, :4].tobytes() for row in range(height))
 
@@ -85,12 +92,13 @@ class _LaggedHolderProbe:
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
-        self.held_frame = None
-        self.held_surface_id = None
-        self.claim_taken = None
-        self.pixels_as_delivered = None
+        self.held_frame: object | None = None
+        self.held_surface_id: "str | None" = None
+        self.claim_taken: "bool | None" = None
+        self.pixels_as_delivered: "numpy.ndarray | None" = None
+        self.pixels_of_the_previous_arrival: "numpy.ndarray | None" = None
         self.frames_the_producer_ran_ahead = 0
-        self.a_later_frame_differed = False
+        self.the_source_produced_a_different_picture = False
         self.reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
@@ -120,30 +128,37 @@ class _LaggedHolderProbe:
         if read is None:
             return
 
+        arrived_surface_id = self._read_current_surface_id(read)
+
         if self.held_frame is None:
             self.held_frame = read
-            self.held_surface_id = (
-                read.surface_id if isinstance(read, VideoFrame) else read["surface_id"]
-            )
+            self.held_surface_id = arrived_surface_id
             self.claim_taken = getattr(read, CLAIM_FIELD, None) is not None
-            self.pixels_as_delivered = self._sample_pixels(ctx, self.held_surface_id)
+            self.pixels_as_delivered = self._sample_pixels(ctx, arrived_surface_id)
+            self.pixels_of_the_previous_arrival = self.pixels_as_delivered
             return
 
-        # The camera is moving; confirm it, or the comparison below proves
-        # nothing.
-        later = self._read_current_surface_id(read)
-        if later == self.held_surface_id:
-            now = self._sample_pixels(ctx, self.held_surface_id)
-            if not (now == self.pixels_as_delivered).all():
-                self.a_later_frame_differed = True
+        # Does the source actually produce different pictures? Measured on
+        # freshly arrived frames, never on the held slot — the held slot is
+        # what the result below is about, so reading it here would be the same
+        # measurement twice and would confirm nothing. Without this, a still
+        # scene makes both probes report "unchanged" and the pair proves
+        # nothing at all.
+        pixels_that_just_arrived = self._sample_pixels(ctx, arrived_surface_id)
+        if not (pixels_that_just_arrived == self.pixels_of_the_previous_arrival).all():
+            self.the_source_produced_a_different_picture = True
+        self.pixels_of_the_previous_arrival = pixels_that_just_arrived
 
         self.frames_the_producer_ran_ahead += 1
         if self.frames_the_producer_ran_ahead < FRAMES_TO_LAG_BY:
             return
 
         # The held frame, read again after the producer has lapped its pool.
-        pixels_now = self._sample_pixels(ctx, self.held_surface_id)
-        held_frame_unchanged = bool((pixels_now == self.pixels_as_delivered).all())
+        held_surface_id = self.held_surface_id
+        pixels_as_delivered = self.pixels_as_delivered
+        assert held_surface_id is not None and pixels_as_delivered is not None
+        pixels_now = self._sample_pixels(ctx, held_surface_id)
+        held_frame_unchanged = bool((pixels_now == pixels_as_delivered).all())
 
         sample_dir = os.environ.get("STREAMLIB_CAST_CLAIM_SAMPLE_DIR")
         written = []
@@ -151,7 +166,7 @@ class _LaggedHolderProbe:
             os.makedirs(sample_dir, exist_ok=True)
             label = type(self).__name__
             for name, pixels in (
-                ("delivered", self.pixels_as_delivered),
+                ("delivered", pixels_as_delivered),
                 ("after_lag", pixels_now),
             ):
                 path = os.path.join(sample_dir, f"{label}_{name}.png")
@@ -162,10 +177,12 @@ class _LaggedHolderProbe:
         observation = {
             "read_as": type(self).__name__,
             "claim_taken": self.claim_taken,
-            "held_surface_id": self.held_surface_id,
+            "held_surface_id": held_surface_id,
             "frames_the_producer_ran_ahead": self.frames_the_producer_ran_ahead,
             "held_frame_unchanged": held_frame_unchanged,
-            "a_later_frame_differed": self.a_later_frame_differed,
+            "the_source_produced_a_different_picture": (
+                self.the_source_produced_a_different_picture
+            ),
             "png_samples": written,
         }
         self.held_frame = None

@@ -149,12 +149,14 @@ def _claim_on_the_surface_a_frame_names(surface_id: str) -> "GpuSurfaceCheckOutL
         return None
     try:
         return gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
-    except RuntimeError as refusal:
-        # Every way this fails means the frame cannot be pinned — its surface
-        # is already gone, or this helper has no route to the engine — and none
-        # of them make the bag unreadable. An unclaimed frame falls back to the
-        # protection pool depth gives it, which is what an untyped read gets;
-        # raising here would turn a delivered frame into an exception.
+    except Exception as refusal:  # noqa: BLE001 — see below
+        # Deliberately every failure, not just the refusals this path is known
+        # to raise today: the claim crosses a socket, and whatever comes back
+        # from below it, none of it makes the delivered bag unreadable. An
+        # unclaimed frame falls back to the protection pool depth gives it,
+        # which is what an untyped read gets; raising here would turn a
+        # delivered frame into an exception at the read. Nothing is hidden by
+        # the breadth — the first one is reported.
         _report_the_first_refused_claim(surface_id, refusal)
         return None
 

@@ -33,14 +33,10 @@ impl Drop for SurfaceShareUnderTest {
 impl SurfaceShareUnderTest {
     /// Start a service on a socket of this test's own.
     pub(crate) fn start(label: &str) -> Self {
-        let socket_directory = std::env::temp_dir().join(format!(
-            "streamlib-lease-debt-{}-{}",
-            label,
-            std::process::id()
-        ));
+        let socket_directory = Self::a_directory_short_enough_for_a_unix_socket(label);
         let _ = std::fs::remove_dir_all(&socket_directory);
         std::fs::create_dir_all(&socket_directory).expect("a directory for the test socket");
-        let socket_path = socket_directory.join("surface-share.sock");
+        let socket_path = socket_directory.join("s.sock");
 
         let state = SurfaceShareState::new();
         let check_out_leases = Arc::clone(state.check_out_leases());
@@ -54,6 +50,25 @@ impl SurfaceShareUnderTest {
             check_out_leases,
             socket_directory,
         }
+    }
+
+    /// A directory whose socket path fits in `sun_path`.
+    ///
+    /// A unix socket address is 108 bytes including the terminator, and it is
+    /// the *path* that has to fit, not the filename — so a build box with a
+    /// long `TMPDIR` (a CI workspace, a sandbox) makes `bind` fail for a reason
+    /// that looks nothing like the cause. `/tmp` is the fallback because this
+    /// module is Linux-only and every Linux box has one.
+    fn a_directory_short_enough_for_a_unix_socket(label: &str) -> PathBuf {
+        const SUN_PATH_CAPACITY: usize = 108;
+        let leaf = format!("sl-ss-{}-{}", label, std::process::id());
+        for root in [std::env::temp_dir(), PathBuf::from("/tmp")] {
+            let candidate = root.join(&leaf);
+            if candidate.join("s.sock").as_os_str().len() < SUN_PATH_CAPACITY {
+                return candidate;
+            }
+        }
+        panic!("no temporary directory leaves room for a {SUN_PATH_CAPACITY}-byte socket path");
     }
 
     /// Publish one surface and return the id it lives under.
