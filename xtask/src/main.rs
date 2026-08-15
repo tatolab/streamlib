@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 pub mod check_boundaries;
+pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
@@ -69,6 +70,7 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         check_no_unbounded_cstr_from_ptr::run,
     ),
     ("check-clock-usage", check_clock_usage::run),
+    ("check-bounded-apt-install", check_bounded_apt_install::run),
 ];
 
 /// Run every source-walking gate, reporting all failures rather than the first.
@@ -278,6 +280,19 @@ enum Commands {
     /// `docs/decisions/one-monotonic-clock.md`.
     CheckClockUsage,
 
+    /// CI gate keeping every apt install in CI behind
+    /// `.github/actions/install-linux-engine-build-dependencies`. Fails on any
+    /// `apt-get` under `.github/workflows/`, and on any step calling that
+    /// action without `timeout-minutes`. An inline `apt-get update && apt-get
+    /// install` has no wall-clock bound, and the mode that costs is a mirror
+    /// that is slow rather than stalled — one measured run fetched 35.6 MB at
+    /// 48 kB/s over 12m17s while every request made progress, so neither
+    /// `Acquire::Retries` (nothing failed) nor `Acquire::http::Timeout`
+    /// (nothing went idle) engaged. Composite-action steps cannot declare
+    /// `timeout-minutes`, so the caller's step is the only place the native
+    /// backstop can live.
+    CheckBoundedAptInstall,
+
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
@@ -324,6 +339,7 @@ fn main() -> Result<()> {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
+        Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,

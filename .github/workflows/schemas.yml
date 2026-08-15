@@ -21,17 +21,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # generate_openapi links the api-server, which pulls in streamlib-engine;
+      # its build.rs compiles GLSL with glslc and links Vulkan, and the audio path
+      # links opus. Mirrors test.yml's Linux engine dep set.
       - name: Install system dependencies
-        # generate_openapi links the api-server, which pulls in streamlib-engine;
-        # its build.rs compiles GLSL with glslc and links Vulkan, and the audio path
-        # links opus. Mirrors test.yml's Linux engine dep set.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            protobuf-compiler \
-            libvulkan-dev \
-            glslc \
+        timeout-minutes: 10
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libvulkan-dev
+            glslc
             libopus-dev
 
       - name: Install Rust

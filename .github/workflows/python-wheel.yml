@@ -47,18 +47,20 @@ jobs:
           # would be readable by it. No workspace member has a git dependency.
           persist-credentials: false
 
+      # Same minimal engine build set as test.yml: the engine's build.rs
+      # compiles GLSL with glslc, the Linux dep set links Vulkan, and iceoryx2's
+      # PAL crates run bindgen. `python3-dev` is the extra — the wheel crate's
+      # unit tests link libpython (see the step below).
       - name: Install system dependencies
-        # Same minimal engine build set as test.yml: the engine's build.rs
-        # compiles GLSL with glslc, and the Linux
-        # dep set links Vulkan.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            protobuf-compiler \
-            libclang-dev \
-            libvulkan-dev \
-            glslc \
+        timeout-minutes: 10
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libvulkan-dev
+            glslc
             python3-dev
 
       - name: Install Rust
