@@ -342,7 +342,14 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     let listener = Arc::new(Mutex::new(McpEventForwarder { tx }));
-    PUBSUB.subscribe(topics::ALL, listener.clone());
+    // `subscribe` blocks until its iceoryx2 subscriber is registered, so it
+    // must not run on an async worker.
+    let subscription: Arc<Mutex<dyn EventListener>> = listener.clone();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || PUBSUB.subscribe(topics::ALL, subscription)).await
+    {
+        return tool_error(format!("logs subscription: {e}"));
+    }
 
     let mut events: Vec<Value> = Vec::with_capacity(sample);
     let deadline = tokio::time::Instant::now() + LOGS_SAMPLE_WINDOW;

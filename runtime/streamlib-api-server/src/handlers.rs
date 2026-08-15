@@ -279,8 +279,15 @@ async fn handle_websocket(socket: WebSocket) {
     // Listener that forwards events to channel
     let listener = Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
 
-    // Subscribe to ALL topics via wildcard
-    PUBSUB.subscribe(topics::ALL, listener.clone());
+    // Subscribe to ALL topics via wildcard. `subscribe` blocks until its
+    // iceoryx2 subscriber is registered, so it must not run on an async worker.
+    let subscription: Arc<Mutex<dyn EventListener>> = listener.clone();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || PUBSUB.subscribe(topics::ALL, subscription)).await
+    {
+        tracing::error!("WebSocket client failed to subscribe to events: {}", e);
+        return;
+    }
 
     tracing::info!("WebSocket client connected, subscribed to all events");
 
