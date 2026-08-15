@@ -705,6 +705,37 @@ fn test_subscriber_receives_correct_event_data() {
 // E. Subscription lifecycle & ordering
 // ===========================================================================
 
+/// The event service carries no history, so iceoryx2 delivers a sample only to
+/// subscribers already registered when `send()` runs. `subscribe()` must
+/// therefore not return until its subscriber is registered — otherwise every
+/// event published in the establishment window is lost with no trace.
+///
+/// Mental-revert: making `subscribe_inner` spawn without awaiting readiness
+/// drops this single publish and the receive below times out.
+#[test]
+fn test_an_event_published_the_instant_subscribe_returns_is_delivered() {
+    let bus = create_initialized_bus("publish-immediately-after-subscribe");
+
+    let (tx, rx) = mpsc::channel();
+    let listener: Arc<Mutex<dyn EventListener>> =
+        Arc::new(Mutex::new(ChannelListener { sender: tx }));
+    bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
+
+    // Published exactly once, with no retry loop: the whole point is that one
+    // publish after subscribe() returns is enough.
+    let event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping);
+    bus.publish(&event.topic(), &event);
+
+    let received = rx.recv_timeout(Duration::from_secs(5));
+    assert!(
+        received.is_ok(),
+        "a single event published after subscribe() returned must be delivered, \
+         but nothing arrived within 5s — subscribe() returned before its subscriber existed",
+    );
+
+    drop(listener);
+}
+
 #[test]
 fn test_subscribe_before_init_receives_events_after_init() {
     let runtime_id = format!("test-sub-before-init-{}", uuid::Uuid::new_v4());
