@@ -17,10 +17,17 @@
 //! Synchronization strategy:
 //! - Uses `std::sync::mpsc` channels for delivery notification (no
 //!   sleep-based waits)
-//! - Publishes each event exactly once: `subscribe()` returns only once
-//!   its subscriber is registered, so there is no startup race to retry
-//!   around. A test that needs a retry loop to see its event is
-//!   reporting a regression, not tolerating a known race.
+//! - A test that subscribes through `PubSub` publishes each event
+//!   exactly once: `subscribe()` returns only once its subscriber is
+//!   registered, so there is no startup race to retry around. Adding a
+//!   retry loop back to one of those tests reports a regression rather
+//!   than tolerating a known race.
+//! - Two kinds of test are exempt, because their race is on the
+//!   publisher side and `subscribe()` does not bound it: the sections B
+//!   and C diagnostics, which hand-roll their own subscriber thread
+//!   below `PubSub`, and `test_concurrent_publish_from_multiple_threads`,
+//!   where a burst of fresh publishers is still establishing
+//!   send-side connections.
 //!
 //! Lives in-source (rather than `tests/`) to access `super::bus::PubSub`
 //! directly — the tests construct ad-hoc `PubSub` instances per case
@@ -548,30 +555,14 @@ fn test_publish_delivers_to_multiple_subscribers_on_same_topic() {
 
     let event = Event::keyboard(KeyCode::B, Modifiers::default(), KeyState::Pressed);
 
-    // Retry publish until BOTH subscribers receive
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut a_received = false;
-    let mut b_received = false;
-    while Instant::now() < deadline && !(a_received && b_received) {
-        bus.publish(&event.topic(), &event);
-        // Drain both channels
-        while rx_a.try_recv().is_ok() {
-            a_received = true;
-        }
-        while rx_b.try_recv().is_ok() {
-            b_received = true;
-        }
-        if !(a_received && b_received) {
-            std::thread::yield_now();
-        }
-    }
+    bus.publish(&event.topic(), &event);
 
     assert!(
-        a_received,
+        rx_a.recv_timeout(Duration::from_secs(5)).is_ok(),
         "First subscriber should have received the event"
     );
     assert!(
-        b_received,
+        rx_b.recv_timeout(Duration::from_secs(5)).is_ok(),
         "Second subscriber should have received the event"
     );
 
@@ -597,7 +588,6 @@ fn test_publish_does_not_cross_topics() {
     // Publish a MOUSE event — only the mouse subscriber should receive it
     let mouse_event = Event::mouse(MouseButton::Left, (10.0, 20.0), MouseState::Pressed);
 
-    // Use retry loop to ensure the mouse subscriber is ready
     let received_mouse =
         publish_once_and_receive(&bus, &mouse_event, &rx_mouse, Duration::from_secs(5));
     assert!(
@@ -628,14 +618,12 @@ fn test_wildcard_subscriber_receives_all_topics() {
     let mouse_event = Event::mouse(MouseButton::Right, (5.0, 10.0), MouseState::Released);
     let processor_event = Event::processor("test-proc", ProcessorEvent::Started);
 
-    // Ensure wildcard subscriber is ready by retrying first event
     let first = publish_once_and_receive(&bus, &keyboard_event, &rx, Duration::from_secs(5));
     assert!(
         first.is_some(),
         "Wildcard subscriber should receive keyboard event"
     );
 
-    // Now publish remaining events (subscriber is ready)
     bus.publish(&mouse_event.topic(), &mouse_event);
     bus.publish(&processor_event.topic(), &processor_event);
 
@@ -782,36 +770,24 @@ fn test_multiple_subscribes_before_init_all_replayed() {
     let mouse_event = Event::mouse(MouseButton::Left, (0.0, 0.0), MouseState::Pressed);
     let rt_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
 
-    // Retry until all 3 subscribers receive
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut kb_ok = false;
-    let mut mouse_ok = false;
-    let mut rt_ok = false;
-    while Instant::now() < deadline && !(kb_ok && mouse_ok && rt_ok) {
-        if !kb_ok {
-            bus.publish(topics::KEYBOARD, &kb_event);
-        }
-        if !mouse_ok {
-            bus.publish(topics::MOUSE, &mouse_event);
-        }
-        if !rt_ok {
-            bus.publish(topics::RUNTIME_GLOBAL, &rt_event);
-        }
-        if rx_kb.try_recv().is_ok() {
-            kb_ok = true;
-        }
-        if rx_mouse.try_recv().is_ok() {
-            mouse_ok = true;
-        }
-        if rx_rt.try_recv().is_ok() {
-            rt_ok = true;
-        }
-        std::thread::yield_now();
-    }
+    // One publish each: the replay path establishes every subscriber before
+    // init() returns, exactly as a direct subscribe() would.
+    bus.publish(topics::KEYBOARD, &kb_event);
+    bus.publish(topics::MOUSE, &mouse_event);
+    bus.publish(topics::RUNTIME_GLOBAL, &rt_event);
 
-    assert!(kb_ok, "Keyboard listener should receive events");
-    assert!(mouse_ok, "Mouse listener should receive events");
-    assert!(rt_ok, "Runtime listener should receive events");
+    assert!(
+        rx_kb.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "Keyboard listener should receive events"
+    );
+    assert!(
+        rx_mouse.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "Mouse listener should receive events"
+    );
+    assert!(
+        rx_rt.recv_timeout(Duration::from_secs(5)).is_ok(),
+        "Runtime listener should receive events"
+    );
 
     drop(kb_handle);
     drop(mouse_handle);
@@ -867,7 +843,6 @@ fn test_runtime_event_delivery() {
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
     bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
 
-    // Ensure subscriber is ready with first event
     let first = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
     let received = publish_once_and_receive(&bus, &first, &rx, Duration::from_secs(5));
     assert!(received.is_some(), "Should receive RuntimeStarted event");
@@ -971,9 +946,6 @@ fn test_oversized_event_is_dropped() {
     let received = publish_once_and_receive(&bus, &normal_event, &rx, Duration::from_secs(5));
     assert!(received.is_some(), "Normal event should be delivered first");
 
-    // Drain any extra events from the retry loop
-    while rx.try_recv().is_ok() {}
-
     // Now try an oversized event — should be silently dropped
     let large_string = "x".repeat(MAX_EVENT_PAYLOAD_SIZE + 1);
     let oversized_event = Event::custom("big-topic", serde_json::json!({ "data": large_string }));
@@ -999,14 +971,6 @@ fn test_concurrent_publish_from_multiple_threads() {
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
     bus.subscribe(topics::KEYBOARD, listener.clone());
-
-    // Ensure subscriber is ready
-    let probe = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
-    let received = publish_once_and_receive(&bus, &probe, &rx, Duration::from_secs(5));
-    assert!(received.is_some(), "Subscriber should be ready");
-
-    // Drain probe events
-    while rx.try_recv().is_ok() {}
 
     // Each thread's first publish creates a new thread-local iceoryx2 publisher.
     // iceoryx2's subscriber needs a beat to establish its receive-side connection

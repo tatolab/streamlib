@@ -344,11 +344,13 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
     let listener = Arc::new(Mutex::new(McpEventForwarder { tx }));
     // `subscribe` blocks until its iceoryx2 subscriber is registered, so it
     // must not run on an async worker.
-    let subscription: Arc<Mutex<dyn EventListener>> = listener.clone();
-    if let Err(e) =
-        tokio::task::spawn_blocking(move || PUBSUB.subscribe(topics::ALL, subscription)).await
+    let listener_for_subscription: Arc<Mutex<dyn EventListener>> = listener.clone();
+    if let Err(join_error) = tokio::task::spawn_blocking(move || {
+        PUBSUB.subscribe(topics::ALL, listener_for_subscription)
+    })
+    .await
     {
-        return tool_error(format!("logs subscription: {e}"));
+        return tool_error(format!("event subscribe task failed to join: {join_error}"));
     }
 
     let mut events: Vec<Value> = Vec::with_capacity(sample);
