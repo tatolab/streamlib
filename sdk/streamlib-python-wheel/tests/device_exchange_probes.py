@@ -201,49 +201,103 @@ class HostSideProbe(_FrameProbeBase):
 
 
 @processor
-class CameraRotationIdentityProbe:
-    """Compares device pixels against host pixels across ring cycles."""
+class LaggedConsumerHoldsItsFrameProbe:
+    """View identity across ring cycles, plus a frame held past the pool's own
+    depth.
+
+    Two claims, and the second is the one #1755 needs. Identity alone cannot
+    fail for the reason the issue exists: two views of one recycled slot agree
+    with each other by construction. Holding one frame while the producer runs
+    well past the pool's depth is what proves the pixels under a surface id are
+    still the ones the bag was published with.
+
+    The frame is held through a view whose handle has already been closed,
+    which is the stricter half of the same contract: `close()` drops only the
+    handle's share of the surface, so a lease that rode `close()` rather than
+    the last share would let the producer recycle the slot underneath a live
+    array.
+
+    Mental-revert: without the checkout lease the producer rehands the held
+    slot within a ring cycle and `held_frame_unchanged` reads False.
+    """
 
     @input(delivery_profile="every_sample")
     def video_from_upstream(self) -> None: ...
 
+    # Comfortably past the pool's pre-allocated depth, so the producer has
+    # cycled its ring several times over while the first frame is still held.
+    FRAMES_TO_LAG_BY = 16
+
     def __init__(self) -> None:
         self.comparisons: "list[bool]" = []
+        self.view_of_the_delivered_frame = None
+        self.pixels_as_delivered = None
+        self.frames_the_producer_ran_ahead = 0
+        self.a_later_frame_differed = False
         self.reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         bag = ctx.inputs.read("video_from_upstream")
         if bag is None or self.reported:
             return
-        frame = VideoFrame.from_bag(bag)
-
-        def compare() -> dict:
-            import torch
-
-            with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
-                surface.lock()
-                if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                    return {"cuda_unavailable": "device side not reachable"}
-                device_pixels = torch.from_dlpack(surface).cpu().numpy()
-                host_pixels = numpy.from_dlpack(surface, device="cpu")
-                return {"match": bool((device_pixels == host_pixels).all())}
-
         try:
-            outcome = compare()
+            self._observe(ctx, VideoFrame.from_bag(bag))
         except BaseException:  # noqa: BLE001 — surfaced through the marker line
             self.reported = True
+            self.view_of_the_delivered_frame = None
             _report(lambda: {"failure": traceback.format_exc()})
+
+    def _observe(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> None:
+        import torch
+
+        if self.view_of_the_delivered_frame is None:
+            surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
+            surface.lock()
+            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                surface.unlock()
+                surface.close()
+                self.reported = True
+                _report(lambda: {"cuda_unavailable": "device side not reachable"})
+                return
+            view = numpy.from_dlpack(surface, device="cpu")
+            # Copied, because this is the ground truth the view is compared
+            # against — a second view would follow the memory under test.
+            self.pixels_as_delivered = view.copy()
+            self.view_of_the_delivered_frame = view
+            # The handle goes now and the view stays: what keeps this frame
+            # still from here on is the surface's last share, not the handle.
+            surface.unlock()
+            surface.close()
+            del surface
             return
-        if "cuda_unavailable" in outcome:
-            self.reported = True
-            _report(lambda: outcome)
+
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            device_pixels = torch.from_dlpack(surface).cpu().numpy()
+            host_pixels = numpy.from_dlpack(surface, device="cpu")
+            self.comparisons.append(bool((device_pixels == host_pixels).all()))
+            # A scene that never changes cannot prove anything about a frame
+            # staying still, so the test skips unless something moved.
+            if not (host_pixels == self.pixels_as_delivered).all():
+                self.a_later_frame_differed = True
+            surface.unlock()
+
+        self.frames_the_producer_ran_ahead += 1
+        if self.frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
             return
-        self.comparisons.append(outcome["match"])
-        # Twelve frames spans the ring several times over — the window
-        # where a source frozen at staging creation lags by a cycle.
-        if len(self.comparisons) >= 12:
-            self.reported = True
-            _report(lambda: {"comparisons": self.comparisons})
+
+        held_frame_unchanged = bool(
+            (self.view_of_the_delivered_frame == self.pixels_as_delivered).all()
+        )
+        self.reported = True
+        observation = {
+            "comparisons": self.comparisons,
+            "frames_the_producer_ran_ahead": self.frames_the_producer_ran_ahead,
+            "held_frame_unchanged": held_frame_unchanged,
+            "a_later_frame_differed": self.a_later_frame_differed,
+        }
+        self.view_of_the_delivered_frame = None
+        _report(lambda: observation)
 
 
 @processor(execution="manual")

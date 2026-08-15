@@ -96,6 +96,12 @@ pub struct Runner {
     /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
     #[cfg(target_os = "linux")]
     pub(crate) surface_socket_path: std::path::PathBuf,
+    /// The surfaces cross-process consumers currently hold checked out, owned
+    /// by the service above and read by the pixel-buffer pool through the
+    /// `SurfaceStore` `start()` hands it. Held here because the service is
+    /// brought up in `new()` and the store is built in `start()`.
+    #[cfg(target_os = "linux")]
+    pub(crate) surface_check_out_leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
     /// Logging guard — keeps the drain worker alive for the runtime's
     /// lifetime. On drop, flushes buffered JSONL records and
     /// `fdatasync`s the log file.
@@ -204,7 +210,8 @@ impl Runner {
         // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET.
         // No external daemon is required.
         #[cfg(target_os = "linux")]
-        let (surface_service, surface_socket_path) = bring_up_surface_service(&runtime_id)?;
+        let (surface_service, surface_socket_path, surface_check_out_leases) =
+            bring_up_surface_service(&runtime_id)?;
 
         // Create Arc-wrapped components
         let compiler = Arc::new(Compiler::new());
@@ -234,6 +241,8 @@ impl Runner {
             surface_service,
             #[cfg(target_os = "linux")]
             surface_socket_path,
+            #[cfg(target_os = "linux")]
+            surface_check_out_leases,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
@@ -393,7 +402,11 @@ impl Runner {
             );
             // `SurfaceStore::new` constructs the handle from a fresh
             // `Arc<SurfaceStoreInner>`.
-            let surface_store = SurfaceStore::new(socket_path.clone(), self.runtime_id.to_string());
+            let surface_store = SurfaceStore::new_reading_check_out_leases(
+                socket_path.clone(),
+                self.runtime_id.to_string(),
+                Arc::clone(&self.surface_check_out_leases),
+            );
             surface_store.connect().map_err(|e| {
                 Error::Runtime(format!(
                     "Failed to connect to runtime-internal surface-sharing service at {}: {}",
@@ -1264,6 +1277,7 @@ fn bring_up_surface_service(
 ) -> Result<(
     Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
     std::path::PathBuf,
+    Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
 )> {
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
@@ -1307,7 +1321,9 @@ fn bring_up_surface_service(
         }
     }
 
-    let mut service = UnixSocketSurfaceService::new(SurfaceShareState::new(), socket_path.clone());
+    let state = SurfaceShareState::new();
+    let check_out_leases = Arc::clone(state.check_out_leases());
+    let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
     service.start().map_err(|e| {
         Error::Runtime(format!(
             "Failed to start runtime-internal surface-sharing service at {}: {}",
@@ -1321,7 +1337,11 @@ fn bring_up_surface_service(
         socket_path.display()
     );
 
-    Ok((Arc::new(Mutex::new(Some(service))), socket_path))
+    Ok((
+        Arc::new(Mutex::new(Some(service))),
+        socket_path,
+        check_out_leases,
+    ))
 }
 
 #[cfg(test)]

@@ -34,10 +34,11 @@ def scenario_frame_probe(probe_class_name: str) -> None:
 
 def scenario_camera_probe() -> None:
     """The camera's ring re-registers a different texture under one surface id
-    every frame — the case a staging that cached its blit source gets wrong."""
+    every frame, and its pool recycles a slot every few frames — the two ways
+    the pixels under a published id used to change underneath a reader."""
     runtime = streamlib.Runtime()
     camera = runtime.add(streamlib.CameraSource, config={"device_id": "/dev/video0"})
-    probe = runtime.add(device_exchange_probes.CameraRotationIdentityProbe)
+    probe = runtime.add(device_exchange_probes.LaggedConsumerHoldsItsFrameProbe)
     runtime.connect(camera.output("video"), probe.input("video_from_upstream"))
     runtime.run()
     print("MARKER:CLEAN_EXIT", flush=True)

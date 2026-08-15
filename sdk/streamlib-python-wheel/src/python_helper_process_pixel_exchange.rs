@@ -47,6 +47,17 @@ use crate::python_cuda_pixel_exchange::CudaImportedSurface;
 
 use streamlib::sdk::rhi::PixelFormat;
 
+/// Warn through the child's own log module.
+///
+/// This process installs no tracing subscriber, so `tracing` here reaches
+/// nobody; `streamlib.log` rides the escalate `Log` op into the unified JSONL.
+#[cfg(target_os = "linux")]
+fn warn_through_the_childs_log_module(python: Python<'_>, message: String) {
+    let _ = python
+        .import("streamlib.log")
+        .and_then(|log_module| log_module.call_method1("warn", (message,)));
+}
+
 /// One escalate round trip to the parent, called with the GIL attached.
 ///
 /// The callable is the bridge's `request_from_parent`, whose wait on the
@@ -130,6 +141,12 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// Present only on an acquired surface — a resolved one belongs to its
     /// acquirer, and releasing it here would evict somebody else's frame.
     pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
+    /// The checkout lease this surface owes, whoever owns the surface itself.
+    #[expect(
+        dead_code,
+        reason = "settled by its own Drop; nothing reads it, and that is the point"
+    )]
+    pub(crate) release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
     /// The plane fds this checkout was delivered, kept so
     /// `export_dma_buf` can answer from them. They are the same fds a
     /// host-side export would mint — the check-out is a kernel dup of
@@ -229,19 +246,52 @@ impl Drop for HelperSurfaceReleaseDebt {
                 Ok(())
             })();
             if let Err(release_failure) = release_outcome {
-                // This process installs no tracing subscriber; the one
-                // observable route is the child's own log module, which
-                // rides the escalate `Log` op into the unified JSONL.
-                let _ = python.import("streamlib.log").and_then(|log_module| {
-                    log_module.call_method1(
-                        "warn",
-                        (format!(
-                            "releasing surface {} to the parent failed ({release_failure}); \
-                             its pool slot returns at teardown",
-                            self.handle_id
-                        ),),
-                    )
-                });
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "releasing surface {} to the parent failed ({release_failure}); its pool \
+                         slot returns at teardown",
+                        self.handle_id
+                    ),
+                );
+            }
+        });
+    }
+}
+
+/// The checkout lease a surface owes the surface-share service: one
+/// `release_check_out`, over the connection the checkout was minted on.
+///
+/// Unlike [`HelperSurfaceReleaseDebt`] this unregisters nothing — it says only
+/// "I am done reading". Owned by the surface, so it settles when the surface's
+/// `GpuSurfaceOwnedMemory` loses its last share, handle *and* every exported
+/// view: paying it at `close()` would return the slot under a live tensor.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperSurfaceCheckOutLeaseDebt {
+    exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    surface_id: String,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HelperSurfaceCheckOutLeaseDebt {
+    /// Best-effort: a parent that is already gone dropped this connection, and
+    /// the service reclaims every lease on a connection's socket closing — so
+    /// a failure here is logged, never raised.
+    fn drop(&mut self) {
+        Python::attach(|python| {
+            // The round trip blocks, so it runs detached — this can be a
+            // capsule deleter running under the child's GIL.
+            let released =
+                python.detach(|| self.exchange_client.release_check_out(&self.surface_id));
+            if let Err(release_failure) = released {
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "releasing the checkout of surface {} failed ({release_failure}); its pool \
+                         slot returns when this helper's connection closes",
+                        self.surface_id
+                    ),
+                );
             }
         });
     }
@@ -352,8 +402,7 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
-        let request = serde_json::json!({"op": "check_out", "surface_id": surface_id});
-        let (response, received_fds) = self.surface_share_request(&request)?;
+        let (response, received_fds) = self.check_out_surface(surface_id)?;
         self.import_checked_out_surface(surface_id, &response, received_fds)
     }
 
@@ -462,8 +511,11 @@ impl HelperProcessGpuExchangeClient {
         described: &DeviceExportStagingDescription,
     ) -> PyResult<HelperDeviceExport> {
         let staging_share_id = described.staging_share_id.as_str();
-        let request = serde_json::json!({"op": "check_out", "surface_id": staging_share_id});
-        let (response, received_fds) = self.surface_share_request(&request)?;
+        // The staging's own claim is never released: it is memoised for this
+        // child's lifetime and is escalate-allocated rather than pool-backed,
+        // so the lease pins no producer's slot. A pool-backed staging would
+        // owe a debt here.
+        let (response, received_fds) = self.check_out_surface(staging_share_id)?;
         if let Some(checkout_error) = response.get("error").and_then(|value| value.as_str()) {
             return Err(crate::python_processor_context::gpu_operation_error(
                 format!(
@@ -577,6 +629,27 @@ impl HelperProcessGpuExchangeClient {
             .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
             .collect();
         Ok((response, received_fds))
+    }
+
+    /// Claim a surface against producer reuse and take its plane fds.
+    ///
+    /// The one place this op is spelled: a checkout is what pins the frame,
+    /// and every caller owes the matching [`Self::release_check_out`].
+    #[cfg(target_os = "linux")]
+    fn check_out_surface(&self, surface_id: &str) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+        self.surface_share_request(&serde_json::json!({
+            "op": "check_out",
+            "surface_id": surface_id,
+        }))
+    }
+
+    /// Let go of one claim on a surface, freeing its slot for its producer.
+    #[cfg(target_os = "linux")]
+    fn release_check_out(&self, surface_id: &str) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+        self.surface_share_request(&serde_json::json!({
+            "op": "release_check_out",
+            "surface_id": surface_id,
+        }))
     }
 
     /// Validate the checkout metadata and turn the plane fds into mapped
@@ -724,6 +797,10 @@ impl HelperProcessGpuExchangeClient {
             format,
             bytes_per_row,
             release_to_parent: None,
+            release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
+                exchange_client: Arc::clone(self),
+                surface_id: surface_id.to_string(),
+            },
             exported_plane_fds: plane_fds,
             exchange_client: Arc::clone(self),
         })
@@ -742,5 +819,144 @@ impl HelperProcessGpuExchangeClient {
         })?);
         *device = Some(Arc::clone(&created));
         Ok(created)
+    }
+}
+
+/// The resolve-time lease against a real surface-share service.
+///
+/// The RAII floor of the lifetime contract: a checkout claims the frame, and
+/// the debt's drop releases it. Provable without a GPU — the wheel's device
+/// tests are `requires_gpu` and CI declares no GPU runner, so the lease's
+/// balance has to hold here or it is not protected anywhere.
+#[cfg(all(test, target_os = "linux"))]
+mod surface_check_out_lease_debt_tests {
+    use super::*;
+    use streamlib::sdk::engine::linux_surface_share::{
+        SurfaceShareState, UnixSocketSurfaceService,
+    };
+
+    /// A service, and the lease table the pool would read.
+    struct SurfaceShareUnderTest {
+        _service: UnixSocketSurfaceService,
+        socket_path: std::path::PathBuf,
+        check_out_leases: Arc<streamlib::sdk::context::SurfaceCheckOutLeaseRegistry>,
+        _socket_dir: std::path::PathBuf,
+    }
+
+    impl Drop for SurfaceShareUnderTest {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self._socket_dir);
+        }
+    }
+
+    fn start_surface_share(label: &str) -> SurfaceShareUnderTest {
+        let socket_dir = std::env::temp_dir().join(format!(
+            "streamlib-lease-debt-{}-{}",
+            label,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&socket_dir);
+        std::fs::create_dir_all(&socket_dir).expect("a directory for the test socket");
+        let socket_path = socket_dir.join("surface-share.sock");
+
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("the surface-share service starts");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        SurfaceShareUnderTest {
+            _service: service,
+            socket_path,
+            check_out_leases,
+            _socket_dir: socket_dir,
+        }
+    }
+
+    /// Publish one surface into the service and return the id it lives under.
+    fn publish_one_surface(share: &SurfaceShareUnderTest) -> String {
+        use std::os::unix::io::{FromRawFd as _, IntoRawFd as _};
+
+        let name = std::ffi::CString::new("streamlib-lease-debt-test").unwrap();
+        let raw_fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+        assert!(raw_fd >= 0, "memfd_create failed");
+        let backing = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+        backing.set_len(4096).expect("size the backing memfd");
+        let backing_fd = backing.into_raw_fd();
+
+        let publisher =
+            streamlib_surface_client::connect_to_surface_share_socket(&share.socket_path)
+                .expect("a publisher connection");
+        let (response, _no_reply_fds) = streamlib_surface_client::send_request_with_fds(
+            &publisher,
+            &serde_json::json!({
+                "op": "check_in",
+                "runtime_id": "lease-debt-test-runtime",
+                "width": 32,
+                "height": 32,
+                "format": "bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[backing_fd],
+            0,
+        )
+        .expect("check_in");
+        unsafe { libc::close(backing_fd) };
+        // Held open deliberately: closing it would take the surface with it.
+        std::mem::forget(publisher);
+        response
+            .get("surface_id")
+            .and_then(|value| value.as_str())
+            .expect("the service minted a surface id")
+            .to_string()
+    }
+
+    fn outstanding(share: &SurfaceShareUnderTest, surface_id: &str) -> u32 {
+        share
+            .check_out_leases
+            .outstanding_check_out_count(surface_id)
+            .expect("the lease table stays readable")
+    }
+
+    /// The checkout claims the frame; dropping the debt — the last share of
+    /// the surface going away — is what returns the slot to its producer.
+    #[test]
+    fn a_check_out_is_held_until_its_debt_drops() {
+        let share = start_surface_share("debt");
+        let surface_id = publish_one_surface(&share);
+
+        // The client needs an escalate callable it never uses here — the
+        // lease path speaks only to the surface-share socket.
+        Python::initialize();
+        let exchange_client = Python::attach(|python| {
+            Arc::new(HelperProcessGpuExchangeClient::new(
+                python.None(),
+                share.socket_path.clone(),
+            ))
+        });
+
+        let (response, _plane_fds_closed_by_scope) = exchange_client
+            .check_out_surface(&surface_id)
+            .expect("the checkout round trip");
+        assert!(
+            response.get("error").is_none(),
+            "the service refused the checkout: {response}"
+        );
+        let debt = HelperSurfaceCheckOutLeaseDebt {
+            exchange_client: Arc::clone(&exchange_client),
+            surface_id: surface_id.clone(),
+        };
+        assert_eq!(
+            outstanding(&share, &surface_id),
+            1,
+            "a checked-out frame is claimed against producer reuse"
+        );
+
+        drop(debt);
+        assert_eq!(
+            outstanding(&share, &surface_id),
+            0,
+            "the slot returns to its producer when the last share lets go"
+        );
     }
 }

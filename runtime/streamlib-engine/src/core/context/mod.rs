@@ -16,6 +16,7 @@ pub(crate) mod isolation;
 #[cfg(target_os = "linux")]
 mod ray_tracing_kernel_bridge;
 mod runtime_context;
+pub(crate) mod surface_check_out_lease_registry;
 pub(crate) mod surface_store;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
@@ -55,6 +56,9 @@ pub use ray_tracing_kernel_bridge::{
     RayTracingShaderStageWire, RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
 };
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+pub use surface_check_out_lease_registry::{
+    SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
+};
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;

@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 use parking_lot::RwLock;
 
+use crate::core::context::SurfaceCheckOutLeaseRegistry;
+
 #[derive(Debug)]
 pub struct SurfaceMetadata {
     pub surface_id: String,
@@ -187,6 +189,7 @@ pub struct SurfaceShareState {
 struct Inner {
     surfaces: RwLock<HashMap<String, SurfaceMetadata>>,
     surface_counter: AtomicU64,
+    check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
 }
 
 /// Result of [`SurfaceShareState::get_surface_planes`] — everything a
@@ -433,6 +436,17 @@ impl SurfaceShareState {
 
     pub fn get_surfaces(&self) -> Vec<SurfaceMetadata> {
         self.inner.surfaces.read().values().cloned().collect()
+    }
+
+    /// The checkout leases cross-process consumers hold against this table.
+    ///
+    /// Shared with the pixel-buffer pool, which reads it to decide whether a
+    /// slot may be rehanded to its producer. Registration and lease are
+    /// deliberately separate concerns: a surface is registered once by its
+    /// producer and checked out many times by consumers who never register
+    /// anything.
+    pub fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
+        &self.inner.check_out_leases
     }
 
     /// Surface ids registered by `runtime_id`. Used by the EPOLLHUP watchdog

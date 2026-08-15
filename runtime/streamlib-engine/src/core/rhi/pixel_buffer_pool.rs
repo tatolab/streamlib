@@ -105,6 +105,39 @@ impl RhiPixelBufferPool {
             ))
         }
     }
+
+    /// Grow the pool by one buffer and hand it out.
+    ///
+    /// What a manager calls when every existing slot is held — by an
+    /// in-process reader or by a cross-process checkout lease — and the
+    /// producer still needs somewhere to write. What comes back must be a
+    /// slot no caller has seen before: the manager appends it to its ring,
+    /// so a recycled buffer would enter the ring twice under one id.
+    ///
+    /// On macOS this refuses rather than growing: `CVPixelBufferPool` may
+    /// recycle, and `PixelBufferPoolMacOS::acquire` deliberately returns the
+    /// existing id for a recycled IOSurface — exactly the duplicate the ring
+    /// must never hold. Growth there needs a dedicated fresh-allocation path.
+    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+        #[cfg(target_os = "macos")]
+        {
+            Err(crate::core::Error::NotSupported(
+                "macOS pool growth needs a fresh-allocation path: CVPixelBufferPool recycling \
+                 would re-enter the ring under an existing id"
+                    .into(),
+            ))
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.allocate_additional_buffer()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            Err(crate::core::Error::Configuration(
+                "RhiPixelBufferPool not implemented for this platform".into(),
+            ))
+        }
+    }
 }
 
 impl std::fmt::Debug for RhiPixelBufferPool {

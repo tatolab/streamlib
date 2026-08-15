@@ -21,7 +21,9 @@ A published surface id names an immutable frame. From publish until every holder
 releases it, the pixels under that id change only through the surface's own explicit
 write-back protocol, never through producer reuse: the pool slot backing a held
 surface is never rehanded to the producer — in-process via the existing refcount,
-cross-process via a checkout lease the consumer's host takes at bag receipt. The producer never waits on a consumer: the pool
+cross-process via a checkout lease ~~the consumer's host takes at bag receipt~~
+(ruled 2026-08-14 on #1866: taken at the typed cast, released when the frame
+object drops — #1870). The producer never waits on a consumer: the pool
 skips leased slots and grows to its cap, and at cap the producer drops its own frame.
 A producer-internal transient (the camera's frames-in-flight ring texture) never backs
 a cross-process export; the export blit sources the surface's pooled backing whenever
@@ -69,9 +71,12 @@ describe the same frame, and that frame is the one the bag delivered.
   > backing a held surface is never rehanded to a producer — in-process via the
   > existing refcount, cross-process via a checkout lease minted by the surface-share
   > service at checkout, released explicitly by the consumer and reclaimed on
-  > connection drop. The consumer's host performs that checkout eagerly at bag
+  > connection drop. ~~The consumer's host performs that checkout eagerly at bag
   > receipt, not when user code first touches the surface, so the guarantee runs
-  > from delivery; the publish-to-checkout transit is protected by pool depth. The producer never waits on a consumer: the pool skips leased
+  > from delivery; the publish-to-checkout transit is protected by pool depth.~~
+  > (Ruled 2026-08-14 on #1866: the claim is taken at the typed cast and released
+  > when the frame object drops; publish-to-claim transit rides pool depth. The
+  > amended entry rides #1870.) The producer never waits on a consumer: the pool skips leased
   > slots and grows to its cap; at cap the producer drops its own frame — a slow
   > consumer costs memory, then its own frames, never another processor's cadence. A
   > producer-internal transient (a frames-in-flight ring texture) never backs a
@@ -94,9 +99,30 @@ describe the same frame, and that frame is the one the bag delivered.
   checkout moves to the child host's bag-receipt path: today `resolve_surface` is a
   user-facing call (`python_processor_context.rs:596-607`), so the lease could not
   begin until user code touched the surface, leaving a queued bag unprotected for
-  its whole queue time; the host's reader thread checks out on arrival instead
-  (user-visible behavior unchanged — the handle the callback gets is already
-  checked out).
+  its whole queue time; ~~the host's reader thread checks out on arrival instead~~
+  ~~the host checks out on arrival instead~~ (superseded by the option-D ruling
+  below: the claim is taken at the typed cast, #1870)
+  ~~(user-visible behavior unchanged — the handle the callback gets is already
+  checked out)~~.
+
+  > ~~the host's reader thread checks out on arrival~~ — Corrected 2026-08-14 by
+  > the #1866 implementation, verified at `origin/main` 53d5410f. No thread in the
+  > wheel receives bags: `ParentProcessBridge._reader` (`_helper.py:116-120`) serves
+  > only the escalate / lifecycle socket, and bags arrive over iceoryx2, pulled
+  > synchronously on the processor's own thread by `InputMailboxesInner::receive_pending`
+  > (`runtime/streamlib-engine/src/iceoryx2/input.rs`, called from `read_raw` /
+  > `has_data` / `any_port_has_data` and nowhere else). Queueing is two-stage — the
+  > iceoryx2 subscriber queue, then the per-port mailbox — so "bag receipt" is the
+  > mailbox push, not an arrival anything is woken for. The stated *how* did not
+  > exist, and the owner re-ruled the *what* on 2026-08-14 (#1866, option D):
+  > receipt-time eager checkout is retracted. The claim is taken at the typed
+  > cast — `read(port, into=VideoFrame)`, the moment the consumer names what it
+  > is holding — and released when the frame object drops, the same last-share
+  > RAII the resolved handle already carries. Queue-time transit is bounded by
+  > pool depth; an untyped dict read gets depth-only protection. The engine
+  > inspects no bag content anywhere. The cast-claim implementation and this
+  > entry's plan amendment ride the follow-up ticket.
+
 - ADDED: an engine-level rotating-producer fixture and ground-truth test: a synthetic
   producer replicating the camera's shape (pool surface + transient ring texture
   registered under the pool id, counter-stamped pixels), asserting (a) a device

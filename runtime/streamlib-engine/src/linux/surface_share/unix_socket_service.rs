@@ -21,6 +21,8 @@ use streamlib_surface_client::{
     MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS, recv_message_with_fds, send_message_with_fds,
 };
 
+use crate::core::context::SurfaceCheckOutLeaseHolderId;
+
 use super::state::{
     SurfaceRegistration, SurfaceShareState, VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
     VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT,
@@ -127,10 +129,43 @@ fn run_listener(
                 let state = state.clone();
                 thread::spawn(move || {
                     let mut connection_runtime_id: Option<String> = None;
-                    let conn_result =
-                        handle_client_connection(stream, state.clone(), &mut connection_runtime_id);
+                    // Every connection is a potential lease holder, in-process
+                    // or not: a checkout carries no runtime_id, so the
+                    // connection is the only identity its leases can be
+                    // charged to.
+                    let lease_holder = state.check_out_leases().mint_holder_id();
+                    let conn_result = handle_client_connection(
+                        stream,
+                        state.clone(),
+                        &mut connection_runtime_id,
+                        lease_holder,
+                    );
                     if let Err(e) = conn_result {
                         tracing::debug!("[Surface share] Client connection ended: {}", e);
+                    }
+                    // The lease backstop, and the reason it is not gated on
+                    // `is_subprocess_peer` the way the registration watchdog
+                    // below is: a registered surface may outlive its
+                    // publisher's connection by design, but a lease may never
+                    // outlive the reader holding it. A child killed mid-frame
+                    // leaves its pool slots pinned forever otherwise.
+                    match state
+                        .check_out_leases()
+                        .release_every_check_out_lease_held_by(lease_holder)
+                    {
+                        Ok(0) => {}
+                        Ok(freed) => tracing::debug!(
+                            "[Surface share] {} dropped its claims, freeing {} slot(s) for \
+                             their producers",
+                            lease_holder,
+                            freed
+                        ),
+                        Err(unreadable) => tracing::error!(
+                            "[Surface share] could not reclaim {}'s checkout leases: {}. Their \
+                             pool slots stay pinned until the runtime stops.",
+                            lease_holder,
+                            unreadable
+                        ),
                     }
                     // EPOLLHUP-equivalent watchdog: when the kernel closes the
                     // socket (typical on subprocess SIGKILL), the per-connection
@@ -162,6 +197,7 @@ fn handle_client_connection(
     mut stream: UnixStream,
     state: SurfaceShareState,
     observed_runtime_id: &mut Option<String>,
+    lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
 
@@ -224,7 +260,13 @@ fn handle_client_connection(
 
         let (response, reply_fds) = match op {
             "register" => handle_register(&state, &request, &received_fds),
-            "lookup" | "check_out" => handle_lookup(&state, &request),
+            // `lookup` and `check_out` return the same planes; only
+            // `check_out` claims the frame. A lookup is the host reading its
+            // own table — it holds nothing, so leasing it would pin a pool
+            // slot no consumer is reading.
+            "lookup" => handle_lookup(&state, &request),
+            "check_out" => handle_check_out(&state, &request, lease_holder),
+            "release_check_out" => handle_release_check_out(&state, &request, lease_holder),
             "unregister" | "release" => handle_unregister(&state, &request),
             "check_in" => handle_check_in(&state, &request, &received_fds),
             "update_layout" => handle_update_layout(&state, &request),
@@ -587,18 +629,105 @@ fn handle_register(
     }
 }
 
+/// `check_out` is `lookup` plus a claim: the planes cross the wire and the
+/// surface is pinned against producer reuse until this connection releases it
+/// or drops.
+///
+/// A lease that cannot be recorded refuses the checkout outright and closes
+/// the dups `lookup` already took. Handing a consumer fds the pool believes
+/// are free is exactly the silent wrongness the lease exists to remove — an
+/// error it can see beats pixels that change under it.
+fn handle_check_out(
+    state: &SurfaceShareState,
+    request: &serde_json::Value,
+    lease_holder: SurfaceCheckOutLeaseHolderId,
+) -> (serde_json::Value, Vec<RawFd>) {
+    let Some(surface_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
+    };
+
+    let (response, reply_fds) = handle_lookup(state, request);
+    if response.get("error").is_some() {
+        return (response, reply_fds);
+    }
+
+    if let Err(unrecordable) = state
+        .check_out_leases()
+        .record_check_out_lease(surface_id, lease_holder)
+    {
+        for fd in &reply_fds {
+            unsafe { libc::close(*fd) };
+        }
+        tracing::error!(
+            "[Surface share] refusing check_out of '{}' for {}: {}",
+            surface_id,
+            lease_holder,
+            unrecordable
+        );
+        return (
+            serde_json::json!({
+                "error": format!(
+                    "no checkout lease could be recorded for surface '{surface_id}', so its \
+                     producer could recycle the slot while you read it: {unrecordable}"
+                )
+            }),
+            Vec::new(),
+        );
+    }
+
+    (response, reply_fds)
+}
+
+/// Drop one of this connection's claims on a surface.
+///
+/// `released: false` means this connection held no lease on that id — a
+/// double release, or a release of somebody else's frame. Reported rather
+/// than raised: the caller is usually a `Drop` that has nowhere to raise to,
+/// and one connection must never be able to unpin another's frame.
+fn handle_release_check_out(
+    state: &SurfaceShareState,
+    request: &serde_json::Value,
+    lease_holder: SurfaceCheckOutLeaseHolderId,
+) -> (serde_json::Value, Vec<RawFd>) {
+    let Some(surface_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
+    };
+
+    match state
+        .check_out_leases()
+        .release_one_check_out_lease(surface_id, lease_holder)
+    {
+        Ok(released) => (
+            serde_json::json!({"success": true, "released": released}),
+            Vec::new(),
+        ),
+        Err(unreadable) => (
+            serde_json::json!({"error": unreadable.to_string()}),
+            Vec::new(),
+        ),
+    }
+}
+
+/// The surface a request names, or `None` when it names none.
+fn requested_surface_id(request: &serde_json::Value) -> Option<&str> {
+    request.get("surface_id").and_then(|v| v.as_str())
+}
+
 fn handle_lookup(
     state: &SurfaceShareState,
     request: &serde_json::Value,
 ) -> (serde_json::Value, Vec<RawFd>) {
-    let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return (
-                serde_json::json!({"error": "missing surface_id"}),
-                Vec::new(),
-            );
-        }
+    let Some(surface_id) = requested_surface_id(request) else {
+        return (
+            serde_json::json!({"error": "missing surface_id"}),
+            Vec::new(),
+        );
     };
 
     let checkout = match state.get_surface_planes(surface_id) {
@@ -942,6 +1071,7 @@ unsafe impl Sync for UnixSocketSurfaceService {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::context::SurfaceCheckOutLeaseRegistry;
     use std::os::unix::io::FromRawFd;
     use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
     use tempfile::TempDir;
@@ -981,6 +1111,208 @@ mod tests {
         let dir = TempDir::new().expect("temp dir for test socket");
         let path = dir.path().join("surface-share.sock");
         (dir, path)
+    }
+
+    /// Register a one-plane surface over the wire and return the id it lives
+    /// under.
+    fn check_in_one_surface(stream: &UnixStream) -> String {
+        let send_fd = make_memfd_with(b"surface-check-out-lease-test");
+        let (response, _no_reply_fds) = send_request_with_fds(
+            stream,
+            &serde_json::json!({
+                "op": "check_in",
+                "runtime_id": "lease-test-runtime",
+                "width": 64,
+                "height": 64,
+                "format": "bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[send_fd],
+            0,
+        )
+        .expect("check_in request");
+        unsafe { libc::close(send_fd) };
+        response
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id in the check_in response")
+            .to_string()
+    }
+
+    fn close_every_fd(fds: &[RawFd]) {
+        for fd in fds {
+            unsafe { libc::close(*fd) };
+        }
+    }
+
+    fn ask(stream: &UnixStream, request: &serde_json::Value) -> serde_json::Value {
+        let (response, reply_fds) =
+            send_request_with_fds(stream, request, &[], MAX_DMA_BUF_PLANES).expect("wire request");
+        close_every_fd(&reply_fds);
+        response
+    }
+
+    fn started_service(state: SurfaceShareState) -> (TempDir, PathBuf, UnixSocketSurfaceService) {
+        let (socket_dir, socket_path) = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        (socket_dir, socket_path, service)
+    }
+
+    /// The reclaim runs on the connection's own thread once its read loop
+    /// ends, so the drop is observed rather than assumed.
+    fn lease_count_settling_to(
+        check_out_leases: &SurfaceCheckOutLeaseRegistry,
+        surface_id: &str,
+        expected: u32,
+    ) -> u32 {
+        for _ in 0..200 {
+            let outstanding = check_out_leases
+                .outstanding_check_out_count(surface_id)
+                .expect("the lease table stays readable");
+            if outstanding == expected {
+                return outstanding;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        check_out_leases
+            .outstanding_check_out_count(surface_id)
+            .expect("the lease table stays readable")
+    }
+
+    /// A checkout claims the frame; a lookup does not. Both hand back the
+    /// same planes, but a lookup is the host reading its own table and holds
+    /// nothing — leasing it would pin a pool slot no consumer is reading.
+    #[test]
+    fn a_check_out_claims_the_frame_and_a_lookup_leaves_it_free() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        let surface_id = check_in_one_surface(&stream);
+
+        ask(
+            &stream,
+            &serde_json::json!({"op": "lookup", "surface_id": surface_id}),
+        );
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&surface_id)
+                .unwrap(),
+            0,
+            "a lookup holds nothing, so it must pin no pool slot"
+        );
+
+        ask(
+            &stream,
+            &serde_json::json!({"op": "check_out", "surface_id": surface_id}),
+        );
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&surface_id)
+                .unwrap(),
+            1,
+            "a checkout claims the frame against producer reuse"
+        );
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// The explicit release, and the rule that one connection can never unpin
+    /// another's frame.
+    #[test]
+    fn release_check_out_frees_only_the_connection_that_took_it() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+
+        let holder = connect_to_surface_share_socket(&socket_path).expect("connect the holder");
+        let surface_id = check_in_one_surface(&holder);
+        ask(
+            &holder,
+            &serde_json::json!({"op": "check_out", "surface_id": surface_id}),
+        );
+
+        let bystander =
+            connect_to_surface_share_socket(&socket_path).expect("connect the bystander");
+        let bystander_release = ask(
+            &bystander,
+            &serde_json::json!({"op": "release_check_out", "surface_id": surface_id}),
+        );
+        assert_eq!(
+            bystander_release.get("released").and_then(|v| v.as_bool()),
+            Some(false),
+            "a connection that never checked the surface out has nothing to release"
+        );
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&surface_id)
+                .unwrap(),
+            1,
+            "one connection must never be able to unpin another's frame"
+        );
+
+        let holder_release = ask(
+            &holder,
+            &serde_json::json!({"op": "release_check_out", "surface_id": surface_id}),
+        );
+        assert_eq!(
+            holder_release.get("released").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&surface_id)
+                .unwrap(),
+            0,
+            "the frame returns to its producer once its reader lets go"
+        );
+
+        drop(holder);
+        drop(bystander);
+        service.stop();
+    }
+
+    /// The backstop: a child killed mid-frame never sends a release, so the
+    /// kernel closing its socket is what returns the slots. Unlike the
+    /// registration watchdog this is not gated on the peer being out of
+    /// process — a lease may never outlive its reader, whoever the reader is.
+    #[test]
+    fn a_dropped_connection_releases_every_lease_it_was_holding() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+
+        let publisher =
+            connect_to_surface_share_socket(&socket_path).expect("connect the publisher");
+        let surface_id = check_in_one_surface(&publisher);
+
+        let reader = connect_to_surface_share_socket(&socket_path).expect("connect the reader");
+        for _ in 0..2 {
+            ask(
+                &reader,
+                &serde_json::json!({"op": "check_out", "surface_id": surface_id}),
+            );
+        }
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&surface_id)
+                .unwrap(),
+            2
+        );
+
+        drop(reader);
+        assert_eq!(
+            lease_count_settling_to(&check_out_leases, &surface_id, 0),
+            0,
+            "a reader that died holding frames must not pin their slots forever"
+        );
+
+        drop(publisher);
+        service.stop();
     }
 
     #[test]

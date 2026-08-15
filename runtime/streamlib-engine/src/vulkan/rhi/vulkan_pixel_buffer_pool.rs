@@ -99,6 +99,44 @@ impl VulkanPixelBufferPool {
         })
     }
 
+    /// Allocate one more buffer and hand it out.
+    ///
+    /// `pre_allocate` is a starting depth, not a ceiling: a consumer holding
+    /// frames makes a producer need more slots than its ring began with. The
+    /// caller owns the cap that bounds this.
+    ///
+    /// A fresh allocation, never a recycled slot, so what comes back is
+    /// guaranteed free — [`Self::acquire`] cannot answer here, because a
+    /// caller that keeps its own permanent share of every buffer never sees a
+    /// strong count of 1 again.
+    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+        let buffer = HostVulkanBuffer::new(
+            &self.device,
+            (self.width as u64) * (self.height as u64) * (self.bytes_per_pixel as u64),
+        )?;
+
+        let index = self.buffers.len();
+        self.buffers.push(Arc::new(buffer));
+        let pool_id = PixelBufferPoolId::new();
+        self.buffer_to_pool_id
+            .lock()
+            .map_err(|_| {
+                Error::BufferError("VulkanPixelBufferPool: the pool-id map is poisoned".into())
+            })?
+            .insert(index, pool_id.clone());
+
+        Ok((
+            pool_id,
+            PixelBuffer::new(PixelBufferRef {
+                inner: Arc::clone(&self.buffers[index]),
+                width: self.width,
+                height: self.height,
+                bytes_per_pixel: self.bytes_per_pixel,
+                format: self.format,
+            }),
+        ))
+    }
+
     /// Acquire a buffer from the pool via ring-cycling.
     ///
     /// Skips buffers still held externally (Arc::strong_count > 1).
