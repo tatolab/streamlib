@@ -16,6 +16,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
 
+use crate::python_processor_context::PythonGpuContextLimitedAccess;
+
 /// Encode a bag to the msgpack bytes the wire carries.
 ///
 /// A bag is a named map — a dict with string keys — because that is what the
@@ -67,7 +69,7 @@ pub(crate) fn cast_decoded_bag_into_read_target<'py>(
     port_name: &str,
     decoded_bag: Bound<'py, PyAny>,
     read_target_type: &Bound<'py, PyAny>,
-    offered_gpu_limited_access: Option<&Bound<'py, PyAny>>,
+    offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let named_map = decoded_bag.cast::<PyDict>().map_err(|_| {
         PyTypeError::new_err(format!(
@@ -108,11 +110,17 @@ thread_local! {
     /// calling it with the bag's entries, which is the whole contract — an
     /// argument the engine added would be one every target had to accept, and
     /// most targets are ordinary dataclasses that want nothing to do with a
-    /// GPU. A processor's callbacks run on its own thread, and construction
-    /// cannot yield to another read on that thread, so the window is exactly
-    /// one constructor call deep.
-    static GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ: RefCell<Option<Py<PyAny>>> =
-        const { RefCell::new(None) };
+    /// GPU.
+    ///
+    /// What this is keyed on is what it guarantees: one OS thread, one read at
+    /// a time. A processor's callbacks run on its own dedicated thread, so the
+    /// window is exactly one constructor call deep. The green-thread execution
+    /// flavor the plan keeps OPEN (ARCHITECTURE.md §Processor model) would
+    /// break that — a switch inside `__init__` is not nested reentrancy, and a
+    /// resumed read would see the wrong offer — so that flavor owes this a
+    /// rework onto `contextvars`, which follows the switch.
+    static GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ:
+        RefCell<Option<Py<PythonGpuContextLimitedAccess>>> = const { RefCell::new(None) };
 }
 
 /// Opens the offer for one construction and withdraws it on drop, whether the
@@ -120,11 +128,11 @@ thread_local! {
 struct TypedReadGpuAccessOffer {
     /// Restored rather than cleared: a target whose constructor reads its own
     /// input ports would otherwise leave the outer read's offer withdrawn.
-    offer_this_read_displaced: Option<Py<PyAny>>,
+    offer_this_read_displaced: Option<Py<PythonGpuContextLimitedAccess>>,
 }
 
 impl TypedReadGpuAccessOffer {
-    fn open(offered_gpu_limited_access: Option<&Bound<'_, PyAny>>) -> Self {
+    fn open(offered_gpu_limited_access: Option<&Bound<'_, PythonGpuContextLimitedAccess>>) -> Self {
         let offered = offered_gpu_limited_access.map(|capability| capability.clone().unbind());
         Self {
             offer_this_read_displaced: GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ
@@ -134,11 +142,13 @@ impl TypedReadGpuAccessOffer {
 }
 
 impl Drop for TypedReadGpuAccessOffer {
+    /// `replace` rather than an assignment through `borrow_mut`, so the
+    /// displaced capability drops after the borrow ends: a decref that ran
+    /// Python and re-entered the reader below would otherwise panic on an
+    /// already-mutable borrow.
     fn drop(&mut self) {
         let restored = self.offer_this_read_displaced.take();
-        GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ.with(|offer| {
-            *offer.borrow_mut() = restored;
-        });
+        GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ.with(|offer| offer.replace(restored));
     }
 }
 
@@ -153,7 +163,7 @@ impl Drop for TypedReadGpuAccessOffer {
 #[pyfunction]
 pub(crate) fn gpu_limited_access_of_the_typed_read_in_progress(
     python: Python<'_>,
-) -> Option<Py<PyAny>> {
+) -> Option<Py<PythonGpuContextLimitedAccess>> {
     GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ.with(|offer| {
         offer
             .borrow()

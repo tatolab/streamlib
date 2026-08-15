@@ -29,6 +29,7 @@ use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
 use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
 /// One processor's links, as seen from Python.
 ///
@@ -78,7 +79,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'py>,
         port_name: &str,
         into: Option<&Bound<'py, PyAny>>,
-        offered_gpu_limited_access: Option<&Bound<'py, PyAny>>,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));

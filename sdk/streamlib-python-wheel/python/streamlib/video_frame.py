@@ -28,6 +28,7 @@ from ._engine import (
     GpuSurfaceCheckOutLease,
     gpu_limited_access_of_the_typed_read_in_progress,
 )
+from .log import warn
 
 __all__ = [
     "ColorInfo",
@@ -52,6 +53,10 @@ Matrix = Literal[
 Range = Literal["full", "limited"]
 
 _NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
+
+# The keys without which there is no frame to speak of. Everything else the
+# bag carries is optional, this cast's or somebody else's.
+_REQUIRED_BAG_KEYS = ("surface_id", "width", "height", "timestamp_ns")
 
 
 def _is_plain_int(value: Any) -> bool:
@@ -108,6 +113,30 @@ def _color_info_or_none(value: Any) -> "ColorInfo | None":
     )
 
 
+_a_refused_claim_has_been_reported = False
+
+
+def _report_the_first_refused_claim(surface_id: str, refusal: BaseException) -> None:
+    """Say once, per process, that frames are arriving unprotected.
+
+    Once and not per frame: this is the per-frame path, and a helper's records
+    cross to the parent, so a refusal that persists would cost more in logging
+    than the claim it is reporting on. Silence would be worse than either — the
+    whole lifetime contract can be off with no other signal.
+    """
+    global _a_refused_claim_has_been_reported
+    if _a_refused_claim_has_been_reported:
+        return
+    _a_refused_claim_has_been_reported = True
+    warn(
+        "a frame could not claim its surface, so the producer may recycle it while this "
+        "processor is still holding the frame; frames are protected by pool depth alone "
+        "until this clears. Not reported again in this process.",
+        surface_id=surface_id,
+        refusal=str(refusal),
+    )
+
+
 def _claim_on_the_surface_a_frame_names(surface_id: str) -> "GpuSurfaceCheckOutLease | None":
     """The claim a frame holds on its own pixels, or `None` when nothing
     offered the means to take one.
@@ -120,12 +149,13 @@ def _claim_on_the_surface_a_frame_names(surface_id: str) -> "GpuSurfaceCheckOutL
         return None
     try:
         return gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
-    except RuntimeError:
+    except RuntimeError as refusal:
         # Every way this fails means the frame cannot be pinned — its surface
         # is already gone, or this helper has no route to the engine — and none
         # of them make the bag unreadable. An unclaimed frame falls back to the
         # protection pool depth gives it, which is what an untyped read gets;
         # raising here would turn a delivered frame into an exception.
+        _report_the_first_refused_claim(surface_id, refusal)
         return None
 
 
@@ -167,7 +197,7 @@ class MasteringDisplay:
     min_luminance: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class VideoFrame:
     """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
 
@@ -192,46 +222,66 @@ class VideoFrame:
     mastering_display: MasteringDisplay | None = None
     texture_layout: int | None = None
 
-    def __post_init__(self) -> None:
+    def __init__(
+        self,
+        surface_id: str,
+        width: int,
+        height: int,
+        timestamp_ns: int,
+        fps: "int | None" = None,
+        color_info: "ColorInfo | Mapping[str, Any] | None" = None,
+        content_light: "ContentLight | Mapping[str, Any] | None" = None,
+        mastering_display: "MasteringDisplay | Mapping[str, Any] | None" = None,
+        texture_layout: "int | None" = None,
+        **keys_this_cast_does_not_read: Any,
+    ) -> None:
         """Validate, cast the nested metadata, and claim the surface.
 
-        Construction is the validation, so `VideoFrame(**bag)` — what
-        `read(port, into=VideoFrame)` does — and `from_bag` agree on what a
-        frame is rather than one being the stricter spelling.
+        Written out rather than generated because the bag is an open map: a
+        producer may carry keys this cast does not read, and the day one adds
+        a key must not be the day every `read(port, into=VideoFrame)` starts
+        raising — which would take the frame's lifetime protection with it.
+        Construction is the validation, so that spelling and `from_bag` are
+        one path rather than two that can drift.
         """
+        del keys_this_cast_does_not_read
         if (
-            not isinstance(self.surface_id, str)
-            or not _is_plain_int(self.width)
-            or not _is_plain_int(self.height)
-            or not _is_plain_int(self.timestamp_ns)
+            not isinstance(surface_id, str)
+            or not _is_plain_int(width)
+            or not _is_plain_int(height)
+            or not _is_plain_int(timestamp_ns)
         ):
             raise ValueError(
                 "bag is not a video frame: surface_id must be str and "
                 "width/height/timestamp_ns must be int"
             )
-        object.__setattr__(self, "fps", _require_int_or_none("fps", self.fps))
-        object.__setattr__(
-            self,
-            "texture_layout",
-            _require_int_or_none("texture_layout", self.texture_layout),
-        )
-        object.__setattr__(self, "color_info", _color_info_or_none(self.color_info))
-        object.__setattr__(
+        # `object.__setattr__` throughout because the frame is frozen: the
+        # generated `__setattr__` refuses, and freezing is what makes a
+        # delivered frame safe to hand around.
+        assign = object.__setattr__
+        assign(self, "surface_id", surface_id)
+        assign(self, "width", width)
+        assign(self, "height", height)
+        assign(self, "timestamp_ns", timestamp_ns)
+        assign(self, "fps", _require_int_or_none("fps", fps))
+        assign(self, "texture_layout", _require_int_or_none("texture_layout", texture_layout))
+        assign(self, "color_info", _color_info_or_none(color_info))
+        assign(
             self,
             "content_light",
-            _nested_or_none("content_light", ContentLight, self.content_light),
+            _nested_or_none("content_light", ContentLight, content_light),
         )
-        object.__setattr__(
+        assign(
             self,
             "mastering_display",
-            _nested_or_none("mastering_display", MasteringDisplay, self.mastering_display),
+            _nested_or_none("mastering_display", MasteringDisplay, mastering_display),
         )
         # The frame's own field, and its whole lifetime protocol: this object
         # going away is what releases the claim.
-        object.__setattr__(
+        assign(
             self,
             "_check_out_lease_on_this_frames_surface",
-            _claim_on_the_surface_a_frame_names(self.surface_id),
+            _claim_on_the_surface_a_frame_names(surface_id),
         )
 
     @classmethod
@@ -239,26 +289,11 @@ class VideoFrame:
         """Construct from a bag dict, raising ValueError on missing or
         mistyped keys — required and optional alike.
 
-        Keys a frame does not declare are ignored: the bag is an open map, and
-        a producer may carry more than this cast reads.
+        The same construction `read(port, into=VideoFrame)` performs, so the
+        two spellings cannot disagree; this one only names the missing key,
+        which keyword construction reports in Python's words.
         """
-        try:
-            surface_id = bag["surface_id"]
-            width = bag["width"]
-            height = bag["height"]
-            timestamp_ns = bag["timestamp_ns"]
-        except KeyError as missing:
-            raise ValueError(
-                f"bag is not a video frame: missing key {missing.args[0]!r}"
-            ) from None
-        return cls(
-            surface_id=surface_id,
-            width=width,
-            height=height,
-            timestamp_ns=timestamp_ns,
-            fps=bag.get("fps"),
-            color_info=bag.get("color_info"),
-            content_light=bag.get("content_light"),
-            mastering_display=bag.get("mastering_display"),
-            texture_layout=bag.get("texture_layout"),
-        )
+        missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
+        if missing:
+            raise ValueError(f"bag is not a video frame: missing key {missing[0]!r}")
+        return cls(**bag)

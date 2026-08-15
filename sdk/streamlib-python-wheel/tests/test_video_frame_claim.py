@@ -30,6 +30,7 @@ from streamlib import (
     ProcessorLinkDataAccess,
     RuntimeContextFullAccess,
     VideoFrame,
+    gpu_limited_access_of_the_typed_read_in_progress,
 )
 from streamlib import video_frame as video_frame_module
 
@@ -177,6 +178,37 @@ def test_the_read_spelling_validates_like_from_bag():
         VideoFrame(**{**FRAME_BAG, "content_light": {"max_cll": 1, "unexpected_key": 1}})
 
 
+def test_both_spellings_ignore_keys_the_cast_does_not_read():
+    """The bag is an open map — the engine's own convention, and what the Rust
+    cast does. A producer adding a key must not turn every typed read into a
+    TypeError, because that read is the one that claims the frame."""
+    bag_from_a_newer_producer = {**FRAME_BAG, "a_key_a_future_producer_adds": "ignored"}
+
+    assert VideoFrame(**bag_from_a_newer_producer) == VideoFrame.from_bag(
+        bag_from_a_newer_producer
+    )
+    assert VideoFrame(**bag_from_a_newer_producer).surface_id == "surface-7"
+
+
+def test_a_refused_claim_is_reported_once_and_then_stays_quiet(offered, monkeypatch):
+    """Silence would let the whole lifetime contract be off with no signal;
+    per-frame logging would cost more than the claim it reports on."""
+    offered(GpuLimitedAccessThatRefuses())
+    monkeypatch.setattr(video_frame_module, "_a_refused_claim_has_been_reported", False)
+    reported: list[str] = []
+    monkeypatch.setattr(
+        video_frame_module,
+        "warn",
+        lambda message, **attrs: reported.append(message),
+    )
+
+    VideoFrame(**FRAME_BAG)
+    VideoFrame(**FRAME_BAG)
+
+    assert len(reported) == 1, "the per-frame path must not flood the log"
+    assert "pool depth" in reported[0]
+
+
 def test_already_cast_metadata_survives_construction():
     """A frame built in Python — a test fixture, a processor forwarding one —
     passes real `ColorInfo`, and re-casting must not mangle it."""
@@ -187,16 +219,25 @@ def test_already_cast_metadata_survives_construction():
 # ---- the spelling itself, over a real link ---------------------------------
 
 
+class FrameThatRecordsWhatTheReadOffered:
+    """A frame class the wheel does not ship, written the way anyone could —
+    it keeps whatever the read put on offer, so a test can name it."""
+
+    def __init__(self, surface_id: str, **rest_of_the_bag: object) -> None:
+        self.surface_id = surface_id
+        self.offered = gpu_limited_access_of_the_typed_read_in_progress()
+
+
 def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu():
     """`ctx.inputs.read(port, into=VideoFrame)` end to end: a bag crosses real
     iceoryx2 ports and arrives as a frame with its metadata cast.
 
     This context is built without an escalate bridge, so its GPU capability
-    reaches nothing — which is the case that matters here. The read still
-    offers that capability, the frame still tries to claim, and the refusal
-    leaves an ordinary frame rather than an exception at the read. What the
-    claim does when the route *is* live needs a surface-share service, and is
-    proven in the wheel's Rust tests.
+    reaches nothing — which is the case that matters here. The read offers that
+    capability anyway (asserted, so unwiring the offer fails this test), the
+    frame tries to claim, and the refusal leaves an ordinary frame rather than
+    an exception at the read. What the claim does when the route *is* live
+    needs a surface-share service, and is proven in the wheel's Rust tests.
     """
     unique = f"framecast{os.getpid()}"
     channel_service_name = f"{unique}/frames"
@@ -220,10 +261,16 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
     ctx = RuntimeContextFullAccess.open_for_helper_process(
         {}, destination, "runtime-under-test", "processor-under-test"
     )
-    source.write_to_output_port(
-        OUTPUT_PORT,
-        {**FRAME_BAG, "fps": 30, "color_info": {"primaries": "bt709"}},
-    )
+    bag_from_upstream = {
+        **FRAME_BAG,
+        "fps": 30,
+        "color_info": {"primaries": "bt709"},
+        # A producer's own key this cast does not read. The bag is an open map,
+        # and the day one is added must not be the day typed reads start
+        # raising — which would take the frame's protection with it.
+        "a_key_a_future_producer_adds": "ignored",
+    }
+    source.write_to_output_port(OUTPUT_PORT, bag_from_upstream)
 
     frame = ctx.inputs.read(INPUT_PORT, into=VideoFrame)
 
@@ -233,7 +280,17 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
     assert getattr(frame, CLAIM_FIELD) is None, (
         "a capability that reaches nothing claims nothing"
     )
-    # Which is a refusal the frame swallowed, not an offer that never happened:
-    # this is the capability the read offers, and this is what it answers.
+
+    # And that None is a refusal the frame swallowed, not an offer that never
+    # happened. Read the same bag into a class that keeps what it was offered:
+    # this fails if the read stops offering, whatever the shipped type does.
+    source.write_to_output_port(OUTPUT_PORT, bag_from_upstream)
+    recording = ctx.inputs.read(INPUT_PORT, into=FrameThatRecordsWhatTheReadOffered)
+    assert recording is not None
+    offered = recording.offered
+    assert offered is ctx.gpu_limited_access, (
+        "the read must offer the constructing type this processor's own capability"
+    )
+    assert offered is not None
     with pytest.raises(RuntimeError, match="not reachable"):
-        ctx.gpu_limited_access.claim_surface_against_producer_reuse("surface-7")
+        offered.claim_surface_against_producer_reuse("surface-7")

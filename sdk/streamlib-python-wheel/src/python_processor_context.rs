@@ -1115,7 +1115,7 @@ impl PythonLinkInputDataReader {
                 python,
                 port_name,
                 into,
-                Some(self.gpu_limited_access_context.bind(python).as_any()),
+                Some(self.gpu_limited_access_context.bind(python)),
             )
     }
 

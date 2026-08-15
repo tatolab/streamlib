@@ -130,10 +130,11 @@ fn parse_device_uuid(as_hex: &str) -> PyResult<[u8; 16]> {
 ///
 /// `checked_out_subject` names what was being checked out, because the caller
 /// knows whether it asked for a published surface or the staging behind one and
-/// the response does not.
+/// the response does not. Taken as `format_args!` so the happy path — every
+/// frame a consumer claims or resolves — formats nothing.
 #[cfg(target_os = "linux")]
 fn refuse_check_out_the_service_declined(
-    checked_out_subject: &str,
+    checked_out_subject: std::fmt::Arguments<'_>,
     response: &serde_json::Value,
 ) -> PyResult<()> {
     match response.get("error").and_then(|value| value.as_str()) {
@@ -428,7 +429,7 @@ impl HelperProcessGpuExchangeClient {
         surface_id: &str,
     ) -> PyResult<HelperSurfaceCheckOutLeaseDebt> {
         let (response, _plane_fds_closed_by_scope) = self.check_out_surface(surface_id)?;
-        refuse_check_out_the_service_declined(&format!("{surface_id:?}"), &response)?;
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
         Ok(HelperSurfaceCheckOutLeaseDebt {
             exchange_client: Arc::clone(self),
             surface_id: surface_id.to_string(),
@@ -556,7 +557,7 @@ impl HelperProcessGpuExchangeClient {
         // owe a debt here.
         let (response, received_fds) = self.check_out_surface(staging_share_id)?;
         refuse_check_out_the_service_declined(
-            &format!("the device-export staging {staging_share_id:?}"),
+            format_args!("the device-export staging {staging_share_id:?}"),
             &response,
         )?;
         let handle_type = response
@@ -697,7 +698,7 @@ impl HelperProcessGpuExchangeClient {
         response: &serde_json::Value,
         received_fds: Vec<OwnedFd>,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
-        refuse_check_out_the_service_declined(&format!("{surface_id:?}"), response)?;
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), response)?;
 
         // Trailing timeline-semaphore fds arrive after the plane fds when the
         // registration carried them. A pixel-buffer checkout carries none
