@@ -34,8 +34,7 @@ const BOUNDED_APT_INSTALL_ACTION_REFERENCE: &str =
     "./.github/actions/install-linux-engine-build-dependencies";
 
 /// The one file allowed to invoke `apt-get` under `.github/`.
-const BOUNDED_RETRY_SCRIPT_RELATIVE_PATH: &str =
-    ".github/actions/install-linux-engine-build-dependencies/install-system-dependencies-with-bounded-retry.sh";
+const BOUNDED_RETRY_SCRIPT_RELATIVE_PATH: &str = ".github/actions/install-linux-engine-build-dependencies/install-system-dependencies-with-bounded-retry.sh";
 
 /// A workflow line that installs apt packages outside the bounded-retry script.
 #[derive(Debug, PartialEq, Eq)]
@@ -125,7 +124,13 @@ pub fn scan(workspace_root: &Path) -> Result<Findings> {
 
 fn list_tracked_workflow_files(workspace_root: &Path) -> Result<Vec<String>> {
     let output = Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "--"])
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+        ])
         .arg(".github/workflows")
         .current_dir(workspace_root)
         .output()
@@ -235,8 +240,10 @@ mod tests {
     use tempfile::TempDir;
 
     fn scan_workflow_text(contents: &str) -> Findings {
-        let mut findings = Findings::default();
-        findings.workflows_scanned = 1;
+        let mut findings = Findings {
+            workflows_scanned: 1,
+            ..Default::default()
+        };
         scan_one_workflow("test.yml", contents, &mut findings);
         findings
     }
@@ -340,10 +347,8 @@ mod tests {
             let invocation_log = temp.path().join("invocations.log");
             fs::write(&invocation_log, "").unwrap();
 
-            let apt_get_fixture = write_executable_fixture(
-                temp.path().join("apt-get-fixture"),
-                apt_get_fixture_body,
-            );
+            let apt_get_fixture =
+                write_executable_fixture(temp.path().join("apt-get-fixture"), apt_get_fixture_body);
             let mirror_switch_fixture = write_executable_fixture(
                 temp.path().join("mirror-switch-fixture"),
                 "#!/usr/bin/env bash\nprintf 'switched %s\\n' \"$1\" >> \"$INVOCATION_LOG\"\n",
