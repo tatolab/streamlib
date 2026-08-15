@@ -18,6 +18,7 @@ from . import log as log
 from ._engine import AddedProcessor as AddedProcessor
 from ._engine import GpuContextFullAccess as GpuContextFullAccess
 from ._engine import GpuContextLimitedAccess as GpuContextLimitedAccess
+from ._engine import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
 from ._engine import GpuSurfaceHandle as GpuSurfaceHandle
 from ._engine import LinkInputDataReader as LinkInputDataReader
 from ._engine import LinkOutputDataWriter as LinkOutputDataWriter
@@ -31,6 +32,9 @@ from ._engine import Runtime as _NativeRuntime
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
 from ._engine import TestPatternSource as TestPatternSource
+from ._engine import (
+    gpu_limited_access_of_the_typed_read_in_progress as gpu_limited_access_of_the_typed_read_in_progress,
+)
 from ._engine import monotonic_now_ns as monotonic_now_ns
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
@@ -50,6 +54,7 @@ __all__ = [
     "DisplayWindow",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
+    "GpuSurfaceCheckOutLease",
     "GpuSurfaceHandle",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
@@ -64,6 +69,7 @@ __all__ = [
     "TestPatternSource",
     "VideoFrame",
     "clock",
+    "gpu_limited_access_of_the_typed_read_in_progress",
     "input",
     "log",
     "monotonic_now_ns",

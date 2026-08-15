@@ -25,6 +25,8 @@ mod python_processor_import_path;
 mod python_processor_link_data_access;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
+#[cfg(all(test, target_os = "linux"))]
+mod python_surface_share_service_for_tests;
 mod python_test_harness_endpoints;
 
 pub use python_runtime_lifecycle::PythonRuntimeHandle;
@@ -48,9 +50,14 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonGpuContextFullAccess>()?;
     module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;
     module.add_class::<python_processor_context::PythonGpuSurfaceHandle>()?;
+    module.add_class::<python_processor_context::PythonGpuSurfaceCheckOutLease>()?;
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
+    module.add_function(wrap_pyfunction!(
+        python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(

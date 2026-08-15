@@ -4,10 +4,17 @@
 """The optional typed cast for a video-frame bag.
 
 A link carries a self-describing bag (a dict); its keys are the contract and
-reading them directly is always enough. `VideoFrame.from_bag` is the opt-in
-strictness dial for consumers that want construction-time validation and
-attribute access instead of key lookups. Pixels never ride the bag — the
-frame references a GPU surface by `surface_id`, resolved out-of-band.
+reading them directly is always enough. Casting is the opt-in dial for
+consumers that want construction-time validation and attribute access instead
+of key lookups. Pixels never ride the bag — the frame references a GPU surface
+by `surface_id`, resolved out-of-band.
+
+Casting also buys the frame's own lifetime: read as a `VideoFrame`, the frame
+babysits its buffer, and the producer cannot recycle the pixels under a frame
+you are still holding. Nothing here is privileged — the class asks the read in
+progress for the capability and keeps what it gets in a field, which any class
+can do, and which is why reading the bag as a dict stays first-class and
+unpenalized.
 """
 
 from __future__ import annotations
@@ -16,6 +23,12 @@ import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
+
+from ._engine import (
+    GpuSurfaceCheckOutLease,
+    gpu_limited_access_of_the_typed_read_in_progress,
+)
+from .log import warn
 
 __all__ = [
     "ColorInfo",
@@ -41,6 +54,10 @@ Range = Literal["full", "limited"]
 
 _NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
 
+# The keys without which there is no frame to speak of. Everything else the
+# bag carries is optional, this cast's or somebody else's.
+_REQUIRED_BAG_KEYS = ("surface_id", "width", "height", "timestamp_ns")
+
 
 def _is_plain_int(value: Any) -> bool:
     """`bool` is an `int` subclass; a frame dimension of `True` is a bug."""
@@ -53,8 +70,8 @@ def _require_int_or_none(key: str, value: Any) -> "int | None":
     return value
 
 
-def _require_mapping_or_none(key: str, value: Any) -> "Mapping[str, Any] | None":
-    if value is not None and not isinstance(value, Mapping):
+def _require_mapping(key: str, value: Any) -> "Mapping[str, Any]":
+    if not isinstance(value, Mapping):
         raise ValueError(f"bag is not a video frame: {key!r} must be a mapping or absent")
     return value
 
@@ -69,6 +86,79 @@ def _cast_nested(
         raise ValueError(
             f"bag is not a video frame: {key!r} is malformed ({construction_error})"
         ) from None
+
+
+def _nested_or_none(
+    key: str, nested_type: "type[_NestedCast]", value: Any
+) -> "_NestedCast | None":
+    """Nested metadata as its own type, whether it arrived already cast or as
+    the bag's nested map."""
+    if value is None or isinstance(value, nested_type):
+        return value
+    return _cast_nested(key, nested_type, _require_mapping(key, value))
+
+
+def _color_info_or_none(value: Any) -> "ColorInfo | None":
+    """`ColorInfo` reads field by field rather than by construction: every
+    field is optional and a bag may carry a key this version does not know,
+    where the H.273 tuple's absent-means-unspecified rule still applies."""
+    if value is None or isinstance(value, ColorInfo):
+        return value
+    color_info_bag = _require_mapping("color_info", value)
+    return ColorInfo(
+        primaries=cast("Primaries | None", color_info_bag.get("primaries")),
+        transfer=cast("Transfer | None", color_info_bag.get("transfer")),
+        matrix=cast("Matrix | None", color_info_bag.get("matrix")),
+        range=cast("Range | None", color_info_bag.get("range")),
+    )
+
+
+_a_refused_claim_has_been_reported = False
+
+
+def _report_the_first_refused_claim(surface_id: str, refusal: BaseException) -> None:
+    """Say once, per process, that frames are arriving unprotected.
+
+    Once and not per frame: this is the per-frame path, and a helper's records
+    cross to the parent, so a refusal that persists would cost more in logging
+    than the claim it is reporting on. Silence would be worse than either — the
+    whole lifetime contract can be off with no other signal.
+    """
+    global _a_refused_claim_has_been_reported
+    if _a_refused_claim_has_been_reported:
+        return
+    _a_refused_claim_has_been_reported = True
+    warn(
+        "a frame could not claim its surface, so the producer may recycle it while this "
+        "processor is still holding the frame; frames are protected by pool depth alone "
+        "until this clears. Not reported again in this process.",
+        surface_id=surface_id,
+        refusal=str(refusal),
+    )
+
+
+def _claim_on_the_surface_a_frame_names(surface_id: str) -> "GpuSurfaceCheckOutLease | None":
+    """The claim a frame holds on its own pixels, or `None` when nothing
+    offered the means to take one.
+
+    Only a `read(port, into=…)` offers it, so a frame built from a dict you are
+    holding claims nothing — a hand-rolled bag may name no live surface at all.
+    """
+    gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
+    if gpu_limited_access is None:
+        return None
+    try:
+        return gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
+    except Exception as refusal:  # noqa: BLE001 — see below
+        # Deliberately every failure, not just the refusals this path is known
+        # to raise today: the claim crosses a socket, and whatever comes back
+        # from below it, none of it makes the delivered bag unreadable. An
+        # unclaimed frame falls back to the protection pool depth gives it,
+        # which is what an untyped read gets; raising here would turn a
+        # delivered frame into an exception at the read. Nothing is hidden by
+        # the breadth — the first one is reported.
+        _report_the_first_refused_claim(surface_id, refusal)
+        return None
 
 
 @dataclass(frozen=True)
@@ -109,13 +199,19 @@ class MasteringDisplay:
     min_luminance: int
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class VideoFrame:
     """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
 
     ``surface_id`` is the handoff contract; ``timestamp_ns`` (the machine's
     monotonic clock in nanoseconds, comparable across every process on the
     host) is the ordering primitive.
+
+    Read through ``ctx.inputs.read(port, into=VideoFrame)``, the frame also
+    holds its surface still: the producer cannot recycle those pixels while
+    this object lives, and letting it go releases them. There is nothing to
+    call, and holding a frame for longer costs the producer memory and then its
+    own frames — never another processor's cadence.
     """
 
     surface_id: str
@@ -128,19 +224,29 @@ class VideoFrame:
     mastering_display: MasteringDisplay | None = None
     texture_layout: int | None = None
 
-    @classmethod
-    def from_bag(cls, bag: Mapping[str, Any]) -> "VideoFrame":
-        """Construct from a bag dict, raising ValueError on missing or
-        mistyped keys — required and optional alike."""
-        try:
-            surface_id = bag["surface_id"]
-            width = bag["width"]
-            height = bag["height"]
-            timestamp_ns = bag["timestamp_ns"]
-        except KeyError as missing:
-            raise ValueError(
-                f"bag is not a video frame: missing key {missing.args[0]!r}"
-            ) from None
+    def __init__(
+        self,
+        surface_id: str,
+        width: int,
+        height: int,
+        timestamp_ns: int,
+        fps: "int | None" = None,
+        color_info: "ColorInfo | Mapping[str, Any] | None" = None,
+        content_light: "ContentLight | Mapping[str, Any] | None" = None,
+        mastering_display: "MasteringDisplay | Mapping[str, Any] | None" = None,
+        texture_layout: "int | None" = None,
+        **keys_this_cast_does_not_read: Any,
+    ) -> None:
+        """Validate, cast the nested metadata, and claim the surface.
+
+        Written out rather than generated because the bag is an open map: a
+        producer may carry keys this cast does not read, and the day one adds
+        a key must not be the day every `read(port, into=VideoFrame)` starts
+        raising — which would take the frame's lifetime protection with it.
+        Construction is the validation, so that spelling and `from_bag` are
+        one path rather than two that can drift.
+        """
+        del keys_this_cast_does_not_read
         if (
             not isinstance(surface_id, str)
             or not _is_plain_int(width)
@@ -151,37 +257,45 @@ class VideoFrame:
                 "bag is not a video frame: surface_id must be str and "
                 "width/height/timestamp_ns must be int"
             )
+        # `object.__setattr__` throughout because the frame is frozen: the
+        # generated `__setattr__` refuses, and freezing is what makes a
+        # delivered frame safe to hand around.
+        assign = object.__setattr__
+        assign(self, "surface_id", surface_id)
+        assign(self, "width", width)
+        assign(self, "height", height)
+        assign(self, "timestamp_ns", timestamp_ns)
+        assign(self, "fps", _require_int_or_none("fps", fps))
+        assign(self, "texture_layout", _require_int_or_none("texture_layout", texture_layout))
+        assign(self, "color_info", _color_info_or_none(color_info))
+        assign(
+            self,
+            "content_light",
+            _nested_or_none("content_light", ContentLight, content_light),
+        )
+        assign(
+            self,
+            "mastering_display",
+            _nested_or_none("mastering_display", MasteringDisplay, mastering_display),
+        )
+        # The frame's own field, and its whole lifetime protocol: this object
+        # going away is what releases the claim.
+        assign(
+            self,
+            "_check_out_lease_on_this_frames_surface",
+            _claim_on_the_surface_a_frame_names(surface_id),
+        )
 
-        color_info_bag = _require_mapping_or_none("color_info", bag.get("color_info"))
-        content_light_bag = _require_mapping_or_none("content_light", bag.get("content_light"))
-        mastering_display_bag = _require_mapping_or_none(
-            "mastering_display", bag.get("mastering_display")
-        )
-        return cls(
-            surface_id=surface_id,
-            width=width,
-            height=height,
-            timestamp_ns=timestamp_ns,
-            fps=_require_int_or_none("fps", bag.get("fps")),
-            color_info=(
-                ColorInfo(
-                    primaries=cast("Primaries | None", color_info_bag.get("primaries")),
-                    transfer=cast("Transfer | None", color_info_bag.get("transfer")),
-                    matrix=cast("Matrix | None", color_info_bag.get("matrix")),
-                    range=cast("Range | None", color_info_bag.get("range")),
-                )
-                if color_info_bag is not None
-                else None
-            ),
-            content_light=(
-                _cast_nested("content_light", ContentLight, content_light_bag)
-                if content_light_bag is not None
-                else None
-            ),
-            mastering_display=(
-                _cast_nested("mastering_display", MasteringDisplay, mastering_display_bag)
-                if mastering_display_bag is not None
-                else None
-            ),
-            texture_layout=_require_int_or_none("texture_layout", bag.get("texture_layout")),
-        )
+    @classmethod
+    def from_bag(cls, bag: Mapping[str, Any]) -> "VideoFrame":
+        """Construct from a bag dict, raising ValueError on missing or
+        mistyped keys — required and optional alike.
+
+        The same construction `read(port, into=VideoFrame)` performs, so the
+        two spellings cannot disagree; this one only names the missing key,
+        which keyword construction reports in Python's words.
+        """
+        missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
+        if missing:
+            raise ValueError(f"bag is not a video frame: missing key {missing[0]!r}")
+        return cls(**bag)

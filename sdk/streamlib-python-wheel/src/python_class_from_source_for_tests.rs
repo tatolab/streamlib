@@ -18,11 +18,22 @@ pub(crate) fn class_from_source<'py>(
     source: &str,
     class_name: &str,
 ) -> Bound<'py, PyAny> {
-    let namespace = PyDict::new(python);
+    class_from_source_in_namespace(python, source, class_name, &PyDict::new(python))
+}
+
+/// The same, in a namespace the caller has already populated — for a class
+/// whose body reaches for a name the wheel exports at module level, which a
+/// test cannot `import streamlib` to get.
+pub(crate) fn class_from_source_in_namespace<'py>(
+    python: Python<'py>,
+    source: &str,
+    class_name: &str,
+    namespace: &Bound<'py, PyDict>,
+) -> Bound<'py, PyAny> {
     python
         .run(
             &std::ffi::CString::new(source).unwrap(),
-            Some(&namespace),
+            Some(namespace),
             None,
         )
         .unwrap();
