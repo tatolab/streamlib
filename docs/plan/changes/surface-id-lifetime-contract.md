@@ -74,9 +74,13 @@ describe the same frame, and that frame is the one the bag delivered.
   > connection drop. ~~The consumer's host performs that checkout eagerly at bag
   > receipt, not when user code first touches the surface, so the guarantee runs
   > from delivery; the publish-to-checkout transit is protected by pool depth.~~
-  > (Ruled 2026-08-14 on #1866: the claim is taken at the typed cast and released
-  > when the frame object drops; publish-to-claim transit rides pool depth. The
-  > amended entry rides #1870.) The producer never waits on a consumer: the pool skips leased
+  > (Ruled 2026-08-14 on #1866, amended here.) The claim is taken at the typed cast
+  > — the moment a consumer names what it is holding — and released when that object
+  > drops; the read offers the constructing type the means to take one, on terms
+  > equally open to any authored class, and takes none for a consumer that reads the
+  > bag as a dict. Publish-to-claim transit rides pool depth, and so does an untyped
+  > read: the strictness dial is also the safety dial. The engine inspects no bag
+  > content anywhere. The producer never waits on a consumer: the pool skips leased
   > slots and grows to its cap; at cap the producer drops its own frame — a slow
   > consumer costs memory, then its own frames, never another processor's cadence. A
   > producer-internal transient (a frames-in-flight ring texture) never backs a
@@ -104,6 +108,22 @@ describe the same frame, and that frame is the one the bag delivered.
   below: the claim is taken at the typed cast, #1870)
   ~~(user-visible behavior unchanged — the handle the callback gets is already
   checked out)~~.
+
+- ADDED: a claim a holder can take without importing the memory —
+  `claim_surface_against_producer_reuse` on the GPU capability, answering with a
+  lease object whose drop is the release. The lease is bookkeeping over an id, so
+  the resolve path's Vulkan import is not owed by a holder that only needs the
+  frame to hold still; claims are counted, so a cast-claim and that holder's own
+  later `resolve_surface` coexist without either releasing the other. It is also
+  what makes the contract provable at all — CI declares no GPU runner, and the
+  import path needs a real device and a real DMA-BUF.
+- ADDED: the typed read's offer — for the length of one construction and no
+  longer, `gpu_limited_access_of_the_typed_read_in_progress()` answers with the
+  same capability `ctx.gpu_limited_access` is. That is how `read(port, into=T)`
+  hands a constructing type the means to claim without adding an argument every
+  target would have to accept. No type is marked, registered or privileged: the
+  shipped `VideoFrame` claims by calling it and keeping the lease in a field, and
+  any authored class gets identical behavior the same way.
 
   > ~~the host's reader thread checks out on arrival~~ — Corrected 2026-08-14 by
   > the #1866 implementation, verified at `origin/main` 53d5410f. No thread in the
