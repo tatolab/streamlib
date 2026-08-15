@@ -4,10 +4,17 @@
 """The optional typed cast for a video-frame bag.
 
 A link carries a self-describing bag (a dict); its keys are the contract and
-reading them directly is always enough. `VideoFrame.from_bag` is the opt-in
-strictness dial for consumers that want construction-time validation and
-attribute access instead of key lookups. Pixels never ride the bag — the
-frame references a GPU surface by `surface_id`, resolved out-of-band.
+reading them directly is always enough. Casting is the opt-in dial for
+consumers that want construction-time validation and attribute access instead
+of key lookups. Pixels never ride the bag — the frame references a GPU surface
+by `surface_id`, resolved out-of-band.
+
+Casting also buys the frame's own lifetime: read as a `VideoFrame`, the frame
+babysits its buffer, and the producer cannot recycle the pixels under a frame
+you are still holding. Nothing here is privileged — the class asks the read in
+progress for the capability and keeps what it gets in a field, which any class
+can do, and which is why reading the bag as a dict stays first-class and
+unpenalized.
 """
 
 from __future__ import annotations
@@ -16,6 +23,11 @@ import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
+
+from ._engine import (
+    GpuSurfaceCheckOutLease,
+    gpu_limited_access_of_the_typed_read_in_progress,
+)
 
 __all__ = [
     "ColorInfo",
@@ -53,8 +65,8 @@ def _require_int_or_none(key: str, value: Any) -> "int | None":
     return value
 
 
-def _require_mapping_or_none(key: str, value: Any) -> "Mapping[str, Any] | None":
-    if value is not None and not isinstance(value, Mapping):
+def _require_mapping(key: str, value: Any) -> "Mapping[str, Any]":
+    if not isinstance(value, Mapping):
         raise ValueError(f"bag is not a video frame: {key!r} must be a mapping or absent")
     return value
 
@@ -69,6 +81,52 @@ def _cast_nested(
         raise ValueError(
             f"bag is not a video frame: {key!r} is malformed ({construction_error})"
         ) from None
+
+
+def _nested_or_none(
+    key: str, nested_type: "type[_NestedCast]", value: Any
+) -> "_NestedCast | None":
+    """Nested metadata as its own type, whether it arrived already cast or as
+    the bag's nested map."""
+    if value is None or isinstance(value, nested_type):
+        return value
+    return _cast_nested(key, nested_type, _require_mapping(key, value))
+
+
+def _color_info_or_none(value: Any) -> "ColorInfo | None":
+    """`ColorInfo` reads field by field rather than by construction: every
+    field is optional and a bag may carry a key this version does not know,
+    where the H.273 tuple's absent-means-unspecified rule still applies."""
+    if value is None or isinstance(value, ColorInfo):
+        return value
+    color_info_bag = _require_mapping("color_info", value)
+    return ColorInfo(
+        primaries=cast("Primaries | None", color_info_bag.get("primaries")),
+        transfer=cast("Transfer | None", color_info_bag.get("transfer")),
+        matrix=cast("Matrix | None", color_info_bag.get("matrix")),
+        range=cast("Range | None", color_info_bag.get("range")),
+    )
+
+
+def _claim_on_the_surface_a_frame_names(surface_id: str) -> "GpuSurfaceCheckOutLease | None":
+    """The claim a frame holds on its own pixels, or `None` when nothing
+    offered the means to take one.
+
+    Only a `read(port, into=…)` offers it, so a frame built from a dict you are
+    holding claims nothing — a hand-rolled bag may name no live surface at all.
+    """
+    gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
+    if gpu_limited_access is None:
+        return None
+    try:
+        return gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
+    except RuntimeError:
+        # Every way this fails means the frame cannot be pinned — its surface
+        # is already gone, or this helper has no route to the engine — and none
+        # of them make the bag unreadable. An unclaimed frame falls back to the
+        # protection pool depth gives it, which is what an untyped read gets;
+        # raising here would turn a delivered frame into an exception.
+        return None
 
 
 @dataclass(frozen=True)
@@ -116,6 +174,12 @@ class VideoFrame:
     ``surface_id`` is the handoff contract; ``timestamp_ns`` (the machine's
     monotonic clock in nanoseconds, comparable across every process on the
     host) is the ordering primitive.
+
+    Read through ``ctx.inputs.read(port, into=VideoFrame)``, the frame also
+    holds its surface still: the producer cannot recycle those pixels while
+    this object lives, and letting it go releases them. There is nothing to
+    call, and holding a frame for longer costs the producer memory and then its
+    own frames — never another processor's cadence.
     """
 
     surface_id: str
@@ -128,10 +192,56 @@ class VideoFrame:
     mastering_display: MasteringDisplay | None = None
     texture_layout: int | None = None
 
+    def __post_init__(self) -> None:
+        """Validate, cast the nested metadata, and claim the surface.
+
+        Construction is the validation, so `VideoFrame(**bag)` — what
+        `read(port, into=VideoFrame)` does — and `from_bag` agree on what a
+        frame is rather than one being the stricter spelling.
+        """
+        if (
+            not isinstance(self.surface_id, str)
+            or not _is_plain_int(self.width)
+            or not _is_plain_int(self.height)
+            or not _is_plain_int(self.timestamp_ns)
+        ):
+            raise ValueError(
+                "bag is not a video frame: surface_id must be str and "
+                "width/height/timestamp_ns must be int"
+            )
+        object.__setattr__(self, "fps", _require_int_or_none("fps", self.fps))
+        object.__setattr__(
+            self,
+            "texture_layout",
+            _require_int_or_none("texture_layout", self.texture_layout),
+        )
+        object.__setattr__(self, "color_info", _color_info_or_none(self.color_info))
+        object.__setattr__(
+            self,
+            "content_light",
+            _nested_or_none("content_light", ContentLight, self.content_light),
+        )
+        object.__setattr__(
+            self,
+            "mastering_display",
+            _nested_or_none("mastering_display", MasteringDisplay, self.mastering_display),
+        )
+        # The frame's own field, and its whole lifetime protocol: this object
+        # going away is what releases the claim.
+        object.__setattr__(
+            self,
+            "_check_out_lease_on_this_frames_surface",
+            _claim_on_the_surface_a_frame_names(self.surface_id),
+        )
+
     @classmethod
     def from_bag(cls, bag: Mapping[str, Any]) -> "VideoFrame":
         """Construct from a bag dict, raising ValueError on missing or
-        mistyped keys — required and optional alike."""
+        mistyped keys — required and optional alike.
+
+        Keys a frame does not declare are ignored: the bag is an open map, and
+        a producer may carry more than this cast reads.
+        """
         try:
             surface_id = bag["surface_id"]
             width = bag["width"]
@@ -141,47 +251,14 @@ class VideoFrame:
             raise ValueError(
                 f"bag is not a video frame: missing key {missing.args[0]!r}"
             ) from None
-        if (
-            not isinstance(surface_id, str)
-            or not _is_plain_int(width)
-            or not _is_plain_int(height)
-            or not _is_plain_int(timestamp_ns)
-        ):
-            raise ValueError(
-                "bag is not a video frame: surface_id must be str and "
-                "width/height/timestamp_ns must be int"
-            )
-
-        color_info_bag = _require_mapping_or_none("color_info", bag.get("color_info"))
-        content_light_bag = _require_mapping_or_none("content_light", bag.get("content_light"))
-        mastering_display_bag = _require_mapping_or_none(
-            "mastering_display", bag.get("mastering_display")
-        )
         return cls(
             surface_id=surface_id,
             width=width,
             height=height,
             timestamp_ns=timestamp_ns,
-            fps=_require_int_or_none("fps", bag.get("fps")),
-            color_info=(
-                ColorInfo(
-                    primaries=cast("Primaries | None", color_info_bag.get("primaries")),
-                    transfer=cast("Transfer | None", color_info_bag.get("transfer")),
-                    matrix=cast("Matrix | None", color_info_bag.get("matrix")),
-                    range=cast("Range | None", color_info_bag.get("range")),
-                )
-                if color_info_bag is not None
-                else None
-            ),
-            content_light=(
-                _cast_nested("content_light", ContentLight, content_light_bag)
-                if content_light_bag is not None
-                else None
-            ),
-            mastering_display=(
-                _cast_nested("mastering_display", MasteringDisplay, mastering_display_bag)
-                if mastering_display_bag is not None
-                else None
-            ),
-            texture_layout=_require_int_or_none("texture_layout", bag.get("texture_layout")),
+            fps=bag.get("fps"),
+            color_info=bag.get("color_info"),
+            content_light=bag.get("content_light"),
+            mastering_display=bag.get("mastering_display"),
+            texture_layout=bag.get("texture_layout"),
         )

@@ -27,6 +27,7 @@ __all__ = [
     "AddedProcessor",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
+    "GpuSurfaceCheckOutLease",
     "GpuSurfaceHandle",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
@@ -45,6 +46,7 @@ __all__ = [
     "await_test_harness_bag",
     "close_test_harness_channel",
     "feed_test_harness_bag",
+    "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
     "monotonic_now_ns",
     "open_test_harness_channel",
@@ -369,6 +371,17 @@ class GpuContextLimitedAccess:
         """Refuses from a Python processor: a pool texture is not registered for
         cross-process import. `acquire_pixel_buffer` is the CPU-reachable path."""
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
+    def claim_surface_against_producer_reuse(
+        self, surface_id: str
+    ) -> GpuSurfaceCheckOutLease:
+        """Claim a published surface until the returned lease is dropped.
+
+        The cheap half of `resolve_surface`: it holds the frame still without
+        importing its memory, so an object that wants only the pixels it was
+        handed to stay put can keep the lease in a field and let its own
+        lifetime do the releasing.
+        """
+
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
         """Refuses: the callback's one atomic privileged scope cannot span a
         process boundary. The operations it wrapped are methods on this
@@ -488,6 +501,20 @@ class GpuSurfaceHandle:
         """
 
 @final
+class GpuSurfaceCheckOutLease:
+    """A claim on a published surface, held for as long as this object is.
+
+    While a claim is outstanding the pool never rehands that surface's slot to
+    its producer, and dropping this object is the release — there is nothing to
+    call. Claims are counted, so holding one and resolving the same surface for
+    its pixels are independent.
+    """
+
+    @property
+    def surface_id(self) -> str:
+        """The surface this claim holds still."""
+
+@final
 class MonotonicTimer:
     """Drift-free periodic timer backed by `timerfd_create(CLOCK_MONOTONIC)`.
 
@@ -515,6 +542,17 @@ class MonotonicTimer:
         exception: BaseException | None = ...,
         traceback: TracebackType | None = ...,
     ) -> Literal[False]: ...
+
+def gpu_limited_access_of_the_typed_read_in_progress() -> GpuContextLimitedAccess | None:
+    """The GPU capability of the `read(port, into=T)` currently constructing an
+    object, or `None` when nothing is being read into a type.
+
+    The same capability as `ctx.gpu_limited_access`, offered so a type can do
+    per-frame work at construction that needs the engine — claiming the frame's
+    surface against producer reuse is what the shipped `VideoFrame` does with
+    it. Any class reachable through `into=` may call this; there is no
+    registration, no marker and no privileged type.
+    """
 
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
