@@ -576,8 +576,8 @@ mod tests {
             );
 
             let bag = bag_with_one_name(python, "cat");
-            let read =
-                cast_decoded_bag_into_read_target("detections", bag.clone(), &target, None).unwrap();
+            let read = cast_decoded_bag_into_read_target("detections", bag.clone(), &target, None)
+                .unwrap();
 
             assert!(read.is(&bag), "the free cast must not copy the bag");
         });
@@ -622,8 +622,9 @@ mod tests {
             );
             let bag = PyDict::new(python);
             bag.set_item("label", "cat").unwrap();
-            let refusal = cast_decoded_bag_into_read_target("detections", bag.into_any(), &target, None)
-                .unwrap_err();
+            let refusal =
+                cast_decoded_bag_into_read_target("detections", bag.into_any(), &target, None)
+                    .unwrap_err();
             assert!(
                 refusal.to_string().contains("label"),
                 "the constructor's own refusal must reach the author: {refusal}"
@@ -644,8 +645,8 @@ mod tests {
                 "Detection",
             );
             let not_a_bag = PyList::new(python, [1i64, 2, 3]).unwrap().into_any();
-            let refusal =
-                cast_decoded_bag_into_read_target("detections", not_a_bag, &target, None).unwrap_err();
+            let refusal = cast_decoded_bag_into_read_target("detections", not_a_bag, &target, None)
+                .unwrap_err();
             assert!(
                 refusal.to_string().contains("detections")
                     && refusal.to_string().contains("named map"),

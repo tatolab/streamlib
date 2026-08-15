@@ -34,11 +34,11 @@ use crate::python_gpu_surface_pixel_exchange::{
     device_dlpack_capsule, imported_device_for, prepare_device_export,
     publish_device_write_back_to_surface,
 };
+use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
     HelperCheckedOutPixelSurface, HelperSurfaceCheckOutLeaseDebt,
 };
-use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
@@ -1418,7 +1418,11 @@ class FrameSomebodyElseWrote:
                 .call_method(
                     "read_from_input_port",
                     (INPUT_PORT,),
-                    Some(&[("into", frame_class(python))].into_py_dict(python).unwrap()),
+                    Some(
+                        &[("into", frame_class(python))]
+                            .into_py_dict(python)
+                            .unwrap(),
+                    ),
                 )
                 .expect("the read");
             assert!(

@@ -71,8 +71,9 @@ impl SurfaceShareUnderTest {
         backing.set_len(4096).expect("size the backing memfd");
         let backing_fd = backing.into_raw_fd();
 
-        let publisher = streamlib_surface_client::connect_to_surface_share_socket(&self.socket_path)
-            .expect("a publisher connection");
+        let publisher =
+            streamlib_surface_client::connect_to_surface_share_socket(&self.socket_path)
+                .expect("a publisher connection");
         let (response, _no_reply_fds) = streamlib_surface_client::send_request_with_fds(
             &publisher,
             &serde_json::json!({
