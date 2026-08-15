@@ -111,7 +111,15 @@ describe the same frame, and that frame is the one the bag delivered.
 
 - ADDED: a claim a holder can take without importing the memory —
   `claim_surface_against_producer_reuse` on the GPU capability, answering with a
-  lease object whose drop is the release. The lease is bookkeeping over an id, so
+  lease object whose drop is the release.
+
+  > ~~the frame holds the resolved surface handle in a private field~~ (#1870 round-2
+  > comment) — Narrowed 2026-08-15 by the owner ruling recorded on #1870: the frame
+  > holds a *claim*, not the resolved handle. A resolve costs a Vulkan import per typed
+  > read, and is unprovable without a GPU — CI declares no GPU runner and the #1869
+  > harness publishes a memfd, which no import accepts. The rest of that comment stands:
+  > the destructor is field ownership, and the pattern is open.
+ The lease is bookkeeping over an id, so
   the resolve path's Vulkan import is not owed by a holder that only needs the
   frame to hold still; claims are counted, so a cast-claim and that holder's own
   later `resolve_surface` coexist without either releasing the other. It is also
