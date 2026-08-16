@@ -662,6 +662,14 @@ pub struct GpuContext {
     /// blobs, never evicted, so a kernel survives its registering helper.
     #[cfg(target_os = "linux")]
     compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
+    /// The engine's GLSL compiler and the SPIR-V it has already produced.
+    ///
+    /// GLSL text is the kernel source contract, so compilation happens here at
+    /// kernel construction rather than in a build step the author has to own.
+    /// Sits in front of `compute_kernel_cache`: this one spares the
+    /// compilation, that one spares the pipeline.
+    #[cfg(target_os = "linux")]
+    glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
     /// Host-side bridge for the graphics-kernel escalate ops
     /// (`register_graphics_kernel`, `run_graphics_draw`). Wired by
     /// application code that exposes the host's
@@ -705,6 +713,10 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
+            glsl_shader_source_compiler: Arc::new(
+                crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
+            ),
+            #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
@@ -731,6 +743,10 @@ impl GpuContext {
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            glsl_shader_source_compiler: Arc::new(
+                crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
+            ),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -2494,6 +2510,34 @@ impl GpuContext {
     /// Returns the cache key as the kernel id: a caller re-registering the same
     /// kernel gets the same id back, and pays no compilation for it.
     #[cfg(target_os = "linux")]
+    /// Compile GLSL kernel source to SPIR-V, reusing what an identical earlier
+    /// request compiled.
+    ///
+    /// `label` is what the compiler's diagnostics name the source as, so it is
+    /// the prefix an author sees on a syntax error.
+    #[cfg(target_os = "linux")]
+    pub fn compile_glsl_shader_source_to_spirv(
+        &self,
+        source: &str,
+        stage: crate::core::rhi::ShaderPipelineStage,
+        entry_point: &str,
+        label: &str,
+    ) -> Result<Arc<Vec<u8>>> {
+        self.glsl_shader_source_compiler
+            .compile_or_reuse(source, stage, entry_point, label)
+    }
+
+    /// How many times this context has actually run the GLSL compiler.
+    ///
+    /// What a cache-hit assertion counts; elapsed time cannot stand in for it,
+    /// since re-creating a kernel is free of compilation while still
+    /// allocating handles.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn glsl_shader_compiler_invocation_count(&self) -> u64 {
+        self.glsl_shader_source_compiler.invocation_count()
+    }
+
     pub fn create_or_reuse_compute_kernel(
         &self,
         spv: &[u8],
@@ -3874,6 +3918,28 @@ impl GpuContextFullAccess {
     /// Check out a surface by ID.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         self.host_inner().check_out_surface(surface_id)
+    }
+
+    /// Compile GLSL kernel source to SPIR-V, reusing what an identical earlier
+    /// request compiled. Reachable only inside `escalate(|full| ...)` since it
+    /// requires `FullAccess`.
+    #[cfg(target_os = "linux")]
+    pub fn compile_glsl_shader_source_to_spirv(
+        &self,
+        source: &str,
+        stage: crate::core::rhi::ShaderPipelineStage,
+        entry_point: &str,
+        label: &str,
+    ) -> Result<Arc<Vec<u8>>> {
+        self.host_inner()
+            .compile_glsl_shader_source_to_spirv(source, stage, entry_point, label)
+    }
+
+    /// How many times the host has actually run the GLSL compiler.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn glsl_shader_compiler_invocation_count(&self) -> u64 {
+        self.host_inner().glsl_shader_compiler_invocation_count()
     }
 
     /// Build a compute kernel, reusing an identical one this context already

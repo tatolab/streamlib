@@ -8,9 +8,8 @@
 //! toolchain beyond the installed wheel, for every kernel kind.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sha2::{Digest, Sha256};
 
@@ -181,8 +180,11 @@ impl GlslShaderCompilationCacheKey {
 /// same source for the same stage — costs no compilation. Entries are never
 /// evicted: they are bounded by the distinct sources a graph's processors
 /// author, and a kernel outlives the helper that registered it.
+/// The compiler is built on first use rather than at construction so a
+/// `GpuContext` that never compiles a kernel pays nothing for one, and so
+/// context construction stays infallible.
 pub struct GlslShaderSourceToSpirvCompiler {
-    compiler: shaderc::Compiler,
+    compiler: OnceLock<shaderc::Compiler>,
     compiled_spirv_by_key: Mutex<HashMap<GlslShaderCompilationCacheKey, Arc<Vec<u8>>>>,
     invocation_count: AtomicU64,
 }
@@ -197,16 +199,36 @@ impl std::fmt::Debug for GlslShaderSourceToSpirvCompiler {
     }
 }
 
+impl Default for GlslShaderSourceToSpirvCompiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GlslShaderSourceToSpirvCompiler {
-    pub fn new() -> Result<Self> {
-        let compiler = shaderc::Compiler::new().map_err(|e| {
-            Error::GpuError(format!("{VENDORED_GLSL_COMPILER_VERSION} would not start: {e}"))
-        })?;
-        Ok(Self {
-            compiler,
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            compiler: OnceLock::new(),
             compiled_spirv_by_key: Mutex::new(HashMap::new()),
             invocation_count: AtomicU64::new(0),
-        })
+        }
+    }
+
+    /// The vendored compiler, started on first use.
+    ///
+    /// A lost initialization race drops the redundant compiler; both are
+    /// equivalent, so which one wins does not matter.
+    fn compiler(&self) -> Result<&shaderc::Compiler> {
+        if let Some(started) = self.compiler.get() {
+            return Ok(started);
+        }
+        let started = shaderc::Compiler::new().map_err(|e| {
+            Error::GpuError(format!(
+                "{VENDORED_GLSL_COMPILER_VERSION} would not start: {e}"
+            ))
+        })?;
+        Ok(self.compiler.get_or_init(|| started))
     }
 
     /// How many times the compiler itself has run.
@@ -290,9 +312,9 @@ impl GlslShaderSourceToSpirvCompiler {
         // module that lost them, so setting one here would refuse every kernel
         // the engine compiled.
 
+        let compiler = self.compiler()?;
         self.invocation_count.fetch_add(1, Ordering::Relaxed);
-        let compiled = self
-            .compiler
+        let compiled = compiler
             .compile_into_spirv(source, stage.shaderc_kind(), label, entry_point, Some(&options))
             .map_err(|e| {
                 Error::GpuError(format!(
@@ -328,7 +350,7 @@ void main() {
 ";
 
     fn compiler() -> GlslShaderSourceToSpirvCompiler {
-        GlslShaderSourceToSpirvCompiler::new().expect("the vendored compiler must start")
+        GlslShaderSourceToSpirvCompiler::new()
     }
 
     fn compile(

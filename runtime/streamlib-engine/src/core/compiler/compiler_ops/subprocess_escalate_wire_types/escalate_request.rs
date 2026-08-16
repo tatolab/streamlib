@@ -422,8 +422,31 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// Compiled SPIR-V bytecode for the compute shader, encoded as lowercase
-    /// hex (no `0x` prefix, no whitespace). The host parses the bytes back,
+    /// GLSL is the kernel source contract: the engine compiles this text at
+    /// kernel construction, so a kernel author needs no shader toolchain
+    /// beyond the installed wheel.
+    /// Mutually exclusive with `spv_hex` — exactly one of the two is supplied.
+    /// Absent as the empty string.
+    #[serde(default)]
+    pub(crate) source: String,
+
+    /// Which stage `source` compiles for. Empty is normalized to `compute`,
+    /// and anything else is refused: this op registers a compute kernel, and a
+    /// stage that disagrees with the op is a caller mistake, not a variant.
+    /// Carried because the stage is part of the compilation cache key.
+    #[serde(default)]
+    pub(crate) stage: String,
+
+    /// Entry-point name. Empty string is normalized to `"main"` host-side. A
+    /// GLSL `source` supports no other value — glslang will not rename an
+    /// entry point — so a non-`main` name is meaningful only with `spv_hex`.
+    #[serde(default)]
+    pub(crate) entry_point: String,
+
+    /// Pre-compiled SPIR-V bytecode for the compute shader, encoded as
+    /// lowercase hex (no `0x` prefix, no whitespace). The escape hatch for a
+    /// caller that already has a module; mutually exclusive with `source`.
+    /// The host parses the bytes back,
     /// derives the binding shape from `rspirv-reflect`, and constructs a
     /// `VulkanComputeKernel` via `GpuContext::create_compute_kernel`.
     /// Re-registering an identical kernel is a host-side cache hit — no
@@ -434,7 +457,10 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// registered ML kernels.
     ///
     /// The blob must retain its `OpName` decorations (`glslc -g`): bindings
-    /// resolve by name, so a stripped blob is refused at registration.
+    /// resolve by name, so a stripped blob is refused at registration. What
+    /// the engine compiles from `source` keeps them by construction — it never
+    /// optimizes.
+    #[serde(default)]
     pub(crate) spv_hex: String,
 }
 
@@ -995,9 +1021,19 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// `"main"` host-side.
     pub(crate) fragment_entry_point: String,
 
-    /// Compiled SPIR-V bytecode for the fragment stage, encoded as lowercase
-    /// hex. Today exactly one fragment stage is required (matching the host
-    /// kernel's v1 contract).
+    /// GLSL is the kernel source contract: the engine compiles this text at
+    /// kernel construction, so a kernel author needs no shader toolchain
+    /// beyond the installed wheel.
+    /// Compiles for the fragment stage. Mutually exclusive with
+    /// `fragment_spv_hex` — exactly one of the two is supplied.
+    #[serde(default)]
+    pub(crate) fragment_source: String,
+
+    /// Pre-compiled SPIR-V bytecode for the fragment stage, encoded as
+    /// lowercase hex. The escape hatch, mutually exclusive with
+    /// `fragment_source`. Today exactly one fragment stage is required
+    /// (matching the host kernel's v1 contract).
+    #[serde(default)]
     pub(crate) fragment_spv_hex: String,
 
     /// Human-readable label used in error messages and tracing on the host.
@@ -1025,10 +1061,19 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// `"main"` host-side.
     pub(crate) vertex_entry_point: String,
 
-    /// Compiled SPIR-V bytecode for the vertex stage, encoded as lowercase
-    /// hex (no `0x` prefix, no whitespace). Today exactly one vertex stage
+    /// GLSL is the kernel source contract: the engine compiles this text at
+    /// kernel construction, so a kernel author needs no shader toolchain
+    /// beyond the installed wheel. Compiles for the vertex stage. Mutually
+    /// exclusive with `vertex_spv_hex` — exactly one of the two is supplied.
+    #[serde(default)]
+    pub(crate) vertex_source: String,
+
+    /// Pre-compiled SPIR-V bytecode for the vertex stage, encoded as lowercase
+    /// hex (no `0x` prefix, no whitespace). The escape hatch, mutually
+    /// exclusive with `vertex_source`. Today exactly one vertex stage
     /// is required (the host kernel rejects zero or multiple vertex stages).
     /// Geometry / tessellation / mesh / task stages are not yet supported.
+    #[serde(default)]
     pub(crate) vertex_spv_hex: String,
 }
 
@@ -1145,8 +1190,18 @@ pub(crate) struct EscalateRequestRegisterRayTracingKernelStage {
     /// Entry-point name. Empty string is normalized to `"main"` host-side.
     pub(crate) entry_point: String,
 
-    /// Compiled SPIR-V bytecode for the stage, lowercase hex (no `0x` prefix,
-    /// no whitespace).
+    /// GLSL is the kernel source contract: the engine compiles this text at
+    /// kernel construction, so a kernel author needs no shader toolchain
+    /// beyond the installed wheel.
+    /// Compiles for this entry's `stage`. Mutually exclusive with `spv_hex` —
+    /// exactly one of the two is supplied.
+    #[serde(default)]
+    pub(crate) source: String,
+
+    /// Pre-compiled SPIR-V bytecode for the stage, lowercase hex (no `0x`
+    /// prefix, no whitespace). The escape hatch, mutually exclusive with
+    /// `source`.
+    #[serde(default)]
     pub(crate) spv_hex: String,
 
     /// Which RT stage this SPIR-V blob fills.
