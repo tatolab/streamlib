@@ -237,7 +237,8 @@ class VideoFrame:
         texture_layout: "int | None" = None,
         **keys_this_cast_does_not_read: Any,
     ) -> None:
-        """Validate, cast the nested metadata, and claim the surface.
+        """Validate, cast the nested metadata, and claim the surface when a
+        read is offering the claim.
 
         Written out rather than generated because the bag is an open map: a
         producer may carry keys this cast does not read, and the day one adds
@@ -291,9 +292,27 @@ class VideoFrame:
         """Construct from a bag dict, raising ValueError on missing or
         mistyped keys — required and optional alike.
 
-        The same construction `read(port, into=VideoFrame)` performs, so the
-        two spellings cannot disagree; this one only names the missing key,
-        which keyword construction reports in Python's words.
+        The same *validation* `read(port, into=VideoFrame)` performs, so the
+        two spellings cannot disagree about what a valid frame is; this one
+        only names the missing key, which keyword construction reports in
+        Python's words.
+
+        They do differ in one respect, and it is the frame's lifetime. The
+        claim on the surface follows the *read*, not the spelling: it is
+        offered for the duration of a `read(port, into=…)` construction and
+        withdrawn the moment that returns. So calling this on a bag you are
+        already holding takes no claim, and its pixels last only as long as
+        pool depth gives them — the same protection an untyped read gets.
+        Called from inside a type that a typed read is constructing, it takes
+        one like any other frame built under that offer; the offer is open to
+        every class the read reaches, with no registration and no privileged
+        type.
+
+        The unclaimed case is a choice, not a lapse — a hand-rolled bag may
+        name no live surface at all. To hold a frame past the producer's ring,
+        read it with `into=VideoFrame`, or take the claim yourself through
+        `gpu_limited_access_of_the_typed_read_in_progress()` in your own type's
+        constructor.
         """
         missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
         if missing:

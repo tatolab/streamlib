@@ -103,6 +103,36 @@ def test_a_frame_built_under_an_offer_claims_the_surface_it_names(offered):
     assert getattr(frame, CLAIM_FIELD).surface_id == "surface-7"
 
 
+def test_from_bag_claims_when_a_typed_read_is_the_one_constructing(offered):
+    """The claim follows the read, not the spelling.
+
+    A type reached through `read(port, into=MyType)` may build a `VideoFrame`
+    from a nested bag inside its own constructor, and that frame is as much a
+    delivered frame as one the read built directly — the offer is open for the
+    whole construction, to every class it reaches. Documenting `from_bag` as
+    unconditionally claimless would be wrong here, and would tell an author
+    composing types that their nested frames are unprotected when they are not.
+    """
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+
+    class FrameHolderBuiltByTheRead:
+        def __init__(self, **bag: object) -> None:
+            self.frame = VideoFrame.from_bag(bag)
+
+    holder = FrameHolderBuiltByTheRead(**FRAME_BAG)
+
+    assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
+    assert getattr(holder.frame, CLAIM_FIELD).surface_id == "surface-7"
+
+
+def test_from_bag_outside_any_read_claims_nothing():
+    """The other half, with no offer standing: the same call takes no claim,
+    which is what an author building a bag by hand gets."""
+    frame = VideoFrame.from_bag(FRAME_BAG)
+
+    assert getattr(frame, CLAIM_FIELD) is None
+
+
 def test_the_claim_goes_away_with_the_frame_and_nothing_is_called(offered):
     offered(GpuLimitedAccessStandIn())
 
