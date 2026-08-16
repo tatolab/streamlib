@@ -369,7 +369,9 @@ impl PooledTextureHandle {
         self.texture.iosurface_id()
     }
 
-    /// Get the platform-native sharing handle for this texture.
+    /// Get the platform-native sharing handle for this texture — on Linux
+    /// the fd's ownership transfers to the caller, per
+    /// [`Texture::native_handle`].
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
         self.texture.native_handle()
     }

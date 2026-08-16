@@ -211,9 +211,6 @@ pub struct HostVulkanTexture {
     /// `GrVkAlloc.fSize`.
     #[cfg(target_os = "linux")]
     imported_memory_size: vk::DeviceSize,
-    /// Cached DMA-BUF fd to avoid leaking a new fd on each export call.
-    #[cfg(target_os = "linux")]
-    cached_dma_buf_fd: OnceLock<std::os::unix::io::RawFd>,
     /// Lazy-cached image view for this texture.
     cached_image_view: OnceLock<vk::ImageView>,
     /// Whether this texture was imported from IOSurface (no memory to free).
@@ -316,8 +313,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -381,8 +376,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -525,7 +518,6 @@ impl HostVulkanTexture {
             allocation: Some(allocation),
             imported_memory: None,
             imported_memory_size: 0,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
@@ -676,7 +668,6 @@ impl HostVulkanTexture {
             allocation: Some(allocation),
             imported_memory: None,
             imported_memory_size: 0,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
@@ -785,7 +776,6 @@ impl HostVulkanTexture {
             allocation: Some(allocation),
             imported_memory: None,
             imported_memory_size: 0,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
@@ -893,8 +883,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -1235,11 +1223,13 @@ impl HostVulkanTexture {
     }
 
     /// Export the texture's memory as a DMA-BUF file descriptor.
+    ///
+    /// Each call returns a fresh kernel fd (the driver dups internally) —
+    /// the caller owns it and is responsible for closing it (or for
+    /// transferring ownership via SCM_RIGHTS / an external-memory import,
+    /// both of which `dup` again on receipt). The texture keeps no copy and
+    /// will never close it.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
-        if let Some(&fd) = self.cached_dma_buf_fd.get() {
-            return Ok(fd);
-        }
-
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
             Error::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
         })?;
@@ -1262,12 +1252,8 @@ impl HostVulkanTexture {
             .build();
 
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
-        let fd = unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
-            .map(|r| r)
-            .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
-
-        let _ = self.cached_dma_buf_fd.set(fd);
-        Ok(fd)
+        unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
+            .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))
     }
 
     /// Subprocess-side import of a render-target DMA-BUF image.
@@ -1419,7 +1405,6 @@ impl HostVulkanTexture {
             allocation: None,
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
@@ -1503,7 +1488,6 @@ impl HostVulkanTexture {
             allocation: None,
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
@@ -1530,8 +1514,6 @@ impl Clone for HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -1555,11 +1537,6 @@ impl Drop for HostVulkanTexture {
             if let Some(vk_dev) = &self.vulkan_device {
                 unsafe { vk_dev.device().destroy_image_view(view, None) };
             }
-        }
-
-        #[cfg(target_os = "linux")]
-        if let Some(&fd) = self.cached_dma_buf_fd.get() {
-            unsafe { libc::close(fd) };
         }
 
         if self.imported_from_iosurface {
@@ -1777,7 +1754,120 @@ mod tests {
         assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
 
         println!("DMA-BUF exported: fd={fd}");
-        // fd is closed by HostVulkanTexture::drop via cached_dma_buf_fd
+        unsafe { libc::close(fd) };
+    }
+
+    /// A DMA-BUF-exportable texture on the rig's device, or `None` when
+    /// there is no Vulkan device to build one on.
+    #[cfg(target_os = "linux")]
+    fn dma_buf_exportable_texture_or_skip() -> Option<HostVulkanTexture> {
+        let device = match HostVulkanDevice::new() {
+            Ok(device) => device,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return None;
+            }
+        };
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
+        Some(HostVulkanTexture::new(&device, &desc).expect("texture creation failed"))
+    }
+
+    /// Every DMA-BUF export mints its own fd and surrenders it — the rule
+    /// the OPAQUE_FD exporters already follow. A memoized fd hands two
+    /// owners the same descriptor: the caller that closes after its
+    /// hand-off, and the texture that closes again at drop (#1880).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn every_dma_buf_export_mints_a_fresh_fd_the_caller_owns() {
+        let Some(texture) = dma_buf_exportable_texture_or_skip() else {
+            return;
+        };
+
+        let first_export = texture
+            .export_dma_buf_fd()
+            .expect("first DMA-BUF export failed");
+        let second_export = texture
+            .export_dma_buf_fd()
+            .expect("second DMA-BUF export failed");
+        assert_ne!(
+            first_export, second_export,
+            "each export must mint its own fd; the same number twice is one \
+             descriptor with two owners"
+        );
+
+        drop(texture);
+
+        for exported_fd in [first_export, second_export] {
+            let survived = unsafe { libc::fcntl(exported_fd, libc::F_GETFD) } != -1;
+            if survived {
+                unsafe { libc::close(exported_fd) };
+            }
+            assert!(
+                survived,
+                "fd {exported_fd} was closed by the texture that exported it; an \
+                 exporter surrenders every fd it mints"
+            );
+        }
+    }
+
+    /// The #1880 teardown corruption, reproduced without the wire: the
+    /// registration path closes the fd it was handed, an unrelated owner
+    /// lands on that descriptor number, and the texture's own drop closes
+    /// it a second time — out from under whoever holds it now.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn dropping_a_texture_never_closes_an_fd_its_export_surrendered() {
+        let Some(texture) = dma_buf_exportable_texture_or_skip() else {
+            return;
+        };
+
+        let exported_fd = texture.export_dma_buf_fd().expect("DMA-BUF export failed");
+
+        // Opened while `exported_fd` is still held, so the kernel's
+        // lowest-free rule cannot hand back the same number.
+        let unrelated_owner_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(
+            unrelated_owner_fd >= 0,
+            "could not open the unrelated owner"
+        );
+        assert_ne!(
+            unrelated_owner_fd, exported_fd,
+            "the unrelated owner must be a descriptor of its own"
+        );
+
+        // One `dup2` is both halves of the hand-off: it closes `exported_fd`
+        // exactly as the receiver of an SCM_RIGHTS send does, and seats the
+        // unrelated owner on that number atomically — no window in which
+        // another thread could claim it.
+        assert_eq!(
+            unsafe { libc::dup2(unrelated_owner_fd, exported_fd) },
+            exported_fd,
+            "could not seat an unrelated owner on the surrendered number"
+        );
+
+        drop(texture);
+
+        let survived = unsafe { libc::fcntl(exported_fd, libc::F_GETFD) } != -1;
+        unsafe {
+            if survived {
+                libc::close(exported_fd);
+            }
+            libc::close(unrelated_owner_fd);
+        }
+        assert!(
+            survived,
+            "the dropped texture closed fd {exported_fd}, which by then belonged to \
+             an unrelated owner — the double-close that corrupts bystander \
+             subsystems at teardown"
+        );
     }
 
     #[test]

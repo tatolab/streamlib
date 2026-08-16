@@ -36,11 +36,12 @@ pub enum NativeTextureHandle {
     /// Linux: DMA-BUF file descriptor for GPU memory sharing.
     /// Import via `EGL_EXT_image_dma_buf_import` or Vulkan external memory.
     ///
-    /// **The FD is borrowed from the host-owning [`Texture`]**: it
-    /// stays valid only while that [`Texture`] keeps the underlying
-    /// allocation alive, and the host closes it on drop. Callers
-    /// handing the FD to an API that takes ownership on success
-    /// (e.g. `vkImportMemoryFdKHR`) MUST `dup(2)` it first.
+    /// **The FD is owned by the receiver**: the export mints a fresh one
+    /// per call and the [`Texture`] keeps no copy, so nothing else will
+    /// ever close it. Close it, or hand it to an API that takes ownership
+    /// (`vkImportMemoryFdKHR`, `cudaImportExternalMemory`) — never both,
+    /// and never `dup(2)` first expecting someone else to close the
+    /// original.
     DmaBuf { fd: i32 },
 
     /// Windows: DXGI shared handle for cross-process GPU memory sharing.
@@ -271,7 +272,10 @@ impl Texture {
     /// - macOS/iOS: `IOSurface { id }`
     /// - Linux: `DmaBuf { fd }` — adapters export DMA-BUF FDs to a
     ///   different GPU API (CUDA, OpenGL, downstream IPC) without
-    ///   touching host-internal `TextureInner` layout.
+    ///   touching host-internal `TextureInner` layout. The fd is freshly
+    ///   minted and its ownership transfers to the caller, who must close
+    ///   it or hand it to an import that dups on receipt; the texture
+    ///   keeps no copy and will not close it (#1880).
     /// - Windows: `DxgiSharedHandle { handle }` (when implemented).
     ///
     /// Returns `None` if no sharing handle is available (no Vulkan
