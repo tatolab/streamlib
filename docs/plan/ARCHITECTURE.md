@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library, surface-id-lifetime-contract)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -70,9 +70,41 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the Python ecosystem as DLPack and the CUDA Array Interface (DLPack first). The
   contract is zero-CPU-copy, stated honestly: tiled engine textures reach a linear
   tensor via one GPU blit into an exportable staging buffer, because DLPack expresses
-  strided linear memory only. The Vulkan↔CUDA and Vulkan↔GL interop adapters survive
+  strided linear memory only — and that blit reads the surface's pooled backing
+  whenever one exists; a producer-internal texture never sources a cross-process
+  export. The Vulkan↔CUDA and Vulkan↔GL interop adapters survive
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
-  `-abi` halves die with the plugin ABI. [importable-python-library]
+  `-abi` halves die with the plugin ABI. [importable-python-library;
+  surface-id-lifetime-contract — SHIPPED #1868 for the source clause]
+- **DECIDED** — A published surface id names an immutable frame: from publish until
+  every holder releases it, the pixels under that id change only through the
+  surface's own write-back protocol (an explicit, engine-ordered edit other holders
+  are meant to observe) — never through producer reuse. The id itself is per-frame:
+  each pool acquisition publishes `<slot>#<generation>`, the `#<digits>` suffix is
+  reserved to that grammar (the surface-share service refuses any other registration
+  carrying one), and recycling the slot retires the previous generation's id — a
+  stale id fails loudly at resolve and checkout as a recycled-frame error, never
+  resolving to the slot's newer pixels. The pool slot backing a held surface is
+  never rehanded to a producer — in-process via the existing refcount, cross-process
+  via a checkout lease minted by the surface-share service at checkout, released
+  explicitly by the consumer and reclaimed on connection drop. The claim is taken
+  at the typed cast — the moment a consumer names what it is holding — and released
+  when that object drops; the read offers the constructing type the means to take
+  one, on terms equally open to any authored class, and takes none for a consumer
+  that reads the bag as a dict. Publish-to-claim transit rides pool depth, and so
+  does an untyped read: the strictness dial is also the safety dial — depth bounds
+  the window, and outwaiting it is an error, never somebody else's pixels. The
+  engine inspects no bag content anywhere. The producer never waits on a consumer:
+  the pool skips leased slots and grows to its cap; at cap the producer drops its
+  own frame — a slow consumer costs memory, then its own frames, never another
+  processor's cadence. A producer-internal transient (a frames-in-flight ring
+  texture) never backs a cross-process export: the export blit sources the
+  surface's pooled backing whenever one exists, read-only; texture-backed export
+  remains for surfaces with no pooled backing (kernel outputs).
+  [surface-id-lifetime-contract — SHIPPED #1868, #1869, #1871, #1877]
+  <!-- verify: cargo test -p streamlib-engine a_checkout_of_a_retired_frame_id_is_refused_naming_the_recycling -->
+  <!-- verify: cargo test -p streamlib-python-wheel claiming_a_recycled_frame_is_refused_naming_the_recycling -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-16-surface-id-lifetime-contract.md -->
 
 ## Processor model & scheduling — IN-FLIGHT (→ processor-class-identity, importable-python-library)
 
