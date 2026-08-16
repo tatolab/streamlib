@@ -137,6 +137,10 @@ mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 vulkanalia = { workspace = true }
 vulkanalia-vma = { workspace = true }
 rspirv-reflect = { workspace = true }
+# Linux-only alongside every other GPU dependency: the kernel escalate ops are
+# Linux-only, and a workspace-wide entry would make `cargo check --target
+# aarch64-apple-darwin` cross-build a C++ toolchain it has no consumer for.
+shaderc = { workspace = true }
 libc.workspace = true
 winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
