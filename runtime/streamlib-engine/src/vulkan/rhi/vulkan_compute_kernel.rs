@@ -174,7 +174,7 @@ impl VulkanComputeKernelInner {
         let queue_family_index = vulkan_device.queue_family_index();
         let device = vulkan_device.device();
 
-        validate_against_spirv(descriptor)?;
+        let reconciled_bindings = validate_against_spirv(descriptor)?;
 
         let spirv: Vec<u32> = descriptor
             .spv
@@ -313,7 +313,7 @@ impl VulkanComputeKernelInner {
             vulkan_device: Arc::clone(vulkan_device),
             device: device.clone(),
             queue,
-            bindings: descriptor.bindings.to_vec(),
+            bindings: reconciled_bindings,
             push_constant_size: descriptor.push_constant_size,
             pipeline,
             pipeline_layout,
@@ -686,6 +686,34 @@ impl VulkanComputeKernelInner {
     /// Bindings declared at construction time, in declaration order.
     pub fn bindings(&self) -> &[ComputeBindingSpec] {
         &self.bindings
+    }
+
+    /// The shader's own names for this kernel's bindings, in declaration
+    /// order — what an error message quotes back to the caller.
+    pub fn declared_binding_names(&self) -> Vec<&str> {
+        self.bindings
+            .iter()
+            .filter_map(|spec| spec.name.as_deref())
+            .collect()
+    }
+
+    /// Resolve one of the shader's binding names to the slot and kind the
+    /// descriptor set is built from.
+    ///
+    /// A name the shader does not declare is an error here, before any
+    /// resource is bound and long before a submission.
+    pub fn resolve_binding_by_name(&self, name: &str) -> Result<&ComputeBindingSpec> {
+        self.bindings
+            .iter()
+            .find(|spec| spec.name.as_deref() == Some(name))
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "Compute kernel '{}': no binding named `{}`; this shader declares {}",
+                    self.label,
+                    name,
+                    quote_declared_names(&self.declared_binding_names()),
+                ))
+            })
     }
 
     /// Push-constant size in bytes (0 if the kernel has none).
@@ -1089,6 +1117,23 @@ impl VulkanComputeKernel {
         self.host_inner().bindings().to_vec()
     }
 
+    /// Resolve one of the shader's binding names to its slot and kind.
+    ///
+    /// Owned rather than borrowed: the inner kernel is reached through a raw
+    /// handle, so there is no borrow to hand out.
+    pub fn resolve_binding_by_name(&self, name: &str) -> Result<ComputeBindingSpec> {
+        self.host_inner().resolve_binding_by_name(name).cloned()
+    }
+
+    /// The shader's own names for this kernel's bindings, in declaration order.
+    pub fn declared_binding_names(&self) -> Vec<String> {
+        self.host_inner()
+            .declared_binding_names()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
     /// Push-constant range size in bytes. Cached POD.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
@@ -1143,7 +1188,11 @@ mod layout_tests {
 
 // ---- Validation + creation helpers --------------------------------------------
 
-fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()> {
+/// Validate the declaration against the shader and return the specs with the
+/// shader's own binding names adopted onto them.
+fn validate_against_spirv(
+    descriptor: &ComputeKernelDescriptor<'_>,
+) -> Result<Vec<ComputeBindingSpec>> {
     let reflection = Reflection::new_from_spirv(descriptor.spv).map_err(|e| {
         Error::GpuError(format!(
             "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
@@ -1170,6 +1219,9 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
     let set0 = sets.get(&0);
 
     // For each declared binding, the SPIR-V must agree on (a) presence and (b) descriptor type.
+    // The shader's own name for the binding is adopted onto the returned spec — that is what a
+    // by-name dispatch resolves against, and the shader is its source of truth.
+    let mut reconciled: Vec<ComputeBindingSpec> = Vec::with_capacity(descriptor.bindings.len());
     for spec in descriptor.bindings {
         let info = set0.and_then(|m| m.get(&spec.binding)).ok_or_else(|| {
             Error::GpuError(format!(
@@ -1184,6 +1236,19 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
                 descriptor.label, spec.binding, spec.kind, expected, info.ty
             )));
         }
+        if let Some(declared_name) = spec.name.as_deref()
+            && declared_name != info.name
+        {
+            return Err(Error::GpuError(format!(
+                "Compute kernel '{}': binding {} declared name `{}`, but SPIR-V names it `{}`",
+                descriptor.label, spec.binding, declared_name, info.name
+            )));
+        }
+        let mut adopted = spec.clone();
+        if !info.name.is_empty() {
+            adopted.name = Some(std::borrow::Cow::Owned(info.name.clone()));
+        }
+        reconciled.push(adopted);
     }
 
     // Conversely, every binding the SPIR-V declares must be present in the
@@ -1222,7 +1287,19 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
         _ => {}
     }
 
-    Ok(())
+    Ok(reconciled)
+}
+
+/// Render a shader's declared binding names for an error message.
+pub(crate) fn quote_declared_names(names: &[&str]) -> String {
+    if names.is_empty() {
+        return "no named bindings".to_string();
+    }
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn expected_spirv_type(kind: ComputeBindingKind) -> RDescriptorType {

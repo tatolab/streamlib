@@ -20,6 +20,12 @@ fn main() {
     compile_shaders();
 }
 
+/// `glslc -O` strips every `OpName`, and a binding with no reflected name
+/// cannot be dispatched against by name. Debug info is what carries the
+/// shader's own spelling of each binding through to `rspirv-reflect`.
+#[cfg(target_os = "linux")]
+const KEEP_BINDING_NAMES: &str = "-g";
+
 #[cfg(target_os = "linux")]
 fn compile_shaders() {
     use std::path::{Path, PathBuf};
@@ -105,6 +111,7 @@ fn compile_shaders() {
 
         let status = Command::new("glslc")
             .arg(format!("-fshader-stage={stage}"))
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg("-I")
             .arg(shader_include_dir)
@@ -124,6 +131,7 @@ fn compile_shaders() {
         let dst_path: PathBuf = Path::new(&out_dir).join("test_sampled_image.spv");
         let status = Command::new("glslc")
             .arg("-fshader-stage=compute")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(Path::new(test_sampled_image_src))
             .arg("-o")
@@ -145,6 +153,7 @@ fn compile_shaders() {
         let dst_path: PathBuf = Path::new(&out_dir).join(format!("test_blend_{n}.spv"));
         let status = Command::new("glslc")
             .arg("-fshader-stage=compute")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(format!("-DINPUT_COUNT={n}"))
             .arg(Path::new(test_blend_src))
@@ -204,6 +213,7 @@ fn compile_shaders() {
             .arg(format!("-fshader-stage={stage}"))
             .arg("--target-env=vulkan1.2")
             .arg("--target-spv=spv1.4")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(src_path)
             .arg("-o")

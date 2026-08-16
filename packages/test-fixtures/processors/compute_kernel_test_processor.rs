@@ -64,10 +64,12 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec {
         binding: 0,
         kind: ComputeBindingKind::StorageBuffer,
+        name: None,
     },
     ComputeBindingSpec {
         binding: 1,
         kind: ComputeBindingKind::StorageBuffer,
+        name: None,
     },
 ];
 
