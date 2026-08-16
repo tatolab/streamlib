@@ -182,6 +182,12 @@ pub struct ComputeKernelDescriptor<'a> {
     pub label: &'a str,
     /// Compiled SPIR-V bytecode for the compute shader.
     pub spv: &'a [u8],
+    /// Name of the shader's entry point — the function the pipeline stage is
+    /// built against. `"main"` for everything the engine compiles: GLSL names
+    /// its entry point `main` and glslang will not rename one. Variable only
+    /// on the pre-compiled-SPIR-V escape hatch, where the blob's
+    /// `OpEntryPoint` may say something else.
+    pub entry_point: &'a str,
     /// Binding declarations for descriptor set 0.
     pub bindings: &'a [ComputeBindingSpec],
     /// Push-constant range size in bytes; 0 if the shader uses no push constants.

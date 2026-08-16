@@ -8,9 +8,11 @@ at slot 0, output-only — which is why no Python compute filter had ever
 existed: the wire could not express read-one-write-another. These tests are
 that pass, written the way a user writes it.
 
-A kernel is an object: built in `setup()`, dispatched per frame in
-`process()`, with bindings passed at dispatch by the shader's own names and
-never persisting on the kernel. What is worth breaking a build over is that
+A kernel is an object: built in `setup()` from GLSL text the engine compiles,
+dispatched per frame in `process()`, with bindings passed at dispatch by the
+shader's own names and never persisting on the kernel. Nothing here shells out
+to a shader compiler, and that absence is load-bearing: authoring a kernel
+requires no toolchain beyond the installed wheel. What is worth breaking a build over is that
 two distinct surfaces really are bound by name, and that every way of getting
 the bindings wrong is refused before any GPU work is submitted, with a message
 naming what the shader actually declares.
@@ -22,7 +24,6 @@ assert on that line.
 
 import json
 import re
-import shutil
 from pathlib import Path
 
 import pytest
@@ -34,14 +35,6 @@ pytestmark = pytest.mark.requires_gpu
 APP = Path(__file__).parent / "compute_kernel_app.py"
 
 PROBE_RESULT = re.compile(r"MARKER:PROBE_RESULT (\{.*\})")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def _needs_a_shader_compiler() -> None:
-    """Until GLSL is the source contract the engine compiles, a caller hands
-    over SPIR-V — and these tests produce it with `glslc`."""
-    if shutil.which("glslc") is None:
-        pytest.skip("glslc is not on PATH; the probes compile their own SPIR-V")
 
 
 def run_probe(start_app_under_test, probe_class_name: str) -> dict:
@@ -161,3 +154,49 @@ def test_an_acquired_texture_is_a_name_not_a_local_mapping(start_app_under_test)
         "pixels here must refuse rather than answer"
     )
     assert "not mapped into this process" in refusal, refusal
+
+
+def test_a_kernel_is_built_from_glsl_with_no_shader_toolchain_installed(
+    start_app_under_test,
+):
+    """The source contract, end to end. The probe hands over GLSL text and
+    never invokes `glslc`, so a passing run is also the evidence that the
+    compiler ships inside the wheel."""
+    observed = run_probe(start_app_under_test, "ReadOneWriteAnotherProbe")
+    assert observed["dispatched"] is True
+    assert sorted(observed["binding_names"]) == sorted([SOURCE_BINDING, OUTPUT_BINDING])
+
+
+def test_a_kernel_built_from_neither_source_nor_spirv_is_refused_naming_both(
+    start_app_under_test,
+):
+    observed = run_probe(start_app_under_test, "ShaderSourceRefusalProbe")
+    assert "source" in observed["neither"]
+    assert "spv_hex" in observed["neither"]
+
+
+def test_a_kernel_built_from_both_source_and_spirv_is_refused_naming_both(
+    start_app_under_test,
+):
+    """They are alternatives; which one to run is not something to guess at."""
+    observed = run_probe(start_app_under_test, "ShaderSourceRefusalProbe")
+    assert "source" in observed["both"]
+    assert "spv_hex" in observed["both"]
+
+
+def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
+    start_app_under_test,
+):
+    """The author reads this message, so it carries the offending line and the
+    name of what the shader got wrong — not just "compilation failed"."""
+    observed = run_probe(start_app_under_test, "ShaderSourceRefusalProbe")
+    assert "no_such_function" in observed["does_not_compile"]
+    assert ":2" in observed["does_not_compile"]
+
+
+def test_a_glsl_entry_point_other_than_main_is_refused(start_app_under_test):
+    """glslang will not rename a GLSL entry point, so accepting one would build
+    a pipeline against a function the module does not contain."""
+    observed = run_probe(start_app_under_test, "ShaderSourceRefusalProbe")
+    assert "sharpen" in observed["non_main_entry_point"]
+    assert "main" in observed["non_main_entry_point"]

@@ -1498,6 +1498,7 @@ mod tests {
         let kernel = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "recorder-test",
                 spv: blend_spv(2),
                 bindings: &bindings,
@@ -1564,6 +1565,7 @@ mod tests {
         let kernel = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "recorder-back-to-back",
                 spv: blend_spv(1),
                 bindings: &bindings,

@@ -1380,7 +1380,12 @@ fn handle_register_compute_kernel(
     let registered = sandbox
         .escalate(|full| {
             let spv = shader_source.spirv(full)?;
-            full.create_or_reuse_compute_kernel(&spv, req.push_constant_size, &declared)
+            full.create_or_reuse_compute_kernel(
+                &spv,
+                req.push_constant_size,
+                &declared,
+                normalized_shader_entry_point(&req.entry_point),
+            )
         })
         .and_then(|(kernel_id, kernel)| {
             // The caller dispatches by name and only the shader knows which

@@ -415,16 +415,24 @@ class GpuContextFullAccess:
 
     def create_compute_kernel(
         self,
-        spirv: bytes,
+        source: str | None = None,
+        spirv: bytes | None = None,
         push_constant_size: int = 0,
         bindings: dict[str, str] | None = None,
+        entry_point: str = "main",
     ) -> ComputeKernel:
-        """Build a compute kernel from pre-compiled SPIR-V.
+        """Build a compute kernel from GLSL `source`, or from pre-compiled SPIR-V.
 
         Constructed once in `setup()`, dispatched per frame in `process()`. The
-        engine reflects the shader at construction and takes its binding names
-        from it — those names are what `dispatch` resolves against. Re-creating
-        an identical kernel is free of compilation.
+        engine compiles the source and reflects the shader at construction,
+        taking its binding names from it — those names are what `dispatch`
+        resolves against. Re-creating an identical kernel is free of
+        compilation. Authoring needs no shader toolchain: the compiler is in
+        the wheel.
+
+        `source` and `spirv` are alternatives — supply exactly one. A GLSL
+        entry point is always `main`; `entry_point` is meaningful only with
+        `spirv`.
 
         `bindings` optionally asserts `{name: kind}` against reflection; each
         kind is one of `sampled_image`, `sampled_texture`, `storage_buffer`,

@@ -525,7 +525,9 @@ impl HelperProcessGpuExchangeClient {
     pub(crate) fn register_compute_kernel(
         &self,
         python: Python<'_>,
+        source: &str,
         spv_hex: &str,
+        entry_point: &str,
         push_constant_size: u32,
         declared_bindings: &Bound<'_, PyAny>,
     ) -> PyResult<(
@@ -534,6 +536,9 @@ impl HelperProcessGpuExchangeClient {
     )> {
         let op = PyDict::new(python);
         op.set_item("op", "register_compute_kernel")?;
+        op.set_item("source", source)?;
+        op.set_item("stage", "compute")?;
+        op.set_item("entry_point", entry_point)?;
         op.set_item("spv_hex", spv_hex)?;
         op.set_item("push_constant_size", push_constant_size)?;
         op.set_item("bindings", declared_bindings)?;

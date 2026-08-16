@@ -215,6 +215,7 @@ impl VulkanToneMapper {
         VulkanComputeKernel::new(
             &self.vulkan_device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "tone_curve_image_to_image",
                 spv,
                 bindings: IMAGE_TO_IMAGE_BINDINGS,

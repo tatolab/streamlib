@@ -212,11 +212,20 @@ impl VulkanComputeKernelInner {
             }
         };
 
+        // A NUL inside the name would truncate the entry point Vulkan looks
+        // for, so it is refused rather than silently shortened.
+        let entry_point = std::ffi::CString::new(descriptor.entry_point).map_err(|_| {
+            Error::GpuError(format!(
+                "compute kernel `{}` declares an entry point containing a NUL byte: {:?}",
+                descriptor.label, descriptor.entry_point
+            ))
+        })?;
         let pipeline = match create_compute_pipeline_with_cache(
             device,
             shader_module,
             pipeline_layout,
             descriptor.spv,
+            &entry_point,
             descriptor.label,
         ) {
             Ok(p) => p,
@@ -1362,6 +1371,7 @@ fn create_compute_pipeline_with_cache(
     shader_module: vk::ShaderModule,
     pipeline_layout: vk::PipelineLayout,
     spv: &[u8],
+    entry_point: &std::ffi::CStr,
     label: &str,
 ) -> Result<vk::Pipeline> {
     let cache_path = pipeline_cache_file_path(spv);
@@ -1384,7 +1394,7 @@ fn create_compute_pipeline_with_cache(
     let stage = vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::COMPUTE)
         .module(shader_module)
-        .name(b"main\0")
+        .name(entry_point.to_bytes_with_nul())
         .build();
     let info = vk::ComputePipelineCreateInfo::builder()
         .stage(stage)
@@ -1682,6 +1692,7 @@ mod tests {
         let kernel = VulkanComputeKernel::new(
             device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "test_blend",
                 spv: blend_spv(input_count),
                 bindings: &bindings,
@@ -1798,6 +1809,7 @@ mod tests {
             let kernel = VulkanComputeKernel::new(
                 &device,
                 &ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "binding-shape",
                     spv: blend_spv(input_count),
                     bindings: &bindings,
@@ -1835,6 +1847,7 @@ mod tests {
         let result = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "kind-mismatch",
                 spv: blend_spv(1),
                 bindings: &bindings,
@@ -1869,6 +1882,7 @@ mod tests {
         let result = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "missing-binding",
                 spv: blend_spv(4),
                 bindings: &bindings,
@@ -1902,6 +1916,7 @@ mod tests {
         let result = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "extra-binding",
                 spv: blend_spv(1),
                 bindings: &bindings,
@@ -1930,6 +1945,7 @@ mod tests {
         let result = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "push-size-mismatch",
                 spv: blend_spv(1),
                 bindings: &bindings,
@@ -1958,6 +1974,7 @@ mod tests {
         let kernel = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "missing-set",
                 spv: blend_spv(2),
                 bindings: &bindings,
@@ -2127,6 +2144,7 @@ mod tests {
             let _kernel = VulkanComputeKernel::new(
                 &device,
                 &ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "cache-miss",
                     spv: blend_spv(1),
                     bindings: &bindings,
@@ -2172,6 +2190,7 @@ mod tests {
                 VulkanComputeKernel::new(
                     &device,
                     &ComputeKernelDescriptor {
+                        entry_point: "main",
                         label: "cache-hit/first",
                         spv: blend_spv(1),
                         bindings: &bindings,
@@ -2195,6 +2214,7 @@ mod tests {
                 VulkanComputeKernel::new(
                     &device,
                     &ComputeKernelDescriptor {
+                        entry_point: "main",
                         label: "cache-hit/second",
                         spv: blend_spv(1),
                         bindings: &bindings,
@@ -2232,6 +2252,7 @@ mod tests {
             let kernel = VulkanComputeKernel::new(
                 &device,
                 &ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "corrupt-blob",
                     spv: blend_spv(1),
                     bindings: &bindings,
@@ -2278,6 +2299,7 @@ mod tests {
             let result = VulkanComputeKernel::new(
                 &device,
                 &ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "readonly-cache",
                     spv: blend_spv(1),
                     bindings: &bindings,
@@ -2324,6 +2346,7 @@ mod tests {
         let kernel = VulkanComputeKernel::new(
             &device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: "test-sampled-image",
                 spv: SAMPLED_IMAGE_SPV,
                 bindings: &bindings,

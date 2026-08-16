@@ -208,11 +208,16 @@ impl PoolSlotReuse<'_> {
 /// contract keys on the compiler's version too, because then the engine is what
 /// turns source into bytes.
 #[cfg(target_os = "linux")]
-fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32) -> String {
+fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32, entry_point: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(spv);
     hasher.update(push_constant_size.to_le_bytes());
+    // Two pipelines built from one module against different entry points are
+    // different kernels, so the id has to tell them apart. Length-prefixed:
+    // without it the name's bytes would run into whatever hashed next.
+    hasher.update((entry_point.len() as u64).to_le_bytes());
+    hasher.update(entry_point.as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -2543,8 +2548,9 @@ impl GpuContext {
         spv: &[u8],
         push_constant_size: u32,
         declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
+        entry_point: &str,
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
-        let kernel_id = compute_kernel_cache_key(spv, push_constant_size);
+        let kernel_id = compute_kernel_cache_key(spv, push_constant_size, entry_point);
         let cached_kernel = self
             .compute_kernel_cache
             .lock()
@@ -2581,6 +2587,7 @@ impl GpuContext {
 
         let kernel = Arc::new(self.create_compute_kernel(
             &crate::core::rhi::ComputeKernelDescriptor {
+                entry_point,
                 label: "escalate-compute-kernel",
                 spv,
                 bindings: &reflected,
@@ -3951,9 +3958,14 @@ impl GpuContextFullAccess {
         spv: &[u8],
         push_constant_size: u32,
         declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
+        entry_point: &str,
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
-        self.host_inner()
-            .create_or_reuse_compute_kernel(spv, push_constant_size, declared_bindings)
+        self.host_inner().create_or_reuse_compute_kernel(
+            spv,
+            push_constant_size,
+            declared_bindings,
+            entry_point,
+        )
     }
 
     /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
@@ -4006,6 +4018,32 @@ impl std::fmt::Debug for GpuContextFullAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kernel id names a pipeline, and two pipelines built from one module
+    /// against different entry points are different pipelines. Serving the
+    /// first for the second would dispatch a function the caller did not ask
+    /// for.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_kernel_id_tells_two_entry_points_over_one_module_apart() {
+        let spv = b"not really spir-v, and this key never parses it";
+        assert_ne!(
+            compute_kernel_cache_key(spv, 0, "main"),
+            compute_kernel_cache_key(spv, 0, "sharpen"),
+        );
+    }
+
+    /// The name is length-prefixed into the hash, so a byte moving between the
+    /// entry point and what follows cannot leave the digest unchanged.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_kernel_id_does_not_confuse_an_entry_point_with_its_neighbour() {
+        let spv = b"not really spir-v, and this key never parses it";
+        assert_ne!(
+            compute_kernel_cache_key(spv, 0, "ab"),
+            compute_kernel_cache_key(spv, 0, "a"),
+        );
+    }
 
     #[test]
     fn test_texture_cache_register_and_resolve() {
@@ -4619,6 +4657,7 @@ mod tests {
         let kernel_arc = limited
             .escalate(|full| {
                 full.create_compute_kernel(&ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "drop_post_escalate_smoke",
                     spv: trivial_spv,
                     bindings,
