@@ -1337,4 +1337,224 @@ mod tests {
             "the device export of a surface with no pooled backing",
         );
     }
+
+    /// The bytes of a host-visible staging, read the way its consumer
+    /// does: straight off the mapping, with no device-to-host hop. That
+    /// this is a plain pointer read *is* the residency's whole point.
+    fn read_cpu_readback_staging_through_its_mapping(staging: &SurfaceExportStaging) -> Vec<u8> {
+        let mapped = staging.staging_buffer().mapped_ptr();
+        assert!(
+            !mapped.is_null(),
+            "a host-visible staging must be mapped; a null pointer here means the residency \
+             fell back to device-local memory no CPU consumer can read"
+        );
+        unsafe { std::slice::from_raw_parts(mapped, staging.staging_byte_size() as usize) }.to_vec()
+    }
+
+    /// The payoff: a CPU consumer reads a texture-backed frame's pixels
+    /// off the mapping, with nothing installed on the context.
+    ///
+    /// Mental-revert: mint this staging `DeviceLocal` and `mapped_ptr()`
+    /// is null, which the reader above fails on by name. Verified.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_cpu_readback_of_a_texture_backed_surface_lands_its_pixels_on_the_mapping() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        let kernel_output_texture = create_producer_owned_texture(&gpu);
+        gpu.register_texture_with_layout(
+            &surface_id,
+            kernel_output_texture.clone(),
+            VulkanLayout::UNDEFINED,
+        );
+
+        let (_, upload_source) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the kernel output's upload source");
+        stamp_every_byte_of_pooled_backing(&upload_source, KERNEL_OUTPUT_STAMP);
+        gpu.copy_pixel_buffer_to_texture(
+            &upload_source,
+            &kernel_output_texture,
+            &surface_id,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+        )
+        .expect("render into the kernel output texture");
+
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("a cpu-readback staging needs nothing installed");
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("refill the cpu-readback staging");
+
+        assert_every_byte_is(
+            &read_cpu_readback_staging_through_its_mapping(&staging),
+            KERNEL_OUTPUT_STAMP,
+            "the cpu readback of a texture-backed surface",
+        );
+    }
+
+    /// A CPU edit written through the mapping publishes back into the
+    /// surface's own pooled allocation.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_cpu_edit_through_the_mapping_publishes_back_into_the_pooled_backing() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a pool-only frame");
+        let surface_id = pool_id.to_string();
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("a cpu-readback staging for a pool-only frame");
+        assert!(
+            staging.writable(),
+            "a frame whose only backing is its own pooled allocation is writable"
+        );
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("refill before editing");
+
+        let mapped = staging.staging_buffer().mapped_ptr();
+        assert!(!mapped.is_null(), "a host-visible staging must be mapped");
+        unsafe {
+            std::ptr::write_bytes(
+                mapped,
+                CONSUMER_EDIT_STAMP,
+                staging.staging_byte_size() as usize,
+            )
+        };
+
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect("publish the CPU edit");
+        assert_every_byte_is(
+            &read_pooled_backing_bytes(&pooled_backing),
+            CONSUMER_EDIT_STAMP,
+            "the pooled backing after a CPU edit was published",
+        );
+    }
+
+    /// The two residencies are two allocations under one surface, and
+    /// asking twice at one residency is a cache hit.
+    ///
+    /// A shared allocation would hand a CUDA consumer host-visible memory
+    /// — or a CPU consumer memory it cannot map — depending only on which
+    /// of them asked first.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn each_residency_is_its_own_allocation_and_repeats_hit_the_cache() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (pool_id, _pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a frame to export both ways");
+        let surface_id = pool_id.to_string();
+
+        let host_visible = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("the cpu-readback staging");
+        let device_local = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("the device-export staging");
+
+        assert!(
+            !Arc::ptr_eq(&host_visible, &device_local),
+            "one surface's two residencies must be two allocations"
+        );
+        assert!(
+            !host_visible.staging_buffer().mapped_ptr().is_null(),
+            "the host-visible residency is mapped"
+        );
+
+        let host_visible_again = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("the cpu-readback staging, again");
+        assert!(
+            Arc::ptr_eq(&host_visible, &host_visible_again),
+            "a second ask at the same residency must hit the cache, not allocate a second \
+             staging the first consumer is not refilling"
+        );
+    }
+
+    /// `try_` answers `contended` while another copy holds the recorder,
+    /// and runs the copy once it is free.
+    ///
+    /// This is what `contended` means now that the capability is the
+    /// engine's: not a foreign registry's counter, but work already in
+    /// flight against this staging.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_try_copy_answers_contended_only_while_the_recorder_is_held() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (pool_id, _pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a frame to read back");
+        let surface_id = pool_id.to_string();
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("the cpu-readback staging");
+
+        let held = staging.refill_submission.lock();
+        assert!(
+            gpu.try_refill_surface_export_staging(&staging, &surface_id)
+                .expect("contention is not an error")
+                .is_none(),
+            "a copy already holding the recorder must read as contended"
+        );
+        drop(held);
+
+        assert!(
+            gpu.try_refill_surface_export_staging(&staging, &surface_id)
+                .expect("the refill itself must succeed")
+                .is_some(),
+            "with the recorder free the try_ path must run the copy, not report contention"
+        );
+    }
+
+    /// A guard refusal stays an error in the `try_` spelling — never a
+    /// contention report, which a caller would retry forever.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_try_copy_reports_a_guard_refusal_as_an_error_and_never_as_contention() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (staged_pool_id, _staged_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame the staging is opened for");
+        let (other_pool_id, _other_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a second, unrelated frame");
+        let staged_surface_id = staged_pool_id.to_string();
+        let other_surface_id = other_pool_id.to_string();
+        assert_ne!(
+            crate::core::rhi::pool_slot_key_of_surface_id(&staged_surface_id),
+            crate::core::rhi::pool_slot_key_of_surface_id(&other_surface_id),
+            "the fixture needs two distinct pool slots to cross the staging against"
+        );
+
+        let staging = gpu
+            .surface_export_staging(
+                &staged_surface_id,
+                SurfaceExportStagingResidency::HostVisible,
+            )
+            .expect("the cpu-readback staging");
+
+        match gpu.try_refill_surface_export_staging(&staging, &other_surface_id) {
+            Err(refusal) => assert!(
+                refusal.to_string().contains(&other_surface_id),
+                "the refusal must name the surface asked for, got: {refusal}"
+            ),
+            Ok(None) => panic!("a staging opened for another surface is an error, not contention"),
+            Ok(Some(_)) => panic!("a staging must never carry another surface's pixels"),
+        }
+    }
 }

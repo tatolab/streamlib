@@ -18,17 +18,10 @@
 //!   import the host's image — that's nonsensical for cpu-readback
 //!   since the consumer can't reach the host's `VkImage`).
 //!
-//! - [`EscalateCpuReadbackCopyTrigger`] (typically constructed in a
-//!   subprocess cdylib using its existing escalate stdin/stdout
-//!   pipe) — sends a `run_cpu_readback_copy` IPC request to the host
-//!   and parses the timeline value from the response.
-//!
-//! The adapter itself is fully generic; the privilege-flavor split
-//! is entirely in the trigger choice. The cdylib's dep graph
-//! excludes `streamlib`, so `HostVulkanDevice` is not reachable from
-//! a cdylib — the wrong-way (constructing an in-process trigger
-//! against a host device from inside a subprocess) is impossible by
-//! the dep graph alone.
+//! A consumer one process away does not come through this crate at
+//! all: CPU readback across a process boundary is a `GpuContext`
+//! capability, reached over the escalate ops, staged in engine-owned
+//! host-visible memory.
 
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -377,69 +370,6 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         );
     }
 
-    /// Bridge entry: run `vkCmdCopyImageToBuffer` for `surface_id` on
-    /// the host's queue without going through the in-process
-    /// `try_begin_*` / `end_*_access` registry counters.
-    ///
-    /// Used by the host-side `CpuReadbackBridge` impl that the
-    /// escalate handler reaches when a subprocess sends
-    /// `run_cpu_readback_copy(direction=image_to_buffer)`. The
-    /// subprocess's own consumer-flavor adapter manages contention
-    /// on its side; the host bridge call is stateless from a
-    /// counter-tracking perspective. **v1 limitation**: do not mix
-    /// in-process host `acquire_*` and subprocess bridge calls
-    /// against the same surface concurrently — the registry's
-    /// counters won't observe the bridge call.
-    pub fn run_bridge_copy_image_to_buffer(
-        &self,
-        surface_id: SurfaceId,
-    ) -> Result<u64, AdapterError> {
-        self.run_bridge_copy_inner(surface_id, BridgeDirection::ImageToBuffer)
-    }
-
-    /// Bridge entry: run `vkCmdCopyBufferToImage` for `surface_id`.
-    /// Mirror of [`Self::run_bridge_copy_image_to_buffer`] — same
-    /// semantics, opposite direction. Used on subprocess write
-    /// release.
-    pub fn run_bridge_copy_buffer_to_image(
-        &self,
-        surface_id: SurfaceId,
-    ) -> Result<u64, AdapterError> {
-        self.run_bridge_copy_inner(surface_id, BridgeDirection::BufferToImage)
-    }
-
-    fn run_bridge_copy_inner(
-        &self,
-        surface_id: SurfaceId,
-        direction: BridgeDirection,
-    ) -> Result<u64, AdapterError> {
-        let snap = self
-            .surfaces
-            .with_mut(surface_id, |state| Self::snapshot_for_acquire(state))
-            .ok_or(AdapterError::SurfaceNotFound { surface_id })?;
-        let next_value = snap.wait_value + 1;
-        let trigger_planes: Vec<TriggerPlane> = snap
-            .planes
-            .iter()
-            .map(|p| TriggerPlane {
-                buffer: p.buffer,
-                width: p.width,
-                height: p.height,
-                bytes_per_pixel: p.bytes_per_pixel,
-            })
-            .collect();
-        let ctx = self.make_trigger_context(surface_id, &snap, next_value, &trigger_planes);
-        let signaled = match direction {
-            BridgeDirection::ImageToBuffer => self.trigger.run_copy_image_to_buffer(&ctx)?,
-            BridgeDirection::BufferToImage => self.trigger.run_copy_buffer_to_image(&ctx)?,
-        };
-        self.surfaces.with_mut(surface_id, |state| {
-            state.current_signal_value = signaled;
-            state.current_layout = VulkanLayout::GENERAL;
-        });
-        Ok(signaled)
-    }
-
     fn acquire_inner(
         &self,
         surface_id: SurfaceId,
@@ -730,12 +660,6 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
 /// `VkDevice` cannot reach a `VkImage` allocated on the host's
 /// device, so the trigger errors when invoked with `image: None`).
 ///
-/// Cdylibs use [`crate::EscalateCpuReadbackCopyTrigger`] (or their
-/// own trigger that talks to the host over IPC) instead — the
-/// in-process trigger is reachable to them only against
-/// `ConsumerVulkanDevice`, which fails at the `image.is_some()`
-/// check.
-///
 /// Holds a single persistent `vk::CommandPool` + command buffer +
 /// completion fence ([`AdapterPersistentSubmitContext`]), reset and
 /// reused on every submit. The pool is lazy-initialised on the first
@@ -832,16 +756,6 @@ impl<D: VulkanRhiDevice> Drop for InProcessCpuReadbackCopyTrigger<D> {
 
 #[derive(Clone, Copy)]
 enum CopyDirection {
-    ImageToBuffer,
-    BufferToImage,
-}
-
-/// Direction enum used by [`CpuReadbackSurfaceAdapter::run_bridge_copy_*`]
-/// internally. Kept private — public callers use the two
-/// `run_bridge_copy_image_to_buffer` / `run_bridge_copy_buffer_to_image`
-/// methods so the wire-shape mapping stays explicit at the call site.
-#[derive(Clone, Copy)]
-enum BridgeDirection {
     ImageToBuffer,
     BufferToImage,
 }
