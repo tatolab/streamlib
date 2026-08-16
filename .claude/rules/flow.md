@@ -18,8 +18,8 @@ paths:
   happens. Prompting keeps the friction and the reason while leaving the owner a way through.
   This is not permission to bend doctrine: the rules still say what is right, and an approved
   prompt only means the owner judged this edit to be the exception.
-- **Guard only what a wrong edit makes expensive to undo** — source without ticket traceability,
-  consumer trees, vendored sources, licence files. Never guard prose. A guard fires on a path and
+- **Guard only what a wrong edit makes expensive to undo** — in this repo that is the licence
+  files and nothing else. Never guard prose. A guard fires on a path and
   cannot see intent, so guarding a directory whose edits are mostly routine records trains the
   session to escalate trivia and the owner to click through without reading — which costs the
   guard its meaning everywhere else. Judgement the session must exercise belongs in an always-on

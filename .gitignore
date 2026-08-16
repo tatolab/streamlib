@@ -69,7 +69,7 @@ examples/camera-python-display/assets/*
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 
-# Operating-model session markers (plan-gate hook): plan-session, active-ticket.json.
+# Operating-model session markers: plan-session, active-ticket.json.
 # Machine-local, created/removed by the lifecycle skills — never tracked.
 .claude/state/
 

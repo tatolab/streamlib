@@ -18,5 +18,4 @@ The glossary is the shared-language layer. Reading it is not this skill; changin
   decision record. It is a glossary and nothing else.
 
 Glossary edits are plan edits: they happen only inside a plan-editing skill (`/align`,
-`/propose-change`, `/pivot`) whose session marker is set — the plan-gate hook enforces
-this.
+`/propose-change`, `/pivot`). Nothing enforces this — it is the session's to apply.

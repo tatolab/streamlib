@@ -17,25 +17,12 @@
       "Bash(docker info *)"
     ],
     "ask": [
-      "Edit(./examples/**)",
-      "Edit(./packages/audio/**)",
-      "Edit(./packages/camera/**)",
-      "Edit(./packages/clap/**)",
-      "Edit(./packages/debug-utilities/**)",
-      "Edit(./packages/display/**)",
-      "Edit(./packages/frame-tap/**)",
-      "Edit(./packages/h264/**)",
-      "Edit(./packages/h265/**)",
-      "Edit(./packages/jpeg/**)",
-      "Edit(./packages/moq/**)",
-      "Edit(./packages/mp4/**)",
-      "Edit(./packages/opus/**)",
-      "Edit(./packages/screen-capture/**)",
-      "Edit(./packages/webrtc/**)",
-      "Edit(vendor/tatolab-vulkanalia*/**)",
       "Edit(LICENSE)",
       "Edit(LICENSES/**)",
-      "Edit(docs/license/**)"
+      "Edit(docs/license/**)",
+      "Write(LICENSE)",
+      "Write(LICENSES/**)",
+      "Write(docs/license/**)"
     ]
   },
   "hooks": {
@@ -46,15 +33,6 @@
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/rig-brake.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/plan-gate.sh"
           }
         ]
       }

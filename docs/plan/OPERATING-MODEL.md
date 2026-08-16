@@ -226,11 +226,11 @@ skipping one physically fail, in layers from soft to hard:
    *records* are ordinary work and land with the change they describe.
 2. **Sharp descriptions** on the model-invoked primitives so they trigger on phrasing
    without being asked.
-3. **Hooks** (the hard layer): a PreToolUse hook rejects `Edit`/`Write` under `runtime/`,
-   `sdk/`, `tools/`, `adapters/`, `xtask/` unless `.claude/state/active-ticket.json`
-   exists — a marker only `/implement` writes, only after the owner confirms the
-   announced plan. Skipping `/implement` doesn't produce sloppy work; it produces a
-   blocked edit. (Owner escape hatch: create the marker by hand.)
+3. **Hooks**: `rig-brake` (rig-consuming Bash) and `worktree-gc` (post-merge cleanup). The
+   source-edit gate that required `.claude/state/active-ticket.json` was unwired 2026-08-15 —
+   it prompted on every engine edit, which is what taught sessions to click through. Routing
+   source edits through `/implement` is now session-applied doctrine with no enforcement
+   layer. The script is still at `.claude/hooks/plan-gate.sh`, referenced by nothing.
 4. **CI backstop**: the PR body must reference a ticket; `review-pr` flags any new public
    trait / module / cross-crate boundary the change proposal doesn't name.
 
