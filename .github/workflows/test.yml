@@ -42,17 +42,25 @@ jobs:
           # be readable by it. No workspace member has a git dependency.
           persist-credentials: false
 
+      # `-p streamlib` pulls streamlib-engine, whose build.rs compiles GLSL
+      # compute shaders with glslc; the Linux engine dep set links Vulkan, and
+      # iceoryx2's PAL crates run bindgen. Minimal subset — no GPU/codec
+      # backends.
+      #
+      # `timeout-minutes` is the native backstop the composite action cannot
+      # declare for itself; `check-bounded-apt-install` fails the build if it
+      # goes missing. 12 minutes sits above the script's own 590s worst case so
+      # the script reports the failure rather than being killed mid-sentence.
       - name: Install system dependencies
-        # `-p streamlib` pulls streamlib-engine, whose build.rs compiles GLSL
-        # compute shaders with glslc; the Linux
-        # engine dep set links Vulkan. Minimal subset — no GPU/codec backends.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            protobuf-compiler \
-            libclang-dev \
-            libvulkan-dev \
+        timeout-minutes: 12
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: >-
+            pkg-config
+            protobuf-compiler
+            libclang1-18
+            libclang-common-18-dev
+            libvulkan-dev
             glslc
 
       - name: Install Rust

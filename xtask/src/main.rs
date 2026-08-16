@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 pub mod check_boundaries;
+pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
@@ -23,6 +24,45 @@ pub mod normal_build_dep_graph;
 /// than descending from the crate root, so a source tree outside both is
 /// invisible to it.
 pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
+
+/// Tracked (and untracked-but-not-ignored) files under one repo-relative root.
+///
+/// `git ls-files` rather than a filesystem walk, for the reason every gate here
+/// shares: CI walks a clean checkout, so "the files in the repo" is the
+/// semantics meant, and the scan roots hold virtualenvs and build trees that
+/// are not ours to gate. `-z` because a path containing a newline would
+/// otherwise split into two entries and drop both from the scan.
+pub fn list_repository_files_under(
+    workspace_root: &Path,
+    repo_relative_root: &str,
+) -> Result<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+        ])
+        .arg(repo_relative_root)
+        .current_dir(workspace_root)
+        .output()
+        .with_context(|| format!("failed to run `git ls-files` for {repo_relative_root}"))?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "`git ls-files {repo_relative_root}` failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    Ok(String::from_utf8(output.stdout)
+        .with_context(|| format!("`git ls-files {repo_relative_root}` emitted non-UTF-8 paths"))?
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
 
 /// Refuse a source-walking gate run that read no source at all.
 ///
@@ -48,7 +88,7 @@ pub fn ensure_source_walking_gate_read_source(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all nine in well under a second, and why CI runs them as
+/// lets one process run all ten in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -69,6 +109,7 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         check_no_unbounded_cstr_from_ptr::run,
     ),
     ("check-clock-usage", check_clock_usage::run),
+    ("check-bounded-apt-install", check_bounded_apt_install::run),
 ];
 
 /// Run every source-walking gate, reporting all failures rather than the first.
@@ -278,6 +319,19 @@ enum Commands {
     /// `docs/decisions/one-monotonic-clock.md`.
     CheckClockUsage,
 
+    /// CI gate keeping every apt install in CI behind
+    /// `.github/actions/install-linux-engine-build-dependencies`. Fails on any
+    /// `apt-get` under `.github/workflows/`, and on any step calling that
+    /// action without `timeout-minutes`. An inline `apt-get update && apt-get
+    /// install` has no wall-clock bound, and the mode that costs is a mirror
+    /// that is slow rather than stalled — one measured run fetched 35.6 MB at
+    /// 48 kB/s over 12m17s while every request made progress, so neither
+    /// `Acquire::Retries` (nothing failed) nor `Acquire::http::Timeout`
+    /// (nothing went idle) engaged. Composite-action steps cannot declare
+    /// `timeout-minutes`, so the caller's step is the only place the native
+    /// backstop can live.
+    CheckBoundedAptInstall,
+
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
@@ -324,6 +378,7 @@ fn main() -> Result<()> {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
+        Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,

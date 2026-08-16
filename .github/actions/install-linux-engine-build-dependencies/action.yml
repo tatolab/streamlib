@@ -1,0 +1,28 @@
+name: Install Linux engine build dependencies
+description: >-
+  apt-installs packages under a wall-clock bound, escaping to a second mirror
+  rather than waiting out a slow one.
+
+# Three workflows need the same apt set and each used to carry its own unbounded
+# `apt-get update && apt-get install`. A slow mirror turned that step from ~15s
+# into 811s in one wheel run and 1400s in one test run on the same day, so the
+# bound lives here rather than in three copies that drift.
+#
+# Composite-action steps cannot declare `timeout-minutes`, so the ceiling is the
+# script's own per-command bound; callers add `timeout-minutes` on the `uses:`
+# step as the native backstop, and `check-bounded-apt-install` fails the build
+# if one forgets.
+
+inputs:
+  packages:
+    description: Whitespace-separated apt packages to install.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies with a bounded retry
+      shell: bash
+      run: >-
+        "${{ github.action_path }}/install-system-dependencies-with-bounded-retry.sh"
+        ${{ inputs.packages }}
