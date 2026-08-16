@@ -20,7 +20,7 @@ use pyo3::exceptions::{
     PyBufferError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
@@ -37,7 +37,8 @@ use crate::python_gpu_surface_pixel_exchange::{
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    HelperCheckedOutPixelSurface, HelperSurfaceCheckOutLeaseDebt,
+    HelperAcquiredTexture, HelperCheckedOutPixelSurface, HelperSurfaceCheckOutLeaseDebt,
+    HelperSurfaceReleaseDebt,
 };
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -102,6 +103,11 @@ pub(crate) struct PythonGpuSurfaceHandle {
     /// `__dlpack__` cannot disagree across calls.
     #[cfg(target_os = "linux")]
     natural_dlpack_side_is_device: std::sync::OnceLock<bool>,
+    /// Set when this handle names a device texture the engine allocated but
+    /// whose memory was never mapped into this process. It holds the pool-slot
+    /// debt directly, because there is no owned memory here to hold it.
+    #[cfg(target_os = "linux")]
+    device_texture_without_a_local_mapping: Mutex<Option<HelperSurfaceReleaseDebt>>,
 }
 
 impl PythonGpuSurfaceHandle {
@@ -123,6 +129,28 @@ impl PythonGpuSurfaceHandle {
             device_write_pending: std::sync::atomic::AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             natural_dlpack_side_is_device: std::sync::OnceLock::new(),
+            #[cfg(target_os = "linux")]
+            device_texture_without_a_local_mapping: Mutex::new(None),
+        }
+    }
+
+    /// A pooled device texture the parent acquired for this helper.
+    ///
+    /// It carries the name a kernel dispatch binds and a downstream processor
+    /// resolves, and nothing else: the texture's memory is not mapped into
+    /// this process, so every pixel accessor refuses by saying so.
+    #[cfg(target_os = "linux")]
+    fn from_helper_acquired_texture(acquired: HelperAcquiredTexture) -> Self {
+        Self {
+            minted_surface_id: Some(acquired.surface_id),
+            surface_width: acquired.width,
+            surface_height: acquired.height,
+            surface_format_name: acquired.format_name,
+            owned_memory: Mutex::new(None),
+            cpu_access: CpuAccessGate::new_unlocked(),
+            device_write_pending: std::sync::atomic::AtomicBool::new(false),
+            natural_dlpack_side_is_device: std::sync::OnceLock::new(),
+            device_texture_without_a_local_mapping: Mutex::new(Some(acquired.release_to_parent)),
         }
     }
 
@@ -155,10 +183,27 @@ impl PythonGpuSurfaceHandle {
     fn release_owned_engine_value(&self) {
         let released_share = self.owned_memory.lock().take();
         drop(released_share);
+        #[cfg(target_os = "linux")]
+        {
+            let released_slot = self.device_texture_without_a_local_mapping.lock().take();
+            drop(released_slot);
+        }
     }
 
     /// Borrow the shared memory anchor, or fail if the handle is closed.
     fn owned_memory(&self) -> PyResult<Arc<GpuSurfaceOwnedMemory>> {
+        #[cfg(target_os = "linux")]
+        if self
+            .device_texture_without_a_local_mapping
+            .lock()
+            .is_some()
+        {
+            return Err(PyRuntimeError::new_err(
+                "this surface is a device texture whose memory is not mapped into this process: \
+                 its pixels are reachable to a kernel dispatch, which binds it by surface id, \
+                 not to this process directly",
+            ));
+        }
         self.owned_memory.lock().clone().ok_or_else(|| {
             PyRuntimeError::new_err("this surface is closed; acquire or resolve it again")
         })
@@ -580,31 +625,31 @@ impl PythonGpuContextLimitedAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
-    /// Acquire a pooled texture from the pre-reserved pool.
+    /// Acquire a pooled device texture, named by the surface id the engine
+    /// minted for it.
     ///
-    /// Refused: a pool texture recycles per frame, and registering each
-    /// acquire into surface-share would put a per-frame SCM_RIGHTS round
-    /// trip and the service's lifetime bookkeeping on the hot path.
-    #[expect(
-        clippy::unused_self,
-        reason = "the refusal is this capability's whole answer for textures"
-    )]
-    #[expect(
-        unused_variables,
-        reason = "the Python-visible parameter names are the API; stubtest compares them"
-    )]
+    /// The id is the whole handle: a kernel dispatch binds it, and a
+    /// downstream processor resolves it. The texture's memory is not mapped
+    /// into this process, so its pixels are not addressable here.
     fn acquire_texture(
         &self,
+        python: Python<'_>,
         width: u32,
         height: u32,
         format: &str,
         usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        Err(PyRuntimeError::new_err(
-            "device textures are not reachable from a Python processor: a pool texture is \
-             not registered for cross-process import. `acquire_pixel_buffer` is the \
-             CPU-reachable path; device-side tensors ride the device-export staging path",
-        ))
+        let texture_format = parse_texture_format_name(format)?;
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let acquired =
+                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
+                acquired,
+            ));
+        }
+        let _ = (python, width, height, texture_format, usage);
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.
@@ -717,31 +762,61 @@ impl PythonGpuContextFullAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
-    /// Acquire a pooled texture through the privileged path.
-    ///
-    /// Refused for the same reason the limited capability refuses it: a
-    /// pool texture recycles per frame, and it is not registered for
-    /// cross-process import.
-    #[expect(
-        clippy::unused_self,
-        reason = "the refusal is this capability's whole answer for textures"
-    )]
-    #[expect(
-        unused_variables,
-        reason = "the Python-visible parameter names are the API; stubtest compares them"
-    )]
+    /// Acquire a pooled device texture through the privileged path.
     fn acquire_texture(
         &self,
+        python: Python<'_>,
         width: u32,
         height: u32,
         format: &str,
         usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        Err(PyRuntimeError::new_err(
-            "device textures are not reachable from a Python processor: a pool texture is \
-             not registered for cross-process import. `acquire_pixel_buffer` is the \
-             CPU-reachable path; device-side tensors ride the device-export staging path",
-        ))
+        let texture_format = parse_texture_format_name(format)?;
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let acquired =
+                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
+                acquired,
+            ));
+        }
+        let _ = (python, width, height, texture_format, usage);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Build a compute kernel from pre-compiled SPIR-V.
+    ///
+    /// Constructed once in `setup()`, dispatched per frame in `process()`.
+    /// The engine reflects the shader at construction and takes its binding
+    /// names from it — those names are what `dispatch` resolves against.
+    /// Re-creating an identical kernel is free of compilation.
+    #[pyo3(signature = (spirv, push_constant_size = 0, bindings = None))]
+    fn create_compute_kernel(
+        &self,
+        python: Python<'_>,
+        spirv: &[u8],
+        push_constant_size: u32,
+        bindings: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<PythonComputeKernel> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let declared = declared_compute_bindings_to_wire(python, bindings)?;
+            let spirv_hex = encode_lowercase_hex(spirv);
+            let (kernel_id, reflected_binding_kinds) = exchange_client.register_compute_kernel(
+                python,
+                &spirv_hex,
+                push_constant_size,
+                declared.as_any(),
+            )?;
+            return Ok(PythonComputeKernel {
+                kernel_id,
+                push_constant_size,
+                reflected_binding_kinds,
+                helper_process_exchange_client: Arc::clone(exchange_client),
+            });
+        }
+        let _ = (python, spirv, push_constant_size, bindings);
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.
@@ -1169,6 +1244,192 @@ impl PythonLinkOutputDataWriter {
 /// `ValueError` Python expects.
 pub(crate) fn parse_pixel_format_name(name: &str) -> PyResult<PixelFormat> {
     PixelFormat::parse_wire_name(name).map_err(PyValueError::new_err)
+}
+
+/// Texture formats travel to the parent as their wire spelling, which the host
+/// parses. Validating the spelling here keeps the refusal on the caller's own
+/// stack rather than arriving as an escalate failure.
+const TEXTURE_FORMAT_WIRE_NAMES: &[&str] = &[
+    "bgra8_unorm",
+    "bgra8_unorm_srgb",
+    "r8_unorm",
+    "rg8_unorm",
+    "rgba8_unorm",
+    "rgba8_unorm_srgb",
+    "rgba16_float",
+    "rgba32_float",
+];
+
+fn parse_texture_format_name(name: &str) -> PyResult<&str> {
+    TEXTURE_FORMAT_WIRE_NAMES
+        .iter()
+        .find(|known| **known == name)
+        .copied()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown texture format {name:?}; the formats a texture can be acquired in are \
+                 {}",
+                TEXTURE_FORMAT_WIRE_NAMES.join(", ")
+            ))
+        })
+}
+
+/// Lowercase hex, no `0x`, no separators — the encoding every escalate blob
+/// field uses.
+fn encode_lowercase_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(
+        String::with_capacity(bytes.len() * 2),
+        |mut encoded, byte| {
+            let _ = write!(encoded, "{byte:02x}");
+            encoded
+        },
+    )
+}
+
+/// The binding kind a Python caller names, as the wire spells it.
+fn parse_compute_binding_kind(kind: &str) -> PyResult<&'static str> {
+    match kind {
+        "sampled_image" => Ok("sampled_image"),
+        "sampled_texture" => Ok("sampled_texture"),
+        "storage_buffer" => Ok("storage_buffer"),
+        "storage_image" => Ok("storage_image"),
+        "uniform_buffer" => Ok("uniform_buffer"),
+        other => Err(PyValueError::new_err(format!(
+            "unknown binding kind {other:?}; a compute binding is one of sampled_image, \
+             sampled_texture, storage_buffer, storage_image, uniform_buffer"
+        ))),
+    }
+}
+
+/// Turn `{name: kind}` into the wire's declaration array.
+#[cfg(target_os = "linux")]
+fn declared_compute_bindings_to_wire<'py>(
+    python: Python<'py>,
+    declared: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyList>> {
+    let wire = PyList::empty(python);
+    if let Some(declared) = declared {
+        for (name, kind) in declared.iter() {
+            let name: String = name.extract()?;
+            let kind: String = kind.extract()?;
+            let entry = PyDict::new(python);
+            entry.set_item("name", name)?;
+            entry.set_item("kind", parse_compute_binding_kind(&kind)?)?;
+            wire.append(entry)?;
+        }
+    }
+    Ok(wire)
+}
+
+/// A compute kernel the engine built and holds, dispatched by name.
+///
+/// Constructed in `setup()` where the capability is Full; dispatched per frame
+/// in `process()`. No kernel handle string, fence, timeline or slot number
+/// reaches Python — the object is the handle.
+#[cfg(target_os = "linux")]
+#[pyclass(name = "ComputeKernel", module = "streamlib", frozen)]
+pub(crate) struct PythonComputeKernel {
+    kernel_id: String,
+    push_constant_size: u32,
+    /// The shader's bindings as reflection found them, name → wire kind. The
+    /// caller supplies surfaces by name; which kind each name is, is the
+    /// shader's to say, so it is carried rather than guessed per dispatch.
+    reflected_binding_kinds: Vec<(String, String)>,
+    helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
+}
+
+#[cfg(target_os = "linux")]
+#[pymethods]
+impl PythonComputeKernel {
+    /// The shader's own names for this kernel's bindings, in slot order.
+    #[getter]
+    fn binding_names(&self) -> Vec<String> {
+        self.reflected_binding_kinds
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Dispatch this kernel, binding each of the shader's declared resources
+    /// by name.
+    ///
+    /// Bindings never persist on the kernel, so every dispatch supplies all of
+    /// them: there is no implicit default and no value carried over from the
+    /// previous frame. Returns when the GPU work has retired and the writes
+    /// are visible.
+    #[pyo3(signature = (bindings, group_count, push_constants = None))]
+    fn dispatch(
+        &self,
+        python: Python<'_>,
+        bindings: &Bound<'_, PyDict>,
+        group_count: (u32, u32, u32),
+        push_constants: Option<&[u8]>,
+    ) -> PyResult<()> {
+        let push_constants = push_constants.unwrap_or_default();
+        if push_constants.len() != self.push_constant_size as usize {
+            return Err(PyValueError::new_err(format!(
+                "this kernel declares {} push-constant bytes but {} were supplied",
+                self.push_constant_size,
+                push_constants.len()
+            )));
+        }
+
+        let wire_bindings = PyList::empty(python);
+        for (name, bound_to) in bindings.iter() {
+            let name: String = name.extract()?;
+            let kind = self.reflected_kind_of(&name)?;
+            let entry = PyDict::new(python);
+            entry.set_item("target_id", self.bound_surface_id(&name, &bound_to)?)?;
+            entry.set_item("name", name)?;
+            entry.set_item("kind", kind)?;
+            wire_bindings.append(entry)?;
+        }
+
+        self.helper_process_exchange_client.run_compute_kernel(
+            python,
+            &self.kernel_id,
+            wire_bindings.as_any(),
+            &encode_lowercase_hex(push_constants),
+            group_count,
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl PythonComputeKernel {
+    /// The kind the shader declares this name as.
+    ///
+    /// An unknown name is refused here rather than sent — the round trip would
+    /// refuse it too, but the caller's own stack is where the mistake is.
+    fn reflected_kind_of(&self, name: &str) -> PyResult<String> {
+        self.reflected_binding_kinds
+            .iter()
+            .find(|(declared, _)| declared == name)
+            .map(|(_, kind)| kind.clone())
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "no binding named {name:?}; this shader declares {}",
+                    self.binding_names()
+                        .iter()
+                        .map(|declared| format!("{declared:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            })
+    }
+
+    /// The surface id a value bound at `name` names.
+    fn bound_surface_id(&self, name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
+        if let Ok(handle) = bound_to.extract::<PyRef<'_, PythonGpuSurfaceHandle>>() {
+            return handle.surface_id();
+        }
+        bound_to.extract::<String>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "binding {name:?} must be a GpuSurfaceHandle or a surface id string"
+            ))
+        })
+    }
 }
 
 /// The typed cast's claim, over a real link and a real surface-share service.

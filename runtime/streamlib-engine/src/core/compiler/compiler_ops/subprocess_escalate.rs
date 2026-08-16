@@ -59,6 +59,8 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
     EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
 };
+#[cfg(target_os = "linux")]
+use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseComputeBinding;
 use super::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
@@ -1198,6 +1200,21 @@ fn compute_binding_kind_from_wire(
     }
 }
 
+/// The wire enum for a binding kind.
+#[cfg(target_os = "linux")]
+fn compute_binding_kind_to_wire(
+    kind: crate::core::rhi::ComputeBindingKind,
+) -> EscalateRequestComputeBindingKind {
+    use crate::core::rhi::ComputeBindingKind;
+    match kind {
+        ComputeBindingKind::SampledImage => EscalateRequestComputeBindingKind::SampledImage,
+        ComputeBindingKind::SampledTexture => EscalateRequestComputeBindingKind::SampledTexture,
+        ComputeBindingKind::StorageBuffer => EscalateRequestComputeBindingKind::StorageBuffer,
+        ComputeBindingKind::StorageImage => EscalateRequestComputeBindingKind::StorageImage,
+        ComputeBindingKind::UniformBuffer => EscalateRequestComputeBindingKind::UniformBuffer,
+    }
+}
+
 /// Build a compute kernel for a subprocess customer, against `GpuContext`.
 ///
 /// Reflection derives the binding shape and its names; the request's own
@@ -1240,12 +1257,26 @@ fn handle_register_compute_kernel(
         })
         .collect();
 
-    match sandbox
-        .escalate(|full| full.create_or_reuse_compute_kernel(&spv, req.push_constant_size, &declared))
-    {
-        Ok((kernel_id, _kernel)) => EscalateResponse::Ok(EscalateResponseOk {
+    match sandbox.escalate(|full| {
+        full.create_or_reuse_compute_kernel(&spv, req.push_constant_size, &declared)
+    }) {
+        Ok((kernel_id, kernel)) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
+            // The caller dispatches by name and only the shader knows which
+            // kind each name is, so the shape goes back with the id.
+            bindings: Some(
+                kernel
+                    .bindings()
+                    .iter()
+                    .filter_map(|spec| {
+                        Some(EscalateResponseComputeBinding {
+                            kind: compute_binding_kind_to_wire(spec.kind),
+                            name: spec.name.as_deref()?.to_string(),
+                        })
+                    })
+                    .collect(),
+            ),
             ..Default::default()
         }),
         Err(e) => EscalateResponse::Err(EscalateResponseErr {

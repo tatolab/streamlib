@@ -146,6 +146,21 @@ fn refuse_check_out_the_service_declined(
     }
 }
 
+/// A pooled texture the parent acquired on this child's behalf.
+///
+/// Deliberately not a [`HelperCheckedOutPixelSurface`]: no fds were checked
+/// out and no memory is mapped here. What this carries is the name a dispatch
+/// binds and a downstream processor resolves, and the debt that hands the
+/// pool slot back.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperAcquiredTexture {
+    pub(crate) surface_id: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format_name: String,
+    pub(crate) release_to_parent: HelperSurfaceReleaseDebt,
+}
+
 /// What a checkout turned into once the fds were imported: mapped memory
 /// plus the layout facts every view derives from.
 #[cfg(target_os = "linux")]
@@ -455,6 +470,103 @@ impl HelperProcessGpuExchangeClient {
     pub(crate) fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
         let op = PyDict::new(python);
         op.set_item("op", "wait_device_idle")?;
+        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        Ok(())
+    }
+
+    /// Acquire a pooled texture, and take back the surface id the parent
+    /// minted for it plus the extent it actually allocated.
+    ///
+    /// Nothing is imported: the id is what a kernel dispatch binds and what a
+    /// downstream processor resolves. Mapping the texture's memory into this
+    /// process is a separate capability.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn acquire_texture(
+        &self,
+        python: Python<'_>,
+        width: u32,
+        height: u32,
+        wire_format_name: &str,
+        usage: &[String],
+    ) -> PyResult<HelperAcquiredTexture> {
+        let op = PyDict::new(python);
+        op.set_item("op", "acquire_texture")?;
+        op.set_item("width", width)?;
+        op.set_item("height", height)?;
+        op.set_item("format", wire_format_name)?;
+        op.set_item("usage", usage)?;
+        let response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let surface_id: String = response_field(&response, "handle_id")?.extract()?;
+        Ok(HelperAcquiredTexture {
+            width: response_field(&response, "width")?.extract()?,
+            height: response_field(&response, "height")?.extract()?,
+            format_name: response_field(&response, "format")?.extract()?,
+            // The debt exists from the moment the parent allocated: dropping
+            // this hands the pool slot back rather than stranding it.
+            release_to_parent: HelperSurfaceReleaseDebt {
+                escalate_request_to_parent: self.escalate_request_to_parent.clone_ref(python),
+                handle_id: surface_id.clone(),
+            },
+            surface_id,
+        })
+    }
+
+    /// Build a compute kernel in the parent and take back its id plus the
+    /// binding shape reflection found.
+    ///
+    /// The shape comes back because dispatch resolves by name and only the
+    /// shader knows which kind each name is — without it this side would have
+    /// to guess a kind for every binding it supplies.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn register_compute_kernel(
+        &self,
+        python: Python<'_>,
+        spv_hex: &str,
+        push_constant_size: u32,
+        declared_bindings: &Bound<'_, PyAny>,
+    ) -> PyResult<(String, Vec<(String, String)>)> {
+        let op = PyDict::new(python);
+        op.set_item("op", "register_compute_kernel")?;
+        op.set_item("spv_hex", spv_hex)?;
+        op.set_item("push_constant_size", push_constant_size)?;
+        op.set_item("bindings", declared_bindings)?;
+        let response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let kernel_id: String = response_field(&response, "handle_id")?.extract()?;
+        let mut reflected = Vec::new();
+        for entry in response_field(&response, "bindings")?.try_iter()? {
+            let entry = entry?;
+            reflected.push((
+                entry.get_item("name")?.extract()?,
+                entry.get_item("kind")?.extract()?,
+            ));
+        }
+        Ok((kernel_id, reflected))
+    }
+
+    /// Dispatch a registered compute kernel with its bindings supplied by name.
+    ///
+    /// Returns when the parent's dispatch has retired: compute is synchronous
+    /// host-side, so the writes are visible on return and no timeline value
+    /// crosses back for this side to wait on.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn run_compute_kernel(
+        &self,
+        python: Python<'_>,
+        kernel_id: &str,
+        bindings: &Bound<'_, PyAny>,
+        push_constants_hex: &str,
+        group_count: (u32, u32, u32),
+    ) -> PyResult<()> {
+        let op = PyDict::new(python);
+        op.set_item("op", "run_compute_kernel")?;
+        op.set_item("kernel_id", kernel_id)?;
+        op.set_item("bindings", bindings)?;
+        op.set_item("push_constants_hex", push_constants_hex)?;
+        op.set_item("group_count_x", group_count.0)?;
+        op.set_item("group_count_y", group_count.1)?;
+        op.set_item("group_count_z", group_count.2)?;
         escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         Ok(())
     }

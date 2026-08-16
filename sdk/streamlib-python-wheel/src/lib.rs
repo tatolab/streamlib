@@ -51,6 +51,8 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;
     module.add_class::<python_processor_context::PythonGpuSurfaceHandle>()?;
     module.add_class::<python_processor_context::PythonGpuSurfaceCheckOutLease>()?;
+    #[cfg(target_os = "linux")]
+    module.add_class::<python_processor_context::PythonComputeKernel>()?;
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;

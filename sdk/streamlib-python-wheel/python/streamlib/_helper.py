@@ -50,7 +50,7 @@ PROTOCOL_VERSION_ENV = "STREAMLIB_PROTOCOL_VERSION"
 # The engine and this module ship in one artifact, so the version cannot
 # disagree with itself. The handshake stays as an assertion because a stale
 # `streamlib` earlier on the child's `sys.path` is still reachable.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # Upper bound on how long an escalate request waits for its correlated
 # response. Generous enough for a cold GPU allocation under load; bounded so
