@@ -298,14 +298,21 @@ class VideoFrame:
         Python's words.
 
         They do differ in one respect, and it is the frame's lifetime. The
-        claim on the surface is offered by the read, so it is taken only when
-        the read builds the frame. Calling this on a bag you are already
-        holding claims nothing: the frame is as valid, and its pixels last
-        only as long as pool depth gives them — the same protection an
-        untyped read gets. That is a choice, not a lapse. Hold a frame past
-        the producer's ring and read it with `into=VideoFrame`, or take the
-        claim yourself through `gpu_limited_access_of_the_typed_read_in_progress()`
-        in your own type's constructor.
+        claim on the surface follows the *read*, not the spelling: it is
+        offered for the duration of a `read(port, into=…)` construction and
+        withdrawn the moment that returns. So calling this on a bag you are
+        already holding takes no claim, and its pixels last only as long as
+        pool depth gives them — the same protection an untyped read gets.
+        Called from inside a type that a typed read is constructing, it takes
+        one like any other frame built under that offer; the offer is open to
+        every class the read reaches, with no registration and no privileged
+        type.
+
+        The unclaimed case is a choice, not a lapse — a hand-rolled bag may
+        name no live surface at all. To hold a frame past the producer's ring,
+        read it with `into=VideoFrame`, or take the claim yourself through
+        `gpu_limited_access_of_the_typed_read_in_progress()` in your own type's
+        constructor.
         """
         missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
         if missing:
