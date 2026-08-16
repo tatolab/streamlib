@@ -1,0 +1,33 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// The pass the v1 compute wire could not express: read one surface, write a
+// different one. Its two bindings are deliberately differently-named and
+// differently-kinded, so a dispatch that resolved them by slot order rather
+// than by name would bind them backwards and fail visibly.
+//
+// Output is the source with its RGB inverted, plus a push-constant bias, so a
+// reader can tell "the kernel ran and read the right input" apart from both
+// "the kernel never ran" and "the kernel read its own output".
+
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D source_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D output_image;
+
+layout(push_constant) uniform PushConstants {
+    float bias;
+} pc;
+
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(output_image);
+    if (at.x >= extent.x || at.y >= extent.y) {
+        return;
+    }
+    vec2 uv = (vec2(at) + 0.5) / vec2(extent);
+    vec4 source = texture(source_image, uv);
+    imageStore(output_image, at, vec4(1.0 - source.rgb + pc.bias, source.a));
+}

@@ -3532,6 +3532,162 @@ mod tests {
             }
         }
 
+        /// The SPIR-V for the pass the v1 wire could not express — one
+        /// sampled input, one storage output, deliberately different kinds.
+        const READ_ONE_WRITE_ANOTHER_SPV: &[u8] =
+            include_bytes!(concat!(env!("OUT_DIR"), "/test_read_one_write_another.spv"));
+
+        fn read_one_write_another_spv_hex() -> String {
+            READ_ONE_WRITE_ANOTHER_SPV
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        }
+
+        fn register_read_one_write_another(
+            sandbox: &GpuContextLimitedAccess,
+        ) -> EscalateResponseOk {
+            let response = handle_register_compute_kernel(
+                sandbox,
+                "reg".to_string(),
+                EscalateRequestRegisterComputeKernel {
+                    bindings: Vec::new(),
+                    push_constant_size: 4,
+                    request_id: "reg".to_string(),
+                    spv_hex: read_one_write_another_spv_hex(),
+                },
+            );
+            match response {
+                EscalateResponse::Ok(ok) => ok,
+                other => panic!("registering the conformance kernel failed: {other:?}"),
+            }
+        }
+
+        /// Registration hands back the shape a dispatch needs: the shader's own
+        /// names, each with the kind only the shader knows.
+        #[test]
+        fn registration_answers_with_the_shaders_binding_names_and_kinds() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("registration_answers_with_the_shaders_bindings: no GPU — skipping");
+                return;
+            };
+            let ok = register_read_one_write_another(&sandbox);
+            let bindings = ok.bindings.expect("a register response carries the shape");
+            assert_eq!(
+                bindings
+                    .iter()
+                    .map(|b| (b.name.as_str(), b.kind))
+                    .collect::<Vec<_>>(),
+                vec![
+                    (
+                        "source_image",
+                        EscalateRequestComputeBindingKind::SampledTexture
+                    ),
+                    (
+                        "output_image",
+                        EscalateRequestComputeBindingKind::StorageImage
+                    ),
+                ],
+                "the two bindings differ in name and in kind, so binding by slot order \
+                 rather than by name would swap them"
+            );
+        }
+
+        /// Re-creating an identical kernel is free: same id, and the very same
+        /// kernel — counted by identity, never by elapsed time.
+        #[test]
+        fn re_registering_an_identical_kernel_is_a_cache_hit() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("re_registering_an_identical_kernel: no GPU — skipping");
+                return;
+            };
+            let first = register_read_one_write_another(&sandbox);
+            let second = register_read_one_write_another(&sandbox);
+            assert_eq!(
+                first.handle_id, second.handle_id,
+                "an identical kernel keeps its id"
+            );
+
+            let held = sandbox
+                .escalate(|full| {
+                    let a = full.compute_kernel_by_id(&first.handle_id);
+                    let b = full.compute_kernel_by_id(&second.handle_id);
+                    Ok((a, b))
+                })
+                .expect("the cache answers inside an escalate scope");
+            let (a, b) = (held.0.expect("cached"), held.1.expect("cached"));
+            assert!(
+                std::sync::Arc::ptr_eq(&a, &b),
+                "the second registration must reuse the first kernel, not build another"
+            );
+        }
+
+        /// The whole point of the change: two surfaces, bound by the shader's
+        /// own names, dispatched and retired.
+        ///
+        /// The textures are registered in-process rather than acquired over
+        /// the escalate op, because an escalate-acquired texture is published
+        /// to the surface-share service and resolves through it — and this
+        /// test has no service. The subject here is the dispatch.
+        #[test]
+        fn a_dispatch_reads_one_surface_and_writes_another() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_dispatch_reads_one_surface_and_writes_another: no GPU — skipping");
+                return;
+            };
+            let kernel_id = register_read_one_write_another(&sandbox).handle_id;
+
+            // Held for the dispatch: dropping a pooled handle hands its slot
+            // back, and the registration would then name a recycled texture.
+            let held = sandbox
+                .escalate(|full| {
+                    let desc = TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                        .with_usage(
+                            TextureUsages::TEXTURE_BINDING
+                                | TextureUsages::STORAGE_BINDING
+                                | TextureUsages::COPY_SRC
+                                | TextureUsages::COPY_DST,
+                        );
+                    let source = full.acquire_texture(&desc)?;
+                    let output = full.acquire_texture(&desc)?;
+                    full.register_texture("conformance-source", source.texture().clone());
+                    full.register_texture("conformance-output", output.texture().clone());
+                    Ok((source, output))
+                })
+                .expect("two pooled textures");
+            let (source_id, output_id) = ("conformance-source", "conformance-output");
+
+            let response = handle_run_compute_kernel(
+                &sandbox,
+                "run".to_string(),
+                EscalateRequestRunComputeKernel {
+                    bindings: vec![
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateRequestComputeBindingKind::SampledTexture,
+                            name: "source_image".to_string(),
+                            target_id: source_id.to_string(),
+                        },
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateRequestComputeBindingKind::StorageImage,
+                            name: "output_image".to_string(),
+                            target_id: output_id.to_string(),
+                        },
+                    ],
+                    group_count_x: 8,
+                    group_count_y: 8,
+                    group_count_z: 1,
+                    kernel_id: kernel_id.clone(),
+                    push_constants_hex: "00000000".to_string(),
+                    request_id: "run".to_string(),
+                },
+            );
+            match response {
+                EscalateResponse::Ok(ok) => assert_eq!(ok.handle_id, kernel_id),
+                other => panic!("the read-one-write-another dispatch failed: {other:?}"),
+            }
+            drop(held);
+        }
+
         #[test]
         fn dispatching_an_unregistered_kernel_id_is_refused() {
             let Some(sandbox) = make_gpu_sandbox_if_available() else {

@@ -124,6 +124,28 @@ fn compile_shaders() {
         assert!(status.success(), "glslc failed to compile {}", src);
     }
 
+    // The read-one-write-another conformance shader for named N-binding
+    // compute dispatch. Also staged as raw GLSL so the wheel's own tests can
+    // compile it — they exercise the same pass from Python.
+    {
+        let read_one_write_another_src = "src/vulkan/rhi/shaders/test_read_one_write_another.comp";
+        println!("cargo:rerun-if-changed={}", read_one_write_another_src);
+        let dst_path: PathBuf = Path::new(&out_dir).join("test_read_one_write_another.spv");
+        let status = Command::new("glslc")
+            .arg("-fshader-stage=compute")
+            .arg(KEEP_BINDING_NAMES)
+            .arg("-O")
+            .arg(Path::new(read_one_write_another_src))
+            .arg("-o")
+            .arg(&dst_path)
+            .status()
+            .expect("Failed to run glslc for test_read_one_write_another.comp");
+        assert!(
+            status.success(),
+            "glslc failed to compile test_read_one_write_another.comp"
+        );
+    }
+
     // Standalone test shader for the SampledImage binding kind.
     {
         let test_sampled_image_src = "src/vulkan/rhi/shaders/test_sampled_image.comp";
