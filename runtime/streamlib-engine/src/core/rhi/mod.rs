@@ -56,8 +56,8 @@ pub use host_timeline_semaphore::HostTimelineSemaphore;
 pub use index_buffer::IndexBuffer;
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{
-    pool_slot_key_of_surface_id, PixelBufferDescriptor, PixelBufferPoolSlotId,
-    PublishedPixelBufferFrameId,
+    PixelBufferDescriptor, PixelBufferPoolSlotId, PublishedPixelBufferFrameId,
+    pool_slot_key_of_surface_id,
 };
 pub use ray_tracing_kernel::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,

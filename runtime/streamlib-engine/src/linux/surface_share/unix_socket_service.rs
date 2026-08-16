@@ -748,8 +748,15 @@ fn handle_lookup(
     // A retired published frame id fails here, loudly, before any planes
     // cross the wire: the slot's registration still exists (it is per-slot),
     // but the frame this id named does not.
-    if let Err(retired) = state.check_out_leases().refuse_a_retired_frame_id(surface_id) {
-        tracing::warn!("[Surface share] refusing lookup of '{}': {}", surface_id, retired);
+    if let Err(retired) = state
+        .check_out_leases()
+        .refuse_a_retired_frame_id(surface_id)
+    {
+        tracing::warn!(
+            "[Surface share] refusing lookup of '{}': {}",
+            surface_id,
+            retired
+        );
         return (
             serde_json::json!({"error": retired.to_string()}),
             Vec::new(),

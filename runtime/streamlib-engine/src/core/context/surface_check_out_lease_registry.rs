@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use crate::core::rhi::{pool_slot_key_of_surface_id, PublishedPixelBufferFrameId};
+use crate::core::rhi::{PublishedPixelBufferFrameId, pool_slot_key_of_surface_id};
 use crate::core::{Error, Result};
 
 /// The holder a checkout lease is charged to — one surface-share connection.
@@ -196,7 +196,10 @@ impl SurfaceCheckOutLeaseRegistry {
     ) -> Result<bool> {
         let lease_key = pool_slot_key_of_surface_id(surface_id);
         let mut table = self.readable_table()?;
-        let Some(holders) = table.outstanding_check_outs_by_surface_id.get_mut(lease_key) else {
+        let Some(holders) = table
+            .outstanding_check_outs_by_surface_id
+            .get_mut(lease_key)
+        else {
             return Ok(false);
         };
         let Some(outstanding) = holders.get_mut(&holder) else {
@@ -521,7 +524,11 @@ mod tests {
                 .record_check_out_lease("never-published#4", child)
                 .is_err()
         );
-        assert!(registry.refuse_a_retired_frame_id("never-published#4").is_err());
+        assert!(
+            registry
+                .refuse_a_retired_frame_id("never-published#4")
+                .is_err()
+        );
     }
 
     /// Two generations of one slot are one lease key: the lease protects the

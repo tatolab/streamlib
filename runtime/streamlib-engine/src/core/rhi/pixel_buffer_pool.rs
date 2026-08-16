@@ -248,7 +248,10 @@ mod tests {
             "#7",
             "trailing-hash#",
         ] {
-            assert!(PublishedPixelBufferFrameId::parse(plain).is_none(), "{plain}");
+            assert!(
+                PublishedPixelBufferFrameId::parse(plain).is_none(),
+                "{plain}"
+            );
             assert_eq!(pool_slot_key_of_surface_id(plain), plain);
         }
     }

@@ -4,9 +4,10 @@
 use crate::core::context::TextureRegistration;
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{
-    pool_slot_key_of_surface_id, CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor,
-    PixelBufferPoolSlotId, PixelFormat, PublishedPixelBufferFrameId, RhiBlitter, RhiColorConverter,
-    RhiCommandQueue, RhiPixelBufferPool, Texture, TextureDescriptor, TextureFormat, TextureUsages,
+    CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolSlotId,
+    PixelFormat, PublishedPixelBufferFrameId, RhiBlitter, RhiColorConverter, RhiCommandQueue,
+    RhiPixelBufferPool, Texture, TextureDescriptor, TextureFormat, TextureUsages,
+    pool_slot_key_of_surface_id,
 };
 use crate::core::{Error, Result};
 #[cfg(target_os = "linux")]
@@ -83,7 +84,10 @@ struct PixelBufferRingEntry {
 }
 
 impl PixelBufferRingEntry {
-    fn holding_a_fresh_allocation(pool_slot_id: PixelBufferPoolSlotId, buffer: PixelBuffer) -> Self {
+    fn holding_a_fresh_allocation(
+        pool_slot_id: PixelBufferPoolSlotId,
+        buffer: PixelBuffer,
+    ) -> Self {
         Self {
             pool_slot_id,
             buffer,
@@ -808,7 +812,10 @@ impl GpuContext {
     pub fn get_pixel_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
         // Check local cache first
         if let Some(buffer) = self.pixel_buffer_pool_manager.get_from_cache(surface_id) {
-            tracing::trace!("GpuContext::get_pixel_buffer: cache hit for '{}'", surface_id);
+            tracing::trace!(
+                "GpuContext::get_pixel_buffer: cache hit for '{}'",
+                surface_id
+            );
             return Ok(buffer);
         }
 
@@ -4619,7 +4626,9 @@ mod tests {
         let grown_slot = acquire_one_pool_slot_id(&gpu)
             .expect("with every slot leased the pool grows instead of refusing");
         assert!(
-            !ring.iter().any(|leased| same_pool_slot(leased, &grown_slot)),
+            !ring
+                .iter()
+                .any(|leased| same_pool_slot(leased, &grown_slot)),
             "the pool handed back a leased slot instead of growing"
         );
     }
