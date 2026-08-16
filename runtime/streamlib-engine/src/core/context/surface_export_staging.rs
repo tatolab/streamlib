@@ -105,22 +105,25 @@ impl SurfaceExportStagingResidency {
     }
 }
 
-/// The pixel shape a texture-backed export presents to a DLPack
-/// consumer. Restricted to 4-byte color: the refill's geometry guard,
-/// the tightly-packed copy region, and the consumer-side tensor layout
-/// all express exactly that today — accepting a wider format here would
-/// size a staging no refill can fill. BGRA stays BGRA: relabeling those
-/// bytes RGBA would silently swap channels.
+/// The pixel shape a texture-backed export presents to its consumer.
+/// Restricted to 4-byte color: the refill's geometry guard, the
+/// tightly-packed copy region, and the consumer-side layout all express
+/// exactly that today — accepting a wider format here would size a
+/// staging no refill can fill. BGRA stays BGRA: relabeling those bytes
+/// RGBA would silently swap channels.
+///
+/// Residency-neutral, because the constraint is: a staging is one
+/// buffer, and both residencies hand out exactly that one buffer.
 fn export_pixel_shape_for_texture(format: TextureFormat) -> Result<PixelFormat> {
     match format {
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba32),
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra32),
         TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => Err(Error::GpuError(format!(
-            "device export supports 4-byte color textures today; {format:?} needs the wider \
-             tensor layouts no consumer path expresses yet"
+            "a surface export supports 4-byte color textures today; {format:?} needs the wider \
+             layouts no consumer path expresses yet"
         ))),
         TextureFormat::Nv12 => Err(Error::GpuError(
-            "device export refuses NV12: it is two planes, and a one-buffer export would drop \
+            "a surface export refuses NV12: it is two planes, and a one-buffer export would drop \
              chroma"
                 .into(),
         )),
@@ -130,8 +133,8 @@ fn export_pixel_shape_for_texture(format: TextureFormat) -> Result<PixelFormat> 
 fn export_bytes_per_pixel_for_pixel_format(format: PixelFormat) -> Result<u32> {
     if format.plane_count() > 1 || format == PixelFormat::Unknown {
         return Err(Error::GpuError(format!(
-            "device export refuses {format:?}: DLPack expresses one strided linear buffer, and \
-             exporting only the first plane would hand out part of the image"
+            "a surface export refuses {format:?}: a staging is one buffer, and exporting only \
+             the first plane would hand out part of the image"
         )));
     }
     Ok(format.bits_per_pixel() / 8)
@@ -843,7 +846,8 @@ impl GpuContext {
     }
 
     /// Export the staging buffer's OPAQUE_FD plus byte size and the
-    /// exporting device's UUID — the CUDA import triple. The fd
+    /// exporting device's UUID — what an importer needs at either
+    /// residency, and the CUDA import triple at `DeviceLocal`. The fd
     /// transfers to the caller.
     pub fn export_surface_export_staging_opaque_fd(
         &self,

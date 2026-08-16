@@ -1114,12 +1114,6 @@ enum CpuReadbackCopyDirection {
 
 #[cfg(target_os = "linux")]
 impl CpuReadbackCopy {
-    fn direction(self) -> CpuReadbackCopyDirection {
-        match self {
-            Self::Blocking(direction) | Self::NonBlocking(direction) => direction,
-        }
-    }
-
     /// The wire op name, for error messages that have to say which
     /// request failed.
     fn escalate_op_name(self) -> &'static str {
