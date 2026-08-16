@@ -3333,6 +3333,7 @@ mod tests {
         use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestRegisterComputeKernelBinding;
         use crate::core::context::GpuContext;
         use crate::core::rhi::ComputeBindingSpec;
+        use crate::host_rhi::HostTextureExt;
 
         /// Compute is an always-present capability now, so there is no bridge
         /// to install — only a device to have or not have.
@@ -3736,16 +3737,19 @@ mod tests {
                 &sandbox,
                 "run".to_string(),
                 EscalateRequestRunComputeKernel {
+                    // Supplied in the reverse of declaration order, so a
+                    // resolution that walked slots instead of names would bind
+                    // the two backwards and fail the pixel assertion below.
                     bindings: vec![
-                        EscalateRequestRunComputeKernelBinding {
-                            kind: EscalateComputeBindingKind::SampledTexture,
-                            name: "source_image".to_string(),
-                            target_id: source_id.to_string(),
-                        },
                         EscalateRequestRunComputeKernelBinding {
                             kind: EscalateComputeBindingKind::StorageImage,
                             name: "output_image".to_string(),
                             target_id: output_id.to_string(),
+                        },
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateComputeBindingKind::SampledTexture,
+                            name: "source_image".to_string(),
+                            target_id: source_id.to_string(),
                         },
                     ],
                     group_count_x: 8,
@@ -3828,6 +3832,13 @@ mod tests {
         /// A pixel-buffer surface is a legal id a Python caller can hold, and
         /// binding it must refuse by name — not fall into the buffer→texture
         /// synthesis path with a zero extent.
+        ///
+        /// The second half is the guard's real substance: a legitimate
+        /// resolver's cached canvas for the same slot must survive the refused
+        /// dispatch. Without the zero-extent guard the refusal still fires
+        /// (the 0×0 create fails), but only after evicting that canvas — so
+        /// this test resolves the surface at its real extent before and after,
+        /// and asserts the same texture comes back.
         #[test]
         fn binding_a_buffer_backed_surface_is_refused_by_name() {
             let Some(sandbox) = make_gpu_sandbox_if_available() else {
@@ -3850,6 +3861,23 @@ mod tests {
                 })
                 .expect("a pixel buffer and an output texture");
 
+            // A legitimate resolve at the real extent populates the slot's
+            // cached canvas — the thing the refused dispatch must not evict.
+            // The registration is held alive across the test: were the canvas
+            // evicted and recreated, the driver could hand the replacement a
+            // recycled handle value, and comparing dead handles would lie.
+            let registration_before = sandbox
+                .escalate(|full| {
+                    full.resolve_texture_registration_by_surface_id(
+                        &buffer_surface_id,
+                        None,
+                        64,
+                        64,
+                    )
+                })
+                .expect("the buffer surface resolves at its real extent");
+            let canvas_before = registration_before.texture().vulkan_inner().image();
+
             let response = handle_run_compute_kernel(
                 &sandbox,
                 "run-buffer".to_string(),
@@ -3858,7 +3886,7 @@ mod tests {
                         EscalateRequestRunComputeKernelBinding {
                             kind: EscalateComputeBindingKind::SampledTexture,
                             name: "source_image".to_string(),
-                            target_id: buffer_surface_id,
+                            target_id: buffer_surface_id.clone(),
                         },
                         EscalateRequestRunComputeKernelBinding {
                             kind: EscalateComputeBindingKind::StorageImage,
@@ -3883,6 +3911,24 @@ mod tests {
                 ),
                 other => panic!("a buffer-backed binding must refuse, got {other:?}"),
             }
+
+            let canvas_after = sandbox
+                .escalate(|full| {
+                    let registration = full.resolve_texture_registration_by_surface_id(
+                        &buffer_surface_id,
+                        None,
+                        64,
+                        64,
+                    )?;
+                    Ok(registration.texture().vulkan_inner().image())
+                })
+                .expect("the buffer surface still resolves after the refused dispatch");
+            assert_eq!(
+                canvas_before, canvas_after,
+                "the refused dispatch must not evict the slot's cached canvas — a fresh \
+                 texture here means the zero-extent guard fired after the eviction, not before"
+            );
+            drop(registration_before);
             drop(held_buffer);
         }
 
