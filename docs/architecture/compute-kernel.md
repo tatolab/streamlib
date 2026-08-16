@@ -29,6 +29,26 @@ and the kernel abstraction is the single gateway for compute dispatch.
 Adding a third shape every time a new kernel arrives is the failure mode
 this doc exists to prevent.
 
+## Two ways in
+
+A kernel is built from GLSL text or from a SPIR-V blob. GLSL is the source
+contract: `GpuContext::compile_glsl_shader_source_to_spirv` compiles it with
+the shaderc the engine links statically, so nothing on the machine has to
+supply a shader toolchain. Compilations are cached under the whole tuple that
+determines their output — source, stage, entry point, target environment,
+compiler version — never source alone.
+
+That compiler never optimizes. Every level above zero strips `OpName`, and a
+binding with no reflected name cannot be bound by name at all, which is the
+only way bindings are addressed.
+
+Pre-compiled SPIR-V remains accepted. It is the caller's job to keep the
+`OpName` decorations there — `derive_bindings_from_spirv` refuses a blob that
+lost them.
+
+The engine's own built-in shaders take neither path: they are compiled at
+build time, below.
+
 ## What the abstraction does for you
 
 Given a SPIR-V blob and a small typed declaration, the kernel:
@@ -63,7 +83,9 @@ Given a SPIR-V blob and a small typed declaration, the kernel:
 
 2. **Wire the shader into `build.rs`.** Append an entry to the `shaders`
    array in `runtime/streamlib-engine/build.rs`. The build script invokes
-   `glslc -O` and writes the SPIR-V into `OUT_DIR`. SPIR-V is read at
+   `glslc -g -O` and writes the SPIR-V into `OUT_DIR`. The `-g` is not
+   optional: `-O` strips every `OpName`, and reflection refuses a module
+   whose binding names are gone. SPIR-V is read at
    compile time via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.spv"))`. Do not
    commit `.spv` files to the source tree — they're build artifacts.

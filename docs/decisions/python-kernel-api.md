@@ -86,6 +86,24 @@ revisiting on its own terms. The
 cost accepted is a statically linked C++ toolchain inside an abi3 manylinux wheel, which
 widens "our Rust is compiled in" to "our code is compiled in" — vendored C/C++ included.
 
+The compiler shipped is `shaderc` 0.10.1 taken `build-from-source`, which vendors shaderc,
+glslang, SPIRV-Tools and SPIRV-Headers in the crate and links `libshaderc_combined.a`. That
+feature is not a preference: it forbids the build script's system-library probe, so no build
+host's stray `libshaderc.so` can end up as a runtime dependency. `glslang` (SnowflakePowered)
+was the lighter option — a `cc`-only build, no cmake — and was passed over because its safe
+wrapper exposes no entry point and its diagnostics are rawer, and a kernel author reads those
+diagnostics.
+
+**The licences, recorded because a reader will grep and find the scary one.** shaderc and
+SPIRV-Tools are Apache-2.0, glslang proper is 3-Clause BSD, SPIRV-Headers is MIT — all
+notice-only, none copyleft. `glslang_tab.cpp` is Bison-generated and carries the GNU GPL
+header, *with* the Bison special exception ("you may create a larger work that contains part
+or all of the Bison parser skeleton and distribute that work under terms of your choice, so
+long as that work isn't itself a parser generator"). StreamLib is not a parser generator, so
+no GPL obligation reaches it — the ordinary case for anything shipping a Bison parser. What
+the notice-only licences do owe is attribution on binary distribution, an obligation the
+wheel already carried for its Rust closure and does not yet discharge anywhere.
+
 **Collapsing the bridges over installing them.** The four traits exist to route between an
 app-process arm and a cdylib arm. The cdylib arm dies with the plugin ABI, helper children
 always take the app-process arm, and `importable-python-library-ripout.md` already records
