@@ -148,10 +148,6 @@ raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.17.0" }
-# Surface-adapter vocabulary the engine's surface-share state documents
-# itself against. Code use went with the host-side readback bridge; what
-# remains is a rustdoc link, which still needs the dependency to resolve.
-streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.17.0" }
 # The extern "C" panic net (run_host_extern_c) every host_services callback
 # routes through.
 # Consumer-side carve-out — defines the trait machinery
@@ -178,6 +174,12 @@ serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interferenc
 tempfile = "3.14"  # Temporary directories for logging and runtime tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 png = "0.17"  # PNG decoding for shader-output fixture comparisons
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# `testing::SubprocessCrashHarness` — drives a real subprocess crash against
+# the surface-share service. Tests only: the engine's library code carries no
+# surface-adapter types.
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.17.0" }
 
 [[bench]]
 name = "logging"
