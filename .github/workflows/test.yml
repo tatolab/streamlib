@@ -49,7 +49,7 @@ jobs:
       #
       # `timeout-minutes` is the native backstop the composite action cannot
       # declare for itself; `check-bounded-apt-install` fails the build if it
-      # goes missing. 10 minutes sits above the script's own 480s worst case so
+      # goes missing. 10 minutes sits above the script's own 540s worst case so
       # the script reports the failure rather than being killed mid-sentence.
       - name: Install system dependencies
         timeout-minutes: 10

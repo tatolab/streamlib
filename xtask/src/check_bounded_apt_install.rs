@@ -19,13 +19,20 @@
 //! the only place the native backstop can live, and a backstop nobody can
 //! forget is the whole point of gating it.
 //!
-//! Three stated blind spots. `timeout-minutes:` counts only at a step's own key
+//! Stated blind spots. `timeout-minutes:` counts only at a step's own key
 //! indentation, so a `with:` input of that name does not satisfy the gate. A
 //! step spelled across a YAML anchor or an `!!merge` key is not recognised as a
-//! step at all. And the front-end list is the apt family only, so
+//! step at all. The front-end list is the apt family only, so
 //! `release-wheel.yml`'s `dnf install` inside its manylinux container passes —
 //! that job is release-time, runs in a container this action cannot serve, and
-//! is deliberately out of scope; it is a real unbounded fetch all the same.
+//! is deliberately out of scope; it is a real unbounded fetch all the same. Two
+//! more live on [`line_fetches_packages`], which owns the shell heuristic.
+//!
+//! The scan root is `.github/` alone, so a workflow step that shells out to a
+//! script elsewhere in the repo is uncovered — `repo-gates.yml` already runs
+//! `bash scripts/check-license-headers.sh`, and `scripts/docker/host-prereqs.sh`
+//! already installs apt packages unbounded. Widening the root would put every
+//! developer-facing script in the repo under a CI rule written for CI.
 //!
 //! `.github/ISSUE_TEMPLATE/` is exempt: it is prose by construction, cannot run
 //! anything, and is the one place under `.github/` where "run apt install …" is
@@ -241,23 +248,36 @@ fn collect_unbounded_apt_invocations(
 /// line. A front-end as the *last* token of a line does not: that is far more
 /// often a step named "Install system dependencies with apt" than a command.
 ///
-/// Blind spot, stated rather than papered over: a front-end whose subcommand is
-/// built from a shell variable (`apt-get "$verb"`) reads as neither.
+/// Global flags between the front-end and its subcommand are skipped, so
+/// `apt-get -y install` and `apt-get -qq update` both read as fetches. `--`
+/// stops the skip: after end-of-options a word is prose, not a subcommand.
+///
+/// Two blind spots, stated rather than papered over: a front-end whose
+/// subcommand is built from a shell variable (`apt-get "$verb"`), and a flag
+/// whose value is a separate token (`apt-get -o Foo=bar update`) — the value
+/// does not start with `-`, so the skip stops on it.
 fn line_fetches_packages(line: &str) -> bool {
     let mut tokens = line.split_whitespace().peekable();
 
     while let Some(token) = tokens.next() {
-        let following = tokens.peek().copied();
-        let fetches = match token {
-            front_end if PACKAGE_FETCH_FRONT_ENDS.contains(&front_end) => match following {
-                Some("\\") => true,
-                Some(subcommand) => PACKAGE_FETCH_SUBCOMMANDS.contains(&subcommand),
-                None => false,
-            },
-            "dpkg" => following.is_some_and(|flag| DPKG_INSTALL_FLAGS.contains(&flag)),
-            _ => false,
-        };
-        if fetches {
+        if PACKAGE_FETCH_FRONT_ENDS.contains(&token) {
+            let mut following = tokens.peek().copied();
+            while following.is_some_and(|word| word != "--" && word.starts_with('-')) {
+                tokens.next();
+                following = tokens.peek().copied();
+            }
+            match following {
+                Some("\\") => return true,
+                Some(subcommand) if PACKAGE_FETCH_SUBCOMMANDS.contains(&subcommand) => return true,
+                _ => continue,
+            }
+        }
+
+        if token == "dpkg"
+            && tokens
+                .peek()
+                .is_some_and(|flag| DPKG_INSTALL_FLAGS.contains(flag))
+        {
             return true;
         }
     }
@@ -289,7 +309,7 @@ fn collect_action_calls(
         // to be named `timeout-minutes` is an input GitHub ignores, not a ceiling.
         let declares_a_timeout = step.uncommented_lines().any(|line| {
             line.trim_start().starts_with("timeout-minutes:")
-                && indentation_width(line) == step.key_indent
+                && indentation_width(line) == step.key_indentation_width
         });
 
         if !declares_a_timeout {
@@ -308,7 +328,7 @@ struct WorkflowStepBlock<'a> {
     /// Indentation of the step's own keys — `name:`, `uses:`, `timeout-minutes:`
     /// — as measured, not as assumed from the `-`. `-   name:` and a bare `-`
     /// put them somewhere other than marker + 2.
-    key_indent: usize,
+    key_indentation_width: usize,
     lines: Vec<&'a str>,
 }
 
@@ -355,7 +375,7 @@ fn split_into_step_blocks(contents: &str) -> Vec<WorkflowStepBlock<'_>> {
             continue;
         }
 
-        let list_marker_indent = indentation_width(line);
+        let list_marker_indentation_width = indentation_width(line);
         let mut block_lines: Vec<&str> = vec![*line];
         let mut end = index + 1;
 
@@ -363,7 +383,7 @@ fn split_into_step_blocks(contents: &str) -> Vec<WorkflowStepBlock<'_>> {
             if following_line.trim().is_empty() {
                 continue;
             }
-            if indentation_width(following_line) <= list_marker_indent {
+            if indentation_width(following_line) <= list_marker_indentation_width {
                 break;
             }
             block_lines.push(following_line);
@@ -373,18 +393,20 @@ fn split_into_step_blocks(contents: &str) -> Vec<WorkflowStepBlock<'_>> {
         // `- key:` puts the first key on the marker line, after however much
         // space follows the dash; a bare `-` puts it on the next line.
         let after_the_dash = &trimmed[1..];
-        let key_indent = if after_the_dash.trim().is_empty() {
+        let key_indentation_width = if after_the_dash.trim().is_empty() {
             block_lines
                 .get(1)
-                .map_or(list_marker_indent + 2, |line| indentation_width(line))
+                .map_or(list_marker_indentation_width + 2, |line| {
+                    indentation_width(line)
+                })
         } else {
-            list_marker_indent + 1 + indentation_width(after_the_dash)
+            list_marker_indentation_width + 1 + indentation_width(after_the_dash)
         };
 
         next_unclaimed_line = end;
         blocks.push(WorkflowStepBlock {
             first_line_number: index + 1,
-            key_indent,
+            key_indentation_width,
             lines: block_lines,
         });
     }
@@ -410,6 +432,12 @@ mod tests {
             .to_path_buf()
     }
 
+    /// Wraps step text in the smallest workflow that parses, so each test reads
+    /// as the steps it is actually about.
+    fn scan_workflow_steps(steps: &str) -> BoundedAptInstallScanReport {
+        scan_workflow_text(&format!("jobs:\n  t:\n    steps:\n{steps}"))
+    }
+
     fn scan_workflow_text(contents: &str) -> BoundedAptInstallScanReport {
         let mut report = BoundedAptInstallScanReport {
             files_scanned: 1,
@@ -420,12 +448,12 @@ mod tests {
         report
     }
 
-    const A_BOUNDED_STEP: &str = "jobs:\n  t:\n    steps:\n      - name: Install system dependencies\n        timeout-minutes: 10\n        uses: ./.github/actions/install-linux-engine-build-dependencies\n        with:\n          packages: glslc libvulkan-dev\n";
+    const A_BOUNDED_STEP: &str = "      - name: Install system dependencies\n        timeout-minutes: 10\n        uses: ./.github/actions/install-linux-engine-build-dependencies\n        with:\n          packages: glslc libvulkan-dev\n";
 
     #[test]
     fn rejects_a_bare_apt_get_in_a_workflow() {
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Install system dependencies\n        \
+        let report = scan_workflow_steps(
+            "      - name: Install system dependencies\n        \
              run: |\n          sudo apt-get update\n          sudo apt-get install -y glslc\n",
         );
         assert_eq!(
@@ -437,7 +465,7 @@ mod tests {
 
     #[test]
     fn accepts_a_workflow_that_uses_the_bounded_action() {
-        let report = scan_workflow_text(A_BOUNDED_STEP);
+        let report = scan_workflow_steps(A_BOUNDED_STEP);
         assert!(
             report.unbounded_apt_invocations.is_empty(),
             "no raw apt-get: {report:?}"
@@ -451,8 +479,8 @@ mod tests {
 
     #[test]
     fn rejects_an_action_call_missing_the_native_ceiling() {
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Install system dependencies\n        \
+        let report = scan_workflow_steps(
+            "      - name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
              with:\n          packages: glslc\n",
         );
@@ -465,8 +493,8 @@ mod tests {
 
     #[test]
     fn a_timeout_on_a_neighbouring_step_does_not_count() {
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Something else\n        \
+        let report = scan_workflow_steps(
+            "      - name: Something else\n        \
              timeout-minutes: 8\n        run: echo hi\n      - name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
              with:\n          packages: glslc\n",
@@ -480,8 +508,8 @@ mod tests {
 
     #[test]
     fn a_with_input_named_timeout_minutes_does_not_satisfy_the_gate() {
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Install system dependencies\n        \
+        let report = scan_workflow_steps(
+            "      - name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
              with:\n          timeout-minutes: 10\n          packages: glslc\n",
         );
@@ -496,8 +524,8 @@ mod tests {
     fn a_bare_dash_step_is_still_a_step() {
         // `-` alone with the keys on following lines is a legal sequence item,
         // and a splitter that misses it would let an unbounded step through.
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      -\n        name: Install system dependencies\n        \
+        let report = scan_workflow_steps(
+            "      -\n        name: Install system dependencies\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n",
         );
         assert_eq!(
@@ -513,8 +541,8 @@ mod tests {
 
     #[test]
     fn a_nested_list_item_does_not_split_its_step_away_from_its_ceiling() {
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Install system dependencies\n        \
+        let report = scan_workflow_steps(
+            "      - name: Install system dependencies\n        \
              timeout-minutes: 10\n        uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
              with:\n          packages: glslc\n          extra:\n            - ./.github/actions/install-linux-engine-build-dependencies\n",
         );
@@ -529,8 +557,8 @@ mod tests {
         // It must not demand a ceiling, and — the one that matters — it must not
         // count toward the liveness check, or a repo whose every real call had
         // been commented out would still read as wired.
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Something else\n        \
+        let report = scan_workflow_steps(
+            "      - name: Something else\n        \
              # uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
              run: echo hi\n",
         );
@@ -545,11 +573,11 @@ mod tests {
     }
 
     #[test]
-    fn the_step_key_indent_is_measured_not_assumed() {
+    fn the_step_key_indentation_width_is_measured_not_assumed() {
         // `-` followed by three spaces puts the keys at marker + 4. Deriving the
         // key indent as marker + 2 would look straight past this ceiling.
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      -   name: Install system dependencies\n          \
+        let report = scan_workflow_steps(
+            "      -   name: Install system dependencies\n          \
              timeout-minutes: 10\n          \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n",
         );
@@ -563,10 +591,9 @@ mod tests {
     #[test]
     fn a_step_named_after_apt_is_not_an_apt_invocation() {
         // A dangling front-end at end of line is far more often a step title
-        // than a command — and flagging a correct step told its author to use
-        // the very action they were already using.
-        let report = scan_workflow_text(
-            "jobs:\n  t:\n    steps:\n      - name: Install system dependencies with apt\n        \
+        // than a command.
+        let report = scan_workflow_steps(
+            "      - name: Install system dependencies with apt\n        \
              timeout-minutes: 10\n        \
              uses: ./.github/actions/install-linux-engine-build-dependencies\n",
         );
@@ -581,9 +608,21 @@ mod tests {
     }
 
     #[test]
-    fn a_line_continuation_still_counts_as_an_invocation() {
+    fn a_dangling_front_end_counts_only_when_it_is_a_continuation() {
         assert!(line_fetches_packages("          sudo apt-get \\"));
         assert!(!line_fetches_packages("      - name: Set up apt"));
+    }
+
+    #[test]
+    fn a_global_flag_between_the_front_end_and_its_subcommand_is_skipped() {
+        assert!(line_fetches_packages(
+            "          sudo apt-get -y install glslc"
+        ));
+        assert!(line_fetches_packages("          apt-get -qq update"));
+        // `--` is end-of-options: past it a word is prose, not a subcommand.
+        assert!(!line_fetches_packages(
+            "      - name: Install with apt -- update the pins"
+        ));
     }
 
     #[test]
@@ -600,7 +639,7 @@ mod tests {
 
     #[test]
     fn skips_a_commented_apt_get() {
-        let report = scan_workflow_text("      # was: sudo apt-get install -y glslc\n");
+        let report = scan_workflow_steps("      # was: sudo apt-get install -y glslc\n");
         assert!(
             report.unbounded_apt_invocations.is_empty(),
             "a comment naming apt-get is not an invocation: {report:?}"
@@ -657,6 +696,7 @@ mod tests {
         apt_get_fixture: PathBuf,
         mirror_switch_fixture: PathBuf,
         dpkg_repair_fixture: PathBuf,
+        privilege_prefix_fixture: PathBuf,
         invocation_log: PathBuf,
     }
 
@@ -683,13 +723,45 @@ mod tests {
                     "#!/usr/bin/env bash\nprintf 'dpkg-repaired\\n' \
                      >> \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"\n",
                 ),
+                privilege_prefix_fixture: write_executable_fixture(
+                    temp.path().join("privilege-prefix-fixture"),
+                    "#!/usr/bin/env bash\nprintf 'privileged %s\\n' \"$*\" \
+                     >> \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"\nexec \"$@\"\n",
+                ),
                 _temp: temp,
                 invocation_log,
             }
         }
 
+        /// Runs with the privilege prefix in play instead of erased, so the
+        /// `sudo timeout` word order is observable. Every other test empties the
+        /// prefix, and with it empty both orderings emit identical argv.
+        fn run_recording_the_privileged_argv(&self) -> BoundedRetryScriptRun {
+            self.run_with_environment(&[
+                (
+                    "STREAMLIB_APT_PRIVILEGE_PREFIX",
+                    self.privilege_prefix_fixture.as_os_str(),
+                ),
+                ("STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS", "5".as_ref()),
+            ])
+        }
+
         fn run_with_attempt_bound(&self, attempt_timeout_seconds: u64) -> BoundedRetryScriptRun {
-            let result = Command::new(&self.script)
+            self.run_with_environment(&[
+                ("STREAMLIB_APT_PRIVILEGE_PREFIX", "".as_ref()),
+                (
+                    "STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS",
+                    attempt_timeout_seconds.to_string().as_ref(),
+                ),
+            ])
+        }
+
+        fn run_with_environment(
+            &self,
+            overrides: &[(&str, &std::ffi::OsStr)],
+        ) -> BoundedRetryScriptRun {
+            let mut command = Command::new(&self.script);
+            command
                 .arg("glslc")
                 .env("STREAMLIB_APT_GET_COMMAND", &self.apt_get_fixture)
                 .env(
@@ -697,12 +769,13 @@ mod tests {
                     &self.mirror_switch_fixture,
                 )
                 .env("STREAMLIB_DPKG_REPAIR_COMMAND", &self.dpkg_repair_fixture)
-                .env(
-                    "STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS",
-                    attempt_timeout_seconds.to_string(),
-                )
-                .env("STREAMLIB_APT_FIXTURE_INVOCATION_LOG", &self.invocation_log)
-                .env("STREAMLIB_APT_PRIVILEGE_PREFIX", "")
+                .env("STREAMLIB_APT_FIXTURE_INVOCATION_LOG", &self.invocation_log);
+
+            for (name, value) in overrides {
+                command.env(name, value);
+            }
+
+            let result = command
                 .output()
                 .expect("the bounded-retry script must be executable");
 
@@ -727,8 +800,8 @@ mod tests {
     }
 
     /// Logs the whole argv, not just the subcommand: the `Acquire::*` options
-    /// are part of the contract, and a fixture that recorded only `$1` let them
-    /// be deleted wholesale with every test still green.
+    /// are part of the contract, so a fixture that recorded only `$1` could not
+    /// hold them.
     const LOG_THE_WHOLE_INVOCATION: &str =
         "printf '%s\\n' \"$*\" >> \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"";
 
@@ -737,8 +810,7 @@ mod tests {
     /// in 65s (inside the bound) and `install` was the command that ran 12m17s.
     ///
     /// A fixture that stalls on *every* subcommand never reaches the install, so
-    /// the install-side status handling goes unexercised and a regression there
-    /// stays green. That mutant was confirmed to survive the earlier fixtures.
+    /// the install-side status handling would go unexercised.
     const STALL_ONLY_ON_THE_INSTALL: &str = "\
         if [ \"$1\" = update ]; then exit 0; fi\n\
         if grep -q switched \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"; then exit 0; fi\n\
@@ -777,13 +849,17 @@ mod tests {
 
     #[test]
     fn every_apt_command_carries_the_retry_and_timeout_options() {
-        // Deleting the whole `apt_acquire_options` array left the suite green
-        // while the fixture logged only `$1`. These are the options that cover
-        // the transient failure and the silent connection; the wall-clock bound
-        // covers neither.
+        // These cover the transient per-file failure and the connection that
+        // goes silent. The wall-clock bound covers neither.
         let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 0\n"));
         let run = harness.run_with_attempt_bound(5);
 
+        assert_eq!(
+            run.invocation_log.lines().count(),
+            2,
+            "update and install must both have run, or this asserts over nothing; log:\n{}",
+            run.invocation_log
+        );
         for invocation in run.invocation_log.lines() {
             for option in [
                 "Acquire::Retries=3",
@@ -795,6 +871,31 @@ mod tests {
                     "`{option}` missing from `{invocation}`"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_bound_runs_under_the_privilege_prefix_not_the_other_way_round() {
+        // `timeout sudo apt-get` would put sudo in timeout's child slot, where
+        // SIGKILL lands on sudo and leaves an orphaned root apt-get holding
+        // /var/lib/dpkg/lock-frontend — so the fallback attempt fails on the
+        // lock and the escape hatch means nothing. Both orderings emit identical
+        // argv when the prefix is empty, which is why this test supplies one.
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 0\n"));
+        let run = harness.run_recording_the_privileged_argv();
+
+        let privileged: Vec<&str> = run
+            .invocation_log
+            .lines()
+            .filter_map(|line| line.strip_prefix("privileged "))
+            .collect();
+
+        assert_eq!(privileged.len(), 2, "log:\n{}", run.invocation_log);
+        for argv in privileged {
+            assert!(
+                argv.starts_with("timeout "),
+                "the prefix must wrap timeout, not the other way round: `{argv}`"
+            );
         }
     }
 

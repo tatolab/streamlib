@@ -15,11 +15,12 @@
 # covers transient per-file errors inside a single run, so retrying the primary
 # would be redundant: two attempts, one per mirror.
 #
-# 120s bounds one apt command, so two mirrors × (update + install) is a 480s
-# worst case — inside the caller's `timeout-minutes`, which is what lets this
-# script report the failure itself instead of being killed mid-sentence. 120s is
-# also ~8× the median step and ~1.8× the slowest *successful* update on record,
-# so a merely-mediocre mirror still finishes on the primary.
+# 120s bounds one apt command and 60s the dpkg repair, so two mirrors ×
+# (update + install) plus one repair is a 540s worst case — inside the caller's
+# `timeout-minutes`, which is what lets this script report the failure itself
+# instead of being killed mid-sentence. 120s is also ~8× the median step and
+# ~1.8× the slowest *successful* update on record, so a merely-mediocre mirror
+# still finishes on the primary.
 #
 # Env (all optional; the last four exist so the gate tests can drive this
 # without root, apt, or a network):
@@ -33,6 +34,7 @@
 set -euo pipefail
 
 readonly TIMEOUT_EXIT_STATUS=124
+readonly DPKG_REPAIR_TIMEOUT_SECONDS=60
 
 attempt_timeout_seconds="${STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS:-120}"
 fallback_mirror_url="${STREAMLIB_APT_FALLBACK_MIRROR_URL:-http://archive.ubuntu.com/ubuntu/}"
@@ -128,9 +130,16 @@ switch_apt_to_fallback_mirror() {
 # SIGINT reaches dpkg too. apt then refuses every later install with "dpkg was
 # interrupted, you must manually run dpkg --configure -a" — which would make the
 # fallback attempt fail deterministically and turn the escape hatch into a no-op.
+#
+# Bounded like everything else, and for the same reason: this runs right after a
+# root apt-get was signalled, so it is exactly when /var/lib/dpkg/lock-frontend
+# is most likely to still be held. An unbounded repair here would blow the
+# worst case the header states and hand the kill back to `timeout-minutes`.
+# 60s because it is local work with no network in it.
 finish_any_interrupted_dpkg() {
   # shellcheck disable=SC2086
-  $apt_privilege_prefix $dpkg_repair_command || true
+  $apt_privilege_prefix timeout --signal=INT --kill-after=10s "${DPKG_REPAIR_TIMEOUT_SECONDS}s" \
+    $dpkg_repair_command || true
 }
 
 primary_status=0
