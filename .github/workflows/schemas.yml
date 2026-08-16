@@ -26,10 +26,12 @@ jobs:
       # crates run bindgen, and the audio path links opus. Mirrors test.yml's
       # Linux engine dep set.
       #
-      # The libclang pair is new here. This job has been dispatch-only and unrun
-      # since 2026-01, and it was already missing what bindgen needs — it built
-      # only because the runner image happens to ship clang-18. Now that all
-      # three workflows share one action, the set says what it depends on.
+      # The libclang pair is new here, and is what the build needs rather than a
+      # copy for its own sake: generate_openapi links streamlib-engine, whose
+      # dependency iceoryx2-pal-posix runs bindgen in its build script, and
+      # bindgen needs both libclang itself and clang's builtin headers. Why this
+      # job's last two runs (both 2026-01-08) got by without them is not
+      # derivable from the tree, and is not worth a guess in a comment.
       - name: Install system dependencies
         timeout-minutes: 10
         uses: ./.github/actions/install-linux-engine-build-dependencies

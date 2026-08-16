@@ -21,21 +21,25 @@
 # also ~8× the median step and ~1.8× the slowest *successful* update on record,
 # so a merely-mediocre mirror still finishes on the primary.
 #
-# Env (all optional; the last three exist so the gate tests can drive this
+# Env (all optional; the last four exist so the gate tests can drive this
 # without root, apt, or a network):
 #   STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS  bound on one apt command (default 120)
 #   STREAMLIB_APT_FALLBACK_MIRROR_URL      mirror used once the primary blows the bound
+#   STREAMLIB_APT_PRIVILEGE_PREFIX         how to become root (default `sudo`; may be empty)
 #   STREAMLIB_APT_GET_COMMAND              the apt-get to invoke
 #   STREAMLIB_APT_MIRROR_SWITCH_COMMAND    the command that repoints apt at the fallback
 #   STREAMLIB_DPKG_REPAIR_COMMAND          the command that finishes an interrupted dpkg
 
 set -euo pipefail
 
+readonly TIMEOUT_EXIT_STATUS=124
+
 attempt_timeout_seconds="${STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS:-120}"
 fallback_mirror_url="${STREAMLIB_APT_FALLBACK_MIRROR_URL:-http://archive.ubuntu.com/ubuntu/}"
-apt_get_command="${STREAMLIB_APT_GET_COMMAND:-sudo apt-get}"
+apt_privilege_prefix="${STREAMLIB_APT_PRIVILEGE_PREFIX-sudo}"
+apt_get_command="${STREAMLIB_APT_GET_COMMAND:-apt-get}"
 mirror_switch_command="${STREAMLIB_APT_MIRROR_SWITCH_COMMAND:-}"
-dpkg_repair_command="${STREAMLIB_DPKG_REPAIR_COMMAND:-sudo dpkg --configure -a}"
+dpkg_repair_command="${STREAMLIB_DPKG_REPAIR_COMMAND:-dpkg --configure -a}"
 
 if [ "$#" -eq 0 ]; then
   echo "usage: ${0##*/} <apt-package>..." >&2
@@ -55,18 +59,25 @@ apt_acquire_options=(
   -o Acquire::https::Timeout=30
 )
 
-# `timeout` reports 124 when it fires. SIGINT first, because apt unwinds on it
-# and leaves `/var/cache/apt/archives/partial` intact for the next attempt to
-# resume from; SIGKILL only if it refuses to go.
+# `sudo timeout ...`, never `timeout sudo ...`: with sudo on the outside the
+# signal lands on sudo, which relays SIGINT but cannot be made to pass SIGKILL
+# on, so a `--kill-after` would leave an orphaned root apt-get holding
+# /var/lib/dpkg/lock-frontend and the fallback attempt would fail on the lock.
+# Running timeout as root puts it in the parent slot of apt-get itself.
+#
+# SIGINT first, because apt unwinds on it and leaves
+# /var/cache/apt/archives/partial intact for the next attempt to resume from;
+# SIGKILL only if it refuses to go. `timeout` reports 124 when it fires, which
+# is what tells a slow mirror apart from a broken package name below.
 run_one_bounded_apt_attempt() {
   local attempt_label="$1"
   local exit_status=0
 
   echo "==> apt attempt: ${attempt_label} (each command bounded to ${attempt_timeout_seconds}s)"
 
-  # Unquoted on purpose: the default is the two words `sudo apt-get`.
+  # Unquoted on purpose: each may be several words, or empty.
   # shellcheck disable=SC2086
-  timeout --signal=INT --kill-after=10s "${attempt_timeout_seconds}s" \
+  $apt_privilege_prefix timeout --signal=INT --kill-after=10s "${attempt_timeout_seconds}s" \
     $apt_get_command update "${apt_acquire_options[@]}" || exit_status=$?
 
   if [ "$exit_status" -ne 0 ]; then
@@ -74,11 +85,23 @@ run_one_bounded_apt_attempt() {
   fi
 
   # shellcheck disable=SC2086
-  timeout --signal=INT --kill-after=10s "${attempt_timeout_seconds}s" \
+  $apt_privilege_prefix timeout --signal=INT --kill-after=10s "${attempt_timeout_seconds}s" \
     $apt_get_command install -y "${apt_acquire_options[@]}" "${requested_packages[@]}" \
     || exit_status=$?
 
   return "$exit_status"
+}
+
+# A missing package and a stalled mirror are different diagnoses, and reporting
+# the second for the first sends the reader hunting a network problem that is
+# not there — the likeliest cause of a deterministic failure here is a
+# version-pinned package name that a runner-image roll retired.
+describe_attempt_failure() {
+  if [ "$1" -eq "$TIMEOUT_EXIT_STATUS" ]; then
+    echo "did not finish inside the ${attempt_timeout_seconds}s bound"
+  else
+    echo "failed with apt exit status $1"
+  fi
 }
 
 switch_apt_to_fallback_mirror() {
@@ -92,7 +115,9 @@ switch_apt_to_fallback_mirror() {
   # (`URIs: mirror+file:/etc/apt/apt-mirrors.txt`), so the whole switch is one
   # file — rewriting sources.list would not move anything.
   if [ -f /etc/apt/apt-mirrors.txt ]; then
-    printf '%s\n' "$fallback_mirror_url" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+    # shellcheck disable=SC2086
+    printf '%s\n' "$fallback_mirror_url" \
+      | $apt_privilege_prefix tee /etc/apt/apt-mirrors.txt >/dev/null
     echo "==> repointed /etc/apt/apt-mirrors.txt at ${fallback_mirror_url}"
   else
     echo "==> no /etc/apt/apt-mirrors.txt to repoint; the retry re-runs against the same mirror" >&2
@@ -105,20 +130,24 @@ switch_apt_to_fallback_mirror() {
 # fallback attempt fail deterministically and turn the escape hatch into a no-op.
 finish_any_interrupted_dpkg() {
   # shellcheck disable=SC2086
-  $dpkg_repair_command || true
+  $apt_privilege_prefix $dpkg_repair_command || true
 }
 
-if run_one_bounded_apt_attempt "primary mirror"; then
+primary_status=0
+run_one_bounded_apt_attempt "primary mirror" || primary_status=$?
+if [ "$primary_status" -eq 0 ]; then
   exit 0
 fi
 
-echo "==> primary mirror did not finish inside the bound; escaping to ${fallback_mirror_url}" >&2
+echo "==> primary mirror $(describe_attempt_failure "$primary_status"); escaping to ${fallback_mirror_url}" >&2
 finish_any_interrupted_dpkg
 switch_apt_to_fallback_mirror
 
-if run_one_bounded_apt_attempt "fallback mirror"; then
+fallback_status=0
+run_one_bounded_apt_attempt "fallback mirror" || fallback_status=$?
+if [ "$fallback_status" -eq 0 ]; then
   exit 0
 fi
 
-echo "==> both mirrors failed with a ${attempt_timeout_seconds}s bound per apt command" >&2
+echo "==> fallback mirror $(describe_attempt_failure "$fallback_status"); giving up" >&2
 exit 1

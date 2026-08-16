@@ -7,7 +7,7 @@
 //! mode that costs is not the one people write guards for — the script's own
 //! header records the measurement and why apt's guards miss it.
 //!
-//! So this is a location rule: a package install belongs in
+//! So this is a location rule: an *apt* install belongs in
 //! `install-system-dependencies-with-bounded-retry.sh` and nowhere else under
 //! `.github/`. Three workflows previously carried three copies of the same
 //! unbounded pair of commands, which is exactly how one of them ends up with a
@@ -19,12 +19,20 @@
 //! the only place the native backstop can live, and a backstop nobody can
 //! forget is the whole point of gating it.
 //!
-//! Two stated blind spots, both narrowed as far as an indentation scan can:
-//! `timeout-minutes:` counts only at a step's own key indentation, so a `with:`
-//! input of that name does not satisfy the gate; and a step spelled across a
-//! YAML anchor or an `!!merge` key would not be recognised as a step at all.
-//! Neither appears in this repo, and [`ensure_the_gate_is_still_wired`] is what
-//! stops the whole gate from passing vacuously if the shapes it keys on move.
+//! Three stated blind spots. `timeout-minutes:` counts only at a step's own key
+//! indentation, so a `with:` input of that name does not satisfy the gate. A
+//! step spelled across a YAML anchor or an `!!merge` key is not recognised as a
+//! step at all. And the front-end list is the apt family only, so
+//! `release-wheel.yml`'s `dnf install` inside its manylinux container passes —
+//! that job is release-time, runs in a container this action cannot serve, and
+//! is deliberately out of scope; it is a real unbounded fetch all the same.
+//!
+//! `.github/ISSUE_TEMPLATE/` is exempt: it is prose by construction, cannot run
+//! anything, and is the one place under `.github/` where "run apt install …" is
+//! a sentence rather than a step.
+//!
+//! [`ensure_the_gate_is_still_wired`] is what stops the whole gate from passing
+//! vacuously if the shapes it keys on move.
 
 use anyhow::Result;
 use std::path::Path;
@@ -62,6 +70,12 @@ const GITHUB_CI_SCAN_ROOT: &str = ".github";
 
 /// Only a workflow step can carry `timeout-minutes`; a composite action's cannot.
 const WORKFLOW_FILE_PREFIX: &str = ".github/workflows/";
+
+/// Prose by construction — the one place under `.github/` where an apt command
+/// is quoted rather than run. Everything else is scanned, extension or not: a
+/// Docker container action's `Dockerfile` is a first-class Actions shape and a
+/// natural home for an unbounded `RUN apt-get install`.
+const PROSE_ONLY_EXEMPT_PREFIX: &str = ".github/ISSUE_TEMPLATE/";
 
 /// A line that installs apt packages outside the bounded-retry script.
 #[derive(Debug, PartialEq, Eq)]
@@ -101,9 +115,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 
     for invocation in &report.unbounded_apt_invocations {
         failure_lines.push(format!(
-            "{}:{}: fetches packages under {} — install through `{}` instead, which bounds \
-             each command and escapes to a second mirror. The only file allowed to fetch \
-             packages is `{}`. Offending line: {}",
+            "{}:{}: fetches apt packages under {} — install through `{}` instead, which \
+             bounds each command and escapes to a second mirror. The only file allowed to \
+             run apt is `{}`. Offending line: {}",
             invocation.file_path,
             invocation.line_number,
             GITHUB_CI_SCAN_ROOT,
@@ -174,7 +188,9 @@ pub fn scan(workspace_root: &Path) -> Result<BoundedAptInstallScanReport> {
     let mut report = BoundedAptInstallScanReport::default();
 
     for file_path in crate::list_repository_files_under(workspace_root, GITHUB_CI_SCAN_ROOT)? {
-        if file_path == BOUNDED_RETRY_SCRIPT_RELATIVE_PATH || !can_carry_shell(&file_path) {
+        if file_path == BOUNDED_RETRY_SCRIPT_RELATIVE_PATH
+            || file_path.starts_with(PROSE_ONLY_EXEMPT_PREFIX)
+        {
             continue;
         }
 
@@ -193,16 +209,6 @@ pub fn scan(workspace_root: &Path) -> Result<BoundedAptInstallScanReport> {
     }
 
     Ok(report)
-}
-
-/// Only files that can run something get the shell heuristic.
-///
-/// `.github/` also holds prose — issue templates, CODEOWNERS — where a sentence
-/// ending in the word "apt" is a sentence, not an unbounded install.
-fn can_carry_shell(file_path: &str) -> bool {
-    [".yml", ".yaml", ".sh"]
-        .iter()
-        .any(|extension| file_path.ends_with(extension))
 }
 
 fn collect_unbounded_apt_invocations(
@@ -231,10 +237,12 @@ fn collect_unbounded_apt_invocations(
 /// invocation, and lets `sudo`, `DEBIAN_FRONTEND=noninteractive` and any other
 /// prefix fall out for free.
 ///
+/// A trailing `\` continuation counts, because the subcommand is on the next
+/// line. A front-end as the *last* token of a line does not: that is far more
+/// often a step named "Install system dependencies with apt" than a command.
+///
 /// Blind spot, stated rather than papered over: a front-end whose subcommand is
-/// built from a shell variable (`apt-get "$verb"`) reads as neither. A trailing
-/// `\` continuation does count, because a front-end left dangling at end of line
-/// is always the head of a wrapped invocation.
+/// built from a shell variable (`apt-get "$verb"`) reads as neither.
 fn line_fetches_packages(line: &str) -> bool {
     let mut tokens = line.split_whitespace().peekable();
 
@@ -242,8 +250,9 @@ fn line_fetches_packages(line: &str) -> bool {
         let following = tokens.peek().copied();
         let fetches = match token {
             front_end if PACKAGE_FETCH_FRONT_ENDS.contains(&front_end) => match following {
-                None | Some("\\") => true,
+                Some("\\") => true,
                 Some(subcommand) => PACKAGE_FETCH_SUBCOMMANDS.contains(&subcommand),
+                None => false,
             },
             "dpkg" => following.is_some_and(|flag| DPKG_INSTALL_FLAGS.contains(&flag)),
             _ => false,
@@ -552,11 +561,29 @@ mod tests {
     }
 
     #[test]
-    fn a_prose_file_under_github_is_not_scanned_for_shell() {
-        assert!(!can_carry_shell(".github/CODEOWNERS"));
-        assert!(!can_carry_shell(".github/ISSUE_TEMPLATE/bug.md"));
-        assert!(can_carry_shell(".github/workflows/test.yml"));
-        assert!(can_carry_shell(".github/actions/x/run.sh"));
+    fn a_step_named_after_apt_is_not_an_apt_invocation() {
+        // A dangling front-end at end of line is far more often a step title
+        // than a command — and flagging a correct step told its author to use
+        // the very action they were already using.
+        let report = scan_workflow_text(
+            "jobs:\n  t:\n    steps:\n      - name: Install system dependencies with apt\n        \
+             timeout-minutes: 10\n        \
+             uses: ./.github/actions/install-linux-engine-build-dependencies\n",
+        );
+        assert!(
+            report.unbounded_apt_invocations.is_empty(),
+            "a step title is not an invocation: {report:?}"
+        );
+        assert!(
+            report.action_calls_without_timeout.is_empty(),
+            "and it is correctly bounded: {report:?}"
+        );
+    }
+
+    #[test]
+    fn a_line_continuation_still_counts_as_an_invocation() {
+        assert!(line_fetches_packages("          sudo apt-get \\"));
+        assert!(!line_fetches_packages("      - name: Set up apt"));
     }
 
     #[test]
@@ -661,7 +688,7 @@ mod tests {
             }
         }
 
-        fn run_with_attempt_bound(&self, attempt_timeout_seconds: u64) -> (bool, String) {
+        fn run_with_attempt_bound(&self, attempt_timeout_seconds: u64) -> BoundedRetryScriptRun {
             let result = Command::new(&self.script)
                 .arg("glslc")
                 .env("STREAMLIB_APT_GET_COMMAND", &self.apt_get_fixture)
@@ -675,14 +702,22 @@ mod tests {
                     attempt_timeout_seconds.to_string(),
                 )
                 .env("STREAMLIB_APT_FIXTURE_INVOCATION_LOG", &self.invocation_log)
+                .env("STREAMLIB_APT_PRIVILEGE_PREFIX", "")
                 .output()
                 .expect("the bounded-retry script must be executable");
 
-            (
-                result.status.success(),
-                fs::read_to_string(&self.invocation_log).unwrap(),
-            )
+            BoundedRetryScriptRun {
+                succeeded: result.status.success(),
+                invocation_log: fs::read_to_string(&self.invocation_log).unwrap(),
+                stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
+            }
         }
+    }
+
+    struct BoundedRetryScriptRun {
+        succeeded: bool,
+        invocation_log: String,
+        stderr: String,
     }
 
     fn write_executable_fixture(path: PathBuf, body: &str) -> PathBuf {
@@ -691,26 +726,11 @@ mod tests {
         path
     }
 
-    const LOG_THE_SUBCOMMAND: &str =
-        "printf '%s\\n' \"$1\" >> \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"";
-
-    #[test]
-    fn a_healthy_mirror_installs_without_switching() {
-        let harness = BoundedRetryScriptHarness::new(&format!(
-            "#!/usr/bin/env bash\n{LOG_THE_SUBCOMMAND}\nexit 0\n"
-        ));
-        let (succeeded, log) = harness.run_with_attempt_bound(5);
-
-        assert!(succeeded, "a healthy mirror must succeed; log:\n{log}");
-        assert!(
-            log.contains("update") && log.contains("install"),
-            "both apt commands must run; log:\n{log}"
-        );
-        assert!(
-            !log.contains("switched"),
-            "a healthy run must not touch the mirror; log:\n{log}"
-        );
-    }
+    /// Logs the whole argv, not just the subcommand: the `Acquire::*` options
+    /// are part of the contract, and a fixture that recorded only `$1` let them
+    /// be deleted wholesale with every test still green.
+    const LOG_THE_WHOLE_INVOCATION: &str =
+        "printf '%s\\n' \"$*\" >> \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"";
 
     /// Succeeds on `update`, stalls on `install` until the mirror has been
     /// switched — the shape of the measured incident, where `update` finished
@@ -724,29 +744,83 @@ mod tests {
         if grep -q switched \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"; then exit 0; fi\n\
         sleep 600\n";
 
+    /// Exits non-zero immediately on the install — a broken package name, not a
+    /// slow mirror. The distinction is what the failure message has to get right.
+    const FAIL_THE_INSTALL_OUTRIGHT: &str = "\
+        if [ \"$1\" = update ]; then exit 0; fi\n\
+        exit 100\n";
+
+    fn apt_fixture(body: &str) -> String {
+        format!("#!/usr/bin/env bash\n{LOG_THE_WHOLE_INVOCATION}\n{body}")
+    }
+
     fn count_of(log: &str, subcommand: &str) -> usize {
-        log.lines().filter(|line| *line == subcommand).count()
+        log.lines()
+            .filter(|line| line.split_whitespace().next() == Some(subcommand))
+            .count()
+    }
+
+    #[test]
+    fn a_healthy_mirror_installs_without_switching() {
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 0\n"));
+        let run = harness.run_with_attempt_bound(5);
+        let log = &run.invocation_log;
+
+        assert!(run.succeeded, "a healthy mirror must succeed; log:\n{log}");
+        assert_eq!(count_of(log, "update"), 1, "log:\n{log}");
+        assert_eq!(count_of(log, "install"), 1, "log:\n{log}");
+        assert!(
+            !log.contains("switched"),
+            "a healthy run must not touch the mirror; log:\n{log}"
+        );
+    }
+
+    #[test]
+    fn every_apt_command_carries_the_retry_and_timeout_options() {
+        // Deleting the whole `apt_acquire_options` array left the suite green
+        // while the fixture logged only `$1`. These are the options that cover
+        // the transient failure and the silent connection; the wall-clock bound
+        // covers neither.
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 0\n"));
+        let run = harness.run_with_attempt_bound(5);
+
+        for invocation in run.invocation_log.lines() {
+            for option in [
+                "Acquire::Retries=3",
+                "Acquire::http::Timeout=30",
+                "Acquire::https::Timeout=30",
+            ] {
+                assert!(
+                    invocation.contains(option),
+                    "`{option}` missing from `{invocation}`"
+                );
+            }
+        }
     }
 
     #[test]
     fn a_slow_install_trips_the_bound_and_escapes_to_the_fallback() {
-        let harness = BoundedRetryScriptHarness::new(&format!(
-            "#!/usr/bin/env bash\n{LOG_THE_SUBCOMMAND}\n{STALL_ONLY_ON_THE_INSTALL}"
-        ));
-        let (succeeded, log) = harness.run_with_attempt_bound(2);
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture(STALL_ONLY_ON_THE_INSTALL));
+        let run = harness.run_with_attempt_bound(2);
+        let log = &run.invocation_log;
 
         assert!(
             log.contains("switched"),
             "the install-side bound must fire and repoint the mirror; log:\n{log}"
         );
         assert!(
-            succeeded,
+            run.succeeded,
             "the fallback mirror must carry the install home; log:\n{log}"
         );
         assert_eq!(
-            count_of(&log, "install"),
+            count_of(log, "install"),
             2,
             "the install must be attempted once per mirror; log:\n{log}"
+        );
+        assert!(
+            run.stderr.contains("did not finish inside the 2s bound"),
+            "a stalled mirror must be reported as a timeout; stderr:\n{}",
+            run.stderr
         );
     }
 
@@ -755,10 +829,9 @@ mod tests {
         // The bound can fire mid-unpack, and the SIGINT reaches dpkg too. apt
         // then refuses every later install until dpkg is reconfigured, which
         // would make the fallback attempt fail deterministically.
-        let harness = BoundedRetryScriptHarness::new(&format!(
-            "#!/usr/bin/env bash\n{LOG_THE_SUBCOMMAND}\n{STALL_ONLY_ON_THE_INSTALL}"
-        ));
-        let (_, log) = harness.run_with_attempt_bound(2);
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture(STALL_ONLY_ON_THE_INSTALL));
+        let run = harness.run_with_attempt_bound(2);
+        let log = &run.invocation_log;
 
         let repaired = log.lines().position(|line| line == "dpkg-repaired");
         let switched = log.lines().position(|line| line.starts_with("switched"));
@@ -769,16 +842,38 @@ mod tests {
     }
 
     #[test]
-    fn both_mirrors_failing_on_the_install_exits_non_zero_rather_than_hanging() {
-        let harness = BoundedRetryScriptHarness::new(&format!(
-            "#!/usr/bin/env bash\n{LOG_THE_SUBCOMMAND}\n\
-             if [ \"$1\" = update ]; then exit 0; fi\nexit 100\n"
-        ));
-        let (succeeded, log) = harness.run_with_attempt_bound(5);
+    fn a_broken_package_is_not_reported_as_a_slow_mirror() {
+        // The likeliest deterministic failure here is a version-pinned package
+        // name a runner-image roll retired. Calling that a timeout sends the
+        // reader hunting a network problem that is not there.
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture(FAIL_THE_INSTALL_OUTRIGHT));
+        let run = harness.run_with_attempt_bound(5);
 
-        assert!(!succeeded, "exhausting both mirrors must fail; log:\n{log}");
+        assert!(!run.succeeded, "a broken package must fail the step");
+        assert!(
+            run.stderr.contains("failed with apt exit status 100"),
+            "the real exit status must be reported; stderr:\n{}",
+            run.stderr
+        );
+        assert!(
+            !run.stderr.contains("did not finish inside"),
+            "nothing timed out, so nothing may say so; stderr:\n{}",
+            run.stderr
+        );
+    }
+
+    #[test]
+    fn both_mirrors_failing_on_the_install_exits_non_zero_rather_than_hanging() {
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture(FAIL_THE_INSTALL_OUTRIGHT));
+        let run = harness.run_with_attempt_bound(5);
+        let log = &run.invocation_log;
+
+        assert!(
+            !run.succeeded,
+            "exhausting both mirrors must fail; log:\n{log}"
+        );
         assert_eq!(
-            count_of(&log, "install"),
+            count_of(log, "install"),
             2,
             "the install must be tried once per mirror, no more; log:\n{log}"
         );
@@ -786,19 +881,21 @@ mod tests {
 
     #[test]
     fn a_failing_update_does_not_go_on_to_install() {
-        let harness = BoundedRetryScriptHarness::new(&format!(
-            "#!/usr/bin/env bash\n{LOG_THE_SUBCOMMAND}\nexit 100\n"
-        ));
-        let (succeeded, log) = harness.run_with_attempt_bound(5);
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture("exit 100\n"));
+        let run = harness.run_with_attempt_bound(5);
+        let log = &run.invocation_log;
 
-        assert!(!succeeded, "exhausting both mirrors must fail; log:\n{log}");
+        assert!(
+            !run.succeeded,
+            "exhausting both mirrors must fail; log:\n{log}"
+        );
         assert_eq!(
-            count_of(&log, "update"),
+            count_of(log, "update"),
             2,
             "one update per mirror; log:\n{log}"
         );
         assert_eq!(
-            count_of(&log, "install"),
+            count_of(log, "install"),
             0,
             "a failed update must not be followed by an install; log:\n{log}"
         );
