@@ -4,6 +4,7 @@
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::sync::{Arc, LazyLock, OnceLock, Weak};
 use std::time::Duration;
@@ -40,6 +41,13 @@ pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 /// listener.
 const SUBSCRIBER_ESTABLISHMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Whether a subscriber beat its caller's timeout. Settled by one
+/// compare-exchange from each side, so the caller and the subscriber thread can
+/// never both believe they won.
+const ESTABLISHMENT_PENDING: u8 = 0;
+const ESTABLISHMENT_CONFIRMED: u8 = 1;
+const ESTABLISHMENT_ABANDONED: u8 = 2;
+
 /// iceoryx2-backed pub/sub for runtime events.
 pub struct PubSub {
     // Set once via init()
@@ -71,13 +79,20 @@ impl PubSub {
     /// dropping the rest would strand listeners the caller cannot re-register,
     /// since the replay queue has already been taken.
     pub fn init(&self, runtime_id: &str, node: Iceoryx2Node) -> Result<()> {
-        let _ = self.runtime_id.set(runtime_id.to_string());
-        let _ = self.node.set(node);
+        // Publishing the backend and draining the queue under one lock is what
+        // makes `subscribe`'s buffer-or-establish decision safe: `node` is set
+        // before `runtime_id` (the gate `subscribe` reads), and a subscriber
+        // that loses the race sees the initialized state rather than pushing
+        // onto a queue nobody will drain again.
+        let pending = {
+            let mut pending = self.pending_subscriptions.lock();
+            let _ = self.node.set(node);
+            let _ = self.runtime_id.set(runtime_id.to_string());
+            std::mem::take(&mut *pending)
+        };
 
         tracing::info!("PUBSUB initialized for runtime '{}'", runtime_id);
 
-        // Replay pending subscriptions
-        let pending = std::mem::take(&mut *self.pending_subscriptions.lock());
         let mut first_failure = None;
         for (topic, listener) in pending {
             tracing::debug!("Replaying pending subscription for topic '{}'", topic);
@@ -137,24 +152,34 @@ impl PubSub {
             );
         }
 
-        if self.runtime_id.get().is_none() {
-            // Not yet initialized — buffer for replay
-            tracing::debug!(
-                "PUBSUB not initialized, buffering subscription for '{}'",
-                topic
-            );
-            self.pending_subscriptions
-                .lock()
-                .push((topic.to_string(), listener));
-            return Ok(());
-        }
+        // Decide and buffer under the lock `init` drains behind, so a
+        // subscription can never be pushed onto an already-taken queue.
+        let listener = {
+            let mut pending = self.pending_subscriptions.lock();
+            if self.runtime_id.get().is_none() {
+                tracing::debug!(
+                    "PUBSUB not initialized, buffering subscription for '{}'",
+                    topic
+                );
+                pending.push((topic.to_string(), listener));
+                return Ok(());
+            }
+            listener
+        };
 
         self.subscribe_inner(topic, listener)
     }
 
     fn subscribe_inner(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) -> Result<()> {
-        let runtime_id = self.runtime_id.get().unwrap().clone();
-        let node = self.node.get().unwrap().clone();
+        // `init` publishes `node` before `runtime_id`, and both callers reach
+        // here only after observing `runtime_id`, so these are set.
+        let (Some(runtime_id), Some(node)) = (self.runtime_id.get(), self.node.get()) else {
+            return Err(Error::Runtime(format!(
+                "PUBSUB backend missing while subscribing to '{topic}'"
+            )));
+        };
+        let runtime_id = runtime_id.clone();
+        let node = node.clone();
         let weak_listener = Arc::downgrade(&listener);
         let topic_owned = topic.to_string();
 
@@ -162,6 +187,13 @@ impl PubSub {
         let service_name_for_log = service_name.clone();
 
         let (subscriber_ready_sender, subscriber_ready_receiver) = sync_channel(1);
+
+        // The channel wakes the caller; this settles who won when the wake-up
+        // and the timeout land together. Exactly one of the two transitions out
+        // of PENDING succeeds, which is what lets `Err` mean "not subscribed"
+        // with no window where it also means "subscribed a moment too late".
+        let establishment = Arc::new(AtomicU8::new(ESTABLISHMENT_PENDING));
+        let establishment_for_subscriber = Arc::clone(&establishment);
 
         // Spawn a dedicated OS thread for polling.
         // iceoryx2 Subscriber uses Rc internally (!Send), so it must be
@@ -209,6 +241,24 @@ impl PubSub {
 
             // Registered in the service's dynamic config: every publisher picks
             // this port up on its next `send()`, so the caller may publish now.
+            if establishment_for_subscriber
+                .compare_exchange(
+                    ESTABLISHMENT_PENDING,
+                    ESTABLISHMENT_CONFIRMED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err()
+            {
+                // The caller already gave up and was told it has no
+                // subscription. Drop this one rather than leave it polling
+                // against a listener nobody believes is subscribed.
+                tracing::debug!(
+                    "Subscriber for topic '{}' came up after its caller gave up; closing it",
+                    topic_owned
+                );
+                return;
+            }
             let _ = subscriber_ready_sender.send(());
 
             subscriber_poll_loop(&subscriber, &weak_listener, &topic_owned);
@@ -233,10 +283,29 @@ impl PubSub {
                 "Subscriber for '{service_name_for_log}' never came up; \
                  events on topic '{topic}' would be missed"
             ))),
-            Err(RecvTimeoutError::Timeout) => Err(Error::Runtime(format!(
-                "Subscriber for '{service_name_for_log}' was still coming up after \
-                 {SUBSCRIBER_ESTABLISHMENT_TIMEOUT:?}; events on topic '{topic}' would be missed"
-            ))),
+            Err(RecvTimeoutError::Timeout) => {
+                if establishment
+                    .compare_exchange(
+                        ESTABLISHMENT_PENDING,
+                        ESTABLISHMENT_ABANDONED,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_err()
+                {
+                    // It registered in the instant we timed out, so the
+                    // subscription is real and reporting failure would be wrong.
+                    tracing::debug!(
+                        "Subscriber for '{}' registered as the timeout elapsed",
+                        service_name_for_log
+                    );
+                    return Ok(());
+                }
+                Err(Error::Runtime(format!(
+                    "Subscriber for '{service_name_for_log}' was still coming up after \
+                     {SUBSCRIBER_ESTABLISHMENT_TIMEOUT:?}; events on topic '{topic}' would be missed"
+                )))
+            }
         }
     }
 

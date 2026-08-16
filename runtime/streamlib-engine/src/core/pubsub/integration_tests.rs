@@ -727,6 +727,77 @@ fn test_an_event_published_the_instant_subscribe_returns_is_delivered() {
     drop(listener);
 }
 
+/// `subscribe` races `init` for the buffer-or-establish decision: it reads the
+/// initialized state, then either pushes onto the replay queue or establishes
+/// directly. Both sides settle that under one lock, so a subscriber can neither
+/// push onto a queue `init` has already drained nor reach `subscribe_inner`
+/// before the backend is published.
+///
+/// Mental-revert: setting `runtime_id` before `node` in `init`, or taking the
+/// queue outside the lock, loses listeners here (and, before the ordering fix,
+/// panicked on `node.get().unwrap()`).
+#[test]
+fn test_subscribing_concurrently_with_init_loses_no_listener() {
+    // Enough attempts to land inside a window that is only a few instructions
+    // wide; the failure this locks is a lost listener, which is deterministic
+    // once the interleaving happens at all.
+    for attempt in 0..8 {
+        let runtime_id = format!("test-init-race-{}-{}", attempt, uuid::Uuid::new_v4());
+        let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+        let bus = Arc::new(PubSub::new());
+
+        let subscriber_count = 4;
+        let start = Arc::new(std::sync::Barrier::new(subscriber_count + 1));
+        let mut receivers = Vec::new();
+        // This thread owns every listener for the whole attempt. Handing the
+        // Arc to the racing thread would tie the subscription's lifetime to
+        // that thread's schedule, and a listener dropped before the publish
+        // below reads exactly like the lost-registration bug under test.
+        let mut listeners: Vec<Arc<Mutex<dyn EventListener>>> = Vec::new();
+        let mut handles = Vec::new();
+
+        for _ in 0..subscriber_count {
+            let (tx, rx) = mpsc::channel();
+            let listener: Arc<Mutex<dyn EventListener>> =
+                Arc::new(Mutex::new(ChannelListener { sender: tx }));
+            receivers.push(rx);
+            listeners.push(Arc::clone(&listener));
+
+            let bus = Arc::clone(&bus);
+            let start = Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                start.wait();
+                bus.subscribe(topics::KEYBOARD, listener)
+            }));
+        }
+
+        start.wait();
+        bus.init(&runtime_id, node)
+            .expect("init establishes pending subscriptions");
+
+        for (index, handle) in handles.into_iter().enumerate() {
+            handle
+                .join()
+                .expect("subscriber thread joins")
+                .unwrap_or_else(|e| {
+                    panic!("attempt {attempt}: subscriber {index} failed to subscribe: {e}")
+                });
+        }
+
+        let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
+        bus.publish(&event.topic(), &event);
+
+        for (index, rx) in receivers.iter().enumerate() {
+            assert!(
+                rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+                "attempt {attempt}: subscriber {index} raced init and was never registered",
+            );
+        }
+
+        drop(listeners);
+    }
+}
+
 #[test]
 fn test_subscribe_before_init_receives_events_after_init() {
     let runtime_id = format!("test-sub-before-init-{}", uuid::Uuid::new_v4());
