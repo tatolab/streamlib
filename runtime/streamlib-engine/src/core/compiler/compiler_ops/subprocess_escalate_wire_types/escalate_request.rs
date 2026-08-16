@@ -349,7 +349,7 @@ pub(crate) struct EscalateRequestRegisterAccelerationStructureTlas {
 
 /// Resource kind for a compute binding slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestComputeBindingKind {
+pub(crate) enum EscalateComputeBindingKind {
     #[serde(rename = "sampled_image")]
     SampledImage,
 
@@ -374,7 +374,7 @@ pub(crate) enum EscalateRequestComputeBindingKind {
 pub(crate) struct EscalateRequestRegisterComputeKernelBinding {
     /// Resource kind the caller expects at this name. Checked against
     /// reflection at registration; a mismatch is an `err` response.
-    pub(crate) kind: EscalateRequestComputeBindingKind,
+    pub(crate) kind: EscalateComputeBindingKind,
 
     /// The shader's own name for the binding.
     pub(crate) name: String,
@@ -1185,7 +1185,7 @@ pub(crate) struct EscalateRequestRunComputeKernelBinding {
     /// Resource kind the caller believes is at this name. Must match the
     /// kernel's reflected kind; a mismatch is an `err` response raised before
     /// anything is submitted.
-    pub(crate) kind: EscalateRequestComputeBindingKind,
+    pub(crate) kind: EscalateComputeBindingKind,
 
     /// The shader's own name for the binding. Resolved against the kernel's
     /// reflected bindings — a name the shader does not declare, or a declared

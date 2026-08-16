@@ -25,8 +25,8 @@ use uuid::Uuid;
 use crate::host_rhi::HostSurfaceStoreExt;
 
 use super::subprocess_escalate_wire_types::escalate_request::{
-    EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
-    EscalateRequestComputeBindingKind, EscalateRequestCopyDeviceExportStagingBackToSurface,
+    EscalateComputeBindingKind, EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer,
+    EscalateRequestAcquireTexture, EscalateRequestCopyDeviceExportStagingBackToSurface,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
     EscalateRequestRegisterAccelerationStructureBlas,
@@ -1188,15 +1188,15 @@ where
 /// The binding kind a wire enum names.
 #[cfg(target_os = "linux")]
 fn compute_binding_kind_from_wire(
-    kind: EscalateRequestComputeBindingKind,
+    kind: EscalateComputeBindingKind,
 ) -> crate::core::rhi::ComputeBindingKind {
     use crate::core::rhi::ComputeBindingKind;
     match kind {
-        EscalateRequestComputeBindingKind::SampledImage => ComputeBindingKind::SampledImage,
-        EscalateRequestComputeBindingKind::SampledTexture => ComputeBindingKind::SampledTexture,
-        EscalateRequestComputeBindingKind::StorageBuffer => ComputeBindingKind::StorageBuffer,
-        EscalateRequestComputeBindingKind::StorageImage => ComputeBindingKind::StorageImage,
-        EscalateRequestComputeBindingKind::UniformBuffer => ComputeBindingKind::UniformBuffer,
+        EscalateComputeBindingKind::SampledImage => ComputeBindingKind::SampledImage,
+        EscalateComputeBindingKind::SampledTexture => ComputeBindingKind::SampledTexture,
+        EscalateComputeBindingKind::StorageBuffer => ComputeBindingKind::StorageBuffer,
+        EscalateComputeBindingKind::StorageImage => ComputeBindingKind::StorageImage,
+        EscalateComputeBindingKind::UniformBuffer => ComputeBindingKind::UniformBuffer,
     }
 }
 
@@ -1204,14 +1204,14 @@ fn compute_binding_kind_from_wire(
 #[cfg(target_os = "linux")]
 fn compute_binding_kind_to_wire(
     kind: crate::core::rhi::ComputeBindingKind,
-) -> EscalateRequestComputeBindingKind {
+) -> EscalateComputeBindingKind {
     use crate::core::rhi::ComputeBindingKind;
     match kind {
-        ComputeBindingKind::SampledImage => EscalateRequestComputeBindingKind::SampledImage,
-        ComputeBindingKind::SampledTexture => EscalateRequestComputeBindingKind::SampledTexture,
-        ComputeBindingKind::StorageBuffer => EscalateRequestComputeBindingKind::StorageBuffer,
-        ComputeBindingKind::StorageImage => EscalateRequestComputeBindingKind::StorageImage,
-        ComputeBindingKind::UniformBuffer => EscalateRequestComputeBindingKind::UniformBuffer,
+        ComputeBindingKind::SampledImage => EscalateComputeBindingKind::SampledImage,
+        ComputeBindingKind::SampledTexture => EscalateComputeBindingKind::SampledTexture,
+        ComputeBindingKind::StorageBuffer => EscalateComputeBindingKind::StorageBuffer,
+        ComputeBindingKind::StorageImage => EscalateComputeBindingKind::StorageImage,
+        ComputeBindingKind::UniformBuffer => EscalateComputeBindingKind::UniformBuffer,
     }
 }
 
@@ -1350,13 +1350,24 @@ fn handle_run_compute_kernel(
     }
 }
 
+/// The binding kinds a dispatch can name a surface for. Narrower than
+/// [`crate::core::rhi::ComputeBindingKind`] on purpose: a plan holding this
+/// type has already refused the buffer and samplerless kinds, so the bind
+/// loop's match is total with no panic arm to keep in sync.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SurfaceBoundComputeBindingKind {
+    StorageImage,
+    SampledTexture,
+}
+
 /// What one validated binding resolved to: the slot to write, the kind to
 /// write it as, and the surface to look up.
 #[cfg(target_os = "linux")]
 #[derive(Debug, PartialEq, Eq)]
 struct PlannedComputeBinding<'a> {
     binding: u32,
-    kind: crate::core::rhi::ComputeBindingKind,
+    kind: SurfaceBoundComputeBindingKind,
     name: &'a str,
     target_id: &'a str,
 }
@@ -1431,8 +1442,9 @@ fn plan_supplied_compute_bindings<'a>(
                 wire.name, supplied_kind, spec.kind
             )));
         }
-        match spec.kind {
-            ComputeBindingKind::StorageImage | ComputeBindingKind::SampledTexture => {}
+        let surface_bound_kind = match spec.kind {
+            ComputeBindingKind::StorageImage => SurfaceBoundComputeBindingKind::StorageImage,
+            ComputeBindingKind::SampledTexture => SurfaceBoundComputeBindingKind::SampledTexture,
             ComputeBindingKind::SampledImage
             | ComputeBindingKind::StorageBuffer
             | ComputeBindingKind::UniformBuffer => {
@@ -1442,10 +1454,10 @@ fn plan_supplied_compute_bindings<'a>(
                     wire.name, spec.kind
                 )));
             }
-        }
+        };
         planned.push(PlannedComputeBinding {
             binding: spec.binding,
-            kind: spec.kind,
+            kind: surface_bound_kind,
             name: wire.name.as_str(),
             target_id: wire.target_id.as_str(),
         });
@@ -1468,7 +1480,6 @@ fn bind_and_dispatch_compute_kernel(
     push_constants: &[u8],
 ) -> crate::core::error::Result<()> {
     use crate::core::error::Error;
-    use crate::core::rhi::ComputeBindingKind;
 
     // Borrowed, not cloned: this runs per frame, and the specs live on the
     // kernel for its whole life.
@@ -1496,16 +1507,11 @@ fn bind_and_dispatch_compute_kernel(
     for (binding, registration) in &resolved {
         let texture = registration.texture();
         match binding.kind {
-            ComputeBindingKind::StorageImage => {
+            SurfaceBoundComputeBindingKind::StorageImage => {
                 kernel.set_storage_image(binding.binding, texture)?;
             }
-            ComputeBindingKind::SampledTexture => {
+            SurfaceBoundComputeBindingKind::SampledTexture => {
                 kernel.set_sampled_texture(binding.binding, texture)?;
-            }
-            ComputeBindingKind::SampledImage
-            | ComputeBindingKind::StorageBuffer
-            | ComputeBindingKind::UniformBuffer => {
-                unreachable!("plan_supplied_compute_bindings refuses unbindable kinds")
             }
         }
     }
@@ -3326,7 +3332,7 @@ mod tests {
         use super::super::*;
         use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestRegisterComputeKernelBinding;
         use crate::core::context::GpuContext;
-        use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec};
+        use crate::core::rhi::ComputeBindingSpec;
 
         /// Compute is an always-present capability now, so there is no bridge
         /// to install — only a device to have or not have.
@@ -3346,7 +3352,7 @@ mod tests {
         }
 
         fn supplied(
-            entries: &[(&str, EscalateRequestComputeBindingKind, &str)],
+            entries: &[(&str, EscalateComputeBindingKind, &str)],
         ) -> Vec<EscalateRequestRunComputeKernelBinding> {
             entries
                 .iter()
@@ -3373,12 +3379,12 @@ mod tests {
             let entries = supplied(&[
                 (
                     "output_image",
-                    EscalateRequestComputeBindingKind::StorageImage,
+                    EscalateComputeBindingKind::StorageImage,
                     "surface-out",
                 ),
                 (
                     "source_image",
-                    EscalateRequestComputeBindingKind::SampledTexture,
+                    EscalateComputeBindingKind::SampledTexture,
                     "surface-in",
                 ),
             ]);
@@ -3391,7 +3397,10 @@ mod tests {
             assert_eq!(planned.len(), 2);
             assert_eq!(planned[0].name, "output_image");
             assert_eq!(planned[0].binding, 1);
-            assert_eq!(planned[0].kind, ComputeBindingKind::StorageImage);
+            assert_eq!(
+                planned[0].kind,
+                SurfaceBoundComputeBindingKind::StorageImage
+            );
             assert_eq!(planned[0].target_id, "surface-out");
             assert_eq!(planned[1].name, "source_image");
             assert_eq!(planned[1].binding, 0);
@@ -3405,17 +3414,17 @@ mod tests {
             let message = plan_error(&supplied(&[
                 (
                     "source_image",
-                    EscalateRequestComputeBindingKind::SampledTexture,
+                    EscalateComputeBindingKind::SampledTexture,
                     "surface-in",
                 ),
                 (
                     "source_image",
-                    EscalateRequestComputeBindingKind::SampledTexture,
+                    EscalateComputeBindingKind::SampledTexture,
                     "surface-other",
                 ),
                 (
                     "output_image",
-                    EscalateRequestComputeBindingKind::StorageImage,
+                    EscalateComputeBindingKind::StorageImage,
                     "surface-out",
                 ),
             ]));
@@ -3434,17 +3443,17 @@ mod tests {
             let message = plan_error(&supplied(&[
                 (
                     "source_image",
-                    EscalateRequestComputeBindingKind::SampledTexture,
+                    EscalateComputeBindingKind::SampledTexture,
                     "surface-in",
                 ),
                 (
                     "output_image",
-                    EscalateRequestComputeBindingKind::StorageImage,
+                    EscalateComputeBindingKind::StorageImage,
                     "surface-out",
                 ),
                 (
                     "sharpen_amount",
-                    EscalateRequestComputeBindingKind::UniformBuffer,
+                    EscalateComputeBindingKind::UniformBuffer,
                     "surface-x",
                 ),
             ]));
@@ -3464,7 +3473,7 @@ mod tests {
         fn a_declared_binding_left_out_is_refused() {
             let message = plan_error(&supplied(&[(
                 "source_image",
-                EscalateRequestComputeBindingKind::SampledTexture,
+                EscalateComputeBindingKind::SampledTexture,
                 "surface-in",
             )]));
             assert!(
@@ -3486,12 +3495,12 @@ mod tests {
             let message = plan_error(&supplied(&[
                 (
                     "source_image",
-                    EscalateRequestComputeBindingKind::SampledTexture,
+                    EscalateComputeBindingKind::SampledTexture,
                     "surface-in",
                 ),
                 (
                     "output_image",
-                    EscalateRequestComputeBindingKind::StorageBuffer,
+                    EscalateComputeBindingKind::StorageBuffer,
                     "surface-out",
                 ),
             ]));
@@ -3618,14 +3627,8 @@ mod tests {
                     .map(|b| (b.name.as_str(), b.kind))
                     .collect::<Vec<_>>(),
                 vec![
-                    (
-                        "source_image",
-                        EscalateRequestComputeBindingKind::SampledTexture
-                    ),
-                    (
-                        "output_image",
-                        EscalateRequestComputeBindingKind::StorageImage
-                    ),
+                    ("source_image", EscalateComputeBindingKind::SampledTexture),
+                    ("output_image", EscalateComputeBindingKind::StorageImage),
                 ],
                 "the two bindings differ in name and in kind, so binding by slot order \
                  rather than by name would swap them"
@@ -3708,7 +3711,6 @@ mod tests {
                     let (_pool_id, seed_buffer) =
                         full.acquire_pixel_buffer(64, 64, crate::core::rhi::PixelFormat::Rgba32)?;
                     let plane = seed_buffer.buffer_ref().plane_base_address(0);
-                    let byte_count = 64 * 64 * 4;
                     unsafe {
                         for pixel in 0..(64 * 64) {
                             std::ptr::copy_nonoverlapping(
@@ -3717,7 +3719,6 @@ mod tests {
                                 4,
                             );
                         }
-                        let _ = byte_count;
                     }
                     full.copy_pixel_buffer_to_texture(
                         &seed_buffer,
@@ -3737,12 +3738,12 @@ mod tests {
                 EscalateRequestRunComputeKernel {
                     bindings: vec![
                         EscalateRequestRunComputeKernelBinding {
-                            kind: EscalateRequestComputeBindingKind::SampledTexture,
+                            kind: EscalateComputeBindingKind::SampledTexture,
                             name: "source_image".to_string(),
                             target_id: source_id.to_string(),
                         },
                         EscalateRequestRunComputeKernelBinding {
-                            kind: EscalateRequestComputeBindingKind::StorageImage,
+                            kind: EscalateComputeBindingKind::StorageImage,
                             name: "output_image".to_string(),
                             target_id: output_id.to_string(),
                         },
@@ -3805,7 +3806,7 @@ mod tests {
                 "reg-wrong".to_string(),
                 EscalateRequestRegisterComputeKernel {
                     bindings: vec![EscalateRequestRegisterComputeKernelBinding {
-                        kind: EscalateRequestComputeBindingKind::StorageBuffer,
+                        kind: EscalateComputeBindingKind::StorageBuffer,
                         name: "sharpen_amount".to_string(),
                     }],
                     push_constant_size: 4,
@@ -3855,12 +3856,12 @@ mod tests {
                 EscalateRequestRunComputeKernel {
                     bindings: vec![
                         EscalateRequestRunComputeKernelBinding {
-                            kind: EscalateRequestComputeBindingKind::SampledTexture,
+                            kind: EscalateComputeBindingKind::SampledTexture,
                             name: "source_image".to_string(),
                             target_id: buffer_surface_id,
                         },
                         EscalateRequestRunComputeKernelBinding {
-                            kind: EscalateRequestComputeBindingKind::StorageImage,
+                            kind: EscalateComputeBindingKind::StorageImage,
                             name: "output_image".to_string(),
                             target_id: "buffer-refusal-output".to_string(),
                         },

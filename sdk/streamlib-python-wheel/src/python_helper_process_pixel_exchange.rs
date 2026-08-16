@@ -525,7 +525,10 @@ impl HelperProcessGpuExchangeClient {
         spv_hex: &str,
         push_constant_size: u32,
         declared_bindings: &Bound<'_, PyAny>,
-    ) -> PyResult<(String, Vec<(String, String)>)> {
+    ) -> PyResult<(
+        String,
+        Vec<crate::python_processor_context::ReflectedComputeBinding>,
+    )> {
         let op = PyDict::new(python);
         op.set_item("op", "register_compute_kernel")?;
         op.set_item("spv_hex", spv_hex)?;
@@ -537,10 +540,10 @@ impl HelperProcessGpuExchangeClient {
         let mut reflected = Vec::new();
         for entry in response_field(&response, "bindings")?.try_iter()? {
             let entry = entry?;
-            reflected.push((
-                entry.get_item("name")?.extract()?,
-                entry.get_item("kind")?.extract()?,
-            ));
+            reflected.push(crate::python_processor_context::ReflectedComputeBinding {
+                name: entry.get_item("name")?.extract()?,
+                kind: entry.get_item("kind")?.extract()?,
+            });
         }
         Ok((kernel_id, reflected))
     }

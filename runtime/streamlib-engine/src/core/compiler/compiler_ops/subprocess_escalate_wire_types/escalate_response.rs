@@ -47,7 +47,7 @@ pub(crate) struct EscalateResponseErr {
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateResponseComputeBinding {
     /// Resource kind, in the same spelling the request's binding arrays use.
-    pub(crate) kind: super::escalate_request::EscalateRequestComputeBindingKind,
+    pub(crate) kind: super::escalate_request::EscalateComputeBindingKind,
 
     /// The shader's own name for the binding — what a dispatch supplies it by.
     pub(crate) name: String,

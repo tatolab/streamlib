@@ -12,7 +12,7 @@
 //! which carry an explicit null.
 
 use super::escalate_request::{
-    EscalateRequestComputeBindingKind, EscalateRequestLogLevel, EscalateRequestLogSource,
+    EscalateComputeBindingKind, EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterGraphicsKernelBindingKind,
     EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
@@ -129,7 +129,7 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
         EscalateRequestLogSource {
             Python => "python",
         }
-        EscalateRequestComputeBindingKind {
+        EscalateComputeBindingKind {
             SampledImage => "sampled_image",
             SampledTexture => "sampled_texture",
             StorageBuffer => "storage_buffer",

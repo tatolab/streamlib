@@ -1272,6 +1272,7 @@ fn parse_texture_format_name(name: &str) -> PyResult<&'static str> {
 
 /// Lowercase hex, no `0x`, no separators — the encoding every escalate blob
 /// field uses.
+#[cfg(target_os = "linux")]
 fn encode_lowercase_hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes.iter().fold(
@@ -1285,6 +1286,7 @@ fn encode_lowercase_hex(bytes: &[u8]) -> String {
 
 /// The binding kinds the wire spells, validated the same way texture formats
 /// are so the error text cannot drift from the accepted set.
+#[cfg(target_os = "linux")]
 const COMPUTE_BINDING_KIND_WIRE_NAMES: &[&str] = &[
     "sampled_image",
     "sampled_texture",
@@ -1293,6 +1295,7 @@ const COMPUTE_BINDING_KIND_WIRE_NAMES: &[&str] = &[
     "uniform_buffer",
 ];
 
+#[cfg(target_os = "linux")]
 fn parse_compute_binding_kind(kind: &str) -> PyResult<&'static str> {
     COMPUTE_BINDING_KIND_WIRE_NAMES
         .iter()
@@ -1326,6 +1329,14 @@ fn declared_compute_bindings_to_wire<'py>(
     Ok(wire)
 }
 
+/// One binding of a registered kernel as reflection found it: the shader's
+/// name and the wire spelling of its kind.
+pub(crate) struct ReflectedComputeBinding {
+    pub(crate) name: String,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    pub(crate) kind: String,
+}
+
 /// A compute kernel the engine built and holds, dispatched by name.
 ///
 /// Constructed in `setup()` where the capability is Full; dispatched per frame
@@ -1341,10 +1352,9 @@ pub(crate) struct PythonComputeKernel {
     kernel_id: String,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     push_constant_size: u32,
-    /// The shader's bindings as reflection found them, name → wire kind. The
-    /// caller supplies surfaces by name; which kind each name is, is the
+    /// The caller supplies surfaces by name; which kind each name is, is the
     /// shader's to say, so it is carried rather than guessed per dispatch.
-    reflected_binding_kinds: Vec<(String, String)>,
+    reflected_binding_kinds: Vec<ReflectedComputeBinding>,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
@@ -1356,7 +1366,7 @@ impl PythonComputeKernel {
     fn binding_names(&self) -> Vec<String> {
         self.reflected_binding_kinds
             .iter()
-            .map(|(name, _)| name.clone())
+            .map(|binding| binding.name.clone())
             .collect()
     }
 
@@ -1397,13 +1407,13 @@ impl PythonComputeKernel {
                 wire_bindings.append(entry)?;
             }
 
-            return self.helper_process_exchange_client.run_compute_kernel(
+            self.helper_process_exchange_client.run_compute_kernel(
                 python,
                 &self.kernel_id,
                 wire_bindings.as_any(),
                 &encode_lowercase_hex(push_constants),
                 group_count,
-            );
+            )
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -1418,11 +1428,12 @@ impl PythonComputeKernel {
     ///
     /// An unknown name is refused here rather than sent — the round trip would
     /// refuse it too, but the caller's own stack is where the mistake is.
+    #[cfg(target_os = "linux")]
     fn reflected_kind_of(&self, name: &str) -> PyResult<&str> {
         self.reflected_binding_kinds
             .iter()
-            .find(|(declared, _)| declared == name)
-            .map(|(_, kind)| kind.as_str())
+            .find(|binding| binding.name == name)
+            .map(|binding| binding.kind.as_str())
             .ok_or_else(|| {
                 PyValueError::new_err(format!(
                     "no binding named {name:?}; this shader declares {}",
