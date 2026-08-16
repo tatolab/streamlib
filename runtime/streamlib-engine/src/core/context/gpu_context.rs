@@ -841,6 +841,25 @@ impl GpuContext {
         self.get_pixel_buffer(surface_id)
     }
 
+    /// Refuse a published frame id whose slot has been recycled since.
+    ///
+    /// An id with no generation suffix passes; so does a context with no
+    /// lease registry, because without a service no ledger exists and the
+    /// in-process paths are already covered by cache eviction.
+    pub(crate) fn refuse_a_retired_frame_id(&self, surface_id: &str) -> Result<()> {
+        if PublishedPixelBufferFrameId::parse(surface_id).is_none() {
+            return Ok(());
+        }
+        let surface_store = self.surface_store.lock().unwrap();
+        match surface_store
+            .as_ref()
+            .and_then(SurfaceStore::check_out_leases)
+        {
+            Some(leases) => leases.refuse_a_retired_frame_id(surface_id),
+            None => Ok(()),
+        }
+    }
+
     /// Register a texture in the same-process texture cache.
     ///
     /// On Linux the texture is registered with `VulkanLayout::UNDEFINED`
@@ -856,7 +875,7 @@ impl GpuContext {
         #[cfg(not(target_os = "linux"))]
         let registration = TextureRegistration::new(texture);
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.insert(id.to_string(), registration);
+        cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
@@ -877,7 +896,10 @@ impl GpuContext {
     ) {
         let registration = TextureRegistration::new(texture, initial_layout);
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.insert(id.to_string(), registration);
+        // Keyed by the slot so a producer re-registering per published
+        // frame replaces one entry instead of growing one per frame; the
+        // published id's generation is checked at resolve time instead.
+        cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
     }
 
     /// Remove a `surface_id` from the same-process texture cache.
@@ -888,7 +910,7 @@ impl GpuContext {
     /// teardown so the cache doesn't outlive the underlying texture.
     pub fn unregister_texture(&self, id: &str) {
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.remove(id);
+        cache.remove(pool_slot_key_of_surface_id(id));
         #[cfg(target_os = "linux")]
         self.evict_device_export_staging(id);
     }
@@ -909,7 +931,11 @@ impl GpuContext {
         &self,
         surface_id: &str,
     ) -> Option<TextureRegistration> {
-        self.texture_cache.lock().unwrap().get(surface_id).cloned()
+        self.texture_cache
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(surface_id))
+            .cloned()
     }
 
     /// The pooled allocation this process holds for `surface_id`, if any
@@ -934,7 +960,12 @@ impl GpuContext {
     /// copy ends in `SHADER_READ_ONLY_OPTIMAL`).
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        if let Some(reg) = self.texture_cache.lock().unwrap().get(id) {
+        if let Some(reg) = self
+            .texture_cache
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(id))
+        {
             reg.update_layout(layout);
         }
     }
@@ -963,10 +994,15 @@ impl GpuContext {
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] width: u32,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] height: u32,
     ) -> Result<TextureRegistration> {
+        // A retired published frame id resolves to an error, not to the
+        // slot's current pixels — every path below serves per-slot backings,
+        // so the frame-vs-slot distinction lives here.
+        self.refuse_a_retired_frame_id(surface_id)?;
+
         // Path 1: same-process texture cache (fastest)
         {
             let cache = self.texture_cache.lock().unwrap();
-            if let Some(reg) = cache.get(surface_id) {
+            if let Some(reg) = cache.get(pool_slot_key_of_surface_id(surface_id)) {
                 return Ok(reg.clone());
             }
         }
@@ -1110,14 +1146,17 @@ impl GpuContext {
     ) -> Result<Texture> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
-        // Get-or-create the cached texture for this surface_id.
+        // Get-or-create the cached texture for this surface's slot: the
+        // texture is a reusable canvas for the slot, and the per-frame
+        // identity check happened before the buffer was resolved.
+        let slot_key = pool_slot_key_of_surface_id(surface_id);
         let texture = {
             let mut cache = self.buffer_texture_cache.lock().unwrap();
-            if let Some(existing) = cache.get(surface_id) {
+            if let Some(existing) = cache.get(slot_key) {
                 if existing.width() == width && existing.height() == height {
                     existing.clone()
                 } else {
-                    cache.remove(surface_id);
+                    cache.remove(slot_key);
                     let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
                         .with_usage(
                             TextureUsages::COPY_DST
@@ -1125,7 +1164,7 @@ impl GpuContext {
                                 | TextureUsages::STORAGE_BINDING,
                         );
                     let new_texture = self.device.create_texture_local(&desc)?;
-                    cache.insert(surface_id.to_string(), new_texture.clone());
+                    cache.insert(slot_key.to_string(), new_texture.clone());
                     new_texture
                 }
             } else {
@@ -1136,7 +1175,7 @@ impl GpuContext {
                             | TextureUsages::STORAGE_BINDING,
                     );
                 let new_texture = self.device.create_texture_local(&desc)?;
-                cache.insert(surface_id.to_string(), new_texture.clone());
+                cache.insert(slot_key.to_string(), new_texture.clone());
                 new_texture
             }
         };

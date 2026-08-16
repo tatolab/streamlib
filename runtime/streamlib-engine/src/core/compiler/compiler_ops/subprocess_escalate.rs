@@ -1044,10 +1044,10 @@ fn handle_device_export_staging_copy(
         .surface_device_export_staging(surface_id)
         .and_then(|staging| match direction {
             DeviceExportCopyDirection::SurfaceIntoStaging => {
-                sandbox.refill_device_export_staging(&staging)
+                sandbox.refill_device_export_staging(&staging, surface_id)
             }
             DeviceExportCopyDirection::StagingBackIntoSurface => {
-                sandbox.copy_device_export_staging_back_to_surface(&staging)
+                sandbox.copy_device_export_staging_back_to_surface(&staging, surface_id)
             }
         });
     match copied {
