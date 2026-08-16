@@ -454,6 +454,7 @@ What that cost buys:
   can only flip a compile-time bit. The hook makes the work the
   application has to do for that adapter visible at the call site,
   next to the surface-allocation arguments.
+
 > A "per-adapter install_default" paragraph was removed here: it proposed
 > `streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`
 > — no adapter crate defines any `install_default`, and architecture docs

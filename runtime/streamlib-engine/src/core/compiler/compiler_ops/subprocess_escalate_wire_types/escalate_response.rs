@@ -25,9 +25,9 @@ pub(crate) enum EscalateResponse {
 pub(crate) struct EscalateResponseContended {
     /// Correlates response with request. Returned by
     /// `try_run_cpu_readback_copy` (and any future `try_*` op that opts
-    /// into the same shape) when the host's adapter would have blocked on
-    /// a competing reader/writer. The subprocess gets no handle, no planes,
-    /// and no surface-share registrations to release — `contended` is purely
+    /// into the same shape) when another copy already holds the surface's
+    /// staging. The subprocess gets no handle, no planes, and no
+    /// surface-share registrations to release — `contended` is purely
     /// advisory, the customer skips the frame and re-tries later.
     pub(crate) request_id: String,
 }

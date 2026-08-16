@@ -52,6 +52,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 
@@ -180,6 +181,14 @@ pub struct SurfaceExportStaging {
     /// can honour a write — true only when the surface's sole backing is
     /// its own pooled allocation.
     writable: bool,
+    /// Whether a refill has ever landed the surface's pixels in here.
+    ///
+    /// A freshly allocated staging holds whatever the allocator handed
+    /// back; publishing that over a live frame would replace a picture
+    /// with uninitialised memory. A write-back is an edit *of a frame*,
+    /// so it requires that the frame was read in first. Latches false →
+    /// true and never back: once filled, later frames refill over it.
+    has_been_filled_from_the_surface: AtomicBool,
     /// The surface-share id this staging is published under, once it has
     /// been. Registration hands the service a dup of the staging fd and
     /// the timeline fd, so repeating it per frame would leak a pair per
@@ -223,6 +232,19 @@ impl SurfaceExportStaging {
     /// Where this staging's memory lives.
     pub fn residency(&self) -> SurfaceExportStagingResidency {
         self.residency
+    }
+
+    /// Run `while_held` with this staging's recorder taken, so a test can
+    /// drive the contended path the `try_` ops report. Nothing in the
+    /// engine holds the recorder across a call — the copy paths take and
+    /// release it internally — so only a test can produce that state.
+    #[cfg(test)]
+    pub(crate) fn while_holding_the_refill_recorder_for_a_test<T>(
+        &self,
+        while_held: impl FnOnce() -> T,
+    ) -> T {
+        let _held = self.refill_submission.lock();
+        while_held()
     }
 
     /// Borrow the staging allocation (for export or import bookkeeping).
@@ -402,6 +424,7 @@ impl GpuContext {
             surface_height: shape.surface_height,
             pixel_format: Some(shape.pixel_format),
             writable: shape.writable,
+            has_been_filled_from_the_surface: AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             surface_share_registration_id: Mutex::new(None),
         });
@@ -597,9 +620,15 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<u64> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        Self::submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
-            Self::record_refill(staging, &source, recorder)
-        })
+        let signalled = Self::submit_staging_copy_and_wait(
+            staging,
+            staging.refill_submission.lock(),
+            |recorder| Self::record_refill(staging, &source, recorder),
+        )?;
+        staging
+            .has_been_filled_from_the_surface
+            .store(true, Ordering::Release);
+        Ok(signalled)
     }
 
     /// [`Self::refill_surface_export_staging`], but answering `Ok(None)`
@@ -615,9 +644,15 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        Self::try_submit_staging_copy_and_wait(staging, |recorder| {
+        let signalled = Self::try_submit_staging_copy_and_wait(staging, |recorder| {
             Self::record_refill(staging, &source, recorder)
-        })
+        })?;
+        if signalled.is_some() {
+            staging
+                .has_been_filled_from_the_surface
+                .store(true, Ordering::Release);
+        }
+        Ok(signalled)
     }
 
     /// The guards every refill runs, plus the freshly-resolved source.
@@ -799,6 +834,16 @@ impl GpuContext {
                 "surface {surface_id} has gained a producer's registered texture since its \
                  export was opened read-write; the pooled allocation now backs someone else's \
                  frame and the staged edit cannot be published into it"
+            )));
+        }
+        if !staging
+            .has_been_filled_from_the_surface
+            .load(Ordering::Acquire)
+        {
+            return Err(Error::GpuError(format!(
+                "surface {surface_id}'s export staging has never been filled from the surface; \
+                 publishing it would write uninitialised memory over a live frame — read the \
+                 frame in before publishing an edit of it"
             )));
         }
         let ResolvedBlitSource::PixelBuffer(pixel_buffer) =
@@ -1558,5 +1603,49 @@ mod tests {
             Ok(None) => panic!("a staging opened for another surface is an error, not contention"),
             Ok(Some(_)) => panic!("a staging must never carry another surface's pixels"),
         }
+    }
+
+    /// A staging nobody has read a frame into holds whatever the
+    /// allocator handed back. Publishing it would replace a live frame's
+    /// picture with uninitialised memory.
+    ///
+    /// Reachable only because this change made it so: at main the op
+    /// answered "no bridge registered" and touched nothing.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_write_back_of_a_never_filled_staging_is_refused_before_it_touches_the_frame() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a pool-only frame");
+        let surface_id = pool_id.to_string();
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("a freshly minted cpu-readback staging");
+
+        let refusal = gpu
+            .copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect_err("a never-filled staging has no edit to publish");
+        assert!(
+            refusal.to_string().contains("never been filled"),
+            "the refusal must name why, got: {refusal}"
+        );
+
+        // The frame is untouched — the refusal came before any submit.
+        assert_every_byte_is(
+            &read_pooled_backing_bytes(&pooled_backing),
+            PUBLISHED_FRAME_STAMP,
+            "the live frame after a refused write-back",
+        );
+
+        // And the guard lifts once the frame has actually been read in.
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("read the frame into the staging");
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect("a filled staging may publish its edit");
     }
 }

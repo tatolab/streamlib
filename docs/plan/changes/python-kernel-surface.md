@@ -169,15 +169,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   (`_engine.pyi:343`, `:365`).
 - REMOVED: importing a foreign DMA-BUF is not reachable from a Python processor yet
   The refusal (`python_processor_context.rs:745-759`) and its stub entry (`_engine.pyi:381`).
-- REMOVED: device export is read-only
-  The write-back refusal (`device_export_staging.rs:571-576`) and the `writable: false`
-  texture arm (`:265`). Only the texture arm retires here. surface-id-lifetime-contract
-  (#1865) routed dual-backed pool surfaces through that same refusal, so it now also enforces
-  the `[surface-id-lifetime-contract]` rule that a pool member its producer still owns exports
-  read-only — deleting the refusal wholesale would delete that rule's enforcement.
-  The literal above is shared by both halves and the surviving half keeps it in the tree, so
-  this bullet cannot go clean as written: re-cut it to an anchor unique to the texture arm
-  when this change is implemented.
+- REMOVED: writable: false
+  The `writable: false` texture arm (`surface_export_staging.rs:352`), which is the anchor this
+  bullet was re-cut to when #1774 implemented the readback half — the shared literal it named
+  before ("device export is read-only") no longer distinguishes the two halves, because #1774
+  reworded that refusal to name the surface. Only the texture arm retires, with the
+  texture-backed write-back below; the pool-surface refusal survives, because
+  surface-id-lifetime-contract (#1865) routed dual-backed pool surfaces through it and it now
+  enforces the `[surface-id-lifetime-contract]` rule that a pool member its producer still owns
+  exports read-only.
 
 ## MODIFIED
 
@@ -210,10 +210,14 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - MODIFIED: CPU readback becomes a `GpuContext` method. The engine has no implementation
   today (the example host supplied it); it is built on `record_copy_image_to_buffer` /
   `record_buffer_barrier`, the shape `refill_device_export_staging` already implements.
+  SHIPPED #1774, which took the "same shape" clause literally: rather than build a sibling,
+  `device_export_staging` grew a residency axis and became `surface_export_staging` — one
+  machine, two memory flavours, since everything but where the staging lives is shared. Every
+  `device_export_staging.rs` anchor in this file now reads `surface_export_staging.rs`.
 - MODIFIED: the device-export staging path extends from buffer-backed to texture-backed
-  write-back (`device_export_staging.rs:507-545`) via `record_copy_buffer_to_image` plus the
+  write-back (`surface_export_staging.rs:672-720`) via `record_copy_buffer_to_image` plus the
   layout barriers the read direction already records (`:440-469`).
-- MODIFIED: `export_pixel_shape_for_texture` (`device_export_staging.rs:64-78`) accepts the
+- MODIFIED: `export_pixel_shape_for_texture` (`surface_export_staging.rs:114-128`) accepts the
   float formats a kernel output actually uses — it refuses `Rgba16Float` and `Rgba32Float`
   today, which would make the scope unreachable for the common HDR compute output.
 - MODIFIED: the helper's importer (`python_helper_process_pixel_exchange.rs:585-698`) gains a
@@ -254,6 +258,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   identical-kernel-recreation test asserting the second `create_*_kernel` for the same key on
   the same `GpuContext` is a cache hit — counted compiler invocations, never elapsed time.
   Re-creation is free of *compilation*; it may still allocate handles.
+
+- ADDED: `open_cpu_readback_staging` — the escalate op that publishes a surface's CPU-readable
+  staging to surface-share so a helper child can check it out. The readback wire had no such
+  op because the pre-#1774 design had application glue pre-register the staging; with the glue
+  deleted and the staging engine-owned, nothing else publishes it, so the copies would land in
+  a buffer no child could reach. The device-export residency already carried its twin
+  (`open_device_export_staging`); both now share one handler. Owner-approved at #1774's
+  announce gate, recorded here because the delta did not anticipate it. The **Python spelling**
+  for CPU-reading a texture-backed surface remains #1758's.
 
 ## Notes (not tickets)
 

@@ -1290,14 +1290,19 @@ pub(crate) struct EscalateRequestRunCpuReadbackCopy {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
-    /// of a surface previously registered with the host's cpu-readback adapter
-    /// and whose staging buffer + timeline were registered with the surface-
-    /// share service via `register_pixel_buffer_with_timeline`. The subprocess
-    /// imported them once at registration time through `streamlib-consumer-
-    /// rhi`'s `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`. JSON
-    /// has no 64-bit integer — the wire form is the decimal string
-    /// representation, parsed back into u64 by the host before dispatch.
+    /// Any surface id the engine can resolve — a published frame
+    /// (`<slot>#<generation>`) or a registered texture's id. It is not
+    /// parsed as an integer and carries no registration precondition: the
+    /// host mints the CPU-readable staging on first ask.
+    ///
+    /// `direction: image_to_buffer` reads the frame into the staging;
+    /// `buffer_to_image` publishes an edit of it back, and is refused
+    /// unless a read happened first — an unfilled staging holds
+    /// uninitialised memory, not an edit.
+    ///
+    /// The subprocess reaches the staging's memory through
+    /// `open_cpu_readback_staging` plus the surface-share check-out that
+    /// follows it; no fd travels on this socket.
     pub(crate) surface_id: String,
 }
 
@@ -1584,10 +1589,11 @@ pub(crate) struct EscalateRequestTryRunCpuReadbackCopy {
 
     /// Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
     /// [`super::escalate_response::EscalateResponse::Contended`] response (no
-    /// timeline value, no copy executed) when its
-    /// registry would have blocked instead of performing the copy. Subprocess
-    /// customers use this to skip a frame instead of stalling their thread
-    /// runner.
+    /// timeline value, no copy executed) when another copy is already in
+    /// flight against this surface's staging. Subprocess customers use this
+    /// to skip a frame instead of stalling their thread runner. Every other
+    /// refusal — a retired frame id, a read-only export, an unfilled
+    /// staging — is an `err`, never `contended`.
     pub(crate) surface_id: String,
 }
 
