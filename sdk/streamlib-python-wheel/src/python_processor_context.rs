@@ -1256,7 +1256,7 @@ const TEXTURE_FORMAT_WIRE_NAMES: &[&str] = &[
     "rgba32_float",
 ];
 
-fn parse_texture_format_name(name: &str) -> PyResult<&str> {
+fn parse_texture_format_name(name: &str) -> PyResult<&'static str> {
     TEXTURE_FORMAT_WIRE_NAMES
         .iter()
         .find(|known| **known == name)
@@ -1283,19 +1283,27 @@ fn encode_lowercase_hex(bytes: &[u8]) -> String {
     )
 }
 
-/// The binding kind a Python caller names, as the wire spells it.
+/// The binding kinds the wire spells, validated the same way texture formats
+/// are so the error text cannot drift from the accepted set.
+const COMPUTE_BINDING_KIND_WIRE_NAMES: &[&str] = &[
+    "sampled_image",
+    "sampled_texture",
+    "storage_buffer",
+    "storage_image",
+    "uniform_buffer",
+];
+
 fn parse_compute_binding_kind(kind: &str) -> PyResult<&'static str> {
-    match kind {
-        "sampled_image" => Ok("sampled_image"),
-        "sampled_texture" => Ok("sampled_texture"),
-        "storage_buffer" => Ok("storage_buffer"),
-        "storage_image" => Ok("storage_image"),
-        "uniform_buffer" => Ok("uniform_buffer"),
-        other => Err(PyValueError::new_err(format!(
-            "unknown binding kind {other:?}; a compute binding is one of sampled_image, \
-             sampled_texture, storage_buffer, storage_image, uniform_buffer"
-        ))),
-    }
+    COMPUTE_BINDING_KIND_WIRE_NAMES
+        .iter()
+        .find(|known| **known == kind)
+        .copied()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown binding kind {kind:?}; a compute binding is one of {}",
+                COMPUTE_BINDING_KIND_WIRE_NAMES.join(", ")
+            ))
+        })
 }
 
 /// Turn `{name: kind}` into the wire's declaration array.
@@ -1323,19 +1331,24 @@ fn declared_compute_bindings_to_wire<'py>(
 /// Constructed in `setup()` where the capability is Full; dispatched per frame
 /// in `process()`. No kernel handle string, fence, timeline or slot number
 /// reaches Python — the object is the handle.
-#[cfg(target_os = "linux")]
+///
+/// Defined on every platform so the stub's surface is honest everywhere;
+/// off Linux it is unconstructible, because `create_compute_kernel` refuses
+/// before reaching it.
 #[pyclass(name = "ComputeKernel", module = "streamlib", frozen)]
 pub(crate) struct PythonComputeKernel {
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     kernel_id: String,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     push_constant_size: u32,
     /// The shader's bindings as reflection found them, name → wire kind. The
     /// caller supplies surfaces by name; which kind each name is, is the
     /// shader's to say, so it is carried rather than guessed per dispatch.
     reflected_binding_kinds: Vec<(String, String)>,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
-#[cfg(target_os = "linux")]
 #[pymethods]
 impl PythonComputeKernel {
     /// The shader's own names for this kernel's bindings, in slot order.
@@ -1362,47 +1375,54 @@ impl PythonComputeKernel {
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
-        let push_constants = push_constants.unwrap_or_default();
-        if push_constants.len() != self.push_constant_size as usize {
-            return Err(PyValueError::new_err(format!(
-                "this kernel declares {} push-constant bytes but {} were supplied",
-                self.push_constant_size,
-                push_constants.len()
-            )));
-        }
+        #[cfg(target_os = "linux")]
+        {
+            let push_constants = push_constants.unwrap_or_default();
+            if push_constants.len() != self.push_constant_size as usize {
+                return Err(PyValueError::new_err(format!(
+                    "this kernel declares {} push-constant bytes but {} were supplied",
+                    self.push_constant_size,
+                    push_constants.len()
+                )));
+            }
 
-        let wire_bindings = PyList::empty(python);
-        for (name, bound_to) in bindings.iter() {
-            let name: String = name.extract()?;
-            let kind = self.reflected_kind_of(&name)?;
-            let entry = PyDict::new(python);
-            entry.set_item("target_id", self.bound_surface_id(&name, &bound_to)?)?;
-            entry.set_item("name", name)?;
-            entry.set_item("kind", kind)?;
-            wire_bindings.append(entry)?;
-        }
+            let wire_bindings = PyList::empty(python);
+            for (name, bound_to) in bindings.iter() {
+                let name: String = name.extract()?;
+                let kind = self.reflected_kind_of(&name)?.to_string();
+                let entry = PyDict::new(python);
+                entry.set_item("target_id", bound_surface_id(&name, &bound_to)?)?;
+                entry.set_item("name", name)?;
+                entry.set_item("kind", kind)?;
+                wire_bindings.append(entry)?;
+            }
 
-        self.helper_process_exchange_client.run_compute_kernel(
-            python,
-            &self.kernel_id,
-            wire_bindings.as_any(),
-            &encode_lowercase_hex(push_constants),
-            group_count,
-        )
+            return self.helper_process_exchange_client.run_compute_kernel(
+                python,
+                &self.kernel_id,
+                wire_bindings.as_any(),
+                &encode_lowercase_hex(push_constants),
+                group_count,
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (python, bindings, group_count, push_constants);
+            Err(gpu_unreachable_from_a_helper_process_error())
+        }
     }
 }
 
-#[cfg(target_os = "linux")]
 impl PythonComputeKernel {
     /// The kind the shader declares this name as.
     ///
     /// An unknown name is refused here rather than sent — the round trip would
     /// refuse it too, but the caller's own stack is where the mistake is.
-    fn reflected_kind_of(&self, name: &str) -> PyResult<String> {
+    fn reflected_kind_of(&self, name: &str) -> PyResult<&str> {
         self.reflected_binding_kinds
             .iter()
             .find(|(declared, _)| declared == name)
-            .map(|(_, kind)| kind.clone())
+            .map(|(_, kind)| kind.as_str())
             .ok_or_else(|| {
                 PyValueError::new_err(format!(
                     "no binding named {name:?}; this shader declares {}",
@@ -1414,18 +1434,19 @@ impl PythonComputeKernel {
                 ))
             })
     }
+}
 
-    /// The surface id a value bound at `name` names.
-    fn bound_surface_id(&self, name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
-        if let Ok(handle) = bound_to.extract::<PyRef<'_, PythonGpuSurfaceHandle>>() {
-            return handle.surface_id();
-        }
-        bound_to.extract::<String>().map_err(|_| {
-            PyTypeError::new_err(format!(
-                "binding {name:?} must be a GpuSurfaceHandle or a surface id string"
-            ))
-        })
+/// The surface id a value bound at `name` names.
+#[cfg(target_os = "linux")]
+fn bound_surface_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(handle) = bound_to.extract::<PyRef<'_, PythonGpuSurfaceHandle>>() {
+        return handle.surface_id();
     }
+    bound_to.extract::<String>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "binding {name:?} must be a GpuSurfaceHandle or a surface id string"
+        ))
+    })
 }
 
 /// The typed cast's claim, over a real link and a real surface-share service.

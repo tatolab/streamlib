@@ -50,6 +50,78 @@ pub struct ComputeBindingSpec {
     pub name: Option<Cow<'static, str>>,
 }
 
+/// What a caller asserts about one binding before reflection has assigned it
+/// a slot: the shader's name for it and the kind expected there.
+///
+/// Deliberately not a [`ComputeBindingSpec`]: a declaration has no slot, and
+/// carrying a placeholder slot in a spec would put a meaningless number in a
+/// field every resolved path treats as load-bearing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputeBindingDeclaration {
+    pub name: String,
+    pub kind: ComputeBindingKind,
+}
+
+/// Render a shader's declared binding names for an error message.
+pub(crate) fn quote_declared_shader_binding_names(names: &[&str]) -> String {
+    if names.is_empty() {
+        return "no named bindings".to_string();
+    }
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Check a caller's binding declarations against what the shader's reflection
+/// actually found, by name.
+///
+/// An empty declaration asserts nothing and the reflected shape stands alone.
+/// Otherwise every declared name must exist in the shader with the kind the
+/// caller claimed, and every reflected name must be accounted for — leaving a
+/// shader binding unmentioned is how a dispatch silently binds nothing.
+pub(crate) fn reconcile_compute_binding_declarations(
+    declared: &[ComputeBindingDeclaration],
+    reflected: &[ComputeBindingSpec],
+) -> Result<()> {
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let shader_names: Vec<&str> = reflected.iter().filter_map(|s| s.name.as_deref()).collect();
+    for declaration in declared {
+        let found = reflected
+            .iter()
+            .find(|r| r.name.as_deref() == Some(declaration.name.as_str()))
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "compute kernel declares a binding named `{}`, which this shader does \
+                     not declare; the shader declares {}",
+                    declaration.name,
+                    quote_declared_shader_binding_names(&shader_names)
+                ))
+            })?;
+        if found.kind != declaration.kind {
+            return Err(Error::GpuError(format!(
+                "compute binding `{}` was declared {:?} but this shader declares it {:?}",
+                declaration.name, declaration.kind, found.kind
+            )));
+        }
+    }
+    for reflected_spec in reflected {
+        let Some(name) = reflected_spec.name.as_deref() else {
+            continue;
+        };
+        if !declared.iter().any(|d| d.name == name) {
+            return Err(Error::GpuError(format!(
+                "compute kernel leaves the shader's binding `{name}` undeclared; every binding \
+                 the shader declares must be accounted for"
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl ComputeBindingSpec {
     pub const fn storage_buffer(binding: u32) -> Self {
         Self {
@@ -267,6 +339,93 @@ mod tests {
                 ("uImage", ComputeBindingKind::SampledImage),
                 ("uOut", ComputeBindingKind::StorageImage),
             ]
+        );
+    }
+
+    fn declared(name: &str, kind: ComputeBindingKind) -> ComputeBindingDeclaration {
+        ComputeBindingDeclaration {
+            name: name.to_string(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn a_declaration_matching_reflection_reconciles() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        reconcile_compute_binding_declarations(
+            &[
+                declared("in0", ComputeBindingKind::StorageBuffer),
+                declared("in1", ComputeBindingKind::StorageBuffer),
+                declared("out_buf", ComputeBindingKind::StorageBuffer),
+            ],
+            &reflected,
+        )
+        .expect("a complete, correctly-kinded declaration");
+    }
+
+    #[test]
+    fn an_empty_declaration_asserts_nothing_and_reconciles() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        reconcile_compute_binding_declarations(&[], &reflected)
+            .expect("no declaration means the reflected shape stands alone");
+    }
+
+    #[test]
+    fn declaring_a_name_the_shader_lacks_is_refused_naming_the_shaders_bindings() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        let err = reconcile_compute_binding_declarations(
+            &[declared(
+                "sharpen_amount",
+                ComputeBindingKind::StorageBuffer,
+            )],
+            &reflected,
+        )
+        .err()
+        .expect("an undeclared name must be refused");
+        let msg = format!("{err}");
+        assert!(msg.contains("`sharpen_amount`"), "{msg}");
+        assert!(
+            msg.contains("`in0`, `in1`, `out_buf`"),
+            "must name the shader's own bindings: {msg}"
+        );
+    }
+
+    #[test]
+    fn declaring_a_kind_reflection_disagrees_with_is_refused() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        let err = reconcile_compute_binding_declarations(
+            &[
+                declared("in0", ComputeBindingKind::StorageImage),
+                declared("in1", ComputeBindingKind::StorageBuffer),
+                declared("out_buf", ComputeBindingKind::StorageBuffer),
+            ],
+            &reflected,
+        )
+        .err()
+        .expect("a kind disagreement must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("`in0`") && msg.contains("StorageImage") && msg.contains("StorageBuffer"),
+            "must name the binding and both kinds: {msg}"
+        );
+    }
+
+    #[test]
+    fn leaving_a_shader_binding_undeclared_is_refused() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        let err = reconcile_compute_binding_declarations(
+            &[
+                declared("in0", ComputeBindingKind::StorageBuffer),
+                declared("in1", ComputeBindingKind::StorageBuffer),
+            ],
+            &reflected,
+        )
+        .err()
+        .expect("a partial declaration must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("`out_buf`") && msg.contains("undeclared"),
+            "must name the binding left out: {msg}"
         );
     }
 

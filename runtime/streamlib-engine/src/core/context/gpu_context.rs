@@ -219,60 +219,6 @@ fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Check a caller's binding declaration against what the shader actually
-/// declares, by name.
-///
-/// An empty declaration asserts nothing and the reflected shape stands alone.
-/// Otherwise every declared name must exist in the shader with the kind the
-/// caller claimed, and every reflected name must be accounted for — leaving a
-/// shader binding unmentioned is how a dispatch silently binds nothing.
-#[cfg(target_os = "linux")]
-fn reconcile_declared_compute_bindings(
-    declared: &[crate::core::rhi::ComputeBindingSpec],
-    reflected: &[crate::core::rhi::ComputeBindingSpec],
-) -> Result<()> {
-    if declared.is_empty() {
-        return Ok(());
-    }
-    let shader_names: Vec<&str> = reflected.iter().filter_map(|s| s.name.as_deref()).collect();
-    for spec in declared {
-        let Some(name) = spec.name.as_deref() else {
-            return Err(Error::GpuError(
-                "a compute binding declaration must name its binding; bindings resolve by name"
-                    .to_string(),
-            ));
-        };
-        let found = reflected
-            .iter()
-            .find(|r| r.name.as_deref() == Some(name))
-            .ok_or_else(|| {
-                Error::GpuError(format!(
-                    "compute kernel declares a binding named `{name}`, which this shader does \
-                     not declare; the shader declares {}",
-                    crate::vulkan::rhi::quote_declared_names(&shader_names)
-                ))
-            })?;
-        if found.kind != spec.kind {
-            return Err(Error::GpuError(format!(
-                "compute binding `{name}` was declared {:?} but this shader declares it {:?}",
-                spec.kind, found.kind
-            )));
-        }
-    }
-    for reflected_spec in reflected {
-        let Some(name) = reflected_spec.name.as_deref() else {
-            continue;
-        };
-        if !declared.iter().any(|d| d.name.as_deref() == Some(name)) {
-            return Err(Error::GpuError(format!(
-                "compute kernel leaves the shader's binding `{name}` undeclared; every binding \
-                 the shader declares must be accounted for"
-            )));
-        }
-    }
-    Ok(())
-}
-
 impl PixelBufferPoolManager {
     fn new(device: Arc<GpuDevice>) -> Self {
         Self {
@@ -711,6 +657,9 @@ pub struct GpuContext {
     /// keyed so that re-creating an identical kernel is free of compilation.
     /// Compute dispatch is a capability every caller reaches, so this is
     /// always present — there is nothing to install and no absent case.
+    ///
+    /// Entries live for this context's lifetime: bounded by distinct SPIR-V
+    /// blobs, never evicted, so a kernel survives its registering helper.
     #[cfg(target_os = "linux")]
     compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
     /// Host-side bridge for the graphics-kernel escalate ops
@@ -1261,6 +1210,18 @@ impl GpuContext {
         height: u32,
     ) -> Result<Texture> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+
+        // Refused before touching the cache: a zero extent cannot describe a
+        // texture, and callers that pass one (a kernel-dispatch binding
+        // resolving a surface id) are saying a buffer-backed surface is not
+        // acceptable to them at all. Evicting the slot's cached canvas on the
+        // way to an invalid create would break the caller that *can* use it.
+        if width == 0 || height == 0 {
+            return Err(Error::GpuError(format!(
+                "surface {surface_id:?} is buffer-backed, and this caller cannot synthesize a \
+                 texture from a pixel buffer"
+            )));
+        }
 
         // Get-or-create the cached texture for this surface's slot: the
         // texture is a reusable canvas for the slot, and the per-frame
@@ -2554,22 +2515,36 @@ impl GpuContext {
         &self,
         spv: &[u8],
         push_constant_size: u32,
-        declared_bindings: &[crate::core::rhi::ComputeBindingSpec],
+        declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
         let kernel_id = compute_kernel_cache_key(spv, push_constant_size);
-        if let Some(cached) = self.compute_kernel_cache.lock().unwrap().get(&kernel_id) {
+        let cached_kernel = self
+            .compute_kernel_cache
+            .lock()
+            .unwrap()
+            .get(&kernel_id)
+            .map(Arc::clone);
+        if let Some(cached) = cached_kernel {
+            // The declaration is checked on the hit path too: the cache key
+            // covers the blob, not the caller's assertion, and a wrong
+            // assertion must refuse identically whether or not somebody
+            // registered this blob first.
+            crate::core::rhi::reconcile_compute_binding_declarations(
+                declared_bindings,
+                &cached.bindings(),
+            )?;
             tracing::debug!(
                 rhi_op = "create_or_reuse_compute_kernel",
                 kernel_id,
                 "GpuContext::create_or_reuse_compute_kernel — cache hit"
             );
-            return Ok((kernel_id, Arc::clone(cached)));
+            return Ok((kernel_id, Arc::clone(&cached)));
         }
 
         // Reflection is the source of truth for the binding shape; a caller's
         // declaration is checked against it rather than replacing it.
         let (reflected, reflected_push_size) = crate::core::rhi::derive_bindings_from_spirv(spv)?;
-        reconcile_declared_compute_bindings(declared_bindings, &reflected)?;
+        crate::core::rhi::reconcile_compute_binding_declarations(declared_bindings, &reflected)?;
         if reflected_push_size != push_constant_size {
             return Err(Error::GpuError(format!(
                 "compute kernel declares {push_constant_size} push-constant bytes but its \
@@ -3937,7 +3912,7 @@ impl GpuContextFullAccess {
         &self,
         spv: &[u8],
         push_constant_size: u32,
-        declared_bindings: &[crate::core::rhi::ComputeBindingSpec],
+        declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
         self.host_inner()
             .create_or_reuse_compute_kernel(spv, push_constant_size, declared_bindings)

@@ -563,8 +563,9 @@ class ComputeKernel:
 
         Bindings never persist on the kernel, so every dispatch supplies all of
         them: there is no implicit default and no value carried over from the
-        previous frame. Supplying an unknown name, omitting a declared one, or
-        naming a surface of the wrong kind raises before anything is submitted.
+        previous frame. Supplying an unknown name or omitting a declared one
+        raises before anything is submitted. Each binding's kind comes from the
+        shader's own reflection, never from the caller.
 
         Returns when the GPU work has retired and the writes are visible.
         """

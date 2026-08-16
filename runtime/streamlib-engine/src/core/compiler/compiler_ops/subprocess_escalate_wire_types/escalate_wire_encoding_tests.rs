@@ -111,7 +111,7 @@ fn escalate_response_vectors_round_trip() {
     assert_golden_vectors_round_trip!(EscalateResponse:
         Contended => r#"{"result":"contended","request_id":"contended.request_id-1"}"#,
         Err => r#"{"result":"err","message":"err.message-2","request_id":"err.request_id-3"}"#,
-        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bytes_per_row":"ok.bytes_per_row-6","exporting_device_uuid":"ok.exporting_device_uuid-7","format":"ok.format-8","height":9,"staging_byte_size":"ok.staging_byte_size-10","timeline_value":"ok.timeline_value-11","usage":["ok.usage[0]-12","ok.usage[1]-13"],"width":14,"writable":false}"#,
+        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
     );
 }
 

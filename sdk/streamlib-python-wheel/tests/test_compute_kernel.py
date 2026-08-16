@@ -108,6 +108,20 @@ def test_a_binding_the_shader_does_not_declare_is_refused(start_app_under_test):
     )
 
 
+def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
+    start_app_under_test,
+):
+    """`bindings={name: kind}` at create asserts against reflection — a name
+    the shader lacks refuses before a kernel exists, naming what it has."""
+    observed = run_probe(start_app_under_test, "BindingRefusalProbe")
+
+    wrong_declaration = observed["wrong_declaration"]
+    assert "sharpen_amount" in wrong_declaration, wrong_declaration
+    assert SOURCE_BINDING in wrong_declaration and OUTPUT_BINDING in wrong_declaration, (
+        f"must name the shader's own bindings: {wrong_declaration}"
+    )
+
+
 def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 

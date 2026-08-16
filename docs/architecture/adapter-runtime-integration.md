@@ -306,10 +306,11 @@ The shape of what the hook does varies by seam:
   adapter — and that submit signals `produce_done`. The cdylib
   signals `consume_done` from `end_read_access`.
 
-The compute / graphics / ray-tracing kernel bridges follow the same
-shape (`gpu.set_compute_kernel_bridge`, `set_graphics_kernel_bridge`,
-`set_ray_tracing_kernel_bridge`) for adapters that escalate kernel
-dispatch through the host RHI.
+The graphics / ray-tracing kernel bridges follow the same shape
+(`gpu.set_graphics_kernel_bridge`, `set_ray_tracing_kernel_bridge`) for
+adapters that escalate kernel dispatch through the host RHI. Compute has no
+bridge: `register_compute_kernel` / `run_compute_kernel` are always-present
+`GpuContext` capabilities served by the escalate handler directly.
 
 Reference implementation:
 `examples/camera-python-display/src/linux.rs`. That example shows

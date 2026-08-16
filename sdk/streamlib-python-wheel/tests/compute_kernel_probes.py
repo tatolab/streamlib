@@ -21,6 +21,7 @@ import traceback
 from pathlib import Path
 
 from streamlib import (
+    GpuContextFullAccess,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
@@ -101,12 +102,23 @@ class _ComputeKernelProbeBase:
     names, not something handed to it.
     """
 
+    gpu_full_access: GpuContextFullAccess
+
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
+            # Held for probes whose observation needs the capability itself
+            # (a refusal at construction is observed by constructing).
+            self.gpu_full_access = gpu
             kernel = gpu.create_compute_kernel(
                 spirv=compile_read_one_write_another_spirv(),
                 push_constant_size=4,
+                # The declaration asserts what the shader must reflect; a
+                # disagreement refuses at construction.
+                bindings={
+                    SOURCE_BINDING: "sampled_texture",
+                    OUTPUT_BINDING: "storage_image",
+                },
             )
             source = gpu.acquire_texture(
                 SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm",
@@ -161,6 +173,14 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         group_count = (SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1)
         push_constants = b"\x00\x00\x00\x00"
 
+        wrong_declaration = _refusal_of(
+            lambda: self.gpu_full_access.create_compute_kernel(
+                spirv=compile_read_one_write_another_spirv(),
+                push_constant_size=4,
+                bindings={"sharpen_amount": "storage_buffer"},
+            )
+        )
+
         unknown = _refusal_of(
             lambda: kernel.dispatch(
                 bindings={
@@ -194,6 +214,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
             )
         )
         return {
+            "wrong_declaration": wrong_declaration,
             "unknown": unknown,
             "missing": missing,
             "wrong_push_constant_size": wrong_push_constant_size,

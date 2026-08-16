@@ -688,34 +688,6 @@ impl VulkanComputeKernelInner {
         &self.bindings
     }
 
-    /// The shader's own names for this kernel's bindings, in declaration
-    /// order — what an error message quotes back to the caller.
-    pub fn declared_binding_names(&self) -> Vec<&str> {
-        self.bindings
-            .iter()
-            .filter_map(|spec| spec.name.as_deref())
-            .collect()
-    }
-
-    /// Resolve one of the shader's binding names to the slot and kind the
-    /// descriptor set is built from.
-    ///
-    /// A name the shader does not declare is an error here, before any
-    /// resource is bound and long before a submission.
-    pub fn resolve_binding_by_name(&self, name: &str) -> Result<&ComputeBindingSpec> {
-        self.bindings
-            .iter()
-            .find(|spec| spec.name.as_deref() == Some(name))
-            .ok_or_else(|| {
-                Error::GpuError(format!(
-                    "Compute kernel '{}': no binding named `{}`; this shader declares {}",
-                    self.label,
-                    name,
-                    quote_declared_names(&self.declared_binding_names()),
-                ))
-            })
-    }
-
     /// Push-constant size in bytes (0 if the kernel has none).
     pub fn push_constant_size(&self) -> u32 {
         self.push_constant_size
@@ -1117,23 +1089,6 @@ impl VulkanComputeKernel {
         self.host_inner().bindings().to_vec()
     }
 
-    /// Resolve one of the shader's binding names to its slot and kind.
-    ///
-    /// Owned rather than borrowed: the inner kernel is reached through a raw
-    /// handle, so there is no borrow to hand out.
-    pub fn resolve_binding_by_name(&self, name: &str) -> Result<ComputeBindingSpec> {
-        self.host_inner().resolve_binding_by_name(name).cloned()
-    }
-
-    /// The shader's own names for this kernel's bindings, in declaration order.
-    pub fn declared_binding_names(&self) -> Vec<String> {
-        self.host_inner()
-            .declared_binding_names()
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    }
-
     /// Push-constant range size in bytes. Cached POD.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
@@ -1288,18 +1243,6 @@ fn validate_against_spirv(
     }
 
     Ok(reconciled)
-}
-
-/// Render a shader's declared binding names for an error message.
-pub(crate) fn quote_declared_names(names: &[&str]) -> String {
-    if names.is_empty() {
-        return "no named bindings".to_string();
-    }
-    names
-        .iter()
-        .map(|name| format!("`{name}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 fn expected_spirv_type(kind: ComputeBindingKind) -> RDescriptorType {

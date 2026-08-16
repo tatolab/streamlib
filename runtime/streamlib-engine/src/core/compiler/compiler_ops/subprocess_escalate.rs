@@ -1243,40 +1243,54 @@ fn handle_register_compute_kernel(
         }
     };
 
-    let declared: Vec<crate::core::rhi::ComputeBindingSpec> = req
+    let declared: Vec<crate::core::rhi::ComputeBindingDeclaration> = req
         .bindings
         .iter()
-        .map(|wire| {
-            // The slot is reflection's to assign; only name and kind are the
-            // caller's to assert.
-            crate::core::rhi::ComputeBindingSpec {
-                binding: 0,
-                kind: compute_binding_kind_from_wire(wire.kind),
-                name: Some(std::borrow::Cow::Owned(wire.name.clone())),
-            }
+        .map(|wire| crate::core::rhi::ComputeBindingDeclaration {
+            name: wire.name.clone(),
+            kind: compute_binding_kind_from_wire(wire.kind),
         })
         .collect();
 
-    match sandbox.escalate(|full| {
-        full.create_or_reuse_compute_kernel(&spv, req.push_constant_size, &declared)
-    }) {
-        Ok((kernel_id, kernel)) => EscalateResponse::Ok(EscalateResponseOk {
+    let registered = sandbox
+        .escalate(|full| {
+            full.create_or_reuse_compute_kernel(&spv, req.push_constant_size, &declared)
+        })
+        .and_then(|(kernel_id, kernel)| {
+            // The caller dispatches by name and only the shader knows which
+            // kind each name is, so the shape goes back with the id. Every
+            // binding this kernel holds came through reflection, which refuses
+            // an unnamed one — an absent name here is a broken invariant, not
+            // a case to skip over.
+            let bindings = kernel
+                .bindings()
+                .iter()
+                .map(|spec| {
+                    Ok(EscalateResponseComputeBinding {
+                        kind: compute_binding_kind_to_wire(spec.kind),
+                        name: spec
+                            .name
+                            .as_deref()
+                            .ok_or_else(|| {
+                                crate::core::error::Error::GpuError(format!(
+                                    "kernel {kernel_id} holds an unnamed binding at slot {}; \
+                                     reflection refuses these, so this kernel did not come \
+                                     through registration",
+                                    spec.binding
+                                ))
+                            })?
+                            .to_string(),
+                    })
+                })
+                .collect::<crate::core::error::Result<Vec<_>>>()?;
+            Ok((kernel_id, bindings))
+        });
+
+    match registered {
+        Ok((kernel_id, bindings)) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
-            // The caller dispatches by name and only the shader knows which
-            // kind each name is, so the shape goes back with the id.
-            bindings: Some(
-                kernel
-                    .bindings()
-                    .iter()
-                    .filter_map(|spec| {
-                        Some(EscalateResponseComputeBinding {
-                            kind: compute_binding_kind_to_wire(spec.kind),
-                            name: spec.name.as_deref()?.to_string(),
-                        })
-                    })
-                    .collect(),
-            ),
+            bindings: Some(bindings),
             ..Default::default()
         }),
         Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -1360,23 +1374,30 @@ struct PlannedComputeBinding<'a> {
 /// - **missing** — a declared name the dispatch omitted. There is no implicit
 ///   default and no carried-over value.
 /// - **kind mismatch** — a name supplied as a kind the shader disagrees with.
+/// - **unbindable kind** — a declared kind no surface can be named for
+///   (buffers, samplerless images). Checked here so the plan is total before
+///   any `set_*` call mutates the kernel's staged bindings.
 #[cfg(target_os = "linux")]
 fn plan_supplied_compute_bindings<'a>(
     supplied: &'a [EscalateRequestRunComputeKernelBinding],
-    declared: &[crate::core::rhi::ComputeBindingSpec],
+    declared: &'a [crate::core::rhi::ComputeBindingSpec],
 ) -> crate::core::error::Result<Vec<PlannedComputeBinding<'a>>> {
     use crate::core::error::Error;
+    use crate::core::rhi::ComputeBindingKind;
 
     let declared_names: Vec<&str> = declared.iter().filter_map(|s| s.name.as_deref()).collect();
-    let shader_declares = crate::vulkan::rhi::quote_declared_names(&declared_names);
+    // Built only when a refusal fires — this runs per frame, and the happy
+    // path should not pay for the error text.
+    let shader_declares = || crate::core::rhi::quote_declared_shader_binding_names(&declared_names);
 
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for wire in supplied {
         if !seen.insert(wire.name.as_str()) {
             return Err(Error::GpuError(format!(
-                "binding `{}` was supplied twice; this shader declares {shader_declares}, each \
-                 supplied exactly once per dispatch",
-                wire.name
+                "binding `{}` was supplied twice; this shader declares {}, each supplied \
+                 exactly once per dispatch",
+                wire.name,
+                shader_declares()
             )));
         }
     }
@@ -1385,7 +1406,8 @@ fn plan_supplied_compute_bindings<'a>(
         if !seen.contains(name) {
             return Err(Error::GpuError(format!(
                 "binding `{name}` was not supplied; bindings do not persist between dispatches, \
-                 so every dispatch supplies all of {shader_declares}"
+                 so every dispatch supplies all of {}",
+                shader_declares()
             )));
         }
     }
@@ -1397,8 +1419,9 @@ fn plan_supplied_compute_bindings<'a>(
             .find(|s| s.name.as_deref() == Some(wire.name.as_str()))
             .ok_or_else(|| {
                 Error::GpuError(format!(
-                    "binding `{}` is not one this shader declares; it declares {shader_declares}",
-                    wire.name
+                    "binding `{}` is not one this shader declares; it declares {}",
+                    wire.name,
+                    shader_declares()
                 ))
             })?;
         let supplied_kind = compute_binding_kind_from_wire(wire.kind);
@@ -1407,6 +1430,18 @@ fn plan_supplied_compute_bindings<'a>(
                 "binding `{}` was supplied as {:?} but this shader declares it {:?}",
                 wire.name, supplied_kind, spec.kind
             )));
+        }
+        match spec.kind {
+            ComputeBindingKind::StorageImage | ComputeBindingKind::SampledTexture => {}
+            ComputeBindingKind::SampledImage
+            | ComputeBindingKind::StorageBuffer
+            | ComputeBindingKind::UniformBuffer => {
+                return Err(Error::GpuError(format!(
+                    "binding `{}` is {:?}, which a dispatch cannot name a surface for — the \
+                     surface-backed kinds are storage_image and sampled_texture",
+                    wire.name, spec.kind
+                )));
+            }
         }
         planned.push(PlannedComputeBinding {
             binding: spec.binding,
@@ -1420,9 +1455,11 @@ fn plan_supplied_compute_bindings<'a>(
 
 /// Resolve every named binding onto the kernel's slots, then dispatch.
 ///
-/// Names are validated and surfaces resolved before the first `set_*` call, so
-/// a refused dispatch never leaves the kernel holding a mix of this dispatch's
-/// bindings and the last one's.
+/// The plan is total and every surface is resolved before the first `set_*`
+/// call, so a refused dispatch never leaves the kernel holding a mix of this
+/// dispatch's bindings and the last one's. The kernel's staged bindings are
+/// shared across every caller of the cache; interleaving is prevented by the
+/// escalate gate, which serializes the whole surrounding scope runtime-wide.
 #[cfg(target_os = "linux")]
 fn bind_and_dispatch_compute_kernel(
     full: &crate::core::context::GpuContextFullAccess,
@@ -1433,14 +1470,17 @@ fn bind_and_dispatch_compute_kernel(
     use crate::core::error::Error;
     use crate::core::rhi::ComputeBindingKind;
 
-    let planned = plan_supplied_compute_bindings(&req.bindings, &kernel.bindings())?;
+    // Borrowed, not cloned: this runs per frame, and the specs live on the
+    // kernel for its whole life.
+    let planned = plan_supplied_compute_bindings(&req.bindings, kernel.host_inner().bindings())?;
 
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
         // Zero extent: a kernel binding names a surface the graph already has
         // as a device texture, which resolves from the same-process cache or
-        // the surface-share service. Only the pixel-buffer fallback consults
-        // the extent, and a buffer is not something a dispatch can bind.
+        // the surface-share service. The pixel-buffer fallback is the one
+        // path that consults the extent, and it refuses a zero one — a
+        // buffer-backed surface is not something a dispatch can bind.
         let registration = full
             .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
             .map_err(|e| {
@@ -1465,11 +1505,7 @@ fn bind_and_dispatch_compute_kernel(
             ComputeBindingKind::SampledImage
             | ComputeBindingKind::StorageBuffer
             | ComputeBindingKind::UniformBuffer => {
-                return Err(Error::GpuError(format!(
-                    "binding `{}` is {:?}, which a dispatch cannot name a surface for — the \
-                     surface-backed kinds are storage_image and sampled_texture",
-                    binding.name, binding.kind
-                )));
+                unreachable!("plan_supplied_compute_bindings refuses unbindable kinds")
             }
         }
     }
@@ -3288,6 +3324,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     mod compute_kernel_dispatch {
         use super::super::*;
+        use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestRegisterComputeKernelBinding;
         use crate::core::context::GpuContext;
         use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec};
 
@@ -3324,7 +3361,8 @@ mod tests {
         }
 
         fn plan_error(supplied: &[EscalateRequestRunComputeKernelBinding]) -> String {
-            let err = plan_supplied_compute_bindings(supplied, &blur_kernel_bindings())
+            let declared = blur_kernel_bindings();
+            let err = plan_supplied_compute_bindings(supplied, &declared)
                 .err()
                 .expect("expected the plan to be refused");
             format!("{err}")
@@ -3344,7 +3382,8 @@ mod tests {
                     "surface-in",
                 ),
             ]);
-            let planned = plan_supplied_compute_bindings(&entries, &blur_kernel_bindings())
+            let declared = blur_kernel_bindings();
+            let planned = plan_supplied_compute_bindings(&entries, &declared)
                 .expect("a complete, correctly-typed dispatch");
 
             // Resolution is by name, so the order the caller supplied them in
@@ -3622,8 +3661,19 @@ mod tests {
             );
         }
 
+        /// Each seed channel inverts exactly in unorm8: out = 255 - in.
+        const SEED_RGBA: [u8; 4] = [10, 20, 30, 255];
+        const INVERTED_RGBA: [u8; 4] = [245, 235, 225, 255];
+
         /// The whole point of the change: two surfaces, bound by the shader's
-        /// own names, dispatched and retired.
+        /// own names, and the output pixels prove the source was read.
+        ///
+        /// Not just "the dispatch was accepted": the source is seeded with a
+        /// known value and the output is read back and compared against the
+        /// shader's own arithmetic, so binding the two names backwards — the
+        /// exact failure a by-slot resolution would produce, since both
+        /// textures share extent, format and usage — fails the assertion
+        /// rather than passing silently.
         ///
         /// The textures are registered in-process rather than acquired over
         /// the escalate op, because an escalate-acquired texture is published
@@ -3652,9 +3702,33 @@ mod tests {
                     let output = full.acquire_texture(&desc)?;
                     full.register_texture("conformance-source", source.texture().clone());
                     full.register_texture("conformance-output", output.texture().clone());
+
+                    // Seed the source with a constant the shader's arithmetic
+                    // transforms recognizably.
+                    let (_pool_id, seed_buffer) =
+                        full.acquire_pixel_buffer(64, 64, crate::core::rhi::PixelFormat::Rgba32)?;
+                    let plane = seed_buffer.buffer_ref().plane_base_address(0);
+                    let byte_count = 64 * 64 * 4;
+                    unsafe {
+                        for pixel in 0..(64 * 64) {
+                            std::ptr::copy_nonoverlapping(
+                                SEED_RGBA.as_ptr(),
+                                plane.add(pixel * 4),
+                                4,
+                            );
+                        }
+                        let _ = byte_count;
+                    }
+                    full.copy_pixel_buffer_to_texture(
+                        &seed_buffer,
+                        source.texture(),
+                        "conformance-source",
+                        64,
+                        64,
+                    )?;
                     Ok((source, output))
                 })
-                .expect("two pooled textures");
+                .expect("two pooled textures, the source seeded");
             let (source_id, output_id) = ("conformance-source", "conformance-output");
 
             let response = handle_run_compute_kernel(
@@ -3685,7 +3759,130 @@ mod tests {
                 EscalateResponse::Ok(ok) => assert_eq!(ok.handle_id, kernel_id),
                 other => panic!("the read-one-write-another dispatch failed: {other:?}"),
             }
+
+            // The dispatch retired before the response, so the output is
+            // readable now — compute leaves a storage image in GENERAL.
+            let output_pixels = sandbox
+                .escalate(|full| {
+                    let readback = full.create_texture_readback(
+                        "conformance-readback",
+                        64,
+                        64,
+                        TextureFormat::Rgba8Unorm,
+                    )?;
+                    let ticket = readback.submit(
+                        held.1.texture(),
+                        crate::core::rhi::TextureSourceLayout::General,
+                    )?;
+                    Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
+                })
+                .expect("the output texture reads back");
+
+            for (pixel_index, pixel) in output_pixels.chunks_exact(4).enumerate() {
+                assert_eq!(
+                    pixel, INVERTED_RGBA,
+                    "pixel {pixel_index} must be the inverted seed — the kernel read \
+                     `source_image` and wrote `output_image`, by name"
+                );
+            }
             drop(held);
+        }
+
+        /// The cache key covers the blob, not the declaration — so the
+        /// declaration is checked on the hit path too, and a wrong assertion
+        /// refuses identically whether or not the blob was registered before.
+        #[test]
+        fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_wrong_declaration_is_refused_when_cached: no GPU — skipping");
+                return;
+            };
+            // First registration warms the cache.
+            register_read_one_write_another(&sandbox);
+
+            let response = handle_register_compute_kernel(
+                &sandbox,
+                "reg-wrong".to_string(),
+                EscalateRequestRegisterComputeKernel {
+                    bindings: vec![EscalateRequestRegisterComputeKernelBinding {
+                        kind: EscalateRequestComputeBindingKind::StorageBuffer,
+                        name: "sharpen_amount".to_string(),
+                    }],
+                    push_constant_size: 4,
+                    request_id: "reg-wrong".to_string(),
+                    spv_hex: read_one_write_another_spv_hex(),
+                },
+            );
+            match response {
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("`sharpen_amount`")
+                        && err.message.contains("`source_image`"),
+                    "the refusal must name the bogus binding and the shader's own: {}",
+                    err.message
+                ),
+                other => panic!("a wrong declaration must refuse on a cache hit, got {other:?}"),
+            }
+        }
+
+        /// A pixel-buffer surface is a legal id a Python caller can hold, and
+        /// binding it must refuse by name — not fall into the buffer→texture
+        /// synthesis path with a zero extent.
+        #[test]
+        fn binding_a_buffer_backed_surface_is_refused_by_name() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("binding_a_buffer_backed_surface: no GPU — skipping");
+                return;
+            };
+            let kernel_id = register_read_one_write_another(&sandbox).handle_id;
+
+            let (buffer_surface_id, held_buffer) = sandbox
+                .escalate(|full| {
+                    let desc = TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                        .with_usage(
+                            TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+                        );
+                    let output = full.acquire_texture(&desc)?;
+                    full.register_texture("buffer-refusal-output", output.texture().clone());
+                    let (pool_id, buffer) =
+                        full.acquire_pixel_buffer(64, 64, crate::core::rhi::PixelFormat::Rgba32)?;
+                    Ok((pool_id.to_string(), (buffer, output)))
+                })
+                .expect("a pixel buffer and an output texture");
+
+            let response = handle_run_compute_kernel(
+                &sandbox,
+                "run-buffer".to_string(),
+                EscalateRequestRunComputeKernel {
+                    bindings: vec![
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateRequestComputeBindingKind::SampledTexture,
+                            name: "source_image".to_string(),
+                            target_id: buffer_surface_id,
+                        },
+                        EscalateRequestRunComputeKernelBinding {
+                            kind: EscalateRequestComputeBindingKind::StorageImage,
+                            name: "output_image".to_string(),
+                            target_id: "buffer-refusal-output".to_string(),
+                        },
+                    ],
+                    group_count_x: 8,
+                    group_count_y: 8,
+                    group_count_z: 1,
+                    kernel_id,
+                    push_constants_hex: "00000000".to_string(),
+                    request_id: "run-buffer".to_string(),
+                },
+            );
+            match response {
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("`source_image`")
+                        && err.message.contains("cannot resolve to a device texture"),
+                    "must name the binding and refuse it as a non-texture: {}",
+                    err.message
+                ),
+                other => panic!("a buffer-backed binding must refuse, got {other:?}"),
+            }
+            drop(held_buffer);
         }
 
         #[test]

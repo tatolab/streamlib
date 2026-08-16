@@ -36,7 +36,11 @@ pub use color_converter::{
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
 pub use compute_kernel::{
-    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, derive_bindings_from_spirv,
+    ComputeBindingDeclaration, ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
+    derive_bindings_from_spirv,
+};
+pub(crate) use compute_kernel::{
+    quote_declared_shader_binding_names, reconcile_compute_binding_declarations,
 };
 pub use device::GpuDevice;
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
