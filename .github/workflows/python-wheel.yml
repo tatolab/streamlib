@@ -51,6 +51,9 @@ jobs:
       # compiles GLSL with glslc, the Linux dep set links Vulkan, and iceoryx2's
       # PAL crates run bindgen. `python3-dev` is the extra — the wheel crate's
       # unit tests link libpython (see the step below).
+      # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
+      # `build-from-source`). Explicit rather than leaning on the runner image
+      # having it, whose contents move between releases.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -63,6 +66,7 @@ jobs:
             libvulkan-dev
             glslc
             python3-dev
+            cmake
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

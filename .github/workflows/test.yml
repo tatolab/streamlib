@@ -51,6 +51,9 @@ jobs:
       # declare for itself; `check-bounded-apt-install` fails the build if it
       # goes missing. 12 minutes sits above the script's own 590s worst case so
       # the script reports the failure rather than being killed mid-sentence.
+      # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
+      # `build-from-source`). Explicit rather than leaning on the runner image
+      # having it, whose contents move between releases.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -62,6 +65,7 @@ jobs:
             libclang-common-18-dev
             libvulkan-dev
             glslc
+            cmake
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
