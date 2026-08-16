@@ -25,7 +25,9 @@ flowchart LR
   pkgs --> helper
   app --> wheel
   wheel --> engine
-  engine --> helper
+  engine -->|"bags carry per-frame surface ids (slot#generation);
+claim at typed cast, lease until drop;
+a stale id errors, never another frame"| helper
   helper -->|kernels + texture handles| engine
   ctl --> registry
   rustapp --> crate
