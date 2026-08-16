@@ -211,9 +211,6 @@ pub struct HostVulkanTexture {
     /// `GrVkAlloc.fSize`.
     #[cfg(target_os = "linux")]
     imported_memory_size: vk::DeviceSize,
-    /// Cached DMA-BUF fd to avoid leaking a new fd on each export call.
-    #[cfg(target_os = "linux")]
-    cached_dma_buf_fd: OnceLock<std::os::unix::io::RawFd>,
     /// Lazy-cached image view for this texture.
     cached_image_view: OnceLock<vk::ImageView>,
     /// Whether this texture was imported from IOSurface (no memory to free).
@@ -316,8 +313,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -381,8 +376,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -525,7 +518,6 @@ impl HostVulkanTexture {
             allocation: Some(allocation),
             imported_memory: None,
             imported_memory_size: 0,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
@@ -676,7 +668,6 @@ impl HostVulkanTexture {
             allocation: Some(allocation),
             imported_memory: None,
             imported_memory_size: 0,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
@@ -785,7 +776,6 @@ impl HostVulkanTexture {
             allocation: Some(allocation),
             imported_memory: None,
             imported_memory_size: 0,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
@@ -893,8 +883,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -1235,11 +1223,15 @@ impl HostVulkanTexture {
     }
 
     /// Export the texture's memory as a DMA-BUF file descriptor.
+    ///
+    /// Each call returns a fresh kernel fd (the driver dups internally) —
+    /// the caller owns it and is responsible for closing it (or for
+    /// transferring ownership via SCM_RIGHTS / an external-memory import,
+    /// both of which `dup` again on receipt). The texture keeps no copy:
+    /// memoizing one here would give a single descriptor two owners, and
+    /// the second close lands on whatever unrelated subsystem the kernel
+    /// handed the number to next (#1880).
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
-        if let Some(&fd) = self.cached_dma_buf_fd.get() {
-            return Ok(fd);
-        }
-
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
             Error::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
         })?;
@@ -1262,12 +1254,8 @@ impl HostVulkanTexture {
             .build();
 
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
-        let fd = unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
-            .map(|r| r)
-            .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
-
-        let _ = self.cached_dma_buf_fd.set(fd);
-        Ok(fd)
+        unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
+            .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))
     }
 
     /// Subprocess-side import of a render-target DMA-BUF image.
@@ -1419,7 +1407,6 @@ impl HostVulkanTexture {
             allocation: None,
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
@@ -1503,7 +1490,6 @@ impl HostVulkanTexture {
             allocation: None,
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
@@ -1530,8 +1516,6 @@ impl Clone for HostVulkanTexture {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
-            #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
@@ -1555,11 +1539,6 @@ impl Drop for HostVulkanTexture {
             if let Some(vk_dev) = &self.vulkan_device {
                 unsafe { vk_dev.device().destroy_image_view(view, None) };
             }
-        }
-
-        #[cfg(target_os = "linux")]
-        if let Some(&fd) = self.cached_dma_buf_fd.get() {
-            unsafe { libc::close(fd) };
         }
 
         if self.imported_from_iosurface {

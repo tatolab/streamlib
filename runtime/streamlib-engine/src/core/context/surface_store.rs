@@ -31,9 +31,13 @@ use crate::host_rhi::HostTextureExt;
 /// Every plane of a pixel buffer exported for the surface-share wire: the
 /// fds to attach, the metadata arrays describing them, and the one
 /// handle-type discriminator the checkout importer dispatches on.
+///
+/// The plane fds are owned, never observed: an exporter mints a fresh fd per
+/// call and surrenders it, so adoption here is what closes each one exactly
+/// once — on the send, on a refusal, and on every early return in between.
 #[cfg(target_os = "linux")]
 struct ExportedPlaneWireHandles {
-    plane_fds: Vec<std::os::unix::io::RawFd>,
+    plane_fds: Vec<std::os::fd::OwnedFd>,
     plane_sizes: Vec<u64>,
     plane_offsets: Vec<u64>,
     handle_type: &'static str,
@@ -44,43 +48,55 @@ struct ExportedPlaneWireHandles {
 /// Single-plane pixel buffers return a one-element vec; multi-plane
 /// DMA-BUFs (e.g. NV12 under DRM format modifiers) one fd per plane;
 /// OPAQUE_FD-flavored buffers (CUDA targets) a single OPAQUE_FD handle.
-/// One registration carries one flavour — a buffer whose planes export
-/// under two is refused here rather than published under whichever
-/// flavour happened to come last, which would import the other planes
-/// through the wrong Vulkan external-handle type.
 #[cfg(target_os = "linux")]
 fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPlaneWireHandles> {
-    use crate::core::rhi::{RhiExternalHandle, RhiPixelBufferExport};
+    use crate::core::rhi::RhiPixelBufferExport;
 
-    let planes = pixel_buffer.export_plane_handles()?;
-    let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
-    let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
-    let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
-    let mut plane_flavours: Vec<&'static str> = Vec::with_capacity(planes.len());
-    for handle in planes {
-        let (fd, size, this_plane_flavour) = match handle {
-            RhiExternalHandle::DmaBuf { fd, size } => (fd, size, "dma_buf"),
-            RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, "opaque_fd"),
+    adopt_exported_planes_into_wire_handles(pixel_buffer.export_plane_handles()?)
+}
+
+/// Adopt one export's worth of plane handles into the wire shape.
+///
+/// One registration carries one flavour — a buffer whose planes export under
+/// two is refused rather than published under whichever flavour happened to
+/// come last, which would import the other planes through the wrong Vulkan
+/// external-handle type.
+///
+/// Split from [`exported_plane_wire_handles`] so the refusal is reachable
+/// without a Vulkan device: it is the path where a leaked or twice-closed
+/// plane fd would go unnoticed.
+#[cfg(target_os = "linux")]
+fn adopt_exported_planes_into_wire_handles(
+    exported_planes: Vec<crate::core::rhi::RhiExternalHandle>,
+) -> Result<ExportedPlaneWireHandles> {
+    use crate::core::rhi::RhiExternalHandle;
+
+    let mut plane_fds: Vec<std::os::fd::OwnedFd> = Vec::with_capacity(exported_planes.len());
+    let mut plane_sizes: Vec<u64> = Vec::with_capacity(exported_planes.len());
+    let mut plane_offsets: Vec<u64> = Vec::with_capacity(exported_planes.len());
+    let mut plane_flavours: Vec<&'static str> = Vec::with_capacity(exported_planes.len());
+    for exported_plane in exported_planes {
+        let (exported_plane_fd, size, this_plane_flavour) = match exported_plane {
+            RhiExternalHandle::DmaBuf { fd, size } => (fd, size, SURFACE_HANDLE_TYPE_DMA_BUF),
+            RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, SURFACE_HANDLE_TYPE_OPAQUE_FD),
         };
-        plane_fds.push(fd);
+        // SAFETY: the export minted this fd for us and handed it to no one
+        // else.
+        plane_fds.push(unsafe { std::os::fd::OwnedFd::from_raw_fd(exported_plane_fd) });
         plane_sizes.push(size as u64);
         plane_offsets.push(0);
         plane_flavours.push(this_plane_flavour);
     }
-    // Validated after every fd is collected, so the refusal closes all of
-    // them rather than only the ones iterated so far.
-    let handle_type = plane_flavours.first().copied().unwrap_or("dma_buf");
+    // Validated after every fd is adopted, so the refusal closes all of them
+    // rather than only the ones the loop reached.
+    let handle_type = plane_flavours
+        .first()
+        .copied()
+        .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF);
     if plane_flavours
         .iter()
         .any(|plane_flavour| *plane_flavour != handle_type)
     {
-        // SAFETY: closing exported fds this process owns and has not handed
-        // to anyone.
-        unsafe {
-            for collected_fd in &plane_fds {
-                libc::close(*collected_fd);
-            }
-        }
         return Err(Error::Configuration(format!(
             "pixel buffer exports mixed external-handle flavours ({plane_flavours:?})"
         )));
@@ -93,17 +109,25 @@ fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPla
     })
 }
 
-/// Adopt freshly-exported fds so they close exactly once, at the end of the
-/// registration that sends them.
+/// Export one timeline-semaphore edge as the OPAQUE_FD the wire carries.
 ///
-/// SAFETY contract of every caller: each fd came from an export that minted
-/// it for this process and handed it to no one else.
+/// The host keeps the semaphore object; the kernel duplicates the fd during
+/// SCM_RIGHTS, so this copy is ours alone and closes with the scope that
+/// adopted it.
 #[cfg(target_os = "linux")]
-fn adopt_exported_fds(exported_fds: Vec<std::os::unix::io::RawFd>) -> Vec<std::os::fd::OwnedFd> {
-    exported_fds
-        .into_iter()
-        .map(|exported_fd| unsafe { std::os::fd::OwnedFd::from_raw_fd(exported_fd) })
-        .collect()
+fn exported_timeline_edge_opaque_fd(
+    operation: &str,
+    edge_name: &str,
+    timeline: &crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+) -> Result<std::os::fd::OwnedFd> {
+    let exported_fd = timeline.export_opaque_fd().map_err(|export_failure| {
+        Error::Configuration(format!(
+            "{operation}: failed to export the {edge_name} timeline opaque fd: {export_failure}"
+        ))
+    })?;
+    // SAFETY: each export mints a fresh fd this process owns and has handed
+    // to no one else.
+    Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(exported_fd) })
 }
 
 /// Maximum number of entries in the SurfaceCache before eviction.
@@ -1037,15 +1061,16 @@ impl SurfaceStoreInner {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
+        let raw_plane_fds: Vec<std::os::unix::io::RawFd> = {
+            use std::os::fd::AsRawFd as _;
+            plane_fds.iter().map(std::os::fd::OwnedFd::as_raw_fd).collect()
+        };
         let send_result =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &plane_fds, 0);
+            streamlib_surface_client::send_request_with_fds(stream, &request, &raw_plane_fds, 0);
 
-        // Close the exported fds (surface-share service has its own dups) regardless of
-        // the request outcome — the peer owns its kernel-delivered fds and
-        // we never keep ours.
-        for fd in &plane_fds {
-            unsafe { libc::close(*fd) };
-        }
+        // The surface-share service owns the fds the kernel delivered it;
+        // ours close here regardless of the request outcome.
+        drop(plane_fds);
 
         let (response, response_fds) = send_result
             .map_err(|e| Error::Configuration(format!("Unix socket check_in failed: {}", e)))?;
@@ -1249,16 +1274,7 @@ impl SurfaceStoreInner {
             "plane_offsets": exported_planes.plane_offsets,
         });
 
-        self.send_surface_share_registration(
-            "register",
-            &request,
-            // SAFETY: freshly-exported plane fds this process owns.
-            exported_planes
-                .plane_fds
-                .into_iter()
-                .map(|plane_fd| unsafe { std::os::fd::OwnedFd::from_raw_fd(plane_fd) })
-                .collect(),
-        )?;
+        self.send_surface_share_registration("register", &request, exported_planes.plane_fds)?;
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
         Ok(())
     }
@@ -1296,16 +1312,11 @@ impl SurfaceStoreInner {
         // — including on the early return the timeline export can take.
         let staging_fd =
             unsafe { std::os::fd::OwnedFd::from_raw_fd(staging_buffer.export_opaque_fd_memory()?) };
-        let refill_done_fd = unsafe {
-            std::os::fd::OwnedFd::from_raw_fd(refill_done.export_opaque_fd().map_err(
-                |export_failure| {
-                    Error::Configuration(format!(
-                        "register_device_export_staging: failed to export the refill timeline: \
-                         {export_failure}"
-                    ))
-                },
-            )?)
-        };
+        let refill_done_fd = exported_timeline_edge_opaque_fd(
+            "register_device_export_staging",
+            "refill_done",
+            refill_done,
+        )?;
 
         let request = serde_json::json!({
             "op": "register",
@@ -1375,48 +1386,27 @@ impl SurfaceStoreInner {
         // NVIDIA (and the call would fail at the driver); DMA-BUF
         // textures have no OPAQUE_FD export path with VMA's
         // per-pool memory configuration.
-        let fd = if is_opaque_fd {
+        let exported_memory_fd = if is_opaque_fd {
             texture.vulkan_inner().export_opaque_fd_memory()?
         } else {
             texture.vulkan_inner().export_dma_buf_fd()?
         };
+        // SAFETY: each export mints a fresh fd this process owns and has
+        // handed to no one else; adopting it here is what closes it exactly
+        // once, on every path out — including the early returns the timeline
+        // exports below can take.
+        let memory_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(exported_memory_fd) };
 
         // Optionally export the producer-side `produce_done` and
         // consumer-side `consume_done` timeline-semaphores as
         // OPAQUE_FDs (single-writer-per-edge model — see
-        // `docs/architecture/adapter-timeline-single-writer.md`). The
-        // host retains ownership of both semaphore objects; the FDs are
-        // duplicated by the kernel during SCM_RIGHTS and we close our
-        // copies after send.
-        let produce_done_fd: Option<std::os::unix::io::RawFd> = match produce_done {
-            Some(t) => match t.export_opaque_fd() {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    unsafe { libc::close(fd) };
-                    return Err(Error::Configuration(format!(
-                        "register_texture: failed to export produce_done opaque fd: {}",
-                        e
-                    )));
-                }
-            },
-            None => None,
-        };
-        let consume_done_fd: Option<std::os::unix::io::RawFd> = match consume_done {
-            Some(t) => match t.export_opaque_fd() {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    unsafe { libc::close(fd) };
-                    if let Some(p) = produce_done_fd {
-                        unsafe { libc::close(p) };
-                    }
-                    return Err(Error::Configuration(format!(
-                        "register_texture: failed to export consume_done opaque fd: {}",
-                        e
-                    )));
-                }
-            },
-            None => None,
-        };
+        // `docs/architecture/adapter-timeline-single-writer.md`).
+        let produce_done_fd = produce_done
+            .map(|edge| exported_timeline_edge_opaque_fd("register_texture", "produce_done", edge))
+            .transpose()?;
+        let consume_done_fd = consume_done
+            .map(|edge| exported_timeline_edge_opaque_fd("register_texture", "consume_done", edge))
+            .transpose()?;
 
         // Per-flavor wire fields. The DMA-BUF path carries the DRM
         // modifier + per-plane layout the EGL / Vulkan import paths
@@ -1503,18 +1493,10 @@ impl SurfaceStoreInner {
             })
         };
 
-        let mut fds: Vec<std::os::unix::io::RawFd> = vec![fd];
-        if let Some(s) = produce_done_fd {
-            fds.push(s);
-        }
-        if let Some(s) = consume_done_fd {
-            fds.push(s);
-        }
-        self.send_surface_share_registration(
-            "register_texture",
-            &request,
-            adopt_exported_fds(fds),
-        )?;
+        let mut wire_fds: Vec<std::os::fd::OwnedFd> = vec![memory_fd];
+        wire_fds.extend(produce_done_fd);
+        wire_fds.extend(consume_done_fd);
+        self.send_surface_share_registration("register_texture", &request, wire_fds)?;
 
         tracing::debug!(
             "SurfaceStore: Registered texture '{}' (produce_done={}, consume_done={})",
@@ -1551,46 +1533,30 @@ impl SurfaceStoreInner {
         consume_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
-        let plane_fds = exported_planes.plane_fds;
 
         // Export `produce_done` + `consume_done` as OPAQUE_FDs (the
         // single-writer-per-edge pair documented in
         // `docs/architecture/adapter-timeline-single-writer.md`). The
         // surface-share daemon's wire format peels both trailing FDs
         // in the published order.
-        let produce_done_fd: Option<std::os::unix::io::RawFd> = match produce_done {
-            Some(t) => match t.export_opaque_fd() {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    for fd in &plane_fds {
-                        unsafe { libc::close(*fd) };
-                    }
-                    return Err(Error::Configuration(format!(
-                        "register_pixel_buffer_with_timeline: failed to export produce_done opaque fd: {}",
-                        e
-                    )));
-                }
-            },
-            None => None,
-        };
-        let consume_done_fd: Option<std::os::unix::io::RawFd> = match consume_done {
-            Some(t) => match t.export_opaque_fd() {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    for fd in &plane_fds {
-                        unsafe { libc::close(*fd) };
-                    }
-                    if let Some(p) = produce_done_fd {
-                        unsafe { libc::close(p) };
-                    }
-                    return Err(Error::Configuration(format!(
-                        "register_pixel_buffer_with_timeline: failed to export consume_done opaque fd: {}",
-                        e
-                    )));
-                }
-            },
-            None => None,
-        };
+        let produce_done_fd = produce_done
+            .map(|edge| {
+                exported_timeline_edge_opaque_fd(
+                    "register_pixel_buffer_with_timeline",
+                    "produce_done",
+                    edge,
+                )
+            })
+            .transpose()?;
+        let consume_done_fd = consume_done
+            .map(|edge| {
+                exported_timeline_edge_opaque_fd(
+                    "register_pixel_buffer_with_timeline",
+                    "consume_done",
+                    edge,
+                )
+            })
+            .transpose()?;
 
         let request = serde_json::json!({
             "op": "register",
@@ -1607,23 +1573,20 @@ impl SurfaceStoreInner {
             "has_consume_done_fd": consume_done_fd.is_some(),
         });
 
-        let mut fds: Vec<std::os::unix::io::RawFd> = plane_fds.clone();
-        if let Some(s) = produce_done_fd {
-            fds.push(s);
-        }
-        if let Some(s) = consume_done_fd {
-            fds.push(s);
-        }
+        let plane_count = exported_planes.plane_sizes.len();
+        let mut wire_fds = exported_planes.plane_fds;
+        wire_fds.extend(produce_done_fd);
+        wire_fds.extend(consume_done_fd);
         self.send_surface_share_registration(
             "register_pixel_buffer_with_timeline",
             &request,
-            adopt_exported_fds(fds),
+            wire_fds,
         )?;
 
         tracing::debug!(
             "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), produce_done={}, consume_done={})",
             surface_id,
-            exported_planes.plane_sizes.len(),
+            plane_count,
             produce_done.is_some(),
             consume_done.is_some(),
         );
@@ -2386,6 +2349,138 @@ mod external_handle_flavour_tests {
         assert!(
             refusal.to_string().contains("io_surface"),
             "the refusal must name what it got: {refusal}"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod plane_fd_ownership_tests {
+    use super::*;
+    use crate::core::rhi::RhiExternalHandle;
+
+    /// A real fd standing in for one an exporter minted, paired with the
+    /// identity that outlives its number being recycled — so "was this
+    /// closed?" can be answered without racing a parallel test thread for
+    /// the descriptor. A pipe rather than a device file because each pipe
+    /// gets its own inode, and holding the write end keeps that inode
+    /// alive even after the read end closes.
+    struct ExportedPlaneFdUnderTest {
+        plane_fd: std::os::unix::io::RawFd,
+        write_end_fd: std::os::unix::io::RawFd,
+        inode: u64,
+    }
+
+    fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
+        let mut file_status = std::mem::MaybeUninit::<libc::stat>::uninit();
+        if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        Some(unsafe { file_status.assume_init() }.st_ino as u64)
+    }
+
+    impl ExportedPlaneFdUnderTest {
+        fn mint() -> Self {
+            let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
+            assert_eq!(
+                unsafe { libc::pipe(pipe_ends.as_mut_ptr()) },
+                0,
+                "could not mint a stand-in plane fd"
+            );
+            let inode = inode_of(pipe_ends[0]).expect("a fresh pipe must stat");
+            Self {
+                plane_fd: pipe_ends[0],
+                write_end_fd: pipe_ends[1],
+                inode,
+            }
+        }
+
+        /// Closed outright, or its number recycled onto something else —
+        /// either way the descriptor is no longer the one we handed over.
+        fn was_closed(&self) -> bool {
+            inode_of(self.plane_fd) != Some(self.inode)
+        }
+    }
+
+    impl Drop for ExportedPlaneFdUnderTest {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.was_closed() {
+                    libc::close(self.plane_fd);
+                }
+                libc::close(self.write_end_fd);
+            }
+        }
+    }
+
+    /// A single-flavour export holds every plane fd open for the send, and
+    /// dropping the wire handles is the one close each fd gets.
+    #[test]
+    fn a_single_flavour_export_owns_every_plane_fd_until_the_send_is_done() {
+        let first_plane = ExportedPlaneFdUnderTest::mint();
+        let second_plane = ExportedPlaneFdUnderTest::mint();
+
+        let wire_handles = adopt_exported_planes_into_wire_handles(vec![
+            RhiExternalHandle::DmaBuf {
+                fd: first_plane.plane_fd,
+                size: 4096,
+            },
+            RhiExternalHandle::DmaBuf {
+                fd: second_plane.plane_fd,
+                size: 2048,
+            },
+        ])
+        .expect("a single-flavour export must be accepted");
+
+        assert_eq!(wire_handles.handle_type, SURFACE_HANDLE_TYPE_DMA_BUF);
+        assert_eq!(wire_handles.plane_sizes, vec![4096, 2048]);
+        assert_eq!(wire_handles.plane_offsets, vec![0, 0]);
+        assert!(
+            !first_plane.was_closed() && !second_plane.was_closed(),
+            "the plane fds must still be open — the send has not happened yet"
+        );
+
+        drop(wire_handles);
+
+        assert!(
+            first_plane.was_closed() && second_plane.was_closed(),
+            "dropping the wire handles must close every plane fd it adopted"
+        );
+    }
+
+    /// The refusal path obeys the same rule as the send path. A plane fd
+    /// left open here is one no owner ever closes; a plane fd closed twice
+    /// corrupts whichever subsystem the kernel hands the number to next,
+    /// which is the teardown crash in #1880.
+    #[test]
+    fn a_mixed_flavour_export_is_refused_and_closes_every_plane_it_adopted() {
+        let first_plane = ExportedPlaneFdUnderTest::mint();
+        let second_plane = ExportedPlaneFdUnderTest::mint();
+
+        let refusal = match adopt_exported_planes_into_wire_handles(vec![
+            RhiExternalHandle::DmaBuf {
+                fd: first_plane.plane_fd,
+                size: 4096,
+            },
+            RhiExternalHandle::OpaqueFd {
+                fd: second_plane.plane_fd,
+                size: 4096,
+            },
+        ]) {
+            Ok(_) => panic!("a buffer exporting two flavours must be refused"),
+            Err(refusal) => refusal,
+        };
+
+        assert!(
+            refusal.to_string().contains("mixed external-handle flavours"),
+            "the refusal must name what it got: {refusal}"
+        );
+        assert!(
+            first_plane.was_closed(),
+            "the refusal left plane 0 open — no owner remains to close it"
+        );
+        assert!(
+            second_plane.was_closed(),
+            "the refusal left plane 1 open — no owner remains to close it"
         );
     }
 }

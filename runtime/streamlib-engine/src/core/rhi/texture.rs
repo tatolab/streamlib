@@ -271,7 +271,10 @@ impl Texture {
     /// - macOS/iOS: `IOSurface { id }`
     /// - Linux: `DmaBuf { fd }` — adapters export DMA-BUF FDs to a
     ///   different GPU API (CUDA, OpenGL, downstream IPC) without
-    ///   touching host-internal `TextureInner` layout.
+    ///   touching host-internal `TextureInner` layout. The fd is freshly
+    ///   minted and its ownership transfers to the caller, who must close
+    ///   it or hand it to an import that dups on receipt; the texture
+    ///   keeps no copy and will not close it (#1880).
     /// - Windows: `DxgiSharedHandle { handle }` (when implemented).
     ///
     /// Returns `None` if no sharing handle is available (no Vulkan
