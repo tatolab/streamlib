@@ -1227,10 +1227,8 @@ impl HostVulkanTexture {
     /// Each call returns a fresh kernel fd (the driver dups internally) —
     /// the caller owns it and is responsible for closing it (or for
     /// transferring ownership via SCM_RIGHTS / an external-memory import,
-    /// both of which `dup` again on receipt). The texture keeps no copy:
-    /// memoizing one here would give a single descriptor two owners, and
-    /// the second close lands on whatever unrelated subsystem the kernel
-    /// handed the number to next (#1880).
+    /// both of which `dup` again on receipt). The texture keeps no copy and
+    /// will never close it.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
             Error::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
@@ -1759,6 +1757,21 @@ mod tests {
         unsafe { libc::close(fd) };
     }
 
+    /// A DMA-BUF-exportable texture on the rig's device, or `None` when
+    /// there is no Vulkan device to build one on.
+    #[cfg(target_os = "linux")]
+    fn dma_buf_exportable_texture_or_skip() -> Option<HostVulkanTexture> {
+        let device = match HostVulkanDevice::new() {
+            Ok(device) => device,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return None;
+            }
+        };
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
+        Some(HostVulkanTexture::new(&device, &desc).expect("texture creation failed"))
+    }
+
     /// Every DMA-BUF export mints its own fd and surrenders it — the rule
     /// the OPAQUE_FD exporters already follow. A memoized fd hands two
     /// owners the same descriptor: the caller that closes after its
@@ -1770,16 +1783,9 @@ mod tests {
     )]
     #[test]
     fn every_dma_buf_export_mints_a_fresh_fd_the_caller_owns() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
+        let Some(texture) = dma_buf_exportable_texture_or_skip() else {
+            return;
         };
-
-        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
-        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
 
         let first_export = texture
             .export_dma_buf_fd()
@@ -1819,36 +1825,32 @@ mod tests {
     )]
     #[test]
     fn dropping_a_texture_never_closes_an_fd_its_export_surrendered() {
-        let device = match HostVulkanDevice::new() {
-            Ok(d) => d,
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                return;
-            }
+        let Some(texture) = dma_buf_exportable_texture_or_skip() else {
+            return;
         };
 
-        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
-        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
-
         let exported_fd = texture.export_dma_buf_fd().expect("DMA-BUF export failed");
-        assert_eq!(
-            unsafe { libc::close(exported_fd) },
-            0,
-            "the receiver's close stands in for the one the SCM_RIGHTS send does"
-        );
 
-        // `dup2` targets the descriptor number rather than racing other
-        // threads for the lowest free one, so the collision the crash needs
-        // is deterministic instead of timing-dependent.
+        // Opened while `exported_fd` is still held, so the kernel's
+        // lowest-free rule cannot hand back the same number.
         let unrelated_owner_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
         assert!(
             unrelated_owner_fd >= 0,
             "could not open the unrelated owner"
         );
+        assert_ne!(
+            unrelated_owner_fd, exported_fd,
+            "the unrelated owner must be a descriptor of its own"
+        );
+
+        // One `dup2` is both halves of the hand-off: it closes `exported_fd`
+        // exactly as the receiver of an SCM_RIGHTS send does, and seats the
+        // unrelated owner on that number atomically — no window in which
+        // another thread could claim it.
         assert_eq!(
             unsafe { libc::dup2(unrelated_owner_fd, exported_fd) },
             exported_fd,
-            "could not stand an unrelated owner on the surrendered number"
+            "could not seat an unrelated owner on the surrendered number"
         );
 
         drop(texture);
