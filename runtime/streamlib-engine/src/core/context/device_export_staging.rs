@@ -572,10 +572,10 @@ impl GpuContext {
     ///
     /// Tested twice: the staging's `writable` is the capability the
     /// consumer was told about when it opened the export, and the
-    /// registration test is re-run here. The two can disagree — pool
-    /// slots keep their ids across reuse, so a surface that was pool-only
-    /// when a consumer opened its export can be re-acquired by a
-    /// texture-registering producer while that consumer still holds it.
+    /// registration test is re-run here. The two can disagree — a
+    /// producer can register a texture over the slot after the export
+    /// was opened, and while a recycled *frame id* is refused above, a
+    /// registration alone advances no generation.
     ///
     /// That live test narrows the window; it does not close it. Nothing
     /// holds the registration and this write-back together, so a producer

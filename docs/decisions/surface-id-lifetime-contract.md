@@ -34,6 +34,30 @@ someone asks why a Python processor's frame cannot change under it.
    producer-published shape) exports read-only; a buffer-only surface keeps its
    writable semantics. Texture-first export survives only for surfaces with no pooled
    backing (kernel outputs, whose id↔backing binding is stable).
+5. The id itself is per-frame (#1872): each pool acquisition publishes
+   `<slot>#<generation>`, and recycling the slot retires the previous generation —
+   the retired id stops resolving everywhere (in-process cache, surface-share
+   checkout and lookup, device-export refill, the typed cast's claim), failing with
+   an error that names the recycling. An unclaimed frame's window is still bounded
+   only by pool depth; what the per-frame id removes is the *silent* half — a late
+   lookup can error, never succeed with somebody else's pixels. The `#<digits>`
+   suffix is reserved for this grammar; the service refuses registrations carrying
+   one.
+
+## The id shape: slot#generation, not a fresh UUID per frame
+
+Identity is per-frame; resources stay per-slot. A fresh unrelated id each
+acquisition would drag the per-slot machinery with it — surface-share registration
+exports plane fds over a socket round trip on the producer's hot path, and the
+helper child memoises one CUDA import per id — recreating the per-frame
+registration anti-pattern this decision already rejects. With `slot#generation`,
+everything expensive (registration, device-export staging, texture caches, the
+child's import) keys on the slot half, registered once; the generation half is a
+counter bump and makes the published string a new name every frame. The retire
+step runs inside the same lock as the pool's availability test, so a checkout of
+the outgoing id lands strictly before it (leased — the slot is never rehanded) or
+strictly after it (refused as recycled), never in between. Consumers never parse
+the id; it stays opaque on every public surface.
 
 ## Why
 
