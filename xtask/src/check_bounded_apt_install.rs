@@ -54,7 +54,7 @@ const PACKAGE_FETCH_SUBCOMMANDS: &[&str] = &[
 /// count — otherwise the gate would fire on a perfectly good package query.
 const DPKG_INSTALL_FLAGS: &[&str] = &["-i", "--install", "--unpack"];
 
-/// The one file under `.github/` allowed to invoke `apt-get`.
+/// The one file under `.github/` allowed to fetch packages.
 const BOUNDED_RETRY_SCRIPT_RELATIVE_PATH: &str = ".github/actions/install-linux-engine-build-dependencies/install-system-dependencies-with-bounded-retry.sh";
 
 /// Everything CI runs lives here — workflows and composite actions alike.
@@ -131,7 +131,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     );
 
     tracing::info!(
-        "check-bounded-apt-install: {} files scanned, {} bounded action call(s), no raw apt-get",
+        "check-bounded-apt-install: {} files scanned, {} bounded action call(s), no unbounded fetch",
         report.files_scanned,
         report.workflow_steps_calling_the_action,
     );
@@ -154,8 +154,8 @@ fn ensure_the_gate_is_still_wired(
             .join(BOUNDED_RETRY_SCRIPT_RELATIVE_PATH)
             .is_file(),
         "check-bounded-apt-install expects the bounded-retry script at `{}` and it is not \
-         there — the gate's `apt-get` ban would then point callers at a file that does not \
-         exist. Update BOUNDED_RETRY_SCRIPT_RELATIVE_PATH if the script moved.",
+         there — the gate's package-fetch ban would then point callers at a file that does \
+         not exist. Update BOUNDED_RETRY_SCRIPT_RELATIVE_PATH if the script moved.",
         BOUNDED_RETRY_SCRIPT_RELATIVE_PATH,
     );
 
@@ -174,7 +174,7 @@ pub fn scan(workspace_root: &Path) -> Result<BoundedAptInstallScanReport> {
     let mut report = BoundedAptInstallScanReport::default();
 
     for file_path in crate::list_repository_files_under(workspace_root, GITHUB_CI_SCAN_ROOT)? {
-        if file_path == BOUNDED_RETRY_SCRIPT_RELATIVE_PATH {
+        if file_path == BOUNDED_RETRY_SCRIPT_RELATIVE_PATH || !can_carry_shell(&file_path) {
             continue;
         }
 
@@ -193,6 +193,16 @@ pub fn scan(workspace_root: &Path) -> Result<BoundedAptInstallScanReport> {
     }
 
     Ok(report)
+}
+
+/// Only files that can run something get the shell heuristic.
+///
+/// `.github/` also holds prose — issue templates, CODEOWNERS — where a sentence
+/// ending in the word "apt" is a sentence, not an unbounded install.
+fn can_carry_shell(file_path: &str) -> bool {
+    [".yml", ".yaml", ".sh"]
+        .iter()
+        .any(|extension| file_path.ends_with(extension))
 }
 
 fn collect_unbounded_apt_invocations(
@@ -226,19 +236,24 @@ fn collect_unbounded_apt_invocations(
 /// `\` continuation does count, because a front-end left dangling at end of line
 /// is always the head of a wrapped invocation.
 fn line_fetches_packages(line: &str) -> bool {
-    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let mut tokens = line.split_whitespace().peekable();
 
-    tokens.iter().enumerate().any(|(position, token)| {
-        let following = tokens.get(position + 1).copied();
-        match *token {
+    while let Some(token) = tokens.next() {
+        let following = tokens.peek().copied();
+        let fetches = match token {
             front_end if PACKAGE_FETCH_FRONT_ENDS.contains(&front_end) => match following {
                 None | Some("\\") => true,
                 Some(subcommand) => PACKAGE_FETCH_SUBCOMMANDS.contains(&subcommand),
             },
             "dpkg" => following.is_some_and(|flag| DPKG_INSTALL_FLAGS.contains(&flag)),
             _ => false,
+        };
+        if fetches {
+            return true;
         }
-    })
+    }
+
+    false
 }
 
 fn collect_action_calls(
@@ -247,9 +262,13 @@ fn collect_action_calls(
     report: &mut BoundedAptInstallScanReport,
 ) {
     for step in split_into_step_blocks(contents) {
+        // A commented-out `uses:` is not a call. Counting one would also inflate
+        // `workflow_steps_calling_the_action`, which is what
+        // `ensure_the_gate_is_still_wired` reads to decide the gate is live —
+        // so a repo whose every real call had been commented out would still
+        // look wired.
         if !step
-            .lines
-            .iter()
+            .uncommented_lines()
             .any(|line| line.contains(BOUNDED_APT_INSTALL_ACTION_REFERENCE))
         {
             continue;
@@ -258,11 +277,10 @@ fn collect_action_calls(
         report.workflow_steps_calling_the_action += 1;
 
         // Only at the step's own key indentation: a `with:` input that happens
-        // to be named `timeout-minutes` is an input, not a ceiling.
-        let step_key_indent = step.list_marker_indent + 2;
-        let declares_a_timeout = step.lines.iter().any(|line| {
+        // to be named `timeout-minutes` is an input GitHub ignores, not a ceiling.
+        let declares_a_timeout = step.uncommented_lines().any(|line| {
             line.trim_start().starts_with("timeout-minutes:")
-                && line.len() - line.trim_start().len() == step_key_indent
+                && indentation_width(line) == step.key_indent
         });
 
         if !declares_a_timeout {
@@ -278,8 +296,25 @@ fn collect_action_calls(
 
 struct WorkflowStepBlock<'a> {
     first_line_number: usize,
-    list_marker_indent: usize,
+    /// Indentation of the step's own keys — `name:`, `uses:`, `timeout-minutes:`
+    /// — as measured, not as assumed from the `-`. `-   name:` and a bare `-`
+    /// put them somewhere other than marker + 2.
+    key_indent: usize,
     lines: Vec<&'a str>,
+}
+
+impl<'a> WorkflowStepBlock<'a> {
+    fn uncommented_lines(&self) -> impl Iterator<Item = &'a str> {
+        self.lines
+            .iter()
+            .copied()
+            .filter(|line| !line.trim_start().starts_with('#'))
+    }
+}
+
+/// YAML forbids tab indentation, so a byte count is a column count.
+fn indentation_width(line: &str) -> usize {
+    line.len() - line.trim_start().len()
 }
 
 /// Split a workflow into top-level YAML list-item blocks.
@@ -290,9 +325,10 @@ struct WorkflowStepBlock<'a> {
 /// step's own list items, not a sibling step, and spawning a block for it would
 /// produce a step that excludes its own `timeout-minutes`.
 ///
-/// Indentation-based rather than parsed — the gate needs to know which lines
-/// share a step, not what the YAML means, and the repo has no YAML dependency to
-/// add for it.
+/// Indentation-based rather than parsed. `serde_yaml` is already in the
+/// workspace, so the cost is not the dependency — it is that its `Value` carries
+/// no source spans, and every failure this gate emits names a `file:line` the
+/// author can jump to.
 fn split_into_step_blocks(contents: &str) -> Vec<WorkflowStepBlock<'_>> {
     let lines: Vec<&str> = contents.lines().collect();
     let mut blocks: Vec<WorkflowStepBlock<'_>> = Vec::new();
@@ -310,7 +346,7 @@ fn split_into_step_blocks(contents: &str) -> Vec<WorkflowStepBlock<'_>> {
             continue;
         }
 
-        let list_marker_indent = line.len() - trimmed.len();
+        let list_marker_indent = indentation_width(line);
         let mut block_lines: Vec<&str> = vec![*line];
         let mut end = index + 1;
 
@@ -318,17 +354,28 @@ fn split_into_step_blocks(contents: &str) -> Vec<WorkflowStepBlock<'_>> {
             if following_line.trim().is_empty() {
                 continue;
             }
-            if following_line.len() - following_line.trim_start().len() <= list_marker_indent {
+            if indentation_width(following_line) <= list_marker_indent {
                 break;
             }
             block_lines.push(following_line);
             end = following_index + 1;
         }
 
+        // `- key:` puts the first key on the marker line, after however much
+        // space follows the dash; a bare `-` puts it on the next line.
+        let after_the_dash = &trimmed[1..];
+        let key_indent = if after_the_dash.trim().is_empty() {
+            block_lines
+                .get(1)
+                .map_or(list_marker_indent + 2, |line| indentation_width(line))
+        } else {
+            list_marker_indent + 1 + indentation_width(after_the_dash)
+        };
+
         next_unclaimed_line = end;
         blocks.push(WorkflowStepBlock {
             first_line_number: index + 1,
-            list_marker_indent,
+            key_indent,
             lines: block_lines,
         });
     }
@@ -466,6 +513,62 @@ mod tests {
             report.action_calls_without_timeout.is_empty(),
             "the nested item belongs to the bounded step, not to a step of its own: {report:?}"
         );
+    }
+
+    #[test]
+    fn a_commented_out_action_call_is_not_a_call() {
+        // It must not demand a ceiling, and — the one that matters — it must not
+        // count toward the liveness check, or a repo whose every real call had
+        // been commented out would still read as wired.
+        let report = scan_workflow_text(
+            "jobs:\n  t:\n    steps:\n      - name: Something else\n        \
+             # uses: ./.github/actions/install-linux-engine-build-dependencies\n        \
+             run: echo hi\n",
+        );
+        assert_eq!(
+            report.workflow_steps_calling_the_action, 0,
+            "a commented `uses:` is not a call: {report:?}"
+        );
+        assert!(
+            report.action_calls_without_timeout.is_empty(),
+            "and it demands no ceiling: {report:?}"
+        );
+    }
+
+    #[test]
+    fn the_step_key_indent_is_measured_not_assumed() {
+        // `-` followed by three spaces puts the keys at marker + 4. Deriving the
+        // key indent as marker + 2 would look straight past this ceiling.
+        let report = scan_workflow_text(
+            "jobs:\n  t:\n    steps:\n      -   name: Install system dependencies\n          \
+             timeout-minutes: 10\n          \
+             uses: ./.github/actions/install-linux-engine-build-dependencies\n",
+        );
+        assert_eq!(report.workflow_steps_calling_the_action, 1);
+        assert!(
+            report.action_calls_without_timeout.is_empty(),
+            "the widely-indented ceiling must count: {report:?}"
+        );
+    }
+
+    #[test]
+    fn a_prose_file_under_github_is_not_scanned_for_shell() {
+        assert!(!can_carry_shell(".github/CODEOWNERS"));
+        assert!(!can_carry_shell(".github/ISSUE_TEMPLATE/bug.md"));
+        assert!(can_carry_shell(".github/workflows/test.yml"));
+        assert!(can_carry_shell(".github/actions/x/run.sh"));
+    }
+
+    #[test]
+    fn a_read_only_dpkg_query_is_not_a_package_fetch() {
+        assert!(!line_fetches_packages("        run: dpkg -L libclang1-18"));
+        assert!(!line_fetches_packages(
+            "        run: ls /var/cache/apt/archives"
+        ));
+        assert!(line_fetches_packages("        run: sudo dpkg -i local.deb"));
+        assert!(line_fetches_packages(
+            "          sudo DEBIAN_FRONTEND=noninteractive apt install -y cowsay"
+        ));
     }
 
     #[test]
