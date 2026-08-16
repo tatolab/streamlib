@@ -151,6 +151,18 @@ fn export_bytes_per_pixel_for_pixel_format(format: PixelFormat) -> Result<u32> {
     Ok(format.bits_per_pixel() / 8)
 }
 
+/// What a staging holds once the copy being submitted lands.
+///
+/// Passed into the submit rather than written after it, because the write-back
+/// guard compares against this and both must be ordered by the same lock.
+enum FrameThisStagingHoldsAfterTheCopy<'a> {
+    /// A refill: the staging now holds this frame's pixels.
+    TheFrameJustReadIn(&'a str),
+    /// A write-back: the copy reads the staging, so what it holds is
+    /// whatever the refill before it put there.
+    WhateverItAlreadyHeld,
+}
+
 /// The recorder plus the next timeline value, under one lock: the
 /// correctness of the strictly-increasing signal values depends on the
 /// value being drawn and submitted while this lock is held, so the
@@ -573,6 +585,7 @@ impl GpuContext {
     fn submit_staging_copy_and_wait(
         staging: &SurfaceExportStaging,
         mut submission: parking_lot::MutexGuard<'_, RefillSubmission>,
+        holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
         record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
     ) -> Result<u64> {
         submission.recorder.begin()?;
@@ -589,6 +602,18 @@ impl GpuContext {
             submission.recorder.abort_recording();
             return Err(submit_failure);
         }
+        // Under the recorder guard, with the submit that made it true: the
+        // guard serialises submission order, and these copies retire in that
+        // order on the one queue. Recorded outside it, two refills of the same
+        // slot at different generations could land their copies in one order
+        // and their bookkeeping in the other — leaving the staging holding one
+        // frame while the field named another, which is the write the frame
+        // check exists to refuse.
+        if let FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id) =
+            holds_after_this_copy
+        {
+            *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
+        }
         drop(submission);
         staging
             .refill_done_timeline
@@ -601,12 +626,14 @@ impl GpuContext {
     /// because the guards run before the lock is even attempted.
     fn try_submit_staging_copy_and_wait(
         staging: &SurfaceExportStaging,
+        holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
         record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
     ) -> Result<Option<u64>> {
         let Some(submission) = staging.refill_submission.try_lock() else {
             return Ok(None);
         };
-        Self::submit_staging_copy_and_wait(staging, submission, record_copy).map(Some)
+        Self::submit_staging_copy_and_wait(staging, submission, holds_after_this_copy, record_copy)
+            .map(Some)
     }
 
     /// Refuse a surface whose pool slot this staging was not opened for.
@@ -637,13 +664,12 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<u64> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        let signalled = Self::submit_staging_copy_and_wait(
+        Self::submit_staging_copy_and_wait(
             staging,
             staging.refill_submission.lock(),
+            FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_refill(staging, &source, recorder),
-        )?;
-        *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
-        Ok(signalled)
+        )
     }
 
     /// [`Self::refill_surface_export_staging`], but answering `Ok(None)`
@@ -659,13 +685,11 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        let signalled = Self::try_submit_staging_copy_and_wait(staging, |recorder| {
-            Self::record_refill(staging, &source, recorder)
-        })?;
-        if signalled.is_some() {
-            *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
-        }
-        Ok(signalled)
+        Self::try_submit_staging_copy_and_wait(
+            staging,
+            FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
+            |recorder| Self::record_refill(staging, &source, recorder),
+        )
     }
 
     /// The guards every refill runs, plus the freshly-resolved source.
@@ -801,9 +825,12 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<u64> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        Self::submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
-            Self::record_write_back(staging, &destination, recorder)
-        })
+        Self::submit_staging_copy_and_wait(
+            staging,
+            staging.refill_submission.lock(),
+            FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
+            |recorder| Self::record_write_back(staging, &destination, recorder),
+        )
     }
 
     /// [`Self::copy_surface_export_staging_back_to_surface`], but
@@ -819,9 +846,11 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        Self::try_submit_staging_copy_and_wait(staging, |recorder| {
-            Self::record_write_back(staging, &destination, recorder)
-        })
+        Self::try_submit_staging_copy_and_wait(
+            staging,
+            FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
+            |recorder| Self::record_write_back(staging, &destination, recorder),
+        )
     }
 
     /// The guards every write-back runs, plus the pooled allocation the
@@ -1742,5 +1771,65 @@ mod tests {
             TWO_FRAMES_LATER_STAMP,
             "the new frame's backing after a refused cross-frame write-back",
         );
+    }
+
+    /// What the staging holds and what it says it holds are written under
+    /// one lock, so they cannot be ordered against each other.
+    ///
+    /// Two threads refilling one staging both take the recorder, and the
+    /// copies retire in the order the guard granted it. Recording the frame
+    /// id outside that guard let the two orders diverge: the staging would
+    /// hold one frame while the field named another, and a write-back for
+    /// the named frame would then pass the identity check and publish the
+    /// other frame's pixels. The field is written under the guard now, so
+    /// whichever copy submitted last is also the one the field names.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn concurrent_refills_leave_the_staging_naming_the_frame_it_actually_holds() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (pool_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire a frame to refill from");
+        let surface_id = pool_id.to_string();
+        stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
+            .expect("the cpu-readback staging");
+
+        // Both threads refill the same staging, repeatedly, through the very
+        // guard the bookkeeping now rides.
+        let gpu = Arc::new(gpu);
+        let both_are_ready = Arc::new(std::sync::Barrier::new(2));
+        let refillers: Vec<_> = (0..2)
+            .map(|_| {
+                let gpu = Arc::clone(&gpu);
+                let staging = Arc::clone(&staging);
+                let surface_id = surface_id.clone();
+                let both_are_ready = Arc::clone(&both_are_ready);
+                std::thread::spawn(move || {
+                    both_are_ready.wait();
+                    for _ in 0..16 {
+                        gpu.refill_surface_export_staging(&staging, &surface_id)
+                            .expect("a refill of a live frame succeeds");
+                    }
+                })
+            })
+            .collect();
+        for refiller in refillers {
+            refiller.join().expect("both refillers finish");
+        }
+
+        // Every refill named this frame, so the field must too — and the
+        // write-back it gates must be accepted rather than refused as
+        // holding somebody else's frame.
+        assert_eq!(
+            staging.frame_last_read_into_this_staging.lock().as_deref(),
+            Some(surface_id.as_str()),
+            "the staging must name the frame its last copy read in"
+        );
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect("a staging naming this frame may publish back into it");
     }
 }

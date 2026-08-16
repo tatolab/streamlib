@@ -971,8 +971,14 @@ impl GpuContext {
     /// [`TextureRing`](crate::core::context::TextureRing)) call this on
     /// teardown so the cache doesn't outlive the underlying texture.
     pub fn unregister_texture(&self, id: &str) {
-        let mut cache = self.texture_cache.lock().unwrap();
-        cache.remove(pool_slot_key_of_surface_id(id));
+        // The guard is scoped, not held across the eviction below: that call
+        // takes the staging map and then the surface-share socket, so holding
+        // this one through it would couple three locks into an order nothing
+        // else needs. The two removals were never atomic together anyway.
+        self.texture_cache
+            .lock()
+            .unwrap()
+            .remove(pool_slot_key_of_surface_id(id));
         #[cfg(target_os = "linux")]
         self.evict_surface_export_stagings(id);
     }

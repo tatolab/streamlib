@@ -1336,7 +1336,7 @@ impl SurfaceStoreInner {
             vec![staging_fd, refill_done_fd],
         )?;
         tracing::debug!(
-            "SurfaceStore: Registered device-export staging '{}' ({} bytes)",
+            "SurfaceStore: Registered surface-export staging '{}' ({} bytes)",
             surface_id,
             staging_byte_size,
         );
