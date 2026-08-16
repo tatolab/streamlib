@@ -104,7 +104,7 @@ Concretely:
 | `streamlib-adapter-vulkan` | Generic over `D: VulkanRhiDevice`. Host pre-registers `VkImage` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanTexture` + a pair of `ConsumerVulkanTimelineSemaphore`s. Per-acquire is layout-transition + `produce_done` wait, no IPC. The writer process signals `produce_done` in `end_write_access`; the reader process signals `consume_done` in `end_read_access`. Both edges typically use host CPU `signal_host`. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 | `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md).) |
 | `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path (and also offers a GL backend that composes on the opengl adapter). (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md).) |
-| `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanBuffer` + a pair of `ConsumerVulkanTimelineSemaphore`s. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and signals `produce_done` via the trigger's `vkQueueSubmit2::pSignalSemaphoreInfos` slot; the subprocess waits on `produce_done`, mmaps the pre-imported staging buffer, then signals `consume_done` via CPU `signal_host` in `end_read_access`. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
+| `streamlib-adapter-cpu-readback` | Serves consumers **in this process**: the host pre-registers a HOST_VISIBLE staging `VkBuffer` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share, and per-acquire records `vkCmdCopyImageToBuffer` through its in-process trigger. A consumer one process away does not come through this adapter at all — `run_cpu_readback_copy` is a `GpuContext` capability answered from an engine-owned `SurfaceExportStaging` at `SurfaceExportStagingResidency::HostVisible`, minted on demand, with nothing registered and no bridge to install. That staging carries a produce edge only: each refill overwrites it wholesale, so there is no consumer-side drain to signal back. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 | `streamlib-adapter-cuda` | Same shape with one twist on the FD wire — two resource flavors: **(a)** the flat-tensor DLPack path: host pre-registers a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` (`HostVulkanBuffer::new_opaque_fd_export`) + two OPAQUE_FD-exportable timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanBuffer::from_opaque_fd` + a pair of `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`, then maps the same FDs into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` + `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The OPAQUE_FD handle type (rather than DMA-BUF) is forced by the DLPack zero-copy contract: PyTorch / JAX / NumPy `from_dlpack` consume `DLTensor.data` as a flat `void*`, and only `cudaExternalMemoryGetMappedBuffer` (which requires the source memory to be a `VkBuffer` exported as OPAQUE_FD) yields the flat pointer. **(b)** the tiled-image path: host pre-registers a DEVICE_LOCAL OPAQUE_FD-exportable `VkImage` (`HostVulkanTexture::new_opaque_fd_export`) — `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier, format restricted to the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`) — and the subprocess imports through `ConsumerVulkanTexture::from_opaque_fd`. The same FD is then handed to CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for `cudaSurfaceObject_t` / `cudaTextureObject_t` backings. The mipmapped-array handle is opaque (not DLPack-compatible) but unlocks hardware-bilinear sampling, mipmap LOD selection, and surface-write writes from CUDA kernels — the texture-shaped slice that complements (a)'s flat-tensor slice. The host-side trigger that produces frames into the staging buffer signals `produce_done` via `vkQueueSubmit2::pSignalSemaphoreInfos`; the subprocess waits on `produce_done` before consuming and signals `consume_done` via CPU `signal_host` in `end_read_access`. No per-acquire IPC, no CUDA bridge trait. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 
 All adapters follow this shape — no outliers.
@@ -193,15 +193,19 @@ address space.
 
 The crossing **is** the IPC wire. Subprocess holds
 `LimitedAccess`, sends a `run_cpu_readback_copy` request with a
-`surface_id`. Host receives it on a worker holding `FullAccess`,
-runs `vkCmdCopyImageToBuffer` on the host VkDevice + queue
-(queue mutex, fence pool, submit instrumentation all covered)
-into the staging buffer that was pre-registered via surface-share
-at setup time, and returns the `produce_done` timeline value to
-wait on. The subprocess waits on the imported `produce_done`
-timeline through the carve-out, reads the pre-imported staging
-buffer it already mmapped, then signals `consume_done` from
-`end_read_access`.
+`surface_id`. Host receives it on a worker holding `FullAccess`
+and runs the copy on the host VkDevice + queue (queue mutex,
+fence pool, submit instrumentation all covered) into that
+surface's CPU-readable staging — minted on demand by
+`GpuContext::surface_export_staging`, not pre-registered at setup
+— and returns the timeline value to wait on. The subprocess
+reaches the staging through `open_cpu_readback_staging` and the
+surface-share check-out that follows it, then waits on the
+imported timeline through the carve-out before reading.
+
+There is no consumer-side drain to signal back: each refill
+overwrites the staging wholesale, so the registration carries a
+produce edge and no `consume_done` fd at all.
 
 There is no in-process `LimitedAccess → FullAccess` upgrade ever.
 The typestate split is enforced by the IPC boundary itself, the
@@ -279,15 +283,14 @@ The shape of what the hook does varies by seam:
   bridge — every subprocess acquire is a one-shot `check_out`.
   (Vulkan rides the dual-timeline shape today; OpenGL and Skia
   haven't lifted yet.)
-- **Escalate-IPC seam** (cpu-readback). The hook constructs the
-  `CpuReadbackSurfaceAdapter`, allocates + registers the host
-  surface(s) it serves (passing both `produce_done` and `consume_done`
-  through `register_pixel_buffer_with_timeline`), and registers a
-  `CpuReadbackBridge` implementation on the GpuContext via
-  `gpu.set_cpu_readback_bridge(...)`. The bridge is the dispatch
-  target the escalate handler reaches when a subprocess sends
-  `run_cpu_readback_copy`; the trigger signals `produce_done`, the
-  subprocess signals `consume_done` in `end_read_access`.
+- **In-process CPU access** (cpu-readback). The hook constructs the
+  `CpuReadbackSurfaceAdapter` and allocates + registers the host
+  surface(s) it serves, passing both `produce_done` and `consume_done`
+  through `register_pixel_buffer_with_timeline`. This serves consumers
+  in this process. A subprocess reaching a surface's pixels with the
+  CPU does not come through this adapter at all: `run_cpu_readback_copy`
+  is answered by `GpuContext` from a host-visible
+  `SurfaceExportStaging`, always present, with nothing registered.
 - **Surface-share seam with OPAQUE_FD** (cuda). The hook allocates a
   HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` via
   `HostVulkanBuffer::new_opaque_fd_export` (rather than
@@ -306,23 +309,22 @@ The shape of what the hook does varies by seam:
   adapter — and that submit signals `produce_done`. The cdylib
   signals `consume_done` from `end_read_access`.
 
-The graphics / ray-tracing kernel bridges follow the same shape
+The graphics / ray-tracing kernel bridges still follow the older shape
 (`gpu.set_graphics_kernel_bridge`, `set_ray_tracing_kernel_bridge`) for
-adapters that escalate kernel dispatch through the host RHI. Compute has no
-bridge: `register_compute_kernel` / `run_compute_kernel` are always-present
-`GpuContext` capabilities served by the escalate handler directly.
+adapters that escalate kernel dispatch through the host RHI. Compute and CPU
+readback have no bridge: `register_compute_kernel` / `run_compute_kernel`,
+`run_cpu_readback_copy` / `try_run_cpu_readback_copy` and
+`open_cpu_readback_staging` are always-present `GpuContext` capabilities
+served by the escalate handler directly.
 
-Reference implementation:
-`examples/camera-python-display/src/linux.rs`. That example shows
-the surface-share seam; adapters that need per-acquire host work
-use the same hook plus a `set_*_bridge` step.
+The hook is the canonical opt-in registration point for adapters that
+need pre-start GpuContext access. Application authors call
+`install_setup_hook` exactly once per adapter they wire.
 
-The hook is the canonical opt-in registration point. Adapters that
-need pre-start GpuContext access use it; adapters that need
-per-acquire host work also expose a `set_*_bridge` setter on
-`GpuContext` mirroring `set_cpu_readback_bridge`. Application
-authors call `install_setup_hook` exactly once per adapter they want
-to expose to subprocesses.
+Per-acquire host work on behalf of a subprocess is not an adapter
+concern. Compute dispatch and CPU readback are `GpuContext`
+capabilities reached the same way by every caller, with no
+installation step and no runtime-absent case.
 
 ### Dual-registration for in-process consumers
 
@@ -456,10 +458,6 @@ What that cost buys:
   can only flip a compile-time bit. The hook makes the work the
   application has to do for that adapter visible at the call site,
   next to the surface-allocation arguments.
-- **Type safety on bridge wiring.** `gpu.set_cpu_readback_bridge(...)`
-  takes a typed `Arc<dyn CpuReadbackBridge>` — wrong-type bridges
-  are a compile error. A feature-flag-driven registration would
-  funnel everything through a generic registry and lose that.
 
 > A "per-adapter install_default" paragraph was removed here: it proposed
 > `streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`

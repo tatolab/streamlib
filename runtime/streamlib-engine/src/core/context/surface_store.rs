@@ -1275,9 +1275,10 @@ impl SurfaceStoreInner {
         Ok(())
     }
 
-    /// Register a device-export staging buffer and the timeline its
+    /// Register a surface-export staging buffer and the timeline its
     /// refills signal, so a helper process can check the pair out and
-    /// import the staging into an external device API.
+    /// reach the staging — importing it into an external device API, or
+    /// mapping it, according to the residency it was minted at.
     ///
     /// The staging is one flat OPAQUE_FD allocation, never a pixel
     /// buffer: pool allocations are DMA-BUF-flavoured, external device
@@ -1293,7 +1294,7 @@ impl SurfaceStoreInner {
     /// there is no consumer-side drain for the host to wait on, because
     /// each refill overwrites the staging wholesale.
     #[cfg(target_os = "linux")]
-    pub fn register_device_export_staging(
+    pub fn register_surface_export_staging(
         &self,
         surface_id: &str,
         staging_buffer: &crate::vulkan::rhi::HostVulkanBuffer,
@@ -1309,7 +1310,7 @@ impl SurfaceStoreInner {
         // — including on the early return the timeline export can take.
         let staging_fd = unsafe { OwnedFd::from_raw_fd(exported_staging_fd) };
         let refill_done_fd = exported_timeline_edge_opaque_fd(
-            "register_device_export_staging",
+            "register_surface_export_staging",
             "refill_done",
             refill_done,
         )?;
@@ -1330,12 +1331,12 @@ impl SurfaceStoreInner {
         });
 
         self.send_surface_share_registration(
-            "register_device_export_staging",
+            "register_surface_export_staging",
             &request,
             vec![staging_fd, refill_done_fd],
         )?;
         tracing::debug!(
-            "SurfaceStore: Registered device-export staging '{}' ({} bytes)",
+            "SurfaceStore: Registered surface-export staging '{}' ({} bytes)",
             surface_id,
             staging_byte_size,
         );

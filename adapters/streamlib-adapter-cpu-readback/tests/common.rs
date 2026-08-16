@@ -8,7 +8,7 @@
 //! Post-#562 (Path E single-pattern shape) every host-side test
 //! pre-allocates the staging buffers + timeline directly via the RHI
 //! and constructs the adapter with an in-process trigger. No
-//! surface-share IPC, no CpuReadbackBridge wiring — the host adapter
+//! surface-share IPC, no cross-process wiring — the host adapter
 //! sees the imported staging buffers natively as
 //! `Arc<HostVulkanBuffer>` through `HostSurfaceRegistration<HostMarker>`.
 

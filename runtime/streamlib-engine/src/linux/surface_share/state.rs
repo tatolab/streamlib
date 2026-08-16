@@ -85,7 +85,7 @@ pub struct SurfaceMetadata {
     pub checkout_count: u64,
     /// Cross-process Vulkan-image-layout (i32 per `VkImageLayout`), the
     /// **single source of truth for cross-process layout state** — same
-    /// semantics as [`streamlib_surface_adapter::SurfaceSyncState::current_image_layout`],
+    /// semantics as `streamlib_surface_adapter::SurfaceSyncState::current_image_layout`,
     /// lifted into the surface-share daemon so any peer (host engine,
     /// subprocess adapter, host adapter) can read or update it through
     /// the same wire format. Producers update on QFOT release;

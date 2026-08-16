@@ -2,10 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod audio_clock;
-#[cfg(target_os = "linux")]
-mod cpu_readback_bridge;
-#[cfg(target_os = "linux")]
-mod device_export_staging;
 pub(crate) mod escalate_gate;
 mod gpu_context;
 #[cfg(target_os = "linux")]
@@ -15,6 +11,8 @@ pub(crate) mod isolation;
 mod ray_tracing_kernel_bridge;
 mod runtime_context;
 pub(crate) mod surface_check_out_lease_registry;
+#[cfg(target_os = "linux")]
+mod surface_export_staging;
 pub(crate) mod surface_store;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
@@ -25,10 +23,6 @@ pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
 };
-#[cfg(target_os = "linux")]
-pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
-#[cfg(target_os = "linux")]
-pub use device_export_staging::SurfaceDeviceExportStaging;
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
@@ -55,6 +49,8 @@ pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeConte
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };
+#[cfg(target_os = "linux")]
+pub use surface_export_staging::{SurfaceExportStaging, SurfaceExportStagingResidency};
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;

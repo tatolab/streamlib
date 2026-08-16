@@ -31,6 +31,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
+    #[serde(rename = "open_cpu_readback_staging")]
+    OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging),
+
     #[serde(rename = "open_device_export_staging")]
     OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging),
 
@@ -230,6 +233,27 @@ pub(crate) struct EscalateRequestLog {
     /// ordering; the host stamps `host_ts` on receipt as the authoritative
     /// sort key.
     pub(crate) source_ts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestOpenCpuReadbackStaging {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The surface whose pixels the subprocess wants to read with the CPU.
+    /// Same contract as `open_device_export_staging` — the host allocates the
+    /// staging if the surface has none, registers it plus its `refill_done`
+    /// timeline with the surface-share service, and answers with the id they
+    /// are registered under — differing in one respect: this staging is
+    /// HOST_VISIBLE and HOST_COHERENT, so the consumer maps and reads it
+    /// directly instead of importing it into a device API. A surface can carry
+    /// both at once; they are separate allocations under separate ids.
+    /// The `ok` response carries `handle_id`, `width`, `height`, `format`,
+    /// `staging_byte_size`, `bytes_per_row`, `writable`, and
+    /// `exporting_device_uuid`. The staging fd and the timeline fd travel over
+    /// the surface-share socket at check-out, never over this one.
+    pub(crate) surface_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1235,13 +1259,16 @@ pub(crate) struct EscalateRequestRunComputeKernel {
     pub(crate) request_id: String,
 }
 
-/// Which copy direction to run on the host. `image_to_buffer` runs
-/// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
-/// `buffer_to_image` runs the reverse at write release. The host signals a new
-/// value on the surface's timeline at end-of-submit; the subprocess waits on
-/// the timeline (through its imported `ConsumerVulkanTimelineSemaphore`) before
-/// reading or releasing. No FDs travel on the wire — only the timeline value
-/// the host signaled.
+/// Which copy the host runs. `image_to_buffer` reads the named frame into the
+/// staging; `buffer_to_image` publishes the staged edit back into the surface's
+/// own pooled allocation, and is refused unless that same frame was read in
+/// first. Which Vulkan copy each becomes is the engine's business and varies
+/// with the surface's backing.
+///
+/// The host signals a new value on the staging's timeline at end-of-submit; the
+/// subprocess waits on the timeline (through its imported
+/// `ConsumerVulkanTimelineSemaphore`) before reading or releasing. No FDs travel
+/// on the wire — only the timeline value the host signaled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum EscalateRequestRunCpuReadbackCopyDirection {
     #[serde(rename = "buffer_to_image")]
@@ -1254,26 +1281,35 @@ pub(crate) enum EscalateRequestRunCpuReadbackCopyDirection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunCpuReadbackCopy {
-    /// Which copy direction to run on the host. `image_to_buffer` runs
-    /// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
-    /// `buffer_to_image` runs the reverse at write release. The host
-    /// signals a new value on the surface's timeline at end-of-submit;
-    /// the subprocess waits on the timeline (through its imported
-    /// `ConsumerVulkanTimelineSemaphore`) before reading or releasing. No FDs
-    /// travel on the wire — only the timeline value the host signaled.
+    /// Which copy the host runs. `image_to_buffer` reads the named frame
+    /// into the staging; `buffer_to_image` publishes the staged edit back
+    /// into the surface's own pooled allocation, and is refused unless
+    /// that same frame was read in first. Which Vulkan copy each becomes
+    /// is the engine's business and varies with the surface's backing.
+    ///
+    /// The host signals a new value on the staging's timeline at
+    /// end-of-submit; the subprocess waits on the timeline (through its
+    /// imported `ConsumerVulkanTimelineSemaphore`) before reading or
+    /// releasing. No FDs travel on the wire — only the timeline value the
+    /// host signaled.
     pub(crate) direction: EscalateRequestRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
-    /// of a surface previously registered with the host's cpu-readback adapter
-    /// and whose staging buffer + timeline were registered with the surface-
-    /// share service via `register_pixel_buffer_with_timeline`. The subprocess
-    /// imported them once at registration time through `streamlib-consumer-
-    /// rhi`'s `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`. JSON
-    /// has no 64-bit integer — the wire form is the decimal string
-    /// representation, parsed back into u64 by the host before dispatch.
+    /// Any surface id the engine can resolve — a published frame
+    /// (`<slot>#<generation>`) or a registered texture's id. It is not
+    /// parsed as an integer and carries no registration precondition: the
+    /// host mints the CPU-readable staging on first ask.
+    ///
+    /// `direction: image_to_buffer` reads the frame into the staging;
+    /// `buffer_to_image` publishes an edit of it back, and is refused
+    /// unless a read happened first — an unfilled staging holds
+    /// uninitialised memory, not an edit.
+    ///
+    /// The subprocess reaches the staging's memory through
+    /// `open_cpu_readback_staging` plus the surface-share check-out that
+    /// follows it; no fd travels on this socket.
     pub(crate) surface_id: String,
 }
 
@@ -1539,7 +1575,8 @@ pub(crate) struct EscalateRequestRunRayTracingKernel {
     pub(crate) width: u32,
 }
 
-/// Same shape as `run_cpu_readback_copy.direction`.
+/// Same shape and same refusals as `run_cpu_readback_copy.direction`; only the
+/// response to a busy staging differs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum EscalateRequestTryRunCpuReadbackCopyDirection {
     #[serde(rename = "buffer_to_image")]
@@ -1552,7 +1589,8 @@ pub(crate) enum EscalateRequestTryRunCpuReadbackCopyDirection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestTryRunCpuReadbackCopy {
-    /// Same shape as `run_cpu_readback_copy.direction`.
+    /// Same shape and same refusals as `run_cpu_readback_copy.direction`;
+    /// only the response to a busy staging differs.
     pub(crate) direction: EscalateRequestTryRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.
@@ -1560,10 +1598,11 @@ pub(crate) struct EscalateRequestTryRunCpuReadbackCopy {
 
     /// Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
     /// [`super::escalate_response::EscalateResponse::Contended`] response (no
-    /// timeline value, no copy executed) when its
-    /// registry would have blocked instead of performing the copy. Subprocess
-    /// customers use this to skip a frame instead of stalling their thread
-    /// runner.
+    /// timeline value, no copy executed) when another copy is already in
+    /// flight against this surface's staging. Subprocess customers use this
+    /// to skip a frame instead of stalling their thread runner. Every other
+    /// refusal — a retired frame id, a read-only export, an unfilled
+    /// staging — is an `err`, never `contended`.
     pub(crate) surface_id: String,
 }
 
