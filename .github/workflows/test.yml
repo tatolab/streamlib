@@ -49,10 +49,10 @@ jobs:
       #
       # `timeout-minutes` is the native backstop the composite action cannot
       # declare for itself; `check-bounded-apt-install` fails the build if it
-      # goes missing. 10 minutes sits above the script's own 540s worst case so
+      # goes missing. 12 minutes sits above the script's own 590s worst case so
       # the script reports the failure rather than being killed mid-sentence.
       - name: Install system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
           packages: >-

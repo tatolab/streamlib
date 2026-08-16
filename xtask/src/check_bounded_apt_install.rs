@@ -964,6 +964,34 @@ mod tests {
     }
 
     #[test]
+    fn an_install_that_ignores_the_signal_is_still_reported_as_a_timeout() {
+        // `timeout` reports 124 when the command honoured the signal, and 137
+        // when `--kill-after` had to escalate to SIGKILL. apt inside a dpkg
+        // transaction can be the second, and calling that an apt failure is the
+        // same misdiagnosis the 124 branch exists to prevent.
+        let harness = BoundedRetryScriptHarness::new(&apt_fixture(
+            "if [ \"$1\" = update ]; then exit 0; fi\ntrap '' INT\nsleep 600\n",
+        ));
+        let run = harness.run_with_environment(&[
+            ("STREAMLIB_APT_PRIVILEGE_PREFIX", "".as_ref()),
+            ("STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS", "1".as_ref()),
+            ("STREAMLIB_APT_KILL_AFTER_SECONDS", "1".as_ref()),
+        ]);
+
+        assert!(!run.succeeded, "stderr:\n{}", run.stderr);
+        assert!(
+            run.stderr.contains("did not finish inside"),
+            "a SIGKILL escalation is a timeout, not an apt failure; stderr:\n{}",
+            run.stderr
+        );
+        assert!(
+            !run.stderr.contains("apt exit status"),
+            "nothing here is an apt exit status; stderr:\n{}",
+            run.stderr
+        );
+    }
+
+    #[test]
     fn both_mirrors_failing_on_the_install_exits_non_zero_rather_than_hanging() {
         let harness = BoundedRetryScriptHarness::new(&apt_fixture(FAIL_THE_INSTALL_OUTRIGHT));
         let run = harness.run_with_attempt_bound(5);

@@ -52,7 +52,7 @@ jobs:
       # PAL crates run bindgen. `python3-dev` is the extra — the wheel crate's
       # unit tests link libpython (see the step below).
       - name: Install system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
           packages: >-

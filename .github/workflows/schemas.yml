@@ -27,7 +27,7 @@ jobs:
       # builtin headers — and the audio path links opus. Mirrors test.yml's
       # Linux engine dep set.
       - name: Install system dependencies
-        timeout-minutes: 10
+        timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
           packages: >-

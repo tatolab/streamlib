@@ -15,14 +15,15 @@
 # covers transient per-file errors inside a single run, so retrying the primary
 # would be redundant: two attempts, one per mirror.
 #
-# 120s bounds one apt command and 60s the dpkg repair, so two mirrors ×
-# (update + install) plus one repair is a 540s worst case — inside the caller's
+# 120s bounds one apt command and 60s the dpkg repair, and each carries a 10s
+# SIGKILL grace on top. Two mirrors × (update + install) plus one repair is
+# therefore 4×130 + 70 = 590s worst case — inside the caller's
 # `timeout-minutes`, which is what lets this script report the failure itself
 # instead of being killed mid-sentence. 120s is also ~8× the median step and
 # ~1.8× the slowest *successful* update on record, so a merely-mediocre mirror
 # still finishes on the primary.
 #
-# Env (all optional; the last four exist so the gate tests can drive this
+# Env (all optional; the last five exist so the gate tests can drive this
 # without root, apt, or a network):
 #   STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS  bound on one apt command (default 120)
 #   STREAMLIB_APT_FALLBACK_MIRROR_URL      mirror used once the primary blows the bound
@@ -30,10 +31,14 @@
 #   STREAMLIB_APT_GET_COMMAND              the apt-get to invoke
 #   STREAMLIB_APT_MIRROR_SWITCH_COMMAND    the command that repoints apt at the fallback
 #   STREAMLIB_DPKG_REPAIR_COMMAND          the command that finishes an interrupted dpkg
+#   STREAMLIB_APT_KILL_AFTER_SECONDS       SIGKILL grace after the signal (default 10)
 
 set -euo pipefail
 
+# `timeout` reports 124 when the command honoured the signal and exited, and 137
+# (128 + SIGKILL) when `--kill-after` had to escalate. Both mean the bound fired.
 readonly TIMEOUT_EXIT_STATUS=124
+readonly SIGKILL_ESCALATION_EXIT_STATUS=137
 readonly DPKG_REPAIR_TIMEOUT_SECONDS=60
 
 attempt_timeout_seconds="${STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS:-120}"
@@ -42,6 +47,7 @@ apt_privilege_prefix="${STREAMLIB_APT_PRIVILEGE_PREFIX-sudo}"
 apt_get_command="${STREAMLIB_APT_GET_COMMAND:-apt-get}"
 mirror_switch_command="${STREAMLIB_APT_MIRROR_SWITCH_COMMAND:-}"
 dpkg_repair_command="${STREAMLIB_DPKG_REPAIR_COMMAND:-dpkg --configure -a}"
+kill_after_seconds="${STREAMLIB_APT_KILL_AFTER_SECONDS:-10}"
 
 if [ "$#" -eq 0 ]; then
   echo "usage: ${0##*/} <apt-package>..." >&2
@@ -69,8 +75,8 @@ apt_acquire_options=(
 #
 # SIGINT first, because apt unwinds on it and leaves
 # /var/cache/apt/archives/partial intact for the next attempt to resume from;
-# SIGKILL only if it refuses to go. `timeout` reports 124 when it fires, which
-# is what tells a slow mirror apart from a broken package name below.
+# SIGKILL only if it refuses to go — which is why the escalation status counts
+# as a timeout too, in `describe_attempt_failure` below.
 run_one_bounded_apt_attempt() {
   local attempt_label="$1"
   local exit_status=0
@@ -79,7 +85,7 @@ run_one_bounded_apt_attempt() {
 
   # Unquoted on purpose: each may be several words, or empty.
   # shellcheck disable=SC2086
-  $apt_privilege_prefix timeout --signal=INT --kill-after=10s "${attempt_timeout_seconds}s" \
+  $apt_privilege_prefix timeout --signal=INT --kill-after="${kill_after_seconds}s" "${attempt_timeout_seconds}s" \
     $apt_get_command update "${apt_acquire_options[@]}" || exit_status=$?
 
   if [ "$exit_status" -ne 0 ]; then
@@ -87,7 +93,7 @@ run_one_bounded_apt_attempt() {
   fi
 
   # shellcheck disable=SC2086
-  $apt_privilege_prefix timeout --signal=INT --kill-after=10s "${attempt_timeout_seconds}s" \
+  $apt_privilege_prefix timeout --signal=INT --kill-after="${kill_after_seconds}s" "${attempt_timeout_seconds}s" \
     $apt_get_command install -y "${apt_acquire_options[@]}" "${requested_packages[@]}" \
     || exit_status=$?
 
@@ -99,7 +105,7 @@ run_one_bounded_apt_attempt() {
 # not there — the likeliest cause of a deterministic failure here is a
 # version-pinned package name that a runner-image roll retired.
 describe_attempt_failure() {
-  if [ "$1" -eq "$TIMEOUT_EXIT_STATUS" ]; then
+  if [ "$1" -eq "$TIMEOUT_EXIT_STATUS" ] || [ "$1" -eq "$SIGKILL_ESCALATION_EXIT_STATUS" ]; then
     echo "did not finish inside the ${attempt_timeout_seconds}s bound"
   else
     echo "failed with apt exit status $1"
@@ -138,7 +144,7 @@ switch_apt_to_fallback_mirror() {
 # 60s because it is local work with no network in it.
 finish_any_interrupted_dpkg() {
   # shellcheck disable=SC2086
-  $apt_privilege_prefix timeout --signal=INT --kill-after=10s "${DPKG_REPAIR_TIMEOUT_SECONDS}s" \
+  $apt_privilege_prefix timeout --signal=INT --kill-after="${kill_after_seconds}s" "${DPKG_REPAIR_TIMEOUT_SECONDS}s" \
     $dpkg_repair_command || true
 }
 
