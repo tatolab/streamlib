@@ -279,15 +279,14 @@ The shape of what the hook does varies by seam:
   bridge — every subprocess acquire is a one-shot `check_out`.
   (Vulkan rides the dual-timeline shape today; OpenGL and Skia
   haven't lifted yet.)
-- **Escalate-IPC seam** (cpu-readback). The hook constructs the
-  `CpuReadbackSurfaceAdapter`, allocates + registers the host
-  surface(s) it serves (passing both `produce_done` and `consume_done`
-  through `register_pixel_buffer_with_timeline`), and registers a
-  `CpuReadbackBridge` implementation on the GpuContext via
-  `gpu.set_cpu_readback_bridge(...)`. The bridge is the dispatch
-  target the escalate handler reaches when a subprocess sends
-  `run_cpu_readback_copy`; the trigger signals `produce_done`, the
-  subprocess signals `consume_done` in `end_read_access`.
+- **In-process CPU access** (cpu-readback). The hook constructs the
+  `CpuReadbackSurfaceAdapter` and allocates + registers the host
+  surface(s) it serves, passing both `produce_done` and `consume_done`
+  through `register_pixel_buffer_with_timeline`. This serves consumers
+  in this process. A subprocess reaching a surface's pixels with the
+  CPU does not come through this adapter at all: `run_cpu_readback_copy`
+  is answered by `GpuContext` from a host-visible
+  `SurfaceExportStaging`, always present, with nothing registered.
 - **Surface-share seam with OPAQUE_FD** (cuda). The hook allocates a
   HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` via
   `HostVulkanBuffer::new_opaque_fd_export` (rather than
@@ -306,23 +305,22 @@ The shape of what the hook does varies by seam:
   adapter — and that submit signals `produce_done`. The cdylib
   signals `consume_done` from `end_read_access`.
 
-The graphics / ray-tracing kernel bridges follow the same shape
+The graphics / ray-tracing kernel bridges still follow the older shape
 (`gpu.set_graphics_kernel_bridge`, `set_ray_tracing_kernel_bridge`) for
-adapters that escalate kernel dispatch through the host RHI. Compute has no
-bridge: `register_compute_kernel` / `run_compute_kernel` are always-present
-`GpuContext` capabilities served by the escalate handler directly.
+adapters that escalate kernel dispatch through the host RHI. Compute and CPU
+readback have no bridge: `register_compute_kernel` / `run_compute_kernel`,
+`run_cpu_readback_copy` / `try_run_cpu_readback_copy` and
+`open_cpu_readback_staging` are always-present `GpuContext` capabilities
+served by the escalate handler directly.
 
-Reference implementation:
-`examples/camera-python-display/src/linux.rs`. That example shows
-the surface-share seam; adapters that need per-acquire host work
-use the same hook plus a `set_*_bridge` step.
+The hook is the canonical opt-in registration point for adapters that
+need pre-start GpuContext access. Application authors call
+`install_setup_hook` exactly once per adapter they wire.
 
-The hook is the canonical opt-in registration point. Adapters that
-need pre-start GpuContext access use it; adapters that need
-per-acquire host work also expose a `set_*_bridge` setter on
-`GpuContext` mirroring `set_cpu_readback_bridge`. Application
-authors call `install_setup_hook` exactly once per adapter they want
-to expose to subprocesses.
+Per-acquire host work on behalf of a subprocess is not an adapter
+concern. Compute dispatch and CPU readback are `GpuContext`
+capabilities reached the same way by every caller, with no
+installation step and no runtime-absent case.
 
 ### Dual-registration for in-process consumers
 
@@ -456,11 +454,6 @@ What that cost buys:
   can only flip a compile-time bit. The hook makes the work the
   application has to do for that adapter visible at the call site,
   next to the surface-allocation arguments.
-- **Type safety on bridge wiring.** `gpu.set_cpu_readback_bridge(...)`
-  takes a typed `Arc<dyn CpuReadbackBridge>` — wrong-type bridges
-  are a compile error. A feature-flag-driven registration would
-  funnel everything through a generic registry and lose that.
-
 > A "per-adapter install_default" paragraph was removed here: it proposed
 > `streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`
 > — no adapter crate defines any `install_default`, and architecture docs

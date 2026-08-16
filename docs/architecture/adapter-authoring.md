@@ -455,10 +455,6 @@ runtime.install_setup_hook(move |gpu| {
 
     register_host_surface(&adapter, gpu)?;
 
-    // Escalate-trigger adapters only: wire the bridge so subprocess
-    // IPC requests dispatch through the host adapter.
-    //   gpu.set_<name>_bridge(Arc::new(BridgeImpl { adapter }));
-
     Ok(())
 });
 ```
@@ -466,12 +462,13 @@ runtime.install_setup_hook(move |gpu| {
 The application calls `install_setup_hook` exactly once per adapter
 it wants to expose. The hook fires after `GpuContext::init_for_platform_sync`
 has created the live `GpuContext`, before any processor's `setup()`
-runs — the window where adapter bridges and pre-allocated host
-surfaces have to be in place.
+runs — the window where pre-allocated host surfaces have to be in
+place.
 
-The bridge contract the hook wires is documented on
-`runtime/streamlib-engine/src/core/context/cpu_readback_bridge.rs`;
-GPU adapters omit the `set_*_bridge` step.
+An adapter serves consumers in this process. A subprocess reaching a
+surface goes through the escalate ops instead, which `GpuContext`
+answers directly — there is nothing for an adapter to register on
+its behalf.
 
 The trade-off discussion (explicit registration vs. Cargo-feature
 ambient availability) lives in the *Trade-off* section of
@@ -687,13 +684,13 @@ shape but **don't**:
    any, is a thin trigger that publishes a timeline value — not a
    fresh FD-passing payload.
 
-4. **"My adapter wants per-acquire host work + GPU adapter
-   semantics."** Fine — that's what the cpu-readback bridge
-   pattern is for. Add a `set_<name>_bridge` setter on `GpuContext`
-   (mirroring `set_cpu_readback_bridge`), wire the bridge in
-   `install_setup_hook`, dispatch a thin IPC trigger per acquire.
-   The subprocess waits on the imported timeline through the
-   carve-out as usual.
+4. **"My adapter wants per-acquire host work on a subprocess's
+   behalf."** That is not an adapter's job. Per-acquire host work
+   for a subprocess is an escalate op answered by `GpuContext`,
+   which owns the staging and signals the timeline the subprocess
+   waits on — see `run_cpu_readback_copy`. Adding an installable
+   bridge would reintroduce the application-glue step the engine
+   deleted.
 
 5. **"My adapter's framework needs a different external-handle
    type than DMA-BUF."** This is real (cuda needs OPAQUE_FD per
