@@ -91,7 +91,12 @@ class _LaggedHolderProbe:
     variable under test.
     """
 
-    @input(delivery_profile="every_sample")
+    # `latest`, not `every_sample`: an unclaimed bag's id is only good for
+    # pool-depth frames after publish, so a probe that lets bags queue reads
+    # ids the camera has already recycled — refused loudly now (#1872), but
+    # that refusal on *arrival* is not what these probes measure. Reading the
+    # newest bag keeps arrivals current; the held frame still gets lapped.
+    @input(delivery_profile="latest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -102,6 +107,7 @@ class _LaggedHolderProbe:
         self.pixels_of_the_previous_arrival: "numpy.ndarray | None" = None
         self.frames_the_producer_ran_ahead = 0
         self.the_source_produced_a_different_picture = False
+        self.arrivals_already_recycled_before_the_probe_read_them = 0
         self.reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
@@ -146,11 +152,21 @@ class _LaggedHolderProbe:
         # what the result below is about, so reading it here would be the same
         # measurement twice and would confirm nothing. Without this, a still
         # scene makes both probes report "unchanged" and the pair proves
-        # nothing at all.
-        pixels_that_just_arrived = self._sample_pixels(ctx, arrived_surface_id)
-        if not (pixels_that_just_arrived == self.pixels_of_the_previous_arrival).all():
-            self.the_source_produced_a_different_picture = True
-        self.pixels_of_the_previous_arrival = pixels_that_just_arrived
+        # nothing at all. An arrival the camera lapped before this probe got
+        # to it resolves as a recycled-frame refusal — counted, not fatal:
+        # arrival freshness is not what these probes measure.
+        try:
+            pixels_that_just_arrived = self._sample_pixels(ctx, arrived_surface_id)
+        except RuntimeError as refusal:
+            if "recycled" not in str(refusal):
+                raise
+            self.arrivals_already_recycled_before_the_probe_read_them += 1
+        else:
+            if not (
+                pixels_that_just_arrived == self.pixels_of_the_previous_arrival
+            ).all():
+                self.the_source_produced_a_different_picture = True
+            self.pixels_of_the_previous_arrival = pixels_that_just_arrived
 
         self.frames_the_producer_ran_ahead += 1
         if self.frames_the_producer_ran_ahead < FRAMES_TO_LAG_BY:
@@ -198,6 +214,9 @@ class _LaggedHolderProbe:
             "held_frame_unchanged": held_frame_unchanged,
             "late_read_refused_as_recycled": late_read_refusal is not None,
             "late_read_refusal": late_read_refusal,
+            "arrivals_already_recycled_before_the_probe_read_them": (
+                self.arrivals_already_recycled_before_the_probe_read_them
+            ),
             "the_source_produced_a_different_picture": (
                 self.the_source_produced_a_different_picture
             ),
