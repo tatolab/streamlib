@@ -1777,7 +1777,113 @@ mod tests {
         assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
 
         println!("DMA-BUF exported: fd={fd}");
-        // fd is closed by HostVulkanTexture::drop via cached_dma_buf_fd
+        unsafe { libc::close(fd) };
+    }
+
+    /// Every DMA-BUF export mints its own fd and surrenders it — the rule
+    /// the OPAQUE_FD exporters already follow. A memoized fd hands two
+    /// owners the same descriptor: the caller that closes after its
+    /// hand-off, and the texture that closes again at drop (#1880).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn every_dma_buf_export_mints_a_fresh_fd_the_caller_owns() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
+
+        let first_export = texture
+            .export_dma_buf_fd()
+            .expect("first DMA-BUF export failed");
+        let second_export = texture
+            .export_dma_buf_fd()
+            .expect("second DMA-BUF export failed");
+        assert_ne!(
+            first_export, second_export,
+            "each export must mint its own fd; the same number twice is one \
+             descriptor with two owners"
+        );
+
+        drop(texture);
+
+        for exported_fd in [first_export, second_export] {
+            let survived = unsafe { libc::fcntl(exported_fd, libc::F_GETFD) } != -1;
+            if survived {
+                unsafe { libc::close(exported_fd) };
+            }
+            assert!(
+                survived,
+                "fd {exported_fd} was closed by the texture that exported it; an \
+                 exporter surrenders every fd it mints"
+            );
+        }
+    }
+
+    /// The #1880 teardown corruption, reproduced without the wire: the
+    /// registration path closes the fd it was handed, an unrelated owner
+    /// lands on that descriptor number, and the texture's own drop closes
+    /// it a second time — out from under whoever holds it now.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn dropping_a_texture_never_closes_an_fd_its_export_surrendered() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
+
+        let exported_fd = texture.export_dma_buf_fd().expect("DMA-BUF export failed");
+        assert_eq!(
+            unsafe { libc::close(exported_fd) },
+            0,
+            "the receiver's close stands in for the one the SCM_RIGHTS send does"
+        );
+
+        // `dup2` targets the descriptor number rather than racing other
+        // threads for the lowest free one, so the collision the crash needs
+        // is deterministic instead of timing-dependent.
+        let unrelated_owner_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(unrelated_owner_fd >= 0, "could not open the unrelated owner");
+        assert_eq!(
+            unsafe { libc::dup2(unrelated_owner_fd, exported_fd) },
+            exported_fd,
+            "could not stand an unrelated owner on the surrendered number"
+        );
+
+        drop(texture);
+
+        let survived = unsafe { libc::fcntl(exported_fd, libc::F_GETFD) } != -1;
+        unsafe {
+            if survived {
+                libc::close(exported_fd);
+            }
+            libc::close(unrelated_owner_fd);
+        }
+        assert!(
+            survived,
+            "the dropped texture closed fd {exported_fd}, which by then belonged to \
+             an unrelated owner — the double-close that corrupts bystander \
+             subsystems at teardown"
+        );
     }
 
     #[test]
