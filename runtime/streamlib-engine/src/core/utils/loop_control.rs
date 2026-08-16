@@ -52,7 +52,13 @@ where
     // IMPORTANT: We must keep the Arc alive for the duration of the loop!
     // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
+    // This loop's error type is the caller's `E`, so a subscribe failure cannot
+    // be returned. It does not have to be: the latch below is polled as well as
+    // the event, so a shutdown still lands — just from the request rather than
+    // from the broadcast.
+    if let Err(e) = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc)) {
+        tracing::error!("Shutdown-aware loop falling back to the latch alone: {e}");
+    }
 
     tracing::info!(
         "Shutdown-aware loop started, subscribed to {}",
@@ -143,7 +149,7 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::mpsc;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
 
         // Ensure PUBSUB has an iceoryx2 backend. Use a process-unique runtime_id
         // so iceoryx2's persistent service state under /tmp/iceoryx2/ doesn't
@@ -153,7 +159,9 @@ mod tests {
         // init() is a no-op (OnceLock), and the existing runtime_id is used.
         if let Ok(node) = Iceoryx2Node::new() {
             let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
-            PUBSUB.init(&runtime_id, node);
+            PUBSUB
+                .init(&runtime_id, node)
+                .expect("init establishes pending subscriptions");
         }
 
         let counter = Arc::new(AtomicUsize::new(0));
@@ -169,9 +177,19 @@ mod tests {
             done_tx.send(result).ok();
         });
 
-        // Give the iceoryx2 subscriber thread time to open the service and
-        // start polling before we send the shutdown event.
-        std::thread::sleep(Duration::from_millis(150));
+        // `shutdown_aware_loop` subscribes before its first callback, and
+        // `subscribe` returns only once its subscriber is registered — so one
+        // observed iteration proves the loop is listening. Waiting on that
+        // rather than on a duration is what keeps this deterministic on a
+        // loaded machine.
+        let ready_deadline = Instant::now() + Duration::from_secs(5);
+        while counter.load(Ordering::Relaxed) == 0 {
+            assert!(
+                Instant::now() < ready_deadline,
+                "shutdown_aware_loop never reached its first iteration",
+            );
+            std::thread::yield_now();
+        }
 
         // Publish shutdown event
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);

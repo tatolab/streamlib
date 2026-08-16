@@ -135,14 +135,8 @@ jobs:
       # second stop is a no-op. `test.yml` deliberately does not run
       # streamlib-engine's lib tests, so this carve-out is their only home.
       #
-      # Last, because `stopping_an_already_stopped_runtime_is_a_no_op` fails
-      # roughly half the time on this runner and passes everywhere else — it
-      # observes `RuntimeStopping` zero times while `RuntimeStopped` arrives.
-      # Whatever the cause, it is not the wheel's, and while this ran first a
-      # failure here meant the wheel was never built and none of the four steps
-      # above ever reported. Running it last keeps the signal this job exists
-      # for. Serializing it was tried and did not help, so no claim about
-      # parallelism is made here.
+      # Last, so that a failure here cannot cost the four steps above their
+      # report — while this ran first, the wheel was never built when it failed.
       - name: Shutdown-signal ownership and stop-idempotency tests
         run: |
           cargo test --locked -p streamlib-engine --lib -- \

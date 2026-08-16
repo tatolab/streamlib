@@ -78,7 +78,10 @@ jobs:
       # explicitly because it is the compile-level half of those locks
       # and cannot live in the proc-macro crate's own lib tests.
       # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a
-      # tracked follow-up, pending a fix to a parallel-run test flake.
+      # tracked follow-up. The "parallel-run test flake" this comment used to
+      # cite was never pinned to a specific test; the one flake since diagnosed
+      # is the pubsub subscribe race, fixed in #1873. What is known to remain is
+      # a DRM-probe hang, a rare SIGABRT, and fd-capture flakes.
       - name: Run unit tests
         run: |
           cargo test --locked -p streamlib -p streamlib-macros --lib

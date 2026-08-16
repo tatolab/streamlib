@@ -203,7 +203,7 @@ impl Runner {
 
         // Initialize global PUBSUB with iceoryx2 backend.
         // Must happen before any subscribe() calls (GraphChangeListener below).
-        PUBSUB.init(&runtime_id, iceoryx2_node.clone());
+        PUBSUB.init(&runtime_id, iceoryx2_node.clone())?;
 
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket at $XDG_RUNTIME_DIR/streamlib-<uuid>.sock that
@@ -227,7 +227,7 @@ impl Runner {
         let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
 
         // Subscribe to graph changes
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))?;
 
         Ok(Arc::new(Self {
             runtime_id,
@@ -928,7 +928,7 @@ impl Runner {
             Arc::new(parking_lot::Mutex::new(ShutdownListener {
                 flag: shutdown_flag_clone.clone(),
             }));
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener))?;
 
         // On macOS, run the NSApplication event loop (required for GUI)
         #[cfg(target_os = "macos")]
@@ -1696,7 +1696,9 @@ mod tests {
         let counts = Arc::new(Mutex::new(StopTransitionCounter::default()));
         let listener: Arc<Mutex<dyn EventListener>> =
             Arc::new(Mutex::new(CountingListener(Arc::clone(&counts))));
-        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+        PUBSUB
+            .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))
+            .expect("subscribe establishes the subscriber");
 
         runner.stop().expect("the first stop succeeds");
         runner.stop().expect("the second stop succeeds");
