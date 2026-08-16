@@ -90,7 +90,8 @@ fn create_initialized_bus(test_name: &str) -> PubSub {
     let runtime_id = format!("test-{}-{}", test_name, uuid::Uuid::new_v4());
     let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
     let bus = PubSub::new();
-    bus.init(&runtime_id, node);
+    bus.init(&runtime_id, node)
+        .expect("init establishes pending subscriptions");
     bus
 }
 
@@ -127,7 +128,8 @@ fn test_pre_init_subscribe_buffers() {
     let bus = PubSub::new();
     let concrete = Arc::new(Mutex::new(CountingListener::new()));
     let listener: Arc<Mutex<dyn EventListener>> = concrete.clone();
-    bus.subscribe(topics::KEYBOARD, listener);
+    bus.subscribe(topics::KEYBOARD, listener)
+        .expect("buffering a pre-init subscription cannot fail");
     // Subscription is buffered, no events delivered yet
     assert_eq!(concrete.lock().count(), 0);
 }
@@ -361,7 +363,8 @@ fn test_pubsub_publish_sends_to_iceoryx2() {
     let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
     let node_probe = node.clone();
     let bus = PubSub::new();
-    bus.init(&runtime_id, node);
+    bus.init(&runtime_id, node)
+        .expect("init establishes pending subscriptions");
 
     // Compute the service name PubSub will use for topics::KEYBOARD
     let sanitized_topic = topics::KEYBOARD.replace(':', "/");
@@ -526,7 +529,8 @@ fn test_publish_delivers_to_subscriber() {
     let (tx, rx) = mpsc::channel();
     let listener = ChannelListener { sender: tx };
     let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    bus.subscribe(topics::KEYBOARD, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
@@ -550,8 +554,10 @@ fn test_publish_delivers_to_multiple_subscribers_on_same_topic() {
     let listener_b: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_b }));
 
-    bus.subscribe(topics::KEYBOARD, listener_a.clone());
-    bus.subscribe(topics::KEYBOARD, listener_b.clone());
+    bus.subscribe(topics::KEYBOARD, listener_a.clone())
+        .expect("subscribe establishes the subscriber");
+    bus.subscribe(topics::KEYBOARD, listener_b.clone())
+        .expect("subscribe establishes the subscriber");
 
     let event = Event::keyboard(KeyCode::B, Modifiers::default(), KeyState::Pressed);
 
@@ -582,8 +588,10 @@ fn test_publish_does_not_cross_topics() {
     let mouse_listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_mouse }));
 
-    bus.subscribe(topics::KEYBOARD, kb_listener.clone());
-    bus.subscribe(topics::MOUSE, mouse_listener.clone());
+    bus.subscribe(topics::KEYBOARD, kb_listener.clone())
+        .expect("subscribe establishes the subscriber");
+    bus.subscribe(topics::MOUSE, mouse_listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Publish a MOUSE event — only the mouse subscriber should receive it
     let mouse_event = Event::mouse(MouseButton::Left, (10.0, 20.0), MouseState::Pressed);
@@ -612,7 +620,8 @@ fn test_wildcard_subscriber_receives_all_topics() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::ALL, listener.clone());
+    bus.subscribe(topics::ALL, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     let keyboard_event = Event::keyboard(KeyCode::C, Modifiers::default(), KeyState::Pressed);
     let mouse_event = Event::mouse(MouseButton::Right, (5.0, 10.0), MouseState::Released);
@@ -656,7 +665,8 @@ fn test_subscriber_receives_correct_event_data() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    bus.subscribe(topics::KEYBOARD, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     let modifiers = Modifiers {
         shift: true,
@@ -699,7 +709,8 @@ fn test_an_event_published_the_instant_subscribe_returns_is_delivered() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
+    bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Published exactly once, with no retry loop: the whole point is that one
     // publish after subscribe() returns is enough.
@@ -726,10 +737,12 @@ fn test_subscribe_before_init_receives_events_after_init() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    bus.subscribe(topics::KEYBOARD, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Now init — pending subscription should be replayed
-    bus.init(&runtime_id, node);
+    bus.init(&runtime_id, node)
+        .expect("init establishes pending subscriptions");
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
@@ -759,12 +772,16 @@ fn test_multiple_subscribes_before_init_all_replayed() {
     let rt_handle: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_rt }));
 
-    bus.subscribe(topics::KEYBOARD, kb_handle.clone());
-    bus.subscribe(topics::MOUSE, mouse_handle.clone());
-    bus.subscribe(topics::RUNTIME_GLOBAL, rt_handle.clone());
+    bus.subscribe(topics::KEYBOARD, kb_handle.clone())
+        .expect("subscribe establishes the subscriber");
+    bus.subscribe(topics::MOUSE, mouse_handle.clone())
+        .expect("subscribe establishes the subscriber");
+    bus.subscribe(topics::RUNTIME_GLOBAL, rt_handle.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Init replays all 3 pending subscriptions
-    bus.init(&runtime_id, node);
+    bus.init(&runtime_id, node)
+        .expect("init establishes pending subscriptions");
 
     let kb_event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let mouse_event = Event::mouse(MouseButton::Left, (0.0, 0.0), MouseState::Pressed);
@@ -802,7 +819,8 @@ fn test_listener_drop_stops_subscriber_thread() {
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
 
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    bus.subscribe(topics::KEYBOARD, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Verify subscriber is working first
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
@@ -841,7 +859,8 @@ fn test_runtime_event_delivery() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone());
+    bus.subscribe(topics::RUNTIME_GLOBAL, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     let first = Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted);
     let received = publish_once_and_receive(&bus, &first, &rx, Duration::from_secs(5));
@@ -887,7 +906,8 @@ fn test_processor_event_delivery() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(&topic, listener.clone());
+    bus.subscribe(&topic, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     let event = Event::processor(processor_id, ProcessorEvent::Started);
     let received = publish_once_and_receive(&bus, &event, &rx, Duration::from_secs(5));
@@ -908,7 +928,8 @@ fn test_custom_event_delivery() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(custom_topic, listener.clone());
+    bus.subscribe(custom_topic, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     let payload = serde_json::json!({"key": "value", "count": 42});
     let event = Event::custom(custom_topic, payload);
@@ -939,7 +960,8 @@ fn test_oversized_event_is_dropped() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe("big-topic", listener.clone());
+    bus.subscribe("big-topic", listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     // First verify the subscriber is working with a normal-sized event
     let normal_event = Event::custom("big-topic", serde_json::json!({"ok": true}));
@@ -970,7 +992,8 @@ fn test_concurrent_publish_from_multiple_threads() {
     let (tx, rx) = mpsc::channel();
     let listener: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx }));
-    bus.subscribe(topics::KEYBOARD, listener.clone());
+    bus.subscribe(topics::KEYBOARD, listener.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Each thread's first publish creates a new thread-local iceoryx2 publisher.
     // iceoryx2's subscriber needs a beat to establish its receive-side connection
@@ -1047,8 +1070,12 @@ fn test_separate_pubsub_instances_are_isolated() {
     let handle_b: Arc<Mutex<dyn EventListener>> =
         Arc::new(Mutex::new(ChannelListener { sender: tx_b }));
 
-    bus_a.subscribe(topics::KEYBOARD, handle_a.clone());
-    bus_b.subscribe(topics::KEYBOARD, handle_b.clone());
+    bus_a
+        .subscribe(topics::KEYBOARD, handle_a.clone())
+        .expect("subscribe establishes the subscriber");
+    bus_b
+        .subscribe(topics::KEYBOARD, handle_b.clone())
+        .expect("subscribe establishes the subscriber");
 
     // Verify bus_a's subscriber is working
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);

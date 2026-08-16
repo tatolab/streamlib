@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock, OnceLock, Weak};
 use std::time::Duration;
 
 use super::events::{Event, EventListener, topics};
+use crate::core::error::{Error, Result};
 use crate::iceoryx2::{EventPayload, Iceoryx2EventService, Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 
 type EventPublisher =
@@ -66,7 +67,10 @@ impl PubSub {
     /// Initialize with iceoryx2 backend. Called once from Runner::new().
     ///
     /// Replays any subscriptions that were registered before initialization.
-    pub fn init(&self, runtime_id: &str, node: Iceoryx2Node) {
+    /// Every pending subscription is attempted even if an earlier one fails —
+    /// dropping the rest would strand listeners the caller cannot re-register,
+    /// since the replay queue has already been taken.
+    pub fn init(&self, runtime_id: &str, node: Iceoryx2Node) -> Result<()> {
         let _ = self.runtime_id.set(runtime_id.to_string());
         let _ = self.node.set(node);
 
@@ -74,26 +78,33 @@ impl PubSub {
 
         // Replay pending subscriptions
         let pending = std::mem::take(&mut *self.pending_subscriptions.lock());
+        let mut first_failure = None;
         for (topic, listener) in pending {
             tracing::debug!("Replaying pending subscription for topic '{}'", topic);
-            self.subscribe_inner(&topic, listener);
+            if let Err(e) = self.subscribe_inner(&topic, listener) {
+                first_failure.get_or_insert(e);
+            }
+        }
+        match first_failure {
+            Some(e) => Err(e),
+            None => Ok(()),
         }
     }
 
-    /// Subscribe a listener to a topic, returning once the subscriber is
-    /// registered — so an event published after a successful return is
-    /// delivered. Establishment failure is logged, not returned; see below.
+    /// Subscribe a listener to a topic, returning `Ok` once the subscriber is
+    /// registered — so an event published after that is delivered.
     ///
     /// Blocks for as long as establishment takes because the event service
     /// carries no history: a sample sent before the subscriber registers reaches
     /// nobody and cannot be replayed. Before `init()` the subscription is
-    /// buffered instead, and establishment happens during the replay.
+    /// buffered and this returns `Ok` immediately; establishment — and any
+    /// error from it — surfaces from `init()` instead.
     ///
-    /// Delivery is best-effort, as everywhere else on this bus: if the
-    /// subscriber cannot be established, or is still coming up after
-    /// `SUBSCRIBER_ESTABLISHMENT_TIMEOUT`, this logs the failure and returns
-    /// anyway rather than blocking the caller indefinitely. Callers that must
-    /// distinguish those cases have nothing to read here yet.
+    /// `Err` means the listener is not subscribed and never will be: either the
+    /// subscriber could not be created, or it was still coming up after
+    /// `SUBSCRIBER_ESTABLISHMENT_TIMEOUT`. Publishing to the topic afterwards
+    /// reaches this listener not at all, so a caller that ignores the error is
+    /// silently deaf rather than degraded.
     ///
     /// The subscriber thread holds only a Weak reference to the listener.
     /// The caller MUST keep the Arc alive for the lifetime of the subscription.
@@ -107,7 +118,7 @@ impl PubSub {
     /// let sub = Arc::new(Mutex::new(listener));
     /// PUBSUB.subscribe(topic, Arc::clone(&sub));
     /// ```
-    pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
+    pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) -> Result<()> {
         // Caller must keep a strong Arc — we only store a Weak in the
         // subscriber thread.  strong_count == 1 means this parameter is the
         // only reference and will be dropped when this call returns.
@@ -135,13 +146,13 @@ impl PubSub {
             self.pending_subscriptions
                 .lock()
                 .push((topic.to_string(), listener));
-            return;
+            return Ok(());
         }
 
-        self.subscribe_inner(topic, listener);
+        self.subscribe_inner(topic, listener)
     }
 
-    fn subscribe_inner(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
+    fn subscribe_inner(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) -> Result<()> {
         let runtime_id = self.runtime_id.get().unwrap().clone();
         let node = self.node.get().unwrap().clone();
         let weak_listener = Arc::downgrade(&listener);
@@ -202,12 +213,9 @@ impl PubSub {
 
             subscriber_poll_loop(&subscriber, &weak_listener, &topic_owned);
         }) {
-            tracing::error!(
-                "Failed to spawn subscriber thread for '{}': {}",
-                service_name_for_log,
-                e
-            );
-            return;
+            return Err(Error::Runtime(format!(
+                "Failed to spawn subscriber thread for '{service_name_for_log}': {e}"
+            )));
         }
 
         // The sender is owned by the spawned thread, so a give-up path drops it
@@ -219,23 +227,16 @@ impl PubSub {
                     topic,
                     service_name_for_log
                 );
+                Ok(())
             }
-            Err(RecvTimeoutError::Disconnected) => {
-                tracing::error!(
-                    "Subscriber for '{}' never came up; events on topic '{}' will be missed",
-                    service_name_for_log,
-                    topic
-                );
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                tracing::error!(
-                    "Subscriber for '{}' was still coming up after {:?}; \
-                     events on topic '{}' published now may be missed",
-                    service_name_for_log,
-                    SUBSCRIBER_ESTABLISHMENT_TIMEOUT,
-                    topic
-                );
-            }
+            Err(RecvTimeoutError::Disconnected) => Err(Error::Runtime(format!(
+                "Subscriber for '{service_name_for_log}' never came up; \
+                 events on topic '{topic}' would be missed"
+            ))),
+            Err(RecvTimeoutError::Timeout) => Err(Error::Runtime(format!(
+                "Subscriber for '{service_name_for_log}' was still coming up after \
+                 {SUBSCRIBER_ESTABLISHMENT_TIMEOUT:?}; events on topic '{topic}' would be missed"
+            ))),
         }
     }
 

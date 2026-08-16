@@ -52,7 +52,13 @@ where
     // IMPORTANT: We must keep the Arc alive for the duration of the loop!
     // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
-    PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc));
+    // This loop's error type is the caller's `E`, so a subscribe failure cannot
+    // be returned. It does not have to be: the latch below is polled as well as
+    // the event, so a shutdown still lands — just from the request rather than
+    // from the broadcast.
+    if let Err(e) = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc)) {
+        tracing::error!("Shutdown-aware loop falling back to the latch alone: {e}");
+    }
 
     tracing::info!(
         "Shutdown-aware loop started, subscribed to {}",
@@ -153,7 +159,9 @@ mod tests {
         // init() is a no-op (OnceLock), and the existing runtime_id is used.
         if let Ok(node) = Iceoryx2Node::new() {
             let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
-            PUBSUB.init(&runtime_id, node);
+            PUBSUB
+                .init(&runtime_id, node)
+                .expect("init establishes pending subscriptions");
         }
 
         let counter = Arc::new(AtomicUsize::new(0));
