@@ -41,6 +41,15 @@
 //! submissions' writes visible. A multi-queue engine would need the
 //! refill to wait on the producer's timeline instead.
 //!
+//! One staging per (surface, residency), shared by every holder of that
+//! slot — so two consumers reading one surface at one residency map the
+//! same allocation, and nothing here arbitrates their overlap. The
+//! `try_` ops' `contended` reports a busy *recorder*, not a competing
+//! reader: it keeps two copies from interleaving, not two consumers from
+//! reading a buffer a third is refilling. The deleted cpu-readback
+//! bridge carried the same limitation in its own words; it is restated
+//! here because that is where the staging now lives.
+//!
 //! Nothing here assumes the consumer lives in this process. A processor
 //! reaching this from its own helper process gets the same staging and
 //! the same timeline: [`GpuContext::share_surface_export_staging`]
@@ -52,7 +61,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 
@@ -181,14 +189,20 @@ pub struct SurfaceExportStaging {
     /// can honour a write — true only when the surface's sole backing is
     /// its own pooled allocation.
     writable: bool,
-    /// Whether a refill has ever landed the surface's pixels in here.
+    /// The frame id a refill last read into this staging, if any.
     ///
-    /// A freshly allocated staging holds whatever the allocator handed
-    /// back; publishing that over a live frame would replace a picture
-    /// with uninitialised memory. A write-back is an edit *of a frame*,
-    /// so it requires that the frame was read in first. Latches false →
-    /// true and never back: once filled, later frames refill over it.
-    has_been_filled_from_the_surface: AtomicBool,
+    /// Names a *frame*, not a flag, because the staging is cached per pool
+    /// slot and spans the generations that slot publishes: a bool would
+    /// let frame `<slot>#7`'s staged pixels be published over `<slot>#8`'s
+    /// backing — another frame's picture, in the write direction, which is
+    /// what `[surface-id-lifetime-contract]` exists to refuse. A
+    /// write-back is an edit *of the frame that was read in*, so it must
+    /// name that frame.
+    ///
+    /// `None` until the first refill: a freshly allocated staging holds
+    /// whatever the allocator handed back, and publishing that would
+    /// replace a live picture with uninitialised memory.
+    frame_last_read_into_this_staging: Mutex<Option<String>>,
     /// The surface-share id this staging is published under, once it has
     /// been. Registration hands the service a dup of the staging fd and
     /// the timeline fd, so repeating it per frame would leak a pair per
@@ -235,9 +249,12 @@ impl SurfaceExportStaging {
     }
 
     /// Run `while_held` with this staging's recorder taken, so a test can
-    /// drive the contended path the `try_` ops report. Nothing in the
-    /// engine holds the recorder across a call — the copy paths take and
-    /// release it internally — so only a test can produce that state.
+    /// drive the contended path the `try_` ops report.
+    ///
+    /// Two concurrent copies produce this state on their own — that is
+    /// what `contended` reports. What a test cannot do without a hook is
+    /// make the window deterministic, because no engine path holds the
+    /// recorder *across* a call.
     #[cfg(test)]
     pub(crate) fn while_holding_the_refill_recorder_for_a_test<T>(
         &self,
@@ -424,7 +441,7 @@ impl GpuContext {
             surface_height: shape.surface_height,
             pixel_format: Some(shape.pixel_format),
             writable: shape.writable,
-            has_been_filled_from_the_surface: AtomicBool::new(false),
+            frame_last_read_into_this_staging: Mutex::new(None),
             #[cfg(target_os = "linux")]
             surface_share_registration_id: Mutex::new(None),
         });
@@ -625,9 +642,7 @@ impl GpuContext {
             staging.refill_submission.lock(),
             |recorder| Self::record_refill(staging, &source, recorder),
         )?;
-        staging
-            .has_been_filled_from_the_surface
-            .store(true, Ordering::Release);
+        *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
         Ok(signalled)
     }
 
@@ -648,9 +663,7 @@ impl GpuContext {
             Self::record_refill(staging, &source, recorder)
         })?;
         if signalled.is_some() {
-            staging
-                .has_been_filled_from_the_surface
-                .store(true, Ordering::Release);
+            *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
         }
         Ok(signalled)
     }
@@ -836,15 +849,22 @@ impl GpuContext {
                  frame and the staged edit cannot be published into it"
             )));
         }
-        if !staging
-            .has_been_filled_from_the_surface
-            .load(Ordering::Acquire)
-        {
-            return Err(Error::GpuError(format!(
-                "surface {surface_id}'s export staging has never been filled from the surface; \
-                 publishing it would write uninitialised memory over a live frame — read the \
-                 frame in before publishing an edit of it"
-            )));
+        match staging.frame_last_read_into_this_staging.lock().as_deref() {
+            None => {
+                return Err(Error::GpuError(format!(
+                    "surface {surface_id}'s export staging has never been read into; publishing \
+                     it would write uninitialised memory over a live frame — read the frame in \
+                     before publishing an edit of it"
+                )));
+            }
+            Some(read_in) if read_in != surface_id => {
+                return Err(Error::GpuError(format!(
+                    "surface {surface_id}'s export staging currently holds frame {read_in}; \
+                     publishing it would write that frame's pixels over this one — read this \
+                     frame in before publishing an edit of it"
+                )));
+            }
+            Some(_) => {}
         }
         let ResolvedBlitSource::PixelBuffer(pixel_buffer) =
             self.resolve_device_export_source(surface_id)?
@@ -1631,7 +1651,7 @@ mod tests {
             .copy_surface_export_staging_back_to_surface(&staging, &surface_id)
             .expect_err("a never-filled staging has no edit to publish");
         assert!(
-            refusal.to_string().contains("never been filled"),
+            refusal.to_string().contains("never been read into"),
             "the refusal must name why, got: {refusal}"
         );
 
@@ -1647,5 +1667,80 @@ mod tests {
             .expect("read the frame into the staging");
         gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
             .expect("a filled staging may publish its edit");
+    }
+
+    /// One staging spans every frame its pool slot publishes, so the
+    /// write-back must name the frame that was read in — not merely
+    /// *some* currently-valid frame.
+    ///
+    /// The gap this closes is narrow, because `refuse_a_retired_frame_id`
+    /// already catches a write-back naming the *older* frame. What it
+    /// cannot catch is the other order: read `<slot>#N` in, let the slot
+    /// cycle, then publish against the now-current `<slot>#N+1` — every
+    /// earlier guard passes and frame N's pixels land on frame N+1's
+    /// backing. That is another frame's picture in the write direction,
+    /// which `[surface-id-lifetime-contract]` refuses.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_write_back_naming_a_different_frame_than_was_read_in_is_refused() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (first_pool_id, first_backing) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame that gets read in");
+        let read_in_surface_id = first_pool_id.to_string();
+        let slot = crate::core::rhi::pool_slot_key_of_surface_id(&read_in_surface_id).to_string();
+        stamp_every_byte_of_pooled_backing(&first_backing, PUBLISHED_FRAME_STAMP);
+
+        let staging = gpu
+            .surface_export_staging(
+                &read_in_surface_id,
+                SurfaceExportStagingResidency::HostVisible,
+            )
+            .expect("the cpu-readback staging");
+        gpu.refill_surface_export_staging(&staging, &read_in_surface_id)
+            .expect("read this frame in");
+
+        // Let the slot cycle: release it, then take it back. The staging
+        // is cached per slot, so the next generation gets this very one.
+        drop(first_backing);
+        let mut recycled = None;
+        let mut _held_elsewhere = Vec::new();
+        for _ in 0..8 {
+            let (pool_id, backing) = gpu
+                .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+                .expect("re-acquire from the pool");
+            if crate::core::rhi::pool_slot_key_of_surface_id(&pool_id.to_string()) == slot {
+                recycled = Some((pool_id.to_string(), backing));
+                break;
+            }
+            _held_elsewhere.push(backing);
+        }
+        let Some((next_frame_surface_id, next_backing)) = recycled else {
+            println!(
+                "a_write_back_naming_a_different_frame_than_was_read_in_is_refused: the pool \
+                 never handed slot {slot} back — skipping"
+            );
+            return;
+        };
+        assert_ne!(
+            next_frame_surface_id, read_in_surface_id,
+            "recycling the slot must publish a new frame id"
+        );
+        stamp_every_byte_of_pooled_backing(&next_backing, TWO_FRAMES_LATER_STAMP);
+
+        let refusal = gpu
+            .copy_surface_export_staging_back_to_surface(&staging, &next_frame_surface_id)
+            .expect_err("a staging holding the previous frame must not publish over this one");
+        assert!(
+            refusal.to_string().contains(&read_in_surface_id),
+            "the refusal must name the frame the staging actually holds, got: {refusal}"
+        );
+        assert_every_byte_is(
+            &read_pooled_backing_bytes(&next_backing),
+            TWO_FRAMES_LATER_STAMP,
+            "the new frame's backing after a refused cross-frame write-back",
+        );
     }
 }

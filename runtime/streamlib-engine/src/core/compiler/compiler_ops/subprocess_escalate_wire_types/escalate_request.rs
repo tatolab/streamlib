@@ -1259,13 +1259,16 @@ pub(crate) struct EscalateRequestRunComputeKernel {
     pub(crate) request_id: String,
 }
 
-/// Which copy direction to run on the host. `image_to_buffer` runs
-/// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
-/// `buffer_to_image` runs the reverse at write release. The host signals a new
-/// value on the surface's timeline at end-of-submit; the subprocess waits on
-/// the timeline (through its imported `ConsumerVulkanTimelineSemaphore`) before
-/// reading or releasing. No FDs travel on the wire — only the timeline value
-/// the host signaled.
+/// Which copy the host runs. `image_to_buffer` reads the named frame into the
+/// staging; `buffer_to_image` publishes the staged edit back into the surface's
+/// own pooled allocation, and is refused unless that same frame was read in
+/// first. Which Vulkan copy each becomes is the engine's business and varies
+/// with the surface's backing.
+///
+/// The host signals a new value on the staging's timeline at end-of-submit; the
+/// subprocess waits on the timeline (through its imported
+/// `ConsumerVulkanTimelineSemaphore`) before reading or releasing. No FDs travel
+/// on the wire — only the timeline value the host signaled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum EscalateRequestRunCpuReadbackCopyDirection {
     #[serde(rename = "buffer_to_image")]
@@ -1278,13 +1281,17 @@ pub(crate) enum EscalateRequestRunCpuReadbackCopyDirection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunCpuReadbackCopy {
-    /// Which copy direction to run on the host. `image_to_buffer` runs
-    /// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
-    /// `buffer_to_image` runs the reverse at write release. The host
-    /// signals a new value on the surface's timeline at end-of-submit;
-    /// the subprocess waits on the timeline (through its imported
-    /// `ConsumerVulkanTimelineSemaphore`) before reading or releasing. No FDs
-    /// travel on the wire — only the timeline value the host signaled.
+    /// Which copy the host runs. `image_to_buffer` reads the named frame
+    /// into the staging; `buffer_to_image` publishes the staged edit back
+    /// into the surface's own pooled allocation, and is refused unless
+    /// that same frame was read in first. Which Vulkan copy each becomes
+    /// is the engine's business and varies with the surface's backing.
+    ///
+    /// The host signals a new value on the staging's timeline at
+    /// end-of-submit; the subprocess waits on the timeline (through its
+    /// imported `ConsumerVulkanTimelineSemaphore`) before reading or
+    /// releasing. No FDs travel on the wire — only the timeline value the
+    /// host signaled.
     pub(crate) direction: EscalateRequestRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.
@@ -1568,7 +1575,8 @@ pub(crate) struct EscalateRequestRunRayTracingKernel {
     pub(crate) width: u32,
 }
 
-/// Same shape as `run_cpu_readback_copy.direction`.
+/// Same shape and same refusals as `run_cpu_readback_copy.direction`; only the
+/// response to a busy staging differs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum EscalateRequestTryRunCpuReadbackCopyDirection {
     #[serde(rename = "buffer_to_image")]
@@ -1581,7 +1589,8 @@ pub(crate) enum EscalateRequestTryRunCpuReadbackCopyDirection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestTryRunCpuReadbackCopy {
-    /// Same shape as `run_cpu_readback_copy.direction`.
+    /// Same shape and same refusals as `run_cpu_readback_copy.direction`;
+    /// only the response to a busy staging differs.
     pub(crate) direction: EscalateRequestTryRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.

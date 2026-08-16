@@ -170,7 +170,7 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - REMOVED: importing a foreign DMA-BUF is not reachable from a Python processor yet
   The refusal (`python_processor_context.rs:745-759`) and its stub entry (`_engine.pyi:381`).
 - REMOVED: writable: false
-  The `writable: false` texture arm (`surface_export_staging.rs:352`), which is the anchor this
+  The `writable: false` texture arm (`surface_export_staging.rs:373`), which is the anchor this
   bullet was re-cut to when #1774 implemented the readback half — the shared literal it named
   before ("device export is read-only") no longer distinguishes the two halves, because #1774
   reworded that refusal to name the surface. Only the texture arm retires, with the
@@ -214,10 +214,12 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   `device_export_staging` grew a residency axis and became `surface_export_staging` — one
   machine, two memory flavours, since everything but where the staging lives is shared. Every
   `device_export_staging.rs` anchor in this file now reads `surface_export_staging.rs`.
-- MODIFIED: the device-export staging path extends from buffer-backed to texture-backed
-  write-back (`surface_export_staging.rs:672-720`) via `record_copy_buffer_to_image` plus the
-  layout barriers the read direction already records (`:440-469`).
-- MODIFIED: `export_pixel_shape_for_texture` (`surface_export_staging.rs:114-128`) accepts the
+- MODIFIED: the surface-export staging path extends from buffer-backed to texture-backed
+  write-back (`record_write_back`, `surface_export_staging.rs:880-900`, reached from
+  `copy_surface_export_staging_back_to_surface` at `:789`) via `record_copy_buffer_to_image`
+  plus the layout barriers the read direction already records (`record_refill`'s texture arm,
+  `:711-731`).
+- MODIFIED: `export_pixel_shape_for_texture` (`surface_export_staging.rs:119-142`) accepts the
   float formats a kernel output actually uses — it refuses `Rgba16Float` and `Rgba32Float`
   today, which would make the scope unreachable for the common HDR compute output.
 - MODIFIED: the helper's importer (`python_helper_process_pixel_exchange.rs:585-698`) gains a
@@ -267,6 +269,13 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   (`open_device_export_staging`); both now share one handler. Owner-approved at #1774's
   announce gate, recorded here because the delta did not anticipate it. The **Python spelling**
   for CPU-reading a texture-backed surface remains #1758's.
+- ADDED: a read-before-write precondition on the readback wire. `run_cpu_readback_copy` /
+  `try_run_cpu_readback_copy` with `direction: buffer_to_image` refuse unless a read of *that
+  frame* landed in the staging first — the engine cannot tell a consumer's write from
+  uninitialised allocator memory, and one staging spans every frame its pool slot publishes, so
+  neither "something was written" nor "some frame was read" is enough. #1758's spelling
+  inherits this: a Python edit is an edit *of a frame the processor read*, never a
+  write-a-fresh-frame path.
 
 ## Notes (not tickets)
 

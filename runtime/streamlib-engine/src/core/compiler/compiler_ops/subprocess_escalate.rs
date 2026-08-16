@@ -1036,7 +1036,13 @@ impl SurfaceExportStagingCopyOp {
     fn contention(self) -> SurfaceExportStagingCopyContention {
         match self {
             Self::TryRunCpuReadbackCopy(_) => SurfaceExportStagingCopyContention::ReportContended,
-            _ => SurfaceExportStagingCopyContention::WaitForTheRecorder,
+            // Spelled out rather than caught: a wire op that gained the
+            // wrong contention here would answer `contended` to a child
+            // with no arm for it, and a catch-all would carry that
+            // silently past every test.
+            Self::RefillDeviceExportStaging
+            | Self::CopyDeviceExportStagingBackToSurface
+            | Self::RunCpuReadbackCopy(_) => SurfaceExportStagingCopyContention::WaitForTheRecorder,
         }
     }
 }
@@ -3271,18 +3277,37 @@ mod tests {
 
             let sandbox = GpuContextLimitedAccess::new(gpu.clone());
             let registry = EscalateHandleRegistry::new();
-            let response = staging.while_holding_the_refill_recorder_for_a_test(|| {
-                handle_escalate_op(
-                    &sandbox,
-                    &registry,
-                    EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                        request_id: "req-seam-try".into(),
-                        surface_id: surface_id.clone(),
-                        direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-                    }),
-                )
-                .expect("try_run_cpu_readback_copy always produces a response")
-            });
+            // The recorder is held on *another* thread: held on this one, a
+            // mapping that wrongly waits would re-lock the same
+            // non-reentrant mutex and deadlock, turning the mutation this
+            // test exists to catch into an unbounded hang instead of a
+            // failure.
+            let recorder_is_held = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let release_the_recorder = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let holder = {
+                let staging = std::sync::Arc::clone(&staging);
+                let recorder_is_held = std::sync::Arc::clone(&recorder_is_held);
+                let release_the_recorder = std::sync::Arc::clone(&release_the_recorder);
+                std::thread::spawn(move || {
+                    staging.while_holding_the_refill_recorder_for_a_test(|| {
+                        recorder_is_held.wait();
+                        release_the_recorder.wait();
+                    })
+                })
+            };
+            recorder_is_held.wait();
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-seam-try".into(),
+                    surface_id: surface_id.clone(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                }),
+            )
+            .expect("try_run_cpu_readback_copy always produces a response");
+            release_the_recorder.wait();
+            holder.join().expect("the recorder holder thread joins");
             match response {
                 EscalateResponse::Contended(contended) => {
                     assert_eq!(contended.request_id, "req-seam-try");
@@ -3320,12 +3345,89 @@ mod tests {
             .expect("run_cpu_readback_copy always produces a response");
             match response {
                 EscalateResponse::Err(err) => assert!(
-                    err.message.contains("never been filled"),
+                    err.message.contains("never been read into"),
                     "publishing an unread staging must be refused by name, got: {}",
                     err.message
                 ),
                 other => panic!("expected Err, got {other:?}"),
             }
+        }
+
+        /// The `try_` publish direction, driven to success through the
+        /// seam: read a frame in, edit the mapping, publish it back.
+        ///
+        /// The only coverage the try_-publish path has. Swap
+        /// `TryRun + BufferToImage` to `SurfaceIntoStaging` and the edit is
+        /// silently discarded and overwritten by the frame — which this
+        /// catches, and nothing else did.
+        /// GPU-gated: skips when no device is present.
+        #[test]
+        fn the_seam_publishes_a_staged_edit_through_the_try_direction() {
+            const EDIT: u8 = 0x6b;
+            let Some(gpu) =
+                gpu_or_skip("the_seam_publishes_a_staged_edit_through_the_try_direction")
+            else {
+                return;
+            };
+            let (pool_id, pooled_backing) = gpu
+                .acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)
+                .expect("acquire a pool-only frame");
+            let surface_id = pool_id.to_string();
+            let sandbox = GpuContextLimitedAccess::new(gpu.clone());
+            let registry = EscalateHandleRegistry::new();
+
+            // Read the frame in — the write-back's precondition.
+            let read = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try-read".into(),
+                    surface_id: surface_id.clone(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                }),
+            )
+            .expect("try_run_cpu_readback_copy always produces a response");
+            assert!(
+                matches!(read, EscalateResponse::Ok(_)),
+                "an uncontended read must succeed, got {read:?}"
+            );
+
+            let staging = gpu
+                .surface_export_staging(
+                    &surface_id,
+                    crate::core::context::SurfaceExportStagingResidency::HostVisible,
+                )
+                .expect("the staging the read minted");
+            let mapped = staging.staging_buffer().mapped_ptr();
+            assert!(!mapped.is_null(), "a host-visible staging must be mapped");
+            unsafe { std::ptr::write_bytes(mapped, EDIT, staging.staging_byte_size() as usize) };
+
+            let published = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try-publish".into(),
+                    surface_id: surface_id.clone(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage,
+                }),
+            )
+            .expect("try_run_cpu_readback_copy always produces a response");
+            let EscalateResponse::Ok(ok) = published else {
+                panic!("expected Ok, got {published:?}");
+            };
+            assert!(
+                ok.timeline_value.is_some(),
+                "a publish answers with the timeline value the child waits on"
+            );
+
+            let plane = pooled_backing.plane_base_address(0);
+            let backing =
+                unsafe { std::slice::from_raw_parts(plane, pooled_backing.plane_size(0) as usize) };
+            assert!(
+                backing.iter().all(|byte| *byte == EDIT),
+                "the edit must reach the pooled backing; first mismatch at {:?}",
+                backing.iter().position(|byte| *byte != EDIT)
+            );
         }
 
         /// The open op names itself, not its device-export twin — the two
