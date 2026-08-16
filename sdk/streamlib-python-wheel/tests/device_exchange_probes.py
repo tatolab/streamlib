@@ -363,13 +363,14 @@ class PrivilegedCapabilityProbe:
 
         # A device texture acquires from a helper process: what comes back is
         # the surface id a kernel dispatch binds and a downstream processor
-        # resolves — a name, deliberately not a local mapping.
-        acquired_texture = ctx.gpu_full_access.acquire_texture(
+        # resolves — a name, deliberately not a local mapping. The `with`
+        # returns its pool slot at a known point, like the acquire above.
+        with ctx.gpu_full_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", ["copy_src"]
-        )
-        observation["acquired_texture_surface_id"] = acquired_texture.surface_id
-        observation["acquired_texture_extent"] = [
-            acquired_texture.width,
-            acquired_texture.height,
-        ]
+        ) as acquired_texture:
+            observation["acquired_texture_surface_id"] = acquired_texture.surface_id
+            observation["acquired_texture_extent"] = [
+                acquired_texture.width,
+                acquired_texture.height,
+            ]
         return observation

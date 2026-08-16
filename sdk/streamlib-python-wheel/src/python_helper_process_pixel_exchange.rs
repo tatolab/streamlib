@@ -498,16 +498,19 @@ impl HelperProcessGpuExchangeClient {
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let surface_id: String = response_field(&response, "handle_id")?.extract()?;
+        // The debt exists from the moment the parent allocated: dropping it
+        // hands the pool slot back rather than stranding it. Bound before the
+        // metadata extraction below, so a malformed response still pays the
+        // release — the same ordering `acquire_pixel_buffer` documents.
+        let release_to_parent = HelperSurfaceReleaseDebt {
+            escalate_request_to_parent: self.escalate_request_to_parent.clone_ref(python),
+            handle_id: surface_id.clone(),
+        };
         Ok(HelperAcquiredTexture {
             width: response_field(&response, "width")?.extract()?,
             height: response_field(&response, "height")?.extract()?,
             format_name: response_field(&response, "format")?.extract()?,
-            // The debt exists from the moment the parent allocated: dropping
-            // this hands the pool slot back rather than stranding it.
-            release_to_parent: HelperSurfaceReleaseDebt {
-                escalate_request_to_parent: self.escalate_request_to_parent.clone_ref(python),
-                handle_id: surface_id.clone(),
-            },
+            release_to_parent,
             surface_id,
         })
     }
