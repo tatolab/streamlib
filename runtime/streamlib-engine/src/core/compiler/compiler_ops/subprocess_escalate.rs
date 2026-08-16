@@ -271,8 +271,9 @@ pub(crate) fn handle_escalate_op(
         }) => Some(match PixelFormat::parse_wire_name(&format) {
             Ok(parsed) => {
                 let acquired = sandbox.escalate(|full| {
-                    let (pool_id, buffer) = full.acquire_pixel_buffer(width, height, parsed)?;
-                    let handle_id = assign_buffer_handle_id(full, &pool_id, &buffer)?;
+                    let (published_frame_id, buffer) =
+                        full.acquire_pixel_buffer(width, height, parsed)?;
+                    let handle_id = assign_buffer_handle_id(full, &published_frame_id, &buffer)?;
                     Ok((handle_id, buffer))
                 });
                 match acquired {
@@ -803,13 +804,13 @@ fn now_ns() -> u64 {
 ///
 /// On Linux, the buffer is checked in with the surface-share service so the polyglot
 /// subprocess shim can later `check_out` the DMA-BUF FD; the surface-share service-assigned
-/// `surface_id` becomes the handle_id. On other platforms the pool id stays
-/// as-is (macOS uses its own XPC `check_in_surface` path via the native lib
-/// directly).
+/// `surface_id` becomes the handle_id. On other platforms the published frame
+/// id stays as-is (macOS uses its own XPC `check_in_surface` path via the
+/// native lib directly).
 #[allow(unused_variables)]
 fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
-    pool_id: &crate::core::rhi::PixelBufferPoolSlotId,
+    published_frame_id: &crate::core::rhi::PublishedPixelBufferFrameId,
     buffer: &PixelBuffer,
 ) -> crate::core::error::Result<String> {
     #[cfg(target_os = "linux")]
@@ -818,7 +819,7 @@ fn assign_buffer_handle_id(
             return store.check_in(buffer);
         }
     }
-    Ok(pool_id.as_str().to_string())
+    Ok(published_frame_id.to_string())
 }
 
 /// Resolve the `handle_id` returned to the subprocess for a pooled texture.
