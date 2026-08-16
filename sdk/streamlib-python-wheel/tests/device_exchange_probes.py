@@ -360,10 +360,16 @@ class PrivilegedCapabilityProbe:
             ctx.gpu_full_access.escalate(lambda privileged: None)
         except RuntimeError as refusal:
             observation["escalate_refusal"] = str(refusal)
-        try:
-            ctx.gpu_full_access.acquire_texture(
-                SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", ["copy_src"]
-            )
-        except RuntimeError as refusal:
-            observation["acquire_texture_refusal"] = str(refusal)
+
+        # A device texture acquires from a helper process: what comes back is
+        # the surface id a kernel dispatch binds and a downstream processor
+        # resolves — a name, deliberately not a local mapping.
+        acquired_texture = ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", ["copy_src"]
+        )
+        observation["acquired_texture_surface_id"] = acquired_texture.surface_id
+        observation["acquired_texture_extent"] = [
+            acquired_texture.width,
+            acquired_texture.height,
+        ]
         return observation

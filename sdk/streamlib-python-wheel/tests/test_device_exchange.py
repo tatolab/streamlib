@@ -241,7 +241,8 @@ def test_the_privileged_capability_works_from_a_helper_process(start_app_under_t
         f"the escalate refusal should say what actually cannot cross: "
         f"{observation['escalate_refusal']!r}"
     )
-    assert "acquire_pixel_buffer" in observation["acquire_texture_refusal"], (
-        f"the texture refusal should name the path that does work: "
-        f"{observation['acquire_texture_refusal']!r}"
+    assert observation["acquired_texture_surface_id"], (
+        "a device texture acquires from a helper process and carries the "
+        "surface id a kernel dispatch binds"
     )
+    assert observation["acquired_texture_extent"] == [SURFACE_WIDTH, SURFACE_HEIGHT]

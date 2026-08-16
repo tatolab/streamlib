@@ -213,7 +213,8 @@ class TextureIsNotLocallyMappedProbe(_ComputeKernelProbeBase):
     def observe(self, kernel, source, output) -> dict:
         del kernel
         try:
-            memoryview(output)
+            output.lock(read_only=True)
+            output.as_numpy()
             pixels_refusal = None
         except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
             pixels_refusal = str(refusal)
