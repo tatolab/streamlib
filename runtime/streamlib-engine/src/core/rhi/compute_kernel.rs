@@ -8,6 +8,8 @@
 //! at kernel creation, validates the declaration matches, and from that point
 //! on the user binds resources by slot via simple typed setters.
 
+use std::borrow::Cow;
+
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::{Error, Result};
@@ -32,13 +34,92 @@ pub enum ComputeBindingKind {
     StorageImage,
 }
 
-/// One binding declaration: (binding index, resource kind).
+/// One binding declaration: (binding index, resource kind, the shader's own
+/// name for the binding).
 ///
 /// Set index is implicitly 0 — multi-set kernels are not supported today.
-#[derive(Debug, Clone, Copy)]
+///
+/// `name` is `None` on a declaration that asserts only slot and kind, and
+/// `Some` on every spec the RHI has reconciled against the shader: the
+/// numeric binding is what the descriptor set is built from, the name is
+/// what a by-name dispatch resolves against.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComputeBindingSpec {
     pub binding: u32,
     pub kind: ComputeBindingKind,
+    pub name: Option<Cow<'static, str>>,
+}
+
+/// What a caller asserts about one binding before reflection has assigned it
+/// a slot: the shader's name for it and the kind expected there.
+///
+/// Deliberately not a [`ComputeBindingSpec`]: a declaration has no slot, and
+/// carrying a placeholder slot in a spec would put a meaningless number in a
+/// field every resolved path treats as load-bearing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputeBindingDeclaration {
+    pub name: String,
+    pub kind: ComputeBindingKind,
+}
+
+/// Render a shader's declared binding names for an error message.
+pub(crate) fn quote_declared_shader_binding_names(names: &[&str]) -> String {
+    if names.is_empty() {
+        return "no named bindings".to_string();
+    }
+    names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Check a caller's binding declarations against what the shader's reflection
+/// actually found, by name.
+///
+/// An empty declaration asserts nothing and the reflected shape stands alone.
+/// Otherwise every declared name must exist in the shader with the kind the
+/// caller claimed, and every reflected name must be accounted for — leaving a
+/// shader binding unmentioned is how a dispatch silently binds nothing.
+pub(crate) fn reconcile_compute_binding_declarations(
+    declared: &[ComputeBindingDeclaration],
+    reflected: &[ComputeBindingSpec],
+) -> Result<()> {
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let shader_names: Vec<&str> = reflected.iter().filter_map(|s| s.name.as_deref()).collect();
+    for declaration in declared {
+        let found = reflected
+            .iter()
+            .find(|r| r.name.as_deref() == Some(declaration.name.as_str()))
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "compute kernel declares a binding named `{}`, which this shader does \
+                     not declare; the shader declares {}",
+                    declaration.name,
+                    quote_declared_shader_binding_names(&shader_names)
+                ))
+            })?;
+        if found.kind != declaration.kind {
+            return Err(Error::GpuError(format!(
+                "compute binding `{}` was declared {:?} but this shader declares it {:?}",
+                declaration.name, declaration.kind, found.kind
+            )));
+        }
+    }
+    for reflected_spec in reflected {
+        let Some(name) = reflected_spec.name.as_deref() else {
+            continue;
+        };
+        if !declared.iter().any(|d| d.name == name) {
+            return Err(Error::GpuError(format!(
+                "compute kernel leaves the shader's binding `{name}` undeclared; every binding \
+                 the shader declares must be accounted for"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl ComputeBindingSpec {
@@ -46,6 +127,7 @@ impl ComputeBindingSpec {
         Self {
             binding,
             kind: ComputeBindingKind::StorageBuffer,
+            name: None,
         }
     }
 
@@ -53,6 +135,7 @@ impl ComputeBindingSpec {
         Self {
             binding,
             kind: ComputeBindingKind::UniformBuffer,
+            name: None,
         }
     }
 
@@ -60,6 +143,7 @@ impl ComputeBindingSpec {
         Self {
             binding,
             kind: ComputeBindingKind::SampledTexture,
+            name: None,
         }
     }
 
@@ -67,6 +151,7 @@ impl ComputeBindingSpec {
         Self {
             binding,
             kind: ComputeBindingKind::SampledImage,
+            name: None,
         }
     }
 
@@ -74,7 +159,15 @@ impl ComputeBindingSpec {
         Self {
             binding,
             kind: ComputeBindingKind::StorageImage,
+            name: None,
         }
+    }
+
+    /// Assert the shader's spelling of this binding as well as its slot.
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 
@@ -105,6 +198,11 @@ pub struct ComputeKernelDescriptor<'a> {
 ///
 /// Rejects multi-set kernels — only descriptor set 0 is supported, matching
 /// `VulkanComputeKernel`'s contract.
+///
+/// Every derived spec carries the shader's own name for its binding. A blob
+/// whose `OpName` decorations were stripped is rejected here rather than at
+/// dispatch: bindings are resolved by name in one spelling for both
+/// languages, so an unnamed binding cannot be bound at all.
 pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>, u32)> {
     let reflection = Reflection::new_from_spirv(spv)
         .map_err(|e| Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}")))?;
@@ -124,17 +222,31 @@ pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>
 
     let mut bindings: Vec<ComputeBindingSpec> = Vec::new();
     if let Some(set0) = sets.get(&0) {
-        let mut entries: Vec<(u32, RDescriptorType)> =
-            set0.iter().map(|(b, info)| (*b, info.ty)).collect();
+        let mut entries: Vec<(u32, RDescriptorType, String)> = set0
+            .iter()
+            .map(|(b, info)| (*b, info.ty, info.name.clone()))
+            .collect();
         // Stable order — declaration-order convenience for callers.
-        entries.sort_by_key(|(b, _)| *b);
-        for (binding, ty) in entries {
+        entries.sort_by_key(|(b, _, _)| *b);
+        for (binding, ty, name) in entries {
             let kind = spirv_type_to_kind(ty).ok_or_else(|| {
                 Error::GpuError(format!(
                     "SPIR-V binding {binding} has unsupported descriptor type {ty:?}"
                 ))
             })?;
-            bindings.push(ComputeBindingSpec { binding, kind });
+            if name.is_empty() {
+                return Err(Error::GpuError(format!(
+                    "SPIR-V binding {binding} ({kind:?}) carries no name — its OpName \
+                     decorations were stripped, and bindings are resolved by name. Compile \
+                     with debug info retained (`glslc -g`) so the shader's own binding names \
+                     survive optimization"
+                )));
+            }
+            bindings.push(ComputeBindingSpec {
+                binding,
+                kind,
+                name: Some(Cow::Owned(name)),
+            });
         }
     }
 
@@ -193,6 +305,168 @@ mod tests {
             assert!(bindings.iter().any(|s| s.binding == 8));
             assert_eq!(push_size, 4);
         }
+    }
+
+    #[test]
+    fn reflection_keeps_the_shaders_own_name_for_every_binding() {
+        let (bindings, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive bindings");
+        let named: Vec<(u32, &str)> = bindings
+            .iter()
+            .map(|spec| {
+                (
+                    spec.binding,
+                    spec.name.as_deref().expect("every binding is named"),
+                )
+            })
+            .collect();
+        // The GLSL variable names, not the block type names — `in0` from
+        // `readonly buffer In0 { … } in0;`. This is the spelling a dispatch
+        // binds against, so it is a contract, not an incidental.
+        assert_eq!(named, vec![(0, "in0"), (1, "in1"), (8, "out_buf")]);
+    }
+
+    #[test]
+    fn reflection_keeps_image_binding_names() {
+        let spv: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/test_sampled_image.spv"));
+        let (bindings, _) = derive_bindings_from_spirv(spv).expect("derive bindings");
+        let named: Vec<(&str, ComputeBindingKind)> = bindings
+            .iter()
+            .map(|spec| (spec.name.as_deref().expect("named"), spec.kind))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("uImage", ComputeBindingKind::SampledImage),
+                ("uOut", ComputeBindingKind::StorageImage),
+            ]
+        );
+    }
+
+    fn declared(name: &str, kind: ComputeBindingKind) -> ComputeBindingDeclaration {
+        ComputeBindingDeclaration {
+            name: name.to_string(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn a_declaration_matching_reflection_reconciles() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        reconcile_compute_binding_declarations(
+            &[
+                declared("in0", ComputeBindingKind::StorageBuffer),
+                declared("in1", ComputeBindingKind::StorageBuffer),
+                declared("out_buf", ComputeBindingKind::StorageBuffer),
+            ],
+            &reflected,
+        )
+        .expect("a complete, correctly-kinded declaration");
+    }
+
+    #[test]
+    fn an_empty_declaration_asserts_nothing_and_reconciles() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        reconcile_compute_binding_declarations(&[], &reflected)
+            .expect("no declaration means the reflected shape stands alone");
+    }
+
+    #[test]
+    fn declaring_a_name_the_shader_lacks_is_refused_naming_the_shaders_bindings() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        let err = reconcile_compute_binding_declarations(
+            &[declared(
+                "sharpen_amount",
+                ComputeBindingKind::StorageBuffer,
+            )],
+            &reflected,
+        )
+        .err()
+        .expect("an undeclared name must be refused");
+        let msg = format!("{err}");
+        assert!(msg.contains("`sharpen_amount`"), "{msg}");
+        assert!(
+            msg.contains("`in0`, `in1`, `out_buf`"),
+            "must name the shader's own bindings: {msg}"
+        );
+    }
+
+    #[test]
+    fn declaring_a_kind_reflection_disagrees_with_is_refused() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        let err = reconcile_compute_binding_declarations(
+            &[
+                declared("in0", ComputeBindingKind::StorageImage),
+                declared("in1", ComputeBindingKind::StorageBuffer),
+                declared("out_buf", ComputeBindingKind::StorageBuffer),
+            ],
+            &reflected,
+        )
+        .err()
+        .expect("a kind disagreement must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("`in0`") && msg.contains("StorageImage") && msg.contains("StorageBuffer"),
+            "must name the binding and both kinds: {msg}"
+        );
+    }
+
+    #[test]
+    fn leaving_a_shader_binding_undeclared_is_refused() {
+        let (reflected, _) = derive_bindings_from_spirv(blend_spv(2)).expect("derive");
+        let err = reconcile_compute_binding_declarations(
+            &[
+                declared("in0", ComputeBindingKind::StorageBuffer),
+                declared("in1", ComputeBindingKind::StorageBuffer),
+            ],
+            &reflected,
+        )
+        .err()
+        .expect("a partial declaration must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("`out_buf`") && msg.contains("undeclared"),
+            "must name the binding left out: {msg}"
+        );
+    }
+
+    #[test]
+    fn name_stripped_spirv_is_refused_at_construction() {
+        // `glslc -O` without `-g` strips every OpName. Such a blob can reach
+        // the engine only through the pre-compiled-SPIR-V escape hatch, and
+        // it cannot be bound by name at all — so it fails here, at
+        // construction, rather than confusingly at first dispatch.
+        let stripped = strip_debug_names(blend_spv(2));
+        let err = derive_bindings_from_spirv(&stripped)
+            .err()
+            .expect("a name-stripped blob must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("carries no name") && msg.contains("glslc -g"),
+            "the refusal must name the cause and the fix, got: {msg}"
+        );
+    }
+
+    /// Drop every `OpName` (opcode 5) from a SPIR-V module, reproducing what
+    /// `glslc -O` emits without `-g`.
+    fn strip_debug_names(spv: &[u8]) -> Vec<u8> {
+        const HEADER_WORDS: usize = 5;
+        const OP_NAME: u16 = 5;
+        let words: Vec<u32> = spv
+            .chunks_exact(4)
+            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+            .collect();
+        let mut kept: Vec<u32> = words[..HEADER_WORDS].to_vec();
+        let mut at = HEADER_WORDS;
+        while at < words.len() {
+            let word_count = (words[at] >> 16) as usize;
+            let opcode = (words[at] & 0xffff) as u16;
+            assert!(word_count > 0, "malformed SPIR-V instruction");
+            if opcode != OP_NAME {
+                kept.extend_from_slice(&words[at..at + word_count]);
+            }
+            at += word_count;
+        }
+        kept.iter().flat_map(|w| w.to_le_bytes()).collect()
     }
 
     #[test]

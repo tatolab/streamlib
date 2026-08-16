@@ -5,12 +5,12 @@
 //! kernel + acceleration-structure registration and per-trace invocation
 //! on behalf of subprocess customers.
 //!
-//! Mirrors the [`super::compute_kernel_bridge::ComputeKernelBridge`] (#550)
-//! and [`super::graphics_kernel_bridge::GraphicsKernelBridge`] (#656)
-//! shapes: the subprocess sends a typed IPC, the host runs privileged
+//! Mirrors the [`super::graphics_kernel_bridge::GraphicsKernelBridge`]
+//! shape: the subprocess sends a typed IPC, the host runs privileged
 //! Vulkan work via its [`crate::core::context::GpuContextFullAccess`], and
 //! the bridge keeps the FullAccess capability boundary on the host side
-//! of the IPC seam.
+//! of the IPC seam. Compute retired its bridge for an always-present
+//! `GpuContext` capability; ray tracing follows in its own change.
 //!
 //! Ray-tracing has two register ops where compute and graphics have one:
 //! the bridge owns BLAS + TLAS construction (via

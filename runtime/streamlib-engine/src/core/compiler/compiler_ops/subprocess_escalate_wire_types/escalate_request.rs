@@ -347,9 +347,49 @@ pub(crate) struct EscalateRequestRegisterAccelerationStructureTlas {
     pub(crate) request_id: String,
 }
 
+/// Resource kind for a compute binding slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum EscalateComputeBindingKind {
+    #[serde(rename = "sampled_image")]
+    SampledImage,
+
+    #[serde(rename = "sampled_texture")]
+    SampledTexture,
+
+    #[serde(rename = "storage_buffer")]
+    StorageBuffer,
+
+    #[serde(rename = "storage_image")]
+    StorageImage,
+
+    #[serde(rename = "uniform_buffer")]
+    UniformBuffer,
+}
+
+/// One binding a compute kernel declares at registration, named as the shader
+/// names it. The slot number is not on the wire — it comes from reflection,
+/// and the name is what a dispatch resolves against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestRegisterComputeKernelBinding {
+    /// Resource kind the caller expects at this name. Checked against
+    /// reflection at registration; a mismatch is an `err` response.
+    pub(crate) kind: EscalateComputeBindingKind,
+
+    /// The shader's own name for the binding.
+    pub(crate) name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterComputeKernel {
+    /// Binding declarations, by name. Validated against `rspirv-reflect` of
+    /// the SPIR-V: a name the shader does not declare, a declared name the
+    /// array omits, or a kind that disagrees with reflection each return an
+    /// `err` response. Empty array means the caller declares nothing and the
+    /// reflected shape stands on its own.
+    pub(crate) bindings: Vec<EscalateRequestRegisterComputeKernelBinding>,
+
     /// Push-constant range size in bytes. 0 if the shader uses no push
     /// constants. The host validates this against the shader's reflected push-
     /// constant range and rejects mismatches with an `err` response.
@@ -362,13 +402,15 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// hex (no `0x` prefix, no whitespace). The host parses the bytes back,
     /// derives the binding shape from `rspirv-reflect`, and constructs a
     /// `VulkanComputeKernel` via `GpuContext::create_compute_kernel`.
-    /// Re-registering identical SPIR-V is a host-side cache hit keyed by SHA-
-    /// 256(spv_bytes) — no re-reflection, no fresh pipeline. The returned
-    /// `kernel_id` is the same.
+    /// Re-registering an identical kernel is a host-side cache hit — no
+    /// re-reflection, no fresh pipeline, and the same `kernel_id` back.
     /// The host's `VulkanComputeKernel` also persists driver- compiled pipeline
     /// state to `<XDG_CACHE_HOME>/streamlib/ pipeline-cache/<spirv_hash>.bin`,
     /// so first-inference latency after a host process restart is fast on user-
     /// registered ML kernels.
+    ///
+    /// The blob must retain its `OpName` decorations (`glslc -g`): bindings
+    /// resolve by name, so a stripped blob is refused at registration.
     pub(crate) spv_hex: String,
 }
 
@@ -1136,9 +1178,38 @@ pub(crate) struct EscalateRequestReleaseHandle {
     pub(crate) request_id: String,
 }
 
+/// One resource bound for a single dispatch, named as the shader names it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestRunComputeKernelBinding {
+    /// Resource kind the caller believes is at this name. Must match the
+    /// kernel's reflected kind; a mismatch is an `err` response raised before
+    /// anything is submitted.
+    pub(crate) kind: EscalateComputeBindingKind,
+
+    /// The shader's own name for the binding. Resolved against the kernel's
+    /// reflected bindings — a name the shader does not declare, or a declared
+    /// name this array omits, is an `err` response.
+    pub(crate) name: String,
+
+    /// Surface id of the resource to bind, as the host registered it
+    /// (`GpuContext::register_texture` / the surface-share service). The host
+    /// resolves it through `resolve_texture_registration_by_surface_id`.
+    pub(crate) target_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunComputeKernel {
+    /// Every binding the kernel declares, supplied by name for this dispatch.
+    ///
+    /// Bindings are passed at dispatch and never persist on the kernel, so
+    /// this array is complete every time: there is no carried-over value from
+    /// the previous dispatch and no implicit default. One name appearing twice
+    /// is an error, checked host-side so the caller's language is not the only
+    /// guard.
+    pub(crate) bindings: Vec<EscalateRequestRunComputeKernelBinding>,
+
     /// vkCmdDispatch groupCountX.
     pub(crate) group_count_x: u32,
 
@@ -1162,16 +1233,6 @@ pub(crate) struct EscalateRequestRunComputeKernel {
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
-
-    /// UUID string of a render-target surface previously registered
-    /// with the surface-share service via `register_texture`. The host
-    /// bridge holds an application-provided UUID→`Texture` map (populated
-    /// in `install_setup_hook`) and binds the looked-up `VkImage` as a
-    /// storage_image at slot 0 (the single-output convention enforced for v1
-    /// — multi-binding kernels are a future extension). UUID rather than u64
-    /// so the host can resolve the surface without subprocess-side counter
-    /// coordination.
-    pub(crate) surface_uuid: String,
 }
 
 /// Which copy direction to run on the host. `image_to_buffer` runs

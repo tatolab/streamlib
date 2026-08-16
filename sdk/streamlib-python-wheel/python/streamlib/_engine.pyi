@@ -25,6 +25,7 @@ _BagReadTarget = TypeVar("_BagReadTarget")
 
 __all__ = [
     "AddedProcessor",
+    "ComputeKernel",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
@@ -368,8 +369,12 @@ class GpuContextLimitedAccess:
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle:
-        """Refuses from a Python processor: a pool texture is not registered for
-        cross-process import. `acquire_pixel_buffer` is the CPU-reachable path."""
+        """Acquire a pooled device texture, named by the surface id the engine minted.
+
+        The id is the whole handle: a kernel dispatch binds it, and a downstream
+        processor resolves it. The texture's memory is not mapped into this
+        process, so its pixels are not addressable here.
+        """
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def claim_surface_against_producer_reuse(
         self, surface_id: str
@@ -401,9 +406,30 @@ class GpuContextFullAccess:
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle:
-        """Refuses from a Python processor: a pool texture is not registered for
-        cross-process import. `acquire_pixel_buffer` is the CPU-reachable path;
-        device-side tensors ride the device-export staging path. See #1757."""
+        """Acquire a pooled device texture through the privileged path.
+
+        The id is the whole handle: a kernel dispatch binds it, and a downstream
+        processor resolves it. The texture's memory is not mapped into this
+        process, so its pixels are not addressable here.
+        """
+
+    def create_compute_kernel(
+        self,
+        spirv: bytes,
+        push_constant_size: int = 0,
+        bindings: dict[str, str] | None = None,
+    ) -> ComputeKernel:
+        """Build a compute kernel from pre-compiled SPIR-V.
+
+        Constructed once in `setup()`, dispatched per frame in `process()`. The
+        engine reflects the shader at construction and takes its binding names
+        from it — those names are what `dispatch` resolves against. Re-creating
+        an identical kernel is free of compilation.
+
+        `bindings` optionally asserts `{name: kind}` against reflection; each
+        kind is one of `sampled_image`, `sampled_texture`, `storage_buffer`,
+        `storage_image`, `uniform_buffer`.
+        """
 
     def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
         """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
@@ -513,6 +539,36 @@ class GpuSurfaceCheckOutLease:
     @property
     def surface_id(self) -> str:
         """The surface this claim holds still."""
+
+@final
+class ComputeKernel:
+    """A compute kernel the engine built and holds, dispatched by name.
+
+    Constructed in `setup()` where the capability is Full, dispatched per frame
+    in `process()`. No kernel handle string, fence, timeline or slot number
+    reaches Python — the object is the handle.
+    """
+
+    @property
+    def binding_names(self) -> list[str]:
+        """The shader's own names for this kernel's bindings, in slot order."""
+
+    def dispatch(
+        self,
+        bindings: dict[str, GpuSurfaceHandle | str],
+        group_count: tuple[int, int, int],
+        push_constants: bytes | None = None,
+    ) -> None:
+        """Dispatch, binding each of the shader's declared resources by name.
+
+        Bindings never persist on the kernel, so every dispatch supplies all of
+        them: there is no implicit default and no value carried over from the
+        previous frame. Supplying an unknown name or omitting a declared one
+        raises before anything is submitted. Each binding's kind comes from the
+        shader's own reflection, never from the caller.
+
+        Returns when the GPU work has retired and the writes are visible.
+        """
 
 @final
 class MonotonicTimer:

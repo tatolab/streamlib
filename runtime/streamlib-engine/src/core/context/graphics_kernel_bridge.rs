@@ -5,11 +5,11 @@
 //! kernel registration and per-draw invocation on behalf of subprocess
 //! customers.
 //!
-//! Mirrors the [`super::compute_kernel_bridge::ComputeKernelBridge`]
-//! shape (#550): the subprocess sends a typed IPC, the host runs
+//! The bridge shape: the subprocess sends a typed IPC, the host runs
 //! privileged Vulkan work via its [`crate::core::context::GpuContextFullAccess`],
 //! and the bridge keeps the FullAccess capability boundary on the host
-//! side of the IPC seam.
+//! side of the IPC seam. Compute retired its bridge for an always-present
+//! `GpuContext` capability; graphics follows in its own change.
 //!
 //! Graphics is register-once-draw-many: the subprocess sends the
 //! vertex + fragment SPIR-V plus the full pipeline state once; the

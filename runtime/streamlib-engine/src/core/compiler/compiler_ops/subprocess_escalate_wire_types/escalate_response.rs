@@ -42,6 +42,17 @@ pub(crate) struct EscalateResponseErr {
     pub(crate) request_id: String,
 }
 
+/// One binding of a registered compute kernel, as reflection found it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateResponseComputeBinding {
+    /// Resource kind, in the same spelling the request's binding arrays use.
+    pub(crate) kind: super::escalate_request::EscalateComputeBindingKind,
+
+    /// The shader's own name for the binding — what a dispatch supplies it by.
+    pub(crate) name: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateResponseOk {
@@ -58,6 +69,15 @@ pub(crate) struct EscalateResponseOk {
 
     /// Correlates response with request. Matches request_id in EscalateRequest.
     pub(crate) request_id: String,
+
+    /// The kernel's binding shape as reflection found it, in slot order. Set on
+    /// `register_compute_kernel` responses.
+    ///
+    /// The caller needs it to dispatch: bindings resolve by name, and only the
+    /// shader knows which kind each name is. Without this the caller would have
+    /// to guess a kind for every binding it supplies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) bindings: Option<Vec<EscalateResponseComputeBinding>>,
 
     /// Decimal-string-encoded u64 row pitch of the device-export staging,
     /// derived from the staging's own geometry rather than from the requesting

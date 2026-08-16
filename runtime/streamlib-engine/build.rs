@@ -20,6 +20,19 @@ fn main() {
     compile_shaders();
 }
 
+/// `glslc -O` strips every `OpName`, and a binding with no reflected name
+/// cannot be dispatched against by name. Debug info is what carries the
+/// shader's own spelling of each binding through to `rspirv-reflect`.
+///
+/// Applied uniformly — production shaders included — so "engine-compiled
+/// SPIR-V keeps its binding names" is one rule with no exceptions list to
+/// maintain. The cost is accepted deliberately: `-g` roughly doubles each
+/// blob (it embeds the GLSL source, not just names), and changing the bytes
+/// changes each driver pipeline-cache filename once, so the first run after
+/// an upgrade recompiles pipelines cold.
+#[cfg(target_os = "linux")]
+const KEEP_BINDING_NAMES: &str = "-g";
+
 #[cfg(target_os = "linux")]
 fn compile_shaders() {
     use std::path::{Path, PathBuf};
@@ -86,6 +99,13 @@ fn compile_shaders() {
             "nv12_to_rgb.spv",
             "compute",
         ),
+        // The read-one-write-another conformance shader for named N-binding
+        // compute dispatch.
+        (
+            "src/vulkan/rhi/shaders/test_read_one_write_another.comp",
+            "test_read_one_write_another.spv",
+            "compute",
+        ),
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
@@ -105,6 +125,7 @@ fn compile_shaders() {
 
         let status = Command::new("glslc")
             .arg(format!("-fshader-stage={stage}"))
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg("-I")
             .arg(shader_include_dir)
@@ -124,6 +145,7 @@ fn compile_shaders() {
         let dst_path: PathBuf = Path::new(&out_dir).join("test_sampled_image.spv");
         let status = Command::new("glslc")
             .arg("-fshader-stage=compute")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(Path::new(test_sampled_image_src))
             .arg("-o")
@@ -145,6 +167,7 @@ fn compile_shaders() {
         let dst_path: PathBuf = Path::new(&out_dir).join(format!("test_blend_{n}.spv"));
         let status = Command::new("glslc")
             .arg("-fshader-stage=compute")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(format!("-DINPUT_COUNT={n}"))
             .arg(Path::new(test_blend_src))
@@ -204,6 +227,7 @@ fn compile_shaders() {
             .arg(format!("-fshader-stage={stage}"))
             .arg("--target-env=vulkan1.2")
             .arg("--target-spv=spv1.4")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(src_path)
             .arg("-o")
