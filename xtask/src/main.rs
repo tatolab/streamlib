@@ -25,6 +25,45 @@ pub mod normal_build_dep_graph;
 /// invisible to it.
 pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
+/// Tracked (and untracked-but-not-ignored) files under one repo-relative root.
+///
+/// `git ls-files` rather than a filesystem walk, for the reason every gate here
+/// shares: CI walks a clean checkout, so "the files in the repo" is the
+/// semantics meant, and the scan roots hold virtualenvs and build trees that
+/// are not ours to gate. `-z` because a path containing a newline would
+/// otherwise split into two entries and drop both from the scan.
+pub fn list_repository_files_under(
+    workspace_root: &Path,
+    repo_relative_root: &str,
+) -> Result<Vec<String>> {
+    let output = std::process::Command::new("git")
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+        ])
+        .arg(repo_relative_root)
+        .current_dir(workspace_root)
+        .output()
+        .with_context(|| format!("failed to run `git ls-files` for {repo_relative_root}"))?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "`git ls-files {repo_relative_root}` failed: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    Ok(String::from_utf8(output.stdout)
+        .with_context(|| format!("`git ls-files {repo_relative_root}` emitted non-UTF-8 paths"))?
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 /// Refuse a source-walking gate run that read no source at all.
 ///
 /// A gate whose scan roots moved out from under it is indistinguishable from a
@@ -49,7 +88,7 @@ pub fn ensure_source_walking_gate_read_source(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all nine in well under a second, and why CI runs them as
+/// lets one process run all ten in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),

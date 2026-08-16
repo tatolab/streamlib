@@ -6,7 +6,7 @@
 # The mode this exists for is a *slow* mirror, not a stalled one. A measured run
 # fetched 35.6 MB at 48 kB/s over 12m17s while every request made forward
 # progress, so neither of apt's own guards engages: `Acquire::Retries` needs a
-# failure to retry and `Acquire::http::Timeout` bounds inactivity, and there was
+# failure to retry and `Acquire::*::Timeout` bounds inactivity, and there was
 # neither. A wall-clock bound is the only thing that detects that mode, and a
 # different mirror is the only thing that recovers from it — a second try
 # against the same host just spends the budget again at the same 48 kB/s.
@@ -21,12 +21,13 @@
 # also ~8× the median step and ~1.8× the slowest *successful* update on record,
 # so a merely-mediocre mirror still finishes on the primary.
 #
-# Env (all optional; the last two exist so the gate tests can drive this without
-# root, apt, or a network):
+# Env (all optional; the last three exist so the gate tests can drive this
+# without root, apt, or a network):
 #   STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS  bound on one apt command (default 120)
 #   STREAMLIB_APT_FALLBACK_MIRROR_URL      mirror used once the primary blows the bound
 #   STREAMLIB_APT_GET_COMMAND              the apt-get to invoke
 #   STREAMLIB_APT_MIRROR_SWITCH_COMMAND    the command that repoints apt at the fallback
+#   STREAMLIB_DPKG_REPAIR_COMMAND          the command that finishes an interrupted dpkg
 
 set -euo pipefail
 
@@ -34,6 +35,7 @@ attempt_timeout_seconds="${STREAMLIB_APT_ATTEMPT_TIMEOUT_SECONDS:-120}"
 fallback_mirror_url="${STREAMLIB_APT_FALLBACK_MIRROR_URL:-http://archive.ubuntu.com/ubuntu/}"
 apt_get_command="${STREAMLIB_APT_GET_COMMAND:-sudo apt-get}"
 mirror_switch_command="${STREAMLIB_APT_MIRROR_SWITCH_COMMAND:-}"
+dpkg_repair_command="${STREAMLIB_DPKG_REPAIR_COMMAND:-sudo dpkg --configure -a}"
 
 if [ "$#" -eq 0 ]; then
   echo "usage: ${0##*/} <apt-package>..." >&2
@@ -42,10 +44,16 @@ fi
 
 requested_packages=("$@")
 
-# Retries covers the transient per-file failure; Timeout covers a connection
-# that goes silent. Neither reaches a mirror that is merely slow — that is what
-# the wall-clock bound below is for.
-apt_acquire_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30)
+# Retries covers the transient per-file failure; the Timeout pair covers a
+# connection that goes silent. apt keys Timeout per scheme and the runner's
+# sources are a mix — Ubuntu over http, several vendor repos over https — so
+# setting only one of them leaves half the fetch unbounded. Neither reaches a
+# mirror that is merely slow; that is what the wall-clock bound below is for.
+apt_acquire_options=(
+  -o Acquire::Retries=3
+  -o Acquire::http::Timeout=30
+  -o Acquire::https::Timeout=30
+)
 
 # `timeout` reports 124 when it fires. SIGINT first, because apt unwinds on it
 # and leaves `/var/cache/apt/archives/partial` intact for the next attempt to
@@ -91,11 +99,21 @@ switch_apt_to_fallback_mirror() {
   fi
 }
 
+# The bound can fire while apt is unpacking rather than downloading, and the
+# SIGINT reaches dpkg too. apt then refuses every later install with "dpkg was
+# interrupted, you must manually run dpkg --configure -a" — which would make the
+# fallback attempt fail deterministically and turn the escape hatch into a no-op.
+finish_any_interrupted_dpkg() {
+  # shellcheck disable=SC2086
+  $dpkg_repair_command || true
+}
+
 if run_one_bounded_apt_attempt "primary mirror"; then
   exit 0
 fi
 
 echo "==> primary mirror did not finish inside the bound; escaping to ${fallback_mirror_url}" >&2
+finish_any_interrupted_dpkg
 switch_apt_to_fallback_mirror
 
 if run_one_bounded_apt_attempt "fallback mirror"; then

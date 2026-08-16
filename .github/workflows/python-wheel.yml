@@ -59,6 +59,7 @@ jobs:
             pkg-config
             protobuf-compiler
             libclang1-18
+            libclang-common-18-dev
             libvulkan-dev
             glslc
             python3-dev

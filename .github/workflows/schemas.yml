@@ -22,8 +22,14 @@ jobs:
       - uses: actions/checkout@v4
 
       # generate_openapi links the api-server, which pulls in streamlib-engine;
-      # its build.rs compiles GLSL with glslc and links Vulkan, and the audio path
-      # links opus. Mirrors test.yml's Linux engine dep set.
+      # its build.rs compiles GLSL with glslc and links Vulkan, iceoryx2's PAL
+      # crates run bindgen, and the audio path links opus. Mirrors test.yml's
+      # Linux engine dep set.
+      #
+      # The libclang pair is new here. This job has been dispatch-only and unrun
+      # since 2026-01, and it was already missing what bindgen needs — it built
+      # only because the runner image happens to ship clang-18. Now that all
+      # three workflows share one action, the set says what it depends on.
       - name: Install system dependencies
         timeout-minutes: 10
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -32,6 +38,7 @@ jobs:
             pkg-config
             protobuf-compiler
             libclang1-18
+            libclang-common-18-dev
             libvulkan-dev
             glslc
             libopus-dev
