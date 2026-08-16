@@ -406,6 +406,20 @@ fn handle_register(
         }
     };
 
+    // Registrations are per-slot; the `#<generation>` suffix belongs to the
+    // published frame ids minted *over* a slot. Accepting one here would
+    // fork the table's key grammar and let a registration collide with a
+    // frame id's slot key.
+    if crate::core::rhi::PublishedPixelBufferFrameId::parse(surface_id).is_some() {
+        return (
+            serde_json::json!({"error": format!(
+                "surface id '{surface_id}' ends in the reserved #<generation> suffix; \
+                 register the pool slot and let acquisition publish the frame ids"
+            )}),
+            Vec::new(),
+        );
+    }
+
     let runtime_id = request
         .get("runtime_id")
         .and_then(|v| v.as_str())
@@ -667,15 +681,16 @@ fn handle_check_out(
             lease_holder,
             unrecordable
         );
-        return (
-            serde_json::json!({
-                "error": format!(
-                    "no checkout lease could be recorded for surface '{surface_id}', so its \
-                     producer could recycle the slot while you read it: {unrecordable}"
-                )
-            }),
-            Vec::new(),
-        );
+        // The recycled-frame refusal is its own story and travels verbatim;
+        // wrapping fits only the lease-bookkeeping failures.
+        let error = match &unrecordable {
+            crate::core::Error::SurfaceFrameRecycled { .. } => unrecordable.to_string(),
+            _ => format!(
+                "no checkout lease could be recorded for surface '{surface_id}', so its \
+                 producer could recycle the slot while you read it: {unrecordable}"
+            ),
+        };
+        return (serde_json::json!({ "error": error }), Vec::new());
     }
 
     (response, reply_fds)
@@ -729,6 +744,17 @@ fn handle_lookup(
             Vec::new(),
         );
     };
+
+    // A retired published frame id fails here, loudly, before any planes
+    // cross the wire: the slot's registration still exists (it is per-slot),
+    // but the frame this id named does not.
+    if let Err(retired) = state.check_out_leases().refuse_a_retired_frame_id(surface_id) {
+        tracing::warn!("[Surface share] refusing lookup of '{}': {}", surface_id, retired);
+        return (
+            serde_json::json!({"error": retired.to_string()}),
+            Vec::new(),
+        );
+    }
 
     let checkout = match state.get_surface_planes(surface_id) {
         Some(planes) => planes,
@@ -794,7 +820,8 @@ fn handle_lookup(
     }
 
     let surfaces = state.get_surfaces();
-    let metadata = surfaces.iter().find(|s| s.surface_id == surface_id);
+    let pool_slot_key = crate::core::rhi::pool_slot_key_of_surface_id(surface_id);
+    let metadata = surfaces.iter().find(|s| s.surface_id == pool_slot_key);
     let (width, height, format, resource_type) = match metadata {
         Some(m) => (
             m.width,
@@ -2052,6 +2079,179 @@ mod tests {
             &[],
             0,
         );
+        drop(stream);
+        service.stop();
+    }
+
+    /// Register a one-plane pool-slot surface under `slot_id` over the wire.
+    fn register_pool_slot(stream: &UnixStream, slot_id: &str) {
+        let send_fd = make_memfd_with(b"frame-generation-test-backing");
+        let (response, _no_reply_fds) = send_request_with_fds(
+            stream,
+            &serde_json::json!({
+                "op": "register",
+                "surface_id": slot_id,
+                "runtime_id": "frame-generation-test-runtime",
+                "width": 64,
+                "height": 64,
+                "format": "bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[send_fd],
+            0,
+        )
+        .expect("register request");
+        unsafe { libc::close(send_fd) };
+        assert_eq!(
+            response.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "register must succeed: {response:?}"
+        );
+    }
+
+    fn wire_error_of(response: &serde_json::Value) -> &str {
+        response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+    }
+
+    /// #1872 over the wire: the slot registers once, its frames publish
+    /// generations, and only the current generation's id checks out. The
+    /// retired id fails with an error naming the recycling — never with the
+    /// recycled slot's planes.
+    #[test]
+    fn a_retired_frame_id_is_refused_and_the_current_one_serves() {
+        let state = SurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        register_pool_slot(&stream, "pool-slot-a");
+        check_out_leases
+            .publish_frame_generation("pool-slot-a", 1)
+            .expect("the pool publishes the first frame");
+
+        let (current, current_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "check_out", "surface_id": "pool-slot-a#1"}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("check_out of the live frame");
+        close_every_fd(&current_fds);
+        assert!(
+            current.get("error").is_none(),
+            "the live frame must check out: {current:?}"
+        );
+        let (_, released) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "release_check_out", "surface_id": "pool-slot-a#1"}),
+            &[],
+            0,
+        )
+        .expect("release of the live frame");
+        close_every_fd(&released);
+
+        // The producer recycles the slot: generation 2 publishes, 1 retires.
+        check_out_leases
+            .publish_frame_generation("pool-slot-a", 2)
+            .expect("the pool recycles the slot");
+
+        for op in ["check_out", "lookup"] {
+            let (refused, refused_fds) = send_request_with_fds(
+                &stream,
+                &serde_json::json!({"op": op, "surface_id": "pool-slot-a#1"}),
+                &[],
+                MAX_DMA_BUF_PLANES,
+            )
+            .expect("the request itself goes through");
+            close_every_fd(&refused_fds);
+            assert!(
+                wire_error_of(&refused).contains("recycled"),
+                "{op} of a retired frame id must fail naming the recycling, got: {refused:?}"
+            );
+            assert!(refused_fds.is_empty(), "no planes may accompany a refusal");
+        }
+
+        let (served, served_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "check_out", "surface_id": "pool-slot-a#2"}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("check_out of the new frame");
+        close_every_fd(&served_fds);
+        assert!(
+            served.get("error").is_none(),
+            "the new generation must check out: {served:?}"
+        );
+        assert_eq!(
+            lease_count_settling_to(&check_out_leases, "pool-slot-a", 1),
+            1,
+            "exactly the surviving checkout holds the slot"
+        );
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// A generation suffix over a slot the pool never published fails
+    /// closed — nothing can prove that frame exists.
+    #[test]
+    fn a_generation_over_an_unpublished_slot_is_refused_on_the_wire() {
+        let state = SurfaceShareState::new();
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        register_pool_slot(&stream, "pool-slot-b");
+        let (refused, refused_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "check_out", "surface_id": "pool-slot-b#1"}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("the request itself goes through");
+        close_every_fd(&refused_fds);
+        assert!(
+            wire_error_of(&refused).contains("refused"),
+            "an unpublished generation must fail closed, got: {refused:?}"
+        );
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// The `#<generation>` suffix is the published-frame grammar; a
+    /// registration carrying one would fork the table's key space.
+    #[test]
+    fn registering_an_id_with_a_generation_suffix_is_refused() {
+        let state = SurfaceShareState::new();
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"reserved-grammar");
+        let (response, _no_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "register",
+                "surface_id": "looks-like-a-frame#3",
+                "runtime_id": "frame-generation-test-runtime",
+                "width": 64,
+                "height": 64,
+                "format": "bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[send_fd],
+            0,
+        )
+        .expect("register request");
+        unsafe { libc::close(send_fd) };
+        assert!(
+            wire_error_of(&response).contains("reserved"),
+            "a #<generation> registration must be refused: {response:?}"
+        );
+
         drop(stream);
         service.stop();
     }

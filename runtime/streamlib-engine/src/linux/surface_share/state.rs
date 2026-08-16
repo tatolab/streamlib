@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 use crate::core::context::SurfaceCheckOutLeaseRegistry;
+use crate::core::rhi::pool_slot_key_of_surface_id;
 
 #[derive(Debug)]
 pub struct SurfaceMetadata {
@@ -372,7 +373,7 @@ impl SurfaceShareState {
     /// surface_id is unknown.
     pub fn update_image_layout(&self, surface_id: &str, layout: i32) -> bool {
         let surfaces = self.inner.surfaces.read();
-        match surfaces.get(surface_id) {
+        match surfaces.get(pool_slot_key_of_surface_id(surface_id)) {
             Some(metadata) => {
                 metadata
                     .current_image_layout
@@ -391,7 +392,9 @@ impl SurfaceShareState {
     /// fd first.
     pub fn get_surface_planes(&self, surface_id: &str) -> Option<SurfacePlaneCheckout> {
         let mut surfaces = self.inner.surfaces.write();
-        surfaces.get_mut(surface_id).map(|metadata| {
+        surfaces
+            .get_mut(pool_slot_key_of_surface_id(surface_id))
+            .map(|metadata| {
             metadata.checkout_count += 1;
             SurfacePlaneCheckout {
                 dma_buf_fds: metadata.dma_buf_fds.clone(),
@@ -415,6 +418,7 @@ impl SurfaceShareState {
     }
 
     pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
+        let surface_id = pool_slot_key_of_surface_id(surface_id);
         let mut surfaces = self.inner.surfaces.write();
         if let Some(metadata) = surfaces.get(surface_id) {
             if metadata.runtime_id == runtime_id {
