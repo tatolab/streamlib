@@ -811,10 +811,16 @@ mod tests {
     ///
     /// A fixture that stalls on *every* subcommand never reaches the install, so
     /// the install-side status handling would go unexercised.
+    ///
+    /// `exec` so the signal reaches `sleep` itself rather than the shell that
+    /// spawned it. `timeout` signals the whole process group, so the shell's
+    /// child dies either way and `Command::output()` sees its pipes close — but
+    /// that is a property of `timeout`'s default, not of this fixture, and a
+    /// stray survivor would hold those pipes for the whole sleep.
     const STALL_ONLY_ON_THE_INSTALL: &str = "\
         if [ \"$1\" = update ]; then exit 0; fi\n\
         if grep -q switched \"$STREAMLIB_APT_FIXTURE_INVOCATION_LOG\"; then exit 0; fi\n\
-        sleep 600\n";
+        exec sleep 60\n";
 
     /// Exits non-zero immediately on the install — a broken package name, not a
     /// slow mirror. The distinction is what the failure message has to get right.
@@ -969,8 +975,11 @@ mod tests {
         // when `--kill-after` had to escalate to SIGKILL. apt inside a dpkg
         // transaction can be the second, and calling that an apt failure is the
         // same misdiagnosis the 124 branch exists to prevent.
+        // Deliberately not `exec sleep`, unlike STALL_ONLY_ON_THE_INSTALL: exec
+        // would replace the shell and discard the trap, `sleep` would honour
+        // SIGINT, and the escalation this test exists for would never happen.
         let harness = BoundedRetryScriptHarness::new(&apt_fixture(
-            "if [ \"$1\" = update ]; then exit 0; fi\ntrap '' INT\nsleep 600\n",
+            "if [ \"$1\" = update ]; then exit 0; fi\ntrap '' INT\nsleep 60\n",
         ));
         let run = harness.run_with_environment(&[
             ("STREAMLIB_APT_PRIVILEGE_PREFIX", "".as_ref()),
