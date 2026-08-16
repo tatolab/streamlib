@@ -1063,7 +1063,10 @@ impl SurfaceStoreInner {
 
         let raw_plane_fds: Vec<std::os::unix::io::RawFd> = {
             use std::os::fd::AsRawFd as _;
-            plane_fds.iter().map(std::os::fd::OwnedFd::as_raw_fd).collect()
+            plane_fds
+                .iter()
+                .map(std::os::fd::OwnedFd::as_raw_fd)
+                .collect()
         };
         let send_result =
             streamlib_surface_client::send_request_with_fds(stream, &request, &raw_plane_fds, 0);
@@ -2471,7 +2474,9 @@ mod plane_fd_ownership_tests {
         };
 
         assert!(
-            refusal.to_string().contains("mixed external-handle flavours"),
+            refusal
+                .to_string()
+                .contains("mixed external-handle flavours"),
             "the refusal must name what it got: {refusal}"
         );
         assert!(

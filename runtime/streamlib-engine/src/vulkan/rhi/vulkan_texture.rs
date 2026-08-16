@@ -1841,7 +1841,10 @@ mod tests {
         // threads for the lowest free one, so the collision the crash needs
         // is deterministic instead of timing-dependent.
         let unrelated_owner_fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
-        assert!(unrelated_owner_fd >= 0, "could not open the unrelated owner");
+        assert!(
+            unrelated_owner_fd >= 0,
+            "could not open the unrelated owner"
+        );
         assert_eq!(
             unsafe { libc::dup2(unrelated_owner_fd, exported_fd) },
             exported_fd,
