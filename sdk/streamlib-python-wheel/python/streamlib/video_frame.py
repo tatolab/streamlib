@@ -237,7 +237,8 @@ class VideoFrame:
         texture_layout: "int | None" = None,
         **keys_this_cast_does_not_read: Any,
     ) -> None:
-        """Validate, cast the nested metadata, and claim the surface.
+        """Validate, cast the nested metadata, and claim the surface when a
+        read is offering the claim.
 
         Written out rather than generated because the bag is an open map: a
         producer may carry keys this cast does not read, and the day one adds
@@ -291,9 +292,20 @@ class VideoFrame:
         """Construct from a bag dict, raising ValueError on missing or
         mistyped keys — required and optional alike.
 
-        The same construction `read(port, into=VideoFrame)` performs, so the
-        two spellings cannot disagree; this one only names the missing key,
-        which keyword construction reports in Python's words.
+        The same *validation* `read(port, into=VideoFrame)` performs, so the
+        two spellings cannot disagree about what a valid frame is; this one
+        only names the missing key, which keyword construction reports in
+        Python's words.
+
+        They do differ in one respect, and it is the frame's lifetime. The
+        claim on the surface is offered by the read, so it is taken only when
+        the read builds the frame. Calling this on a bag you are already
+        holding claims nothing: the frame is as valid, and its pixels last
+        only as long as pool depth gives them — the same protection an
+        untyped read gets. That is a choice, not a lapse. Hold a frame past
+        the producer's ring and read it with `into=VideoFrame`, or take the
+        claim yourself through `gpu_limited_access_of_the_typed_read_in_progress()`
+        in your own type's constructor.
         """
         missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
         if missing:
