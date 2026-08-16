@@ -3103,9 +3103,9 @@ mod tests {
     ///
     /// These run without a real surface, so they assert the shape of the
     /// refusal rather than a landed copy — an unresolvable surface is an
-    /// error naming the surface, never the "no CpuReadbackBridge
-    /// registered on GpuContext" the deleted seam used to answer to every
-    /// caller. The copy itself is proven over a real device in
+    /// error naming the surface, never the missing-bridge refusal the
+    /// deleted seam used to answer to every caller. The copy itself is
+    /// proven over a real device in
     /// `surface_export_staging`'s own GPU-gated tests.
     #[cfg(target_os = "linux")]
     mod cpu_readback_answers_from_gpu_context {

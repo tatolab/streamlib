@@ -148,8 +148,9 @@ raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.17.0" }
-# Surface descriptor types referenced by the host-side CpuReadbackBridge
-# trait (linux-only; the cpu-readback adapter is linux-only).
+# Surface-adapter vocabulary the engine's surface-share state documents
+# itself against. Code use went with the host-side readback bridge; what
+# remains is a rustdoc link, which still needs the dependency to resolve.
 streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.17.0" }
 # The extern "C" panic net (run_host_extern_c) every host_services callback
 # routes through.
