@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::core::rhi::{PixelBuffer, PixelBufferPoolId, PixelBufferRef, PixelFormat};
+use crate::core::rhi::{PixelBuffer, PixelBufferPoolSlotId, PixelBufferRef, PixelFormat};
 use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
@@ -19,7 +19,7 @@ pub struct VulkanPixelBufferPool {
     format: PixelFormat,
     buffers: Vec<Arc<HostVulkanBuffer>>,
     next_index: AtomicUsize,
-    buffer_to_pool_id: Mutex<HashMap<usize, PixelBufferPoolId>>,
+    buffer_to_pool_id: Mutex<HashMap<usize, PixelBufferPoolSlotId>>,
 }
 
 impl VulkanPixelBufferPool {
@@ -48,7 +48,7 @@ impl VulkanPixelBufferPool {
             ) {
                 Ok(buffer) => {
                     buffers.push(Arc::new(buffer));
-                    buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
+                    buffer_to_pool_id.insert(i, PixelBufferPoolSlotId::new());
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -109,7 +109,7 @@ impl VulkanPixelBufferPool {
     /// guaranteed free — [`Self::acquire`] cannot answer here, because a
     /// caller that keeps its own permanent share of every buffer never sees a
     /// strong count of 1 again.
-    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         let buffer = HostVulkanBuffer::new(
             &self.device,
             (self.width as u64) * (self.height as u64) * (self.bytes_per_pixel as u64),
@@ -117,7 +117,7 @@ impl VulkanPixelBufferPool {
 
         let index = self.buffers.len();
         self.buffers.push(Arc::new(buffer));
-        let pool_id = PixelBufferPoolId::new();
+        let pool_id = PixelBufferPoolSlotId::new();
         self.buffer_to_pool_id
             .lock()
             .map_err(|_| {
@@ -141,7 +141,7 @@ impl VulkanPixelBufferPool {
     ///
     /// Skips buffers still held externally (Arc::strong_count > 1).
     /// Returns error if all buffers are in use.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    pub fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         let len = self.buffers.len();
         if len == 0 {
             return Err(Error::BufferError(
@@ -161,7 +161,7 @@ impl VulkanPixelBufferPool {
                     let map = self.buffer_to_pool_id.lock().unwrap();
                     map.get(&index)
                         .cloned()
-                        .unwrap_or_else(PixelBufferPoolId::new)
+                        .unwrap_or_else(PixelBufferPoolSlotId::new)
                 };
 
                 let pixel_buffer_ref = PixelBufferRef {
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(buf.height, 64);
         assert_ne!(
             pool_id,
-            PixelBufferPoolId::new(),
+            PixelBufferPoolSlotId::new(),
             "pool id must be stable, not a fresh zero-id"
         );
     }

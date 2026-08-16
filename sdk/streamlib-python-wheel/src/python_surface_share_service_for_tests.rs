@@ -22,6 +22,9 @@ pub(crate) struct SurfaceShareUnderTest {
     pub(crate) socket_path: PathBuf,
     check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
     socket_directory: PathBuf,
+    /// Publisher connections held open for the test's lifetime: the service
+    /// releases a publisher's surfaces when its connection drops.
+    held_publisher_connections: parking_lot::Mutex<Vec<std::os::unix::net::UnixStream>>,
 }
 
 impl Drop for SurfaceShareUnderTest {
@@ -49,6 +52,7 @@ impl SurfaceShareUnderTest {
             socket_path,
             check_out_leases,
             socket_directory,
+            held_publisher_connections: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -107,7 +111,7 @@ impl SurfaceShareUnderTest {
         // is ours to close.
         unsafe { libc::close(backing_fd) };
         // Held open deliberately: closing it would take the surface with it.
-        std::mem::forget(publisher);
+        self.held_publisher_connections.lock().push(publisher);
         response
             .get("surface_id")
             .and_then(|value| value.as_str())
@@ -121,5 +125,63 @@ impl SurfaceShareUnderTest {
         self.check_out_leases
             .outstanding_check_out_count(surface_id)
             .expect("the lease table stays readable")
+    }
+
+    /// Register `slot_id` as a pool-slot surface and publish `frame_generation`
+    /// as its current frame — the state a pool producer's acquire leaves
+    /// behind, without needing a pool or a GPU.
+    pub(crate) fn publish_pool_slot_frame(&self, slot_id: &str, frame_generation: u64) {
+        use std::os::unix::io::{FromRawFd as _, IntoRawFd as _};
+
+        if self
+            .check_out_leases
+            .current_frame_generation(slot_id)
+            .expect("the lease table stays readable")
+            .is_none()
+        {
+            let name = std::ffi::CString::new("streamlib-frame-generation-test").unwrap();
+            // SAFETY: an ordinary libc call taking a NUL-terminated name; the
+            // fd it answers with is adopted immediately below.
+            let raw_fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+            assert!(raw_fd >= 0, "memfd_create failed");
+            // SAFETY: adopting the fd `memfd_create` just returned; nothing
+            // else holds it.
+            let backing = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+            backing.set_len(4096).expect("size the backing memfd");
+            let backing_fd = backing.into_raw_fd();
+
+            let publisher =
+                streamlib_surface_client::connect_to_surface_share_socket(&self.socket_path)
+                    .expect("a publisher connection");
+            let (response, _no_reply_fds) = streamlib_surface_client::send_request_with_fds(
+                &publisher,
+                &serde_json::json!({
+                    "op": "register",
+                    "surface_id": slot_id,
+                    "runtime_id": "frame-generation-test-runtime",
+                    "width": 32,
+                    "height": 32,
+                    "format": "bgra32",
+                    "resource_type": "pixel_buffer",
+                }),
+                &[backing_fd],
+                0,
+            )
+            .expect("register");
+            // SAFETY: the service dup'd this fd over SCM_RIGHTS; this side's
+            // copy is ours to close.
+            unsafe { libc::close(backing_fd) };
+            // Held open deliberately: closing it would take the surface with it.
+            self.held_publisher_connections.lock().push(publisher);
+            assert_eq!(
+                response.get("success").and_then(serde_json::Value::as_bool),
+                Some(true),
+                "the slot registration must succeed: {response:?}"
+            );
+        }
+
+        self.check_out_leases
+            .publish_frame_generation(slot_id, frame_generation)
+            .expect("the lease table stays readable");
     }
 }

@@ -4,9 +4,10 @@
 use crate::core::context::TextureRegistration;
 use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{
-    CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat,
-    RhiBlitter, RhiColorConverter, RhiCommandQueue, RhiPixelBufferPool, Texture, TextureDescriptor,
-    TextureFormat, TextureUsages,
+    CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolSlotId,
+    PixelFormat, PublishedPixelBufferFrameId, RhiBlitter, RhiColorConverter, RhiCommandQueue,
+    RhiPixelBufferPool, Texture, TextureDescriptor, TextureFormat, TextureUsages,
+    pool_slot_key_of_surface_id,
 };
 use crate::core::{Error, Result};
 #[cfg(target_os = "linux")]
@@ -75,8 +76,59 @@ struct PixelBufferPoolKey {
 
 /// A single entry in the ring pool.
 struct PixelBufferRingEntry {
-    pool_id: PixelBufferPoolId,
+    pool_slot_id: PixelBufferPoolSlotId,
     buffer: PixelBuffer,
+    /// How many frames this slot has published — the generation of the id
+    /// the most recent acquisition handed out; 0 before the first.
+    published_frame_generation: u64,
+}
+
+impl PixelBufferRingEntry {
+    fn holding_a_fresh_allocation(
+        pool_slot_id: PixelBufferPoolSlotId,
+        buffer: PixelBuffer,
+    ) -> Self {
+        Self {
+            pool_slot_id,
+            buffer,
+            published_frame_generation: 0,
+        }
+    }
+
+    /// Hand the slot's buffer over if no in-process holder has it.
+    ///
+    /// `PixelBuffer` holds an opaque handle to a host-side `Arc`; the
+    /// baseline is 2 — one share in the ring pool's Vec, one under the
+    /// current published id in `buffer_cache` (1 before the slot ever
+    /// publishes, when no consumer can hold it either) — so anything above
+    /// that is a live reader. Taking the clone here rather than at the call
+    /// site is what keeps the test and the hand-off inside the caller's
+    /// lease guard.
+    fn hand_off_if_unheld_in_process(&self) -> Option<PixelBuffer> {
+        (self.buffer.strong_count() <= 2).then(|| self.buffer.clone())
+    }
+
+    /// Advance to the next frame generation and answer with the id it
+    /// publishes — the single mint for reuse and growth alike.
+    fn mint_next_published_frame_id(&mut self) -> PublishedPixelBufferFrameId {
+        self.published_frame_generation += 1;
+        self.currently_published_frame_id()
+    }
+
+    /// The id the most recent acquisition published.
+    fn currently_published_frame_id(&self) -> PublishedPixelBufferFrameId {
+        PublishedPixelBufferFrameId::new(self.pool_slot_id.clone(), self.published_frame_generation)
+    }
+
+    /// The id the *previous* acquisition published, once one exists.
+    fn previously_published_frame_id(&self) -> Option<PublishedPixelBufferFrameId> {
+        (self.published_frame_generation > 1).then(|| {
+            PublishedPixelBufferFrameId::new(
+                self.pool_slot_id.clone(),
+                self.published_frame_generation - 1,
+            )
+        })
+    }
 }
 
 /// Ring pool of permanently held pixel buffers for a given (width, height, format).
@@ -104,6 +156,12 @@ struct PixelBufferPoolManager {
     /// Global cache for UUID -> PixelBuffer lookups (includes buffers from all pools).
     /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
     buffer_cache: Mutex<HashMap<String, PixelBuffer>>,
+    /// Slot key → the generation this manager most recently minted — the
+    /// in-process read index over the entries' own counters, so a retired
+    /// id is refusable without any lease registry existing (per-slot
+    /// entries, bounded by the pool cap; its own short lock, so a resolve
+    /// never waits behind an allocating acquire holding `pools`).
+    minted_frame_generation_by_pool_slot: Mutex<HashMap<String, u64>>,
     /// GPU device reference for creating platform pixel buffer pools.
     #[allow(dead_code)]
     device: Arc<GpuDevice>,
@@ -124,11 +182,25 @@ enum PoolSlotReuse<'leases> {
 }
 
 impl PoolSlotReuse<'_> {
-    fn permits(&self, pool_id: &str) -> bool {
+    fn permits(&self, pool_slot_key: &str) -> bool {
         match self {
             Self::RefcountIsTheWholeAnswer => true,
-            Self::LeaseAware(hand_off) => !hand_off.is_checked_out_by_any_holder(pool_id),
+            Self::LeaseAware(hand_off) => !hand_off.is_checked_out_by_any_holder(pool_slot_key),
             Self::NothingCanBeProvenFree => false,
+        }
+    }
+
+    /// The retire step of a reuse: the outgoing generation's id stops
+    /// resolving before the slot is handed back to its producer.
+    ///
+    /// Runs on the same guard the availability test held, so a checkout of
+    /// the outgoing id lands strictly before the test (leased — the slot is
+    /// never rehanded) or strictly after this publish (refused as recycled).
+    /// A no-op with no service, because then no cross-process consumer can
+    /// exist to look the id up.
+    fn publish_frame_generation(&mut self, pool_slot_key: &str, frame_generation: u64) {
+        if let Self::LeaseAware(hand_off) = self {
+            hand_off.publish_frame_generation(pool_slot_key, frame_generation);
         }
     }
 }
@@ -138,8 +210,31 @@ impl PixelBufferPoolManager {
         Self {
             pools: Mutex::new(HashMap::new()),
             buffer_cache: Mutex::new(HashMap::new()),
+            minted_frame_generation_by_pool_slot: Mutex::new(HashMap::new()),
             device,
         }
+    }
+
+    /// Record the generation `entry` just minted, so in-process resolves can
+    /// refuse the retired ids without a lease registry existing.
+    fn index_minted_generation(&self, entry: &PixelBufferRingEntry) {
+        self.minted_frame_generation_by_pool_slot
+            .lock()
+            .unwrap()
+            .insert(
+                entry.pool_slot_id.as_str().to_string(),
+                entry.published_frame_generation,
+            );
+    }
+
+    /// The generation this manager most recently minted over `pool_slot_key`,
+    /// if the slot is one of its own.
+    fn minted_frame_generation_of_slot(&self, pool_slot_key: &str) -> Option<u64> {
+        self.minted_frame_generation_by_pool_slot
+            .lock()
+            .unwrap()
+            .get(pool_slot_key)
+            .copied()
     }
 
     /// Acquire a buffer from the pool.
@@ -147,13 +242,16 @@ impl PixelBufferPoolManager {
     /// If this is a new pool, pre-allocates POOL_PRE_ALLOCATE_COUNT buffers
     /// and registers them with the surface-share service (if surface_store is available).
     /// Returns the next available buffer from the ring, skipping any in use.
+    /// The id names the frame this hand-off publishes: the slot's next
+    /// acquisition retires it, so a consumer that outwaits the pool resolves
+    /// an error, never another frame's pixels.
     fn acquire(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
         surface_store: Option<&SurfaceStore>,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
         let key = PixelBufferPoolKey {
             width,
             height,
@@ -237,14 +335,12 @@ impl PixelBufferPoolManager {
                             }
                         }
 
-                        // Add to global cache for UUID lookups
-                        self.buffer_cache
-                            .lock()
-                            .unwrap()
-                            .insert(pool_id.as_str().to_string(), buffer.clone());
-
-                        // Store permanently in ring pool
-                        buffers.push(PixelBufferRingEntry { pool_id, buffer });
+                        // The global cache gets an entry per *published
+                        // frame*, at hand-off — a slot that has published
+                        // nothing has no id anybody could resolve.
+                        buffers.push(PixelBufferRingEntry::holding_a_fresh_allocation(
+                            pool_id, buffer,
+                        ));
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -285,11 +381,12 @@ impl PixelBufferPoolManager {
         // `docs/decisions/surface-id-lifetime-contract.md`.
         //
         // Held for the whole scan, so the lease answer a slot is tested
-        // against is still the answer when that slot is handed over: a
-        // checkout takes the same lock, and therefore lands strictly before
-        // the test or strictly after the clone, never between them where it
-        // would lease a slot already promised to the producer.
-        let reuse = match surface_store.and_then(SurfaceStore::check_out_leases) {
+        // against is still the answer when that slot is handed over AND when
+        // its outgoing id is retired: a checkout takes the same lock, and
+        // therefore lands strictly before the test or strictly after the
+        // retire, never between them where it would lease a frame already
+        // promised back to the producer.
+        let mut reuse = match surface_store.and_then(SurfaceStore::check_out_leases) {
             // No service, so no cross-process consumer can exist and the
             // refcount is the whole answer.
             None => PoolSlotReuse::RefcountIsTheWholeAnswer,
@@ -304,18 +401,26 @@ impl PixelBufferPoolManager {
             let idx = ring_pool.next_index % buffer_count;
             ring_pool.next_index = (ring_pool.next_index + 1) % buffer_count;
 
-            let entry = &ring_pool.buffers[idx];
-            if !reuse.permits(entry.pool_id.as_str()) {
+            let entry = &mut ring_pool.buffers[idx];
+            if !reuse.permits(entry.pool_slot_id.as_str()) {
                 continue;
             }
 
-            if let Some(handed_off) = Self::hand_off_if_unheld_in_process(entry) {
+            if let Some(handed_off_buffer) = entry.hand_off_if_unheld_in_process() {
+                // The retire step, on the guard the availability test held.
+                let published = entry.mint_next_published_frame_id();
+                reuse.publish_frame_generation(
+                    entry.pool_slot_id.as_str(),
+                    entry.published_frame_generation,
+                );
+                self.index_minted_generation(entry);
+                self.retire_previous_frame_in_cache(entry, &handed_off_buffer);
                 tracing::trace!(
                     "PixelBufferPoolManager: acquired buffer {} (idx {})",
-                    entry.pool_id,
+                    published,
                     idx
                 );
-                return Ok(handed_off);
+                return Ok((published, handed_off_buffer));
             }
         }
         // Nothing was reusable; growth below allocates instead, which needs no
@@ -349,15 +454,11 @@ impl PixelBufferPoolManager {
                             }
                         }
 
-                        // Add to global cache
-                        self.buffer_cache
-                            .lock()
-                            .unwrap()
-                            .insert(pool_id.as_str().to_string(), buffer.clone());
-
                         ring_pool
                             .buffers
-                            .push(PixelBufferRingEntry { pool_id, buffer });
+                            .push(PixelBufferRingEntry::holding_a_fresh_allocation(
+                                pool_id, buffer,
+                            ));
                         newly_added += 1;
                     }
                     Err(e) => {
@@ -379,10 +480,35 @@ impl PixelBufferPoolManager {
                     format
                 );
 
-                // Return the first newly added buffer (it's definitely not in use)
+                // Hand off the first newly added buffer — a fresh allocation
+                // no caller has seen, so its first frame needs no hand-off
+                // guard: a consumer cannot race to check out an id that has
+                // never been published. The standalone publish tells the
+                // service what generation is current before any consumer can
+                // hold the id; if it fails, checkouts of this id fail closed
+                // at the service rather than succeeding silently.
                 let idx = ring_pool.buffers.len() - newly_added;
-                let entry = &ring_pool.buffers[idx];
-                return Ok((entry.pool_id.clone(), entry.buffer.clone()));
+                let entry = &mut ring_pool.buffers[idx];
+                let published = entry.mint_next_published_frame_id();
+                self.index_minted_generation(entry);
+                if let Some(leases) = surface_store.and_then(SurfaceStore::check_out_leases) {
+                    if let Err(unpublishable) = leases.publish_frame_generation(
+                        entry.pool_slot_id.as_str(),
+                        entry.published_frame_generation,
+                    ) {
+                        tracing::warn!(
+                            "PixelBufferPoolManager: could not publish generation {} of fresh \
+                             slot {}: {} — cross-process checkouts of this frame will fail \
+                             closed",
+                            entry.published_frame_generation,
+                            entry.pool_slot_id,
+                            unpublishable
+                        );
+                    }
+                }
+                let handed_off_buffer = entry.buffer.clone();
+                self.retire_previous_frame_in_cache(entry, &handed_off_buffer);
+                return Ok((published, handed_off_buffer));
             }
         }
 
@@ -401,17 +527,21 @@ impl PixelBufferPoolManager {
         ))
     }
 
-    /// Hand the slot over if no in-process holder has it.
-    ///
-    /// `PixelBuffer` holds an opaque handle to a host-side `Arc`; the baseline
-    /// is 2 — one share in the ring pool's Vec, one in `buffer_cache` — so
-    /// anything above that is a live reader. Taking the clone here rather than
-    /// at the call site is what keeps the test and the hand-off inside the
-    /// caller's lease guard.
-    fn hand_off_if_unheld_in_process(
-        entry: &PixelBufferRingEntry,
-    ) -> Option<(PixelBufferPoolId, PixelBuffer)> {
-        (entry.buffer.strong_count() <= 2).then(|| (entry.pool_id.clone(), entry.buffer.clone()))
+    /// Swap the slot's `buffer_cache` entry to the id just minted: the
+    /// retired id stops resolving in-process — absence *is* the loud
+    /// failure here — and the cache keeps exactly one share per slot, which
+    /// [`PixelBufferRingEntry::hand_off_if_unheld_in_process`]'s baseline
+    /// counts on. Call after the mint: the entry's current id is the one
+    /// this publishes.
+    fn retire_previous_frame_in_cache(&self, entry: &PixelBufferRingEntry, buffer: &PixelBuffer) {
+        let mut cache = self.buffer_cache.lock().unwrap();
+        if let Some(previous) = entry.previously_published_frame_id() {
+            cache.remove(&previous.to_string());
+        }
+        cache.insert(
+            entry.currently_published_frame_id().to_string(),
+            buffer.clone(),
+        );
     }
 
     /// Get a buffer by its UUID from local cache.
@@ -678,7 +808,8 @@ impl GpuContext {
     ///
     /// Pools are cached by (width, height, format) - the first call creates the pool
     /// and pre-allocates buffers, subsequent calls reuse it. Returns (id, buffer) where
-    /// id can be used with `get_pixel_buffer()` to retrieve the same buffer.
+    /// the id names this acquisition's frame and can be used with
+    /// `get_pixel_buffer()` until the slot's next acquisition retires it.
     ///
     /// If SurfaceStore is initialized, pre-allocated buffers are registered with the surface-share service.
     pub fn acquire_pixel_buffer(
@@ -686,7 +817,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
         tracing::debug!(
             rhi_op = "acquire_pixel_buffer",
             width,
@@ -699,24 +830,26 @@ impl GpuContext {
             .acquire(width, height, format, surface_store.as_ref())
     }
 
-    /// Get a pixel buffer by its UUID.
+    /// Get a pixel buffer by its published surface id.
     ///
-    /// First checks local cache, then falls back to surface-share service lookup for cross-process sharing.
-    /// Returns the buffer if found, or an error if not found anywhere.
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
+    /// First checks local cache, then falls back to surface-share service
+    /// lookup for cross-process sharing. Either path fails for a retired
+    /// published frame id: the pool evicts on recycle and the service
+    /// refuses, so "found" always means "still that frame".
+    pub fn get_pixel_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
         // Check local cache first
-        if let Some(buffer) = self
-            .pixel_buffer_pool_manager
-            .get_from_cache(pool_id.as_str())
-        {
-            tracing::trace!("GpuContext::get_pixel_buffer: cache hit for '{}'", pool_id);
+        if let Some(buffer) = self.pixel_buffer_pool_manager.get_from_cache(surface_id) {
+            tracing::trace!(
+                "GpuContext::get_pixel_buffer: cache hit for '{}'",
+                surface_id
+            );
             return Ok(buffer);
         }
 
         // Cache miss - try surface-share service lookup
         tracing::debug!(
             "GpuContext::get_pixel_buffer: cache miss for '{}', trying surface-share service",
-            pool_id
+            surface_id
         );
 
         let surface_store = self.surface_store.lock().unwrap();
@@ -724,19 +857,58 @@ impl GpuContext {
             Error::Configuration("SurfaceStore not initialized. Call runtime.start() first.".into())
         })?;
 
-        let buffer = store.lookup_buffer(pool_id.as_str())?;
+        let buffer = store.lookup_buffer(surface_id)?;
 
-        // Cache for future lookups
-        self.pixel_buffer_pool_manager
-            .cache_buffer(pool_id.as_str(), buffer.clone());
+        // Cache the lookup — except under a published frame id, whose cache
+        // life is owned by the pool's retire-on-recycle eviction; an entry
+        // minted here would outlive the frame and serve the recycled slot.
+        if PublishedPixelBufferFrameId::parse(surface_id).is_none() {
+            self.pixel_buffer_pool_manager
+                .cache_buffer(surface_id, buffer.clone());
+        }
 
         Ok(buffer)
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        let pool_id = PixelBufferPoolId::from_str(surface_id);
-        self.get_pixel_buffer(&pool_id)
+        self.get_pixel_buffer(surface_id)
+    }
+
+    /// Refuse a published frame id whose slot has been recycled since.
+    ///
+    /// An id with no generation suffix passes. A slot this context's own
+    /// pool minted answers from the pool's generation index — present with
+    /// or without a lease registry, so the refusal holds in a context no
+    /// service was wired into. Anything else falls to the registry, which
+    /// fails closed on slots nobody published.
+    pub(crate) fn refuse_a_retired_frame_id(&self, surface_id: &str) -> Result<()> {
+        let Some((pool_slot, published_generation)) =
+            crate::core::rhi::split_pool_slot_and_frame_generation(surface_id)
+        else {
+            return Ok(());
+        };
+        if let Some(minted) = self
+            .pixel_buffer_pool_manager
+            .minted_frame_generation_of_slot(pool_slot)
+        {
+            if minted == published_generation {
+                return Ok(());
+            }
+            return Err(Error::SurfaceFrameRecycled {
+                surface_id: surface_id.to_string(),
+                published_generation,
+                current_generation: minted,
+            });
+        }
+        let surface_store = self.surface_store.lock().unwrap();
+        match surface_store
+            .as_ref()
+            .and_then(SurfaceStore::check_out_leases)
+        {
+            Some(leases) => leases.refuse_a_retired_frame_id(surface_id),
+            None => Ok(()),
+        }
     }
 
     /// Register a texture in the same-process texture cache.
@@ -754,7 +926,7 @@ impl GpuContext {
         #[cfg(not(target_os = "linux"))]
         let registration = TextureRegistration::new(texture);
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.insert(id.to_string(), registration);
+        cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
@@ -775,7 +947,10 @@ impl GpuContext {
     ) {
         let registration = TextureRegistration::new(texture, initial_layout);
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.insert(id.to_string(), registration);
+        // Keyed by the slot so a producer re-registering per published
+        // frame replaces one entry instead of growing one per frame; the
+        // published id's generation is checked at resolve time instead.
+        cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
     }
 
     /// Remove a `surface_id` from the same-process texture cache.
@@ -786,7 +961,7 @@ impl GpuContext {
     /// teardown so the cache doesn't outlive the underlying texture.
     pub fn unregister_texture(&self, id: &str) {
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.remove(id);
+        cache.remove(pool_slot_key_of_surface_id(id));
         #[cfg(target_os = "linux")]
         self.evict_device_export_staging(id);
     }
@@ -807,17 +982,20 @@ impl GpuContext {
         &self,
         surface_id: &str,
     ) -> Option<TextureRegistration> {
-        self.texture_cache.lock().unwrap().get(surface_id).cloned()
+        self.texture_cache
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(surface_id))
+            .cloned()
     }
 
     /// The pooled allocation this process holds for `surface_id`, if any
     /// — the pool's own cache, with no surface-share round trip.
     ///
-    /// "Held", not "produced": [`Self::get_pixel_buffer`] caches a
-    /// successful cross-process lookup into this same cache, so a buffer
-    /// another process produced answers here from the second resolution
-    /// on. That is the intent — what matters is that the surface has a
-    /// pooled backing reachable without asking the service again.
+    /// For a published frame id this answers only while the frame is
+    /// current: the pool owns the entry and evicts it on recycle. Ids with
+    /// no generation ([`Self::get_pixel_buffer`] caches their successful
+    /// cross-process lookups here) answer from the second resolution on.
     pub(crate) fn pooled_backing_held_in_this_process(
         &self,
         surface_id: &str,
@@ -832,7 +1010,12 @@ impl GpuContext {
     /// copy ends in `SHADER_READ_ONLY_OPTIMAL`).
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        if let Some(reg) = self.texture_cache.lock().unwrap().get(id) {
+        if let Some(reg) = self
+            .texture_cache
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(id))
+        {
             reg.update_layout(layout);
         }
     }
@@ -861,10 +1044,15 @@ impl GpuContext {
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] width: u32,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] height: u32,
     ) -> Result<TextureRegistration> {
+        // A retired published frame id resolves to an error, not to the
+        // slot's current pixels — every path below serves per-slot backings,
+        // so the frame-vs-slot distinction lives here.
+        self.refuse_a_retired_frame_id(surface_id)?;
+
         // Path 1: same-process texture cache (fastest)
         {
             let cache = self.texture_cache.lock().unwrap();
-            if let Some(reg) = cache.get(surface_id) {
+            if let Some(reg) = cache.get(pool_slot_key_of_surface_id(surface_id)) {
                 return Ok(reg.clone());
             }
         }
@@ -918,9 +1106,9 @@ impl GpuContext {
 
         // Path 3: cross-process pixel buffer fallback — refresh a private
         // host-owned texture from the latest buffer contents. The cache is
-        // separate from `texture_cache` because rotating-pool producers reuse
-        // surface_ids across cycles and a cache hit on stale contents would
-        // silently render the previous frame.
+        // separate from `texture_cache` because a pool slot serves a new
+        // frame every cycle and a cache hit on stale contents would
+        // silently render the previous one.
         #[cfg(target_os = "linux")]
         {
             // Same-process pool first: a producer that published only a
@@ -1008,14 +1196,17 @@ impl GpuContext {
     ) -> Result<Texture> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
-        // Get-or-create the cached texture for this surface_id.
+        // Get-or-create the cached texture for this surface's slot: the
+        // texture is a reusable canvas for the slot, and the per-frame
+        // identity check happened before the buffer was resolved.
+        let slot_key = pool_slot_key_of_surface_id(surface_id);
         let texture = {
             let mut cache = self.buffer_texture_cache.lock().unwrap();
-            if let Some(existing) = cache.get(surface_id) {
+            if let Some(existing) = cache.get(slot_key) {
                 if existing.width() == width && existing.height() == height {
                     existing.clone()
                 } else {
-                    cache.remove(surface_id);
+                    cache.remove(slot_key);
                     let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
                         .with_usage(
                             TextureUsages::COPY_DST
@@ -1023,7 +1214,7 @@ impl GpuContext {
                                 | TextureUsages::STORAGE_BINDING,
                         );
                     let new_texture = self.device.create_texture_local(&desc)?;
-                    cache.insert(surface_id.to_string(), new_texture.clone());
+                    cache.insert(slot_key.to_string(), new_texture.clone());
                     new_texture
                 }
             } else {
@@ -1034,7 +1225,7 @@ impl GpuContext {
                             | TextureUsages::STORAGE_BINDING,
                     );
                 let new_texture = self.device.create_texture_local(&desc)?;
-                cache.insert(surface_id.to_string(), new_texture.clone());
+                cache.insert(slot_key.to_string(), new_texture.clone());
                 new_texture
             }
         };
@@ -1174,7 +1365,12 @@ impl GpuContext {
             )?;
         }
         // Refresh the registration's layout (no-op for unregistered surface_ids).
-        if let Some(reg) = self.texture_cache.lock().unwrap().get(surface_id) {
+        if let Some(reg) = self
+            .texture_cache
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(surface_id))
+        {
             reg.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         }
         Ok(())
@@ -2714,7 +2910,7 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
         self.host_inner()
             .acquire_pixel_buffer(width, height, format)
     }
@@ -2753,9 +2949,9 @@ impl GpuContextLimitedAccess {
         self.host_inner().acquire_index_buffer(byte_size)
     }
 
-    /// Get a pixel buffer by its pool id (Split: local cache).
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        self.host_inner().get_pixel_buffer(pool_id)
+    /// Get a pixel buffer by its published surface id (Split: local cache).
+    pub fn get_pixel_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
+        self.host_inner().get_pixel_buffer(surface_id)
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
@@ -2979,7 +3175,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
+    ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
         self.host_inner()
             .acquire_pixel_buffer(width, height, format)
     }
@@ -3029,9 +3225,9 @@ impl GpuContextFullAccess {
             .acquire_render_target_dma_buf_image(width, height, format)
     }
 
-    /// Get a pixel buffer by its pool id.
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        self.host_inner().get_pixel_buffer(pool_id)
+    /// Get a pixel buffer by its published surface id.
+    pub fn get_pixel_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
+        self.host_inner().get_pixel_buffer(surface_id)
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
@@ -4392,7 +4588,17 @@ mod tests {
             LEASE_TEST_SURFACE_HEIGHT,
             PixelFormat::Rgba32,
         )
-        .map(|(pool_id, _returned_to_the_pool_immediately)| pool_id.to_string())
+        .map(|(published_frame_id, _returned_to_the_pool_immediately)| {
+            published_frame_id.to_string()
+        })
+    }
+
+    /// Slot-key equality: ids of *different frames* of one slot must count
+    /// as the same slot, or a rehand would hide behind a fresh generation.
+    #[cfg(target_os = "linux")]
+    fn same_pool_slot(one_published_id: &str, another_published_id: &str) -> bool {
+        pool_slot_key_of_surface_id(one_published_id)
+            == pool_slot_key_of_surface_id(another_published_id)
     }
 
     /// The ids of the pool's pre-allocated slots, learned by cycling the ring
@@ -4428,8 +4634,8 @@ mod tests {
 
         for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2) {
             let handed = acquire_one_pool_slot_id(&gpu).expect("free slots remain");
-            assert_ne!(
-                handed, held_by_a_child,
+            assert!(
+                !same_pool_slot(&handed, &held_by_a_child),
                 "the producer was handed back the slot a child is still reading"
             );
         }
@@ -4437,8 +4643,10 @@ mod tests {
         check_out_leases
             .release_one_check_out_lease(&held_by_a_child, child)
             .expect("the child releases the frame");
-        let comes_back = (0..(POOL_PRE_ALLOCATE_COUNT * 4))
-            .any(|_| acquire_one_pool_slot_id(&gpu).is_ok_and(|handed| handed == held_by_a_child));
+        let comes_back = (0..(POOL_PRE_ALLOCATE_COUNT * 4)).any(|_| {
+            acquire_one_pool_slot_id(&gpu)
+                .is_ok_and(|handed| same_pool_slot(&handed, &held_by_a_child))
+        });
         assert!(
             comes_back,
             "a released slot must return to the producer, or the lease is a leak"
@@ -4466,7 +4674,9 @@ mod tests {
         let grown_slot = acquire_one_pool_slot_id(&gpu)
             .expect("with every slot leased the pool grows instead of refusing");
         assert!(
-            !ring.contains(&grown_slot),
+            !ring
+                .iter()
+                .any(|leased| same_pool_slot(leased, &grown_slot)),
             "the pool handed back a leased slot instead of growing"
         );
     }
@@ -4535,9 +4745,116 @@ mod tests {
         for _ in 0..(POOL_PRE_ALLOCATE_COUNT * 2) {
             let handed = acquire_one_pool_slot_id(&gpu).expect("growth still serves the producer");
             assert!(
-                !ring.contains(&handed),
+                !ring.iter().any(|known| same_pool_slot(known, &handed)),
                 "a slot was reused while the lease table was unreadable"
             );
         }
+    }
+
+    /// #1872 itself, at pool level: one slot, two acquisitions, two ids —
+    /// and the first id stops resolving the moment the slot is recycled,
+    /// in-process (cache eviction) and in the lease registry (generation
+    /// ledger) alike.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn recycling_a_slot_retires_the_id_the_previous_frame_published() {
+        let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
+            return;
+        };
+
+        let first_published = acquire_one_pool_slot_id(&gpu).expect("first acquisition");
+        gpu.resolve_pixel_buffer_by_surface_id(&first_published)
+            .expect("a live published id resolves");
+
+        // Cycle the whole ring so the first slot is recycled.
+        let second_published = (0..POOL_PRE_ALLOCATE_COUNT)
+            .map(|_| acquire_one_pool_slot_id(&gpu).expect("free slots remain"))
+            .find(|later| same_pool_slot(later, &first_published))
+            .expect("cycling the ring once rehands the first slot");
+
+        assert_ne!(
+            second_published, first_published,
+            "recycling the slot must publish a new frame id"
+        );
+        gpu.resolve_pixel_buffer_by_surface_id(&second_published)
+            .expect("the current frame id resolves");
+        assert!(
+            gpu.resolve_pixel_buffer_by_surface_id(&first_published)
+                .is_err(),
+            "a recycled slot's previous id must stop resolving — resolving it silently \
+             serves somebody else's pixels, which is #1872"
+        );
+        let child = check_out_leases.mint_holder_id();
+        assert!(
+            matches!(
+                check_out_leases.record_check_out_lease(&first_published, child),
+                Err(Error::SurfaceFrameRecycled { .. })
+            ),
+            "a cross-process checkout of the retired id must be refused"
+        );
+    }
+
+    /// The refusal is the pool's own, not the lease registry's: a context
+    /// with no surface store wired in — no service, no registry — still
+    /// refuses a retired id on the texture path, whose slot-keyed cache
+    /// would otherwise serve the slot's current texture under the dead id.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_retired_id_is_refused_even_with_no_lease_registry() {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            println!("Skipping - no GPU device available");
+            return;
+        };
+
+        let first_published = acquire_one_pool_slot_id(&gpu).expect("first acquisition");
+        let desc = TextureDescriptor::new(
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+            TextureFormat::Rgba8Unorm,
+        )
+        .with_usage(TextureUsages::TEXTURE_BINDING);
+        let producer_texture = gpu
+            .device()
+            .create_texture(&desc)
+            .expect("texture creation");
+        gpu.register_texture_with_layout(
+            &first_published,
+            producer_texture,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        gpu.resolve_texture_registration_by_surface_id(
+            &first_published,
+            None,
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+        )
+        .expect("the live published id resolves its producer's texture");
+
+        let second_published = (0..POOL_PRE_ALLOCATE_COUNT)
+            .map(|_| acquire_one_pool_slot_id(&gpu).expect("free slots remain"))
+            .find(|later| same_pool_slot(later, &first_published))
+            .expect("cycling the ring once rehands the first slot");
+
+        assert!(
+            matches!(
+                gpu.resolve_texture_registration_by_surface_id(
+                    &first_published,
+                    None,
+                    LEASE_TEST_SURFACE_WIDTH,
+                    LEASE_TEST_SURFACE_HEIGHT,
+                ),
+                Err(Error::SurfaceFrameRecycled { .. })
+            ),
+            "with no registry anywhere, the retired id must still be refused"
+        );
+        gpu.resolve_texture_registration_by_surface_id(
+            &second_published,
+            None,
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+        )
+        .expect("the current frame id keeps resolving");
     }
 }

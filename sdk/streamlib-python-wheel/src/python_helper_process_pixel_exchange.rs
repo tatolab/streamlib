@@ -472,7 +472,15 @@ impl HelperProcessGpuExchangeClient {
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<Arc<HelperDeviceExport>> {
-        if let Some(already_open) = self.device_exports_by_surface.lock().get(surface_id) {
+        // Memoised per pool slot: the parent's staging (and this CUDA
+        // import of it) spans every frame the slot publishes, while each
+        // refill names — and the parent validates — the specific frame id.
+        let source_pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
+        if let Some(already_open) = self
+            .device_exports_by_surface
+            .lock()
+            .get(source_pool_slot_key)
+        {
             return Ok(Arc::clone(already_open));
         }
 
@@ -500,12 +508,10 @@ impl HelperProcessGpuExchangeClient {
                 self.check_out_and_import_device_export(&described)?,
             ))
         })?;
-        // Published under the *source* surface's id: that is what a
-        // handle knows, and what every later refill names.
         Ok(Arc::clone(
             self.device_exports_by_surface
                 .lock()
-                .entry(surface_id.to_string())
+                .entry(source_pool_slot_key.to_string())
                 .or_insert(opened),
         ))
     }
@@ -939,6 +945,45 @@ mod surface_check_out_lease_debt_tests {
 
         drop(claim);
         assert_eq!(share.outstanding_claims_on(&surface_id), 0);
+    }
+
+    /// #1872 as the wheel sees it: a frame the producer recycled is not a
+    /// claim to be taken quietly. The typed cast on a stale bag must raise —
+    /// pinning the slot's *current* frame while the caller believes it pinned
+    /// the delivered one would be the same silent wrongness one layer up.
+    #[test]
+    fn claiming_a_recycled_frame_is_refused_naming_the_recycling() {
+        let share = SurfaceShareUnderTest::start("recycled");
+        share.publish_pool_slot_frame("pool-slot-under-test", 1);
+        let exchange_client = exchange_client_on(&share);
+
+        let claim_while_current = exchange_client
+            .claim_surface_against_producer_reuse("pool-slot-under-test#1")
+            .expect("the current frame claims");
+        assert_eq!(share.outstanding_claims_on("pool-slot-under-test"), 1);
+        drop(claim_while_current);
+
+        // The producer laps the pool: generation 2 publishes, 1 retires.
+        share.publish_pool_slot_frame("pool-slot-under-test", 2);
+
+        let Err(refusal) =
+            exchange_client.claim_surface_against_producer_reuse("pool-slot-under-test#1")
+        else {
+            panic!("claiming a recycled frame must refuse");
+        };
+        assert!(
+            refusal.to_string().contains("recycled"),
+            "the refusal must say the frame was recycled: {refusal}"
+        );
+        assert_eq!(
+            share.outstanding_claims_on("pool-slot-under-test"),
+            0,
+            "a refused claim must leave no lease behind"
+        );
+
+        exchange_client
+            .claim_surface_against_producer_reuse("pool-slot-under-test#2")
+            .expect("the new current frame claims");
     }
 
     /// A surface the service does not know is not a claim to be taken quietly:

@@ -10,8 +10,11 @@ the rig, against the camera, whose pool recycles a slot every few frames.
 
 Each probe holds one delivered frame while the camera runs ahead of it, then
 reads that frame's pixels again. The pair is the point: the frame read *as a
-`VideoFrame`* must come back unchanged, and the same probe reading the bag as a
-plain dict must not — a scene that never moves would make both vacuous.
+`VideoFrame`* must come back unchanged, and the same probe reading the bag as
+a plain dict must be refused loudly — the camera recycled the slot, the
+published frame id retired with it (#1872), and a resolve of the retired id
+raises instead of serving somebody else's pixels. A scene that never moves
+would make the typed half vacuous, so scene motion is measured separately.
 """
 
 import json
@@ -88,7 +91,12 @@ class _LaggedHolderProbe:
     variable under test.
     """
 
-    @input(delivery_profile="every_sample")
+    # `latest`, not `every_sample`: an unclaimed bag's id is only good for
+    # pool-depth frames after publish, so a probe that lets bags queue reads
+    # ids the camera has already recycled — refused loudly now (#1872), but
+    # that refusal on *arrival* is not what these probes measure. Reading the
+    # newest bag keeps arrivals current; the held frame still gets lapped.
+    @input(delivery_profile="latest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -99,6 +107,7 @@ class _LaggedHolderProbe:
         self.pixels_of_the_previous_arrival: "numpy.ndarray | None" = None
         self.frames_the_producer_ran_ahead = 0
         self.the_source_produced_a_different_picture = False
+        self.arrivals_already_recycled_before_the_probe_read_them = 0
         self.reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
@@ -143,32 +152,55 @@ class _LaggedHolderProbe:
         # what the result below is about, so reading it here would be the same
         # measurement twice and would confirm nothing. Without this, a still
         # scene makes both probes report "unchanged" and the pair proves
-        # nothing at all.
-        pixels_that_just_arrived = self._sample_pixels(ctx, arrived_surface_id)
-        if not (pixels_that_just_arrived == self.pixels_of_the_previous_arrival).all():
-            self.the_source_produced_a_different_picture = True
-        self.pixels_of_the_previous_arrival = pixels_that_just_arrived
+        # nothing at all. An arrival the camera lapped before this probe got
+        # to it resolves as a recycled-frame refusal — counted, not fatal:
+        # arrival freshness is not what these probes measure.
+        try:
+            pixels_that_just_arrived = self._sample_pixels(ctx, arrived_surface_id)
+        except RuntimeError as refusal:
+            if "recycled" not in str(refusal):
+                raise
+            self.arrivals_already_recycled_before_the_probe_read_them += 1
+        else:
+            if not (
+                pixels_that_just_arrived == self.pixels_of_the_previous_arrival
+            ).all():
+                self.the_source_produced_a_different_picture = True
+            self.pixels_of_the_previous_arrival = pixels_that_just_arrived
 
         self.frames_the_producer_ran_ahead += 1
         if self.frames_the_producer_ran_ahead < FRAMES_TO_LAG_BY:
             return
 
         # The held frame, read again after the producer has lapped its pool.
+        # An unclaimed frame's slot was recycled, so its published id retired
+        # and the resolve is *refused* (#1872) — that refusal is the result,
+        # not a probe failure. A claimed frame's slot never recycled, so its
+        # id is still current and the pixels must be the delivered ones.
         held_surface_id = self.held_surface_id
         pixels_as_delivered = self.pixels_as_delivered
         assert held_surface_id is not None and pixels_as_delivered is not None
-        pixels_now = self._sample_pixels(ctx, held_surface_id)
-        held_frame_unchanged = bool((pixels_now == pixels_as_delivered).all())
+        pixels_now = None
+        late_read_refusal = None
+        try:
+            pixels_now = self._sample_pixels(ctx, held_surface_id)
+        except RuntimeError as refusal:
+            if "recycled" not in str(refusal):
+                raise
+            late_read_refusal = str(refusal)
+        held_frame_unchanged = pixels_now is not None and bool(
+            (pixels_now == pixels_as_delivered).all()
+        )
 
         sample_dir = os.environ.get("STREAMLIB_CAST_CLAIM_SAMPLE_DIR")
         written = []
         if sample_dir:
             os.makedirs(sample_dir, exist_ok=True)
             label = type(self).__name__
-            for name, pixels in (
-                ("delivered", pixels_as_delivered),
-                ("after_lag", pixels_now),
-            ):
+            samples = [("delivered", pixels_as_delivered)]
+            if pixels_now is not None:
+                samples.append(("after_lag", pixels_now))
+            for name, pixels in samples:
                 path = os.path.join(sample_dir, f"{label}_{name}.png")
                 _write_png(path, pixels)
                 written.append(path)
@@ -180,6 +212,11 @@ class _LaggedHolderProbe:
             "held_surface_id": held_surface_id,
             "frames_the_producer_ran_ahead": self.frames_the_producer_ran_ahead,
             "held_frame_unchanged": held_frame_unchanged,
+            "late_read_refused_as_recycled": late_read_refusal is not None,
+            "late_read_refusal": late_read_refusal,
+            "arrivals_already_recycled_before_the_probe_read_them": (
+                self.arrivals_already_recycled_before_the_probe_read_them
+            ),
             "the_source_produced_a_different_picture": (
                 self.the_source_produced_a_different_picture
             ),
@@ -206,9 +243,9 @@ class TypedCastHoldsItsFrameProbe(_LaggedHolderProbe):
 @processor
 class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
     """The control. Same probe, same lag, bag read as a plain dict — so nothing
-    is claimed and the camera is free to recycle the slot. If this one also
-    comes back unchanged, the scene is not moving and the typed probe proves
-    nothing."""
+    is claimed and the camera is free to recycle the slot. The late re-read
+    must be refused as recycled; a lookup that *succeeds* here is #1872's
+    silent wrongness come back."""
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream")

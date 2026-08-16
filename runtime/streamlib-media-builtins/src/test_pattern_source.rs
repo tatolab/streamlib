@@ -9,7 +9,7 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::Result;
 use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ContinuousProcessor;
-use streamlib::sdk::rhi::{PixelBuffer, PixelBufferPoolId, PixelFormat};
+use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
 
 use crate::video_frame::{ColorInfo, Primaries, Range, Transfer, VideoFrame};
 
@@ -77,7 +77,7 @@ enum TestPatternSurfaceState {
     #[default]
     NotYetAcquired,
     Ready {
-        pool_id: PixelBufferPoolId,
+        published_frame_id: PublishedPixelBufferFrameId,
         /// Held for the processor's lifetime: the [`PixelBuffer`] keeps the
         /// pool slot (and thus the surface id) alive.
         _pixel_buffer: PixelBuffer,
@@ -104,7 +104,7 @@ impl TestPatternSource::Processor {
     ) -> Result<TestPatternSurfaceState> {
         let width = self.config.width;
         let height = self.config.height;
-        let (pool_id, pixel_buffer) =
+        let (published_frame_id, pixel_buffer) =
             ctx.gpu_limited_access()
                 .acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
 
@@ -130,11 +130,11 @@ impl TestPatternSource::Processor {
         tracing::info!(
             width,
             height,
-            surface_id = %pool_id,
+            surface_id = %published_frame_id,
             "TestPatternSource: pattern surface ready"
         );
         Ok(TestPatternSurfaceState::Ready {
-            pool_id,
+            published_frame_id,
             _pixel_buffer: pixel_buffer,
         })
     }
@@ -156,12 +156,15 @@ impl ContinuousProcessor for TestPatternSource::Processor {
                 }
             }
         }
-        let TestPatternSurfaceState::Ready { pool_id, .. } = &self.surface_state else {
+        let TestPatternSurfaceState::Ready {
+            published_frame_id, ..
+        } = &self.surface_state
+        else {
             return Ok(());
         };
 
         let frame = VideoFrame {
-            surface_id: pool_id.to_string(),
+            surface_id: published_frame_id.to_string(),
             width: self.config.width,
             height: self.config.height,
             timestamp_ns: MediaClock::now().as_nanos() as i64,

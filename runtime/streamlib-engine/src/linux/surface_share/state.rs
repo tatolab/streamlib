@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 use crate::core::context::SurfaceCheckOutLeaseRegistry;
+use crate::core::rhi::pool_slot_key_of_surface_id;
 
 #[derive(Debug)]
 pub struct SurfaceMetadata {
@@ -372,7 +373,7 @@ impl SurfaceShareState {
     /// surface_id is unknown.
     pub fn update_image_layout(&self, surface_id: &str, layout: i32) -> bool {
         let surfaces = self.inner.surfaces.read();
-        match surfaces.get(surface_id) {
+        match surfaces.get(pool_slot_key_of_surface_id(surface_id)) {
             Some(metadata) => {
                 metadata
                     .current_image_layout
@@ -391,30 +392,33 @@ impl SurfaceShareState {
     /// fd first.
     pub fn get_surface_planes(&self, surface_id: &str) -> Option<SurfacePlaneCheckout> {
         let mut surfaces = self.inner.surfaces.write();
-        surfaces.get_mut(surface_id).map(|metadata| {
-            metadata.checkout_count += 1;
-            SurfacePlaneCheckout {
-                dma_buf_fds: metadata.dma_buf_fds.clone(),
-                plane_sizes: metadata.plane_sizes.clone(),
-                plane_offsets: metadata.plane_offsets.clone(),
-                plane_strides: metadata.plane_strides.clone(),
-                drm_format_modifier: metadata.drm_format_modifier,
-                handle_type: metadata.handle_type.clone(),
-                produce_done_fd: metadata.produce_done_fd,
-                consume_done_fd: metadata.consume_done_fd,
-                current_image_layout: metadata.current_image_layout.load(Ordering::Acquire),
-                vk_image_type: metadata.vk_image_type,
-                vk_image_mip_levels: metadata.vk_image_mip_levels,
-                vk_image_array_layers: metadata.vk_image_array_layers,
-                vk_image_samples: metadata.vk_image_samples,
-                vk_image_tiling: metadata.vk_image_tiling,
-                vk_image_usage: metadata.vk_image_usage,
-                vk_image_allocation_size: metadata.vk_image_allocation_size,
-            }
-        })
+        surfaces
+            .get_mut(pool_slot_key_of_surface_id(surface_id))
+            .map(|metadata| {
+                metadata.checkout_count += 1;
+                SurfacePlaneCheckout {
+                    dma_buf_fds: metadata.dma_buf_fds.clone(),
+                    plane_sizes: metadata.plane_sizes.clone(),
+                    plane_offsets: metadata.plane_offsets.clone(),
+                    plane_strides: metadata.plane_strides.clone(),
+                    drm_format_modifier: metadata.drm_format_modifier,
+                    handle_type: metadata.handle_type.clone(),
+                    produce_done_fd: metadata.produce_done_fd,
+                    consume_done_fd: metadata.consume_done_fd,
+                    current_image_layout: metadata.current_image_layout.load(Ordering::Acquire),
+                    vk_image_type: metadata.vk_image_type,
+                    vk_image_mip_levels: metadata.vk_image_mip_levels,
+                    vk_image_array_layers: metadata.vk_image_array_layers,
+                    vk_image_samples: metadata.vk_image_samples,
+                    vk_image_tiling: metadata.vk_image_tiling,
+                    vk_image_usage: metadata.vk_image_usage,
+                    vk_image_allocation_size: metadata.vk_image_allocation_size,
+                }
+            })
     }
 
     pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
+        let surface_id = pool_slot_key_of_surface_id(surface_id);
         let mut surfaces = self.inner.surfaces.write();
         if let Some(metadata) = surfaces.get(surface_id) {
             if metadata.runtime_id == runtime_id {
