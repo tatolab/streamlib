@@ -1304,13 +1304,13 @@ fn registered_shader_stage_source(
     }
 }
 
+#[cfg(target_os = "linux")]
 impl RegisteredShaderStageSource {
     /// The stage's SPIR-V, compiling the GLSL if that is what was supplied.
     ///
     /// Runs inside the caller's escalate scope, alongside the pipeline build it
     /// feeds: that build costs far more than the compile, so a second scope
     /// would buy nothing.
-    #[cfg(target_os = "linux")]
     fn spirv(&self, full: &GpuContextFullAccess) -> crate::core::error::Result<Arc<Vec<u8>>> {
         match self {
             Self::GlslSource {
