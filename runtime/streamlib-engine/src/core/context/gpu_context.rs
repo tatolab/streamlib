@@ -156,6 +156,12 @@ struct PixelBufferPoolManager {
     /// Global cache for UUID -> PixelBuffer lookups (includes buffers from all pools).
     /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
     buffer_cache: Mutex<HashMap<String, PixelBuffer>>,
+    /// Slot key → the generation this manager most recently minted — the
+    /// in-process read index over the entries' own counters, so a retired
+    /// id is refusable without any lease registry existing (per-slot
+    /// entries, bounded by the pool cap; its own short lock, so a resolve
+    /// never waits behind an allocating acquire holding `pools`).
+    minted_frame_generation_by_pool_slot: Mutex<HashMap<String, u64>>,
     /// GPU device reference for creating platform pixel buffer pools.
     #[allow(dead_code)]
     device: Arc<GpuDevice>,
@@ -204,8 +210,31 @@ impl PixelBufferPoolManager {
         Self {
             pools: Mutex::new(HashMap::new()),
             buffer_cache: Mutex::new(HashMap::new()),
+            minted_frame_generation_by_pool_slot: Mutex::new(HashMap::new()),
             device,
         }
+    }
+
+    /// Record the generation `entry` just minted, so in-process resolves can
+    /// refuse the retired ids without a lease registry existing.
+    fn index_minted_generation(&self, entry: &PixelBufferRingEntry) {
+        self.minted_frame_generation_by_pool_slot
+            .lock()
+            .unwrap()
+            .insert(
+                entry.pool_slot_id.as_str().to_string(),
+                entry.published_frame_generation,
+            );
+    }
+
+    /// The generation this manager most recently minted over `pool_slot_key`,
+    /// if the slot is one of its own.
+    fn minted_frame_generation_of_slot(&self, pool_slot_key: &str) -> Option<u64> {
+        self.minted_frame_generation_by_pool_slot
+            .lock()
+            .unwrap()
+            .get(pool_slot_key)
+            .copied()
     }
 
     /// Acquire a buffer from the pool.
@@ -384,6 +413,7 @@ impl PixelBufferPoolManager {
                     entry.pool_slot_id.as_str(),
                     entry.published_frame_generation,
                 );
+                self.index_minted_generation(entry);
                 self.retire_previous_frame_in_cache(entry, &handed_off_buffer);
                 tracing::trace!(
                     "PixelBufferPoolManager: acquired buffer {} (idx {})",
@@ -460,6 +490,7 @@ impl PixelBufferPoolManager {
                 let idx = ring_pool.buffers.len() - newly_added;
                 let entry = &mut ring_pool.buffers[idx];
                 let published = entry.mint_next_published_frame_id();
+                self.index_minted_generation(entry);
                 if let Some(leases) = surface_store.and_then(SurfaceStore::check_out_leases) {
                     if let Err(unpublishable) = leases.publish_frame_generation(
                         entry.pool_slot_id.as_str(),
@@ -846,12 +877,29 @@ impl GpuContext {
 
     /// Refuse a published frame id whose slot has been recycled since.
     ///
-    /// An id with no generation suffix passes; so does a context with no
-    /// lease registry, because without a service no ledger exists and the
-    /// in-process paths are already covered by cache eviction.
+    /// An id with no generation suffix passes. A slot this context's own
+    /// pool minted answers from the pool's generation index — present with
+    /// or without a lease registry, so the refusal holds in a context no
+    /// service was wired into. Anything else falls to the registry, which
+    /// fails closed on slots nobody published.
     pub(crate) fn refuse_a_retired_frame_id(&self, surface_id: &str) -> Result<()> {
-        if PublishedPixelBufferFrameId::parse(surface_id).is_none() {
+        let Some((pool_slot, published_generation)) =
+            crate::core::rhi::split_pool_slot_and_frame_generation(surface_id)
+        else {
             return Ok(());
+        };
+        if let Some(minted) = self
+            .pixel_buffer_pool_manager
+            .minted_frame_generation_of_slot(pool_slot)
+        {
+            if minted == published_generation {
+                return Ok(());
+            }
+            return Err(Error::SurfaceFrameRecycled {
+                surface_id: surface_id.to_string(),
+                published_generation,
+                current_generation: minted,
+            });
         }
         let surface_store = self.surface_store.lock().unwrap();
         match surface_store
@@ -4745,5 +4793,68 @@ mod tests {
             ),
             "a cross-process checkout of the retired id must be refused"
         );
+    }
+
+    /// The refusal is the pool's own, not the lease registry's: a context
+    /// with no surface store wired in — no service, no registry — still
+    /// refuses a retired id on the texture path, whose slot-keyed cache
+    /// would otherwise serve the slot's current texture under the dead id.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_retired_id_is_refused_even_with_no_lease_registry() {
+        let Ok(gpu) = GpuContext::init_for_platform() else {
+            println!("Skipping - no GPU device available");
+            return;
+        };
+
+        let first_published = acquire_one_pool_slot_id(&gpu).expect("first acquisition");
+        let desc = TextureDescriptor::new(
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+            TextureFormat::Rgba8Unorm,
+        )
+        .with_usage(TextureUsages::TEXTURE_BINDING);
+        let producer_texture = gpu
+            .device()
+            .create_texture(&desc)
+            .expect("texture creation");
+        gpu.register_texture_with_layout(
+            &first_published,
+            producer_texture,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        gpu.resolve_texture_registration_by_surface_id(
+            &first_published,
+            None,
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+        )
+        .expect("the live published id resolves its producer's texture");
+
+        let second_published = (0..POOL_PRE_ALLOCATE_COUNT)
+            .map(|_| acquire_one_pool_slot_id(&gpu).expect("free slots remain"))
+            .find(|later| same_pool_slot(later, &first_published))
+            .expect("cycling the ring once rehands the first slot");
+
+        assert!(
+            matches!(
+                gpu.resolve_texture_registration_by_surface_id(
+                    &first_published,
+                    None,
+                    LEASE_TEST_SURFACE_WIDTH,
+                    LEASE_TEST_SURFACE_HEIGHT,
+                ),
+                Err(Error::SurfaceFrameRecycled { .. })
+            ),
+            "with no registry anywhere, the retired id must still be refused"
+        );
+        gpu.resolve_texture_registration_by_surface_id(
+            &second_published,
+            None,
+            LEASE_TEST_SURFACE_WIDTH,
+            LEASE_TEST_SURFACE_HEIGHT,
+        )
+        .expect("the current frame id keeps resolving");
     }
 }

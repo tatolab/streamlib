@@ -465,13 +465,7 @@ impl GpuContext {
         Ok(signal_value)
     }
 
-    /// Copy `surface_id`'s current pixels into the staging buffer.
-    /// Resolves the source fresh — a rotating producer's latest
-    /// registration, not a snapshot — and refuses an id whose frame the
-    /// producer has recycled, because the slot's bytes are then somebody
-    /// else's picture. Returns the signalled timeline value a
-    /// cross-process consumer would wait on instead of relying on the
-    /// in-process host wait.
+    /// Refuse a surface whose pool slot this staging was not opened for.
     fn refuse_a_surface_this_staging_does_not_export(
         staging: &SurfaceDeviceExportStaging,
         surface_id: &str,
@@ -486,6 +480,13 @@ impl GpuContext {
         Ok(())
     }
 
+    /// Copy `surface_id`'s current pixels into the staging buffer.
+    /// Resolves the source fresh — a rotating producer's latest
+    /// registration, not a snapshot — and refuses an id whose frame the
+    /// producer has recycled, because the slot's bytes are then somebody
+    /// else's picture. Returns the signalled timeline value a
+    /// cross-process consumer would wait on instead of relying on the
+    /// in-process host wait.
     pub fn refill_device_export_staging(
         &self,
         staging: &SurfaceDeviceExportStaging,
