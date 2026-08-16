@@ -55,7 +55,6 @@ impl RhiBlitter for NoOpBlitter {
 
 #[cfg(target_os = "linux")]
 #[cfg(target_os = "linux")]
-use super::cpu_readback_bridge::CpuReadbackBridge;
 #[cfg(target_os = "linux")]
 use super::graphics_kernel_bridge::GraphicsKernelBridge;
 #[cfg(target_os = "linux")]
@@ -616,14 +615,22 @@ pub struct GpuContext {
     /// `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
     /// adapter consumers do.
     texture_cache: Arc<Mutex<HashMap<String, TextureRegistration>>>,
-    /// Device-export stagings keyed by surface_id — sibling of
+    /// Export stagings keyed by (surface_id, residency) — sibling of
     /// `texture_cache`, but spanning registration replacements: a
     /// rotating producer re-registers per frame, and the staging must
     /// survive that while its blit source is re-resolved per refill.
+    /// Residency is part of the key because one surface can be exported
+    /// to a GPU consumer and a CPU consumer at once, as two allocations.
     /// Dropped with the context; evicted by `unregister_texture`.
     #[cfg(target_os = "linux")]
-    pub(crate) device_export_stagings:
-        Arc<parking_lot::Mutex<HashMap<String, Arc<super::SurfaceDeviceExportStaging>>>>,
+    pub(crate) surface_export_stagings: Arc<
+        parking_lot::Mutex<
+            HashMap<
+                (String, super::SurfaceExportStagingResidency),
+                Arc<super::SurfaceExportStaging>,
+            >,
+        >,
+    >,
     /// Cache of textures backing surface-share-registered pixel buffers
     /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
     /// rotating-pool producers don't render stale contents — kept separate
@@ -647,12 +654,6 @@ pub struct GpuContext {
     /// Condvar rather than a `Mutex<()>` guard, so enter and exit can
     /// run on different threads.
     escalate_gate: Arc<super::escalate_gate::EscalateGate>,
-    /// Host-side bridge for the cpu-readback escalate op. Set by application
-    /// code that wires a `CpuReadbackSurfaceAdapter` into the runtime; left
-    /// unset on hosts that don't expose cpu-readback to subprocess customers
-    /// (the escalate handler responds with an `Err` in that case).
-    #[cfg(target_os = "linux")]
-    cpu_readback_bridge: Arc<Mutex<Option<Arc<dyn CpuReadbackBridge>>>>,
     /// Compute kernels built for the `register_compute_kernel` escalate op,
     /// keyed so that re-creating an identical kernel is free of compilation.
     /// Compute dispatch is a capability every caller reaches, so this is
@@ -697,13 +698,11 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
-            device_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
-            #[cfg(target_os = "linux")]
-            cpu_readback_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
@@ -726,13 +725,11 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
-            device_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
-            #[cfg(target_os = "linux")]
-            cpu_readback_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
@@ -978,7 +975,7 @@ impl GpuContext {
         let mut cache = self.texture_cache.lock().unwrap();
         cache.remove(pool_slot_key_of_surface_id(id));
         #[cfg(target_os = "linux")]
-        self.evict_device_export_staging(id);
+        self.evict_surface_export_stagings(id);
     }
 
     /// The texture a producer registered of its own under `surface_id`
@@ -2477,25 +2474,6 @@ impl GpuContext {
     }
 
     // =========================================================================
-    // CpuReadbackBridge — host-side dispatch for the cpu-readback escalate op
-    // =========================================================================
-
-    /// Register a [`CpuReadbackBridge`] implementation. The escalate handler
-    /// dispatches `acquire_cpu_readback` requests through this bridge; until
-    /// it is set, those requests fail with an "unsupported" error response.
-    /// Linux-only: the cpu-readback adapter is Linux-only.
-    #[cfg(target_os = "linux")]
-    pub fn set_cpu_readback_bridge(&self, bridge: Arc<dyn CpuReadbackBridge>) {
-        *self.cpu_readback_bridge.lock().unwrap() = Some(bridge);
-    }
-
-    /// Get the registered [`CpuReadbackBridge`], if any.
-    #[cfg(target_os = "linux")]
-    pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
-        self.cpu_readback_bridge.lock().unwrap().clone()
-    }
-
-    // =========================================================================
     // Compute kernels for the escalate ops — always present, never installed
     // =========================================================================
 
@@ -3893,17 +3871,6 @@ impl GpuContextFullAccess {
         self.host_inner().check_out_surface(surface_id)
     }
 
-    /// Get the registered cpu-readback bridge, if any. Reachable only inside
-    /// `escalate(|full| ...)` since it requires `FullAccess`.
-    ///
-    /// **Engine-only** — the bridge is registered by
-    /// host code via `set_cpu_readback_bridge` and read by host adapter
-    /// machinery.
-    #[cfg(target_os = "linux")]
-    pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
-        self.host_inner().cpu_readback_bridge()
-    }
-
     /// Build a compute kernel, reusing an identical one this context already
     /// built. Reachable only inside `escalate(|full| ...)` since it requires
     /// `FullAccess`.
@@ -3931,8 +3898,8 @@ impl GpuContextFullAccess {
     /// Get the registered graphics-kernel bridge, if any. Reachable only inside
     /// `escalate(|full| ...)` since it requires `FullAccess`.
     ///
-    /// **Engine-only** — trait-object return; same rationale as
-    /// [`Self::cpu_readback_bridge`].
+    /// **Engine-only** — trait-object return, which no cross-DSO surface
+    /// can carry.
     #[cfg(target_os = "linux")]
     pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
         self.host_inner().graphics_kernel_bridge()
@@ -3941,8 +3908,8 @@ impl GpuContextFullAccess {
     /// Get the registered ray-tracing-kernel bridge, if any. Reachable only
     /// inside `escalate(|full| ...)` since it requires `FullAccess`.
     ///
-    /// **Engine-only** — trait-object return; same rationale as
-    /// [`Self::cpu_readback_bridge`].
+    /// **Engine-only** — trait-object return, which no cross-DSO surface
+    /// can carry.
     #[cfg(target_os = "linux")]
     pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
         self.host_inner().ray_tracing_kernel_bridge()

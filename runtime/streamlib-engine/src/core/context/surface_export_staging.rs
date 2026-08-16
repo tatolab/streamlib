@@ -1,18 +1,27 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Per-surface staging for handing engine frames to an external device
-//! consumer (CUDA today) — the "one GPU blit into an exportable staging
-//! buffer" the plan decides.
+//! Per-surface staging for handing engine frames to a consumer one hop
+//! away — the "one GPU blit into an exportable staging buffer" the plan
+//! decides.
 //!
 //! Why a blit at all: pool allocations are DMA-BUF-flavoured, external
 //! device APIs import OPAQUE_FD, and on NVIDIA one allocation cannot
 //! export both — `vkGetPhysicalDeviceExternalBufferProperties` reports
 //! the two handle types in disjoint `compatibleHandleTypes` sets, so a
 //! dual-flavour allocation is spec-invalid (VUID-VkExportMemoryAllocateInfo-
-//! handleTypes-00656). The staging buffer is the bridge: OPAQUE_FD
-//! DEVICE_LOCAL, allocated once per surface, refilled by a VRAM-side
-//! copy each time a consumer asks.
+//! handleTypes-00656). The staging buffer is the bridge: OPAQUE_FD,
+//! allocated once per surface, refilled by a GPU copy each time a
+//! consumer asks.
+//!
+//! One machine, two residencies ([`SurfaceExportStagingResidency`]).
+//! Everything below — the per-surface lifetime, the source resolve, the
+//! frame-identity guards, the timeline, the reused recorder, the
+//! surface-share publication — is the same whether the consumer reads
+//! the staging with the GPU or with the CPU. The only axis that differs
+//! is where the memory lives, and it is never inferred: the caller names
+//! it, because CPU residency is the compatibility path a consumer opts
+//! into deliberately, not one it can fall into.
 //!
 //! What the blit reads is the surface's own pooled backing whenever it
 //! has one — a producer's registered texture is a frames-in-flight
@@ -34,7 +43,7 @@
 //!
 //! Nothing here assumes the consumer lives in this process. A processor
 //! reaching this from its own helper process gets the same staging and
-//! the same timeline: [`GpuContext::share_device_export_staging`]
+//! the same timeline: [`GpuContext::share_surface_export_staging`]
 //! publishes both to the surface-share service once, and the child
 //! triggers refills through the escalate ops that wrap the methods
 //! below. The bounded host wait after each submit is a convenience for
@@ -53,10 +62,48 @@ use crate::vulkan::rhi::{
 };
 use streamlib_consumer_rhi::{PixelFormat, TextureFormat, VulkanLayout};
 
-/// Bound on the host wait for a staging refill. The copy is VRAM→VRAM
-/// (tens of microseconds); a wait that reaches this bound is a wedged
-/// queue, not a slow copy.
+/// Bound on the host wait for a staging refill. The copy is a GPU copy
+/// of one frame (tens of microseconds); a wait that reaches this bound
+/// is a wedged queue, not a slow copy.
 const STAGING_REFILL_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
+
+/// Where a staging buffer's memory lives, and therefore who can read it.
+///
+/// Named by the caller, never inferred from the surface: the GPU
+/// adapters deliberately do not offer CPU access, and that asymmetry is
+/// how "switch to opt into CPU" is enforced. A residency defaulted or
+/// guessed would erode it silently.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SurfaceExportStagingResidency {
+    /// DEVICE_LOCAL — an external *device* API (CUDA today) imports the
+    /// OPAQUE_FD and reads it on the GPU. The frame never touches host
+    /// memory.
+    DeviceLocal,
+    /// HOST_VISIBLE + HOST_COHERENT — the consumer maps the memory and
+    /// reads it with the CPU. The compatibility path, for code that
+    /// speaks host memory only.
+    HostVisible,
+}
+
+impl SurfaceExportStagingResidency {
+    /// The suffix distinguishing this residency's surface-share
+    /// registration from the other's for the same surface. Two
+    /// residencies are two allocations and must never collide on one id.
+    fn surface_share_id_suffix(self) -> &'static str {
+        match self {
+            Self::DeviceLocal => "device-export-staging",
+            Self::HostVisible => "cpu-readback-staging",
+        }
+    }
+
+    /// How this residency reads in an error message.
+    fn described(self) -> &'static str {
+        match self {
+            Self::DeviceLocal => "device-local",
+            Self::HostVisible => "host-visible",
+        }
+    }
+}
 
 /// The pixel shape a texture-backed export presents to a DLPack
 /// consumer. Restricted to 4-byte color: the refill's geometry guard,
@@ -99,15 +146,20 @@ struct RefillSubmission {
     next_signal_value: u64,
 }
 
-/// One surface's device-export staging: the OPAQUE_FD buffer an external
-/// device consumer imports, the exportable timeline that orders refills,
-/// and the recorder that reuses one command pool across them.
-pub struct SurfaceDeviceExportStaging {
+/// One surface's export staging: the OPAQUE_FD buffer a consumer one hop
+/// away imports, the exportable timeline that orders refills, and the
+/// recorder that reuses one command pool across them.
+pub struct SurfaceExportStaging {
     /// The slot-normalized key of the surface this staging exports —
     /// stable across the frames a pool slot publishes, which is what lets
-    /// one staging (and the child's one CUDA import of it) span them. The
+    /// one staging (and the child's one import of it) span them. The
     /// frame a refill serves is named by the id passed to that refill.
     source_surface_key: String,
+    /// Where this staging's memory lives. Part of the cache key, so one
+    /// surface can carry both residencies at once — a consumer reading on
+    /// the GPU and another reading on the CPU are two allocations, never
+    /// one reinterpreted.
+    residency: SurfaceExportStagingResidency,
     staging_buffer: Arc<HostVulkanBuffer>,
     refill_done_timeline: Arc<HostVulkanTimelineSemaphore>,
     /// One recorder, reused: per-refill pool creation is the exact churn
@@ -119,7 +171,7 @@ pub struct SurfaceDeviceExportStaging {
     /// The pixel shape the staging was sized for — the buffer's own
     /// format, or the 4-byte color shape a texture source maps to.
     pixel_format: Option<PixelFormat>,
-    /// Whether [`GpuContext::copy_device_export_staging_back_to_surface`]
+    /// Whether [`GpuContext::copy_surface_export_staging_back_to_surface`]
     /// can honour a write — true only when the surface's sole backing is
     /// its own pooled allocation.
     writable: bool,
@@ -132,7 +184,7 @@ pub struct SurfaceDeviceExportStaging {
     surface_share_registration_id: Mutex<Option<String>>,
 }
 
-impl SurfaceDeviceExportStaging {
+impl SurfaceExportStaging {
     /// Byte size of the staging buffer — the span a DLPack tensor covers.
     pub fn staging_byte_size(&self) -> u64 {
         self.staging_byte_size
@@ -158,9 +210,14 @@ impl SurfaceDeviceExportStaging {
         self.pixel_format
     }
 
-    /// Whether a device consumer may write and copy back.
+    /// Whether a consumer may write and copy back.
     pub fn writable(&self) -> bool {
         self.writable
+    }
+
+    /// Where this staging's memory lives.
+    pub fn residency(&self) -> SurfaceExportStagingResidency {
+        self.residency
     }
 
     /// Borrow the staging allocation (for export or import bookkeeping).
@@ -169,7 +226,7 @@ impl SurfaceDeviceExportStaging {
     }
 
     /// The timeline a consumer waits on; each refill signals the value
-    /// [`GpuContext::refill_device_export_staging`] returns.
+    /// [`GpuContext::refill_surface_export_staging`] returns.
     pub fn refill_done_timeline(&self) -> &Arc<HostVulkanTimelineSemaphore> {
         &self.refill_done_timeline
     }
@@ -191,7 +248,7 @@ enum ResolvedBlitSource {
 
 /// The geometry and capability a staging is minted with, read off
 /// whichever backing answered for the surface.
-struct DeviceExportStagingShape {
+struct SurfaceExportStagingShape {
     staging_byte_size: u64,
     surface_width: u32,
     surface_height: u32,
@@ -241,17 +298,23 @@ impl GpuContext {
         }
     }
 
-    /// The device-export staging for `surface_id`, created on first ask
-    /// and cached on this context — it dies with the context and is
-    /// evicted by [`Self::unregister_texture`], never by a rotating
+    /// The export staging for `surface_id` at `residency`, created on
+    /// first ask and cached on this context — it dies with the context and
+    /// is evicted by [`Self::unregister_texture`], never by a rotating
     /// re-registration, which the per-refill source resolve absorbs.
-    pub fn surface_device_export_staging(
+    ///
+    /// Keyed by residency as well as surface, so asking for a CPU-readable
+    /// staging never hands back the device-local one a CUDA consumer is
+    /// already importing.
+    pub fn surface_export_staging(
         &self,
         surface_id: &str,
-    ) -> Result<Arc<SurfaceDeviceExportStaging>> {
+        residency: SurfaceExportStagingResidency,
+    ) -> Result<Arc<SurfaceExportStaging>> {
         self.refuse_a_retired_frame_id(surface_id)?;
         let source_surface_key = crate::core::rhi::pool_slot_key_of_surface_id(surface_id);
-        if let Some(existing) = self.device_export_stagings.lock().get(source_surface_key) {
+        let cache_key = (source_surface_key.to_string(), residency);
+        if let Some(existing) = self.surface_export_stagings.lock().get(&cache_key) {
             return Ok(Arc::clone(existing));
         }
 
@@ -260,7 +323,7 @@ impl GpuContext {
                 let texture = registration.texture();
                 let pixel_format = export_pixel_shape_for_texture(texture.format())?;
                 let (surface_width, surface_height) = (texture.width(), texture.height());
-                DeviceExportStagingShape {
+                SurfaceExportStagingShape {
                     // 4-byte color by `export_pixel_shape_for_texture`'s
                     // restriction — the same arithmetic the refill guard
                     // and the copy region assume.
@@ -288,7 +351,7 @@ impl GpuContext {
                 let pooled_allocation_is_the_only_backing = self
                     .producer_registered_texture_for_surface_id(surface_id)
                     .is_none();
-                DeviceExportStagingShape {
+                SurfaceExportStagingShape {
                     staging_byte_size,
                     surface_width: pixel_buffer.width,
                     surface_height: pixel_buffer.height,
@@ -299,18 +362,29 @@ impl GpuContext {
         };
 
         let vulkan_device = self.device().vulkan_device();
-        let staging_buffer = Arc::new(HostVulkanBuffer::new_opaque_fd_export_device_local(
-            vulkan_device,
-            shape.staging_byte_size,
-        )?);
+        // The one line the residency decides. Both are OPAQUE_FD so the
+        // check-out and import path is identical either way; only the
+        // memory properties differ, and with them who can read it.
+        let staging_buffer = Arc::new(match residency {
+            SurfaceExportStagingResidency::DeviceLocal => {
+                HostVulkanBuffer::new_opaque_fd_export_device_local(
+                    vulkan_device,
+                    shape.staging_byte_size,
+                )?
+            }
+            SurfaceExportStagingResidency::HostVisible => {
+                HostVulkanBuffer::new_opaque_fd_export(vulkan_device, shape.staging_byte_size)?
+            }
+        });
         let refill_done_timeline = self.create_exportable_timeline_semaphore(0)?;
         let refill_submission = Mutex::new(RefillSubmission {
-            recorder: self.create_command_recorder("device_export_refill")?,
+            recorder: self.create_command_recorder("surface_export_staging_refill")?,
             next_signal_value: 1,
         });
 
-        let staging = Arc::new(SurfaceDeviceExportStaging {
+        let staging = Arc::new(SurfaceExportStaging {
             source_surface_key: source_surface_key.to_string(),
+            residency,
             staging_buffer,
             refill_done_timeline,
             refill_submission,
@@ -323,15 +397,15 @@ impl GpuContext {
             surface_share_registration_id: Mutex::new(None),
         });
         // Double-check under the insert lock: a concurrent asker for the
-        // same slot may have published one while this thread was
-        // allocating. The loser's freshly-built staging drops here rather
-        // than replacing the entry other holders (and the wheel's
-        // CUDA-import memo) key on.
-        let mut stagings = self.device_export_stagings.lock();
-        if let Some(published) = stagings.get(source_surface_key) {
+        // same slot and residency may have published one while this thread
+        // was allocating. The loser's freshly-built staging drops here
+        // rather than replacing the entry other holders (and the wheel's
+        // import memo) key on.
+        let mut stagings = self.surface_export_stagings.lock();
+        if let Some(published) = stagings.get(&cache_key) {
             return Ok(Arc::clone(published));
         }
-        stagings.insert(source_surface_key.to_string(), Arc::clone(&staging));
+        stagings.insert(cache_key, Arc::clone(&staging));
         Ok(staging)
     }
 
@@ -340,12 +414,12 @@ impl GpuContext {
     ///
     /// This is how a consumer one process away reaches the export: it
     /// checks the id out, receives the staging's OPAQUE_FD and the
-    /// timeline's fd over SCM_RIGHTS, imports the memory into its own
-    /// device API, and waits on the timeline for the value each refill
-    /// returns. The published id is derived from the source surface's so
-    /// the two never collide — the source is already registered under
-    /// its own id with its DMA-BUF planes, which is a different
-    /// allocation in a different external-handle flavour.
+    /// timeline's fd over SCM_RIGHTS, imports or maps the memory, and
+    /// waits on the timeline for the value each refill returns. The
+    /// published id is derived from the source surface's *and* the
+    /// residency, so three registrations never collide — the source is
+    /// already registered under its own id with its DMA-BUF planes, and
+    /// the two residencies are separate allocations of their own.
     ///
     /// Registers at most once per staging; later calls answer with the
     /// same id.
@@ -354,14 +428,15 @@ impl GpuContext {
     /// caller building a consumer-side layout does not re-derive — and
     /// cannot disagree about — what this already refused without.
     #[cfg(target_os = "linux")]
-    pub fn share_device_export_staging(
+    pub fn share_surface_export_staging(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
     ) -> Result<(String, PixelFormat)> {
         let pixel_format = staging.pixel_format.ok_or_else(|| {
             Error::GpuError(format!(
-                "the device-export staging for surface {} carries no pixel shape; a consumer \
-                 would have no layout to import it under",
+                "the {} export staging for surface {} carries no pixel shape; a consumer would \
+                 have no layout to import it under",
+                staging.residency.described(),
                 staging.source_surface_key
             ))
         })?;
@@ -371,12 +446,16 @@ impl GpuContext {
         }
         let surface_store = self.surface_store().ok_or_else(|| {
             Error::GpuError(
-                "this runtime has no surface-share service, so a device export cannot reach \
+                "this runtime has no surface-share service, so a surface export cannot reach \
                  another process"
                     .into(),
             )
         })?;
-        let shared_id = format!("{}-device-export-staging", staging.source_surface_key);
+        let shared_id = format!(
+            "{}-{}",
+            staging.source_surface_key,
+            staging.residency.surface_share_id_suffix()
+        );
         // `host_inner`-direct for the same reason the passthroughs below
         // are: the plugin ABI is not grown a vtable slot for a surface
         // #1715 deletes. A cdylib caller panics at the guard.
@@ -393,37 +472,48 @@ impl GpuContext {
         Ok((shared_id, pixel_format))
     }
 
-    /// Drop the cached device-export staging for `surface_id`, if any.
-    /// Outstanding consumers keep theirs alive through their own `Arc`s.
+    /// Drop every cached export staging for `surface_id` — both
+    /// residencies, because the surface they staged is going away and
+    /// neither survives it. Outstanding consumers keep theirs alive
+    /// through their own `Arc`s.
     ///
     /// A staging that was published to the surface-share service is released
     /// from it here too: the service refuses duplicate ids, so leaving the
     /// dead entry behind would permanently block a later staging for a reused
     /// surface id from ever being shared — and the service would keep holding
     /// dups of an fd pair nothing refills.
-    pub(crate) fn evict_device_export_staging(&self, surface_id: &str) {
-        let evicted_staging = self
-            .device_export_stagings
-            .lock()
-            .remove(crate::core::rhi::pool_slot_key_of_surface_id(surface_id));
+    pub(crate) fn evict_surface_export_stagings(&self, surface_id: &str) {
+        let evicted_key = crate::core::rhi::pool_slot_key_of_surface_id(surface_id);
+        let evicted_stagings: Vec<Arc<SurfaceExportStaging>> = {
+            let mut stagings = self.surface_export_stagings.lock();
+            let keys: Vec<_> = stagings
+                .keys()
+                .filter(|(slot_key, _)| slot_key == evicted_key)
+                .cloned()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| stagings.remove(&key))
+                .collect()
+        };
         #[cfg(target_os = "linux")]
-        if let Some(staging) = evicted_staging
-            && let Some(shared_id) = staging.surface_share_registration_id.lock().take()
-            && let Some(surface_store) = self.surface_store()
-        {
-            // Best-effort: the service also releases everything with the
-            // connection, so a failure here is deferred cleanup, not a leak
-            // for the life of the process.
-            if let Err(release_failure) = surface_store.host_inner().release(&shared_id) {
-                tracing::debug!(
-                    %shared_id,
-                    %release_failure,
-                    "releasing an evicted device-export staging from surface-share failed"
-                );
+        for staging in &evicted_stagings {
+            if let Some(shared_id) = staging.surface_share_registration_id.lock().take()
+                && let Some(surface_store) = self.surface_store()
+            {
+                // Best-effort: the service also releases everything with the
+                // connection, so a failure here is deferred cleanup, not a leak
+                // for the life of the process.
+                if let Err(release_failure) = surface_store.host_inner().release(&shared_id) {
+                    tracing::debug!(
+                        %shared_id,
+                        %release_failure,
+                        "releasing an evicted surface export staging from surface-share failed"
+                    );
+                }
             }
         }
         #[cfg(not(target_os = "linux"))]
-        drop(evicted_staging);
+        drop(evicted_stagings);
     }
 
     /// Record + submit one staging copy and wait (bounded) for it to
@@ -436,14 +526,17 @@ impl GpuContext {
     /// recording — a recorder left mid-recording refuses every later
     /// `begin`, which would brick this surface's export for the life of
     /// the cache entry.
+    /// Takes the recorder it is handed rather than acquiring it, so the
+    /// blocking and non-blocking entry points differ only in how they got
+    /// one — and neither carries the other's return shape.
     fn submit_staging_copy_and_wait(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
+        mut submission: parking_lot::MutexGuard<'_, RefillSubmission>,
         record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
     ) -> Result<u64> {
         let signal_value;
         {
-            let mut submission = staging.refill_submission.lock();
             submission.recorder.begin()?;
             if let Err(record_failure) = record_copy(&mut submission.recorder) {
                 submission.recorder.abort_recording();
@@ -458,6 +551,7 @@ impl GpuContext {
                 submission.recorder.abort_recording();
                 return Err(submit_failure);
             }
+            drop(submission);
         }
         staging
             .refill_done_timeline
@@ -467,13 +561,14 @@ impl GpuContext {
 
     /// Refuse a surface whose pool slot this staging was not opened for.
     fn refuse_a_surface_this_staging_does_not_export(
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
         surface_id: &str,
     ) -> Result<()> {
         if crate::core::rhi::pool_slot_key_of_surface_id(surface_id) != staging.source_surface_key {
             return Err(Error::GpuError(format!(
-                "surface {surface_id} is not the surface this device-export staging was opened \
-                 for ({}); the staged copy would carry another surface's pixels",
+                "surface {surface_id} is not the surface this {} export staging was opened for \
+                 ({}); the staged copy would carry another surface's pixels",
+                staging.residency.described(),
                 staging.source_surface_key
             )));
         }
@@ -487,15 +582,63 @@ impl GpuContext {
     /// else's picture. Returns the signalled timeline value a
     /// cross-process consumer would wait on instead of relying on the
     /// in-process host wait.
-    pub fn refill_device_export_staging(
+    pub fn refill_surface_export_staging(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
         surface_id: &str,
     ) -> Result<u64> {
+        let source = self.resolve_refill_source(staging, surface_id)?;
+        self.submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
+            Self::record_refill(staging, &source, recorder)
+        })
+    }
+
+    /// [`Self::refill_surface_export_staging`], but answering `Ok(None)`
+    /// instead of queueing when another copy already holds this staging's
+    /// recorder — what the `try_` escalate op reports as `contended`.
+    ///
+    /// The guards and the source resolve run first and identically: a
+    /// retired frame id or a mismatched staging is an error either way,
+    /// never a contention report.
+    pub fn try_refill_surface_export_staging(
+        &self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<Option<u64>> {
+        let source = self.resolve_refill_source(staging, surface_id)?;
+        let Some(submission) = staging.refill_submission.try_lock() else {
+            return Ok(None);
+        };
+        self.submit_staging_copy_and_wait(staging, submission, |recorder| {
+            Self::record_refill(staging, &source, recorder)
+        })
+        .map(Some)
+    }
+
+    /// The guards every refill runs, plus the freshly-resolved source.
+    /// Resolves fresh — a rotating producer's latest registration, not a
+    /// snapshot — and refuses an id whose frame the producer has
+    /// recycled, because the slot's bytes are then somebody else's
+    /// picture.
+    fn resolve_refill_source(
+        &self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<ResolvedBlitSource> {
         Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
-        let source = self.resolve_device_export_source(surface_id)?;
-        self.submit_staging_copy_and_wait(staging, |recorder| match &source {
+        self.resolve_device_export_source(surface_id)
+    }
+
+    /// Record one surface→staging copy. Geometry is re-checked here
+    /// rather than at resolve: a re-registration between the two would
+    /// otherwise size the copy from a shape the staging no longer has.
+    fn record_refill(
+        staging: &SurfaceExportStaging,
+        source: &ResolvedBlitSource,
+        recorder: &mut RhiCommandRecorder,
+    ) -> Result<()> {
+        match source {
             ResolvedBlitSource::RegisteredTexture(registration) => {
                 let texture = registration.texture();
                 if u64::from(texture.width()) * u64::from(texture.height()) * 4
@@ -574,11 +717,11 @@ impl GpuContext {
                     staging.staging_byte_size,
                 )
             }
-        })
+        }
     }
 
     /// Copy a written staging buffer back into its source surface, so an
-    /// in-place device-side edit is visible to every other holder.
+    /// in-place consumer-side edit is visible to every other holder.
     ///
     /// Only for a surface whose sole backing is its own pooled
     /// allocation. A frame its producer also published as a registered
@@ -599,17 +742,52 @@ impl GpuContext {
     /// written. Closing it takes the checkout lease, whose claim is
     /// atomic against pool acquire by construction — which a test here
     /// cannot be.
-    pub fn copy_device_export_staging_back_to_surface(
+    pub fn copy_surface_export_staging_back_to_surface(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
         surface_id: &str,
     ) -> Result<u64> {
+        let destination = self.resolve_write_back_destination(staging, surface_id)?;
+        self.submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
+            Self::record_write_back(staging, &destination, recorder)
+        })
+    }
+
+    /// [`Self::copy_surface_export_staging_back_to_surface`], but
+    /// answering `Ok(None)` instead of queueing when another copy already
+    /// holds this staging's recorder.
+    ///
+    /// Every refusal above — read-only export, a producer's texture
+    /// arriving over the slot, a geometry change — stays an error here.
+    /// Only the recorder being busy is a contention report.
+    pub fn try_copy_surface_export_staging_back_to_surface(
+        &self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<Option<u64>> {
+        let destination = self.resolve_write_back_destination(staging, surface_id)?;
+        let Some(submission) = staging.refill_submission.try_lock() else {
+            return Ok(None);
+        };
+        self.submit_staging_copy_and_wait(staging, submission, |recorder| {
+            Self::record_write_back(staging, &destination, recorder)
+        })
+        .map(Some)
+    }
+
+    /// The guards every write-back runs, plus the pooled allocation the
+    /// staged edit publishes into.
+    fn resolve_write_back_destination(
+        &self,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<crate::core::rhi::PixelBuffer> {
         Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
         if !staging.writable {
             return Err(Error::GpuError(format!(
-                "surface {surface_id}'s device export is read-only: the write-back path \
-                 belongs to surfaces whose only backing is their own pooled allocation"
+                "surface {surface_id}'s export is read-only: the write-back path belongs to \
+                 surfaces whose only backing is their own pooled allocation"
             )));
         }
         if self
@@ -618,12 +796,13 @@ impl GpuContext {
         {
             return Err(Error::GpuError(format!(
                 "surface {surface_id} has gained a producer's registered texture since its \
-                 device export was opened read-write; the pooled allocation now backs someone \
-                 else's frame and the staged edit cannot be published into it"
+                 export was opened read-write; the pooled allocation now backs someone else's \
+                 frame and the staged edit cannot be published into it"
             )));
         }
-        let source = self.resolve_device_export_source(surface_id)?;
-        let ResolvedBlitSource::PixelBuffer(pixel_buffer) = source else {
+        let ResolvedBlitSource::PixelBuffer(pixel_buffer) =
+            self.resolve_device_export_source(surface_id)?
+        else {
             return Err(Error::GpuError(format!(
                 "surface {surface_id} no longer resolves to a pooled allocation; the staged \
                  edit has nowhere to be published"
@@ -637,31 +816,38 @@ impl GpuContext {
                 staging.staging_byte_size,
             )));
         }
-        self.submit_staging_copy_and_wait(staging, |recorder| {
-            recorder.record_copy_buffer_to_buffer(
-                staging.staging_buffer.as_ref(),
-                &pixel_buffer,
-                staging.staging_byte_size,
-            )?;
-            // The published edit must be visible to whoever reads next —
-            // downstream GPU consumers and, via the coherent mapping the
-            // host wait covers, CPU readers.
-            recorder.record_buffer_barrier(
-                &pixel_buffer,
-                VulkanStage::ALL_TRANSFER,
-                VulkanStage::ALL_COMMANDS,
-                VulkanAccess::TRANSFER_WRITE,
-                VulkanAccess::MEMORY_READ,
-            )
-        })
+        Ok(pixel_buffer)
+    }
+
+    /// Record one staging→surface copy.
+    fn record_write_back(
+        staging: &SurfaceExportStaging,
+        destination: &crate::core::rhi::PixelBuffer,
+        recorder: &mut RhiCommandRecorder,
+    ) -> Result<()> {
+        recorder.record_copy_buffer_to_buffer(
+            staging.staging_buffer.as_ref(),
+            destination,
+            staging.staging_byte_size,
+        )?;
+        // The published edit must be visible to whoever reads next —
+        // downstream GPU consumers and, via the coherent mapping the
+        // host wait covers, CPU readers.
+        recorder.record_buffer_barrier(
+            destination,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_WRITE,
+            VulkanAccess::MEMORY_READ,
+        )
     }
 
     /// Export the staging buffer's OPAQUE_FD plus byte size and the
     /// exporting device's UUID — the CUDA import triple. The fd
     /// transfers to the caller.
-    pub fn export_device_staging_opaque_fd(
+    pub fn export_surface_export_staging_opaque_fd(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
     ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
         let fd = staging.staging_buffer.export_opaque_fd_memory()?;
         let uuid = staging
@@ -678,49 +864,72 @@ impl GpuContext {
 // grown for a surface #1715 deletes — a cdylib caller panics at the
 // `host_inner` guard.
 impl crate::core::context::GpuContextLimitedAccess {
-    /// See [`GpuContext::share_device_export_staging`].
+    /// See [`GpuContext::share_surface_export_staging`].
     #[cfg(target_os = "linux")]
-    pub fn share_device_export_staging(
+    pub fn share_surface_export_staging(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
     ) -> Result<(String, PixelFormat)> {
-        self.host_inner().share_device_export_staging(staging)
+        self.host_inner().share_surface_export_staging(staging)
     }
 
-    /// See [`GpuContext::surface_device_export_staging`].
-    pub fn surface_device_export_staging(
+    /// See [`GpuContext::surface_export_staging`].
+    pub fn surface_export_staging(
         &self,
         surface_id: &str,
-    ) -> Result<Arc<SurfaceDeviceExportStaging>> {
-        self.host_inner().surface_device_export_staging(surface_id)
+        residency: SurfaceExportStagingResidency,
+    ) -> Result<Arc<SurfaceExportStaging>> {
+        self.host_inner()
+            .surface_export_staging(surface_id, residency)
     }
 
-    /// See [`GpuContext::refill_device_export_staging`].
-    pub fn refill_device_export_staging(
+    /// See [`GpuContext::refill_surface_export_staging`].
+    pub fn refill_surface_export_staging(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
         surface_id: &str,
     ) -> Result<u64> {
         self.host_inner()
-            .refill_device_export_staging(staging, surface_id)
+            .refill_surface_export_staging(staging, surface_id)
     }
 
-    /// See [`GpuContext::copy_device_export_staging_back_to_surface`].
-    pub fn copy_device_export_staging_back_to_surface(
+    /// See [`GpuContext::try_refill_surface_export_staging`].
+    pub fn try_refill_surface_export_staging(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<Option<u64>> {
+        self.host_inner()
+            .try_refill_surface_export_staging(staging, surface_id)
+    }
+
+    /// See [`GpuContext::copy_surface_export_staging_back_to_surface`].
+    pub fn copy_surface_export_staging_back_to_surface(
+        &self,
+        staging: &SurfaceExportStaging,
         surface_id: &str,
     ) -> Result<u64> {
         self.host_inner()
-            .copy_device_export_staging_back_to_surface(staging, surface_id)
+            .copy_surface_export_staging_back_to_surface(staging, surface_id)
     }
 
-    /// See [`GpuContext::export_device_staging_opaque_fd`].
-    pub fn export_device_staging_opaque_fd(
+    /// See [`GpuContext::try_copy_surface_export_staging_back_to_surface`].
+    pub fn try_copy_surface_export_staging_back_to_surface(
         &self,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<Option<u64>> {
+        self.host_inner()
+            .try_copy_surface_export_staging_back_to_surface(staging, surface_id)
+    }
+
+    /// See [`GpuContext::export_surface_export_staging_opaque_fd`].
+    pub fn export_surface_export_staging_opaque_fd(
+        &self,
+        staging: &SurfaceExportStaging,
     ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
-        self.host_inner().export_device_staging_opaque_fd(staging)
+        self.host_inner()
+            .export_surface_export_staging_opaque_fd(staging)
     }
 }
 
@@ -803,7 +1012,7 @@ mod tests {
     /// hop a CUDA consumer's device-to-host copy makes.
     fn read_device_export_staging_into_host_bytes(
         gpu: &GpuContext,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
     ) -> Vec<u8> {
         let byte_size = staging.staging_byte_size();
         let host_readback = gpu
@@ -840,7 +1049,7 @@ mod tests {
     /// export, before asking for it to be published back.
     fn stamp_every_byte_of_device_export_staging(
         gpu: &GpuContext,
-        staging: &SurfaceDeviceExportStaging,
+        staging: &SurfaceExportStaging,
         stamp: u8,
     ) {
         let byte_size = staging.staging_byte_size();
@@ -941,11 +1150,14 @@ mod tests {
         // The consumer takes its export at bag receipt; the producer then
         // runs ahead of it.
         let staging = gpu
-            .surface_device_export_staging(&published.surface_id)
+            .surface_export_staging(
+                &published.surface_id,
+                SurfaceExportStagingResidency::DeviceLocal,
+            )
             .expect("device-export staging for the published frame");
         published.advance_ring_texture_to(&gpu, TWO_FRAMES_LATER_STAMP);
 
-        gpu.refill_device_export_staging(&staging, &published.surface_id)
+        gpu.refill_surface_export_staging(&staging, &published.surface_id)
             .expect("refill the device export");
         assert_every_byte_is(
             &read_device_export_staging_into_host_bytes(&gpu, &staging),
@@ -965,7 +1177,10 @@ mod tests {
         };
         let published = RotatingProducerPublishedFrame::publish(&gpu, PUBLISHED_FRAME_STAMP);
         let staging = gpu
-            .surface_device_export_staging(&published.surface_id)
+            .surface_export_staging(
+                &published.surface_id,
+                SurfaceExportStagingResidency::DeviceLocal,
+            )
             .expect("device-export staging for the published frame");
 
         assert!(
@@ -974,7 +1189,7 @@ mod tests {
              must export read-only"
         );
         let refusal = gpu
-            .copy_device_export_staging_back_to_surface(&staging, &published.surface_id)
+            .copy_surface_export_staging_back_to_surface(&staging, &published.surface_id)
             .expect_err("a dual-backed export must refuse a write-back");
         assert!(
             refusal.to_string().contains("read-only"),
@@ -997,14 +1212,14 @@ mod tests {
         stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
 
         let staging = gpu
-            .surface_device_export_staging(&surface_id)
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
             .expect("device-export staging for the published frame");
         assert!(
             staging.writable(),
             "a surface whose only backing is its pool member keeps the write-back path"
         );
 
-        gpu.refill_device_export_staging(&staging, &surface_id)
+        gpu.refill_surface_export_staging(&staging, &surface_id)
             .expect("refill the device export");
         assert_every_byte_is(
             &read_device_export_staging_into_host_bytes(&gpu, &staging),
@@ -1013,7 +1228,7 @@ mod tests {
         );
 
         stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
-        gpu.copy_device_export_staging_back_to_surface(&staging, &surface_id)
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
             .expect("publish the device-side edit back to the surface");
 
         assert_every_byte_is(
@@ -1047,13 +1262,13 @@ mod tests {
         stamp_every_byte_of_pooled_backing(&pooled_backing, PUBLISHED_FRAME_STAMP);
 
         let staging = gpu
-            .surface_device_export_staging(&surface_id)
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
             .expect("device-export staging for the published frame");
         assert!(
             staging.writable(),
             "the surface was pool-only when the export was opened"
         );
-        gpu.refill_device_export_staging(&staging, &surface_id)
+        gpu.refill_surface_export_staging(&staging, &surface_id)
             .expect("refill the device export");
         stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
 
@@ -1064,7 +1279,7 @@ mod tests {
         );
 
         let refusal = gpu
-            .copy_device_export_staging_back_to_surface(&staging, &surface_id)
+            .copy_surface_export_staging_back_to_surface(&staging, &surface_id)
             .expect_err("the write-back must refuse a slot a producer has taken over");
         assert!(
             refusal.to_string().contains("registered texture"),
@@ -1107,14 +1322,14 @@ mod tests {
         .expect("render into the kernel output texture");
 
         let staging = gpu
-            .surface_device_export_staging(&surface_id)
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
             .expect("device-export staging for the kernel output");
         assert!(
             !staging.writable(),
             "a texture-backed export has no write-back path"
         );
 
-        gpu.refill_device_export_staging(&staging, &surface_id)
+        gpu.refill_surface_export_staging(&staging, &surface_id)
             .expect("refill the device export");
         assert_every_byte_is(
             &read_device_export_staging_into_host_bytes(&gpu, &staging),

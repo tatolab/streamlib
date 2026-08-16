@@ -28,8 +28,8 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateComputeBindingKind, EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer,
     EscalateRequestAcquireTexture, EscalateRequestCopyDeviceExportStagingBackToSurface,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
-    EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateRequestOpenCpuReadbackStaging, EscalateRequestOpenDeviceExportStaging,
+    EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
     EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelBindingKind,
     EscalateRequestRegisterGraphicsKernelPipelineState,
@@ -68,15 +68,15 @@ use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::{
-    BlasRegisterDecl, BlendFactorWire, BlendOpWire, CpuReadbackBridge, CpuReadbackCopyDirection,
-    CullModeWire, DepthCompareOpWire, DepthFormatWire, DynamicStateWire, FrontFaceWire,
-    GraphicsBindingDecl, GraphicsBindingKindWire, GraphicsBindingValue, GraphicsDrawSpec,
-    GraphicsIndexBufferBinding, GraphicsKernelBridge, GraphicsKernelRegisterDecl,
-    GraphicsKernelRunDraw, GraphicsPipelineStateWire, GraphicsVertexBufferBinding, IndexTypeWire,
-    PolygonModeWire, PrimitiveTopologyWire, RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl,
-    RayTracingBindingKindWire, RayTracingBindingValue, RayTracingKernelBridge,
-    RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
-    RayTracingShaderStageWire, RayTracingStageDecl, ScissorRectWire, TlasInstanceDeclWire,
+    BlasRegisterDecl, BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire,
+    DepthFormatWire, DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
+    GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
+    GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
+    GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
+    RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl, RayTracingBindingKindWire,
+    RayTracingBindingValue, RayTracingKernelBridge, RayTracingKernelRegisterDecl,
+    RayTracingKernelRunDispatch, RayTracingShaderGroupWire, RayTracingShaderStageWire,
+    RayTracingStageDecl, ScissorRectWire, SurfaceExportStagingResidency, TlasInstanceDeclWire,
     TlasRegisterDecl, VertexAttributeFormatWire, VertexInputAttributeDecl, VertexInputBindingDecl,
     VertexInputRateWire, ViewportWire,
 };
@@ -104,6 +104,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
+        EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => Some(&p.request_id),
@@ -454,11 +455,18 @@ pub(crate) fn handle_escalate_op(
         }) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_run_cpu_readback_copy(
+                Some(handle_cpu_readback_copy(
                     sandbox,
                     rid,
                     &surface_id,
-                    direction,
+                    CpuReadbackCopy::Blocking(match direction {
+                        EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer => {
+                            CpuReadbackCopyDirection::SurfaceIntoStaging
+                        }
+                        EscalateRequestRunCpuReadbackCopyDirection::BufferToImage => {
+                            CpuReadbackCopyDirection::StagingBackIntoSurface
+                        }
+                    }),
                 ))
             }
             #[cfg(not(target_os = "linux"))]
@@ -477,11 +485,18 @@ pub(crate) fn handle_escalate_op(
         }) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_try_run_cpu_readback_copy(
+                Some(handle_cpu_readback_copy(
                     sandbox,
                     rid,
                     &surface_id,
-                    direction,
+                    CpuReadbackCopy::NonBlocking(match direction {
+                        EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer => {
+                            CpuReadbackCopyDirection::SurfaceIntoStaging
+                        }
+                        EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage => {
+                            CpuReadbackCopyDirection::StagingBackIntoSurface
+                        }
+                    }),
                 ))
             }
             #[cfg(not(target_os = "linux"))]
@@ -505,6 +520,23 @@ pub(crate) fn handle_escalate_op(
                     message: format!("wait_device_idle failed: {failure}"),
                 }),
             })
+        }
+        EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
+            request_id: _,
+            surface_id,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_open_cpu_readback_staging(sandbox, rid, &surface_id))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = surface_id;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "open_cpu_readback_staging is only available on Linux".to_string(),
+                }))
+            }
         }
         EscalateRequest::OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging {
             request_id: _,
@@ -950,25 +982,45 @@ impl DeviceExportCopyDirection {
     }
 }
 
-/// Open the device-export staging for `surface_id` on behalf of a
-/// helper process: allocate it if the surface has none, publish it and
-/// its refill timeline to the surface-share service, and answer with
-/// everything the child needs to import the memory — the id to check
-/// out, the geometry the staging was sized for, whether a write-back is
-/// possible, and the UUID of the GPU that owns it.
-///
-/// No fd travels on this socket. The staging's OPAQUE_FD and the
-/// timeline's fd reach the child through the surface-share check-out it
-/// makes with the returned id.
+/// Open the device-local export staging for `surface_id` on behalf of a
+/// helper process — the residency an external device API (CUDA) imports.
 #[cfg(target_os = "linux")]
 fn handle_open_device_export_staging(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
     surface_id: &str,
 ) -> EscalateResponse {
+    handle_open_surface_export_staging(
+        sandbox,
+        request_id,
+        surface_id,
+        SurfaceExportStagingResidency::DeviceLocal,
+        "open_device_export_staging",
+    )
+}
+
+/// Open one residency's export staging for `surface_id` on behalf of a
+/// helper process: allocate it if the surface has none at that
+/// residency, publish it and its refill timeline to the surface-share
+/// service, and answer with everything the child needs to reach the
+/// memory — the id to check out, the geometry the staging was sized for,
+/// whether a write-back is possible, and the UUID of the GPU that owns
+/// it.
+///
+/// No fd travels on this socket. The staging's OPAQUE_FD and the
+/// timeline's fd reach the child through the surface-share check-out it
+/// makes with the returned id.
+#[cfg(target_os = "linux")]
+fn handle_open_surface_export_staging(
+    sandbox: &GpuContextLimitedAccess,
+    request_id: String,
+    surface_id: &str,
+    residency: SurfaceExportStagingResidency,
+    op_label: &str,
+) -> EscalateResponse {
     let opened = (|| -> crate::core::error::Result<EscalateResponseOk> {
-        let staging = sandbox.surface_device_export_staging(surface_id)?;
-        let (shared_id, pixel_format) = sandbox.share_device_export_staging(&staging)?;
+        let staging = sandbox.surface_export_staging(surface_id, residency)?;
+        let (shared_id, pixel_format) = sandbox.share_surface_export_staging(&staging)?;
         Ok(EscalateResponseOk {
             request_id: request_id.clone(),
             handle_id: shared_id,
@@ -992,7 +1044,7 @@ fn handle_open_device_export_staging(
         Ok(response) => EscalateResponse::Ok(response),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
             request_id,
-            message: format!("open_device_export_staging failed: {failure}"),
+            message: format!("{op_label} failed: {failure}"),
         }),
     }
 }
@@ -1012,13 +1064,13 @@ fn handle_device_export_staging_copy(
     direction: DeviceExportCopyDirection,
 ) -> EscalateResponse {
     let copied = sandbox
-        .surface_device_export_staging(surface_id)
+        .surface_export_staging(surface_id, SurfaceExportStagingResidency::DeviceLocal)
         .and_then(|staging| match direction {
             DeviceExportCopyDirection::SurfaceIntoStaging => {
-                sandbox.refill_device_export_staging(&staging, surface_id)
+                sandbox.refill_surface_export_staging(&staging, surface_id)
             }
             DeviceExportCopyDirection::StagingBackIntoSurface => {
-                sandbox.copy_device_export_staging_back_to_surface(&staging, surface_id)
+                sandbox.copy_surface_export_staging_back_to_surface(&staging, surface_id)
             }
         });
     match copied {
@@ -1035,154 +1087,120 @@ fn handle_device_export_staging_copy(
     }
 }
 
-/// Map a wire-format `run_cpu_readback_copy` request through the
-/// registered [`CpuReadbackBridge`].
+/// Which way a cpu-readback copy runs, and whether it may wait.
 ///
-/// Post-#562: the bridge runs the host-side GPU copy on its queue,
-/// signals a new value on the surface's shared timeline at end-of-
-/// submit, and returns that value. Staging buffers + timeline are
-/// already imported by the subprocess (registered with surface-share
-/// at startup), so this op carries no FDs — only the surface_id, the
-/// direction, and the timeline value the host signaled.
-///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. `surface_id` doesn't parse as a `u64` — wire format is decimal.
-/// 2. No bridge is registered — the host runtime didn't wire a
-///    cpu-readback adapter into [`crate::core::context::GpuContext::set_cpu_readback_bridge`].
-/// 3. Bridge `run_copy` returned an error — typically "surface not
-///    registered" or a Vulkan submit failure inside the adapter.
+/// The direction names the same two copies the device-export ops run;
+/// the residency of the staging they run against is what differs, and
+/// [`handle_cpu_readback_copy`] names it once.
 #[cfg(target_os = "linux")]
-fn handle_run_cpu_readback_copy(
-    sandbox: &GpuContextLimitedAccess,
-    rid: String,
-    surface_id_str: &str,
-    direction: EscalateRequestRunCpuReadbackCopyDirection,
-) -> EscalateResponse {
-    let bridge_dir = match direction {
-        EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer => {
-            CpuReadbackCopyDirection::ImageToBuffer
-        }
-        EscalateRequestRunCpuReadbackCopyDirection::BufferToImage => {
-            CpuReadbackCopyDirection::BufferToImage
-        }
-    };
-    dispatch_run_cpu_readback_copy(
-        sandbox,
-        rid,
-        surface_id_str,
-        "run_cpu_readback_copy",
-        |bridge, surface_id| match bridge.run_copy(surface_id, bridge_dir) {
-            Ok(v) => Ok(Some(v)),
-            Err(msg) => Err(msg),
-        },
-    )
+#[derive(Clone, Copy)]
+enum CpuReadbackCopy {
+    /// `run_cpu_readback_copy` — waits for the staging's recorder.
+    Blocking(CpuReadbackCopyDirection),
+    /// `try_run_cpu_readback_copy` — answers `contended` instead of
+    /// waiting.
+    NonBlocking(CpuReadbackCopyDirection),
 }
 
-/// Map a wire-format `try_run_cpu_readback_copy` request. Behaviour
-/// matches [`handle_run_cpu_readback_copy`] on success and on hard
-/// error, but surfaces an [`EscalateResponse::Contended`] response
-/// when the bridge reports `Ok(None)` — i.e. a competing reader/writer
-/// is holding the surface on the host side.
+/// Which direction a cpu-readback copy runs.
 #[cfg(target_os = "linux")]
-fn handle_try_run_cpu_readback_copy(
-    sandbox: &GpuContextLimitedAccess,
-    rid: String,
-    surface_id_str: &str,
-    direction: EscalateRequestTryRunCpuReadbackCopyDirection,
-) -> EscalateResponse {
-    let bridge_dir = match direction {
-        EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer => {
-            CpuReadbackCopyDirection::ImageToBuffer
-        }
-        EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage => {
-            CpuReadbackCopyDirection::BufferToImage
-        }
-    };
-    dispatch_run_cpu_readback_copy(
-        sandbox,
-        rid,
-        surface_id_str,
-        "try_run_cpu_readback_copy",
-        |bridge, surface_id| bridge.try_run_copy(surface_id, bridge_dir),
-    )
+#[derive(Clone, Copy)]
+enum CpuReadbackCopyDirection {
+    /// The surface's current pixels into the CPU-readable staging.
+    SurfaceIntoStaging,
+    /// The consumer's CPU edit back into the surface's own allocation.
+    StagingBackIntoSurface,
 }
 
-/// Shared dispatch path for blocking and non-blocking
-/// `run_cpu_readback_copy`. `op_label` is the wire op name used in
-/// error messages. `bridge_call` returns:
-///   - `Ok(Some(timeline_value))` → produce an [`EscalateResponse::Ok`];
-///   - `Ok(None)`                  → produce an [`EscalateResponse::Contended`];
-///   - `Err(msg)`                  → produce an [`EscalateResponse::Err`].
 #[cfg(target_os = "linux")]
-fn dispatch_run_cpu_readback_copy<F>(
+impl CpuReadbackCopy {
+    fn direction(self) -> CpuReadbackCopyDirection {
+        match self {
+            Self::Blocking(direction) | Self::NonBlocking(direction) => direction,
+        }
+    }
+
+    /// The wire op name, for error messages that have to say which
+    /// request failed.
+    fn escalate_op_name(self) -> &'static str {
+        match self {
+            Self::Blocking(_) => "run_cpu_readback_copy",
+            Self::NonBlocking(_) => "try_run_cpu_readback_copy",
+        }
+    }
+}
+
+/// Run one cpu-readback copy on behalf of a helper process and answer
+/// with the timeline value it signalled.
+///
+/// Always available: the staging is a `GpuContext` capability, minted on
+/// first ask at [`SurfaceExportStagingResidency::HostVisible`], with no
+/// installation step and nothing supplied by the application. The child
+/// reaches the memory itself through `open_cpu_readback_staging` and the
+/// surface-share check-out that follows it; this op carries no fds, only
+/// the surface id, the direction, and the timeline value to wait for.
+///
+/// `try_run_cpu_readback_copy` answers [`EscalateResponse::Contended`]
+/// when another copy already holds this staging's recorder. Every other
+/// refusal — a retired frame id, a read-only export, a geometry change —
+/// is an error in both spellings, never a contention report.
+#[cfg(target_os = "linux")]
+fn handle_cpu_readback_copy(
     sandbox: &GpuContextLimitedAccess,
-    rid: String,
-    surface_id_str: &str,
-    op_label: &str,
-    bridge_call: F,
-) -> EscalateResponse
-where
-    F: FnOnce(
-        &dyn CpuReadbackBridge,
-        streamlib_surface_adapter::SurfaceId,
-    ) -> std::result::Result<Option<u64>, String>,
-{
-    use std::sync::Arc;
+    request_id: String,
+    surface_id: &str,
+    copy: CpuReadbackCopy,
+) -> EscalateResponse {
+    let copied = sandbox
+        .surface_export_staging(surface_id, SurfaceExportStagingResidency::HostVisible)
+        .and_then(|staging| match copy {
+            CpuReadbackCopy::Blocking(CpuReadbackCopyDirection::SurfaceIntoStaging) => sandbox
+                .refill_surface_export_staging(&staging, surface_id)
+                .map(Some),
+            CpuReadbackCopy::Blocking(CpuReadbackCopyDirection::StagingBackIntoSurface) => sandbox
+                .copy_surface_export_staging_back_to_surface(&staging, surface_id)
+                .map(Some),
+            CpuReadbackCopy::NonBlocking(CpuReadbackCopyDirection::SurfaceIntoStaging) => {
+                sandbox.try_refill_surface_export_staging(&staging, surface_id)
+            }
+            CpuReadbackCopy::NonBlocking(CpuReadbackCopyDirection::StagingBackIntoSurface) => {
+                sandbox.try_copy_surface_export_staging_back_to_surface(&staging, surface_id)
+            }
+        });
+    match copied {
+        Ok(Some(signalled)) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id,
+            handle_id: surface_id.to_string(),
+            timeline_value: Some(signalled.to_string()),
+            ..Default::default()
+        }),
+        Ok(None) => EscalateResponse::Contended(EscalateResponseContended { request_id }),
+        Err(failure) => EscalateResponse::Err(EscalateResponseErr {
+            request_id,
+            message: format!("{} failed: {failure}", copy.escalate_op_name()),
+        }),
+    }
+}
 
-    let surface_id: streamlib_surface_adapter::SurfaceId = match surface_id_str.parse() {
-        Ok(v) => v,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: format!(
-                    "{op_label}: surface_id '{surface_id_str}' is not a u64 decimal: {e}"
-                ),
-            });
-        }
-    };
-
-    let bridge: Arc<dyn CpuReadbackBridge> = match sandbox.escalate(|full| {
-        full.cpu_readback_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(format!(
-                "{op_label}: no CpuReadbackBridge registered on GpuContext"
-            ))
-        })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
-
-    let signaled = match bridge_call(bridge.as_ref(), surface_id) {
-        Ok(Some(v)) => v,
-        Ok(None) => {
-            return EscalateResponse::Contended(EscalateResponseContended { request_id: rid });
-        }
-        Err(msg) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: format!("{op_label} bridge call failed: {msg}"),
-            });
-        }
-    };
-
-    EscalateResponse::Ok(EscalateResponseOk {
-        request_id: rid,
-        // Handle ID is meaningless for cpu-readback after Path E — the
-        // subprocess holds no host-side resource lifetime; the staging
-        // buffers are pre-registered surface-share entries that live
-        // for the surface's lifetime, not per acquire. Keep the field
-        // populated with the surface_id for symmetry, but the
-        // subprocess never has anything to release for cpu-readback.
-        handle_id: surface_id_str.to_string(),
-        timeline_value: Some(signaled.to_string()),
-        ..Default::default()
-    })
+/// Open the CPU-readable staging for `surface_id` on behalf of a helper
+/// process — the readback twin of
+/// [`handle_open_device_export_staging`], differing only in residency.
+///
+/// Without this the copies above would land in a buffer no child can
+/// reach: the staging is engine-owned, so nothing else publishes it.
+#[cfg(target_os = "linux")]
+fn handle_open_cpu_readback_staging(
+    sandbox: &GpuContextLimitedAccess,
+    request_id: String,
+    surface_id: &str,
+) -> EscalateResponse {
+    handle_open_surface_export_staging(
+        sandbox,
+        request_id,
+        surface_id,
+        SurfaceExportStagingResidency::HostVisible,
+        "open_cpu_readback_staging",
+    )
 }
 
 /// The binding kind a wire enum names.
@@ -3086,235 +3104,115 @@ mod tests {
         );
     }
 
-    /// `RunCpuReadbackCopy` with no bridge registered must surface a
-    /// clean error response (not a panic) so the subprocess can
-    /// translate it into a Python exception.
+    /// The readback ops answer from `GpuContext` with nothing installed:
+    /// no bridge, no application glue, no runtime-absent case.
+    ///
+    /// These run without a real surface, so they assert the shape of the
+    /// refusal rather than a landed copy — an unresolvable surface is an
+    /// error naming the surface, never the "no CpuReadbackBridge
+    /// registered on GpuContext" the deleted seam used to answer to every
+    /// caller. The copy itself is proven over a real device in
+    /// `surface_export_staging`'s own GPU-gated tests.
     #[cfg(target_os = "linux")]
-    #[test]
-    fn run_cpu_readback_copy_without_bridge_returns_err() {
+    mod cpu_readback_answers_from_gpu_context {
+        use super::*;
         use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
-        let gpu = match GpuContext::init_for_platform_sync() {
-            Ok(g) => g,
-            Err(_) => {
-                println!(
-                    "run_cpu_readback_copy_without_bridge_returns_err: no GPU device — skipping"
-                );
-                return;
+        fn sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+            match GpuContext::init_for_platform_sync() {
+                Ok(gpu) => Some(GpuContextLimitedAccess::new(gpu)),
+                Err(_) => {
+                    println!("{test_name}: no GPU device — skipping");
+                    None
+                }
             }
-        };
-        let sandbox = GpuContextLimitedAccess::new(gpu);
-        let registry = EscalateHandleRegistry::new();
+        }
 
-        let req = EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
-            request_id: "req-cpu-1".to_string(),
-            surface_id: "42".to_string(),
-            direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
-        });
-        let response = handle_escalate_op(&sandbox, &registry, req)
+        /// Every readback op names the surface it could not resolve, and
+        /// none of them mentions an installation step.
+        #[test]
+        fn an_unresolvable_surface_is_refused_by_name_and_never_by_a_missing_bridge() {
+            let Some(sandbox) = sandbox_or_skip(
+                "an_unresolvable_surface_is_refused_by_name_and_never_by_a_missing_bridge",
+            ) else {
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let requests = [
+                EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                    request_id: "req-run".into(),
+                    surface_id: "no-such-surface".into(),
+                    direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
+                }),
+                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
+                    request_id: "req-try".into(),
+                    surface_id: "no-such-surface".into(),
+                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage,
+                }),
+                EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
+                    request_id: "req-open".into(),
+                    surface_id: "no-such-surface".into(),
+                }),
+            ];
+
+            for request in requests {
+                let expected_request_id = request_id(&request)
+                    .expect("every readback op carries a correlation token")
+                    .to_string();
+                let response = handle_escalate_op(&sandbox, &registry, request)
+                    .expect("every readback op produces a response");
+                match response {
+                    EscalateResponse::Err(err) => {
+                        assert_eq!(err.request_id, expected_request_id);
+                        assert!(
+                            err.message.contains("no-such-surface"),
+                            "{expected_request_id}: the refusal must name the surface, got: {}",
+                            err.message
+                        );
+                        assert!(
+                            !err.message.contains("Bridge"),
+                            "{expected_request_id}: the capability is always present, so no \
+                             refusal may cite a bridge; got: {}",
+                            err.message
+                        );
+                    }
+                    other => panic!("{expected_request_id}: expected Err, got {other:?}"),
+                }
+            }
+        }
+
+        /// A surface id that is not a decimal `u64` is no longer special.
+        ///
+        /// The deleted bridge keyed its own registry by `u64` and parsed
+        /// the id before doing anything else, which would refuse every
+        /// modern id: a published frame is `<slot>#<generation>`. The
+        /// engine resolves the id it was given.
+        #[test]
+        fn a_non_numeric_surface_id_is_not_a_parse_error() {
+            let Some(sandbox) = sandbox_or_skip("a_non_numeric_surface_id_is_not_a_parse_error")
+            else {
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                    request_id: "req-frame-id".into(),
+                    surface_id: "pool-slot-7#3".into(),
+                    direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
+                }),
+            )
             .expect("run_cpu_readback_copy always produces a response");
-        match response {
-            EscalateResponse::Err(err) => {
-                assert_eq!(err.request_id, "req-cpu-1");
-                assert!(
-                    err.message.contains("CpuReadbackBridge"),
-                    "expected error to mention bridge, got: {}",
+            match response {
+                EscalateResponse::Err(err) => assert!(
+                    !err.message.contains("u64"),
+                    "a per-frame surface id must not be refused as a malformed integer, got: {}",
                     err.message
-                );
-            }
-            EscalateResponse::Ok(_) => {
-                panic!("run_cpu_readback_copy must fail when no bridge is registered")
-            }
-            EscalateResponse::Contended(_) => {
-                panic!("blocking run_cpu_readback_copy must never return Contended")
-            }
-        }
-        assert_eq!(
-            registry.handle_count(),
-            0,
-            "no handle should be registered on the failure path"
-        );
-    }
-
-    /// `TryRunCpuReadbackCopy` parse / no-bridge / contended dispatch
-    /// path.
-    #[cfg(target_os = "linux")]
-    mod try_run_cpu_readback_copy_dispatch {
-        use super::super::*;
-        use super::EscalateHandleRegistry;
-        use std::sync::Arc;
-
-        use crate::core::context::{
-            CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext, GpuContextLimitedAccess,
-        };
-        use streamlib_surface_adapter::SurfaceId;
-
-        struct AlwaysContendedBridge;
-        impl CpuReadbackBridge for AlwaysContendedBridge {
-            fn run_copy(
-                &self,
-                _surface_id: SurfaceId,
-                _direction: CpuReadbackCopyDirection,
-            ) -> std::result::Result<u64, String> {
-                Err("AlwaysContendedBridge does not implement blocking run_copy".to_string())
-            }
-            fn try_run_copy(
-                &self,
-                _surface_id: SurfaceId,
-                _direction: CpuReadbackCopyDirection,
-            ) -> std::result::Result<Option<u64>, String> {
-                Ok(None)
-            }
-        }
-
-        struct AlwaysErrBridge;
-        impl CpuReadbackBridge for AlwaysErrBridge {
-            fn run_copy(
-                &self,
-                _surface_id: SurfaceId,
-                _direction: CpuReadbackCopyDirection,
-            ) -> std::result::Result<u64, String> {
-                Err("blocking path not exercised in this test".into())
-            }
-            fn try_run_copy(
-                &self,
-                _surface_id: SurfaceId,
-                _direction: CpuReadbackCopyDirection,
-            ) -> std::result::Result<Option<u64>, String> {
-                Err("synthetic adapter failure for test".into())
-            }
-        }
-
-        fn make_sandbox_with_bridge(
-            bridge: Option<Arc<dyn CpuReadbackBridge>>,
-        ) -> Option<GpuContextLimitedAccess> {
-            let gpu = match GpuContext::init_for_platform_sync() {
-                Ok(g) => g,
-                Err(_) => return None,
-            };
-            if let Some(b) = bridge {
-                gpu.set_cpu_readback_bridge(b);
-            }
-            Some(GpuContextLimitedAccess::new(gpu))
-        }
-
-        /// Bridge `Ok(None)` → `EscalateResponse::Contended`.
-        #[test]
-        fn contended_response_when_bridge_returns_none() {
-            let Some(sandbox) = make_sandbox_with_bridge(Some(Arc::new(AlwaysContendedBridge)))
-            else {
-                println!("contended_response_when_bridge_returns_none: no GPU — skipping");
-                return;
-            };
-            let registry = EscalateHandleRegistry::new();
-
-            let req =
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-contended".into(),
-                    surface_id: "1".into(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-                });
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("try_run_cpu_readback_copy always produces a response");
-            match response {
-                EscalateResponse::Contended(c) => {
-                    assert_eq!(c.request_id, "req-try-contended");
-                }
-                other => panic!("expected Contended response, got {other:?}"),
-            }
-            assert_eq!(registry.handle_count(), 0);
-        }
-
-        /// Bridge `Err(_)` → `EscalateResponse::Err`, NOT `Contended`.
-        #[test]
-        fn err_response_when_bridge_returns_err() {
-            let Some(sandbox) = make_sandbox_with_bridge(Some(Arc::new(AlwaysErrBridge))) else {
-                println!("err_response_when_bridge_returns_err: no GPU — skipping");
-                return;
-            };
-            let registry = EscalateHandleRegistry::new();
-
-            let req =
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-err".into(),
-                    surface_id: "1".into(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-                });
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("try_run_cpu_readback_copy always produces a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-try-err");
-                    assert!(
-                        err.message.contains("synthetic adapter failure"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err response, got {other:?}"),
-            }
-        }
-
-        /// `try_run_cpu_readback_copy` with no bridge installed
-        /// surfaces the same Configuration error shape as the blocking
-        /// variant.
-        #[test]
-        fn err_when_no_bridge_registered() {
-            let Some(sandbox) = make_sandbox_with_bridge(None) else {
-                println!("err_when_no_bridge_registered: no GPU — skipping");
-                return;
-            };
-            let registry = EscalateHandleRegistry::new();
-
-            let req =
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-no-bridge".into(),
-                    surface_id: "1".into(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-                });
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("try_run_cpu_readback_copy always produces a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-try-no-bridge");
-                    assert!(
-                        err.message.contains("CpuReadbackBridge"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err response, got {other:?}"),
-            }
-        }
-
-        /// Malformed `surface_id` must report a parse error.
-        #[test]
-        fn err_when_surface_id_malformed() {
-            let Some(sandbox) = make_sandbox_with_bridge(Some(Arc::new(AlwaysContendedBridge)))
-            else {
-                println!("err_when_surface_id_malformed: no GPU — skipping");
-                return;
-            };
-            let registry = EscalateHandleRegistry::new();
-
-            let req =
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-bad-id".into(),
-                    surface_id: "abc".into(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-                });
-            let response = handle_escalate_op(&sandbox, &registry, req)
-                .expect("try_run_cpu_readback_copy always produces a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-try-bad-id");
-                    assert!(
-                        err.message.contains("not a u64") || err.message.contains("invalid"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err response, got {other:?}"),
+                ),
+                other => panic!("expected Err, got {other:?}"),
             }
         }
     }

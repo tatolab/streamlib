@@ -109,10 +109,9 @@ pub struct Runner {
     _logging_guard: crate::core::logging::StreamlibLoggingGuard,
     /// Engine-extension hooks invoked exactly once during [`Self::start`],
     /// after the [`GpuContext`] is initialized and before any
-    /// processor's `setup()` runs. Used to register host-side bridges
-    /// (e.g. [`crate::core::context::CpuReadbackBridge`]) whose
-    /// construction needs the live GpuContext but whose registration
-    /// must precede the first `process()` call. Drained on each `start()`.
+    /// processor's `setup()` runs, for engine extensions whose
+    /// construction needs the live GpuContext but whose registration must
+    /// precede the first `process()` call. Drained on each `start()`.
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
     /// Optional pipeline name carried across snapshot load → save.
     /// Set by [`Self::load_graph_snapshot`] and read by
@@ -253,13 +252,9 @@ impl Runner {
     /// Register a one-shot hook to run during [`Self::start`], after the
     /// [`GpuContext`] is initialized and before any processor's
     /// `setup()` runs. The hook receives the live `Arc<GpuContext>`,
-    /// giving caller code a window to register engine extensions —
-    /// today the canonical use is wiring a
-    /// [`crate::core::context::CpuReadbackBridge`] via
-    /// [`crate::core::context::GpuContext::set_cpu_readback_bridge`]
-    /// before subprocess processors fire their first
-    /// `acquire_cpu_readback`. Hooks fire FIFO; a hook returning `Err`
-    /// aborts `start()` with the same error.
+    /// giving caller code a window to register engine extensions before
+    /// any processor runs. Hooks fire FIFO; a hook returning `Err` aborts
+    /// `start()` with the same error.
     pub fn install_setup_hook<F>(&self, hook: F)
     where
         F: FnOnce(&GpuContext) -> Result<()> + Send + 'static,

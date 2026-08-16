@@ -31,6 +31,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
+    #[serde(rename = "open_cpu_readback_staging")]
+    OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging),
+
     #[serde(rename = "open_device_export_staging")]
     OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging),
 
@@ -230,6 +233,27 @@ pub(crate) struct EscalateRequestLog {
     /// ordering; the host stamps `host_ts` on receipt as the authoritative
     /// sort key.
     pub(crate) source_ts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestOpenCpuReadbackStaging {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The surface whose pixels the subprocess wants to read with the CPU.
+    /// Same contract as `open_device_export_staging` — the host allocates the
+    /// staging if the surface has none, registers it plus its `refill_done`
+    /// timeline with the surface-share service, and answers with the id they
+    /// are registered under — differing in one respect: this staging is
+    /// HOST_VISIBLE and HOST_COHERENT, so the consumer maps and reads it
+    /// directly instead of importing it into a device API. A surface can carry
+    /// both at once; they are separate allocations under separate ids.
+    /// The `ok` response carries `handle_id`, `width`, `height`, `format`,
+    /// `staging_byte_size`, `bytes_per_row`, `writable`, and
+    /// `exporting_device_uuid`. The staging fd and the timeline fd travel over
+    /// the surface-share socket at check-out, never over this one.
+    pub(crate) surface_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
