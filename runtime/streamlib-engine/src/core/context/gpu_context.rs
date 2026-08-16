@@ -54,7 +54,6 @@ impl RhiBlitter for NoOpBlitter {
 }
 
 #[cfg(target_os = "linux")]
-use super::compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
 use super::cpu_readback_bridge::CpuReadbackBridge;
 #[cfg(target_os = "linux")]
@@ -203,6 +202,75 @@ impl PoolSlotReuse<'_> {
             hand_off.publish_frame_generation(pool_slot_key, frame_generation);
         }
     }
+}
+
+/// Cache key for a compute kernel built from a pre-compiled blob.
+///
+/// The blob fixes stage, entry point and target environment on its own, so the
+/// bytes plus the declared push-constant size are the whole key. A GLSL source
+/// contract keys on the compiler's version too, because then the engine is what
+/// turns source into bytes.
+#[cfg(target_os = "linux")]
+fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(spv);
+    hasher.update(push_constant_size.to_le_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Check a caller's binding declaration against what the shader actually
+/// declares, by name.
+///
+/// An empty declaration asserts nothing and the reflected shape stands alone.
+/// Otherwise every declared name must exist in the shader with the kind the
+/// caller claimed, and every reflected name must be accounted for — leaving a
+/// shader binding unmentioned is how a dispatch silently binds nothing.
+#[cfg(target_os = "linux")]
+fn reconcile_declared_compute_bindings(
+    declared: &[crate::core::rhi::ComputeBindingSpec],
+    reflected: &[crate::core::rhi::ComputeBindingSpec],
+) -> Result<()> {
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let shader_names: Vec<&str> = reflected.iter().filter_map(|s| s.name.as_deref()).collect();
+    for spec in declared {
+        let Some(name) = spec.name.as_deref() else {
+            return Err(Error::GpuError(
+                "a compute binding declaration must name its binding; bindings resolve by name"
+                    .to_string(),
+            ));
+        };
+        let found = reflected
+            .iter()
+            .find(|r| r.name.as_deref() == Some(name))
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "compute kernel declares a binding named `{name}`, which this shader does \
+                     not declare; the shader declares {}",
+                    crate::vulkan::rhi::quote_declared_names(&shader_names)
+                ))
+            })?;
+        if found.kind != spec.kind {
+            return Err(Error::GpuError(format!(
+                "compute binding `{name}` was declared {:?} but this shader declares it {:?}",
+                spec.kind, found.kind
+            )));
+        }
+    }
+    for reflected_spec in reflected {
+        let Some(name) = reflected_spec.name.as_deref() else {
+            continue;
+        };
+        if !declared.iter().any(|d| d.name.as_deref() == Some(name)) {
+            return Err(Error::GpuError(format!(
+                "compute kernel leaves the shader's binding `{name}` undeclared; every binding \
+                 the shader declares must be accounted for"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl PixelBufferPoolManager {
@@ -639,14 +707,12 @@ pub struct GpuContext {
     /// (the escalate handler responds with an `Err` in that case).
     #[cfg(target_os = "linux")]
     cpu_readback_bridge: Arc<Mutex<Option<Arc<dyn CpuReadbackBridge>>>>,
-    /// Host-side bridge for the compute-kernel escalate ops
-    /// (`register_compute_kernel`, `run_compute_kernel`). Wired by
-    /// application code that exposes the host's
-    /// [`crate::vulkan::rhi::VulkanComputeKernel`] to subprocess customers;
-    /// left unset on hosts that don't expose compute dispatch (the escalate
-    /// handler responds with an `Err` in that case).
+    /// Compute kernels built for the `register_compute_kernel` escalate op,
+    /// keyed so that re-creating an identical kernel is free of compilation.
+    /// Compute dispatch is a capability every caller reaches, so this is
+    /// always present — there is nothing to install and no absent case.
     #[cfg(target_os = "linux")]
-    compute_kernel_bridge: Arc<Mutex<Option<Arc<dyn ComputeKernelBridge>>>>,
+    compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
     /// Host-side bridge for the graphics-kernel escalate ops
     /// (`register_graphics_kernel`, `run_graphics_draw`). Wired by
     /// application code that exposes the host's
@@ -690,7 +756,7 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
-            compute_kernel_bridge: Arc::new(Mutex::new(None)),
+            compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -719,7 +785,7 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
-            compute_kernel_bridge: Arc::new(Mutex::new(None)),
+            compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -2469,23 +2535,80 @@ impl GpuContext {
     }
 
     // =========================================================================
-    // ComputeKernelBridge — host-side dispatch for the compute-kernel escalate ops
+    // Compute kernels for the escalate ops — always present, never installed
     // =========================================================================
 
-    /// Register a [`ComputeKernelBridge`] implementation. The escalate handler
-    /// dispatches `register_compute_kernel` and `run_compute_kernel` requests
-    /// through this bridge; until it is set, those requests fail with an
-    /// "unsupported" error response. Linux-only: compute escalate uses the
-    /// Linux-side `VulkanComputeKernel`.
+    /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
+    /// identical one if this context already built it.
+    ///
+    /// The cache key covers everything that changes the compiled output. For a
+    /// pre-compiled blob that is the blob itself plus the declared
+    /// push-constant size — the bytes already fix stage, entry point and target
+    /// environment. A GLSL source contract adds the compiler's own version to
+    /// the key, because then the engine is what produces the bytes.
+    ///
+    /// Returns the cache key as the kernel id: a caller re-registering the same
+    /// kernel gets the same id back, and pays no compilation for it.
     #[cfg(target_os = "linux")]
-    pub fn set_compute_kernel_bridge(&self, bridge: Arc<dyn ComputeKernelBridge>) {
-        *self.compute_kernel_bridge.lock().unwrap() = Some(bridge);
+    pub fn create_or_reuse_compute_kernel(
+        &self,
+        spv: &[u8],
+        push_constant_size: u32,
+        declared_bindings: &[crate::core::rhi::ComputeBindingSpec],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
+        let kernel_id = compute_kernel_cache_key(spv, push_constant_size);
+        if let Some(cached) = self.compute_kernel_cache.lock().unwrap().get(&kernel_id) {
+            tracing::debug!(
+                rhi_op = "create_or_reuse_compute_kernel",
+                kernel_id,
+                "GpuContext::create_or_reuse_compute_kernel — cache hit"
+            );
+            return Ok((kernel_id, Arc::clone(cached)));
+        }
+
+        // Reflection is the source of truth for the binding shape; a caller's
+        // declaration is checked against it rather than replacing it.
+        let (reflected, reflected_push_size) =
+            crate::core::rhi::derive_bindings_from_spirv(spv)?;
+        reconcile_declared_compute_bindings(declared_bindings, &reflected)?;
+        if reflected_push_size != push_constant_size {
+            return Err(Error::GpuError(format!(
+                "compute kernel declares {push_constant_size} push-constant bytes but its \
+                 SPIR-V reflects {reflected_push_size}"
+            )));
+        }
+
+        let kernel = Arc::new(self.create_compute_kernel(&crate::core::rhi::ComputeKernelDescriptor {
+            label: "escalate-compute-kernel",
+            spv,
+            bindings: &reflected,
+            push_constant_size,
+        })?);
+
+        Ok((
+            kernel_id.clone(),
+            Arc::clone(
+                self.compute_kernel_cache
+                    .lock()
+                    .unwrap()
+                    .entry(kernel_id)
+                    .or_insert(kernel),
+            ),
+        ))
     }
 
-    /// Get the registered [`ComputeKernelBridge`], if any.
+    /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
+    /// returned.
     #[cfg(target_os = "linux")]
-    pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
-        self.compute_kernel_bridge.lock().unwrap().clone()
+    pub fn compute_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.compute_kernel_cache
+            .lock()
+            .unwrap()
+            .get(kernel_id)
+            .map(Arc::clone)
     }
 
     // =========================================================================
@@ -3805,14 +3928,28 @@ impl GpuContextFullAccess {
         self.host_inner().cpu_readback_bridge()
     }
 
-    /// Get the registered compute-kernel bridge, if any. Reachable only inside
-    /// `escalate(|full| ...)` since it requires `FullAccess`.
-    ///
-    /// **Engine-only** — trait-object return; same rationale as
-    /// [`Self::cpu_readback_bridge`].
+    /// Build a compute kernel, reusing an identical one this context already
+    /// built. Reachable only inside `escalate(|full| ...)` since it requires
+    /// `FullAccess`.
     #[cfg(target_os = "linux")]
-    pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
-        self.host_inner().compute_kernel_bridge()
+    pub fn create_or_reuse_compute_kernel(
+        &self,
+        spv: &[u8],
+        push_constant_size: u32,
+        declared_bindings: &[crate::core::rhi::ComputeBindingSpec],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
+        self.host_inner()
+            .create_or_reuse_compute_kernel(spv, push_constant_size, declared_bindings)
+    }
+
+    /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
+    /// returned.
+    #[cfg(target_os = "linux")]
+    pub fn compute_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.host_inner().compute_kernel_by_id(kernel_id)
     }
 
     /// Get the registered graphics-kernel bridge, if any. Reachable only inside

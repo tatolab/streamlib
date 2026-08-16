@@ -26,6 +26,7 @@ use crate::host_rhi::HostSurfaceStoreExt;
 
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
+    EscalateRequestComputeBindingKind,
     EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestLog,
     EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestOpenDeviceExportStaging,
     EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
@@ -50,7 +51,8 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRegisterRayTracingKernel, EscalateRequestRegisterRayTracingKernelBindingKind,
     EscalateRequestRegisterRayTracingKernelGroupKind,
     EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestReleaseHandle,
-    EscalateRequestRunComputeKernel, EscalateRequestRunCpuReadbackCopy,
+    EscalateRequestRunComputeKernel, EscalateRequestRunComputeKernelBinding,
+    EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
     EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
     EscalateRequestRunGraphicsDrawIndexBufferIndexType, EscalateRequestRunRayTracingKernel,
@@ -64,7 +66,7 @@ use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::{
-    BlasRegisterDecl, BlendFactorWire, BlendOpWire, ComputeKernelBridge, CpuReadbackBridge,
+    BlasRegisterDecl, BlendFactorWire, BlendOpWire, CpuReadbackBridge,
     CpuReadbackCopyDirection, CullModeWire, DepthCompareOpWire, DepthFormatWire, DynamicStateWire,
     FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire, GraphicsBindingValue,
     GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge, GraphicsKernelRegisterDecl,
@@ -567,61 +569,28 @@ pub(crate) fn handle_escalate_op(
                 }))
             }
         }
-        EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-            request_id: _,
-            spv_hex,
-            push_constant_size,
-        }) => {
+        EscalateRequest::RegisterComputeKernel(req) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_register_compute_kernel(
-                    sandbox,
-                    rid,
-                    &spv_hex,
-                    push_constant_size,
-                ))
+                Some(handle_register_compute_kernel(sandbox, rid, req))
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (spv_hex, push_constant_size);
+                let _ = req;
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "register_compute_kernel is only available on Linux".to_string(),
                 }))
             }
         }
-        EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
-            request_id: _,
-            kernel_id,
-            surface_uuid,
-            push_constants_hex,
-            group_count_x,
-            group_count_y,
-            group_count_z,
-        }) => {
+        EscalateRequest::RunComputeKernel(req) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_run_compute_kernel(
-                    sandbox,
-                    rid,
-                    &kernel_id,
-                    &surface_uuid,
-                    &push_constants_hex,
-                    group_count_x,
-                    group_count_y,
-                    group_count_z,
-                ))
+                Some(handle_run_compute_kernel(sandbox, rid, req))
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (
-                    kernel_id,
-                    surface_uuid,
-                    push_constants_hex,
-                    group_count_x,
-                    group_count_y,
-                    group_count_z,
-                );
+                let _ = req;
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "run_compute_kernel is only available on Linux".to_string(),
@@ -1214,32 +1183,40 @@ where
     })
 }
 
-/// Map a wire-format `register_compute_kernel` request through the
-/// registered [`ComputeKernelBridge`].
+/// The binding kind a wire enum names.
+#[cfg(target_os = "linux")]
+fn compute_binding_kind_from_wire(
+    kind: EscalateRequestComputeBindingKind,
+) -> crate::core::rhi::ComputeBindingKind {
+    use crate::core::rhi::ComputeBindingKind;
+    match kind {
+        EscalateRequestComputeBindingKind::SampledImage => ComputeBindingKind::SampledImage,
+        EscalateRequestComputeBindingKind::SampledTexture => ComputeBindingKind::SampledTexture,
+        EscalateRequestComputeBindingKind::StorageBuffer => ComputeBindingKind::StorageBuffer,
+        EscalateRequestComputeBindingKind::StorageImage => ComputeBindingKind::StorageImage,
+        EscalateRequestComputeBindingKind::UniformBuffer => ComputeBindingKind::UniformBuffer,
+    }
+}
+
+/// Build a compute kernel for a subprocess customer, against `GpuContext`.
 ///
-/// The bridge derives the kernel's binding shape from `rspirv-reflect`,
-/// builds the `VulkanComputeKernel` (with on-disk pipeline cache
-/// persistence keyed by SHA-256 of the SPIR-V), and returns the same
-/// hash hex back as `kernel_id`. Subsequent identical SPIR-V hits the
-/// host-side cache and returns the same id without re-reflecting.
+/// Reflection derives the binding shape and its names; the request's own
+/// declaration is checked against it rather than replacing it. Re-registering
+/// an identical kernel is a cache hit and answers with the same `kernel_id`.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
+/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
 /// 1. `spv_hex` doesn't decode as hex bytes.
-/// 2. No bridge is registered — the host runtime didn't wire a
-///    compute-kernel bridge into [`crate::core::context::GpuContext::set_compute_kernel_bridge`].
-/// 3. Bridge `register` returned an error — typically reflection
-///    failure, push-constant size mismatch, or pipeline build failure.
+/// 2. The blob's `OpName` decorations were stripped — bindings resolve by
+///    name, so an unnamed binding cannot be bound at all.
+/// 3. The declaration disagrees with reflection on a name or a kind.
+/// 4. Push-constant size mismatch, or pipeline build failure.
 #[cfg(target_os = "linux")]
 fn handle_register_compute_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
-    spv_hex: &str,
-    push_constant_size: u32,
+    req: EscalateRequestRegisterComputeKernel,
 ) -> EscalateResponse {
-    use std::sync::Arc;
-
-    let spv = match decode_hex(spv_hex) {
+    let spv = match decode_hex(&req.spv_hex) {
         Ok(b) => b,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
@@ -1249,66 +1226,51 @@ fn handle_register_compute_kernel(
         }
     };
 
-    let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
-        full.compute_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "register_compute_kernel: no ComputeKernelBridge registered on GpuContext"
-                    .to_string(),
-            )
+    let declared: Vec<crate::core::rhi::ComputeBindingSpec> = req
+        .bindings
+        .iter()
+        .map(|wire| {
+            // The slot is reflection's to assign; only name and kind are the
+            // caller's to assert.
+            crate::core::rhi::ComputeBindingSpec {
+                binding: 0,
+                kind: compute_binding_kind_from_wire(wire.kind),
+                name: Some(std::borrow::Cow::Owned(wire.name.clone())),
+            }
         })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
+        .collect();
 
-    match bridge.register(&spv, push_constant_size) {
-        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+    match sandbox
+        .escalate(|full| full.create_or_reuse_compute_kernel(&spv, req.push_constant_size, &declared))
+    {
+        Ok((kernel_id, _kernel)) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("register_compute_kernel bridge call failed: {msg}"),
+            message: format!("register_compute_kernel failed: {e}"),
         }),
     }
 }
 
-/// Map a wire-format `run_compute_kernel` request through the
-/// registered [`ComputeKernelBridge`].
+/// Dispatch a registered compute kernel with its bindings resolved by name.
 ///
-/// Compute dispatch on the host is synchronous: the bridge's `run`
-/// blocks on the kernel's fence before returning, so by the time this
-/// function emits an `Ok` response, the GPU work has retired and the
-/// host's writes to the surface's `VkImage` are visible to any
-/// subsequent submission against the same VkDevice. The subprocess can
-/// safely advance its surface-share timeline on receipt of the `ok`.
+/// Compute dispatch on the host is synchronous — `VulkanComputeKernel::dispatch`
+/// waits on its own fence — so by the time this emits an `Ok`, the GPU work has
+/// retired and the writes are visible to any later submission on the same
+/// device. The subprocess can advance its surface-share timeline on receipt.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. `push_constants_hex` doesn't decode as hex bytes.
-/// 2. No bridge is registered.
-/// 3. Bridge `run` returned an error — typically unrecognized
-///    `kernel_id`, surface lookup failure, or Vulkan submit failure.
+/// Every binding error raises here, before anything is submitted, and names the
+/// shader's own bindings so the caller can see what it should have supplied.
 #[cfg(target_os = "linux")]
 fn handle_run_compute_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
-    kernel_id: &str,
-    surface_uuid: &str,
-    push_constants_hex: &str,
-    group_count_x: u32,
-    group_count_y: u32,
-    group_count_z: u32,
+    req: EscalateRequestRunComputeKernel,
 ) -> EscalateResponse {
-    use std::sync::Arc;
-
-    let push_constants = match decode_hex(push_constants_hex) {
+    let push_constants = match decode_hex(&req.push_constants_hex) {
         Ok(b) => b,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
@@ -1318,42 +1280,174 @@ fn handle_run_compute_kernel(
         }
     };
 
-    let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
-        full.compute_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "run_compute_kernel: no ComputeKernelBridge registered on GpuContext".to_string(),
-            )
-        })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
+    let dispatched = sandbox.escalate(|full| {
+        let kernel = full.compute_kernel_by_id(&req.kernel_id).ok_or_else(|| {
+            crate::core::error::Error::GpuError(format!(
+                "run_compute_kernel: no kernel registered under id {:?}",
+                req.kernel_id
+            ))
+        })?;
+        bind_and_dispatch_compute_kernel(full, &kernel, &req, &push_constants)
+    });
 
-    match bridge.run(
-        kernel_id,
-        surface_uuid,
-        &push_constants,
-        group_count_x,
-        group_count_y,
-        group_count_z,
-    ) {
+    match dispatched {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             // Echo the kernel_id back — compute is sync host-side, no
             // separate handle is allocated per dispatch.
-            handle_id: kernel_id.to_string(),
+            handle_id: req.kernel_id,
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("run_compute_kernel bridge call failed: {msg}"),
+            message: format!("run_compute_kernel failed: {e}"),
         }),
     }
+}
+
+/// What one validated binding resolved to: the slot to write, the kind to
+/// write it as, and the surface to look up.
+#[cfg(target_os = "linux")]
+#[derive(Debug, PartialEq, Eq)]
+struct PlannedComputeBinding<'a> {
+    binding: u32,
+    kind: crate::core::rhi::ComputeBindingKind,
+    name: &'a str,
+    target_id: &'a str,
+}
+
+/// Match a dispatch's supplied bindings against the kernel's declared ones.
+///
+/// Every failure here is raised before any resource is bound and long before a
+/// submission, and every message names the shader's own bindings. Bindings do
+/// not persist on a kernel, so a dispatch supplies all of them or none:
+///
+/// - **duplicate** — one name supplied twice. Not expressible in a Python
+///   mapping, which is why this is checked against the wire array rather than
+///   left to the caller's language.
+/// - **unknown** — a name the shader does not declare.
+/// - **missing** — a declared name the dispatch omitted. There is no implicit
+///   default and no carried-over value.
+/// - **kind mismatch** — a name supplied as a kind the shader disagrees with.
+#[cfg(target_os = "linux")]
+fn plan_supplied_compute_bindings<'a>(
+    supplied: &'a [EscalateRequestRunComputeKernelBinding],
+    declared: &[crate::core::rhi::ComputeBindingSpec],
+) -> crate::core::error::Result<Vec<PlannedComputeBinding<'a>>> {
+    use crate::core::error::Error;
+
+    let declared_names: Vec<&str> = declared.iter().filter_map(|s| s.name.as_deref()).collect();
+    let shader_declares = crate::vulkan::rhi::quote_declared_names(&declared_names);
+
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for wire in supplied {
+        if !seen.insert(wire.name.as_str()) {
+            return Err(Error::GpuError(format!(
+                "binding `{}` was supplied twice; this shader declares {shader_declares}, each \
+                 supplied exactly once per dispatch",
+                wire.name
+            )));
+        }
+    }
+
+    for name in &declared_names {
+        if !seen.contains(name) {
+            return Err(Error::GpuError(format!(
+                "binding `{name}` was not supplied; bindings do not persist between dispatches, \
+                 so every dispatch supplies all of {shader_declares}"
+            )));
+        }
+    }
+
+    let mut planned = Vec::with_capacity(supplied.len());
+    for wire in supplied {
+        let spec = declared
+            .iter()
+            .find(|s| s.name.as_deref() == Some(wire.name.as_str()))
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "binding `{}` is not one this shader declares; it declares {shader_declares}",
+                    wire.name
+                ))
+            })?;
+        let supplied_kind = compute_binding_kind_from_wire(wire.kind);
+        if spec.kind != supplied_kind {
+            return Err(Error::GpuError(format!(
+                "binding `{}` was supplied as {:?} but this shader declares it {:?}",
+                wire.name, supplied_kind, spec.kind
+            )));
+        }
+        planned.push(PlannedComputeBinding {
+            binding: spec.binding,
+            kind: spec.kind,
+            name: wire.name.as_str(),
+            target_id: wire.target_id.as_str(),
+        });
+    }
+    Ok(planned)
+}
+
+/// Resolve every named binding onto the kernel's slots, then dispatch.
+///
+/// Names are validated and surfaces resolved before the first `set_*` call, so
+/// a refused dispatch never leaves the kernel holding a mix of this dispatch's
+/// bindings and the last one's.
+#[cfg(target_os = "linux")]
+fn bind_and_dispatch_compute_kernel(
+    full: &crate::core::context::GpuContextFullAccess,
+    kernel: &crate::vulkan::rhi::VulkanComputeKernel,
+    req: &EscalateRequestRunComputeKernel,
+    push_constants: &[u8],
+) -> crate::core::error::Result<()> {
+    use crate::core::error::Error;
+    use crate::core::rhi::ComputeBindingKind;
+
+    let planned = plan_supplied_compute_bindings(&req.bindings, &kernel.bindings())?;
+
+    let mut resolved = Vec::with_capacity(planned.len());
+    for binding in &planned {
+        // Zero extent: a kernel binding names a surface the graph already has
+        // as a device texture, which resolves from the same-process cache or
+        // the surface-share service. Only the pixel-buffer fallback consults
+        // the extent, and a buffer is not something a dispatch can bind.
+        let registration = full
+            .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "binding `{}` names surface {:?}, which this graph cannot resolve to a \
+                     device texture: {e}",
+                    binding.name, binding.target_id
+                ))
+            })?;
+        resolved.push((binding, registration));
+    }
+
+    for (binding, registration) in &resolved {
+        let texture = registration.texture();
+        match binding.kind {
+            ComputeBindingKind::StorageImage => {
+                kernel.set_storage_image(binding.binding, texture)?;
+            }
+            ComputeBindingKind::SampledTexture => {
+                kernel.set_sampled_texture(binding.binding, texture)?;
+            }
+            ComputeBindingKind::SampledImage
+            | ComputeBindingKind::StorageBuffer
+            | ComputeBindingKind::UniformBuffer => {
+                return Err(Error::GpuError(format!(
+                    "binding `{}` is {:?}, which a dispatch cannot name a surface for — the \
+                     surface-backed kinds are storage_image and sampled_texture",
+                    binding.name, binding.kind
+                )));
+            }
+        }
+    }
+
+    if !push_constants.is_empty() {
+        kernel.set_push_constants(push_constants)?;
+    }
+
+    kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z)
 }
 
 /// Map a wire-format `register_graphics_kernel` request through the
@@ -3152,444 +3246,288 @@ mod tests {
         }
     }
 
-    /// Compute-kernel handler tests: cover the IPC dispatch paths
-    /// `register_compute_kernel` / `run_compute_kernel` end-to-end
-    /// (bridge missing, invalid hex, kernel_id stability, unregistered
-    /// kernel_id). The bridge implementation lives in application setup
-    /// glue (`examples/polyglot-vulkan-compute/runner/src/main.rs`); these
-    /// tests use a synthetic in-test bridge so the contract holds even
-    /// when no GPU is available.
+    /// Compute-kernel handler tests.
+    ///
+    /// The named-binding cases are the point: a dispatch supplies every
+    /// binding the shader declares, by the shader's own name, exactly once.
+    /// They run against the binding planner directly rather than through a
+    /// GPU, because that is the layer the rules live at — and because
+    /// **duplicate is not expressible in a Python mapping**, so the wire
+    /// array is the only place it can be tested at all.
     #[cfg(target_os = "linux")]
     mod compute_kernel_dispatch {
         use super::super::*;
-        use super::EscalateHandleRegistry;
-        use std::sync::{Arc, Mutex};
+        use crate::core::context::GpuContext;
+        use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec};
 
-        use crate::core::context::{ComputeKernelBridge, GpuContext, GpuContextLimitedAccess};
-
-        /// Synthetic bridge: returns SHA-256(spv) hex on register and
-        /// records the (kernel_id, surface_uuid, push, dispatch) tuple
-        /// per `run` call so the test can assert the wire shape.
-        struct RecordingBridge {
-            registered: Mutex<std::collections::HashMap<String, u32>>,
-            runs: Mutex<Vec<RecordedRun>>,
+        /// Compute is an always-present capability now, so there is no bridge
+        /// to install — only a device to have or not have.
+        fn make_gpu_sandbox_if_available() -> Option<GpuContextLimitedAccess> {
+            GpuContext::init_for_platform_sync()
+                .ok()
+                .map(GpuContextLimitedAccess::new)
         }
 
-        #[derive(Clone, Debug)]
-        struct RecordedRun {
-            kernel_id: String,
-            surface_uuid: String,
-            push_len: usize,
-            groups: (u32, u32, u32),
+        /// A two-binding kernel shaped like the read-one-write-another pass
+        /// this whole change exists to make possible.
+        fn blur_kernel_bindings() -> Vec<ComputeBindingSpec> {
+            vec![
+                ComputeBindingSpec::sampled_texture(0).with_name("source_image"),
+                ComputeBindingSpec::storage_image(1).with_name("output_image"),
+            ]
         }
 
-        impl RecordingBridge {
-            fn new() -> Arc<Self> {
-                Arc::new(Self {
-                    registered: Mutex::new(std::collections::HashMap::new()),
-                    runs: Mutex::new(Vec::new()),
-                })
-            }
-
-            fn registered_count(&self) -> usize {
-                self.registered.lock().unwrap().len()
-            }
-
-            fn runs(&self) -> Vec<RecordedRun> {
-                self.runs.lock().unwrap().clone()
-            }
+        fn supplied(
+            entries: &[(&str, EscalateRequestComputeBindingKind, &str)],
+        ) -> Vec<EscalateRequestRunComputeKernelBinding> {
+            entries
+                .iter()
+                .map(
+                    |(name, kind, target_id)| EscalateRequestRunComputeKernelBinding {
+                        kind: *kind,
+                        name: (*name).to_string(),
+                        target_id: (*target_id).to_string(),
+                    },
+                )
+                .collect()
         }
 
-        impl ComputeKernelBridge for RecordingBridge {
-            fn register(
-                &self,
-                spv: &[u8],
-                push_constant_size: u32,
-            ) -> std::result::Result<String, String> {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(spv);
-                let id = format!("{:x}", h.finalize());
-                self.registered
-                    .lock()
-                    .unwrap()
-                    .insert(id.clone(), push_constant_size);
-                Ok(id)
-            }
-
-            fn run(
-                &self,
-                kernel_id: &str,
-                surface_uuid: &str,
-                push_constants: &[u8],
-                group_count_x: u32,
-                group_count_y: u32,
-                group_count_z: u32,
-            ) -> std::result::Result<(), String> {
-                if !self.registered.lock().unwrap().contains_key(kernel_id) {
-                    return Err(format!(
-                        "kernel_id '{kernel_id}' not registered with this bridge"
-                    ));
-                }
-                self.runs.lock().unwrap().push(RecordedRun {
-                    kernel_id: kernel_id.to_string(),
-                    surface_uuid: surface_uuid.to_string(),
-                    push_len: push_constants.len(),
-                    groups: (group_count_x, group_count_y, group_count_z),
-                });
-                Ok(())
-            }
+        fn plan_error(supplied: &[EscalateRequestRunComputeKernelBinding]) -> String {
+            let err = plan_supplied_compute_bindings(supplied, &blur_kernel_bindings())
+                .err()
+                .expect("expected the plan to be refused");
+            format!("{err}")
         }
 
-        fn make_sandbox_with_bridge(
-            bridge: Option<Arc<dyn ComputeKernelBridge>>,
-        ) -> Option<GpuContextLimitedAccess> {
-            let gpu = match GpuContext::init_for_platform_sync() {
-                Ok(g) => g,
-                Err(_) => return None,
-            };
-            if let Some(b) = bridge {
-                gpu.set_compute_kernel_bridge(b);
-            }
-            Some(GpuContextLimitedAccess::new(gpu))
-        }
-
-        /// `register_compute_kernel` with no bridge registered must
-        /// surface a typed `Err`, not a panic. Mirrors
-        /// `run_cpu_readback_copy_without_bridge_returns_err`.
         #[test]
-        fn register_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("register_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req =
-                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-                    request_id: "req-reg-1".to_string(),
-                    spv_hex: "deadbeef".to_string(),
-                    push_constant_size: 0,
-                });
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-reg-1");
-                    assert!(
-                        err.message.contains("ComputeKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
-            }
+        fn a_complete_dispatch_resolves_every_name_to_its_slot() {
+            let entries = supplied(&[
+                (
+                    "output_image",
+                    EscalateRequestComputeBindingKind::StorageImage,
+                    "surface-out",
+                ),
+                (
+                    "source_image",
+                    EscalateRequestComputeBindingKind::SampledTexture,
+                    "surface-in",
+                ),
+            ]);
+            let planned = plan_supplied_compute_bindings(&entries, &blur_kernel_bindings())
+                .expect("a complete, correctly-typed dispatch");
+
+            // Resolution is by name, so the order the caller supplied them in
+            // is not the order the shader declared them in — and that is fine.
+            assert_eq!(planned.len(), 2);
+            assert_eq!(planned[0].name, "output_image");
+            assert_eq!(planned[0].binding, 1);
+            assert_eq!(planned[0].kind, ComputeBindingKind::StorageImage);
+            assert_eq!(planned[0].target_id, "surface-out");
+            assert_eq!(planned[1].name, "source_image");
+            assert_eq!(planned[1].binding, 0);
+            assert_eq!(planned[1].target_id, "surface-in");
         }
 
-        /// `run_compute_kernel` with no bridge registered must surface a
-        /// typed `Err`, not a panic.
+        /// Not expressible in a Python mapping — a dict cannot carry one key
+        /// twice — so the wire array is the only layer that can guard it.
         #[test]
-        fn run_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("run_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
-                request_id: "req-run-1".to_string(),
-                kernel_id: "abc".to_string(),
-                surface_uuid: "uuid-1".to_string(),
-                push_constants_hex: "".to_string(),
-                group_count_x: 1,
-                group_count_y: 1,
-                group_count_z: 1,
-            });
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-run-1");
-                    assert!(
-                        err.message.contains("ComputeKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
-            }
-        }
-
-        /// Malformed `spv_hex` must surface as a clean parse error
-        /// keyed by `request_id`, not a panic.
-        #[test]
-        fn register_with_invalid_hex_returns_err() {
-            let bridge = RecordingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_with_invalid_hex_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req =
-                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-                    request_id: "req-reg-bad".to_string(),
-                    spv_hex: "xyz123".to_string(), // non-hex character
-                    push_constant_size: 0,
-                });
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-reg-bad");
-                    assert!(err.message.contains("spv_hex"), "got: {}", err.message);
-                }
-                other => panic!("expected Err for malformed hex, got {other:?}"),
-            }
-            assert_eq!(
-                bridge.registered_count(),
-                0,
-                "bridge.register must not have been called on the parse-error path"
-            );
-        }
-
-        /// Malformed `push_constants_hex` must surface as a clean parse
-        /// error keyed by `request_id`.
-        #[test]
-        fn run_with_invalid_push_constants_hex_returns_err() {
-            let bridge = RecordingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("run_with_invalid_push_constants_hex_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
-                request_id: "req-run-bad".to_string(),
-                kernel_id: "abc".to_string(),
-                surface_uuid: "uuid-1".to_string(),
-                push_constants_hex: "xyz".to_string(), // odd-length + non-hex
-                group_count_x: 1,
-                group_count_y: 1,
-                group_count_z: 1,
-            });
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-run-bad");
-                    assert!(
-                        err.message.contains("push_constants_hex"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for malformed hex, got {other:?}"),
-            }
+        fn a_name_supplied_twice_is_refused() {
+            let message = plan_error(&supplied(&[
+                (
+                    "source_image",
+                    EscalateRequestComputeBindingKind::SampledTexture,
+                    "surface-in",
+                ),
+                (
+                    "source_image",
+                    EscalateRequestComputeBindingKind::SampledTexture,
+                    "surface-other",
+                ),
+                (
+                    "output_image",
+                    EscalateRequestComputeBindingKind::StorageImage,
+                    "surface-out",
+                ),
+            ]));
             assert!(
-                bridge.runs().is_empty(),
-                "bridge.run must not have been called on the parse-error path"
+                message.contains("`source_image` was supplied twice"),
+                "must name the duplicate, got: {message}"
+            );
+            assert!(
+                message.contains("`source_image`, `output_image`"),
+                "must name the shader's declared bindings, got: {message}"
             );
         }
 
-        /// Registering identical SPIR-V twice must return the same
-        /// `kernel_id`. Reflects the issue body's "kernel_id stability"
-        /// requirement and the host-side cache-hit semantics.
         #[test]
-        fn register_returns_stable_kernel_id_for_identical_spirv() {
-            let bridge = RecordingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_returns_stable_kernel_id_for_identical_spirv: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let make_req = |rid: &str| {
-                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-                    request_id: rid.to_string(),
-                    spv_hex: "deadbeefcafebabe".to_string(),
-                    push_constant_size: 0,
-                })
-            };
-            let first = handle_escalate_op(&sandbox, &registry, make_req("r1"))
-                .expect("first register must produce a response");
-            let second = handle_escalate_op(&sandbox, &registry, make_req("r2"))
-                .expect("second register must produce a response");
-            let id1 = match first {
-                EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "r1");
-                    ok.handle_id
-                }
-                other => panic!("first register expected Ok, got {other:?}"),
-            };
-            let id2 = match second {
-                EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "r2");
-                    ok.handle_id
-                }
-                other => panic!("second register expected Ok, got {other:?}"),
-            };
-            assert_eq!(id1, id2, "identical SPIR-V must produce the same kernel_id");
-        }
-
-        /// Different SPIR-V must produce different `kernel_id`s.
-        #[test]
-        fn register_returns_distinct_kernel_ids_for_different_spirv() {
-            let bridge = RecordingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_returns_distinct_kernel_ids_for_different_spirv: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req_a =
-                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-                    request_id: "ra".to_string(),
-                    spv_hex: "deadbeef".to_string(),
-                    push_constant_size: 0,
-                });
-            let req_b =
-                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-                    request_id: "rb".to_string(),
-                    spv_hex: "cafebabe".to_string(),
-                    push_constant_size: 0,
-                });
-            let resp_a = match handle_escalate_op(&sandbox, &registry, req_a)
-                .expect("must produce a response")
-            {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            let resp_b = match handle_escalate_op(&sandbox, &registry, req_b)
-                .expect("must produce a response")
-            {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            assert_ne!(
-                resp_a, resp_b,
-                "different SPIR-V must produce different kernel_ids"
+        fn a_name_the_shader_does_not_declare_is_refused() {
+            let message = plan_error(&supplied(&[
+                (
+                    "source_image",
+                    EscalateRequestComputeBindingKind::SampledTexture,
+                    "surface-in",
+                ),
+                (
+                    "output_image",
+                    EscalateRequestComputeBindingKind::StorageImage,
+                    "surface-out",
+                ),
+                (
+                    "sharpen_amount",
+                    EscalateRequestComputeBindingKind::UniformBuffer,
+                    "surface-x",
+                ),
+            ]));
+            assert!(
+                message.contains("`sharpen_amount` is not one this shader declares"),
+                "must name the unknown binding, got: {message}"
+            );
+            assert!(
+                message.contains("`source_image`, `output_image`"),
+                "must name the shader's declared bindings, got: {message}"
             );
         }
 
-        /// Dispatching a kernel_id the bridge has never seen must
-        /// surface as a typed `Err`, not a panic. Reflects the issue
-        /// body's "Negative test: dispatch with an unregistered
-        /// kernel_id returns a typed `EscalateError`, not a panic"
-        /// requirement.
+        /// No implicit default and no carried-over value: the kernel holds no
+        /// binding state between dispatches to fall back on.
         #[test]
-        fn run_with_unregistered_kernel_id_returns_err() {
-            let bridge = RecordingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("run_with_unregistered_kernel_id_returns_err: no GPU — skipping");
-                    return;
-                }
+        fn a_declared_binding_left_out_is_refused() {
+            let message = plan_error(&supplied(&[(
+                "source_image",
+                EscalateRequestComputeBindingKind::SampledTexture,
+                "surface-in",
+            )]));
+            assert!(
+                message.contains("`output_image` was not supplied"),
+                "must name the missing binding, got: {message}"
+            );
+            assert!(
+                message.contains("do not persist between dispatches"),
+                "must say why there is no fallback, got: {message}"
+            );
+            assert!(
+                message.contains("`source_image`, `output_image`"),
+                "must name the shader's declared bindings, got: {message}"
+            );
+        }
+
+        #[test]
+        fn a_binding_supplied_as_the_wrong_kind_is_refused() {
+            let message = plan_error(&supplied(&[
+                (
+                    "source_image",
+                    EscalateRequestComputeBindingKind::SampledTexture,
+                    "surface-in",
+                ),
+                (
+                    "output_image",
+                    EscalateRequestComputeBindingKind::StorageBuffer,
+                    "surface-out",
+                ),
+            ]));
+            assert!(
+                message.contains("`output_image` was supplied as StorageBuffer"),
+                "must name the binding and the kind supplied, got: {message}"
+            );
+            assert!(
+                message.contains("declares it StorageImage"),
+                "must name the kind the shader declares, got: {message}"
+            );
+        }
+
+        /// A kernel with no bindings at all dispatches — the empty case is not
+        /// an error, and the "missing" rule has nothing to fire on.
+        #[test]
+        fn a_kernel_declaring_nothing_needs_nothing_supplied() {
+            let planned =
+                plan_supplied_compute_bindings(&[], &[]).expect("an unbound kernel dispatches");
+            assert!(planned.is_empty());
+        }
+
+        /// Both hex fields are decoded before the escalate hop, so a malformed
+        /// one is refused without touching the GPU at all.
+        #[test]
+        fn register_with_invalid_spv_hex_is_refused_without_escalating() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_with_invalid_spv_hex: no GPU — skipping");
+                return;
             };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
-                request_id: "req-run-bad-id".to_string(),
-                kernel_id: "never-registered-id".to_string(),
-                surface_uuid: "uuid-1".to_string(),
-                push_constants_hex: "".to_string(),
-                group_count_x: 1,
-                group_count_y: 1,
-                group_count_z: 1,
-            });
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
+            let response = handle_register_compute_kernel(
+                &sandbox,
+                "rid-1".to_string(),
+                EscalateRequestRegisterComputeKernel {
+                    bindings: Vec::new(),
+                    push_constant_size: 0,
+                    request_id: "rid-1".to_string(),
+                    spv_hex: "not-hex".to_string(),
+                },
+            );
             match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-run-bad-id");
-                    assert!(
-                        err.message.contains("not registered")
-                            || err.message.contains("never-registered-id"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for unregistered kernel_id, got {other:?}"),
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("spv_hex decode"),
+                    "got: {}",
+                    err.message
+                ),
+                other => panic!("expected Err, got {other:?}"),
             }
         }
 
-        /// Successful `run_compute_kernel` echoes the kernel_id back as
-        /// `handle_id` (no separate handle is allocated per dispatch —
-        /// compute is sync host-side) and forwards push-constants /
-        /// dispatch dimensions to the bridge unchanged.
         #[test]
-        fn run_forwards_payload_to_bridge_and_echoes_kernel_id() {
-            let bridge = RecordingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "run_forwards_payload_to_bridge_and_echoes_kernel_id: no GPU — skipping"
-                    );
-                    return;
-                }
+        fn run_with_invalid_push_constants_hex_is_refused_without_escalating() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("run_with_invalid_push_constants_hex: no GPU — skipping");
+                return;
             };
-            let registry = EscalateHandleRegistry::new();
-
-            // Register first so the bridge has the kernel_id cached.
-            let reg =
-                EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
-                    request_id: "reg".to_string(),
-                    spv_hex: "abcdef0123456789".to_string(),
-                    push_constant_size: 8,
-                });
-            let kernel_id = match handle_escalate_op(&sandbox, &registry, reg).unwrap() {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("register expected Ok, got {other:?}"),
-            };
-
-            let run = EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
-                request_id: "run".to_string(),
-                kernel_id: kernel_id.clone(),
-                surface_uuid: "surface-xyz".to_string(),
-                push_constants_hex: "00112233aabbccdd".to_string(),
-                group_count_x: 4,
-                group_count_y: 5,
-                group_count_z: 6,
-            });
-            let response = handle_escalate_op(&sandbox, &registry, run).unwrap();
+            let response = handle_run_compute_kernel(
+                &sandbox,
+                "rid-2".to_string(),
+                EscalateRequestRunComputeKernel {
+                    bindings: Vec::new(),
+                    group_count_x: 1,
+                    group_count_y: 1,
+                    group_count_z: 1,
+                    kernel_id: "whatever".to_string(),
+                    push_constants_hex: "zz".to_string(),
+                    request_id: "rid-2".to_string(),
+                },
+            );
             match response {
-                EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "run");
-                    assert_eq!(
-                        ok.handle_id, kernel_id,
-                        "run response handle_id must echo the kernel_id"
-                    );
-                    assert!(
-                        ok.timeline_value.is_none(),
-                        "run_compute_kernel responses carry no timeline"
-                    );
-                }
-                other => panic!("run expected Ok, got {other:?}"),
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("push_constants_hex decode"),
+                    "got: {}",
+                    err.message
+                ),
+                other => panic!("expected Err, got {other:?}"),
             }
-            let runs = bridge.runs();
-            assert_eq!(runs.len(), 1, "bridge.run must have been called once");
-            let r = &runs[0];
-            assert_eq!(r.kernel_id, kernel_id);
-            assert_eq!(r.surface_uuid, "surface-xyz");
-            assert_eq!(r.push_len, 8, "push_constants_hex decoded to 8 bytes");
-            assert_eq!(r.groups, (4, 5, 6));
+        }
+
+        #[test]
+        fn dispatching_an_unregistered_kernel_id_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("dispatching_an_unregistered_kernel_id: no GPU — skipping");
+                return;
+            };
+            let response = handle_run_compute_kernel(
+                &sandbox,
+                "rid-3".to_string(),
+                EscalateRequestRunComputeKernel {
+                    bindings: Vec::new(),
+                    group_count_x: 1,
+                    group_count_y: 1,
+                    group_count_z: 1,
+                    kernel_id: "never-registered".to_string(),
+                    push_constants_hex: String::new(),
+                    request_id: "rid-3".to_string(),
+                },
+            );
+            match response {
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("no kernel registered under id"),
+                    "got: {}",
+                    err.message
+                ),
+                other => panic!("expected Err, got {other:?}"),
+            }
         }
     }
 

@@ -112,6 +112,7 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
 mod vulkan_compute_kernel;
 pub use vulkan_compute_kernel::VulkanComputeKernel;
+pub(crate) use vulkan_compute_kernel::quote_declared_names;
 
 mod vulkan_graphics_kernel;
 pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel};
