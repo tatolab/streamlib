@@ -85,16 +85,9 @@ impl PublishedPixelBufferFrameId {
     /// Read a published frame id back out of a surface-id string; `None` for
     /// ids that carry no `#<generation>` suffix (non-pool surfaces).
     pub fn parse(surface_id: &str) -> Option<Self> {
-        let (pool_slot, generation_digits) = surface_id.rsplit_once('#')?;
-        if pool_slot.is_empty()
-            || generation_digits.is_empty()
-            || !generation_digits.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return None;
-        }
-        Some(Self {
+        split_pool_slot_and_frame_generation(surface_id).map(|(pool_slot, frame_generation)| Self {
             pool_slot_id: PixelBufferPoolSlotId::from_str(pool_slot),
-            frame_generation: generation_digits.parse().ok()?,
+            frame_generation,
         })
     }
 }
@@ -105,15 +98,25 @@ impl std::fmt::Display for PublishedPixelBufferFrameId {
     }
 }
 
+/// The borrowing half of the grammar: the slot and generation of a published
+/// frame id, or `None` for an id that carries no `#<generation>` suffix.
+pub fn split_pool_slot_and_frame_generation(surface_id: &str) -> Option<(&str, u64)> {
+    let (pool_slot, generation_digits) = surface_id.rsplit_once('#')?;
+    if pool_slot.is_empty()
+        || generation_digits.is_empty()
+        || !generation_digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((pool_slot, generation_digits.parse().ok()?))
+}
+
 /// The pool-slot portion of any surface id: strips a published frame id's
 /// `#<generation>` suffix and returns every other id whole. What per-slot
 /// caches normalize their keys through.
 pub fn pool_slot_key_of_surface_id(surface_id: &str) -> &str {
-    match PublishedPixelBufferFrameId::parse(surface_id) {
-        Some(_) => surface_id
-            .rsplit_once('#')
-            .map(|(pool_slot, _)| pool_slot)
-            .unwrap_or(surface_id),
+    match split_pool_slot_and_frame_generation(surface_id) {
+        Some((pool_slot, _)) => pool_slot,
         None => surface_id,
     }
 }

@@ -27,6 +27,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::VulkanLayout;
+use streamlib::sdk::rhi::pool_slot_key_of_surface_id;
 
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -488,16 +489,21 @@ impl DisplayWindowEventLoopHandler {
                 registration
             }
             Err(e) => {
-                // Redraws retry at frame rate; warn once per surface, not
-                // once per attempt.
-                if self.last_unresolved_surface_id.as_deref() != Some(frame_bag.surface_id.as_str())
+                // Redraws retry at frame rate; warn once per underlying
+                // surface, not once per attempt — and a pool surface
+                // publishes a fresh id per frame, so the dedup keys on the
+                // slot or a lagging display would warn at source cadence.
+                let unresolved_surface_key =
+                    pool_slot_key_of_surface_id(&frame_bag.surface_id).to_string();
+                if self.last_unresolved_surface_id.as_deref()
+                    != Some(unresolved_surface_key.as_str())
                 {
                     tracing::warn!(
                         surface_id = %frame_bag.surface_id,
                         error = %e,
                         "DisplayWindow: failed to resolve frame texture (warning once per surface)"
                     );
-                    self.last_unresolved_surface_id = Some(frame_bag.surface_id.clone());
+                    self.last_unresolved_surface_id = Some(unresolved_surface_key);
                 }
                 return;
             }

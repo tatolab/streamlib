@@ -46,8 +46,8 @@ pub(crate) struct EscalateResponseErr {
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateResponseOk {
     /// Opaque handle returned by the host. For acquire_pixel_buffer this is
-    /// the PixelBufferPoolSlotId the host registered with its pixel-buffer pool and
-    /// SurfaceStore. For acquire_texture this is a host-side UUID keying the
+    /// the surface-share check-in id (or, with no store, the acquisition's
+    /// published frame id). For acquire_texture this is a host-side UUID keying the
     /// EscalateHandleRegistry's texture slot. For register_compute_kernel this
     /// is the SHA-256 hex of the SPIR-V blob — re-registering identical SPIR-V
     /// returns the same handle_id and re-uses the cached `VulkanComputeKernel`.

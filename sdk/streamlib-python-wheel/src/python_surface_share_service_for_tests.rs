@@ -22,6 +22,9 @@ pub(crate) struct SurfaceShareUnderTest {
     pub(crate) socket_path: PathBuf,
     check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
     socket_directory: PathBuf,
+    /// Publisher connections held open for the test's lifetime: the service
+    /// releases a publisher's surfaces when its connection drops.
+    held_publisher_connections: parking_lot::Mutex<Vec<std::os::unix::net::UnixStream>>,
 }
 
 impl Drop for SurfaceShareUnderTest {
@@ -49,6 +52,7 @@ impl SurfaceShareUnderTest {
             socket_path,
             check_out_leases,
             socket_directory,
+            held_publisher_connections: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -107,7 +111,7 @@ impl SurfaceShareUnderTest {
         // is ours to close.
         unsafe { libc::close(backing_fd) };
         // Held open deliberately: closing it would take the surface with it.
-        std::mem::forget(publisher);
+        self.held_publisher_connections.lock().push(publisher);
         response
             .get("surface_id")
             .and_then(|value| value.as_str())
@@ -168,7 +172,7 @@ impl SurfaceShareUnderTest {
             // copy is ours to close.
             unsafe { libc::close(backing_fd) };
             // Held open deliberately: closing it would take the surface with it.
-            std::mem::forget(publisher);
+            self.held_publisher_connections.lock().push(publisher);
             assert_eq!(
                 response.get("success").and_then(serde_json::Value::as_bool),
                 Some(true),

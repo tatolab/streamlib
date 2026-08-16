@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use crate::core::rhi::{PublishedPixelBufferFrameId, pool_slot_key_of_surface_id};
+use crate::core::rhi::{pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation};
 use crate::core::{Error, Result};
 
 /// The holder a checkout lease is charged to — one surface-share connection.
@@ -63,19 +63,16 @@ impl SurfaceCheckOutLeaseTable {
     /// frame the producer has already recycled — one lock, so the answer
     /// cannot go stale between the test and the record.
     fn lease_key_of_a_live_frame<'id>(&self, surface_id: &'id str) -> Result<&'id str> {
-        let Some(published) = PublishedPixelBufferFrameId::parse(surface_id) else {
+        let Some((pool_slot, published_generation)) =
+            split_pool_slot_and_frame_generation(surface_id)
+        else {
             return Ok(surface_id);
         };
-        match self
-            .current_frame_generation_by_pool_slot
-            .get(published.pool_slot_id().as_str())
-        {
-            Some(&current) if current == published.frame_generation() => {
-                Ok(pool_slot_key_of_surface_id(surface_id))
-            }
+        match self.current_frame_generation_by_pool_slot.get(pool_slot) {
+            Some(&current) if current == published_generation => Ok(pool_slot),
             Some(&current) => Err(Error::SurfaceFrameRecycled {
                 surface_id: surface_id.to_string(),
-                published_generation: published.frame_generation(),
+                published_generation,
                 current_generation: current,
             }),
             // Fail closed: an id that claims a generation over a slot this
@@ -86,6 +83,19 @@ impl SurfaceCheckOutLeaseTable {
                  still exists, so the checkout is refused"
             ))),
         }
+    }
+
+    /// The one place the ledger advances. Generations only move forward: a
+    /// lower one would silently un-retire ids the pool already promised are
+    /// dead.
+    fn publish_frame_generation(&mut self, pool_slot_key: &str, frame_generation: u64) {
+        let previous = self
+            .current_frame_generation_by_pool_slot
+            .insert(pool_slot_key.to_string(), frame_generation);
+        debug_assert!(
+            previous.is_none_or(|earlier| earlier < frame_generation),
+            "generation {frame_generation} of pool slot {pool_slot_key} does not advance {previous:?}"
+        );
     }
 }
 
@@ -179,8 +189,7 @@ impl SurfaceCheckOutLeaseRegistry {
         frame_generation: u64,
     ) -> Result<()> {
         self.readable_table()?
-            .current_frame_generation_by_pool_slot
-            .insert(pool_slot_key.to_string(), frame_generation);
+            .publish_frame_generation(pool_slot_key, frame_generation);
         Ok(())
     }
 
@@ -293,8 +302,7 @@ impl SurfaceCheckOutLeaseHandOff<'_> {
     /// where it would lease a frame the producer is already overwriting.
     pub fn publish_frame_generation(&mut self, pool_slot_key: &str, frame_generation: u64) {
         self.table
-            .current_frame_generation_by_pool_slot
-            .insert(pool_slot_key.to_string(), frame_generation);
+            .publish_frame_generation(pool_slot_key, frame_generation);
     }
 }
 
@@ -553,11 +561,16 @@ mod tests {
         assert_eq!(registry.outstanding_check_out_count("slot-a").unwrap(), 0);
     }
 
-    /// The retire step rides the hand-off guard: a checkout racing the pool
-    /// lands strictly before the guard (lease recorded, visible to the test)
-    /// or strictly after publish (refused as recycled) — never in between.
+    /// The refused half of the hand-off ordering: a checkout that loses the
+    /// race to the retire is refused, never silently leased. (The other half
+    /// — a checkout landing first is *seen* and the slot never rehanded — is
+    /// [`a_checkout_cannot_land_inside_the_pools_hand_off`].)
+    ///
+    /// Mental-revert: publish the generation after dropping the guard and
+    /// the racer can lease generation 1 between the availability test and
+    /// the retire — a lease on a frame the producer is already overwriting.
     #[test]
-    fn a_checkout_racing_the_retire_is_either_seen_or_refused() {
+    fn a_checkout_that_loses_the_race_to_the_retire_is_refused() {
         let registry = std::sync::Arc::new(SurfaceCheckOutLeaseRegistry::new());
         let child = registry.mint_holder_id();
         registry.publish_frame_generation("slot-a", 1).unwrap();

@@ -475,8 +475,12 @@ impl HelperProcessGpuExchangeClient {
         // Memoised per pool slot: the parent's staging (and this CUDA
         // import of it) spans every frame the slot publishes, while each
         // refill names — and the parent validates — the specific frame id.
-        let memo_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
-        if let Some(already_open) = self.device_exports_by_surface.lock().get(memo_key) {
+        let source_pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
+        if let Some(already_open) = self
+            .device_exports_by_surface
+            .lock()
+            .get(source_pool_slot_key)
+        {
             return Ok(Arc::clone(already_open));
         }
 
@@ -507,7 +511,7 @@ impl HelperProcessGpuExchangeClient {
         Ok(Arc::clone(
             self.device_exports_by_surface
                 .lock()
-                .entry(memo_key.to_string())
+                .entry(source_pool_slot_key.to_string())
                 .or_insert(opened),
         ))
     }

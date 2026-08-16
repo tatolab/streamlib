@@ -2173,12 +2173,12 @@ mod tests {
                 MAX_DMA_BUF_PLANES,
             )
             .expect("the request itself goes through");
+            assert!(refused_fds.is_empty(), "no planes may accompany a refusal");
             close_every_fd(&refused_fds);
             assert!(
                 wire_error_of(&refused).contains("recycled"),
                 "{op} of a retired frame id must fail naming the recycling, got: {refused:?}"
             );
-            assert!(refused_fds.is_empty(), "no planes may accompany a refusal");
         }
 
         let (served, served_fds) = send_request_with_fds(

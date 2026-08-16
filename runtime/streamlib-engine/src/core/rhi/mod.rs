@@ -57,7 +57,7 @@ pub use index_buffer::IndexBuffer;
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{
     PixelBufferDescriptor, PixelBufferPoolSlotId, PublishedPixelBufferFrameId,
-    pool_slot_key_of_surface_id,
+    pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation,
 };
 pub use ray_tracing_kernel::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,

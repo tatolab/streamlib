@@ -472,11 +472,26 @@ impl GpuContext {
     /// else's picture. Returns the signalled timeline value a
     /// cross-process consumer would wait on instead of relying on the
     /// in-process host wait.
+    fn refuse_a_surface_this_staging_does_not_export(
+        staging: &SurfaceDeviceExportStaging,
+        surface_id: &str,
+    ) -> Result<()> {
+        if crate::core::rhi::pool_slot_key_of_surface_id(surface_id) != staging.source_surface_key {
+            return Err(Error::GpuError(format!(
+                "surface {surface_id} is not the surface this device-export staging was opened \
+                 for ({}); the staged copy would carry another surface's pixels",
+                staging.source_surface_key
+            )));
+        }
+        Ok(())
+    }
+
     pub fn refill_device_export_staging(
         &self,
         staging: &SurfaceDeviceExportStaging,
         surface_id: &str,
     ) -> Result<u64> {
+        Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
         let source = self.resolve_device_export_source(surface_id)?;
         self.submit_staging_copy_and_wait(staging, |recorder| match &source {
@@ -588,6 +603,7 @@ impl GpuContext {
         staging: &SurfaceDeviceExportStaging,
         surface_id: &str,
     ) -> Result<u64> {
+        Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
         if !staging.writable {
             return Err(Error::GpuError(format!(
