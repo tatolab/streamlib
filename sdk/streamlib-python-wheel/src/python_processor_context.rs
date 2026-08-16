@@ -193,11 +193,7 @@ impl PythonGpuSurfaceHandle {
     /// Borrow the shared memory anchor, or fail if the handle is closed.
     fn owned_memory(&self) -> PyResult<Arc<GpuSurfaceOwnedMemory>> {
         #[cfg(target_os = "linux")]
-        if self
-            .device_texture_without_a_local_mapping
-            .lock()
-            .is_some()
-        {
+        if self.device_texture_without_a_local_mapping.lock().is_some() {
             return Err(PyRuntimeError::new_err(
                 "this surface is a device texture whose memory is not mapped into this process: \
                  its pixels are reachable to a kernel dispatch, which binds it by surface id, \

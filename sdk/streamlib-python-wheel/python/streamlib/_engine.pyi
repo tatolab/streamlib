@@ -25,6 +25,7 @@ _BagReadTarget = TypeVar("_BagReadTarget")
 
 __all__ = [
     "AddedProcessor",
+    "ComputeKernel",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",

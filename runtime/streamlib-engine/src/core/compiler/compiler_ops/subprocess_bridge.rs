@@ -46,25 +46,24 @@ use super::subprocess_escalate::{EscalateHandleRegistry, process_bridge_message}
 /// uses it as the framed-IPC transport.
 pub(crate) const ESCALATE_FD_ENV: &str = "STREAMLIB_ESCALATE_FD";
 
-/// Engine-wide, language-agnostic subprocess protocol version — the single
-/// coordinate every subprocess SDK (Python, Deno, any future language)
-/// handshakes on. Covers the three lockstep runtime surfaces: the native-lib
-/// ctypes/FFI symbol contract, the escalate IPC schema, and this
-/// lifecycle-command protocol. The subprocess analogue of the cdylib plugin
-/// ABI's `STREAMLIB_ABI_VERSION`; bump it (in lockstep with each SDK's mirror
-/// constant) when any of those surfaces changes incompatibly.
+/// Helper-process protocol version — the coordinate the engine and the
+/// helper's Python half handshake on. Covers the escalate IPC schema and this
+/// lifecycle-command protocol; bump it, in lockstep with `_helper.py`'s
+/// mirror constant, when either changes incompatibly.
 ///
-/// Now that an SDK is resolved from a registry *by version* rather than
-/// injected from the workspace, compatibility is no longer guaranteed by
-/// construction — it's asserted by a handshake at subprocess startup. The
-/// engine satisfies a monotonic *range* (`MIN..=CURRENT`, the Cloudflare
-/// `compatibility_date` shape), not strict equality, so a newer engine keeps
-/// accepting SDKs that speak an older-but-still-supported protocol.
-pub const STREAMLIB_SUBPROCESS_PROTOCOL_VERSION: u32 = 1;
+/// Engine and helper ship in one wheel, so this cannot disagree with itself in
+/// a correct install. What the handshake catches is a stale process still
+/// running an older build, or a different `streamlib` earlier on the child's
+/// `sys.path` — both of which would otherwise surface as a mis-parsed op deep
+/// inside an escalate round trip.
+///
+/// v2: the compute escalate ops carry named binding arrays.
+pub const STREAMLIB_SUBPROCESS_PROTOCOL_VERSION: u32 = 2;
 
-/// Oldest subprocess-SDK protocol version this engine still accepts. Raise it
-/// only when dropping support for an old SDK protocol.
-pub(crate) const MIN_SUPPORTED_SUBPROCESS_PROTOCOL: u32 = 1;
+/// Oldest helper protocol this engine accepts. Equal to the current version:
+/// the two halves ship together, so there is no supported skew, and accepting
+/// an older helper would let it mis-parse an op that changed shape.
+pub(crate) const MIN_SUPPORTED_SUBPROCESS_PROTOCOL: u32 = 2;
 
 /// Env var the engine sets to advertise [`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION`]
 /// to the subprocess. The SDK reads it at startup and refuses to run if it

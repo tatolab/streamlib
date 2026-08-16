@@ -2568,8 +2568,7 @@ impl GpuContext {
 
         // Reflection is the source of truth for the binding shape; a caller's
         // declaration is checked against it rather than replacing it.
-        let (reflected, reflected_push_size) =
-            crate::core::rhi::derive_bindings_from_spirv(spv)?;
+        let (reflected, reflected_push_size) = crate::core::rhi::derive_bindings_from_spirv(spv)?;
         reconcile_declared_compute_bindings(declared_bindings, &reflected)?;
         if reflected_push_size != push_constant_size {
             return Err(Error::GpuError(format!(
@@ -2578,12 +2577,14 @@ impl GpuContext {
             )));
         }
 
-        let kernel = Arc::new(self.create_compute_kernel(&crate::core::rhi::ComputeKernelDescriptor {
-            label: "escalate-compute-kernel",
-            spv,
-            bindings: &reflected,
-            push_constant_size,
-        })?);
+        let kernel = Arc::new(self.create_compute_kernel(
+            &crate::core::rhi::ComputeKernelDescriptor {
+                label: "escalate-compute-kernel",
+                spv,
+                bindings: &reflected,
+                push_constant_size,
+            },
+        )?);
 
         Ok((
             kernel_id.clone(),
