@@ -81,7 +81,8 @@ impl PubSub {
     }
 
     /// Subscribe a listener to a topic, returning once the subscriber is
-    /// registered — so an event published after this returns is delivered.
+    /// registered — so an event published after a successful return is
+    /// delivered. Establishment failure is logged, not returned; see below.
     ///
     /// Blocks for as long as establishment takes because the event service
     /// carries no history: a sample sent before the subscriber registers reaches
@@ -90,7 +91,7 @@ impl PubSub {
     ///
     /// Delivery is best-effort, as everywhere else on this bus: if the
     /// subscriber cannot be established, or is still coming up after
-    /// [`SUBSCRIBER_ESTABLISHMENT_TIMEOUT`], this logs the failure and returns
+    /// `SUBSCRIBER_ESTABLISHMENT_TIMEOUT`, this logs the failure and returns
     /// anyway rather than blocking the caller indefinitely. Callers that must
     /// distinguish those cases have nothing to read here yet.
     ///
