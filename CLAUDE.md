@@ -22,15 +22,16 @@ ONE core system per concern — extend the existing system, never build a parall
 - All work enters through `/plan` — it reads the plan statuses and the tracker and says
   which skill is next.
 - Source edits (`runtime/ sdk/ adapters/ xtask/`) belong inside `/implement` with an
-  owner-confirmed ticket — the hook prompts via `.claude/state/active-ticket.json`.
+  owner-confirmed ticket. Nothing prompts on one — like a doc edit, the distinction is the
+  session's to apply.
 - Plan *decisions* belong inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
   Plan and doc *records* do not — see §Recording facts vs deciding. Nothing prompts on a
   doc edit; the distinction is the session's to apply, because a path guard can't see it.
 - **Guardrails prompt; they never wall off.** Every path guard routes to the owner rather
   than refusing, so a scope written months ago can't strand work that has to land. The
   doctrine still decides what is *right* — a prompt is not permission to bend a rule.
-  Guards cover what is genuinely hard to reverse — source without a ticket, consumer
-  trees, licence files. They are not a review queue for prose.
+  Guards cover only what is genuinely hard to reverse — the licence files. They are not a
+  review queue for prose.
 - Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (as few
   tracer bullets as the change honestly needs) →
   `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction

@@ -18,8 +18,8 @@ disable-model-invocation: true
 4. **Announce** the refined plan — goal, files, the seams tests will exercise, scope —
    and **wait for the owner's confirmation**. Hard stop.
 5. On yes: `mkdir -p .claude/state` and write `.claude/state/active-ticket.json`
-   (`{"issue": <N>, "branch": "<type>/<N>-<slug>"}`) — this is what unlocks source edits
-   (the plan-gate hook checks it). Branch `<type>/<N>-<slug>` off fresh `main`.
+   (`{"issue": <N>, "branch": "<type>/<N>-<slug>"}`) — the mid-flight marker `/plan` reads.
+   Branch `<type>/<N>-<slug>` off fresh `main`.
 6. **Build test-first at the seams the ticket names.** Commit at logical checkpoints
    with conventional-commit prefixes; every commit builds.
 7. Scope is the ticket. Side findings go in the PR body as notes — a new ticket only if
