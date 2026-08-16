@@ -50,6 +50,7 @@
 //! callers already in this process; the exportable timeline is the
 //! contract, and it is what a child waits on.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -95,13 +96,14 @@ impl SurfaceExportStagingResidency {
             Self::HostVisible => "cpu-readback-staging",
         }
     }
+}
 
-    /// How this residency reads in an error message.
-    fn described(self) -> &'static str {
-        match self {
+impl std::fmt::Display for SurfaceExportStagingResidency {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             Self::DeviceLocal => "device-local",
             Self::HostVisible => "host-visible",
-        }
+        })
     }
 }
 
@@ -316,8 +318,12 @@ impl GpuContext {
     ) -> Result<Arc<SurfaceExportStaging>> {
         self.refuse_a_retired_frame_id(surface_id)?;
         let source_surface_key = crate::core::rhi::pool_slot_key_of_surface_id(surface_id);
-        let cache_key = (source_surface_key.to_string(), residency);
-        if let Some(existing) = self.surface_export_stagings.lock().get(&cache_key) {
+        if let Some(existing) = self
+            .surface_export_stagings
+            .lock()
+            .get(source_surface_key)
+            .and_then(|by_residency| by_residency.get(&residency))
+        {
             return Ok(Arc::clone(existing));
         }
 
@@ -405,10 +411,11 @@ impl GpuContext {
         // rather than replacing the entry other holders (and the wheel's
         // import memo) key on.
         let mut stagings = self.surface_export_stagings.lock();
-        if let Some(published) = stagings.get(&cache_key) {
+        let by_residency = stagings.entry(source_surface_key.to_string()).or_default();
+        if let Some(published) = by_residency.get(&residency) {
             return Ok(Arc::clone(published));
         }
-        stagings.insert(cache_key, Arc::clone(&staging));
+        by_residency.insert(residency, Arc::clone(&staging));
         Ok(staging)
     }
 
@@ -439,8 +446,7 @@ impl GpuContext {
             Error::GpuError(format!(
                 "the {} export staging for surface {} carries no pixel shape; a consumer would \
                  have no layout to import it under",
-                staging.residency.described(),
-                staging.source_surface_key
+                staging.residency, staging.source_surface_key
             ))
         })?;
         let mut registration_id = staging.surface_share_registration_id.lock();
@@ -462,7 +468,7 @@ impl GpuContext {
         // `host_inner`-direct for the same reason the passthroughs below
         // are: the plugin ABI is not grown a vtable slot for a surface
         // #1715 deletes. A cdylib caller panics at the guard.
-        surface_store.host_inner().register_device_export_staging(
+        surface_store.host_inner().register_surface_export_staging(
             &shared_id,
             &staging.staging_buffer,
             staging.staging_byte_size,
@@ -486,20 +492,13 @@ impl GpuContext {
     /// surface id from ever being shared — and the service would keep holding
     /// dups of an fd pair nothing refills.
     pub(crate) fn evict_surface_export_stagings(&self, surface_id: &str) {
-        let evicted_key = crate::core::rhi::pool_slot_key_of_surface_id(surface_id);
-        let evicted_stagings: Vec<Arc<SurfaceExportStaging>> = {
-            let mut stagings = self.surface_export_stagings.lock();
-            let keys: Vec<_> = stagings
-                .keys()
-                .filter(|(slot_key, _)| slot_key == evicted_key)
-                .cloned()
-                .collect();
-            keys.into_iter()
-                .filter_map(|key| stagings.remove(&key))
-                .collect()
-        };
-        #[cfg(target_os = "linux")]
-        for staging in &evicted_stagings {
+        // One removal takes every residency: they are the surface's inner
+        // map, and the surface they stage is going away.
+        let evicted = self
+            .surface_export_stagings
+            .lock()
+            .remove(crate::core::rhi::pool_slot_key_of_surface_id(surface_id));
+        for staging in evicted.into_iter().flat_map(HashMap::into_values) {
             if let Some(shared_id) = staging.surface_share_registration_id.lock().take()
                 && let Some(surface_store) = self.surface_store()
             {
@@ -515,8 +514,6 @@ impl GpuContext {
                 }
             }
         }
-        #[cfg(not(target_os = "linux"))]
-        drop(evicted_stagings);
     }
 
     /// Record + submit one staging copy and wait (bounded) for it to
@@ -529,37 +526,47 @@ impl GpuContext {
     /// recording — a recorder left mid-recording refuses every later
     /// `begin`, which would brick this surface's export for the life of
     /// the cache entry.
+    ///
     /// Takes the recorder it is handed rather than acquiring it, so the
     /// blocking and non-blocking entry points differ only in how they got
     /// one — and neither carries the other's return shape.
     fn submit_staging_copy_and_wait(
-        &self,
         staging: &SurfaceExportStaging,
         mut submission: parking_lot::MutexGuard<'_, RefillSubmission>,
         record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
     ) -> Result<u64> {
-        let signal_value;
-        {
-            submission.recorder.begin()?;
-            if let Err(record_failure) = record_copy(&mut submission.recorder) {
-                submission.recorder.abort_recording();
-                return Err(record_failure);
-            }
-            signal_value = submission.next_signal_value;
-            submission.next_signal_value += 1;
-            if let Err(submit_failure) = submission
-                .recorder
-                .submit_signaling_timeline(&staging.refill_done_timeline, signal_value)
-            {
-                submission.recorder.abort_recording();
-                return Err(submit_failure);
-            }
-            drop(submission);
+        submission.recorder.begin()?;
+        if let Err(record_failure) = record_copy(&mut submission.recorder) {
+            submission.recorder.abort_recording();
+            return Err(record_failure);
         }
+        let signal_value = submission.next_signal_value;
+        submission.next_signal_value += 1;
+        if let Err(submit_failure) = submission
+            .recorder
+            .submit_signaling_timeline(&staging.refill_done_timeline, signal_value)
+        {
+            submission.recorder.abort_recording();
+            return Err(submit_failure);
+        }
+        drop(submission);
         staging
             .refill_done_timeline
             .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
         Ok(signal_value)
+    }
+
+    /// The contention contract in one place: only a busy recorder is
+    /// `Ok(None)`. Every guard refusal reaches here already as an `Err`,
+    /// because the guards run before the lock is even attempted.
+    fn try_submit_staging_copy_and_wait(
+        staging: &SurfaceExportStaging,
+        record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
+    ) -> Result<Option<u64>> {
+        let Some(submission) = staging.refill_submission.try_lock() else {
+            return Ok(None);
+        };
+        Self::submit_staging_copy_and_wait(staging, submission, record_copy).map(Some)
     }
 
     /// Refuse a surface whose pool slot this staging was not opened for.
@@ -571,8 +578,7 @@ impl GpuContext {
             return Err(Error::GpuError(format!(
                 "surface {surface_id} is not the surface this {} export staging was opened for \
                  ({}); the staged copy would carry another surface's pixels",
-                staging.residency.described(),
-                staging.source_surface_key
+                staging.residency, staging.source_surface_key
             )));
         }
         Ok(())
@@ -591,7 +597,7 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<u64> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        self.submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
+        Self::submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
             Self::record_refill(staging, &source, recorder)
         })
     }
@@ -609,13 +615,9 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let source = self.resolve_refill_source(staging, surface_id)?;
-        let Some(submission) = staging.refill_submission.try_lock() else {
-            return Ok(None);
-        };
-        self.submit_staging_copy_and_wait(staging, submission, |recorder| {
+        Self::try_submit_staging_copy_and_wait(staging, |recorder| {
             Self::record_refill(staging, &source, recorder)
         })
-        .map(Some)
     }
 
     /// The guards every refill runs, plus the freshly-resolved source.
@@ -751,7 +753,7 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<u64> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        self.submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
+        Self::submit_staging_copy_and_wait(staging, staging.refill_submission.lock(), |recorder| {
             Self::record_write_back(staging, &destination, recorder)
         })
     }
@@ -769,13 +771,9 @@ impl GpuContext {
         surface_id: &str,
     ) -> Result<Option<u64>> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        let Some(submission) = staging.refill_submission.try_lock() else {
-            return Ok(None);
-        };
-        self.submit_staging_copy_and_wait(staging, submission, |recorder| {
+        Self::try_submit_staging_copy_and_wait(staging, |recorder| {
             Self::record_write_back(staging, &destination, recorder)
         })
-        .map(Some)
     }
 
     /// The guards every write-back runs, plus the pooled allocation the

@@ -54,8 +54,6 @@ impl RhiBlitter for NoOpBlitter {
 }
 
 #[cfg(target_os = "linux")]
-#[cfg(target_os = "linux")]
-#[cfg(target_os = "linux")]
 use super::graphics_kernel_bridge::GraphicsKernelBridge;
 #[cfg(target_os = "linux")]
 use super::ray_tracing_kernel_bridge::RayTracingKernelBridge;
@@ -619,15 +617,16 @@ pub struct GpuContext {
     /// `texture_cache`, but spanning registration replacements: a
     /// rotating producer re-registers per frame, and the staging must
     /// survive that while its blit source is re-resolved per refill.
-    /// Residency is part of the key because one surface can be exported
-    /// to a GPU consumer and a CPU consumer at once, as two allocations.
+    /// Nested by residency because one surface can be exported to a GPU
+    /// consumer and a CPU consumer at once, as two allocations — and
+    /// because eviction takes the surface's whole inner map at once.
     /// Dropped with the context; evicted by `unregister_texture`.
     #[cfg(target_os = "linux")]
     pub(crate) surface_export_stagings: Arc<
         parking_lot::Mutex<
             HashMap<
-                (String, super::SurfaceExportStagingResidency),
-                Arc<super::SurfaceExportStaging>,
+                String,
+                HashMap<super::SurfaceExportStagingResidency, Arc<super::SurfaceExportStaging>>,
             >,
         >,
     >,

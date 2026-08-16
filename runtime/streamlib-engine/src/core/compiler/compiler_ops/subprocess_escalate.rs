@@ -455,16 +455,16 @@ pub(crate) fn handle_escalate_op(
         }) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_cpu_readback_copy(
+                Some(handle_surface_export_staging_copy(
                     sandbox,
                     rid,
                     &surface_id,
-                    CpuReadbackCopy::Blocking(match direction {
+                    SurfaceExportStagingCopyOp::RunCpuReadbackCopy(match direction {
                         EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer => {
-                            CpuReadbackCopyDirection::SurfaceIntoStaging
+                            SurfaceExportStagingCopyDirection::SurfaceIntoStaging
                         }
                         EscalateRequestRunCpuReadbackCopyDirection::BufferToImage => {
-                            CpuReadbackCopyDirection::StagingBackIntoSurface
+                            SurfaceExportStagingCopyDirection::StagingBackIntoSurface
                         }
                     }),
                 ))
@@ -485,16 +485,16 @@ pub(crate) fn handle_escalate_op(
         }) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_cpu_readback_copy(
+                Some(handle_surface_export_staging_copy(
                     sandbox,
                     rid,
                     &surface_id,
-                    CpuReadbackCopy::NonBlocking(match direction {
+                    SurfaceExportStagingCopyOp::TryRunCpuReadbackCopy(match direction {
                         EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer => {
-                            CpuReadbackCopyDirection::SurfaceIntoStaging
+                            SurfaceExportStagingCopyDirection::SurfaceIntoStaging
                         }
                         EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage => {
-                            CpuReadbackCopyDirection::StagingBackIntoSurface
+                            SurfaceExportStagingCopyDirection::StagingBackIntoSurface
                         }
                     }),
                 ))
@@ -561,11 +561,11 @@ pub(crate) fn handle_escalate_op(
         }) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_device_export_staging_copy(
+                Some(handle_surface_export_staging_copy(
                     sandbox,
                     rid,
                     &surface_id,
-                    DeviceExportCopyDirection::SurfaceIntoStaging,
+                    SurfaceExportStagingCopyOp::RefillDeviceExportStaging,
                 ))
             }
             #[cfg(not(target_os = "linux"))]
@@ -585,11 +585,11 @@ pub(crate) fn handle_escalate_op(
         ) => {
             #[cfg(target_os = "linux")]
             {
-                Some(handle_device_export_staging_copy(
+                Some(handle_surface_export_staging_copy(
                     sandbox,
                     rid,
                     &surface_id,
-                    DeviceExportCopyDirection::StagingBackIntoSurface,
+                    SurfaceExportStagingCopyOp::CopyDeviceExportStagingBackToSurface,
                 ))
             }
             #[cfg(not(target_os = "linux"))]
@@ -958,27 +958,95 @@ fn assign_image_handle_id(
     Ok((handle_id, produce_done, consume_done))
 }
 
-/// Which way one device-export staging copy runs.
+/// The four wire ops that run one surface-export staging copy.
+///
+/// Named as ops rather than as a (residency x direction x may-wait)
+/// product because that product has a cell the wire does not: there is no
+/// non-blocking device-export copy. Enumerating the ops keeps every state
+/// reachable and gives each one its name for free.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
-enum DeviceExportCopyDirection {
+enum SurfaceExportStagingCopyOp {
+    RefillDeviceExportStaging,
+    CopyDeviceExportStagingBackToSurface,
+    RunCpuReadbackCopy(SurfaceExportStagingCopyDirection),
+    TryRunCpuReadbackCopy(SurfaceExportStagingCopyDirection),
+}
+
+/// Which way one surface-export staging copy runs.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum SurfaceExportStagingCopyDirection {
     /// A refill: the surface's current pixels into the staging, so the
     /// consumer's next read sees this frame.
     SurfaceIntoStaging,
-    /// A publish: the consumer's device-side edit back into the
-    /// surface's own allocation, so every other holder observes it.
+    /// A publish: the consumer's edit back into the surface's own
+    /// allocation, so every other holder observes it.
     StagingBackIntoSurface,
 }
 
+/// Whether a copy may wait for the staging's recorder.
 #[cfg(target_os = "linux")]
-impl DeviceExportCopyDirection {
+#[derive(Clone, Copy)]
+enum SurfaceExportStagingCopyContention {
+    WaitForTheRecorder,
+    ReportContended,
+}
+
+#[cfg(target_os = "linux")]
+impl SurfaceExportStagingCopyOp {
     /// The wire op name, for error messages that have to say which
     /// request failed.
     fn escalate_op_name(self) -> &'static str {
         match self {
-            Self::SurfaceIntoStaging => "refill_device_export_staging",
-            Self::StagingBackIntoSurface => "copy_device_export_staging_back_to_surface",
+            Self::RefillDeviceExportStaging => "refill_device_export_staging",
+            Self::CopyDeviceExportStagingBackToSurface => {
+                "copy_device_export_staging_back_to_surface"
+            }
+            Self::RunCpuReadbackCopy(_) => "run_cpu_readback_copy",
+            Self::TryRunCpuReadbackCopy(_) => "try_run_cpu_readback_copy",
         }
+    }
+
+    fn residency(self) -> SurfaceExportStagingResidency {
+        match self {
+            Self::RefillDeviceExportStaging | Self::CopyDeviceExportStagingBackToSurface => {
+                SurfaceExportStagingResidency::DeviceLocal
+            }
+            Self::RunCpuReadbackCopy(_) | Self::TryRunCpuReadbackCopy(_) => {
+                SurfaceExportStagingResidency::HostVisible
+            }
+        }
+    }
+
+    fn direction(self) -> SurfaceExportStagingCopyDirection {
+        match self {
+            Self::RefillDeviceExportStaging => {
+                SurfaceExportStagingCopyDirection::SurfaceIntoStaging
+            }
+            Self::CopyDeviceExportStagingBackToSurface => {
+                SurfaceExportStagingCopyDirection::StagingBackIntoSurface
+            }
+            Self::RunCpuReadbackCopy(direction) | Self::TryRunCpuReadbackCopy(direction) => {
+                direction
+            }
+        }
+    }
+
+    fn contention(self) -> SurfaceExportStagingCopyContention {
+        match self {
+            Self::TryRunCpuReadbackCopy(_) => SurfaceExportStagingCopyContention::ReportContended,
+            _ => SurfaceExportStagingCopyContention::WaitForTheRecorder,
+        }
+    }
+}
+
+/// The wire op that opens a staging at `residency`.
+#[cfg(target_os = "linux")]
+fn escalate_open_op_name(residency: SurfaceExportStagingResidency) -> &'static str {
+    match residency {
+        SurfaceExportStagingResidency::DeviceLocal => "open_device_export_staging",
+        SurfaceExportStagingResidency::HostVisible => "open_cpu_readback_staging",
     }
 }
 
@@ -995,7 +1063,6 @@ fn handle_open_device_export_staging(
         request_id,
         surface_id,
         SurfaceExportStagingResidency::DeviceLocal,
-        "open_device_export_staging",
     )
 }
 
@@ -1016,7 +1083,6 @@ fn handle_open_surface_export_staging(
     request_id: String,
     surface_id: &str,
     residency: SurfaceExportStagingResidency,
-    op_label: &str,
 ) -> EscalateResponse {
     let opened = (|| -> crate::core::error::Result<EscalateResponseOk> {
         let staging = sandbox.surface_export_staging(surface_id, residency)?;
@@ -1044,120 +1110,52 @@ fn handle_open_surface_export_staging(
         Ok(response) => EscalateResponse::Ok(response),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
             request_id,
-            message: format!("{op_label} failed: {failure}"),
+            message: format!("{} failed: {failure}", escalate_open_op_name(residency)),
         }),
     }
 }
 
-/// Run one device-export staging copy on behalf of a helper process and
+/// Run one surface-export staging copy on behalf of a helper process and
 /// answer with the timeline value it signalled.
 ///
 /// The child waits for that value on its imported copy of the staging's
 /// `refill_done` timeline before touching the memory — the host's own
 /// bounded wait orders the submit for callers in this process, but it
 /// says nothing to a consumer one process away.
+///
+/// Always available at either residency: the staging is a `GpuContext`
+/// capability, minted on first ask, with no installation step and
+/// nothing supplied by the application.
+///
+/// Only `try_run_cpu_readback_copy` can answer
+/// [`EscalateResponse::Contended`], and only because another copy holds
+/// this staging's recorder. Every other refusal — a retired frame id, a
+/// read-only export, a geometry change — is an error for every op. The
+/// blocking arms map through `Some`, so a child with no `contended` arm
+/// can never be handed one.
 #[cfg(target_os = "linux")]
-fn handle_device_export_staging_copy(
+fn handle_surface_export_staging_copy(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
     surface_id: &str,
-    direction: DeviceExportCopyDirection,
+    op: SurfaceExportStagingCopyOp,
 ) -> EscalateResponse {
+    use SurfaceExportStagingCopyContention as Contention;
+    use SurfaceExportStagingCopyDirection as Direction;
+
     let copied = sandbox
-        .surface_export_staging(surface_id, SurfaceExportStagingResidency::DeviceLocal)
-        .and_then(|staging| match direction {
-            DeviceExportCopyDirection::SurfaceIntoStaging => {
-                sandbox.refill_surface_export_staging(&staging, surface_id)
-            }
-            DeviceExportCopyDirection::StagingBackIntoSurface => {
-                sandbox.copy_surface_export_staging_back_to_surface(&staging, surface_id)
-            }
-        });
-    match copied {
-        Ok(signalled) => EscalateResponse::Ok(EscalateResponseOk {
-            request_id,
-            handle_id: surface_id.to_string(),
-            timeline_value: Some(signalled.to_string()),
-            ..Default::default()
-        }),
-        Err(failure) => EscalateResponse::Err(EscalateResponseErr {
-            request_id,
-            message: format!("{} failed: {failure}", direction.escalate_op_name()),
-        }),
-    }
-}
-
-/// Which way a cpu-readback copy runs, and whether it may wait.
-///
-/// The direction names the same two copies the device-export ops run;
-/// the residency of the staging they run against is what differs, and
-/// [`handle_cpu_readback_copy`] names it once.
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy)]
-enum CpuReadbackCopy {
-    /// `run_cpu_readback_copy` — waits for the staging's recorder.
-    Blocking(CpuReadbackCopyDirection),
-    /// `try_run_cpu_readback_copy` — answers `contended` instead of
-    /// waiting.
-    NonBlocking(CpuReadbackCopyDirection),
-}
-
-/// Which direction a cpu-readback copy runs.
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy)]
-enum CpuReadbackCopyDirection {
-    /// The surface's current pixels into the CPU-readable staging.
-    SurfaceIntoStaging,
-    /// The consumer's CPU edit back into the surface's own allocation.
-    StagingBackIntoSurface,
-}
-
-#[cfg(target_os = "linux")]
-impl CpuReadbackCopy {
-    /// The wire op name, for error messages that have to say which
-    /// request failed.
-    fn escalate_op_name(self) -> &'static str {
-        match self {
-            Self::Blocking(_) => "run_cpu_readback_copy",
-            Self::NonBlocking(_) => "try_run_cpu_readback_copy",
-        }
-    }
-}
-
-/// Run one cpu-readback copy on behalf of a helper process and answer
-/// with the timeline value it signalled.
-///
-/// Always available: the staging is a `GpuContext` capability, minted on
-/// first ask at [`SurfaceExportStagingResidency::HostVisible`], with no
-/// installation step and nothing supplied by the application. The child
-/// reaches the memory itself through `open_cpu_readback_staging` and the
-/// surface-share check-out that follows it; this op carries no fds, only
-/// the surface id, the direction, and the timeline value to wait for.
-///
-/// `try_run_cpu_readback_copy` answers [`EscalateResponse::Contended`]
-/// when another copy already holds this staging's recorder. Every other
-/// refusal — a retired frame id, a read-only export, a geometry change —
-/// is an error in both spellings, never a contention report.
-#[cfg(target_os = "linux")]
-fn handle_cpu_readback_copy(
-    sandbox: &GpuContextLimitedAccess,
-    request_id: String,
-    surface_id: &str,
-    copy: CpuReadbackCopy,
-) -> EscalateResponse {
-    let copied = sandbox
-        .surface_export_staging(surface_id, SurfaceExportStagingResidency::HostVisible)
-        .and_then(|staging| match copy {
-            CpuReadbackCopy::Blocking(CpuReadbackCopyDirection::SurfaceIntoStaging) => sandbox
+        .surface_export_staging(surface_id, op.residency())
+        .and_then(|staging| match (op.direction(), op.contention()) {
+            (Direction::SurfaceIntoStaging, Contention::WaitForTheRecorder) => sandbox
                 .refill_surface_export_staging(&staging, surface_id)
                 .map(Some),
-            CpuReadbackCopy::Blocking(CpuReadbackCopyDirection::StagingBackIntoSurface) => sandbox
+            (Direction::StagingBackIntoSurface, Contention::WaitForTheRecorder) => sandbox
                 .copy_surface_export_staging_back_to_surface(&staging, surface_id)
                 .map(Some),
-            CpuReadbackCopy::NonBlocking(CpuReadbackCopyDirection::SurfaceIntoStaging) => {
+            (Direction::SurfaceIntoStaging, Contention::ReportContended) => {
                 sandbox.try_refill_surface_export_staging(&staging, surface_id)
             }
-            CpuReadbackCopy::NonBlocking(CpuReadbackCopyDirection::StagingBackIntoSurface) => {
+            (Direction::StagingBackIntoSurface, Contention::ReportContended) => {
                 sandbox.try_copy_surface_export_staging_back_to_surface(&staging, surface_id)
             }
         });
@@ -1171,7 +1169,7 @@ fn handle_cpu_readback_copy(
         Ok(None) => EscalateResponse::Contended(EscalateResponseContended { request_id }),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
             request_id,
-            message: format!("{} failed: {failure}", copy.escalate_op_name()),
+            message: format!("{} failed: {failure}", op.escalate_op_name()),
         }),
     }
 }
@@ -1193,7 +1191,6 @@ fn handle_open_cpu_readback_staging(
         request_id,
         surface_id,
         SurfaceExportStagingResidency::HostVisible,
-        "open_cpu_readback_staging",
     )
 }
 
