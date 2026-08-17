@@ -58,11 +58,18 @@ def test_a_two_pass_filter_runs_as_one_batch(start_app_under_test):
     observed = run_probe(start_app_under_test, "TwoPassBatchProbe")
 
     assert observed["first_scope_returned"] is True
-    assert (
-        observed["source_surface_id"]
-        != observed["intermediate_surface_id"]
-        != observed["output_surface_id"]
-    ), "a two-pass chain runs over three distinct surfaces"
+
+    # Compared as a set, not chained: `a != b != c` is `(a != b) and (b != c)`,
+    # which never compares the source against the output — the pair this is
+    # here to rule out.
+    chain_surface_ids = [
+        observed["source_surface_id"],
+        observed["intermediate_surface_id"],
+        observed["output_surface_id"],
+    ]
+    assert len(set(chain_surface_ids)) == 3, (
+        f"a two-pass chain runs over three distinct surfaces: {chain_surface_ids}"
+    )
 
 
 def test_a_batch_scope_leaves_the_engines_recorder_ready_for_the_next_one(

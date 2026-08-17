@@ -1618,6 +1618,17 @@ impl PythonKernelDispatchBatch {
                 kernel.validated_wire_dispatch(python, bindings, push_constants)?;
 
             let mut recording = self.recording.lock();
+            // Re-checked, not assumed from the first look: validating the
+            // bindings ran user code, and CPython can switch threads inside
+            // it, so another thread may have left the scope and taken the
+            // recorded dispatches meanwhile. Pushing onto a spent batch would
+            // return Ok for work that never reaches the GPU.
+            if recording.closed {
+                return Err(PyRuntimeError::new_err(
+                    "this batch has already run; open a new `kernel_dispatch_batch()` scope \
+                     for the next one",
+                ));
+            }
             if let Some(earlier) = recording
                 .dispatches
                 .iter()

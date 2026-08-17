@@ -1710,10 +1710,16 @@ fn resolve_supplied_compute_bindings(
     // `<slot>`), so a string comparison would let the pair through to exactly
     // the dispatch this refuses.
     for (index, binding) in resolved.iter().enumerate() {
-        let image = binding.registration.texture().vulkan_inner().image();
+        // A texture carrying no image is its own error, raised where the
+        // descriptor would be written. Skipped rather than compared, because
+        // two absent images are not one texture and refusing them here would
+        // send the caller looking for a duplicate they did not write.
+        let Some(image) = binding.registration.texture().vulkan_inner().image() else {
+            continue;
+        };
         if let Some(other) = resolved[..index].iter().position(|prior| {
             prior.kind != binding.kind
-                && prior.registration.texture().vulkan_inner().image() == image
+                && prior.registration.texture().vulkan_inner().image() == Some(image)
         }) {
             // Both ids, as the caller wrote them: a published frame id and its
             // pool slot are different strings for one texture, so naming only
