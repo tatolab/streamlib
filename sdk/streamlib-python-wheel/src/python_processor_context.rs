@@ -726,7 +726,6 @@ impl PythonGpuContextLimitedAccess {
 pub(crate) struct PythonGpuContextFullAccess {
     /// `None` means this helper was started without its GPU channels, and
     /// every method refuses by name.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
 
@@ -1500,7 +1499,6 @@ impl PythonComputeKernel {
 #[derive(Default)]
 struct KernelDispatchBatchRecording {
     /// One wire entry per `dispatch()`, in the order they will run.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     dispatches: Vec<Py<PyDict>>,
     /// The kernel id each entry names, for refusing a repeat in the caller's
     /// own stack. Parallel to `dispatches`.
@@ -1584,9 +1582,9 @@ impl PythonKernelDispatchBatch {
     ) -> PyResult<()> {
         #[cfg(target_os = "linux")]
         {
-            let (wire_bindings, push_constants_hex) =
-                kernel.validated_wire_dispatch(python, bindings, push_constants)?;
-
+            // Before the bindings are looked at: a spent batch collects
+            // nothing, so a binding mistake here is the lesser of the two
+            // things wrong and must not mask it.
             let mut recording = self.recording.lock();
             if recording.closed {
                 return Err(PyRuntimeError::new_err(
@@ -1594,6 +1592,8 @@ impl PythonKernelDispatchBatch {
                      for the next one",
                 ));
             }
+            let (wire_bindings, push_constants_hex) =
+                kernel.validated_wire_dispatch(python, bindings, push_constants)?;
             if let Some(earlier) = recording
                 .kernel_ids
                 .iter()

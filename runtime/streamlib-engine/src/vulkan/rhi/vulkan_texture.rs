@@ -903,6 +903,15 @@ impl HostVulkanTexture {
         self.image
     }
 
+    /// The underlying image's identity as an opaque number.
+    ///
+    /// For callers outside the RHI that must tell two textures' images apart —
+    /// image layout belongs to the image, and two registration records can
+    /// name one — without naming a `vulkanalia` type to do it.
+    pub fn image_identity(&self) -> Option<u64> {
+        self.image.map(|image| image.as_raw())
+    }
+
     /// Texture width in pixels.
     pub fn width(&self) -> u32 {
         self.width

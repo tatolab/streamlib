@@ -2782,20 +2782,25 @@ impl GpuContext {
     fn record_compute_kernel_batch<'a>(
         recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
         batch: &[BatchedComputeKernelDispatch<'a>],
-    ) -> Result<HashMap<*const std::ffi::c_void, (&'a TextureRegistration, VulkanLayout)>> {
+    ) -> Result<HashMap<u64, (&'a TextureRegistration, VulkanLayout)>> {
         use crate::core::rhi::SurfaceBoundComputeBindingKind;
         use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
 
-        // The layout each texture is in *as the recording proceeds*, keyed by
-        // registration identity. Tracking it here rather than re-reading the
-        // registration is what makes a chain work: pass 1 leaves its output in
-        // GENERAL, and barriering pass 2's read from the pre-batch layout —
-        // typically UNDEFINED for a freshly acquired texture — would discard
-        // exactly the writes pass 2 is there to read.
-        let mut layout_during_recording: HashMap<
-            *const std::ffi::c_void,
-            (&'a TextureRegistration, VulkanLayout),
-        > = HashMap::new();
+        // The layout each image is in *as the recording proceeds*. Tracking it
+        // here rather than re-reading the registration is what makes a chain
+        // work: pass 1 leaves its output in GENERAL, and barriering pass 2's
+        // read from the pre-batch layout — typically UNDEFINED for a freshly
+        // acquired texture — would discard exactly the writes pass 2 is there
+        // to read.
+        //
+        // Keyed on the raw image handle, which is what a layout belongs to,
+        // and not on the registration: a cross-process import synthesizes a
+        // fresh registration per resolve, so two passes over one imported
+        // surface would otherwise track two independent layouts for one image.
+        // Raw rather than typed because this file is outside the RHI and
+        // names no `vulkanalia` type.
+        let mut layout_during_recording: HashMap<u64, (&'a TextureRegistration, VulkanLayout)> =
+            HashMap::new();
 
         for dispatch in batch {
             for binding in dispatch.bindings {
@@ -2805,12 +2810,22 @@ impl GpuContext {
                         VulkanLayout::SHADER_READ_ONLY_OPTIMAL
                     }
                 };
-                let entry = layout_during_recording
-                    .entry(binding.registration.handle)
-                    .or_insert((
-                        binding.registration,
-                        binding.registration.current_layout(),
-                    ));
+                let image = binding
+                    .registration
+                    .texture()
+                    .vulkan_inner()
+                    .image_identity()
+                    .ok_or_else(|| {
+                        Error::GpuError(
+                            "a batched dispatch bound a texture with no image, which a \
+                             descriptor cannot be written from"
+                                .to_string(),
+                        )
+                    })?;
+                let entry = layout_during_recording.entry(image).or_insert((
+                    binding.registration,
+                    binding.registration.current_layout(),
+                ));
                 // Recorded even when the layout already matches: the barrier is
                 // carrying the previous pass's stores to this pass's reads, and
                 // a same-layout transition is exactly that memory dependency.

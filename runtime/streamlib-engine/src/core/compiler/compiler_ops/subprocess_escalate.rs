@@ -4768,7 +4768,6 @@ void main() {
         /// with [`CHAIN_SEED_RGBA`]. Returned held: dropping a pooled handle
         /// hands its slot back, and the registration would then name a
         /// recycled texture.
-        #[allow(clippy::type_complexity)]
         fn seeded_chain_textures(
             sandbox: &GpuContextLimitedAccess,
             ids: [&str; 3],
