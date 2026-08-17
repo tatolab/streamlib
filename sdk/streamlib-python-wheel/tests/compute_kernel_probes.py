@@ -15,10 +15,7 @@ GPU work is submitted.
 
 import json
 import os
-import subprocess
-import tempfile
 import traceback
-from pathlib import Path
 
 from streamlib import (
     GpuContextFullAccess,
@@ -53,26 +50,6 @@ void main() {
     imageStore(output_image, at, vec4(1.0 - source.rgb + pc.bias, source.a));
 }
 """
-
-
-def compile_read_one_write_another_spirv() -> bytes:
-    """Compile the conformance shader to SPIR-V.
-
-    `-g` is not optional: `glslc -O` strips every `OpName`, and a binding with
-    no reflected name cannot be dispatched against by name at all. GLSL as a
-    source contract the engine compiles is a later change; until then a caller
-    hands over bytes, and these are the bytes.
-    """
-    with tempfile.TemporaryDirectory() as scratch:
-        source = Path(scratch) / "read_one_write_another.comp"
-        compiled = Path(scratch) / "read_one_write_another.spv"
-        source.write_text(READ_ONE_WRITE_ANOTHER_GLSL)
-        subprocess.run(
-            ["glslc", "-fshader-stage=compute", "-g", "-O", str(source), "-o", str(compiled)],
-            check=True,
-            capture_output=True,
-        )
-        return compiled.read_bytes()
 
 
 def _report(probe_body) -> None:
@@ -111,7 +88,7 @@ class _ComputeKernelProbeBase:
             # (a refusal at construction is observed by constructing).
             self.gpu_full_access = gpu
             kernel = gpu.create_compute_kernel(
-                spirv=compile_read_one_write_another_spirv(),
+                source=READ_ONE_WRITE_ANOTHER_GLSL,
                 push_constant_size=4,
                 # The declaration asserts what the shader must reflect; a
                 # disagreement refuses at construction.
@@ -175,7 +152,7 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
 
         wrong_declaration = _refusal_of(
             lambda: self.gpu_full_access.create_compute_kernel(
-                spirv=compile_read_one_write_another_spirv(),
+                source=READ_ONE_WRITE_ANOTHER_GLSL,
                 push_constant_size=4,
                 bindings={"sharpen_amount": "storage_buffer"},
             )
@@ -245,4 +222,38 @@ class TextureIsNotLocallyMappedProbe(_ComputeKernelProbeBase):
             "height": output.height,
             "pixels_refusal": pixels_refusal,
             "source_surface_id": source.surface_id,
+        }
+
+
+@processor(
+    execution="manual",
+    description="Every way of getting the kernel's source wrong, refused by name",
+)
+class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
+    """GLSL source and pre-compiled SPIR-V are alternatives, and a shader that
+    does not compile says so with the compiler's own diagnostic."""
+
+    def observe(self, kernel, source, output) -> dict:
+        del kernel, source, output
+        gpu = self.gpu_full_access
+        return {
+            "neither": _refusal_of(lambda: gpu.create_compute_kernel()),
+            "both": _refusal_of(
+                lambda: gpu.create_compute_kernel(
+                    source=READ_ONE_WRITE_ANOTHER_GLSL,
+                    spirv=b"\x03\x02\x23\x07",
+                )
+            ),
+            "does_not_compile": _refusal_of(
+                lambda: gpu.create_compute_kernel(
+                    source="#version 450\nvoid main() { no_such_function(); }\n",
+                )
+            ),
+            "non_main_entry_point": _refusal_of(
+                lambda: gpu.create_compute_kernel(
+                    source=READ_ONE_WRITE_ANOTHER_GLSL,
+                    push_constant_size=4,
+                    entry_point="sharpen",
+                )
+            ),
         }

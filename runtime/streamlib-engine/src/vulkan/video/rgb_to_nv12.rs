@@ -129,6 +129,7 @@ impl RgbToNv12Converter {
             let kernel = VulkanComputeKernel::new(
                 ctx.host_device(),
                 &ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "rgb_to_nv12",
                     spv: SHADER_SPIRV,
                     bindings: BINDINGS,

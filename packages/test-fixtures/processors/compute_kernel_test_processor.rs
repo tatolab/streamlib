@@ -151,6 +151,7 @@ fn run_compute_kernel_round_trip(
     let kernel = full
         .create_compute_kernel(&ComputeKernelDescriptor {
             label: "cpu_ref_doubler",
+            entry_point: "main",
             spv: CPU_REF_DOUBLER_SPV,
             bindings: CPU_REF_DOUBLER_BINDINGS,
             push_constant_size: std::mem::size_of::<u32>() as u32,

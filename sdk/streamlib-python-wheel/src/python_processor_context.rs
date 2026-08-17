@@ -780,27 +780,35 @@ impl PythonGpuContextFullAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
-    /// Build a compute kernel from pre-compiled SPIR-V.
+    /// Build a compute kernel from GLSL source, or from pre-compiled SPIR-V.
     ///
     /// Constructed once in `setup()`, dispatched per frame in `process()`.
-    /// The engine reflects the shader at construction and takes its binding
-    /// names from it — those names are what `dispatch` resolves against.
-    /// Re-creating an identical kernel is free of compilation.
-    #[pyo3(signature = (spirv, push_constant_size = 0, bindings = None))]
+    /// The engine compiles `source` and reflects the shader at construction,
+    /// taking its binding names from it — those names are what `dispatch`
+    /// resolves against. Re-creating an identical kernel is free of
+    /// compilation.
+    #[pyo3(signature = (source = None, spirv = None, push_constant_size = 0, bindings = None, entry_point = "main"))]
     fn create_compute_kernel(
         &self,
         python: Python<'_>,
-        spirv: &[u8],
+        source: Option<&str>,
+        spirv: Option<&[u8]>,
         push_constant_size: u32,
         bindings: Option<&Bound<'_, PyDict>>,
+        entry_point: &str,
     ) -> PyResult<PythonComputeKernel> {
         #[cfg(target_os = "linux")]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let declared = declared_compute_bindings_to_wire(python, bindings)?;
-            let spirv_hex = encode_lowercase_hex(spirv);
+            // Neither and both are refused engine-side, in the one place the
+            // rule is written; forwarding both fields keeps the wheel from
+            // becoming a second spelling of it that can drift.
+            let spirv_hex = spirv.map(encode_lowercase_hex).unwrap_or_default();
             let (kernel_id, reflected_binding_kinds) = exchange_client.register_compute_kernel(
                 python,
+                source.unwrap_or_default(),
                 &spirv_hex,
+                entry_point,
                 push_constant_size,
                 declared.as_any(),
             )?;
@@ -811,7 +819,14 @@ impl PythonGpuContextFullAccess {
                 helper_process_exchange_client: Arc::clone(exchange_client),
             });
         }
-        let _ = (python, spirv, push_constant_size, bindings);
+        let _ = (
+            python,
+            source,
+            spirv,
+            push_constant_size,
+            bindings,
+            entry_point,
+        );
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 

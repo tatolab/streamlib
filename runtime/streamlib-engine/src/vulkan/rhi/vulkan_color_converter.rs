@@ -209,6 +209,7 @@ impl VulkanColorConverter {
         VulkanComputeKernel::new(
             &self.vulkan_device,
             &ComputeKernelDescriptor {
+                entry_point: "main",
                 label: label.as_str(),
                 spv,
                 bindings: BUFFER_TO_IMAGE_BINDINGS,

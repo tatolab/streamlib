@@ -104,6 +104,7 @@ impl JpegDecodeKernel {
     pub fn new(full_access: &GpuContextFullAccess) -> Result<Self> {
         let spv: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/jpeg_decode.spv"));
         let kernel = full_access.create_compute_kernel(&ComputeKernelDescriptor {
+            entry_point: "main",
             label: "jpeg_decode",
             spv,
             bindings: BINDINGS,

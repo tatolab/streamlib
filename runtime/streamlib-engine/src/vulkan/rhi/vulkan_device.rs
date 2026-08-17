@@ -1505,6 +1505,7 @@ impl HostVulkanDevice {
         // engages codegen. Mirror this in prewarm.comp; don't trim to a
         // specific kernel's shape.
         let descriptor = crate::core::rhi::ComputeKernelDescriptor {
+            entry_point: "main",
             label: "pipeline_compiler_prewarm",
             spv: PREWARM_SPV,
             bindings: &[

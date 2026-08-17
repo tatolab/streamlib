@@ -117,6 +117,16 @@ vulkanalia-vma = { package = "tatolab-vulkanalia-vma", path = "vendor/tatolab-vu
 # SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
 rspirv-reflect = "0.9.0"
 
+# The engine's runtime GLSL compiler. `build-from-source` is not a preference:
+# it forbids the build script's system-library probe, so the wheel can never
+# link a `libshaderc.so` that happens to sit on the build machine. The crate
+# carries shaderc, glslang, SPIRV-Tools and SPIRV-Headers as sources and links
+# `libshaderc_combined.a`, which is what lets a kernel author need no shader
+# toolchain at all. Pinned exact: the compiler version is part of the
+# compilation cache key, and a silent minor bump would change emitted SPIR-V
+# under a key that did not move.
+shaderc = { version = "=0.10.1", features = ["build-from-source"] }
+
 # DLPack v0.8 + v1.0 `#[repr(C)]` ABI mirrors for cross-framework
 # zero-copy tensor handoff (PyTorch / JAX / NumPy `from_dlpack`).
 # Pinned exact (`=0.6.0`) so the upgrade story is explicit — a layout

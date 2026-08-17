@@ -208,11 +208,17 @@ impl PoolSlotReuse<'_> {
 /// contract keys on the compiler's version too, because then the engine is what
 /// turns source into bytes.
 #[cfg(target_os = "linux")]
-fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32) -> String {
+fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32, entry_point: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(spv);
     hasher.update(push_constant_size.to_le_bytes());
+    // Two pipelines built from one module against different entry points are
+    // different kernels, so the id has to tell them apart. The length prefix is
+    // defensive: the name is last in the digest today, so nothing can run into
+    // it yet, but a field appended below would merge with it silently.
+    hasher.update((entry_point.len() as u64).to_le_bytes());
+    hasher.update(entry_point.as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -662,6 +668,14 @@ pub struct GpuContext {
     /// blobs, never evicted, so a kernel survives its registering helper.
     #[cfg(target_os = "linux")]
     compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
+    /// The engine's GLSL compiler and the SPIR-V it has already produced.
+    ///
+    /// GLSL text is the kernel source contract, so compilation happens here at
+    /// kernel construction rather than in a build step the author has to own.
+    /// Sits in front of `compute_kernel_cache`: this one spares the
+    /// compilation, that one spares the pipeline.
+    #[cfg(target_os = "linux")]
+    glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
     /// Host-side bridge for the graphics-kernel escalate ops
     /// (`register_graphics_kernel`, `run_graphics_draw`). Wired by
     /// application code that exposes the host's
@@ -705,6 +719,10 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
+            glsl_shader_source_compiler: Arc::new(
+                crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
+            ),
+            #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
@@ -731,6 +749,10 @@ impl GpuContext {
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            glsl_shader_source_compiler: Arc::new(
+                crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
+            ),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -2482,6 +2504,34 @@ impl GpuContext {
     // Compute kernels for the escalate ops — always present, never installed
     // =========================================================================
 
+    /// Compile GLSL kernel source to SPIR-V, reusing what an identical earlier
+    /// request compiled.
+    ///
+    /// `label` is what the compiler's diagnostics name the source as, so it is
+    /// the prefix an author sees on a syntax error.
+    #[cfg(target_os = "linux")]
+    pub fn compile_glsl_shader_source_to_spirv(
+        &self,
+        source: &str,
+        stage: crate::core::rhi::GlslCompilationTargetStage,
+        entry_point: &str,
+        label: &str,
+    ) -> Result<Arc<[u8]>> {
+        self.glsl_shader_source_compiler
+            .compile_or_reuse(source, stage, entry_point, label)
+    }
+
+    /// How many times this context has actually run the GLSL compiler.
+    ///
+    /// What a cache-hit assertion counts; elapsed time cannot stand in for it,
+    /// since re-creating a kernel is free of compilation while still
+    /// allocating handles.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn glsl_shader_compiler_invocation_count(&self) -> u64 {
+        self.glsl_shader_source_compiler.invocation_count()
+    }
+
     /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
     /// identical one if this context already built it.
     ///
@@ -2499,8 +2549,9 @@ impl GpuContext {
         spv: &[u8],
         push_constant_size: u32,
         declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
+        entry_point: &str,
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
-        let kernel_id = compute_kernel_cache_key(spv, push_constant_size);
+        let kernel_id = compute_kernel_cache_key(spv, push_constant_size, entry_point);
         let cached_kernel = self
             .compute_kernel_cache
             .lock()
@@ -2537,6 +2588,7 @@ impl GpuContext {
 
         let kernel = Arc::new(self.create_compute_kernel(
             &crate::core::rhi::ComputeKernelDescriptor {
+                entry_point,
                 label: "escalate-compute-kernel",
                 spv,
                 bindings: &reflected,
@@ -3885,9 +3937,14 @@ impl GpuContextFullAccess {
         spv: &[u8],
         push_constant_size: u32,
         declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
+        entry_point: &str,
     ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
-        self.host_inner()
-            .create_or_reuse_compute_kernel(spv, push_constant_size, declared_bindings)
+        self.host_inner().create_or_reuse_compute_kernel(
+            spv,
+            push_constant_size,
+            declared_bindings,
+            entry_point,
+        )
     }
 
     /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
@@ -3940,6 +3997,20 @@ impl std::fmt::Debug for GpuContextFullAccess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A kernel id names a pipeline, and two pipelines built from one module
+    /// against different entry points are different pipelines. Serving the
+    /// first for the second would dispatch a function the caller did not ask
+    /// for.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_kernel_id_tells_two_entry_points_over_one_module_apart() {
+        let spv = b"not really spir-v, and this key never parses it";
+        assert_ne!(
+            compute_kernel_cache_key(spv, 0, "main"),
+            compute_kernel_cache_key(spv, 0, "sharpen"),
+        );
+    }
 
     #[test]
     fn test_texture_cache_register_and_resolve() {
@@ -4553,6 +4624,7 @@ mod tests {
         let kernel_arc = limited
             .escalate(|full| {
                 full.create_compute_kernel(&ComputeKernelDescriptor {
+                    entry_point: "main",
                     label: "drop_post_escalate_smoke",
                     spv: trivial_spv,
                     bindings,

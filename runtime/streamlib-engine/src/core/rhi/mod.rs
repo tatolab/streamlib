@@ -12,6 +12,8 @@ mod compute_kernel;
 mod device;
 mod external_handle;
 mod gl_interop;
+#[cfg(target_os = "linux")]
+mod glsl_shader_source_compiler;
 mod graphics_kernel;
 mod host_timeline_semaphore;
 mod index_buffer;
@@ -45,6 +47,10 @@ pub(crate) use compute_kernel::{
 pub use device::GpuDevice;
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
 pub use gl_interop::{GlContext, GlTextureBinding, gl_constants};
+#[cfg(target_os = "linux")]
+pub use glsl_shader_source_compiler::{
+    DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderSourceToSpirvCompiler,
+};
 pub use graphics_kernel::{
     AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,
     CullMode, DepthCompareOp, DepthFormat, DepthStencilState, DrawCall, DrawIndexedCall, FrontFace,
