@@ -123,7 +123,9 @@ pub const TONE_MAPPER_PUSH_CONSTANT_SIZE: u32 =
 /// `GENERAL` otherwise. Callers holding a
 /// [`crate::core::context::TextureRegistration`] write these back via
 /// `update_layout`.
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "the terminal layouts must reach the textures' registrations — discarding them leaves a registration claiming a stale layout"]
 pub struct ToneMapperFinalTextureLayouts {
     /// Layout the source texture was left in.
     pub src_final_layout: crate::core::rhi::VulkanLayout,
@@ -222,6 +224,11 @@ impl RhiToneMapper {
     ///   storage images, and the 4-barrier sequence would emit
     ///   conflicting layout claims on the same image. Passing the same
     ///   handle for both returns `Err`.
+    /// - The declared current layouts must be layouts the images'
+    ///   usage permits — `SHADER_READ_ONLY_OPTIMAL` declared for an
+    ///   image without `SAMPLED` / `INPUT_ATTACHMENT` usage returns
+    ///   `Err` (the oldLayout side of the same VUID the terminal-layout
+    ///   choice satisfies).
     /// - This helper does **not** read or write
     ///   [`crate::core::context::TextureRegistration`]. The caller is
     ///   responsible for `update_layout`ing any associated registration

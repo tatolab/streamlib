@@ -4,10 +4,12 @@
 // Image-source → image-dest tone-curve compute shader.
 //
 // Bindings:
-//   0 — `readonly image2D rgba_input` (RGBA8 / RGBA16F storage image,
-//       interpreted in input_transfer encoding).
-//   1 — `writeonly image2D rgba_output` (RGBA8 / RGBA16F storage image,
-//       written in output_transfer encoding).
+//   0 — `readonly image2D rgba_input` (format-less storage image —
+//       serves BGRA8 / RGBA8 / RGBA16F views, interpreted in
+//       input_transfer encoding).
+//   1 — `writeonly image2D rgba_output` (format-less storage image —
+//       serves BGRA8 / RGBA8 / RGBA16F views, written in
+//       output_transfer encoding).
 //
 // Per-channel pipeline:
 //   1. EOTF: input_transfer → linear (per-channel, normalized to peak_in_nits).

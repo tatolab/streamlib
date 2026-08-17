@@ -76,9 +76,10 @@ pub use ray_tracing_kernel::{
 };
 #[cfg(target_os = "linux")]
 pub use storage_buffer::StorageBuffer;
+#[cfg(target_os = "linux")]
+pub use tone_mapper::ToneMapperFinalTextureLayouts;
 pub use tone_mapper::{
-    RhiToneMapper, TONE_MAPPER_PUSH_CONSTANT_SIZE, ToneCurveId, ToneMapperFinalTextureLayouts,
-    ToneMapperPushConstants,
+    RhiToneMapper, TONE_MAPPER_PUSH_CONSTANT_SIZE, ToneCurveId, ToneMapperPushConstants,
 };
 #[cfg(target_os = "linux")]
 pub use uniform_buffer::UniformBuffer;

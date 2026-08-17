@@ -195,6 +195,24 @@ pub trait VulkanTextureLike {
     /// `COLOR_ATTACHMENT` is required for `wrap_backend_render_target`).
     fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags;
 
+    /// Terminal layout a recorded pass may legally leave this image in
+    /// for a downstream shader read: `SHADER_READ_ONLY_OPTIMAL` when
+    /// the create-time usage carries `SAMPLED` or `INPUT_ATTACHMENT`
+    /// (VUID-VkImageMemoryBarrier2-oldLayout-01211), `GENERAL`
+    /// otherwise. Textures whose construction path records no usage
+    /// metadata report empty flags and fall to `GENERAL`, which is
+    /// legal for any image.
+    fn terminal_layout_for_shader_read_access(&self) -> crate::VulkanLayout {
+        if self
+            .vk_image_usage_flags()
+            .intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::INPUT_ATTACHMENT)
+        {
+            crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        } else {
+            crate::VulkanLayout::GENERAL
+        }
+    }
+
     /// `VkDeviceMemory` handle the image is bound to. Returns
     /// `vk::DeviceMemory::null()` for placeholder textures.
     fn vk_memory(&self) -> vk::DeviceMemory;

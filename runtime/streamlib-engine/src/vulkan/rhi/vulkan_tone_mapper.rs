@@ -22,7 +22,10 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
 
-use super::{HostVulkanDevice, RhiCommandRecorder, VulkanAccess, VulkanComputeKernel, VulkanStage};
+use super::{
+    HostVulkanDevice, RhiCommandRecorder, VulkanAccess, VulkanComputeKernel, VulkanStage,
+    VulkanTextureLike,
+};
 
 /// Workgroup tile size. Matches the converter shader so consumers
 /// computing dispatch dims (`⌈(width, height) / 16⌉`) can use a single
@@ -107,6 +110,10 @@ impl VulkanToneMapper {
     /// - `src` and `dst` must reference distinct VkImages — in-place
     ///   tone-map is not supported; passing the same handle returns
     ///   `Err(Error::Configuration)`.
+    /// - The declared current layouts must be layouts the images'
+    ///   usage permits — `SHADER_READ_ONLY_OPTIMAL` declared for an
+    ///   image without `SAMPLED` / `INPUT_ATTACHMENT` usage returns
+    ///   `Err(Error::Configuration)`.
     /// - The helper does not touch
     ///   [`crate::core::context::TextureRegistration`]; the caller
     ///   updates any associated registration with the returned
@@ -154,16 +161,27 @@ impl VulkanToneMapper {
             }
         }
 
-        let src_final_layout = if src_host_texture.supports_shader_read_only_optimal_layout() {
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
-        } else {
-            VulkanLayout::GENERAL
-        };
-        let dst_final_layout = if dst_host_texture.supports_shader_read_only_optimal_layout() {
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
-        } else {
-            VulkanLayout::GENERAL
-        };
+        let src_final_layout = src_host_texture.terminal_layout_for_shader_read_access();
+        let dst_final_layout = dst_host_texture.terminal_layout_for_shader_read_access();
+
+        // The oldLayout side of VUID-VkImageMemoryBarrier2-oldLayout-01211:
+        // a declared current layout of SHADER_READ_ONLY_OPTIMAL on an
+        // image whose usage cannot legally hold that layout is the same
+        // violation the terminal-layout choice above prevents — the
+        // image cannot actually be in the layout the caller claims.
+        // Refuse it loudly instead of feeding it into the pre-barrier.
+        for (texture_role, declared_current_layout, usage_legal_terminal_layout) in [
+            ("src", src_current_layout, src_final_layout),
+            ("dst", dst_current_layout, dst_final_layout),
+        ] {
+            if declared_current_layout == VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+                && usage_legal_terminal_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+            {
+                return Err(Error::Configuration(format!(
+                    "VulkanToneMapper::apply_with_layouts: {texture_role} declares current layout SHADER_READ_ONLY_OPTIMAL but its image was created without SAMPLED or INPUT_ATTACHMENT usage, which that layout requires (VUID-VkImageMemoryBarrier2-oldLayout-01211)"
+                )));
+            }
+        }
 
         let kernel = self.prepare(src, dst, push)?;
         let dispatch_x = push.width.div_ceil(TONE_MAPPER_WORKGROUP_SIZE);
@@ -449,38 +467,50 @@ mod tests {
         texture
     }
 
-    /// Allocate an empty BGRA8 texture with the given usage for the
-    /// tone mapper's dispatch destination. Layout is `UNDEFINED` on
-    /// return — `apply_with_layouts` transitions it.
-    fn make_dst_texture(
+    /// Allocate an empty BGRA8 texture with the given usage and debug
+    /// label. Layout is `UNDEFINED` on return — `apply_with_layouts`
+    /// transitions it.
+    fn make_empty_bgra8_texture_with_usage(
         device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
         usage: TextureUsages,
+        label: &'static str,
     ) -> Texture {
         let desc = TextureDescriptor {
             width,
             height,
             format: TextureFormat::Bgra8Unorm,
             usage,
-            label: Some("tone-mapper-test-output"),
+            label: Some(label),
         };
         let host_tex = HostVulkanTexture::new(device, &desc).expect("texture");
         <Texture as crate::host_rhi::HostTextureExt>::from_vulkan(host_tex)
     }
 
+    /// Canonical PQ → sRGB BT.2390 1000 nit → 100 nit push constants
+    /// shared by the dispatch-shaped tests.
+    fn pq_to_srgb_bt2390_push_constants(width: u32, height: u32) -> ToneMapperPushConstants {
+        ToneMapperPushConstants::new(
+            width,
+            height,
+            TransferId::Pq,
+            TransferId::Srgb,
+            ToneCurveId::Bt2390,
+            1000.0,
+            100.0,
+        )
+    }
+
     /// Convert a CPU-reference HDR PQ pixel into the BGRA8 byte triple
-    /// the GPU sees when it samples `imageLoad` on an RGBA8 storage
-    /// image bound to a BGRA-formatted view.
+    /// baked into the test input texture.
     ///
-    /// Per Vulkan's storage-image format-compatibility rules, the
-    /// shader sees `vec4(B, G, R, A)` for an `rgba8` qualifier bound
-    /// to a `B8G8R8A8_UNORM` view. Our shader treats the read `vec4`
-    /// as `(R, G, B, A)`, so the byte order in memory is `B G R A`
-    /// from the shader's perspective — the channels effectively
-    /// swap. The tone-mapper math is per-channel and channel-symmetric
-    /// (same curve applied to each), so this swap is invisible to the
-    /// result: input R/G/B = byte 0/1/2 = shader's r/g/b.
+    /// The shader's storage images carry no format qualifier (SPIR-V
+    /// format `Unknown`), so `imageLoad` honors the bound view's
+    /// `B8G8R8A8_UNORM` component order and the shader's `vec4` is
+    /// `(R, G, B, A)` with no reinterpretation. The fixture is
+    /// grayscale (one byte across all three channels), so the expected
+    /// bytes are channel-order-independent regardless.
     fn pq_pixel(linear_norm_0_to_1: f32) -> [u8; 4] {
         let abs_lin = (linear_norm_0_to_1 * 1000.0) / 10_000.0;
         let pq = linear_to_pq(abs_lin).clamp(0.0, 1.0);
@@ -525,11 +555,12 @@ mod tests {
         let src = make_general_texture(&device, width, height, |x, y| {
             pq_pixel(input_linear_for(x, y))
         });
-        let dst = make_dst_texture(
+        let dst = make_empty_bgra8_texture_with_usage(
             &device,
             width,
             height,
             TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING,
+            "tone-mapper-test-output",
         );
 
         let mapper = VulkanToneMapper::new(&device);
@@ -629,17 +660,21 @@ mod tests {
             | TextureUsages::COPY_DST
             | TextureUsages::STORAGE_BINDING
             | TextureUsages::TEXTURE_BINDING;
-        let src = make_dst_texture(&device, 8, 8, sampled_capable_usage);
-        let dst = make_dst_texture(&device, 8, 8, sampled_capable_usage);
-        let push = ToneMapperPushConstants::new(
+        let src = make_empty_bgra8_texture_with_usage(
+            &device,
             8,
             8,
-            TransferId::Pq,
-            TransferId::Srgb,
-            ToneCurveId::Bt2390,
-            1000.0,
-            100.0,
+            sampled_capable_usage,
+            "tone-mapper-test-sampled-src",
         );
+        let dst = make_empty_bgra8_texture_with_usage(
+            &device,
+            8,
+            8,
+            sampled_capable_usage,
+            "tone-mapper-test-sampled-dst",
+        );
+        let push = pq_to_srgb_bt2390_push_constants(8, 8);
         let mapper = VulkanToneMapper::new(&device);
         let final_layouts = mapper
             .apply_with_layouts(
@@ -657,6 +692,95 @@ mod tests {
         assert_eq!(
             final_layouts.dst_final_layout,
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
+    /// A declared *current* layout of `SHADER_READ_ONLY_OPTIMAL` on a
+    /// storage-only image is the oldLayout side of
+    /// VUID-VkImageMemoryBarrier2-oldLayout-01211 — the image cannot
+    /// actually be in that layout. The mapper refuses it loudly
+    /// instead of recording the illegal pre-barrier.
+    #[test]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    fn apply_with_layouts_refuses_a_declared_layout_the_usage_cannot_hold() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let storage_only_usage =
+            TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING;
+        let src =
+            make_empty_bgra8_texture_with_usage(&device, 8, 8, storage_only_usage, "refusal-src");
+        let dst =
+            make_empty_bgra8_texture_with_usage(&device, 8, 8, storage_only_usage, "refusal-dst");
+        let push = pq_to_srgb_bt2390_push_constants(8, 8);
+        let mapper = VulkanToneMapper::new(&device);
+        let result = mapper.apply_with_layouts(
+            &src,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            &dst,
+            VulkanLayout::UNDEFINED,
+            &push,
+        );
+        match result {
+            Err(crate::core::Error::Configuration(msg)) => {
+                assert!(
+                    msg.contains("src") && msg.contains("SHADER_READ_ONLY_OPTIMAL"),
+                    "expected a refusal naming src and the illegal layout, got: {msg}"
+                );
+            }
+            other => panic!("expected Err(Configuration), got {other:?}"),
+        }
+    }
+
+    /// The tone-curve SPIR-V declares the two `WithoutFormat`
+    /// capabilities its format-less storage images require — the
+    /// shader-side half of the device-feature pairing enabled in
+    /// `HostVulkanDevice::new` (`shaderStorageImageReadWithoutFormat` /
+    /// `shaderStorageImageWriteWithoutFormat`). Runs without a GPU:
+    /// it parses the compiled blob's `OpCapability` instructions.
+    #[test]
+    fn tone_curve_spirv_declares_the_without_format_capabilities() {
+        const SPIRV_MAGIC: u32 = 0x0723_0203;
+        const OP_CAPABILITY: u32 = 17;
+        const CAPABILITY_STORAGE_IMAGE_READ_WITHOUT_FORMAT: u32 = 55;
+        const CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT: u32 = 56;
+
+        let spv: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/tone_curve.spv"));
+        assert_eq!(spv.len() % 4, 0, "SPIR-V blob must be word-aligned");
+        let words: Vec<u32> = spv
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        assert_eq!(words[0], SPIRV_MAGIC, "not a SPIR-V module");
+
+        let mut declared_capabilities = Vec::new();
+        // Instructions start after the 5-word header; word 0 of each is
+        // (word_count << 16) | opcode.
+        let mut cursor = 5;
+        while cursor < words.len() {
+            let word_count = (words[cursor] >> 16) as usize;
+            let opcode = words[cursor] & 0xFFFF;
+            assert!(word_count > 0, "malformed SPIR-V instruction");
+            if opcode == OP_CAPABILITY {
+                declared_capabilities.push(words[cursor + 1]);
+            }
+            cursor += word_count;
+        }
+
+        assert!(
+            declared_capabilities.contains(&CAPABILITY_STORAGE_IMAGE_READ_WITHOUT_FORMAT),
+            "tone_curve.spv no longer declares StorageImageReadWithoutFormat — \
+             if the shader regained a format qualifier, drop the matching \
+             device-feature enable in HostVulkanDevice::new"
+        );
+        assert!(
+            declared_capabilities.contains(&CAPABILITY_STORAGE_IMAGE_WRITE_WITHOUT_FORMAT),
+            "tone_curve.spv no longer declares StorageImageWriteWithoutFormat — \
+             if the shader regained a format qualifier, drop the matching \
+             device-feature enable in HostVulkanDevice::new"
         );
     }
 
@@ -703,15 +827,7 @@ mod tests {
             return;
         };
         let texture = make_general_texture(&device, 8, 8, |_, _| [0; 4]);
-        let push = ToneMapperPushConstants::new(
-            8,
-            8,
-            TransferId::Pq,
-            TransferId::Srgb,
-            ToneCurveId::Bt2390,
-            1000.0,
-            100.0,
-        );
+        let push = pq_to_srgb_bt2390_push_constants(8, 8);
         let mapper = VulkanToneMapper::new(&device);
         let result = mapper.apply_with_layouts(
             &texture,
