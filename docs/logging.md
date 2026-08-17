@@ -28,10 +28,15 @@ Use the API above instead.
    opt in via `[lints] workspace = true` in `Cargo.toml`. `cargo clippy
    --workspace` fails on any violation.
 
-2. **CI lint (Python)** — `cargo xtask lint-logging` scans
-   `sdk/streamlib-python-wheel/python/**/*.py` for banned substrings
-   (`print(`, `sys.stdout`, `sys.stderr`, `logging.basicConfig`). Exits
-   non-zero with each offending file+line on failure.
+2. **AST walk (Rust + Python)** — `cargo xtask lint-logging`. On Python it
+   scans `sdk/streamlib-python-wheel/python/**/*.py` for banned substrings
+   (`print(`, `sys.stdout`, `sys.stderr`, `logging.basicConfig`). On Rust it
+   parses rather than greps, so `#[cfg(test)]` and
+   `#[allow(clippy::disallowed_macros)]` are honoured, and it skips `tests`
+   directories outright. That last exemption is why it and clippy can disagree
+   about the same file: a `[[bin]]` whose `path` points into `tests/` is a
+   default target to clippy and an exempt path to this walk. Exits non-zero
+   with each offending file+line on failure.
 
 3. **Runtime capture** — the Rust host captures a helper process's fd2 at
    the process level for anything the static layers can't see
@@ -44,9 +49,23 @@ the grounds of redundancy.
 
 ## CI
 
-Both checks run on every PR and push to `main` via
-`.github/workflows/lint-logging.yml`. A PR is merge-blocked until both jobs
-are green.
+`cargo xtask lint-logging` runs in `source-gates.yml`, as one of the
+consolidated source-walking gates. `cargo clippy --locked --workspace
+--no-deps` runs in `test.yml`'s Linux job, which already carries the engine's
+build dependencies; default targets only, so a test's `println!` stays a test's
+business, matching layer 2's exemption. `cargo fmt --all --check` runs in
+`source-gates.yml` beside the walks.
+
+`cargo xtask run-local-ci-gates` runs the two static layers before you push.
+Layer 3 is a property of the running host, not a gate, so nothing runs it
+ahead of time.
+
+> ~~Both checks run on every PR and push to `main` via
+> `.github/workflows/lint-logging.yml`.~~ — Superseded 2026-08-16. That
+> workflow was retired when PR #1857 consolidated 13 jobs into 6, and for a
+> while afterwards nothing ran `cargo clippy` or `cargo fmt` at all: the claim
+> above described enforcement that had stopped existing, and an `eprintln!` in
+> each of two adapter test helpers sat unnoticed behind it.
 
 ## Exceptions — how to add one when you really need it
 

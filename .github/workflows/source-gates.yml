@@ -77,6 +77,11 @@ jobs:
           shared-key: xtask
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # Free here: rustfmt needs no crate to compile, so it rides the one job
+      # that already has a toolchain and no engine build dependencies.
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
       - name: cargo xtask check-all-source-gates
         run: cargo run --locked -q -p xtask -- check-all-source-gates
 
