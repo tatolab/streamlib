@@ -49,8 +49,8 @@ pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBuffe
 pub use gl_interop::{GlContext, GlTextureBinding, gl_constants};
 #[cfg(target_os = "linux")]
 pub use glsl_shader_source_compiler::{
-    GLSL_SOURCE_ENTRY_POINT, GlslShaderCompilationCacheKey, GlslShaderSourceToSpirvCompiler,
-    ShaderPipelineStage, ShaderTargetEnvironment, VENDORED_GLSL_COMPILER_VERSION,
+    DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderCompilationCacheKey,
+    GlslShaderSourceToSpirvCompiler, ShaderTargetEnvironment, VENDORED_GLSL_COMPILER_VERSION,
 };
 pub use graphics_kernel::{
     AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,

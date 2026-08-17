@@ -2512,10 +2512,10 @@ impl GpuContext {
     pub fn compile_glsl_shader_source_to_spirv(
         &self,
         source: &str,
-        stage: crate::core::rhi::ShaderPipelineStage,
+        stage: crate::core::rhi::GlslCompilationTargetStage,
         entry_point: &str,
         label: &str,
-    ) -> Result<Arc<Vec<u8>>> {
+    ) -> Result<Arc<[u8]>> {
         self.glsl_shader_source_compiler
             .compile_or_reuse(source, stage, entry_point, label)
     }
@@ -3934,10 +3934,10 @@ impl GpuContextFullAccess {
     pub fn compile_glsl_shader_source_to_spirv(
         &self,
         source: &str,
-        stage: crate::core::rhi::ShaderPipelineStage,
+        stage: crate::core::rhi::GlslCompilationTargetStage,
         entry_point: &str,
         label: &str,
-    ) -> Result<Arc<Vec<u8>>> {
+    ) -> Result<Arc<[u8]>> {
         self.host_inner()
             .compile_glsl_shader_source_to_spirv(source, stage, entry_point, label)
     }

@@ -422,11 +422,8 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// GLSL is the kernel source contract: the engine compiles this text at
-    /// kernel construction, so a kernel author needs no shader toolchain
-    /// beyond the installed wheel.
-    /// Mutually exclusive with `spv_hex` — exactly one of the two is supplied.
-    /// Absent as the empty string.
+    /// GLSL source for the compute shader; the engine compiles it. Mutually
+    /// exclusive with `spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) source: String,
 
@@ -1021,11 +1018,8 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// `"main"` host-side.
     pub(crate) fragment_entry_point: String,
 
-    /// GLSL is the kernel source contract: the engine compiles this text at
-    /// kernel construction, so a kernel author needs no shader toolchain
-    /// beyond the installed wheel.
-    /// Compiles for the fragment stage. Mutually exclusive with
-    /// `fragment_spv_hex` — exactly one of the two is supplied.
+    /// GLSL source for the fragment stage. Mutually exclusive with
+    /// `fragment_spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) fragment_source: String,
 
@@ -1061,10 +1055,8 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// `"main"` host-side.
     pub(crate) vertex_entry_point: String,
 
-    /// GLSL is the kernel source contract: the engine compiles this text at
-    /// kernel construction, so a kernel author needs no shader toolchain
-    /// beyond the installed wheel. Compiles for the vertex stage. Mutually
-    /// exclusive with `vertex_spv_hex` — exactly one of the two is supplied.
+    /// GLSL source for the vertex stage. Mutually exclusive with
+    /// `vertex_spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) vertex_source: String,
 
@@ -1163,7 +1155,7 @@ pub(crate) struct EscalateRequestRegisterRayTracingKernelGroup {
 }
 
 /// Which RT stage this SPIR-V blob fills.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub(crate) enum EscalateRequestRegisterRayTracingKernelStageStage {
     #[serde(rename = "any_hit")]
     AnyHit,
@@ -1190,11 +1182,8 @@ pub(crate) struct EscalateRequestRegisterRayTracingKernelStage {
     /// Entry-point name. Empty string is normalized to `"main"` host-side.
     pub(crate) entry_point: String,
 
-    /// GLSL is the kernel source contract: the engine compiles this text at
-    /// kernel construction, so a kernel author needs no shader toolchain
-    /// beyond the installed wheel.
-    /// Compiles for this entry's `stage`. Mutually exclusive with `spv_hex` —
-    /// exactly one of the two is supplied.
+    /// GLSL source for this entry's `stage`. Mutually exclusive with
+    /// `spv_hex` — exactly one of the two, absent as `""`.
     #[serde(default)]
     pub(crate) source: String,
 

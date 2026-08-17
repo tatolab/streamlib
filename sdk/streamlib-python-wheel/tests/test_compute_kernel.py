@@ -23,7 +23,9 @@ assert on that line.
 """
 
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -156,12 +158,31 @@ def test_an_acquired_texture_is_a_name_not_a_local_mapping(start_app_under_test)
     assert "not mapped into this process" in refusal, refusal
 
 
-def test_a_kernel_is_built_from_glsl_with_no_shader_toolchain_installed(
-    start_app_under_test,
+def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
+    start_app_under_test, tmp_path, monkeypatch
 ):
-    """The source contract, end to end. The probe hands over GLSL text and
-    never invokes `glslc`, so a passing run is also the evidence that the
-    compiler ships inside the wheel."""
+    """The claim the whole change rests on, made falsifiable.
+
+    Asserting "the probe does not shell out" by *reading* the probe proves
+    nothing durable — someone adds a `subprocess.run(["glslc", ...])` later and
+    every test still passes. So `glslc` and `glslangValidator` are shadowed
+    with stubs that exit 127 and say so, and the app plus the helper child it
+    spawns inherit that PATH. A kernel still builds, so the compiler that built
+    it is the one linked into the wheel.
+    """
+    sabotaged = tmp_path / "no-shader-toolchain"
+    sabotaged.mkdir()
+    for tool in ("glslc", "glslangValidator"):
+        stub = sabotaged / tool
+        stub.write_text(
+            f"#!/bin/sh\necho '{tool} was invoked; the engine must not shell out' >&2\nexit 127\n"
+        )
+        stub.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{sabotaged}{os.pathsep}{os.environ['PATH']}")
+    assert shutil.which("glslc") == str(sabotaged / "glslc"), (
+        "the stub must be what a shell-out would find, or this test proves nothing"
+    )
+
     observed = run_probe(start_app_under_test, "ReadOneWriteAnotherProbe")
     assert observed["dispatched"] is True
     assert sorted(observed["binding_names"]) == sorted([SOURCE_BINDING, OUTPUT_BINDING])

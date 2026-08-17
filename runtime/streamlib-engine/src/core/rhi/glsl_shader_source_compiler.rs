@@ -22,21 +22,18 @@ use crate::core::{Error, Result};
 /// `Cargo.lock`, so the constant cannot drift away from what is linked in.
 pub const VENDORED_GLSL_COMPILER_VERSION: &str = "shaderc 0.10.1";
 
-/// GLSL's entry point is `main`, and glslang will not rename one.
+/// What an unspecified entry point means, on either shader path.
 ///
-/// Handing shaderc another name is silently ignored — it emits a module whose
-/// `OpEntryPoint` still says `main` — so the alternative to refusing is a
-/// pipeline built against a function that is not in the module.
-pub const GLSL_SOURCE_ENTRY_POINT: &str = "main";
+/// Also the *only* name GLSL can have: glslang will not rename an entry point,
+/// and handing shaderc another one is silently ignored — it emits a module
+/// whose `OpEntryPoint` still says `main`. So the alternative to refusing a
+/// non-`main` GLSL entry point is a pipeline built against a function that is
+/// not in the module.
+pub const DEFAULT_SHADER_ENTRY_POINT: &str = "main";
 
 /// The pipeline stage a GLSL source compiles for.
-///
-/// Every ray-tracing stage is here deliberately: ray-tracing kernels are a
-/// decided capability, and a GLSL contract covering compute and graphics but
-/// not raygen / miss / hit / intersection would exclude one kernel kind that
-/// an author would discover only on writing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ShaderPipelineStage {
+pub enum GlslCompilationTargetStage {
     Compute,
     Vertex,
     Fragment,
@@ -48,7 +45,7 @@ pub enum ShaderPipelineStage {
     RayCallable,
 }
 
-impl ShaderPipelineStage {
+impl GlslCompilationTargetStage {
     /// The stage's spelling on the escalate wire and in the cache key.
     #[must_use]
     pub const fn wire_name(self) -> &'static str {
@@ -113,44 +110,44 @@ impl ShaderPipelineStage {
 }
 
 /// The Vulkan client version and SPIR-V version the engine compiles against.
-///
-/// One engine, one target — this is not a caller-facing dial. It is in the
-/// cache key regardless, because moving the pin changes the emitted words and
-/// a key without it would hand back SPIR-V built for the old target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShaderTargetEnvironment {
     vulkan_env_version: shaderc::EnvVersion,
     spirv_version: shaderc::SpirvVersion,
 }
 
+// shaderc's two version enums derive no `Hash`, and this is half of a hash-map
+// key. Their discriminants are the values Vulkan and SPIR-V themselves use, so
+// hashing those is hashing the target.
+impl std::hash::Hash for ShaderTargetEnvironment {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        (self.vulkan_env_version as u32).hash(hasher);
+        (self.spirv_version as u32).hash(hasher);
+    }
+}
+
 impl ShaderTargetEnvironment {
-    /// The pair `build.rs` compiles the engine's own shaders with
-    /// (`--target-env=vulkan1.2 --target-spv=spv1.4`). Runtime-compiled kernels
-    /// share the device with those, so they share the target.
+    /// SPIR-V 1.4 is the floor `SPV_KHR_ray_tracing` needs, so it is the pin
+    /// that covers every stage this compiler can emit — the same pair
+    /// `build.rs` gives its ray-tracing shaders, the only call there that
+    /// states a target at all.
     pub const ENGINE: Self = Self {
         vulkan_env_version: shaderc::EnvVersion::Vulkan1_2,
         spirv_version: shaderc::SpirvVersion::V1_4,
     };
-
-    fn key_spelling(self) -> String {
-        format!(
-            "vulkan-env {} / spirv {}",
-            self.vulkan_env_version as u32, self.spirv_version as u32
-        )
-    }
 }
 
 /// Everything about a compilation that changes the SPIR-V it emits.
 ///
 /// Never the source alone: the same text compiled for another stage, against
 /// another target environment, or by another compiler build is a different
-/// module, and a key that dropped any of those would serve one for the other.
+/// module.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GlslShaderCompilationCacheKey {
-    source_sha256: String,
-    stage: ShaderPipelineStage,
+    source_sha256: [u8; 32],
+    stage: GlslCompilationTargetStage,
     entry_point: String,
-    target_environment: String,
+    target_environment: ShaderTargetEnvironment,
     compiler_version: &'static str,
 }
 
@@ -158,17 +155,17 @@ impl GlslShaderCompilationCacheKey {
     #[must_use]
     pub fn new(
         source: &str,
-        stage: ShaderPipelineStage,
+        stage: GlslCompilationTargetStage,
         entry_point: &str,
         target_environment: ShaderTargetEnvironment,
     ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(source.as_bytes());
         Self {
-            source_sha256: format!("{:x}", hasher.finalize()),
+            source_sha256: hasher.finalize().into(),
             stage,
             entry_point: entry_point.to_string(),
-            target_environment: target_environment.key_spelling(),
+            target_environment,
             compiler_version: VENDORED_GLSL_COMPILER_VERSION,
         }
     }
@@ -176,16 +173,12 @@ impl GlslShaderCompilationCacheKey {
 
 /// Compiles GLSL text to SPIR-V and remembers what it compiled.
 ///
-/// Held for a `GpuContext`'s lifetime, so re-creating an identical kernel — the
-/// same source for the same stage — costs no compilation. Entries are never
-/// evicted: they are bounded by the distinct sources a graph's processors
-/// author, and a kernel outlives the helper that registered it.
-/// The compiler is built on first use rather than at construction so a
-/// `GpuContext` that never compiles a kernel pays nothing for one, and so
-/// context construction stays infallible.
+/// Entries are never evicted: they are bounded by the distinct sources a
+/// graph's processors author, and a kernel outlives the helper that
+/// registered it.
 pub struct GlslShaderSourceToSpirvCompiler {
     compiler: OnceLock<shaderc::Compiler>,
-    compiled_spirv_by_key: Mutex<HashMap<GlslShaderCompilationCacheKey, Arc<Vec<u8>>>>,
+    compiled_spirv_by_key: Mutex<HashMap<GlslShaderCompilationCacheKey, Arc<[u8]>>>,
     invocation_count: AtomicU64,
 }
 
@@ -233,9 +226,9 @@ impl GlslShaderSourceToSpirvCompiler {
 
     /// How many times the compiler itself has run.
     ///
-    /// What a cache-hit assertion counts. Elapsed time cannot stand in for it:
-    /// re-creating a kernel is free of *compilation* while still allocating
-    /// Vulkan handles, so a timing comparison measures the wrong half.
+    /// What a cache-hit assertion counts. Elapsed time cannot stand in: a
+    /// re-created kernel is free of *compilation* while still allocating
+    /// handles, so a timing comparison measures the wrong half.
     #[must_use]
     pub fn invocation_count(&self) -> u64 {
         self.invocation_count.load(Ordering::Relaxed)
@@ -249,16 +242,16 @@ impl GlslShaderSourceToSpirvCompiler {
     pub fn compile_or_reuse(
         &self,
         source: &str,
-        stage: ShaderPipelineStage,
+        stage: GlslCompilationTargetStage,
         entry_point: &str,
         label: &str,
-    ) -> Result<Arc<Vec<u8>>> {
-        if entry_point != GLSL_SOURCE_ENTRY_POINT {
+    ) -> Result<Arc<[u8]>> {
+        if entry_point != DEFAULT_SHADER_ENTRY_POINT {
             return Err(Error::GpuError(format!(
                 "kernel source declares entry point `{entry_point}`, but a GLSL entry point is \
-                 always `{GLSL_SOURCE_ENTRY_POINT}` — glslang will not rename one, so the \
+                 always `{DEFAULT_SHADER_ENTRY_POINT}` — glslang will not rename one, so the \
                  pipeline would be built against a function the module does not contain. \
-                 Rename the shader's function to `{GLSL_SOURCE_ENTRY_POINT}`, or hand over \
+                 Rename the shader's function to `{DEFAULT_SHADER_ENTRY_POINT}`, or hand over \
                  pre-compiled SPIR-V if the entry point has to differ"
             )));
         }
@@ -279,7 +272,7 @@ impl GlslShaderSourceToSpirvCompiler {
             return Ok(Arc::clone(cached));
         }
 
-        let spirv = Arc::new(self.compile(source, stage, entry_point, label)?);
+        let spirv: Arc<[u8]> = self.compile(source, stage, entry_point, label)?.into();
         Ok(Arc::clone(
             self.compiled_spirv_by_key
                 .lock()
@@ -292,7 +285,7 @@ impl GlslShaderSourceToSpirvCompiler {
     fn compile(
         &self,
         source: &str,
-        stage: ShaderPipelineStage,
+        stage: GlslCompilationTargetStage,
         entry_point: &str,
         label: &str,
     ) -> Result<Vec<u8>> {
@@ -321,7 +314,7 @@ impl GlslShaderSourceToSpirvCompiler {
             )
             .map_err(|e| {
                 Error::GpuError(format!(
-                    "compiling the {} kernel source failed: {e}",
+                    "compiling `{label}` as a {} shader failed: {e}",
                     stage.wire_name()
                 ))
             })?;
@@ -359,10 +352,10 @@ void main() {
     fn compile(
         compiler: &GlslShaderSourceToSpirvCompiler,
         source: &str,
-        stage: ShaderPipelineStage,
-    ) -> Arc<Vec<u8>> {
+        stage: GlslCompilationTargetStage,
+    ) -> Arc<[u8]> {
         compiler
-            .compile_or_reuse(source, stage, GLSL_SOURCE_ENTRY_POINT, "test.glsl")
+            .compile_or_reuse(source, stage, DEFAULT_SHADER_ENTRY_POINT, "test.glsl")
             .unwrap_or_else(|e| panic!("compiling the {} source failed: {e}", stage.wire_name()))
     }
 
@@ -374,7 +367,11 @@ void main() {
 
     #[test]
     fn glsl_source_compiles_to_a_spirv_module() {
-        let spirv = compile(&compiler(), COMPUTE_SOURCE, ShaderPipelineStage::Compute);
+        let spirv = compile(
+            &compiler(),
+            COMPUTE_SOURCE,
+            GlslCompilationTargetStage::Compute,
+        );
         assert!(is_spirv_module(&spirv), "expected a SPIR-V module");
     }
 
@@ -387,27 +384,27 @@ void main() {
         let compiler = compiler();
         let sources = [
             (
-                ShaderPipelineStage::RayGeneration,
+                GlslCompilationTargetStage::RayGeneration,
                 "layout(location = 0) rayPayloadEXT vec3 payload;\nvoid main() { payload = vec3(1.0); }",
             ),
             (
-                ShaderPipelineStage::RayMiss,
+                GlslCompilationTargetStage::RayMiss,
                 "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { payload = vec3(0.0); }",
             ),
             (
-                ShaderPipelineStage::RayClosestHit,
+                GlslCompilationTargetStage::RayClosestHit,
                 "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { payload = vec3(0.5); }",
             ),
             (
-                ShaderPipelineStage::RayAnyHit,
+                GlslCompilationTargetStage::RayAnyHit,
                 "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { ignoreIntersectionEXT; }",
             ),
             (
-                ShaderPipelineStage::RayIntersection,
+                GlslCompilationTargetStage::RayIntersection,
                 "hitAttributeEXT vec2 attribs;\nvoid main() { reportIntersectionEXT(1.0, 0u); }",
             ),
             (
-                ShaderPipelineStage::RayCallable,
+                GlslCompilationTargetStage::RayCallable,
                 "layout(location = 0) callableDataInEXT vec3 called;\nvoid main() { called = vec3(1.0); }",
             ),
         ];
@@ -427,7 +424,11 @@ void main() {
     /// binding survives into reflection.
     #[test]
     fn an_engine_compiled_module_keeps_its_binding_names() {
-        let spirv = compile(&compiler(), COMPUTE_SOURCE, ShaderPipelineStage::Compute);
+        let spirv = compile(
+            &compiler(),
+            COMPUTE_SOURCE,
+            GlslCompilationTargetStage::Compute,
+        );
         let (bindings, _push_constant_size) = crate::core::rhi::derive_bindings_from_spirv(&spirv)
             .expect(
                 "reflection refuses a name-stripped module, so this failing means the engine \
@@ -446,8 +447,16 @@ void main() {
     #[test]
     fn compiling_the_same_source_twice_invokes_the_compiler_once() {
         let compiler = compiler();
-        let first = compile(&compiler, COMPUTE_SOURCE, ShaderPipelineStage::Compute);
-        let second = compile(&compiler, COMPUTE_SOURCE, ShaderPipelineStage::Compute);
+        let first = compile(
+            &compiler,
+            COMPUTE_SOURCE,
+            GlslCompilationTargetStage::Compute,
+        );
+        let second = compile(
+            &compiler,
+            COMPUTE_SOURCE,
+            GlslCompilationTargetStage::Compute,
+        );
         assert_eq!(compiler.invocation_count(), 1);
         assert_eq!(first, second);
     }
@@ -460,8 +469,8 @@ void main() {
     fn a_different_stage_is_a_different_compilation() {
         let compiler = compiler();
         let source = "#version 450\nvoid main() {}\n";
-        compile(&compiler, source, ShaderPipelineStage::Compute);
-        compile(&compiler, source, ShaderPipelineStage::Vertex);
+        compile(&compiler, source, GlslCompilationTargetStage::Compute);
+        compile(&compiler, source, GlslCompilationTargetStage::Vertex);
         assert_eq!(compiler.invocation_count(), 2);
     }
 
@@ -473,14 +482,14 @@ void main() {
         };
         let engine = GlslShaderCompilationCacheKey::new(
             COMPUTE_SOURCE,
-            ShaderPipelineStage::Compute,
-            GLSL_SOURCE_ENTRY_POINT,
+            GlslCompilationTargetStage::Compute,
+            DEFAULT_SHADER_ENTRY_POINT,
             ShaderTargetEnvironment::ENGINE,
         );
         let other = GlslShaderCompilationCacheKey::new(
             COMPUTE_SOURCE,
-            ShaderPipelineStage::Compute,
-            GLSL_SOURCE_ENTRY_POINT,
+            GlslCompilationTargetStage::Compute,
+            DEFAULT_SHADER_ENTRY_POINT,
             vulkan_1_3_spirv_1_6,
         );
         assert_ne!(engine, other);
@@ -490,13 +499,13 @@ void main() {
     fn a_different_entry_point_is_a_different_key() {
         let main = GlslShaderCompilationCacheKey::new(
             COMPUTE_SOURCE,
-            ShaderPipelineStage::Compute,
-            GLSL_SOURCE_ENTRY_POINT,
+            GlslCompilationTargetStage::Compute,
+            DEFAULT_SHADER_ENTRY_POINT,
             ShaderTargetEnvironment::ENGINE,
         );
         let sharpen = GlslShaderCompilationCacheKey::new(
             COMPUTE_SOURCE,
-            ShaderPipelineStage::Compute,
+            GlslCompilationTargetStage::Compute,
             "sharpen",
             ShaderTargetEnvironment::ENGINE,
         );
@@ -511,7 +520,7 @@ void main() {
         let err = compiler()
             .compile_or_reuse(
                 COMPUTE_SOURCE,
-                ShaderPipelineStage::Compute,
+                GlslCompilationTargetStage::Compute,
                 "sharpen",
                 "test.comp",
             )
@@ -529,8 +538,8 @@ void main() {
         let err = compiler()
             .compile_or_reuse(
                 "#version 450\nvoid main() { no_such_function(); }\n",
-                ShaderPipelineStage::Compute,
-                GLSL_SOURCE_ENTRY_POINT,
+                GlslCompilationTargetStage::Compute,
+                DEFAULT_SHADER_ENTRY_POINT,
                 "blur.comp",
             )
             .err()
@@ -549,8 +558,8 @@ void main() {
             compiler
                 .compile_or_reuse(
                     broken,
-                    ShaderPipelineStage::Compute,
-                    GLSL_SOURCE_ENTRY_POINT,
+                    GlslCompilationTargetStage::Compute,
+                    DEFAULT_SHADER_ENTRY_POINT,
                     "broken.comp",
                 )
                 .err()
@@ -561,21 +570,21 @@ void main() {
 
     #[test]
     fn an_unknown_stage_name_is_refused_naming_every_accepted_one() {
-        let err = ShaderPipelineStage::from_wire_name("geometry")
+        let err = GlslCompilationTargetStage::from_wire_name("geometry")
             .err()
             .expect("`geometry` is not a stage this engine compiles for");
         let message = format!("{err}");
         assert!(message.contains("geometry"), "{message}");
-        for stage in ShaderPipelineStage::ALL {
+        for stage in GlslCompilationTargetStage::ALL {
             assert!(message.contains(stage.wire_name()), "{message}");
         }
     }
 
     #[test]
     fn every_stage_wire_name_round_trips() {
-        for stage in ShaderPipelineStage::ALL {
+        for stage in GlslCompilationTargetStage::ALL {
             assert_eq!(
-                ShaderPipelineStage::from_wire_name(stage.wire_name()).unwrap(),
+                GlslCompilationTargetStage::from_wire_name(stage.wire_name()).unwrap(),
                 *stage
             );
         }

@@ -22,9 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
-use crate::core::context::GpuContextFullAccess;
-#[cfg(target_os = "linux")]
-use crate::core::rhi::ShaderPipelineStage;
+use crate::core::rhi::GlslCompilationTargetStage;
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostSurfaceStoreExt;
 
@@ -1244,12 +1242,15 @@ enum RegisteredShaderStageSource {
     /// GLSL text, compiled once the handler holds Full access.
     GlslSource {
         source: String,
-        stage: ShaderPipelineStage,
+        stage: GlslCompilationTargetStage,
         entry_point: String,
         field_name: String,
     },
     /// Bytes the caller compiled elsewhere — the escape hatch.
-    PreCompiledSpirv(Arc<Vec<u8>>),
+    PreCompiledSpirv {
+        spirv: Arc<[u8]>,
+        entry_point: String,
+    },
 }
 
 /// Read one stage's shader out of a register op, without touching the device.
@@ -1262,7 +1263,7 @@ fn registered_shader_stage_source(
     field_prefix: &str,
     source: &str,
     spv_hex: &str,
-    stage: ShaderPipelineStage,
+    stage: GlslCompilationTargetStage,
     entry_point: &str,
 ) -> std::result::Result<RegisteredShaderStageSource, String> {
     let source_field = format!("{field_prefix}source");
@@ -1286,7 +1287,10 @@ fn registered_shader_stage_source(
             field_name: source_field,
         }),
         (true, false) => decode_hex(spv_hex)
-            .map(|spv| RegisteredShaderStageSource::PreCompiledSpirv(Arc::new(spv)))
+            .map(|spv| RegisteredShaderStageSource::PreCompiledSpirv {
+                spirv: spv.into(),
+                entry_point: normalized_shader_entry_point(entry_point).to_string(),
+            })
             .map_err(|e| format!("{spv_field} decode: {e}")),
     }
 }
@@ -1295,18 +1299,35 @@ fn registered_shader_stage_source(
 impl RegisteredShaderStageSource {
     /// The stage's SPIR-V, compiling the GLSL if that is what was supplied.
     ///
-    /// Runs inside the caller's escalate scope, alongside the pipeline build it
-    /// feeds: that build costs far more than the compile, so a second scope
-    /// would buy nothing.
-    fn spirv(&self, full: &GpuContextFullAccess) -> crate::core::error::Result<Arc<Vec<u8>>> {
+    /// Takes the sandbox rather than a `GpuContextFullAccess`, so it needs no
+    /// escalate scope and every handler calls it before opening one:
+    /// compilation is CPU work that touches no device, and that gate
+    /// serializes every processor's device work. A cold C++ compile is
+    /// milliseconds no other processor should ever wait on.
+    fn spirv(&self, sandbox: &GpuContextLimitedAccess) -> crate::core::error::Result<Arc<[u8]>> {
         match self {
             Self::GlslSource {
                 source,
                 stage,
                 entry_point,
                 field_name,
-            } => full.compile_glsl_shader_source_to_spirv(source, *stage, entry_point, field_name),
-            Self::PreCompiledSpirv(spirv) => Ok(Arc::clone(spirv)),
+            } => sandbox.host_inner().compile_glsl_shader_source_to_spirv(
+                source,
+                *stage,
+                entry_point,
+                field_name,
+            ),
+            Self::PreCompiledSpirv { spirv, .. } => Ok(Arc::clone(spirv)),
+        }
+    }
+
+    /// The entry point the pipeline stage is built against — the same value
+    /// the module was compiled against, normalized once at resolution.
+    fn entry_point(&self) -> &str {
+        match self {
+            Self::GlslSource { entry_point, .. } | Self::PreCompiledSpirv { entry_point, .. } => {
+                entry_point
+            }
         }
     }
 }
@@ -1316,7 +1337,7 @@ impl RegisteredShaderStageSource {
 #[cfg(target_os = "linux")]
 fn normalized_shader_entry_point(entry_point: &str) -> &str {
     if entry_point.is_empty() {
-        crate::core::rhi::GLSL_SOURCE_ENTRY_POINT
+        crate::core::rhi::DEFAULT_SHADER_ENTRY_POINT
     } else {
         entry_point
     }
@@ -1340,26 +1361,50 @@ fn handle_register_compute_kernel(
     rid: String,
     req: EscalateRequestRegisterComputeKernel,
 ) -> EscalateResponse {
-    if !req.stage.is_empty() && req.stage != ShaderPipelineStage::Compute.wire_name() {
-        return EscalateResponse::Err(EscalateResponseErr {
-            request_id: rid,
-            message: format!(
-                "register_compute_kernel carries stage `{}`; this op registers a compute \
-                 kernel, so the only stage it compiles for is `{}`",
-                req.stage,
-                ShaderPipelineStage::Compute.wire_name()
-            ),
-        });
+    // Parsed before it is judged, so a misspelling and a real-but-wrong stage
+    // get different answers: one lists the stages that exist, the other says
+    // which one this op means.
+    if !req.stage.is_empty() {
+        match GlslCompilationTargetStage::from_wire_name(&req.stage) {
+            Ok(GlslCompilationTargetStage::Compute) => {}
+            Ok(other) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!(
+                        "register_compute_kernel carries stage `{}`; this op registers a \
+                         compute kernel, so the only stage it compiles for is `{}`",
+                        other.wire_name(),
+                        GlslCompilationTargetStage::Compute.wire_name()
+                    ),
+                });
+            }
+            Err(e) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!("register_compute_kernel: {e}"),
+                });
+            }
+        }
     }
 
     let shader_source = match registered_shader_stage_source(
         "",
         &req.source,
         &req.spv_hex,
-        ShaderPipelineStage::Compute,
+        GlslCompilationTargetStage::Compute,
         &req.entry_point,
     ) {
         Ok(shader_source) => shader_source,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("register_compute_kernel: {e}"),
+            });
+        }
+    };
+
+    let spv = match shader_source.spirv(sandbox) {
+        Ok(spv) => spv,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
@@ -1379,12 +1424,11 @@ fn handle_register_compute_kernel(
 
     let registered = sandbox
         .escalate(|full| {
-            let spv = shader_source.spirv(full)?;
             full.create_or_reuse_compute_kernel(
                 &spv,
                 req.push_constant_size,
                 &declared,
-                normalized_shader_entry_point(&req.entry_point),
+                shader_source.entry_point(),
             )
         })
         .and_then(|(kernel_id, kernel)| {
@@ -1683,7 +1727,7 @@ fn handle_register_graphics_kernel(
         "vertex_",
         &req.vertex_source,
         &req.vertex_spv_hex,
-        ShaderPipelineStage::Vertex,
+        GlslCompilationTargetStage::Vertex,
         &req.vertex_entry_point,
     )
     .and_then(|vertex| {
@@ -1691,7 +1735,7 @@ fn handle_register_graphics_kernel(
             "fragment_",
             &req.fragment_source,
             &req.fragment_spv_hex,
-            ShaderPipelineStage::Fragment,
+            GlslCompilationTargetStage::Fragment,
             &req.fragment_entry_point,
         )
         .map(|fragment| (vertex, fragment))
@@ -1706,23 +1750,34 @@ fn handle_register_graphics_kernel(
         }
     };
 
-    let resolved = sandbox.escalate(|full| {
-        let vertex_spv = vertex_source.spirv(full)?;
-        let fragment_spv = fragment_source.spirv(full)?;
-        let bridge = full.graphics_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "register_graphics_kernel: no GraphicsKernelBridge registered on GpuContext"
-                    .to_string(),
-            )
-        })?;
-        Ok((vertex_spv, fragment_spv, bridge))
-    });
-    let (vertex_spv, fragment_spv, bridge): (_, _, Arc<dyn GraphicsKernelBridge>) = match resolved {
-        Ok(resolved) => resolved,
+    let compiled = vertex_source
+        .spirv(sandbox)
+        .and_then(|vertex_spv| Ok((vertex_spv, fragment_source.spirv(sandbox)?)));
+    let (vertex_spv, fragment_spv) = match compiled {
+        Ok(compiled) => compiled,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
                 message: format!("register_graphics_kernel: {e}"),
+            });
+        }
+    };
+
+    // Not re-prefixed with the op: this payload already opens with it, and
+    // `Error::Configuration` adds its own "Invalid configuration:" on top.
+    let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
+        full.graphics_kernel_bridge().ok_or_else(|| {
+            crate::core::error::Error::Configuration(
+                "register_graphics_kernel: no GraphicsKernelBridge registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
             });
         }
     };
@@ -1749,10 +1804,10 @@ fn handle_register_graphics_kernel(
 
     let decl = GraphicsKernelRegisterDecl {
         label: req.label,
-        vertex_spv: vertex_spv.as_ref().clone(),
-        fragment_spv: fragment_spv.as_ref().clone(),
-        vertex_entry_point: req.vertex_entry_point,
-        fragment_entry_point: req.fragment_entry_point,
+        vertex_spv: vertex_spv.to_vec(),
+        fragment_spv: fragment_spv.to_vec(),
+        vertex_entry_point: vertex_source.entry_point().to_string(),
+        fragment_entry_point: fragment_source.entry_point().to_string(),
         bindings,
         push_constant_size: req.push_constant_size,
         push_constant_stages: req.push_constant_stages,
@@ -2162,8 +2217,8 @@ fn handle_register_acceleration_structure_tlas(
 #[cfg(target_os = "linux")]
 fn ray_tracing_pipeline_stage_from_wire(
     stage: EscalateRequestRegisterRayTracingKernelStageStage,
-) -> crate::core::rhi::ShaderPipelineStage {
-    use crate::core::rhi::ShaderPipelineStage as Compiled;
+) -> crate::core::rhi::GlslCompilationTargetStage {
+    use crate::core::rhi::GlslCompilationTargetStage as Compiled;
     use EscalateRequestRegisterRayTracingKernelStageStage as Wire;
     match stage {
         Wire::AnyHit => Compiled::RayAnyHit,
@@ -2200,16 +2255,20 @@ fn handle_register_ray_tracing_kernel(
 ) -> EscalateResponse {
     use std::sync::Arc;
 
+    // One consuming pass pairs each stage's shader with the bridge stage it
+    // fills, so nothing downstream has to keep two vectors index-aligned.
     let mut stage_sources = Vec::with_capacity(req.stages.len());
-    for (idx, st) in req.stages.iter().enumerate() {
+    for (idx, st) in req.stages.into_iter().enumerate() {
         match registered_shader_stage_source(
             &format!("stages[{idx}]."),
             &st.source,
             &st.spv_hex,
-            ray_tracing_pipeline_stage_from_wire(st.stage.clone()),
+            ray_tracing_pipeline_stage_from_wire(st.stage),
             &st.entry_point,
         ) {
-            Ok(stage_source) => stage_sources.push(stage_source),
+            Ok(stage_source) => {
+                stage_sources.push((stage_source, ray_tracing_stage_from_wire(st.stage)));
+            }
             Err(e) => {
                 return EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
@@ -2219,19 +2278,16 @@ fn handle_register_ray_tracing_kernel(
         }
     }
 
-    let resolved_stages = sandbox.escalate(|full| {
-        req.stages
-            .iter()
-            .zip(&stage_sources)
-            .map(|(st, stage_source)| {
-                Ok(RayTracingStageDecl {
-                    stage: ray_tracing_stage_from_wire(st.stage.clone()),
-                    spv: stage_source.spirv(full)?.as_ref().clone(),
-                    entry_point: st.entry_point.clone(),
-                })
+    let resolved_stages = stage_sources
+        .iter()
+        .map(|(stage_source, bridge_stage)| {
+            Ok(RayTracingStageDecl {
+                stage: *bridge_stage,
+                spv: stage_source.spirv(sandbox)?.to_vec(),
+                entry_point: stage_source.entry_point().to_string(),
             })
-            .collect::<crate::core::error::Result<Vec<_>>>()
-    });
+        })
+        .collect::<crate::core::error::Result<Vec<_>>>();
     let stages = match resolved_stages {
         Ok(stages) => stages,
         Err(e) => {
@@ -3737,7 +3793,7 @@ void main() {
         #[test]
         fn a_register_op_supplying_neither_source_nor_spirv_is_refused_naming_both() {
             let message =
-                registered_shader_stage_source("", "", "", ShaderPipelineStage::Compute, "")
+                registered_shader_stage_source("", "", "", GlslCompilationTargetStage::Compute, "")
                     .err()
                     .expect("a register op with no shader at all must be refused");
             assert!(message.contains("source"), "{message}");
@@ -3750,7 +3806,7 @@ void main() {
                 "vertex_",
                 READ_ONE_WRITE_ANOTHER_GLSL,
                 "0badc0de",
-                ShaderPipelineStage::Vertex,
+                GlslCompilationTargetStage::Vertex,
                 "",
             )
             .err()
@@ -3774,6 +3830,26 @@ void main() {
             ));
             assert!(message.contains("vertex"), "{message}");
             assert!(message.contains("compute"), "{message}");
+        }
+
+        /// A misspelling and a real-but-wrong stage are different mistakes and
+        /// get different answers — the first needs the list of stages that
+        /// exist, the second needs to know which one this op means.
+        #[test]
+        fn a_stage_that_is_not_a_stage_at_all_is_refused_naming_the_ones_that_are() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("compute register op unknown stage: no GPU — skipping");
+                return;
+            };
+            let message = refusal_message(handle_register_compute_kernel(
+                &sandbox,
+                "rid-glsl".to_string(),
+                register_from_glsl(READ_ONE_WRITE_ANOTHER_GLSL, "commpute"),
+            ));
+            assert!(message.contains("commpute"), "{message}");
+            for stage in GlslCompilationTargetStage::ALL {
+                assert!(message.contains(stage.wire_name()), "{message}");
+            }
         }
 
         /// The ticket's demo, at the wire: GLSL text where bytes used to go,
