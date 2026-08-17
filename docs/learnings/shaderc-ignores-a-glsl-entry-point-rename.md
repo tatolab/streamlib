@@ -10,7 +10,7 @@ runs `main` if some other layer normalizes the name back.
 Observed with shaderc 0.10.1 (vendored glslang), targeting Vulkan 1.2 /
 SPIR-V 1.4:
 
-```
+```text
 entry_point="sharpen", source declares main  -> Ok, module contains "main", not "sharpen"
 entry_point="sharpen", source declares only sharpen()
                                             -> Err: "Linking compute stage:

@@ -455,8 +455,8 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     ///
     /// The blob must retain its `OpName` decorations (`glslc -g`): bindings
     /// resolve by name, so a stripped blob is refused at registration. What
-    /// the engine compiles from `source` keeps them by construction — it never
-    /// optimizes.
+    /// the engine compiles from `source` keeps them by construction — it emits
+    /// debug info, which carries the names through the optimizer.
     #[serde(default)]
     pub(crate) spv_hex: String,
 }
