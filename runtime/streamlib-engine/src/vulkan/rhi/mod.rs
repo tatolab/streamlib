@@ -155,4 +155,7 @@ pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor};
 pub mod drm_modifier_probe;
 
 #[cfg(all(test, target_os = "linux"))]
+mod video_profile_test_fixture;
+
+#[cfg(all(test, target_os = "linux"))]
 mod vulkan_swapchain_alloc_repro_test;
