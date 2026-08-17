@@ -2587,6 +2587,27 @@ impl GpuContext {
         self.glsl_shader_source_compiler.invocation_count()
     }
 
+    /// How many queue submissions this context's device has made.
+    ///
+    /// What a batching assertion counts. Elapsed time cannot stand in for it:
+    /// a batch is faster than N dispatches for reasons a loaded machine can
+    /// hide, while the submission count says outright whether the work went
+    /// out as one command buffer or N.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn queue_submission_count(&self) -> usize {
+        self.device.inner.queue_submission_count()
+    }
+
+    /// How many times a compute dispatch path has blocked on a fence — the
+    /// stalls a batch exists to collapse. See
+    /// [`Self::queue_submission_count`] on why this is counted, not timed.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn blocking_fence_wait_count(&self) -> usize {
+        self.device.inner.blocking_fence_wait_count()
+    }
+
     /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
     /// identical one if this context already built it.
     ///
@@ -2687,10 +2708,9 @@ impl GpuContext {
     /// dispatch.
     ///
     /// Each dispatch's bindings are barriered into the layout its descriptor
-    /// requires, from whatever layout the registration currently tracks. Those
-    /// barriers are also the write-then-read edge between consecutive passes:
-    /// they name `COMPUTE_SHADER`/`SHADER_WRITE` as the source, so pass N+1
-    /// observes pass N's stores.
+    /// requires. Those barriers are also the write-then-read edge between
+    /// consecutive passes: they name `COMPUTE_SHADER`/`SHADER_WRITE` as the
+    /// source, so pass N+1 observes pass N's stores.
     ///
     /// One kernel may appear only once. A kernel owns a single descriptor set,
     /// so a second bind would retarget the dispatch already recorded against it
@@ -2701,8 +2721,6 @@ impl GpuContext {
         &self,
         batch: &[BatchedComputeKernelDispatch<'_>],
     ) -> Result<()> {
-        use crate::core::rhi::SurfaceBoundComputeBindingKind;
-
         if batch.is_empty() {
             return Ok(());
         }
@@ -2730,26 +2748,20 @@ impl GpuContext {
         // From here on the recorder is open, and every early return has to
         // close it or the next batch's begin() refuses.
         recorder.begin()?;
-        let recorded = Self::record_compute_kernel_batch(recorder, batch);
-        if recorded.is_err() {
-            recorder.abort_recording();
-            return recorded;
-        }
+        let landed_in = match Self::record_compute_kernel_batch(recorder, batch) {
+            Ok(landed_in) => landed_in,
+            Err(e) => {
+                recorder.abort_recording();
+                return Err(e);
+            }
+        };
         recorder.submit_and_wait()?;
 
-        // Compute leaves a storage image in GENERAL and a sampled texture in
-        // SHADER_READ_ONLY_OPTIMAL — recorded only now, so a batch that failed
-        // mid-recording (and submitted nothing) leaves the tracked layouts
-        // describing what the textures are actually in.
-        for dispatch in batch {
-            for binding in dispatch.bindings {
-                binding.registration.update_layout(match binding.kind {
-                    SurfaceBoundComputeBindingKind::StorageImage => VulkanLayout::GENERAL,
-                    SurfaceBoundComputeBindingKind::SampledTexture => {
-                        VulkanLayout::SHADER_READ_ONLY_OPTIMAL
-                    }
-                });
-            }
+        // Published only now: a batch that failed mid-recording submitted
+        // nothing, so its textures are still in the layouts they arrived in and
+        // the tracked layout must keep saying so.
+        for (registration, layout) in landed_in.values() {
+            registration.update_layout(*layout);
         }
 
         tracing::debug!(
@@ -2762,13 +2774,28 @@ impl GpuContext {
 
     /// The recording half of [`Self::dispatch_compute_kernel_batch`], split out
     /// so every failure path funnels through one `abort_recording`.
+    ///
+    /// Returns the layout each bound texture ends the recording in, for the
+    /// caller to publish once the submission has retired.
     #[cfg(target_os = "linux")]
-    fn record_compute_kernel_batch(
+    #[allow(clippy::type_complexity)]
+    fn record_compute_kernel_batch<'a>(
         recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
-        batch: &[BatchedComputeKernelDispatch<'_>],
-    ) -> Result<()> {
+        batch: &[BatchedComputeKernelDispatch<'a>],
+    ) -> Result<HashMap<*const std::ffi::c_void, (&'a TextureRegistration, VulkanLayout)>> {
         use crate::core::rhi::SurfaceBoundComputeBindingKind;
         use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+        // The layout each texture is in *as the recording proceeds*, keyed by
+        // registration identity. Tracking it here rather than re-reading the
+        // registration is what makes a chain work: pass 1 leaves its output in
+        // GENERAL, and barriering pass 2's read from the pre-batch layout —
+        // typically UNDEFINED for a freshly acquired texture — would discard
+        // exactly the writes pass 2 is there to read.
+        let mut layout_during_recording: HashMap<
+            *const std::ffi::c_void,
+            (&'a TextureRegistration, VulkanLayout),
+        > = HashMap::new();
 
         for dispatch in batch {
             for binding in dispatch.bindings {
@@ -2778,18 +2805,25 @@ impl GpuContext {
                         VulkanLayout::SHADER_READ_ONLY_OPTIMAL
                     }
                 };
+                let entry = layout_during_recording
+                    .entry(binding.registration.handle)
+                    .or_insert((
+                        binding.registration,
+                        binding.registration.current_layout(),
+                    ));
                 // Recorded even when the layout already matches: the barrier is
                 // carrying the previous pass's stores to this pass's reads, and
                 // a same-layout transition is exactly that memory dependency.
                 recorder.record_image_barrier(
                     binding.registration.texture(),
-                    binding.registration.current_layout(),
+                    entry.1,
                     required_layout,
                     VulkanStage::COMPUTE_SHADER,
                     VulkanStage::COMPUTE_SHADER,
                     VulkanAccess::SHADER_WRITE,
                     VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
                 )?;
+                entry.1 = required_layout;
             }
 
             for binding in dispatch.bindings {
@@ -2816,7 +2850,7 @@ impl GpuContext {
                 dispatch.group_count_z,
             )?;
         }
-        Ok(())
+        Ok(layout_during_recording)
     }
 
     // =========================================================================

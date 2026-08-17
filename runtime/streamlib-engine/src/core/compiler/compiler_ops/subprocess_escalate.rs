@@ -4690,6 +4690,513 @@ void main() {
                 other => panic!("expected Err, got {other:?}"),
             }
         }
+
+        use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestRunComputeKernelBatchDispatch;
+
+        /// Pass 1 of the chain: every channel gains 40/255.
+        const BRIGHTEN_GLSL: &str = "\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D unbrightened_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D brightened_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    vec4 source = texelFetch(unbrightened_image, at, 0);
+    imageStore(brightened_image, at, vec4(source.rgb + 40.0 / 255.0, source.a));
+}
+";
+
+        /// Pass 2 of the chain: every channel doubles. Deliberately not
+        /// commutative with pass 1, so running them in the wrong order — or
+        /// running pass 2 against pass 1's *input* — lands on different pixels.
+        const DOUBLE_GLSL: &str = "\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D brightened_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D doubled_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    vec4 source = texelFetch(brightened_image, at, 0);
+    imageStore(doubled_image, at, vec4(source.rgb * 2.0, source.a));
+}
+";
+
+        /// 10,20,30 brightened by 40 is 50,60,70; doubled is 100,120,140.
+        const CHAIN_SEED_RGBA: [u8; 4] = [10, 20, 30, 255];
+        const CHAIN_BRIGHTENED_RGBA: [u8; 4] = [50, 60, 70, 255];
+        const CHAIN_DOUBLED_RGBA: [u8; 4] = [100, 120, 140, 255];
+
+        fn register_glsl_kernel(sandbox: &GpuContextLimitedAccess, source: &str) -> String {
+            let response = handle_register_compute_kernel(
+                sandbox,
+                "reg-chain".to_string(),
+                register_from_glsl(source, "compute"),
+            );
+            match response {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("registering a chain kernel failed: {other:?}"),
+            }
+        }
+
+        fn batched_dispatch(
+            kernel_id: &str,
+            source_binding: (&str, &str),
+            output_binding: (&str, &str),
+        ) -> EscalateRequestRunComputeKernelBatchDispatch {
+            EscalateRequestRunComputeKernelBatchDispatch {
+                bindings: vec![
+                    EscalateRequestRunComputeKernelBinding {
+                        kind: EscalateComputeBindingKind::SampledTexture,
+                        name: source_binding.0.to_string(),
+                        target_id: source_binding.1.to_string(),
+                    },
+                    EscalateRequestRunComputeKernelBinding {
+                        kind: EscalateComputeBindingKind::StorageImage,
+                        name: output_binding.0.to_string(),
+                        target_id: output_binding.1.to_string(),
+                    },
+                ],
+                group_count_x: 8,
+                group_count_y: 8,
+                group_count_z: 1,
+                kernel_id: kernel_id.to_string(),
+                push_constants_hex: String::new(),
+            }
+        }
+
+        /// Three 64×64 textures registered under fixed ids, the first seeded
+        /// with [`CHAIN_SEED_RGBA`]. Returned held: dropping a pooled handle
+        /// hands its slot back, and the registration would then name a
+        /// recycled texture.
+        #[allow(clippy::type_complexity)]
+        fn seeded_chain_textures(
+            sandbox: &GpuContextLimitedAccess,
+            ids: [&str; 3],
+        ) -> Vec<crate::core::context::PooledTextureHandle> {
+            sandbox
+                .escalate(|full| {
+                    let desc = TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                        .with_usage(
+                            TextureUsages::TEXTURE_BINDING
+                                | TextureUsages::STORAGE_BINDING
+                                | TextureUsages::COPY_SRC
+                                | TextureUsages::COPY_DST,
+                        );
+                    let mut held = Vec::with_capacity(ids.len());
+                    for id in ids {
+                        let texture = full.acquire_texture(&desc)?;
+                        full.register_texture(id, texture.texture().clone());
+                        held.push(texture);
+                    }
+
+                    let (_pool_id, seed_buffer) =
+                        full.acquire_pixel_buffer(64, 64, crate::core::rhi::PixelFormat::Rgba32)?;
+                    let plane = seed_buffer.buffer_ref().plane_base_address(0);
+                    unsafe {
+                        for pixel in 0..(64 * 64) {
+                            std::ptr::copy_nonoverlapping(
+                                CHAIN_SEED_RGBA.as_ptr(),
+                                plane.add(pixel * 4),
+                                4,
+                            );
+                        }
+                    }
+                    full.copy_pixel_buffer_to_texture(
+                        &seed_buffer,
+                        held[0].texture(),
+                        ids[0],
+                        64,
+                        64,
+                    )?;
+                    Ok(held)
+                })
+                .expect("three pooled textures, the first seeded")
+        }
+
+        fn read_back_rgba8(
+            sandbox: &GpuContextLimitedAccess,
+            texture: &crate::core::rhi::Texture,
+            label: &str,
+        ) -> Vec<u8> {
+            sandbox
+                .escalate(|full| {
+                    let readback =
+                        full.create_texture_readback(label, 64, 64, TextureFormat::Rgba8Unorm)?;
+                    let ticket = readback.submit(
+                        texture,
+                        crate::core::rhi::TextureSourceLayout::General,
+                    )?;
+                    Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
+                })
+                .expect("the texture reads back")
+        }
+
+        fn assert_every_pixel_is(pixels: &[u8], expected: [u8; 4], what: &str) {
+            for (index, pixel) in pixels.chunks_exact(4).enumerate() {
+                assert_eq!(pixel, expected, "pixel {index} of {what}");
+            }
+        }
+
+        /// The claim the whole op rests on: a later pass reads what an earlier
+        /// pass wrote, inside one recording.
+        ///
+        /// The intermediate is written as a storage image and read as a sampled
+        /// texture, so the batch owes it both a memory dependency and a layout
+        /// transition — and a barrier taken from the texture's *pre-batch*
+        /// layout would discard the very writes pass 2 is there for. The two
+        /// shaders do not commute, so a swapped order fails on the pixels
+        /// rather than passing quietly.
+        #[test]
+        fn a_later_pass_in_a_batch_reads_what_an_earlier_pass_wrote() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("batched chain: no GPU — skipping");
+                return;
+            };
+            let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+            let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+            let held = seeded_chain_textures(
+                &sandbox,
+                ["chain-seed", "chain-brightened", "chain-doubled"],
+            );
+
+            let response = handle_run_compute_kernel_batch(
+                &sandbox,
+                "chain".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![
+                        batched_dispatch(
+                            &brighten,
+                            ("unbrightened_image", "chain-seed"),
+                            ("brightened_image", "chain-brightened"),
+                        ),
+                        batched_dispatch(
+                            &double,
+                            ("brightened_image", "chain-brightened"),
+                            ("doubled_image", "chain-doubled"),
+                        ),
+                    ],
+                    request_id: "chain".to_string(),
+                },
+            );
+            assert!(
+                matches!(response, EscalateResponse::Ok(_)),
+                "the two-pass chain failed: {response:?}"
+            );
+
+            assert_every_pixel_is(
+                &read_back_rgba8(&sandbox, held[2].texture(), "chain-readback"),
+                CHAIN_DOUBLED_RGBA,
+                "the chain's output — pass 2 must have read pass 1's writes, not the \
+                 seed and not an undefined intermediate",
+            );
+            assert_every_pixel_is(
+                &read_back_rgba8(&sandbox, held[1].texture(), "chain-intermediate-readback"),
+                CHAIN_BRIGHTENED_RGBA,
+                "the intermediate — pass 1's own output",
+            );
+
+            // Each texture's tracked layout is published as the layout its
+            // *last* use in the batch left it in, which is where the next
+            // batch's barrier starts from. Asserted because the pixels above
+            // cannot check it: a source layout of UNDEFINED licenses the driver
+            // to discard contents, and this one declines to, so a batch that
+            // barriered every pass from the pre-batch layout would still read
+            // back correctly here while being wrong by the spec.
+            let tracked = |surface_id: &str| {
+                sandbox
+                    .escalate(|full| {
+                        Ok(full
+                            .resolve_texture_registration_by_surface_id(surface_id, None, 64, 64)?
+                            .current_layout())
+                    })
+                    .expect("the chain's textures still resolve")
+            };
+            assert_eq!(
+                tracked("chain-brightened"),
+                streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                "the intermediate was written as a storage image and then read as a sampled \
+                 texture, so it ends in the layout its last use required"
+            );
+            assert_eq!(
+                tracked("chain-doubled"),
+                streamlib_consumer_rhi::VulkanLayout::GENERAL,
+                "the final output was only ever written, so it ends in GENERAL"
+            );
+            drop(held);
+        }
+
+        /// The reason the op exists, counted rather than timed: three passes
+        /// batched cost one submission and one stall, where three separate
+        /// `run_compute_kernel` ops cost three submissions and two stalls each.
+        ///
+        /// Both arms run the same three dispatches on the same device in the
+        /// same test, so the comparison is against the path this op replaces —
+        /// not against a remembered number.
+        #[test]
+        fn a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("batch submission count: no GPU — skipping");
+                return;
+            };
+            let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+            let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+            let held = seeded_chain_textures(
+                &sandbox,
+                ["counted-seed", "counted-brightened", "counted-doubled"],
+            );
+
+            let dispatches = vec![
+                batched_dispatch(
+                    &brighten,
+                    ("unbrightened_image", "counted-seed"),
+                    ("brightened_image", "counted-brightened"),
+                ),
+                batched_dispatch(
+                    &double,
+                    ("brightened_image", "counted-brightened"),
+                    ("doubled_image", "counted-doubled"),
+                ),
+            ];
+
+            let submissions_before = sandbox.host_inner().queue_submission_count();
+            let stalls_before = sandbox.host_inner().blocking_fence_wait_count();
+            let response = handle_run_compute_kernel_batch(
+                &sandbox,
+                "counted".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: dispatches.clone(),
+                    request_id: "counted".to_string(),
+                },
+            );
+            assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
+            let batched_submissions =
+                sandbox.host_inner().queue_submission_count() - submissions_before;
+            let batched_stalls = sandbox.host_inner().blocking_fence_wait_count() - stalls_before;
+
+            assert_eq!(
+                batched_submissions, 1,
+                "two batched dispatches must go out as one command buffer"
+            );
+            assert_eq!(
+                batched_stalls, 1,
+                "and cost the caller exactly one fence wait"
+            );
+
+            let submissions_before = sandbox.host_inner().queue_submission_count();
+            let stalls_before = sandbox.host_inner().blocking_fence_wait_count();
+            for dispatch in &dispatches {
+                let response = handle_run_compute_kernel(
+                    &sandbox,
+                    "separate".to_string(),
+                    EscalateRequestRunComputeKernel {
+                        bindings: dispatch.bindings.clone(),
+                        group_count_x: dispatch.group_count_x,
+                        group_count_y: dispatch.group_count_y,
+                        group_count_z: dispatch.group_count_z,
+                        kernel_id: dispatch.kernel_id.clone(),
+                        push_constants_hex: dispatch.push_constants_hex.clone(),
+                        request_id: "separate".to_string(),
+                    },
+                );
+                assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
+            }
+            let separate_submissions =
+                sandbox.host_inner().queue_submission_count() - submissions_before;
+            let separate_stalls = sandbox.host_inner().blocking_fence_wait_count() - stalls_before;
+
+            assert_eq!(
+                separate_submissions, dispatches.len(),
+                "the path the batch replaces submits once per dispatch — if this is 1 the \
+                 counter is not counting and the assertion above proves nothing"
+            );
+            assert!(
+                separate_stalls > batched_stalls,
+                "the path the batch replaces must stall more than the batch does: \
+                 {separate_stalls} vs {batched_stalls}"
+            );
+            drop(held);
+        }
+
+        /// A kernel owns one descriptor set, so the second bind would hand the
+        /// first recorded dispatch this dispatch's bindings — and nothing has
+        /// executed yet, so it would do it silently.
+        #[test]
+        fn a_batch_naming_one_kernel_twice_is_refused_saying_why() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("batch duplicate kernel: no GPU — skipping");
+                return;
+            };
+            let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+            let held = seeded_chain_textures(
+                &sandbox,
+                ["twice-seed", "twice-middle", "twice-out"],
+            );
+
+            let response = handle_run_compute_kernel_batch(
+                &sandbox,
+                "twice".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![
+                        batched_dispatch(
+                            &brighten,
+                            ("unbrightened_image", "twice-seed"),
+                            ("brightened_image", "twice-middle"),
+                        ),
+                        batched_dispatch(
+                            &brighten,
+                            ("unbrightened_image", "twice-middle"),
+                            ("brightened_image", "twice-out"),
+                        ),
+                    ],
+                    request_id: "twice".to_string(),
+                },
+            );
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert!(
+                        err.message.contains("descriptor set"),
+                        "the refusal must say why one kernel cannot appear twice: {}",
+                        err.message
+                    );
+                    assert!(
+                        err.message.contains("dispatch 1") && err.message.contains("dispatch 0"),
+                        "and must name both dispatches: {}",
+                        err.message
+                    );
+                }
+                other => panic!("naming one kernel twice must refuse, got {other:?}"),
+            }
+            drop(held);
+        }
+
+        /// A batch runs whole or not at all, and never strands the recorder.
+        ///
+        /// The refused batch here fails on its *second* dispatch, so the first
+        /// one was already planned when the refusal fired. Nothing may reach
+        /// the GPU — asserted on the first dispatch's output pixels, which stay
+        /// at what they held — and the recorder must still take the next batch,
+        /// which is what `begin()` would refuse if the failure had left a
+        /// recording open.
+        #[test]
+        fn a_refused_batch_submits_nothing_and_leaves_the_recorder_usable() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("refused batch: no GPU — skipping");
+                return;
+            };
+            let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+            let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
+            let held = seeded_chain_textures(
+                &sandbox,
+                ["refused-seed", "refused-brightened", "refused-doubled"],
+            );
+
+            // The intermediate starts undefined; one batch establishes it, so
+            // the assertion below is against known content rather than
+            // whatever the allocator handed over.
+            let established = handle_run_compute_kernel_batch(
+                &sandbox,
+                "establish".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![batched_dispatch(
+                        &brighten,
+                        ("unbrightened_image", "refused-seed"),
+                        ("brightened_image", "refused-brightened"),
+                    )],
+                    request_id: "establish".to_string(),
+                },
+            );
+            assert!(matches!(established, EscalateResponse::Ok(_)), "{established:?}");
+
+            let submissions_before = sandbox.host_inner().queue_submission_count();
+            let refused = handle_run_compute_kernel_batch(
+                &sandbox,
+                "refused".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![
+                        batched_dispatch(
+                            &brighten,
+                            ("unbrightened_image", "refused-brightened"),
+                            ("brightened_image", "refused-brightened"),
+                        ),
+                        batched_dispatch(
+                            &double,
+                            ("brightened_image", "no-such-surface"),
+                            ("doubled_image", "refused-doubled"),
+                        ),
+                    ],
+                    request_id: "refused".to_string(),
+                },
+            );
+            match refused {
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("dispatch 1") && err.message.contains("no-such-surface"),
+                    "the refusal must name the dispatch and the surface: {}",
+                    err.message
+                ),
+                other => panic!("an unresolvable binding must refuse, got {other:?}"),
+            }
+            assert_eq!(
+                sandbox.host_inner().queue_submission_count(),
+                submissions_before,
+                "a refused batch submits nothing — not even the dispatches ahead of the \
+                 one that was refused"
+            );
+            assert_every_pixel_is(
+                &read_back_rgba8(&sandbox, held[1].texture(), "refused-readback"),
+                CHAIN_BRIGHTENED_RGBA,
+                "the intermediate, untouched by the refused batch",
+            );
+
+            // The recorder survived: a fresh batch runs, which begin() would
+            // refuse outright if the refusal above had left a recording open.
+            let after = handle_run_compute_kernel_batch(
+                &sandbox,
+                "after".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![batched_dispatch(
+                        &double,
+                        ("brightened_image", "refused-brightened"),
+                        ("doubled_image", "refused-doubled"),
+                    )],
+                    request_id: "after".to_string(),
+                },
+            );
+            assert!(
+                matches!(after, EscalateResponse::Ok(_)),
+                "the recorder must still be usable after a refused batch: {after:?}"
+            );
+            assert_every_pixel_is(
+                &read_back_rgba8(&sandbox, held[2].texture(), "after-readback"),
+                CHAIN_DOUBLED_RGBA,
+                "the batch that ran after the refused one",
+            );
+            drop(held);
+        }
+
+        /// An empty batch is not an error — there is simply nothing to submit,
+        /// and a caller who opened a scope and dispatched nothing has not made
+        /// a mistake worth raising on.
+        #[test]
+        fn an_empty_batch_submits_nothing_and_is_not_an_error() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("empty batch: no GPU — skipping");
+                return;
+            };
+            let submissions_before = sandbox.host_inner().queue_submission_count();
+            let response = handle_run_compute_kernel_batch(
+                &sandbox,
+                "empty".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: Vec::new(),
+                    request_id: "empty".to_string(),
+                },
+            );
+            assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
+            assert_eq!(
+                sandbox.host_inner().queue_submission_count(),
+                submissions_before
+            );
+        }
     }
 
     /// Host-Rust unit tests for the `register_graphics_kernel` /
