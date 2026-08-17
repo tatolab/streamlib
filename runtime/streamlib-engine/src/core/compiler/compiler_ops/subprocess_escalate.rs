@@ -1551,6 +1551,8 @@ fn handle_run_compute_kernel(
 use crate::core::context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 #[cfg(target_os = "linux")]
 use crate::core::rhi::SurfaceBoundComputeBindingKind;
+#[cfg(target_os = "linux")]
+use crate::host_rhi::HostTextureExt as _;
 
 /// What one validated binding resolved to: the slot to write, the kind to
 /// write it as, and the surface to look up.
@@ -1674,27 +1676,6 @@ fn resolve_supplied_compute_bindings(
     // kernel for its whole life.
     let planned = plan_supplied_compute_bindings(supplied, kernel.host_inner().bindings())?;
 
-    // One surface cannot serve two kinds in one dispatch. The descriptor
-    // layouts are fixed and disagree — a combined image sampler is written
-    // SHADER_READ_ONLY_OPTIMAL and a storage image GENERAL — so whatever
-    // layout the texture is put in, one of the two descriptors is wrong.
-    // Refused here rather than dispatched: `plan_supplied_compute_bindings`
-    // dedups on the shader's names, and two names legitimately reaching one
-    // surface is what this catches.
-    for (index, binding) in planned.iter().enumerate() {
-        if let Some(other) = planned[..index]
-            .iter()
-            .find(|prior| prior.target_id == binding.target_id && prior.kind != binding.kind)
-        {
-            return Err(Error::GpuError(format!(
-                "bindings `{}` and `{}` both name surface {:?} but as {:?} and {:?}; one \
-                 image cannot be in the layout both descriptors require, so a dispatch \
-                 reads and writes different surfaces or binds one of them alone",
-                other.name, binding.name, binding.target_id, other.kind, binding.kind
-            )));
-        }
-    }
-
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
         // Zero extent: a kernel binding names a surface the graph already has
@@ -1716,6 +1697,40 @@ fn resolve_supplied_compute_bindings(
             kind: binding.kind,
             registration,
         });
+    }
+
+    // One image cannot serve two kinds in one dispatch. The descriptor layouts
+    // are fixed and disagree — a combined image sampler is written
+    // SHADER_READ_ONLY_OPTIMAL and a storage image GENERAL — so whatever layout
+    // the texture is put in, one of the two descriptors is wrong.
+    //
+    // Compared after resolution and on the image, not on the id the caller
+    // wrote: a published frame id and its pool slot are two spellings of one
+    // texture (`<slot>#<generation>` resolves through the same cache entry as
+    // `<slot>`), so a string comparison would let the pair through to exactly
+    // the dispatch this refuses.
+    for (index, binding) in resolved.iter().enumerate() {
+        let image = binding.registration.texture().vulkan_inner().image();
+        if let Some(other) = resolved[..index].iter().position(|prior| {
+            prior.kind != binding.kind
+                && prior.registration.texture().vulkan_inner().image() == image
+        }) {
+            // Both ids, as the caller wrote them: a published frame id and its
+            // pool slot are different strings for one texture, so naming only
+            // one would leave the reader looking for a duplicate that is not
+            // there on the page.
+            return Err(Error::GpuError(format!(
+                "bindings `{}` (surface {:?}) and `{}` (surface {:?}) name one texture but \
+                 as {:?} and {:?}; no image layout satisfies both descriptors, so a \
+                 dispatch reads and writes different surfaces or binds one of them alone",
+                planned[other].name,
+                planned[other].target_id,
+                planned[index].name,
+                planned[index].target_id,
+                resolved[other].kind,
+                binding.kind
+            )));
+        }
     }
     Ok(resolved)
 }
@@ -4812,17 +4827,35 @@ void main() {
                 .expect("three pooled textures, the first seeded")
         }
 
+        /// Read a surface back, sourcing the readback barrier from the layout
+        /// the surface is actually tracked in.
+        ///
+        /// Not a hardcoded `General`: a batch leaves a sampled binding in
+        /// SHADER_READ_ONLY_OPTIMAL, and a barrier whose `oldLayout` disagrees
+        /// with the image makes the contents undefined by spec — so a test
+        /// asserting on those pixels would be reading what no driver owes it.
         fn read_back_rgba8(
             sandbox: &GpuContextLimitedAccess,
+            surface_id: &str,
             texture: &crate::core::rhi::Texture,
             label: &str,
         ) -> Vec<u8> {
+            use crate::core::rhi::TextureSourceLayout;
             sandbox
                 .escalate(|full| {
+                    let resting_layout = full
+                        .resolve_texture_registration_by_surface_id(surface_id, None, 64, 64)?
+                        .current_layout();
+                    let source_layout = if resting_layout
+                        == streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+                    {
+                        TextureSourceLayout::ShaderReadOnly
+                    } else {
+                        TextureSourceLayout::General
+                    };
                     let readback =
                         full.create_texture_readback(label, 64, 64, TextureFormat::Rgba8Unorm)?;
-                    let ticket =
-                        readback.submit(texture, crate::core::rhi::TextureSourceLayout::General)?;
+                    let ticket = readback.submit(texture, source_layout)?;
                     Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
                 })
                 .expect("the texture reads back")
@@ -4881,13 +4914,23 @@ void main() {
             );
 
             assert_every_pixel_is(
-                &read_back_rgba8(&sandbox, held[2].texture(), "chain-readback"),
+                &read_back_rgba8(
+                    &sandbox,
+                    "chain-doubled",
+                    held[2].texture(),
+                    "chain-readback",
+                ),
                 CHAIN_DOUBLED_RGBA,
                 "the chain's output — pass 2 must have read pass 1's writes, not the \
                  seed and not an undefined intermediate",
             );
             assert_every_pixel_is(
-                &read_back_rgba8(&sandbox, held[1].texture(), "chain-intermediate-readback"),
+                &read_back_rgba8(
+                    &sandbox,
+                    "chain-brightened",
+                    held[1].texture(),
+                    "chain-intermediate-readback",
+                ),
                 CHAIN_BRIGHTENED_RGBA,
                 "the intermediate — pass 1's own output",
             );
@@ -5158,7 +5201,12 @@ void main() {
                  one that was refused"
             );
             assert_every_pixel_is(
-                &read_back_rgba8(&sandbox, held[1].texture(), "refused-readback"),
+                &read_back_rgba8(
+                    &sandbox,
+                    "refused-brightened",
+                    held[1].texture(),
+                    "refused-readback",
+                ),
                 CHAIN_BRIGHTENED_RGBA,
                 "the intermediate, untouched by the refused batch",
             );
@@ -5182,7 +5230,12 @@ void main() {
                 "the recorder must still be usable after a refused batch: {after:?}"
             );
             assert_every_pixel_is(
-                &read_back_rgba8(&sandbox, held[2].texture(), "after-readback"),
+                &read_back_rgba8(
+                    &sandbox,
+                    "refused-doubled",
+                    held[2].texture(),
+                    "after-readback",
+                ),
                 CHAIN_DOUBLED_RGBA,
                 "the batch that ran after the refused one",
             );
@@ -5275,7 +5328,12 @@ void main() {
                 "the recorder must be usable after a batch aborted mid-recording: {after:?}"
             );
             assert_every_pixel_is(
-                &read_back_rgba8(&sandbox, held[1].texture(), "after-abort-readback"),
+                &read_back_rgba8(
+                    &sandbox,
+                    "aborted-middle",
+                    held[1].texture(),
+                    "after-abort-readback",
+                ),
                 CHAIN_BRIGHTENED_RGBA,
                 "the batch that ran after the aborted one",
             );
@@ -5346,7 +5404,7 @@ void main() {
                         group_count_x: 8,
                         group_count_y: 8,
                         group_count_z: 1,
-                        kernel_id,
+                        kernel_id: kernel_id.clone(),
                         push_constants_hex: "00000000".to_string(),
                     }],
                     request_id: "both-batched".to_string(),
@@ -5360,6 +5418,41 @@ void main() {
                 sandbox.host_inner().queue_submission_count(),
                 submissions_before,
                 "and submits nothing"
+            );
+
+            // Two spellings, one texture. A published frame id resolves through
+            // its pool slot's cache entry, so `both-seed` and `both-seed#3` are
+            // the same image — and comparing the ids as strings would let this
+            // pair through to the dispatch the arms above refuse.
+            let two_spellings = handle_run_compute_kernel(
+                &sandbox,
+                "both-spellings".to_string(),
+                EscalateRequestRunComputeKernel {
+                    bindings: supplied(&[
+                        (
+                            "source_image",
+                            EscalateComputeBindingKind::SampledTexture,
+                            "both-seed",
+                        ),
+                        (
+                            "output_image",
+                            EscalateComputeBindingKind::StorageImage,
+                            "both-seed#3",
+                        ),
+                    ]),
+                    group_count_x: 8,
+                    group_count_y: 8,
+                    group_count_z: 1,
+                    kernel_id,
+                    push_constants_hex: "00000000".to_string(),
+                    request_id: "both-spellings".to_string(),
+                },
+            );
+            let message = refusal_message(two_spellings);
+            assert!(
+                message.contains("both-seed\"") && message.contains("both-seed#3"),
+                "the refusal must name both spellings, since neither is wrong on its own: \
+                 {message}"
             );
             drop(held);
         }
