@@ -2503,18 +2503,6 @@ impl GpuContext {
     // Compute kernels for the escalate ops — always present, never installed
     // =========================================================================
 
-    /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
-    /// identical one if this context already built it.
-    ///
-    /// The cache key covers everything that changes the compiled output. For a
-    /// pre-compiled blob that is the blob itself plus the declared
-    /// push-constant size — the bytes already fix stage, entry point and target
-    /// environment. A GLSL source contract adds the compiler's own version to
-    /// the key, because then the engine is what produces the bytes.
-    ///
-    /// Returns the cache key as the kernel id: a caller re-registering the same
-    /// kernel gets the same id back, and pays no compilation for it.
-    #[cfg(target_os = "linux")]
     /// Compile GLSL kernel source to SPIR-V, reusing what an identical earlier
     /// request compiled.
     ///
@@ -2543,6 +2531,18 @@ impl GpuContext {
         self.glsl_shader_source_compiler.invocation_count()
     }
 
+    /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
+    /// identical one if this context already built it.
+    ///
+    /// The cache key covers everything that changes the compiled output. For a
+    /// pre-compiled blob that is the blob itself plus the declared
+    /// push-constant size — the bytes already fix stage, entry point and target
+    /// environment. A GLSL source contract adds the compiler's own version to
+    /// the key, because then the engine is what produces the bytes.
+    ///
+    /// Returns the cache key as the kernel id: a caller re-registering the same
+    /// kernel gets the same id back, and pays no compilation for it.
+    #[cfg(target_os = "linux")]
     pub fn create_or_reuse_compute_kernel(
         &self,
         spv: &[u8],

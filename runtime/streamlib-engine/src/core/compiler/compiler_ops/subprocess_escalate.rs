@@ -1234,19 +1234,6 @@ fn compute_binding_kind_to_wire(
     }
 }
 
-/// Build a compute kernel for a subprocess customer, against `GpuContext`.
-///
-/// Reflection derives the binding shape and its names; the request's own
-/// declaration is checked against it rather than replacing it. Re-registering
-/// an identical kernel is a cache hit and answers with the same `kernel_id`.
-///
-/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
-/// 1. `spv_hex` doesn't decode as hex bytes.
-/// 2. The blob's `OpName` decorations were stripped — bindings resolve by
-///    name, so an unnamed binding cannot be bound at all.
-/// 3. The declaration disagrees with reflection on a name or a kind.
-/// 4. Push-constant size mismatch, or pipeline build failure.
-#[cfg(target_os = "linux")]
 /// Which of the two shader sources a register op supplied for one stage.
 ///
 /// Resolved before escalating. Supplying neither, both, or undecodable hex is
@@ -1335,6 +1322,19 @@ fn normalized_shader_entry_point(entry_point: &str) -> &str {
     }
 }
 
+/// Build a compute kernel for a subprocess customer, against `GpuContext`.
+///
+/// Reflection derives the binding shape and its names; the request's own
+/// declaration is checked against it rather than replacing it. Re-registering
+/// an identical kernel is a cache hit and answers with the same `kernel_id`.
+///
+/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
+/// 1. `spv_hex` doesn't decode as hex bytes.
+/// 2. The blob's `OpName` decorations were stripped — bindings resolve by
+///    name, so an unnamed binding cannot be bound at all.
+/// 3. The declaration disagrees with reflection on a name or a kind.
+/// 4. Push-constant size mismatch, or pipeline build failure.
+#[cfg(target_os = "linux")]
 fn handle_register_compute_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
@@ -2154,24 +2154,6 @@ fn handle_register_acceleration_structure_tlas(
     }
 }
 
-/// Map a wire-format `register_ray_tracing_kernel` request through
-/// the registered [`RayTracingKernelBridge`].
-///
-/// Decodes per-stage SPIR-V hex blobs, translates the wire-format
-/// stage / group / binding kinds into the bridge's typed mirrors, and
-/// asks the bridge to register the kernel. The bridge returns a
-/// stable `kernel_id` (typically SHA-256 over a canonical
-/// representation of all register-time inputs); identical
-/// re-registration hits the bridge's cache and returns the same id.
-///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. Any stage's `spv_hex` doesn't decode as hex bytes.
-/// 2. No bridge is registered.
-/// 3. Bridge `register_kernel` returned an error — typically
-///    reflection failure, push-constant size mismatch, group/stage
-///    inconsistency, or pipeline build failure.
-#[cfg(target_os = "linux")]
 /// The compiler's name for a ray-tracing wire stage.
 ///
 /// Distinct from [`ray_tracing_stage_from_wire`], which maps the same wire
@@ -2193,6 +2175,24 @@ fn ray_tracing_pipeline_stage_from_wire(
     }
 }
 
+/// Map a wire-format `register_ray_tracing_kernel` request through
+/// the registered [`RayTracingKernelBridge`].
+///
+/// Decodes per-stage SPIR-V hex blobs, translates the wire-format
+/// stage / group / binding kinds into the bridge's typed mirrors, and
+/// asks the bridge to register the kernel. The bridge returns a
+/// stable `kernel_id` (typically SHA-256 over a canonical
+/// representation of all register-time inputs); identical
+/// re-registration hits the bridge's cache and returns the same id.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. Any stage's `spv_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered.
+/// 3. Bridge `register_kernel` returned an error — typically
+///    reflection failure, push-constant size mismatch, group/stage
+///    inconsistency, or pipeline build failure.
+#[cfg(target_os = "linux")]
 fn handle_register_ray_tracing_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
