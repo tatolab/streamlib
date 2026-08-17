@@ -168,13 +168,32 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test
     construction, so identity alone cannot fail for the reason #1755 exists.
     The second claim is the real one — a consumer holding a frame while the
     producer runs 16 frames past it still reads the pixels it was delivered,
-    because the checkout lease keeps the pool off that slot.
+    because the checkout lease keeps the pool off that slot. The probe takes
+    that lease by reading `into=VideoFrame`; reading untyped and casting
+    afterwards takes no claim, which is how this test spent #1869 asserting a
+    lease it never held.
+
+    Only the *held* frame is protected. A later frame can recycle before this
+    deliberately-slow consumer reaches it — publish-to-claim transit rides pool
+    depth — so those are skipped rather than failed, and the count guard below
+    keeps that tolerance from emptying the comparison.
     """
     if not Path("/dev/video0").exists():
         pytest.skip("no camera on this rig")
     observation = run_probe(start_app_under_test, "camera")
     skip_without_cuda(observation)
 
+    # A later frame can recycle before this slow consumer reads it, which is
+    # the lifetime contract rather than a fault — those are skipped, not failed.
+    # Guarding the count keeps that tolerance from quietly emptying the
+    # comparison out: an all-recycled run would satisfy `not mismatches`
+    # vacuously and stop locking #1755 at all.
+    assert len(observation["comparisons"]) >= observation["frames_the_producer_ran_ahead"] // 2, (
+        f"only {len(observation['comparisons'])} of "
+        f"{observation['frames_the_producer_ran_ahead']} frames were readable "
+        f"({observation['frames_recycled_before_this_probe_read_them']} recycled before "
+        f"this probe reached them) — too few to lock the blit source"
+    )
     mismatches = [i for i, ok in enumerate(observation["comparisons"]) if not ok]
     assert not mismatches, (
         f"device pixels diverged from host pixels on frames {mismatches} — the blit "
