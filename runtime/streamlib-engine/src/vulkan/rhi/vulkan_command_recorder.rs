@@ -263,14 +263,10 @@ impl RhiCommandRecorderInner {
 
         unsafe {
             if self.submission_in_flight {
-                self.device
-                    .wait_for_fences(&[self.completion_fence], true, u64::MAX)
-                    .map_err(|e| {
-                        Error::GpuError(format!(
-                            "RhiCommandRecorder '{}': wait_for_fences at begin(): {e}",
-                            self.label
-                        ))
-                    })?;
+                self.vulkan_device.wait_for_fences_blocking(
+                    &[self.completion_fence],
+                    &format!("RhiCommandRecorder '{}' at begin()", self.label),
+                )?;
                 self.device
                     .reset_fences(&[self.completion_fence])
                     .map_err(|e| {
@@ -693,17 +689,10 @@ impl RhiCommandRecorderInner {
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
     pub fn submit_and_wait(&mut self) -> Result<()> {
         self.submit_inner(None)?;
-        unsafe {
-            self.device
-                .wait_for_fences(&[self.completion_fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "RhiCommandRecorder '{}': wait_for_fences in submit_and_wait: {e}",
-                        self.label
-                    ))
-                })?;
-        }
-        Ok(())
+        self.vulkan_device.wait_for_fences_blocking(
+            &[self.completion_fence],
+            &format!("RhiCommandRecorder '{}' in submit_and_wait", self.label),
+        )
     }
 
     /// Host-block until this recorder's most recent submission drains,
@@ -715,16 +704,13 @@ impl RhiCommandRecorderInner {
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
     pub fn wait_for_completion(&mut self) -> Result<()> {
         if self.submission_in_flight {
-            unsafe {
-                self.device
-                    .wait_for_fences(&[self.completion_fence], true, u64::MAX)
-                    .map_err(|e| {
-                        Error::GpuError(format!(
-                            "RhiCommandRecorder '{}': wait_for_fences in wait_for_completion: {e}",
-                            self.label
-                        ))
-                    })?;
-            }
+            self.vulkan_device.wait_for_fences_blocking(
+                &[self.completion_fence],
+                &format!(
+                    "RhiCommandRecorder '{}' in wait_for_completion",
+                    self.label
+                ),
+            )?;
         }
         Ok(())
     }
