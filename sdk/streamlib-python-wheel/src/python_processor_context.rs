@@ -726,7 +726,6 @@ impl PythonGpuContextLimitedAccess {
 pub(crate) struct PythonGpuContextFullAccess {
     /// `None` means this helper was started without its GPU channels, and
     /// every method refuses by name.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
 
@@ -828,6 +827,23 @@ impl PythonGpuContextFullAccess {
             entry_point,
         );
         Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Open a scope that records several dispatches and runs them as one.
+    ///
+    /// The Python equivalent of the engine's command-recorder flow, and the
+    /// reason dispatch has two entry points in both languages: `kernel.dispatch()`
+    /// for a single pass, this for several. Multi-pass work costs one round
+    /// trip, one submission and one stall instead of N of each; leaving the
+    /// scope returns with every write visible, same as a single dispatch.
+    fn kernel_dispatch_batch(&self) -> PythonKernelDispatchBatch {
+        PythonKernelDispatchBatch {
+            helper_process_exchange_client: self
+                .helper_process_exchange_client
+                .as_ref()
+                .map(Arc::clone),
+            recording: Mutex::default(),
+        }
     }
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.
@@ -1402,31 +1418,13 @@ impl PythonComputeKernel {
     ) -> PyResult<()> {
         #[cfg(target_os = "linux")]
         {
-            let push_constants = push_constants.unwrap_or_default();
-            if push_constants.len() != self.push_constant_size as usize {
-                return Err(PyValueError::new_err(format!(
-                    "this kernel declares {} push-constant bytes but {} were supplied",
-                    self.push_constant_size,
-                    push_constants.len()
-                )));
-            }
-
-            let wire_bindings = PyList::empty(python);
-            for (name, bound_to) in bindings.iter() {
-                let name: String = name.extract()?;
-                let kind = self.reflected_kind_of(&name)?.to_string();
-                let entry = PyDict::new(python);
-                entry.set_item("target_id", bound_surface_id(&name, &bound_to)?)?;
-                entry.set_item("name", name)?;
-                entry.set_item("kind", kind)?;
-                wire_bindings.append(entry)?;
-            }
-
+            let (wire_bindings, push_constants_hex) =
+                self.validated_wire_dispatch(python, bindings, push_constants)?;
             self.helper_process_exchange_client.run_compute_kernel(
                 python,
                 &self.kernel_id,
                 wire_bindings.as_any(),
-                &encode_lowercase_hex(push_constants),
+                &push_constants_hex,
                 group_count,
             )
         }
@@ -1439,6 +1437,41 @@ impl PythonComputeKernel {
 }
 
 impl PythonComputeKernel {
+    /// This dispatch's bindings as the wire carries them, plus its
+    /// hex-encoded push constants.
+    ///
+    /// Shared by the two entry points a dispatch has — on its own, and inside
+    /// a batch — so a mistake is refused identically either way, in the
+    /// caller's own stack rather than a round trip later.
+    #[cfg(target_os = "linux")]
+    fn validated_wire_dispatch<'py>(
+        &self,
+        python: Python<'py>,
+        bindings: &Bound<'py, PyDict>,
+        push_constants: Option<&[u8]>,
+    ) -> PyResult<(Bound<'py, PyList>, String)> {
+        let push_constants = push_constants.unwrap_or_default();
+        if push_constants.len() != self.push_constant_size as usize {
+            return Err(PyValueError::new_err(format!(
+                "this kernel declares {} push-constant bytes but {} were supplied",
+                self.push_constant_size,
+                push_constants.len()
+            )));
+        }
+
+        let wire_bindings = PyList::empty(python);
+        for (name, bound_to) in bindings.iter() {
+            let name: String = name.extract()?;
+            let kind = self.reflected_kind_of(&name)?.to_string();
+            let entry = PyDict::new(python);
+            entry.set_item("target_id", bound_surface_id(&name, &bound_to)?)?;
+            entry.set_item("name", name)?;
+            entry.set_item("kind", kind)?;
+            wire_bindings.append(entry)?;
+        }
+        Ok((wire_bindings, encode_lowercase_hex(push_constants)))
+    }
+
     /// The kind the shader declares this name as.
     ///
     /// An unknown name is refused here rather than sent — the round trip would
@@ -1459,6 +1492,190 @@ impl PythonComputeKernel {
                         .join(", ")
                 ))
             })
+    }
+}
+
+/// One recorded dispatch: the wire entry to send, and the kernel it names.
+struct RecordedKernelDispatch {
+    /// Kept beside the entry rather than read back out of it, so refusing a
+    /// repeated kernel cannot drift from the entry it refuses against.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    kernel_id: String,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    wire_entry: Py<PyDict>,
+}
+
+/// What a batch has accumulated, and where its scope stands.
+#[derive(Default)]
+struct KernelDispatchBatchRecording {
+    /// One entry per `dispatch()`, in the order they will run.
+    dispatches: Vec<RecordedKernelDispatch>,
+    /// Set by `__enter__`. Dispatching into a batch that was never entered
+    /// would accumulate work no `__exit__` will ever send — the silently
+    /// discarded GPU work the ADR rejected an explicit `publish()` over.
+    entered: bool,
+    /// Set on leaving the scope, however it was left. A batch is not
+    /// reusable: the dispatches it holds have already run.
+    closed: bool,
+}
+
+/// Several dispatches recorded as one: one submission, one stall.
+///
+/// A two-pass filter dispatching on its own pays the round trip, the
+/// submission and the fence wait twice; inside this scope it pays each once.
+/// Leaving the scope normally runs the batch — leaving it by a raise runs
+/// nothing, because half of a multi-pass filter is not what the author wrote,
+/// and publishing a half-processed frame surfaces as corrupt pixels somewhere
+/// downstream rather than at the `raise`.
+///
+/// Nothing about the synchronous contract changes: the scope returns when the
+/// GPU work has retired and the writes are visible, and no fence or timeline
+/// value reaches Python.
+#[pyclass(name = "KernelDispatchBatch", module = "streamlib", frozen)]
+pub(crate) struct PythonKernelDispatchBatch {
+    /// `None` means this helper was started without its GPU channels.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
+    recording: Mutex<KernelDispatchBatchRecording>,
+}
+
+#[pymethods]
+impl PythonKernelDispatchBatch {
+    fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        python_self.recording.lock().entered = true;
+        python_self
+    }
+
+    /// Run everything recorded, unless the block was left by a raise.
+    ///
+    /// Returns `False` always: discarding the batch never suppresses the
+    /// exception that discarded it.
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
+    fn __exit__(
+        &self,
+        python: Python<'_>,
+        exception_type: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let _ = (exception, traceback);
+        let left_by_a_raise = exception_type.is_some_and(|raised| !raised.is_none());
+        let recorded = {
+            let mut recording = self.recording.lock();
+            recording.closed = true;
+            std::mem::take(&mut recording.dispatches)
+        };
+        if left_by_a_raise || recorded.is_empty() {
+            return Ok(false);
+        }
+        self.run(python, recorded)?;
+        Ok(false)
+    }
+
+    /// Add a dispatch to this batch.
+    ///
+    /// The receiver is explicit because a batch dispatches several kernels;
+    /// `kernel.dispatch(...)` names its own. Bindings are checked here, so a
+    /// name the shader does not declare or a wrong push-constant size refuses
+    /// at this line rather than when the scope closes.
+    ///
+    /// One kernel may appear only once per batch: a kernel owns a single
+    /// descriptor set, so binding it again would hand its earlier dispatch
+    /// these bindings.
+    #[pyo3(signature = (kernel, bindings, group_count, push_constants = None))]
+    fn dispatch(
+        &self,
+        python: Python<'_>,
+        kernel: &PythonComputeKernel,
+        bindings: &Bound<'_, PyDict>,
+        group_count: (u32, u32, u32),
+        push_constants: Option<&[u8]>,
+    ) -> PyResult<()> {
+        #[cfg(target_os = "linux")]
+        {
+            // Scope state first, and the lock dropped before validation: a
+            // batch nobody entered or already ran collects nothing, so a
+            // binding mistake must not mask either — and validation calls back
+            // into the interpreter over caller-supplied objects, which is not
+            // something to do holding a non-reentrant lock.
+            {
+                let recording = self.recording.lock();
+                if recording.closed {
+                    return Err(PyRuntimeError::new_err(
+                        "this batch has already run; open a new `kernel_dispatch_batch()` \
+                         scope for the next one",
+                    ));
+                }
+                if !recording.entered {
+                    return Err(PyRuntimeError::new_err(
+                        "this batch was never entered, so nothing would ever run it; use it \
+                         as `with ctx.gpu_full_access.kernel_dispatch_batch() as batch:`",
+                    ));
+                }
+            }
+
+            let (wire_bindings, push_constants_hex) =
+                kernel.validated_wire_dispatch(python, bindings, push_constants)?;
+
+            let mut recording = self.recording.lock();
+            // Re-checked, not assumed from the first look: validating the
+            // bindings ran user code, and CPython can switch threads inside
+            // it, so another thread may have left the scope and taken the
+            // recorded dispatches meanwhile. Pushing onto a spent batch would
+            // return Ok for work that never reaches the GPU.
+            if recording.closed {
+                return Err(PyRuntimeError::new_err(
+                    "this batch has already run; open a new `kernel_dispatch_batch()` scope \
+                     for the next one",
+                ));
+            }
+            if let Some(earlier) = recording
+                .dispatches
+                .iter()
+                .position(|already| already.kernel_id == kernel.kernel_id)
+            {
+                return Err(PyValueError::new_err(format!(
+                    "this kernel is already dispatch {earlier} of this batch; a kernel owns \
+                     one descriptor set, so dispatching it again here would give dispatch \
+                     {earlier} these bindings. Build a second kernel, or use a second batch"
+                )));
+            }
+
+            let wire_entry =
+                crate::python_helper_process_pixel_exchange::compute_dispatch_wire_entry(
+                    python,
+                    &kernel.kernel_id,
+                    wire_bindings.as_any(),
+                    &push_constants_hex,
+                    group_count,
+                )?;
+            recording.dispatches.push(RecordedKernelDispatch {
+                kernel_id: kernel.kernel_id.clone(),
+                wire_entry: wire_entry.unbind(),
+            });
+            Ok(())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (python, kernel, bindings, group_count, push_constants);
+            Err(gpu_unreachable_from_a_helper_process_error())
+        }
+    }
+}
+
+impl PythonKernelDispatchBatch {
+    /// Send everything recorded as one op.
+    fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let dispatches = PyList::new(
+                python,
+                recorded.iter().map(|entry| entry.wire_entry.bind(python)),
+            )?;
+            return exchange_client.run_compute_kernel_batch(python, dispatches.as_any());
+        }
+        let _ = (python, recorded);
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 }
 

@@ -366,6 +366,30 @@ pub(crate) struct HelperProcessGpuExchangeClient {
 #[cfg(target_os = "linux")]
 const DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
 
+/// One compute dispatch as the wire carries it.
+///
+/// The single-dispatch op and one entry of a batch are the same six fields, so
+/// they are built here once — `#[serde(deny_unknown_fields)]` host-side means a
+/// key that drifted in only one of two builders would be a hard refusal inside
+/// a helper child.
+#[cfg(target_os = "linux")]
+pub(crate) fn compute_dispatch_wire_entry<'py>(
+    python: Python<'py>,
+    kernel_id: &str,
+    bindings: &Bound<'_, PyAny>,
+    push_constants_hex: &str,
+    group_count: (u32, u32, u32),
+) -> PyResult<Bound<'py, PyDict>> {
+    let entry = PyDict::new(python);
+    entry.set_item("kernel_id", kernel_id)?;
+    entry.set_item("bindings", bindings)?;
+    entry.set_item("push_constants_hex", push_constants_hex)?;
+    entry.set_item("group_count_x", group_count.0)?;
+    entry.set_item("group_count_y", group_count.1)?;
+    entry.set_item("group_count_z", group_count.2)?;
+    Ok(entry)
+}
+
 impl HelperProcessGpuExchangeClient {
     pub(crate) fn new(escalate_request_to_parent: Py<PyAny>, surface_socket_path: PathBuf) -> Self {
         Self {
@@ -570,14 +594,38 @@ impl HelperProcessGpuExchangeClient {
         push_constants_hex: &str,
         group_count: (u32, u32, u32),
     ) -> PyResult<()> {
-        let op = PyDict::new(python);
+        let op = compute_dispatch_wire_entry(
+            python,
+            kernel_id,
+            bindings,
+            push_constants_hex,
+            group_count,
+        )?;
         op.set_item("op", "run_compute_kernel")?;
-        op.set_item("kernel_id", kernel_id)?;
-        op.set_item("bindings", bindings)?;
-        op.set_item("push_constants_hex", push_constants_hex)?;
-        op.set_item("group_count_x", group_count.0)?;
-        op.set_item("group_count_y", group_count.1)?;
-        op.set_item("group_count_z", group_count.2)?;
+        // Sent as its own op rather than a batch of one: this path dispatches
+        // through the kernel's own fence, which is what `run_compute_kernel`
+        // has always meant, and a batch would change where it synchronizes.
+        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        Ok(())
+    }
+
+    /// Run several registered dispatches as one recording in the parent.
+    ///
+    /// Each entry comes from [`compute_dispatch_wire_entry`], the same builder
+    /// the single-dispatch op uses.
+    ///
+    /// One round trip, not one per dispatch: the whole point is that N passes
+    /// cost one submission and one stall, and sending them separately would
+    /// pay both N times over before the parent ever saw a batch.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn run_compute_kernel_batch(
+        &self,
+        python: Python<'_>,
+        dispatches: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let op = PyDict::new(python);
+        op.set_item("op", "run_compute_kernel_batch")?;
+        op.set_item("dispatches", dispatches)?;
         escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         Ok(())
     }

@@ -538,10 +538,14 @@ impl VulkanComputeKernelInner {
 
         // Wait for prior dispatch (if any) to drain so the command buffer +
         // descriptor set are safe to mutate.
+        self.vulkan_device.wait_for_fences_blocking_counted(
+            &[self.fence],
+            format_args!(
+                "Compute kernel '{}' draining its prior dispatch",
+                self.label
+            ),
+        )?;
         unsafe {
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| Error::GpuError(format!("Failed to wait for compute fence: {e}")))?;
             self.device
                 .reset_fences(&[self.fence])
                 .map_err(|e| Error::GpuError(format!("Failed to reset compute fence: {e}")))?;
@@ -581,13 +585,12 @@ impl VulkanComputeKernelInner {
 
             self.vulkan_device
                 .submit_to_queue(self.queue, &[submit], self.fence)?;
-
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| Error::GpuError(format!("Failed to wait for compute fence: {e}")))?;
         }
 
-        Ok(())
+        self.vulkan_device.wait_for_fences_blocking_counted(
+            &[self.fence],
+            format_args!("Compute kernel '{}' awaiting its dispatch", self.label),
+        )
     }
 
     /// Record bind + push-constants + dispatch into a caller-owned

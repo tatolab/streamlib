@@ -601,6 +601,87 @@ pub struct GpuCapabilitiesSnapshot {
     pub supports_ray_tracing_pipeline: bool,
 }
 
+/// One dispatch inside a batched recording, with its bindings already resolved
+/// to registrations.
+///
+/// Resolution happens before the recording opens, on purpose: a name the shader
+/// does not declare, or a surface this graph cannot resolve, is a caller
+/// mistake, and refusing it while a command buffer is open would mean unwinding
+/// one.
+/// Owned rather than borrowing: a kernel and a registration are both opaque
+/// `Arc` handles whose clone is a refcount bump, and a cloned registration
+/// shares the very layout cell `update_layout` writes — so owning them costs a
+/// few increments and spares the caller a second set of vectors to borrow from.
+#[cfg(target_os = "linux")]
+pub struct BatchedComputeKernelDispatch {
+    /// The kernel to bind and dispatch. No kernel may appear twice in one
+    /// batch — see [`GpuContext::dispatch_compute_kernel_batch`].
+    pub kernel: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
+    /// Every binding the kernel declares. Bindings do not persist on a kernel,
+    /// so this is complete for each dispatch.
+    pub bindings: Vec<BatchedComputeKernelDispatchBinding>,
+    /// Push-constant payload for this dispatch alone — recorded into the
+    /// command buffer, so consecutive dispatches of different kernels keep
+    /// their own.
+    pub push_constants: Vec<u8>,
+    /// `vkCmdDispatch` groupCountX.
+    pub group_count_x: u32,
+    /// `vkCmdDispatch` groupCountY.
+    pub group_count_y: u32,
+    /// `vkCmdDispatch` groupCountZ.
+    pub group_count_z: u32,
+}
+
+/// One resolved binding of a [`BatchedComputeKernelDispatch`].
+#[cfg(target_os = "linux")]
+pub struct BatchedComputeKernelDispatchBinding {
+    /// Descriptor binding number the kernel declares this resource at.
+    pub binding: u32,
+    /// How this dispatch uses the surface, which decides both the descriptor
+    /// write and the layout its barrier moves the texture into.
+    pub kind: crate::core::rhi::SurfaceBoundComputeBindingKind,
+    /// The bound texture and the layout it is currently tracked in — the
+    /// barrier's source layout.
+    pub registration: TextureRegistration,
+}
+
+#[cfg(target_os = "linux")]
+impl BatchedComputeKernelDispatchBinding {
+    /// Stage this binding on `kernel`, as the kind the shader declares it.
+    ///
+    /// The one place a binding kind becomes a descriptor write, shared by the
+    /// single-dispatch path and the batch so the two cannot drift.
+    pub fn write_into_kernel(
+        &self,
+        kernel: &crate::vulkan::rhi::VulkanComputeKernel,
+    ) -> Result<()> {
+        use crate::core::rhi::SurfaceBoundComputeBindingKind;
+        let texture = self.registration.texture();
+        match self.kind {
+            SurfaceBoundComputeBindingKind::StorageImage => {
+                kernel.set_storage_image(self.binding, texture)
+            }
+            SurfaceBoundComputeBindingKind::SampledTexture => {
+                kernel.set_sampled_texture(self.binding, texture)
+            }
+        }
+    }
+}
+
+/// The layout one image is in as a batch's recording proceeds, and the
+/// registration to publish it on once the submission retires.
+#[cfg(target_os = "linux")]
+struct ImageLayoutDuringBatchRecording<'a> {
+    registration: &'a TextureRegistration,
+    layout_so_far: VulkanLayout,
+}
+
+/// Where a batched dispatch's binding sits, for a refusal to name.
+#[cfg(target_os = "linux")]
+fn batched_binding_location(dispatch_index: usize, binding: u32) -> String {
+    format!("dispatch {dispatch_index} of this batch, binding {binding}")
+}
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
@@ -676,6 +757,17 @@ pub struct GpuContext {
     /// compilation, that one spares the pipeline.
     #[cfg(target_os = "linux")]
     glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
+    /// The recorder every batched compute dispatch records into, built on
+    /// first use and kept for this context's lifetime.
+    ///
+    /// One recorder, not one per batch: its command pool, primary command
+    /// buffer and completion fence are exactly what a batch reuses, and
+    /// allocating them per frame would spend the submission the batch exists
+    /// to save. Serial use is what the recorder requires and what it gets —
+    /// batching runs inside the escalate gate, which serializes runtime-wide.
+    #[cfg(target_os = "linux")]
+    batched_compute_dispatch_recorder:
+        Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
     /// Host-side bridge for the graphics-kernel escalate ops
     /// (`register_graphics_kernel`, `run_graphics_draw`). Wired by
     /// application code that exposes the host's
@@ -723,6 +815,8 @@ impl GpuContext {
                 crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
             ),
             #[cfg(target_os = "linux")]
+            batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
@@ -753,6 +847,8 @@ impl GpuContext {
             glsl_shader_source_compiler: Arc::new(
                 crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
             ),
+            #[cfg(target_os = "linux")]
+            batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -2532,6 +2628,33 @@ impl GpuContext {
         self.glsl_shader_source_compiler.invocation_count()
     }
 
+    /// How many queue submissions this context's device has made.
+    ///
+    /// What a batching assertion counts. Elapsed time cannot stand in for it:
+    /// a batch is faster than N dispatches for reasons a loaded machine can
+    /// hide, while the submission count says outright whether the work went
+    /// out as one command buffer or N.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn queue_submission_count(&self) -> usize {
+        self.device.inner.queue_submission_count()
+    }
+
+    /// How many times a command recorder or a compute kernel has blocked on a
+    /// fence — the stalls a batch exists to collapse.
+    ///
+    /// Recorder-wide, not compute-only: present, staging and the tone mapper
+    /// drain recorders too, so a reading is only about a batch when nothing
+    /// else on this device is recording. See [`Self::queue_submission_count`]
+    /// on why this is counted, not timed.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn recorder_and_compute_kernel_fence_wait_count(&self) -> usize {
+        self.device
+            .inner
+            .recorder_and_compute_kernel_fence_wait_count()
+    }
+
     /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
     /// identical one if this context already built it.
     ///
@@ -2620,6 +2743,187 @@ impl GpuContext {
             .unwrap()
             .get(kernel_id)
             .map(Arc::clone)
+    }
+
+    /// Record every dispatch in `batch` into one command buffer, submit once,
+    /// and return when that submission has retired.
+    ///
+    /// The cost this exists to avoid is per-dispatch: `VulkanComputeKernel::dispatch`
+    /// submits and blocks on its own fence every time, so a two-pass filter pays
+    /// two of each. Here N passes cost one submission and one wait, and a caller
+    /// that leaves this call has its writes visible, exactly as after a single
+    /// dispatch.
+    ///
+    /// Each dispatch's bindings are barriered into the layout its descriptor
+    /// requires. Those barriers are also the write-then-read edge between
+    /// consecutive passes, so pass N+1 observes pass N's stores. An image's
+    /// first barrier in the recording takes a wide source scope — whatever
+    /// wrote it before the batch is not the batch's to know — and narrows to
+    /// compute-to-compute once this recording is the writer.
+    ///
+    /// One kernel may appear only once. A kernel owns a single descriptor set,
+    /// so a second bind would retarget the dispatch already recorded against it
+    /// — silently, since nothing has executed yet. Refused by name rather than
+    /// dispatched wrong.
+    #[cfg(target_os = "linux")]
+    pub fn dispatch_compute_kernel_batch(
+        &self,
+        batch: &[BatchedComputeKernelDispatch],
+    ) -> Result<()> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        for (index, dispatch) in batch.iter().enumerate() {
+            if let Some(earlier) = batch[..index]
+                .iter()
+                .position(|prior| prior.kernel.handle == dispatch.kernel.handle)
+            {
+                return Err(Error::GpuError(format!(
+                    "dispatch {index} of this batch names the kernel dispatch {earlier} already \
+                     names; a kernel owns one descriptor set, so binding it twice in one \
+                     recording would give dispatch {earlier} this dispatch's bindings. Build a \
+                     second kernel, or run them as separate batches"
+                )));
+            }
+        }
+
+        let mut batched_compute_dispatch_recorder_slot =
+            self.batched_compute_dispatch_recorder.lock();
+        let recorder = match batched_compute_dispatch_recorder_slot.as_mut() {
+            Some(recorder) => recorder,
+            None => batched_compute_dispatch_recorder_slot
+                .insert(self.create_command_recorder("batched_compute_dispatch")?),
+        };
+
+        // From here on the recorder is open, and every early return has to
+        // close it or the next batch's begin() refuses.
+        recorder.begin()?;
+        let layout_each_image_landed_in = match Self::record_compute_kernel_batch(recorder, batch) {
+            Ok(landed_in) => landed_in,
+            Err(e) => {
+                recorder.abort_recording();
+                return Err(e);
+            }
+        };
+        recorder.submit()?;
+
+        // Published between the submit and the wait, not after both: once the
+        // queue has taken the recording the transitions belong to the GPU, so a
+        // wait that fails must not leave the tracked layouts describing a state
+        // the hardware has already left. A batch that failed while recording
+        // never reaches here, and its textures are still as they arrived.
+        for landed in layout_each_image_landed_in.values() {
+            landed.registration.update_layout(landed.layout_so_far);
+        }
+        recorder.wait_for_completion()?;
+
+        tracing::debug!(
+            rhi_op = "dispatch_compute_kernel_batch",
+            dispatches = batch.len(),
+            "GpuContext::dispatch_compute_kernel_batch — one submission, one wait"
+        );
+        Ok(())
+    }
+
+    /// The recording half of [`Self::dispatch_compute_kernel_batch`], split out
+    /// so every failure path funnels through one `abort_recording`.
+    ///
+    /// Returns the layout each bound texture ends the recording in, for the
+    /// caller to publish once the submission has retired.
+    #[cfg(target_os = "linux")]
+    fn record_compute_kernel_batch<'a>(
+        recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
+        batch: &'a [BatchedComputeKernelDispatch],
+    ) -> Result<HashMap<vulkanalia::vk::Image, ImageLayoutDuringBatchRecording<'a>>> {
+        use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+        // The layout each image is in *as the recording proceeds*. Tracking it
+        // here rather than re-reading the registration is what makes a chain
+        // work: pass 1 leaves its output in GENERAL, and barriering pass 2's
+        // read from the pre-batch layout — typically UNDEFINED for a freshly
+        // acquired texture — would discard exactly the writes pass 2 is there
+        // to read.
+        //
+        // Keyed on the image, which is what a layout belongs to, and not on
+        // the registration: a cross-process import synthesizes a fresh
+        // registration per resolve, so two passes over one imported surface
+        // would otherwise track two independent layouts for one image.
+        let mut layout_during_recording: HashMap<
+            vulkanalia::vk::Image,
+            ImageLayoutDuringBatchRecording<'a>,
+        > = HashMap::new();
+
+        for (dispatch_index, dispatch) in batch.iter().enumerate() {
+            for binding in &dispatch.bindings {
+                let required_layout = binding.kind.required_image_layout();
+                let image = binding
+                    .registration
+                    .texture()
+                    .vulkan_inner()
+                    .image()
+                    .ok_or_else(|| {
+                        Error::GpuError(format!(
+                            "{} names a texture with no image, which a descriptor cannot be \
+                             written from",
+                            batched_binding_location(dispatch_index, binding.binding)
+                        ))
+                    })?;
+                let first_touch_in_this_recording = !layout_during_recording.contains_key(&image);
+                let landed = layout_during_recording.entry(image).or_insert(
+                    ImageLayoutDuringBatchRecording {
+                        registration: &binding.registration,
+                        layout_so_far: binding.registration.current_layout(),
+                    },
+                );
+                // The source scope narrows only once the batch is the writer.
+                // On an image's first touch the previous writer is whatever the
+                // graph did — a transfer upload, a camera, another node — so
+                // the wide scope every other entry-from-an-unknown-producer
+                // barrier in the engine uses is the only correct one. From the
+                // second touch on, this recording wrote it, and compute-to-
+                // compute is exactly the dependency to name.
+                let (from_stage, from_access) = if first_touch_in_this_recording {
+                    (VulkanStage::ALL_COMMANDS, VulkanAccess::MEMORY_WRITE)
+                } else {
+                    (VulkanStage::COMPUTE_SHADER, VulkanAccess::SHADER_WRITE)
+                };
+                // Recorded even when the layout already matches: the barrier is
+                // carrying the previous pass's stores to this pass's reads, and
+                // a same-layout transition is exactly that memory dependency.
+                recorder.record_image_barrier(
+                    binding.registration.texture(),
+                    landed.layout_so_far,
+                    required_layout,
+                    from_stage,
+                    VulkanStage::COMPUTE_SHADER,
+                    from_access,
+                    VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+                )?;
+                landed.layout_so_far = required_layout;
+            }
+
+            for binding in &dispatch.bindings {
+                binding.write_into_kernel(&dispatch.kernel)?;
+            }
+            // A kernel that declares push constants must be given them even
+            // when the payload is empty, so `set_push_constants` produces the
+            // size mismatch rather than the dispatch running against whatever
+            // the kernel's staged buffer last held.
+            if dispatch.kernel.push_constant_size() > 0 || !dispatch.push_constants.is_empty() {
+                dispatch
+                    .kernel
+                    .set_push_constants(&dispatch.push_constants)?;
+            }
+
+            recorder.record_dispatch(
+                &dispatch.kernel,
+                dispatch.group_count_x,
+                dispatch.group_count_y,
+                dispatch.group_count_z,
+            )?;
+        }
+        Ok(layout_during_recording)
     }
 
     // =========================================================================
@@ -3955,6 +4259,16 @@ impl GpuContextFullAccess {
         kernel_id: &str,
     ) -> Option<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner().compute_kernel_by_id(kernel_id)
+    }
+
+    /// [`GpuContext::dispatch_compute_kernel_batch`] — N dispatches, one
+    /// submission, one fence wait.
+    #[cfg(target_os = "linux")]
+    pub fn dispatch_compute_kernel_batch(
+        &self,
+        batch: &[BatchedComputeKernelDispatch],
+    ) -> Result<()> {
+        self.host_inner().dispatch_compute_kernel_batch(batch)
     }
 
     /// Get the registered graphics-kernel bridge, if any. Reachable only inside

@@ -34,6 +34,32 @@ pub enum ComputeBindingKind {
     StorageImage,
 }
 
+/// The subset of [`ComputeBindingKind`] a dispatch can name a surface for.
+///
+/// Narrower than its parent on purpose: a caller holding this has already
+/// refused the buffer and samplerless kinds, so every match on it is total
+/// with no panic arm to keep in sync. It also carries the image layout the
+/// descriptor requires, which is what a batch's barriers move a texture into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceBoundComputeBindingKind {
+    /// Written through `imageStore`; the descriptor requires `GENERAL`.
+    StorageImage,
+    /// Read through a combined sampler; the descriptor requires
+    /// `SHADER_READ_ONLY_OPTIMAL`.
+    SampledTexture,
+}
+
+#[cfg(target_os = "linux")]
+impl SurfaceBoundComputeBindingKind {
+    /// The image layout this kind's descriptor requires at dispatch.
+    pub fn required_image_layout(self) -> streamlib_consumer_rhi::VulkanLayout {
+        match self {
+            Self::StorageImage => streamlib_consumer_rhi::VulkanLayout::GENERAL,
+            Self::SampledTexture => streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        }
+    }
+}
+
 /// One binding declaration: (binding index, resource kind, the shader's own
 /// name for the binding).
 ///

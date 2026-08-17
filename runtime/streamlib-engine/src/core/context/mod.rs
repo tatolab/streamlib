@@ -25,6 +25,8 @@ pub use audio_clock::{
 };
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
+#[cfg(target_os = "linux")]
+pub use gpu_context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 #[cfg(target_os = "linux")]
 pub use graphics_kernel_bridge::{
