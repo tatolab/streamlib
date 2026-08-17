@@ -217,6 +217,12 @@ class LaggedConsumerHoldsItsFrameProbe:
     the last share would let the producer recycle the slot underneath a live
     array.
 
+    The read is `into=VideoFrame` and that is load-bearing, not style: a claim
+    is offered for the duration of a typed read and taken by the type being
+    constructed. Reading the bag untyped and calling `VideoFrame.from_bag` on
+    it afterwards takes no claim at all, so the held frame would ride pool
+    depth like any other — and this probe would assert a lease it never took.
+
     Mental-revert: without the checkout lease the producer rehands the held
     slot within a ring cycle and `held_frame_unchanged` reads False.
     """
@@ -234,14 +240,15 @@ class LaggedConsumerHoldsItsFrameProbe:
         self.pixels_as_delivered = None
         self.frames_the_producer_ran_ahead = 0
         self.a_later_frame_differed = False
+        self.frames_recycled_before_this_probe_read_them = 0
         self.reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None or self.reported:
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None or self.reported:
             return
         try:
-            self._observe(ctx, VideoFrame.from_bag(bag))
+            self._observe(ctx, frame)
         except BaseException:  # noqa: BLE001 — surfaced through the marker line
             self.reported = True
             self.view_of_the_delivered_frame = None
@@ -271,7 +278,24 @@ class LaggedConsumerHoldsItsFrameProbe:
             del surface
             return
 
-        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+        # A later frame can recycle before this probe gets to it, and that is
+        # the contract rather than a fault: publish-to-claim transit rides pool
+        # depth, and this consumer is deliberately slow. Only the *held* frame
+        # is protected, by its lease. Counting a recycled frame as a comparison
+        # failure would fail the test for the engine behaving as designed.
+        try:
+            later_frame = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
+        except RuntimeError as recycled:
+            if "recycled frame" not in str(recycled):
+                raise
+            self.frames_recycled_before_this_probe_read_them += 1
+            self.frames_the_producer_ran_ahead += 1
+            if self.frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
+                return
+            self._report_the_held_frame()
+            return
+
+        with later_frame as surface:
             surface.lock()
             device_pixels = torch.from_dlpack(surface).cpu().numpy()
             host_pixels = numpy.from_dlpack(surface, device="cpu")
@@ -285,7 +309,15 @@ class LaggedConsumerHoldsItsFrameProbe:
         self.frames_the_producer_ran_ahead += 1
         if self.frames_the_producer_ran_ahead < self.FRAMES_TO_LAG_BY:
             return
+        self._report_the_held_frame()
 
+    def _report_the_held_frame(self) -> None:
+        """The frame held since the first `process()` still reads as delivered.
+
+        Read from `view_of_the_delivered_frame`, a mapping taken while the
+        handle was open and still live because the lease — not the handle —
+        is what keeps the slot.
+        """
         held_frame_unchanged = bool(
             (self.view_of_the_delivered_frame == self.pixels_as_delivered).all()
         )
@@ -293,6 +325,9 @@ class LaggedConsumerHoldsItsFrameProbe:
         observation = {
             "comparisons": self.comparisons,
             "frames_the_producer_ran_ahead": self.frames_the_producer_ran_ahead,
+            "frames_recycled_before_this_probe_read_them": (
+                self.frames_recycled_before_this_probe_read_them
+            ),
             "held_frame_unchanged": held_frame_unchanged,
             "a_later_frame_differed": self.a_later_frame_differed,
         }
