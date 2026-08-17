@@ -63,21 +63,22 @@ impl VideoProfileWithOwnedCodecExtensionChain {
         }
     }
 
-    /// 8-bit 4:2:0 H.264 encode. `VkVideoEncodeUsageInfoKHR` is chained behind
-    /// the codec profile the way `VkVideoCoreProfile` chains it for every
-    /// encode session.
+    /// 8-bit 4:2:0 H.264 encode — the profile `VideoEncodeSession` builds for
+    /// its DPB and bitstream allocations, down to the `LOW_LATENCY` tuning
+    /// hint. `VkVideoEncodeUsageInfoKHR` is chained behind the codec profile
+    /// the way `VkVideoCoreProfile` chains it for every encode session.
     pub(super) fn h264_encode_420_8bit() -> Self {
         let encode_usage_info = Box::new(vk::VideoEncodeUsageInfoKHR {
             s_type: vk::StructureType::VIDEO_ENCODE_USAGE_INFO_KHR,
             next: std::ptr::null(),
             video_usage_hints: vk::VideoEncodeUsageFlagsKHR::DEFAULT,
             video_content_hints: vk::VideoEncodeContentFlagsKHR::DEFAULT,
-            tuning_mode: vk::VideoEncodeTuningModeKHR::DEFAULT,
+            tuning_mode: vk::VideoEncodeTuningModeKHR::LOW_LATENCY,
         });
         let encode_h264_profile_info = Box::new(vk::VideoEncodeH264ProfileInfoKHR {
             s_type: vk::StructureType::VIDEO_ENCODE_H264_PROFILE_INFO_KHR,
             next: &*encode_usage_info as *const _ as *const std::ffi::c_void,
-            std_profile_idc: vk::video::STD_VIDEO_H264_PROFILE_IDC_MAIN,
+            std_profile_idc: vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH,
         });
 
         Self {

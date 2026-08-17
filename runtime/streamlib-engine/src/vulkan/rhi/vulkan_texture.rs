@@ -2528,9 +2528,10 @@ mod tests {
     /// the codec profile + DPB usage). Hardware-gated because real
     /// VMA + driver are needed.
     ///
-    /// A direction whose codec queue family the device does not expose is
-    /// skipped; a direction it does expose must allocate. Swallowing the
-    /// driver's rejection instead would leave the test unable to fail.
+    /// A direction the device has no H.264 support for — the codec extension
+    /// enabled and a queue family for it — is skipped; a direction it does
+    /// support must allocate. Swallowing the driver's rejection instead would
+    /// leave the test unable to fail.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),

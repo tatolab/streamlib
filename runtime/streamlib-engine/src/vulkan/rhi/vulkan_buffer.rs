@@ -1853,9 +1853,10 @@ mod tests {
     /// expose a non-null `mapped_ptr` + accurate `size`. Hardware-gated
     /// because real VMA + a real `VkVideoProfileInfoKHR` are required.
     ///
-    /// A direction whose codec queue family the device does not expose is
-    /// skipped; a direction it does expose must allocate. Swallowing the
-    /// driver's rejection instead would leave the test unable to fail.
+    /// A direction the device has no H.264 support for — the codec extension
+    /// enabled and a queue family for it — is skipped; a direction it does
+    /// support must allocate. Swallowing the driver's rejection instead would
+    /// leave the test unable to fail.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -1887,15 +1888,15 @@ mod tests {
                 direction,
                 video_profile: profile.video_profile_info(),
             };
-            let buf = HostVulkanBuffer::new_video_bitstream(&device, &descriptor)
+            let bitstream_buffer = HostVulkanBuffer::new_video_bitstream(&device, &descriptor)
                 .unwrap_or_else(|e| panic!("{direction:?}: bitstream allocation failed: {e}"));
-            assert_eq!(buf.size(), SIZE, "size must match descriptor");
+            assert_eq!(bitstream_buffer.size(), SIZE, "size must match descriptor");
             assert!(
-                !buf.mapped_ptr().is_null(),
+                !bitstream_buffer.mapped_ptr().is_null(),
                 "{direction:?} bitstream buffer must be persistently mapped"
             );
             assert_ne!(
-                buf.buffer(),
+                bitstream_buffer.buffer(),
                 vk::Buffer::null(),
                 "VkBuffer handle must be non-null"
             );
