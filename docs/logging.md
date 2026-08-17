@@ -56,7 +56,9 @@ build dependencies; default targets only, so a test's `println!` stays a test's
 business, matching layer 2's exemption. `cargo fmt --all --check` runs in
 `source-gates.yml` beside the walks.
 
-`cargo xtask run-local-ci-gates` runs all three before you push.
+`cargo xtask run-local-ci-gates` runs the two static layers before you push.
+Layer 3 is a property of the running host, not a gate, so nothing runs it
+ahead of time.
 
 > ~~Both checks run on every PR and push to `main` via
 > `.github/workflows/lint-logging.yml`.~~ — Superseded 2026-08-16. That

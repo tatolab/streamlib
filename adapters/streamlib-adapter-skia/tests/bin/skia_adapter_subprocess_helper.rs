@@ -18,15 +18,6 @@
 //!   per-surface state survives a SIGKILL on a subprocess that holds
 //!   live Skia + EGL state.
 
-// A test fixture the harness spawns and reads stderr from, with no tracing
-// subscriber installed — `tracing::error!` here would go nowhere, so stderr is
-// the mechanism rather than a lapse. `xtask lint-logging` already exempts this
-// file by its `tests/` path; the allow is what makes clippy agree, now that
-// clippy runs in CI.
-#![allow(
-    clippy::disallowed_macros,
-    reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
-)]
 #![cfg(target_os = "linux")]
 
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
@@ -60,6 +51,16 @@ struct HelperResponse {
     note: String,
 }
 
+// A test fixture the harness spawns and reads stderr from, with no tracing
+// subscriber installed — `tracing::error!` here would go nowhere, so stderr is
+// the mechanism rather than a lapse. `xtask lint-logging` already exempts this
+// file by its `tests/` path; the allow is what makes clippy agree, now that
+// clippy runs in CI. Scoped to the two functions that write, so a `println!`
+// added anywhere else here is still caught.
+#[allow(
+    clippy::disallowed_macros,
+    reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
+)]
 fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     eprintln!("[skia-helper] FATAL: {msg}");
     if let Some(s) = socket {
@@ -177,6 +178,16 @@ fn run() -> ExitCode {
 /// in the relevant sense — the host has work in flight that the
 /// subprocess never got around to draining, and the host's per-surface
 /// state must still survive the SIGKILL that follows.
+// A test fixture the harness spawns and reads stderr from, with no tracing
+// subscriber installed — `tracing::error!` here would go nowhere, so stderr is
+// the mechanism rather than a lapse. `xtask lint-logging` already exempts this
+// file by its `tests/` path; the allow is what makes clippy agree, now that
+// clippy runs in CI. Scoped to the two functions that write, so a `println!`
+// added anywhere else here is still caught.
+#[allow(
+    clippy::disallowed_macros,
+    reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
+)]
 fn crash_mid_skia_write(skia_ctx: &SkiaGlContext, width: u32, height: u32) -> ExitCode {
     let surface_descriptor = StreamlibSurface::new(
         HELPER_SURFACE_ID,
