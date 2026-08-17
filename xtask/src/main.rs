@@ -180,10 +180,20 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
         // Default targets only. A test's `println!` is a test's business —
         // `lint-logging` exempts `tests` directories, and `--all-targets` here
         // would deny what that walk deliberately allows.
+        // Same exclusion as CI so this really does mirror it: `skia-bindings`
+        // cannot build on a runner, and a local gate that lints more than CI
+        // does is a gate whose result nobody can act on.
         (
             "clippy",
             "cargo",
-            &["clippy", "--locked", "--workspace", "--no-deps"],
+            &[
+                "clippy",
+                "--locked",
+                "--workspace",
+                "--exclude",
+                "streamlib-adapter-skia",
+                "--no-deps",
+            ],
         ),
         (
             "license headers",

@@ -99,8 +99,15 @@ jobs:
       # Before this step existed no workflow ran clippy at all — `docs/logging.md`
       # claimed it did, and an `eprintln!` in each of two adapter test helpers
       # sat behind that claim unnoticed.
+      # `--exclude streamlib-adapter-skia`: `skia-bindings` 404s on its prebuilt
+      # download here and then needs FreeType headers to build from source, and
+      # no CI job has ever built that crate — every other cargo invocation in
+      # this repo is `-p`-scoped, so this clippy step is the first `--workspace`
+      # anything. Making CI build Skia is a real cost and its own decision; the
+      # exclusion keeps the existing coverage boundary rather than moving it
+      # silently. Consequence worth knowing: that adapter is linted by nothing.
       - name: cargo clippy (workspace, default targets)
-        run: cargo clippy --locked --workspace --no-deps
+        run: cargo clippy --locked --workspace --exclude streamlib-adapter-skia --no-deps
 
       - name: Run unit tests
         run: |
