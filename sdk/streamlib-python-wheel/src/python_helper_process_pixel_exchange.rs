@@ -582,6 +582,24 @@ impl HelperProcessGpuExchangeClient {
         Ok(())
     }
 
+    /// Run several registered dispatches as one recording in the parent.
+    ///
+    /// One round trip, not one per dispatch: the whole point is that N passes
+    /// cost one submission and one stall, and sending them separately would
+    /// pay both N times over before the parent ever saw a batch.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn run_compute_kernel_batch(
+        &self,
+        python: Python<'_>,
+        dispatches: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let op = PyDict::new(python);
+        op.set_item("op", "run_compute_kernel_batch")?;
+        op.set_item("dispatches", dispatches)?;
+        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        Ok(())
+    }
+
     /// Open this surface's device export, importing the parent's staging
     /// into CUDA on first ask and memoising it for this child.
     ///

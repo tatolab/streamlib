@@ -225,6 +225,201 @@ class TextureIsNotLocallyMappedProbe(_ComputeKernelProbeBase):
         }
 
 
+BRIGHTEN_GLSL = """\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D unbrightened_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D brightened_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    vec4 source = texelFetch(unbrightened_image, at, 0);
+    imageStore(brightened_image, at, vec4(source.rgb + 40.0 / 255.0, source.a));
+}
+"""
+
+DOUBLE_GLSL = """\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D brightened_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D doubled_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    vec4 source = texelFetch(brightened_image, at, 0);
+    imageStore(doubled_image, at, vec4(source.rgb * 2.0, source.a));
+}
+"""
+
+GROUP_COUNT = (SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1)
+
+
+class _TwoPassProbeBase:
+    """Builds the two-pass chain the batch scope exists for, and the three
+    surfaces it runs over.
+
+    Written the way the change file spells it: two kernels constructed in
+    `setup()`, an intermediate surface neither the source nor the output.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        def observe() -> dict:
+            gpu = ctx.gpu_full_access
+            self.gpu_full_access = gpu
+            self.brighten = gpu.create_compute_kernel(source=BRIGHTEN_GLSL)
+            self.double = gpu.create_compute_kernel(source=DOUBLE_GLSL)
+            usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+            self.source = gpu.acquire_texture(
+                SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+            )
+            self.intermediate = gpu.acquire_texture(
+                SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+            )
+            self.output = gpu.acquire_texture(
+                SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+            )
+            return self.observe()
+
+        _report(observe)
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        pass
+
+    def brighten_then_double(self, batch) -> None:
+        """The two passes, in order, into whatever batch is handed in."""
+        batch.dispatch(
+            self.brighten,
+            bindings={
+                "unbrightened_image": self.source,
+                "brightened_image": self.intermediate,
+            },
+            group_count=GROUP_COUNT,
+        )
+        batch.dispatch(
+            self.double,
+            bindings={
+                "brightened_image": self.intermediate,
+                "doubled_image": self.output,
+            },
+            group_count=GROUP_COUNT,
+        )
+
+    def observe(self) -> dict:
+        raise NotImplementedError
+
+
+@processor(
+    execution="manual",
+    description="A two-pass filter dispatched as one batch",
+)
+class TwoPassBatchProbe(_TwoPassProbeBase):
+    """The demo: a chain whose intermediate is written by pass 1 and read by
+    pass 2, inside one scope."""
+
+    def observe(self) -> dict:
+        with self.gpu_full_access.kernel_dispatch_batch() as batch:
+            self.brighten_then_double(batch)
+        # The scope returned, so the work has retired — dispatching again
+        # against the same surfaces is the proof that nothing was left open.
+        with self.gpu_full_access.kernel_dispatch_batch() as second:
+            self.brighten_then_double(second)
+        return {
+            "batched": True,
+            "source_surface_id": self.source.surface_id,
+            "intermediate_surface_id": self.intermediate.surface_id,
+            "output_surface_id": self.output.surface_id,
+        }
+
+
+@processor(
+    execution="manual",
+    description="A raise inside a batch scope submits nothing and propagates",
+)
+class BatchExceptionProbe(_TwoPassProbeBase):
+    """Half of a multi-pass filter is not what the author wrote, so a raise
+    inside the scope discards the whole batch — and the exception is not
+    swallowed on the way out."""
+
+    def observe(self) -> dict:
+        class TheProbesOwnFailure(Exception):
+            pass
+
+        propagated = None
+        try:
+            with self.gpu_full_access.kernel_dispatch_batch() as batch:
+                self.brighten_then_double(batch)
+                raise TheProbesOwnFailure("the block did not finish")
+        except TheProbesOwnFailure as raised:
+            propagated = str(raised)
+
+        # The capability is unharmed: a fresh batch runs after the discarded
+        # one, which is what a stranded recorder in the parent would refuse.
+        with self.gpu_full_access.kernel_dispatch_batch() as batch:
+            self.brighten_then_double(batch)
+
+        return {
+            "propagated": propagated,
+            "dispatched_after_the_raise": True,
+        }
+
+
+@processor(
+    execution="manual",
+    description="Every way of getting a batch wrong, refused by name",
+)
+class BatchRefusalProbe(_TwoPassProbeBase):
+    """A batch refuses in the caller's own stack: a wrong binding at the
+    `dispatch` line, a repeated kernel at the line that repeats it, and a
+    closed scope when it is dispatched into again."""
+
+    def observe(self) -> dict:
+        with self.gpu_full_access.kernel_dispatch_batch() as batch:
+            unknown = _refusal_of(
+                lambda: batch.dispatch(
+                    self.brighten,
+                    bindings={
+                        "unbrightened_image": self.source,
+                        "brightened_image": self.intermediate,
+                        "sharpen_amount": self.output,
+                    },
+                    group_count=GROUP_COUNT,
+                )
+            )
+            batch.dispatch(
+                self.brighten,
+                bindings={
+                    "unbrightened_image": self.source,
+                    "brightened_image": self.intermediate,
+                },
+                group_count=GROUP_COUNT,
+            )
+            same_kernel_twice = _refusal_of(
+                lambda: batch.dispatch(
+                    self.brighten,
+                    bindings={
+                        "unbrightened_image": self.intermediate,
+                        "brightened_image": self.output,
+                    },
+                    group_count=GROUP_COUNT,
+                )
+            )
+            closed_batch = batch
+
+        after_the_scope = _refusal_of(
+            lambda: closed_batch.dispatch(
+                self.double,
+                bindings={
+                    "brightened_image": self.intermediate,
+                    "doubled_image": self.output,
+                },
+                group_count=GROUP_COUNT,
+            )
+        )
+        return {
+            "unknown": unknown,
+            "same_kernel_twice": same_kernel_twice,
+            "after_the_scope": after_the_scope,
+        }
+
+
 @processor(
     execution="manual",
     description="Every way of getting the kernel's source wrong, refused by name",

@@ -26,6 +26,7 @@ _BagReadTarget = TypeVar("_BagReadTarget")
 __all__ = [
     "AddedProcessor",
     "ComputeKernel",
+    "KernelDispatchBatch",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
@@ -439,6 +440,19 @@ class GpuContextFullAccess:
         `storage_image`, `uniform_buffer`.
         """
 
+    def kernel_dispatch_batch(self) -> KernelDispatchBatch:
+        """Open a scope that records several dispatches and runs them as one.
+
+        The Python equivalent of the engine's command-recorder flow, and why
+        dispatch has two entry points: `kernel.dispatch()` for a single pass,
+        this for several. A two-pass filter costs one round trip, one
+        submission and one fence wait instead of two of each.
+
+        Leaving the scope runs the batch and returns when the GPU work has
+        retired, exactly as a single dispatch does. Leaving it by a raise runs
+        nothing.
+        """
+
     def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
         """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
 
@@ -576,6 +590,45 @@ class ComputeKernel:
         shader's own reflection, never from the caller.
 
         Returns when the GPU work has retired and the writes are visible.
+        """
+
+@final
+class KernelDispatchBatch:
+    """Several dispatches recorded as one: one submission, one fence wait.
+
+    A two-pass filter dispatching on its own pays the round trip, the
+    submission and the stall twice; inside this scope it pays each once.
+    Leaving the scope normally runs the batch — leaving it by a raise runs
+    nothing, because half of a multi-pass filter is not what the author wrote.
+
+    Nothing about the synchronous contract changes: the scope returns when the
+    GPU work has retired and the writes are visible.
+    """
+
+    def __enter__(self) -> KernelDispatchBatch: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = ...,
+        exception: BaseException | None = ...,
+        traceback: TracebackType | None = ...,
+    ) -> Literal[False]: ...
+    def dispatch(
+        self,
+        kernel: ComputeKernel,
+        bindings: dict[str, GpuSurfaceHandle | str],
+        group_count: tuple[int, int, int],
+        push_constants: bytes | None = None,
+    ) -> None:
+        """Add a dispatch to this batch.
+
+        The receiver is explicit because a batch dispatches several kernels;
+        `kernel.dispatch()` names its own. Bindings are checked here, so a name
+        the shader does not declare or a wrong push-constant size raises at
+        this line rather than when the scope closes.
+
+        One kernel may appear only once per batch: a kernel owns a single
+        descriptor set, so dispatching it again would give its earlier dispatch
+        these bindings.
         """
 
 @final
