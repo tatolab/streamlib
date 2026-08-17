@@ -2560,7 +2560,8 @@ mod tests {
                 }
                 VideoDpbDirection::Encode => vk::ImageUsageFlags::empty(),
             };
-            let profile = VideoProfileWithOwnedCodecExtensionChain::h264_for_dpb_direction(direction);
+            let profile =
+                VideoProfileWithOwnedCodecExtensionChain::h264_for_dpb_direction(direction);
             let descriptor = VideoDpbTextureDescriptor {
                 label: "test/dpb-positive",
                 width: 1920,
