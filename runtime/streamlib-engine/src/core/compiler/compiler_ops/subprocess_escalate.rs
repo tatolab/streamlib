@@ -5208,7 +5208,11 @@ void main() {
                     "refused-readback",
                 ),
                 CHAIN_BRIGHTENED_RGBA,
-                "the intermediate, untouched by the refused batch",
+                // Weak on its own — dispatch 0 would have recomputed this same
+                // value — so the claim that nothing ran rests on the
+                // submission count above. This checks the refusal did not
+                // leave the surface unreadable.
+                "the intermediate, still readable after the refused batch",
             );
 
             // The recorder survived: a fresh batch runs, which begin() would
