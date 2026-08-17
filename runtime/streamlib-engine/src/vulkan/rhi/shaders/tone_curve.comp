@@ -4,10 +4,12 @@
 // Image-source → image-dest tone-curve compute shader.
 //
 // Bindings:
-//   0 — `readonly image2D rgba_input` (RGBA8 / RGBA16F storage image,
-//       interpreted in input_transfer encoding).
-//   1 — `writeonly image2D rgba_output` (RGBA8 / RGBA16F storage image,
-//       written in output_transfer encoding).
+//   0 — `readonly image2D rgba_input` (format-less storage image —
+//       serves BGRA8 / RGBA8 / RGBA16F views, interpreted in
+//       input_transfer encoding).
+//   1 — `writeonly image2D rgba_output` (format-less storage image —
+//       serves BGRA8 / RGBA8 / RGBA16F views, written in
+//       output_transfer encoding).
 //
 // Per-channel pipeline:
 //   1. EOTF: input_transfer → linear (per-channel, normalized to peak_in_nits).
@@ -18,17 +20,22 @@
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_shader_image_load_formatted : require
 
 #include "color_convert_common.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-// Storage images — format-agnostic at the SPIR-V level (the
-// `set_storage_image` binding picks the texture's view format at
-// runtime). The shader operates on `vec4` color, so this works for
-// RGBA8_UNORM, RGBA16_UNORM, and RGBA16_SFLOAT alike.
-layout(rgba8, set = 0, binding = 0) readonly uniform image2D rgba_input;
-layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
+// Storage images — declared with no format qualifier (SPIR-V format
+// `Unknown`) so the descriptor's view format is the single source of
+// truth. A declared format must exactly match the bound view's format
+// per the storage-image rules (`Undefined-Value-StorageImage-
+// FormatMismatch-ImageView`), and these bindings serve BGRA8_UNORM,
+// RGBA8_UNORM, and RGBA16_SFLOAT views alike. Requires the device
+// features `shaderStorageImageReadWithoutFormat` /
+// `shaderStorageImageWriteWithoutFormat` — enabled at device creation.
+layout(set = 0, binding = 0) readonly uniform image2D rgba_input;
+layout(set = 0, binding = 1) writeonly uniform image2D rgba_output;
 
 layout(push_constant, std430) uniform PushConstants {
     uint width;
