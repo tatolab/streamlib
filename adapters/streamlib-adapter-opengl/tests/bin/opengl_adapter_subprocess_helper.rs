@@ -37,6 +37,15 @@ struct HelperResponse {
     note: String,
 }
 
+// A test fixture the harness spawns and reads stderr from, with no tracing
+// subscriber installed — `tracing::error!` here would go nowhere, so stderr is
+// the mechanism rather than a lapse. `xtask lint-logging` already exempts this
+// file by its `tests/` path; the allow is what makes clippy agree, now that
+// clippy runs in CI.
+#[allow(
+    clippy::disallowed_macros,
+    reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
+)]
 fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     eprintln!("[opengl-helper] FATAL: {msg}");
     if let Some(s) = socket {

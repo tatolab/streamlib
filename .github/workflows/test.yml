@@ -90,6 +90,18 @@ jobs:
       # cite was never pinned to a specific test; the one flake since diagnosed
       # is the pubsub subscribe race, fixed in #1873. What is known to remain is
       # a DRM-probe hang, a rare SIGABRT, and fd-capture flakes.
+      # Here rather than in source-gates.yml because clippy has to compile the
+      # workspace, and this is the job that already carries the engine's build
+      # dependencies and its warm dependency cache. Default targets only: a
+      # test's `println!` is a test's business, matching the exemption
+      # `xtask lint-logging` already makes for `tests` directories.
+      #
+      # Before this step existed no workflow ran clippy at all — `docs/logging.md`
+      # claimed it did, and an `eprintln!` in each of two adapter test helpers
+      # sat behind that claim unnoticed.
+      - name: cargo clippy (workspace, default targets)
+        run: cargo clippy --locked --workspace --no-deps
+
       - name: Run unit tests
         run: |
           cargo test --locked -p streamlib -p streamlib-macros --lib

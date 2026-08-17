@@ -176,6 +176,15 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
     }
 
     let shelled_out_gates: &[(&str, &str, &[&str])] = &[
+        ("rustfmt", "cargo", &["fmt", "--all", "--check"]),
+        // Default targets only. A test's `println!` is a test's business —
+        // `lint-logging` exempts `tests` directories, and `--all-targets` here
+        // would deny what that walk deliberately allows.
+        (
+            "clippy",
+            "cargo",
+            &["clippy", "--locked", "--workspace", "--no-deps"],
+        ),
         (
             "license headers",
             "bash",
