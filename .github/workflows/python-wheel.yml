@@ -52,8 +52,10 @@ jobs:
       # PAL crates run bindgen. `python3-dev` is the extra — the wheel crate's
       # unit tests link libpython (see the step below).
       # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
-      # `build-from-source`). Explicit rather than leaning on the runner image
-      # having it, whose contents move between releases.
+      # `build-from-source`); `ninja-build` is what makes that ~64s instead of
+      # minutes — shaderc-sys picks the Ninja generator whenever `ninja` is on
+      # PATH, so installing it is the whole configuration. Explicit rather than
+      # leaning on the runner image having either, whose contents move.
       - name: Install system dependencies
         timeout-minutes: 12
         uses: ./.github/actions/install-linux-engine-build-dependencies
@@ -67,6 +69,7 @@ jobs:
             glslc
             python3-dev
             cmake
+            ninja-build
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

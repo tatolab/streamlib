@@ -214,8 +214,9 @@ fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32, entry_point: &s
     hasher.update(spv);
     hasher.update(push_constant_size.to_le_bytes());
     // Two pipelines built from one module against different entry points are
-    // different kernels, so the id has to tell them apart. Length-prefixed:
-    // without it the name's bytes would run into whatever hashed next.
+    // different kernels, so the id has to tell them apart. The length prefix is
+    // defensive: the name is last in the digest today, so nothing can run into
+    // it yet, but a field appended below would merge with it silently.
     hasher.update((entry_point.len() as u64).to_le_bytes());
     hasher.update(entry_point.as_bytes());
     format!("{:x}", hasher.finalize())
@@ -3927,28 +3928,6 @@ impl GpuContextFullAccess {
         self.host_inner().check_out_surface(surface_id)
     }
 
-    /// Compile GLSL kernel source to SPIR-V, reusing what an identical earlier
-    /// request compiled. Reachable only inside `escalate(|full| ...)` since it
-    /// requires `FullAccess`.
-    #[cfg(target_os = "linux")]
-    pub fn compile_glsl_shader_source_to_spirv(
-        &self,
-        source: &str,
-        stage: crate::core::rhi::GlslCompilationTargetStage,
-        entry_point: &str,
-        label: &str,
-    ) -> Result<Arc<[u8]>> {
-        self.host_inner()
-            .compile_glsl_shader_source_to_spirv(source, stage, entry_point, label)
-    }
-
-    /// How many times the host has actually run the GLSL compiler.
-    #[cfg(target_os = "linux")]
-    #[must_use]
-    pub fn glsl_shader_compiler_invocation_count(&self) -> u64 {
-        self.host_inner().glsl_shader_compiler_invocation_count()
-    }
-
     /// Build a compute kernel, reusing an identical one this context already
     /// built. Reachable only inside `escalate(|full| ...)` since it requires
     /// `FullAccess`.
@@ -4030,18 +4009,6 @@ mod tests {
         assert_ne!(
             compute_kernel_cache_key(spv, 0, "main"),
             compute_kernel_cache_key(spv, 0, "sharpen"),
-        );
-    }
-
-    /// The name is length-prefixed into the hash, so a byte moving between the
-    /// entry point and what follows cannot leave the digest unchanged.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_kernel_id_does_not_confuse_an_entry_point_with_its_neighbour() {
-        let spv = b"not really spir-v, and this key never parses it";
-        assert_ne!(
-            compute_kernel_cache_key(spv, 0, "ab"),
-            compute_kernel_cache_key(spv, 0, "a"),
         );
     }
 

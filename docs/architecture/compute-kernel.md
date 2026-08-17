@@ -38,9 +38,11 @@ supply a shader toolchain. Compilations are cached under the whole tuple that
 determines their output — source, stage, entry point, target environment,
 compiler version — never source alone.
 
-That compiler never optimizes. Every level above zero strips `OpName`, and a
-binding with no reflected name cannot be bound by name at all, which is the
-only way bindings are addressed.
+That compiler optimizes *and* emits debug info, and the two are not separable
+here: optimizing strips `OpName`, a binding with no reflected name cannot be
+bound by name at all, and by-name is the only way bindings are addressed. Debug
+info is what carries the names through — the same pairing `build.rs` uses. It
+costs the GLSL source embedded alongside them.
 
 Pre-compiled SPIR-V remains accepted. It is the caller's job to keep the
 `OpName` decorations there — `derive_bindings_from_spirv` refuses a blob that

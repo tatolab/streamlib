@@ -295,12 +295,19 @@ impl GlslShaderSourceToSpirvCompiler {
         })?;
         options.set_target_env(shaderc::TargetEnv::Vulkan, target.vulkan_env_version as u32);
         options.set_target_spirv(target.spirv_version);
-        // No optimization level is set, and none may be: every level above
-        // zero strips `OpName`, and a binding with no reflected name cannot be
-        // dispatched against by name at all. The engine keeps debug names in
-        // what it compiles itself — `derive_bindings_from_spirv` refuses a
-        // module that lost them, so setting one here would refuse every kernel
-        // the engine compiled.
+        // These two move together or not at all. Optimizing strips `OpName`,
+        // and a binding with no reflected name cannot be bound by name — which
+        // is the only way bindings are addressed here, so an optimized module
+        // without debug info is refused by `derive_bindings_from_spirv`. Debug
+        // info is what carries the names through, and it is what lets a
+        // user-authored kernel be optimized at all rather than run at level
+        // zero. `build.rs` pairs them the same way (`glslc -g -O`).
+        //
+        // The cost is the GLSL source embedded alongside the names: measured
+        // at 360 SPIR-V words against 199 for optimized-and-stripped, on the
+        // conformance kernel.
+        options.set_generate_debug_info();
+        options.set_optimization_level(shaderc::OptimizationLevel::Performance);
 
         let compiler = self.compiler()?;
         self.invocation_count.fetch_add(1, Ordering::Relaxed);
