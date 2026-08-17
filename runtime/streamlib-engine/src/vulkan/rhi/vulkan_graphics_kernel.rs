@@ -213,7 +213,7 @@ impl VulkanGraphicsKernelInner {
             )));
         }
 
-        validate_against_spirv(descriptor)?;
+        let reconciled_bindings = validate_against_spirv(descriptor)?;
 
         let device = vulkan_device.device();
         let queue = vulkan_device.queue();
@@ -312,7 +312,7 @@ impl VulkanGraphicsKernelInner {
             device: device.clone(),
             queue,
             queue_family_index,
-            bindings: descriptor.bindings.to_vec(),
+            bindings: reconciled_bindings,
             push_constant_size: descriptor.push_constants.size,
             push_constant_stages: shader_stage_flags_to_vk(descriptor.push_constants.stages),
             pipeline_state: descriptor.pipeline_state.clone(),
@@ -1452,10 +1452,15 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
 
 // ---- Validation + creation helpers --------------------------------------------
 
-fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<()> {
+/// Validate the declaration against the shaders and return the specs with the
+/// shader's own binding names adopted onto them.
+fn validate_against_spirv(
+    descriptor: &GraphicsKernelDescriptor<'_>,
+) -> Result<Vec<GraphicsBindingSpec>> {
     use std::collections::BTreeMap;
 
-    let mut merged: BTreeMap<u32, (RDescriptorType, GraphicsShaderStageFlags)> = BTreeMap::new();
+    let mut merged: BTreeMap<u32, (RDescriptorType, GraphicsShaderStageFlags, String)> =
+        BTreeMap::new();
     let mut spirv_push_size: u32 = 0;
     let mut spirv_push_stages = GraphicsShaderStageFlags::NONE;
 
@@ -1483,13 +1488,23 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         }
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
-                let entry = merged
-                    .entry(binding)
-                    .or_insert((info.ty, GraphicsShaderStageFlags::NONE));
+                let entry = merged.entry(binding).or_insert((
+                    info.ty,
+                    GraphicsShaderStageFlags::NONE,
+                    info.name.clone(),
+                ));
                 if entry.0 != info.ty {
                     return Err(Error::GpuError(format!(
                         "Graphics kernel '{}': binding {binding} type conflict — {:?} vs {:?} (in {:?})",
                         descriptor.label, entry.0, info.ty, stage.stage
+                    )));
+                }
+                if entry.2 != info.name {
+                    return Err(Error::GpuError(format!(
+                        "Graphics kernel '{}': binding {binding} is named `{}` by one stage and \
+                         `{}` by the {:?} stage; bindings are resolved by name, so one slot \
+                         spelled two ways cannot be bound",
+                        descriptor.label, entry.2, info.name, stage.stage
                     )));
                 }
                 entry.1 |= stage_flag;
@@ -1506,7 +1521,11 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         }
     }
 
-    // Each declared binding must agree with merged shader declaration.
+    // Each declared binding must agree with merged shader declaration. The
+    // shader's own name for the binding is adopted onto the returned spec —
+    // that is what a by-name draw resolves against, and the shader is its
+    // source of truth.
+    let mut reconciled: Vec<GraphicsBindingSpec> = Vec::with_capacity(descriptor.bindings.len());
     for spec in descriptor.bindings {
         let merged_entry = merged.get(&spec.binding).ok_or_else(|| {
             Error::GpuError(format!(
@@ -1519,6 +1538,14 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
             return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': binding {} declared {:?} ({:?}), but SPIR-V has {:?}",
                 descriptor.label, spec.binding, spec.kind, expected, merged_entry.0
+            )));
+        }
+        if let Some(declared_name) = spec.name.as_deref()
+            && declared_name != merged_entry.2
+        {
+            return Err(Error::GpuError(format!(
+                "Graphics kernel '{}': binding {} declared name `{}`, but SPIR-V names it `{}`",
+                descriptor.label, spec.binding, declared_name, merged_entry.2
             )));
         }
         // Declared visibility must cover at least the SPIR-V's stages —
@@ -1534,16 +1561,22 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
                 merged_entry.1.bits()
             )));
         }
+        let mut adopted = spec.clone();
+        if !merged_entry.2.is_empty() {
+            adopted.name = Some(std::borrow::Cow::Owned(merged_entry.2.clone()));
+        }
+        reconciled.push(adopted);
     }
 
     // Conversely, every SPIR-V binding must be declared.
-    for (&binding, (ty, stages)) in &merged {
+    for (&binding, (ty, stages, name)) in &merged {
         if !descriptor.bindings.iter().any(|s| s.binding == binding) {
             return Err(Error::GpuError(format!(
-                "Graphics kernel '{}': SPIR-V declares binding {} ({:?}, stages {:#b}) but it is missing from the descriptor",
+                "Graphics kernel '{}': SPIR-V declares binding {} ({:?}, name `{}`, stages {:#b}) but it is missing from the descriptor",
                 descriptor.label,
                 binding,
                 ty,
+                name,
                 stages.bits()
             )));
         }
@@ -1570,7 +1603,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         )));
     }
 
-    Ok(())
+    Ok(reconciled)
 }
 
 fn stage_to_flag(stage: GraphicsShaderStage) -> GraphicsShaderStageFlags {

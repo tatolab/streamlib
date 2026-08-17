@@ -12,6 +12,13 @@ fn main() {
     }
 }
 
+/// `glslc -O` strips every `OpName`, and a binding with no reflected name
+/// cannot be dispatched against by name. The engine's own `build.rs` applies
+/// this uniformly for that reason; a fixture compiled without it would be the
+/// one blob in the tree whose bindings cannot be bound.
+#[cfg(target_os = "linux")]
+const KEEP_BINDING_NAMES: &str = "-g";
+
 #[cfg(target_os = "linux")]
 fn compile_cpu_ref_doubler() {
     use std::path::{Path, PathBuf};
@@ -23,6 +30,7 @@ fn compile_cpu_ref_doubler() {
     let dst: PathBuf = Path::new(&out_dir).join("cpu_ref_doubler.spv");
     let status = Command::new("glslc")
         .arg("-fshader-stage=compute")
+        .arg(KEEP_BINDING_NAMES)
         .arg("-O")
         .arg(Path::new(src))
         .arg("-o")
@@ -57,6 +65,7 @@ fn compile_graphics_kernel_smoke() {
         let dst: PathBuf = Path::new(&out_dir).join(dst_name);
         let status = Command::new("glslc")
             .arg(stage_arg)
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(Path::new(src))
             .arg("-o")
@@ -104,6 +113,7 @@ fn compile_ray_tracing_kernel_smoke() {
             .arg(stage_arg)
             .arg("--target-env=vulkan1.2")
             .arg("--target-spv=spv1.4")
+            .arg(KEEP_BINDING_NAMES)
             .arg("-O")
             .arg(Path::new(src))
             .arg("-o")

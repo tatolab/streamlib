@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::Reflection;
 use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -34,7 +34,7 @@ use std::ffi::c_void;
 use crate::core::rhi::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingShaderGroup, RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
-    Texture, validate_shader_groups,
+    Texture, ray_tracing_spirv_type_to_kind, validate_shader_groups,
 };
 use crate::core::{Error, Result};
 
@@ -130,7 +130,7 @@ impl VulkanRayTracingKernelInner {
         }
 
         validate_shader_groups(descriptor.label, descriptor.stages, descriptor.groups)?;
-        validate_bindings_against_spirv(descriptor)?;
+        let reconciled_bindings = validate_bindings_against_spirv(descriptor)?;
         validate_push_constants_against_spirv(descriptor)?;
 
         let device = vulkan_device.device();
@@ -361,7 +361,7 @@ impl VulkanRayTracingKernelInner {
             vulkan_device: Arc::clone(vulkan_device),
             device: device.clone(),
             queue,
-            bindings: descriptor.bindings.to_vec(),
+            bindings: reconciled_bindings,
             push_constant_size: descriptor.push_constants.size,
             push_constant_stages: stage_flags_to_vk(descriptor.push_constants.stages),
             pipeline,
@@ -1076,11 +1076,15 @@ mod plugin_abi_object_layout_tests {
 
 // ---- Validation + creation helpers --------------------------------------------
 
-fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) -> Result<()> {
+/// Validate the declaration against every stage and return the specs with the
+/// shader's own binding names adopted onto them.
+fn validate_bindings_against_spirv(
+    descriptor: &RayTracingKernelDescriptor<'_>,
+) -> Result<Vec<RayTracingBindingSpec>> {
     use std::collections::BTreeMap;
 
     // Merge per-stage SPIR-V reflection into a single map.
-    let mut merged: BTreeMap<u32, (RayTracingBindingKind, RayTracingShaderStageFlags)> =
+    let mut merged: BTreeMap<u32, (RayTracingBindingKind, RayTracingShaderStageFlags, String)> =
         BTreeMap::new();
 
     for stage in descriptor.stages {
@@ -1107,19 +1111,29 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
         let stage_flag = stage_to_stage_flag(stage.stage);
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
-                let kind = spirv_type_to_kind(info.ty).ok_or_else(|| {
+                let kind = ray_tracing_spirv_type_to_kind(info.ty).ok_or_else(|| {
                     Error::GpuError(format!(
                         "Ray-tracing kernel '{}': SPIR-V binding {} in stage {:?} has unsupported descriptor type {:?}",
                         descriptor.label, binding, stage.stage, info.ty
                     ))
                 })?;
-                let entry = merged
-                    .entry(binding)
-                    .or_insert((kind, RayTracingShaderStageFlags::NONE));
+                let entry = merged.entry(binding).or_insert((
+                    kind,
+                    RayTracingShaderStageFlags::NONE,
+                    info.name.clone(),
+                ));
                 if entry.0 != kind {
                     return Err(Error::GpuError(format!(
                         "Ray-tracing kernel '{}': SPIR-V binding {} declared as {:?} in one stage and {:?} in another",
                         descriptor.label, binding, entry.0, kind
+                    )));
+                }
+                if entry.2 != info.name {
+                    return Err(Error::GpuError(format!(
+                        "Ray-tracing kernel '{}': binding {} is named `{}` by one stage and `{}` \
+                         by the {:?} stage; bindings are resolved by name, so one slot spelled \
+                         two ways cannot be bound",
+                        descriptor.label, binding, entry.2, info.name, stage.stage
                     )));
                 }
                 entry.1 |= stage_flag;
@@ -1127,14 +1141,19 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
         }
     }
 
-    // Every declared binding must exist in the merged SPIR-V map.
+    // Every declared binding must exist in the merged SPIR-V map. The shader's
+    // own name for the binding is adopted onto the returned spec — that is what
+    // a by-name dispatch resolves against, and the shader is its source of
+    // truth.
+    let mut reconciled: Vec<RayTracingBindingSpec> = Vec::with_capacity(descriptor.bindings.len());
     for spec in descriptor.bindings {
-        let (spirv_kind, spirv_stages) = merged.get(&spec.binding).ok_or_else(|| {
-            Error::GpuError(format!(
-                "Ray-tracing kernel '{}': binding {} declared but missing in SPIR-V",
-                descriptor.label, spec.binding
-            ))
-        })?;
+        let (spirv_kind, spirv_stages, spirv_name) =
+            merged.get(&spec.binding).ok_or_else(|| {
+                Error::GpuError(format!(
+                    "Ray-tracing kernel '{}': binding {} declared but missing in SPIR-V",
+                    descriptor.label, spec.binding
+                ))
+            })?;
         if *spirv_kind != spec.kind {
             return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} declared {:?}, but SPIR-V has {:?}",
@@ -1147,19 +1166,32 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
                 descriptor.label, spec.binding, spec.stages, spirv_stages
             )));
         }
+        if let Some(declared_name) = spec.name.as_deref()
+            && declared_name != spirv_name
+        {
+            return Err(Error::GpuError(format!(
+                "Ray-tracing kernel '{}': binding {} declared name `{}`, but SPIR-V names it `{}`",
+                descriptor.label, spec.binding, declared_name, spirv_name
+            )));
+        }
+        let mut adopted = spec.clone();
+        if !spirv_name.is_empty() {
+            adopted.name = Some(std::borrow::Cow::Owned(spirv_name.clone()));
+        }
+        reconciled.push(adopted);
     }
 
     // Conversely, every SPIR-V binding must be declared.
-    for (&binding, &(kind, _)) in &merged {
+    for (&binding, (kind, _, name)) in &merged {
         if !descriptor.bindings.iter().any(|s| s.binding == binding) {
             return Err(Error::GpuError(format!(
-                "Ray-tracing kernel '{}': SPIR-V declares binding {} ({:?}) but it is missing from the descriptor",
-                descriptor.label, binding, kind
+                "Ray-tracing kernel '{}': SPIR-V declares binding {} ({:?}, name `{}`) but it is missing from the descriptor",
+                descriptor.label, binding, kind, name
             )));
         }
     }
 
-    Ok(())
+    Ok(reconciled)
 }
 
 fn validate_push_constants_against_spirv(
@@ -1189,19 +1221,6 @@ fn validate_push_constants_against_spirv(
         )));
     }
     Ok(())
-}
-
-fn spirv_type_to_kind(ty: RDescriptorType) -> Option<RayTracingBindingKind> {
-    match ty {
-        RDescriptorType::STORAGE_BUFFER => Some(RayTracingBindingKind::StorageBuffer),
-        RDescriptorType::UNIFORM_BUFFER => Some(RayTracingBindingKind::UniformBuffer),
-        RDescriptorType::COMBINED_IMAGE_SAMPLER => Some(RayTracingBindingKind::SampledTexture),
-        RDescriptorType::STORAGE_IMAGE => Some(RayTracingBindingKind::StorageImage),
-        RDescriptorType::ACCELERATION_STRUCTURE_KHR => {
-            Some(RayTracingBindingKind::AccelerationStructure)
-        }
-        _ => None,
-    }
 }
 
 fn create_descriptor_set_layout(

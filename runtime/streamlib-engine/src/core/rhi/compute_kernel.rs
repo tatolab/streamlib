@@ -14,6 +14,8 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::{Error, Result};
 
+use super::kernel_binding_names::quote_declared_shader_binding_names;
+
 /// Kind of resource bound at a particular slot in a compute kernel's
 /// descriptor set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,18 +88,6 @@ pub struct ComputeBindingSpec {
 pub struct ComputeBindingDeclaration {
     pub name: String,
     pub kind: ComputeBindingKind,
-}
-
-/// Render a shader's declared binding names for an error message.
-pub(crate) fn quote_declared_shader_binding_names(names: &[&str]) -> String {
-    if names.is_empty() {
-        return "no named bindings".to_string();
-    }
-    names
-        .iter()
-        .map(|name| format!("`{name}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Check a caller's binding declarations against what the shader's reflection

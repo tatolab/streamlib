@@ -13,7 +13,16 @@
 //! declarations, and from that point on the caller binds resources by
 //! slot via simple typed setters.
 
+use std::borrow::Cow;
+
+use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+
 use crate::core::{Error, Result};
+
+use super::kernel_binding_names::{
+    KernelBindingUnderReconciliation, KernelShaderStageMask,
+    reconcile_staged_kernel_binding_declarations,
+};
 
 /// Shader stages that contribute to a ray-tracing pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -52,6 +61,20 @@ impl RayTracingShaderStageFlags {
 
     pub const fn bits(self) -> u32 {
         self.0
+    }
+
+    /// The mask a raw bitmask names, or `None` if it names a bit no
+    /// ray-tracing stage owns.
+    ///
+    /// An unknown bit is refused rather than masked off: a caller that set it
+    /// meant a stage, and dropping it silently would make the declaration
+    /// assert less than it said.
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        if bits & !Self::ALL.0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
     }
 }
 
@@ -143,12 +166,264 @@ pub enum RayTracingBindingKind {
     AccelerationStructure,
 }
 
-/// One binding declaration: (binding index, resource kind, visible stages).
-#[derive(Debug, Clone, Copy)]
+/// One binding declaration: (binding index, resource kind, visible stages, the
+/// shader's own name for the binding).
+///
+/// `name` is `None` on a declaration that asserts only slot, kind and stages,
+/// and `Some` on every spec the RHI derived from reflection: the numeric
+/// binding is what the descriptor set is built from, the name is what a
+/// by-name dispatch resolves against.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RayTracingBindingSpec {
     pub binding: u32,
     pub kind: RayTracingBindingKind,
     pub stages: RayTracingShaderStageFlags,
+    pub name: Option<Cow<'static, str>>,
+}
+
+/// What a caller asserts about one ray-tracing binding before reflection has
+/// assigned it a slot: the shader's name for it, the kind expected there, and
+/// the stages the caller believes read it.
+///
+/// Deliberately not a [`RayTracingBindingSpec`]: a declaration has no slot, and
+/// carrying a placeholder slot in a spec would put a meaningless number in a
+/// field every resolved path treats as load-bearing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RayTracingBindingDeclaration {
+    pub name: String,
+    pub kind: RayTracingBindingKind,
+    pub stages: RayTracingShaderStageFlags,
+}
+
+impl KernelShaderStageMask for RayTracingShaderStageFlags {
+    fn named_stages(self) -> Vec<&'static str> {
+        [
+            (Self::RAYGEN, "ray_gen"),
+            (Self::MISS, "miss"),
+            (Self::CLOSEST_HIT, "closest_hit"),
+            (Self::ANY_HIT, "any_hit"),
+            (Self::INTERSECTION, "intersection"),
+            (Self::CALLABLE, "callable"),
+        ]
+        .into_iter()
+        .filter(|(flag, _)| self.contains(*flag))
+        .map(|(_, name)| name)
+        .collect()
+    }
+
+    fn names_no_stage(self) -> bool {
+        self == Self::NONE
+    }
+
+    fn stages_missing_from(self, available: Self) -> Vec<&'static str> {
+        Self(self.0 & !available.0).named_stages()
+    }
+
+    fn contains_every_stage_in(self, other: Self) -> bool {
+        self.contains(other)
+    }
+}
+
+/// Check a caller's ray-tracing binding declarations against what the stages'
+/// reflection actually found, by name.
+///
+/// Runs at kernel construction, where the multi-stage declaration is built —
+/// which is the only place a stage mismatch can be caught, because a dispatch
+/// never revisits which stage reads what. A ray-tracing kernel's stage set
+/// varies per kernel, so naming `any_hit` on a kernel built without an any-hit
+/// module is a mistake no dispatch could ever make true.
+pub(crate) fn reconcile_ray_tracing_binding_declarations(
+    declared: &[RayTracingBindingDeclaration],
+    reflected: &[RayTracingBindingSpec],
+    stages_the_kernel_was_built_from: RayTracingShaderStageFlags,
+) -> Result<()> {
+    let declared_view: Vec<_> = declared
+        .iter()
+        .map(|declaration| KernelBindingUnderReconciliation {
+            name: declaration.name.as_str(),
+            kind: declaration.kind,
+            stages: declaration.stages,
+        })
+        .collect();
+    let reflected_view: Vec<_> = reflected
+        .iter()
+        .filter_map(|spec| {
+            Some(KernelBindingUnderReconciliation {
+                name: spec.name.as_deref()?,
+                kind: spec.kind,
+                stages: spec.stages,
+            })
+        })
+        .collect();
+    reconcile_staged_kernel_binding_declarations(
+        "ray-tracing",
+        &declared_view,
+        &reflected_view,
+        stages_the_kernel_was_built_from,
+    )
+}
+
+/// Reflect every stage of a ray-tracing pipeline and return the merged binding
+/// shape + total push-constant size + visible stages per binding.
+///
+/// The ray-tracing twin of
+/// [`super::graphics_kernel::derive_bindings_from_spirv_multistage`], and the
+/// same contract: each stage's reflection is unioned, every derived spec
+/// carries the shader's own name, and the two ways a name can fail to identify
+/// one binding — a slot two stages spell differently, and one name on two
+/// slots — are rejected here rather than at dispatch. A blob whose `OpName`
+/// decorations were stripped is rejected for the same reason.
+pub fn derive_ray_tracing_bindings_from_spirv_multistage(
+    stages: &[RayTracingStage<'_>],
+) -> Result<(Vec<RayTracingBindingSpec>, RayTracingPushConstants)> {
+    let mut merged: std::collections::BTreeMap<
+        u32,
+        (RayTracingBindingKind, RayTracingShaderStageFlags, String),
+    > = std::collections::BTreeMap::new();
+    let mut push_size: u32 = 0;
+    let mut push_stages = RayTracingShaderStageFlags::NONE;
+
+    for stage in stages {
+        let stage_flag = ray_tracing_stage_to_flag(stage.stage);
+        let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
+            Error::GpuError(format!(
+                "Ray-tracing kernel: failed to reflect SPIR-V for {:?} stage: {e:?}",
+                stage.stage
+            ))
+        })?;
+        let sets = reflection.get_descriptor_sets().map_err(|e| {
+            Error::GpuError(format!(
+                "Ray-tracing kernel: failed to extract descriptor sets for {:?} stage: {e:?}",
+                stage.stage
+            ))
+        })?;
+        if sets.len() > 1 {
+            return Err(Error::GpuError(format!(
+                "Ray-tracing kernel: only descriptor set 0 is supported; SPIR-V {:?} stage uses \
+                 sets {:?}",
+                stage.stage,
+                sets.keys().collect::<Vec<_>>()
+            )));
+        }
+        if let Some(set0) = sets.get(&0) {
+            for (&binding, info) in set0 {
+                let kind = ray_tracing_spirv_type_to_kind(info.ty).ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "Ray-tracing kernel: SPIR-V {:?} stage binding {binding} has unsupported \
+                         descriptor type {:?}",
+                        stage.stage, info.ty
+                    ))
+                })?;
+                if info.name.is_empty() {
+                    return Err(Error::GpuError(format!(
+                        "Ray-tracing kernel: SPIR-V {:?} stage binding {binding} ({kind:?}) \
+                         carries no name — its OpName decorations were stripped, and bindings are \
+                         resolved by name. Compile with debug info retained (`glslc -g`) so the \
+                         shader's own binding names survive optimization",
+                        stage.stage
+                    )));
+                }
+                let entry = merged.entry(binding).or_insert((
+                    kind,
+                    RayTracingShaderStageFlags::NONE,
+                    info.name.clone(),
+                ));
+                if entry.0 != kind {
+                    return Err(Error::GpuError(format!(
+                        "Ray-tracing kernel: binding {binding} kind conflict — {:?} vs {:?} \
+                         (introduced by {:?})",
+                        entry.0, kind, stage.stage
+                    )));
+                }
+                if entry.2 != info.name {
+                    return Err(Error::GpuError(format!(
+                        "Ray-tracing kernel: binding {binding} is named `{}` by one stage and \
+                         `{}` by the {:?} stage; bindings are resolved by name, so one slot \
+                         spelled two ways cannot be bound",
+                        entry.2, info.name, stage.stage
+                    )));
+                }
+                entry.1 |= stage_flag;
+            }
+        }
+        if let Some(info) = reflection.get_push_constant_range().map_err(|e| {
+            Error::GpuError(format!(
+                "Ray-tracing kernel: failed to read push-constant range for {:?} stage: {e:?}",
+                stage.stage
+            ))
+        })? {
+            push_size = push_size.max(info.size);
+            push_stages |= stage_flag;
+        }
+    }
+
+    let bindings: Vec<RayTracingBindingSpec> = merged
+        .into_iter()
+        .map(|(binding, (kind, stages, name))| RayTracingBindingSpec {
+            binding,
+            kind,
+            stages,
+            name: Some(Cow::Owned(name)),
+        })
+        .collect();
+    for (index, spec) in bindings.iter().enumerate() {
+        if let Some(earlier) = bindings[..index]
+            .iter()
+            .find(|earlier| earlier.name == spec.name)
+        {
+            return Err(Error::GpuError(format!(
+                "Ray-tracing kernel: bindings {} and {} are both named `{}`; bindings are \
+                 resolved by name, so one name on two slots cannot be bound",
+                earlier.binding,
+                spec.binding,
+                spec.name.as_deref().unwrap_or_default()
+            )));
+        }
+    }
+    Ok((
+        bindings,
+        RayTracingPushConstants {
+            size: push_size,
+            stages: push_stages,
+        },
+    ))
+}
+
+/// The union of the stages a set of shader modules covers.
+pub fn ray_tracing_stages_covered_by(stages: &[RayTracingStage<'_>]) -> RayTracingShaderStageFlags {
+    stages
+        .iter()
+        .fold(RayTracingShaderStageFlags::NONE, |covered, stage| {
+            covered | ray_tracing_stage_to_flag(stage.stage)
+        })
+}
+
+const fn ray_tracing_stage_to_flag(stage: RayTracingShaderStage) -> RayTracingShaderStageFlags {
+    match stage {
+        RayTracingShaderStage::RayGen => RayTracingShaderStageFlags::RAYGEN,
+        RayTracingShaderStage::Miss => RayTracingShaderStageFlags::MISS,
+        RayTracingShaderStage::ClosestHit => RayTracingShaderStageFlags::CLOSEST_HIT,
+        RayTracingShaderStage::AnyHit => RayTracingShaderStageFlags::ANY_HIT,
+        RayTracingShaderStage::Intersection => RayTracingShaderStageFlags::INTERSECTION,
+        RayTracingShaderStage::Callable => RayTracingShaderStageFlags::CALLABLE,
+    }
+}
+
+/// The binding kind a reflected descriptor type names, or `None` for a type no
+/// ray-tracing binding kind covers.
+pub(crate) fn ray_tracing_spirv_type_to_kind(
+    ty: RDescriptorType,
+) -> Option<RayTracingBindingKind> {
+    match ty {
+        RDescriptorType::STORAGE_BUFFER => Some(RayTracingBindingKind::StorageBuffer),
+        RDescriptorType::UNIFORM_BUFFER => Some(RayTracingBindingKind::UniformBuffer),
+        RDescriptorType::COMBINED_IMAGE_SAMPLER => Some(RayTracingBindingKind::SampledTexture),
+        RDescriptorType::STORAGE_IMAGE => Some(RayTracingBindingKind::StorageImage),
+        RDescriptorType::ACCELERATION_STRUCTURE_KHR => {
+            Some(RayTracingBindingKind::AccelerationStructure)
+        }
+        _ => None,
+    }
 }
 
 impl RayTracingBindingSpec {
@@ -157,6 +432,7 @@ impl RayTracingBindingSpec {
             binding,
             kind: RayTracingBindingKind::StorageBuffer,
             stages,
+            name: None,
         }
     }
 
@@ -165,6 +441,7 @@ impl RayTracingBindingSpec {
             binding,
             kind: RayTracingBindingKind::UniformBuffer,
             stages,
+            name: None,
         }
     }
 
@@ -173,6 +450,7 @@ impl RayTracingBindingSpec {
             binding,
             kind: RayTracingBindingKind::SampledTexture,
             stages,
+            name: None,
         }
     }
 
@@ -181,6 +459,7 @@ impl RayTracingBindingSpec {
             binding,
             kind: RayTracingBindingKind::StorageImage,
             stages,
+            name: None,
         }
     }
 
@@ -189,7 +468,15 @@ impl RayTracingBindingSpec {
             binding,
             kind: RayTracingBindingKind::AccelerationStructure,
             stages,
+            name: None,
         }
+    }
+
+    /// Assert the shader's spelling of this binding as well as its slot.
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 
