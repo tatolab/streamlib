@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use crate::core::rhi::{
     ComputeBindingSpec, ComputeKernelDescriptor, TONE_MAPPER_PUSH_CONSTANT_SIZE, Texture,
-    ToneMapperPushConstants, VulkanLayout,
+    ToneMapperFinalTextureLayouts, ToneMapperPushConstants, VulkanLayout,
 };
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
@@ -89,10 +89,14 @@ impl VulkanToneMapper {
     }
 
     /// Apply tone curve with caller-declared current layouts, recording
-    /// the `→ GENERAL` pre-barriers + dispatch + `→ SHADER_READ_ONLY_OPTIMAL`
-    /// post-barriers in one engine-owned command buffer; submits and
-    /// waits before returning. Both `src` and `dst` are left in
-    /// [`VulkanLayout::SHADER_READ_ONLY_OPTIMAL`] on success.
+    /// the `→ GENERAL` pre-barriers + dispatch + post-barriers in one
+    /// engine-owned command buffer; submits and waits before returning.
+    /// Each texture's terminal layout is chosen from its create-time
+    /// usage — `SHADER_READ_ONLY_OPTIMAL` when the image is
+    /// sampled-capable, `GENERAL` otherwise (SROO on an image without
+    /// `SAMPLED` / `INPUT_ATTACHMENT` usage violates
+    /// VUID-VkImageMemoryBarrier2-oldLayout-01211) — and returned as
+    /// [`ToneMapperFinalTextureLayouts`].
     ///
     /// Used by [`crate::core::context::GpuContext`] consumers (e.g.,
     /// the `BlendingCompositor` per-acquire conversion) that don't
@@ -105,7 +109,8 @@ impl VulkanToneMapper {
     ///   `Err(Error::Configuration)`.
     /// - The helper does not touch
     ///   [`crate::core::context::TextureRegistration`]; the caller
-    ///   updates any associated registration after the call.
+    ///   updates any associated registration with the returned
+    ///   terminal layouts after the call.
     ///
     /// For consumers that already drive their own recorder, prefer
     /// [`Self::prepare`] + their recorder's `record_image_barrier` +
@@ -117,16 +122,7 @@ impl VulkanToneMapper {
         dst: &Texture,
         dst_current_layout: VulkanLayout,
         push: &ToneMapperPushConstants,
-    ) -> Result<()> {
-        // Reject in-place tone-map. The kernel binds src + dst as
-        // distinct storage images and the barrier sequence (src →
-        // GENERAL, dst → GENERAL, dispatch, src → SROO, dst → SROO)
-        // emits conflicting layout claims on the same VkImage when
-        // the caller passes the same handle for both, which trips
-        // VUID-VkImageMemoryBarrier2-oldLayout-01197 twice per submit.
-        // Catch the misuse here rather than as validation noise 60
-        // frames downstream.
-        //
+    ) -> Result<ToneMapperFinalTextureLayouts> {
         // `vulkan_inner()` routes through `Texture::host_inner()`,
         // which panics in cdylib mode by design — the host owns the
         // RHI and cdylib code must reach `HostVulkanTexture` through
@@ -134,18 +130,40 @@ impl VulkanToneMapper {
         // documented cdylib-safe accessor: in host mode it
         // `Arc::clone`s the inner directly; in cdylib mode it
         // dispatches through the v10 FullAccess vtable slot so the
-        // host returns its own `Arc<HostVulkanTexture>` and the
-        // `VkImage` compare runs against the real host-side handles.
-        if let (Some(src_image), Some(dst_image)) = (
-            src.host_vulkan_texture_arc()?.image(),
-            dst.host_vulkan_texture_arc()?.image(),
-        ) {
+        // host returns its own `Arc<HostVulkanTexture>` and both the
+        // `VkImage` compare and the usage-driven layout choice run
+        // against the real host-side handles.
+        let src_host_texture = src.host_vulkan_texture_arc()?;
+        let dst_host_texture = dst.host_vulkan_texture_arc()?;
+
+        // Reject in-place tone-map. The kernel binds src + dst as
+        // distinct storage images and the barrier sequence (src →
+        // GENERAL, dst → GENERAL, dispatch, src post, dst post)
+        // emits conflicting layout claims on the same VkImage when
+        // the caller passes the same handle for both, which trips
+        // VUID-VkImageMemoryBarrier2-oldLayout-01197 twice per submit.
+        // Catch the misuse here rather than as validation noise 60
+        // frames downstream.
+        if let (Some(src_image), Some(dst_image)) =
+            (src_host_texture.image(), dst_host_texture.image())
+        {
             if src_image == dst_image {
                 return Err(Error::Configuration(
                     "VulkanToneMapper::apply_with_layouts: src and dst must be distinct VkImages (in-place tone-map is not supported)".into(),
                 ));
             }
         }
+
+        let src_final_layout = if src_host_texture.supports_shader_read_only_optimal_layout() {
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        } else {
+            VulkanLayout::GENERAL
+        };
+        let dst_final_layout = if dst_host_texture.supports_shader_read_only_optimal_layout() {
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        } else {
+            VulkanLayout::GENERAL
+        };
 
         let kernel = self.prepare(src, dst, push)?;
         let dispatch_x = push.width.div_ceil(TONE_MAPPER_WORKGROUP_SIZE);
@@ -173,31 +191,36 @@ impl VulkanToneMapper {
             VulkanAccess::SHADER_WRITE,
         )?;
         recorder.record_dispatch(&kernel, dispatch_x, dispatch_y, 1)?;
-        // Post-barriers: leave both in SHADER_READ_ONLY_OPTIMAL —
-        // canonical "ready for next consumer to sample" state. The
-        // src texture is restored from GENERAL so its registration
-        // claim doesn't drift if another consumer reads the same
+        // Post-barriers: leave each image in its usage-legal terminal
+        // layout ("ready for the next consumer"). A GENERAL→GENERAL
+        // barrier is not a no-op — it still orders the dispatch's
+        // shader access against downstream consumers and makes the
+        // writes available. The src barrier keeps its registration
+        // claim from drifting if another consumer reads the same
         // surface_id afterward.
         recorder.record_image_barrier(
             src,
             VulkanLayout::GENERAL,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            src_final_layout,
             VulkanStage::COMPUTE_SHADER,
             VulkanStage::ALL_COMMANDS,
             VulkanAccess::SHADER_READ,
-            VulkanAccess::SHADER_SAMPLED_READ,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
         )?;
         recorder.record_image_barrier(
             dst,
             VulkanLayout::GENERAL,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            dst_final_layout,
             VulkanStage::COMPUTE_SHADER,
             VulkanStage::ALL_COMMANDS,
             VulkanAccess::SHADER_WRITE,
-            VulkanAccess::SHADER_SAMPLED_READ,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
         )?;
         recorder.submit_and_wait()?;
-        Ok(())
+        Ok(ToneMapperFinalTextureLayouts {
+            src_final_layout,
+            dst_final_layout,
+        })
     }
 
     fn get_or_build_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
@@ -426,17 +449,20 @@ mod tests {
         texture
     }
 
-    /// Allocate an empty `STORAGE_BINDING | COPY_SRC | COPY_DST` BGRA8
-    /// texture for the tone mapper's dispatch destination. Layout is
-    /// `UNDEFINED` on return — `apply_with_layouts` transitions it.
-    fn make_dst_texture(device: &Arc<HostVulkanDevice>, width: u32, height: u32) -> Texture {
+    /// Allocate an empty BGRA8 texture with the given usage for the
+    /// tone mapper's dispatch destination. Layout is `UNDEFINED` on
+    /// return — `apply_with_layouts` transitions it.
+    fn make_dst_texture(
+        device: &Arc<HostVulkanDevice>,
+        width: u32,
+        height: u32,
+        usage: TextureUsages,
+    ) -> Texture {
         let desc = TextureDescriptor {
             width,
             height,
             format: TextureFormat::Bgra8Unorm,
-            usage: TextureUsages::COPY_SRC
-                | TextureUsages::COPY_DST
-                | TextureUsages::STORAGE_BINDING,
+            usage,
             label: Some("tone-mapper-test-output"),
         };
         let host_tex = HostVulkanTexture::new(device, &desc).expect("texture");
@@ -499,7 +525,12 @@ mod tests {
         let src = make_general_texture(&device, width, height, |x, y| {
             pq_pixel(input_linear_for(x, y))
         });
-        let dst = make_dst_texture(&device, width, height);
+        let dst = make_dst_texture(
+            &device,
+            width,
+            height,
+            TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING,
+        );
 
         let mapper = VulkanToneMapper::new(&device);
         let push = ToneMapperPushConstants::new(
@@ -512,7 +543,7 @@ mod tests {
             pout_nits,
         );
 
-        mapper
+        let final_layouts = mapper
             .apply_with_layouts(
                 &src,
                 VulkanLayout::GENERAL,
@@ -521,6 +552,12 @@ mod tests {
                 &push,
             )
             .expect("apply_with_layouts");
+
+        // Neither fixture carries SAMPLED usage, so SHADER_READ_ONLY_OPTIMAL
+        // is illegal for both (VUID-VkImageMemoryBarrier2-oldLayout-01211)
+        // and the mapper must leave them in GENERAL.
+        assert_eq!(final_layouts.src_final_layout, VulkanLayout::GENERAL);
+        assert_eq!(final_layouts.dst_final_layout, VulkanLayout::GENERAL);
 
         let readback = VulkanTextureReadback::new(
             &device,
@@ -533,7 +570,7 @@ mod tests {
         )
         .expect("readback");
         let ticket = readback
-            .submit(&dst, TextureSourceLayout::ShaderReadOnly)
+            .submit(&dst, TextureSourceLayout::General)
             .expect("submit");
         let bytes = readback.wait_and_read(ticket, u64::MAX).expect("read");
 
@@ -571,6 +608,56 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A sampled-capable pair (`TEXTURE_BINDING` in the usage) keeps
+    /// the pre-fix terminal state: both textures land in
+    /// `SHADER_READ_ONLY_OPTIMAL` — the production path (compositor
+    /// intermediates created with `SAMPLED` usage) does not regress to
+    /// GENERAL. Mentally revert the usage-driven layout choice in
+    /// `apply_with_layouts` to unconditional GENERAL and this fails.
+    #[test]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    fn apply_with_layouts_leaves_sampled_capable_textures_shader_read_only() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let sampled_capable_usage = TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST
+            | TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING;
+        let src = make_dst_texture(&device, 8, 8, sampled_capable_usage);
+        let dst = make_dst_texture(&device, 8, 8, sampled_capable_usage);
+        let push = ToneMapperPushConstants::new(
+            8,
+            8,
+            TransferId::Pq,
+            TransferId::Srgb,
+            ToneCurveId::Bt2390,
+            1000.0,
+            100.0,
+        );
+        let mapper = VulkanToneMapper::new(&device);
+        let final_layouts = mapper
+            .apply_with_layouts(
+                &src,
+                VulkanLayout::UNDEFINED,
+                &dst,
+                VulkanLayout::UNDEFINED,
+                &push,
+            )
+            .expect("apply_with_layouts");
+        assert_eq!(
+            final_layouts.src_final_layout,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+        assert_eq!(
+            final_layouts.dst_final_layout,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
     }
 
     /// Sanity check on `pq_pixel`: 1.0 linear → PQ encoded byte for the

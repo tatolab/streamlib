@@ -118,6 +118,19 @@ impl ToneMapperPushConstants {
 pub const TONE_MAPPER_PUSH_CONSTANT_SIZE: u32 =
     std::mem::size_of::<ToneMapperPushConstants>() as u32;
 
+/// Terminal layouts [`RhiToneMapper::apply_with_layouts`] left its two
+/// textures in — `SHADER_READ_ONLY_OPTIMAL` for a sampled-capable image,
+/// `GENERAL` otherwise. Callers holding a
+/// [`crate::core::context::TextureRegistration`] write these back via
+/// `update_layout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToneMapperFinalTextureLayouts {
+    /// Layout the source texture was left in.
+    pub src_final_layout: crate::core::rhi::VulkanLayout,
+    /// Layout the destination texture was left in.
+    pub dst_final_layout: crate::core::rhi::VulkanLayout,
+}
+
 /// Engine-owned image→image tone-curve primitive.
 ///
 /// Constructed directly by consumers via [`RhiToneMapper::new`]. The
@@ -195,10 +208,13 @@ impl RhiToneMapper {
 
     /// Apply the tone curve with caller-declared current layouts. The
     /// kernel records pre-barriers (`→ GENERAL`) + dispatch +
-    /// post-barriers (`→ SHADER_READ_ONLY_OPTIMAL`) in one
-    /// engine-owned command buffer; submits and waits before returning.
-    /// Both `src` and `dst` are left in `SHADER_READ_ONLY_OPTIMAL` on
-    /// success.
+    /// post-barriers in one engine-owned command buffer; submits and
+    /// waits before returning. Each texture's terminal layout is chosen
+    /// from its create-time usage — `SHADER_READ_ONLY_OPTIMAL` when the
+    /// image is sampled-capable (`SAMPLED` / `INPUT_ATTACHMENT` usage,
+    /// per VUID-VkImageMemoryBarrier2-oldLayout-01211), `GENERAL`
+    /// otherwise — and both choices are returned as
+    /// [`ToneMapperFinalTextureLayouts`].
     ///
     /// Caller contract:
     /// - `src` and `dst` must reference **distinct VkImages**. In-place
@@ -209,8 +225,7 @@ impl RhiToneMapper {
     /// - This helper does **not** read or write
     ///   [`crate::core::context::TextureRegistration`]. The caller is
     ///   responsible for `update_layout`ing any associated registration
-    ///   after the call (the helper leaves both textures in
-    ///   `SHADER_READ_ONLY_OPTIMAL`, so the writeback is a constant).
+    ///   with the returned terminal layouts after the call.
     #[cfg(target_os = "linux")]
     pub fn apply_with_layouts(
         &self,
@@ -219,7 +234,7 @@ impl RhiToneMapper {
         dst: &Texture,
         dst_current_layout: crate::core::rhi::VulkanLayout,
         push: &ToneMapperPushConstants,
-    ) -> Result<()> {
+    ) -> Result<ToneMapperFinalTextureLayouts> {
         self.inner
             .apply_with_layouts(src, src_current_layout, dst, dst_current_layout, push)
     }

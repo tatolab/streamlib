@@ -1132,11 +1132,26 @@ impl HostVulkanDevice {
                 .ray_tracing_pipeline(true)
                 .build();
 
+        // shaderStorageImage{Read,Write}WithoutFormat (core 1.0) — the
+        // tone-curve kernel's storage images are declared with SPIR-V
+        // format `Unknown` so one pipeline serves BGRA8 / RGBA8 /
+        // RGBA16F views without tripping the storage-image
+        // format-match rule. Universal on the platform floor (NVIDIA,
+        // radv, anv, llvmpipe all advertise both); a driver without
+        // them fails device creation with FEATURE_NOT_PRESENT rather
+        // than reading undefined values per dispatch.
+        #[cfg(target_os = "linux")]
+        let enabled_device_features = vk::PhysicalDeviceFeatures::builder()
+            .shader_storage_image_read_without_format(true)
+            .shader_storage_image_write_without_format(true)
+            .build();
+
         #[cfg(target_os = "linux")]
         let device_create_info = {
             let mut builder = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&queue_create_infos)
                 .enabled_extension_names(&device_extensions)
+                .enabled_features(&enabled_device_features)
                 .push_next(&mut dynamic_rendering_features)
                 .push_next(&mut timeline_semaphore_features)
                 .push_next(&mut synchronization2_features)

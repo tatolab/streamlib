@@ -903,6 +903,18 @@ impl HostVulkanTexture {
         self.image
     }
 
+    /// Whether the image's create-time usage permits the
+    /// `SHADER_READ_ONLY_OPTIMAL` layout — `SAMPLED` or
+    /// `INPUT_ATTACHMENT` per VUID-VkImageMemoryBarrier2-oldLayout-01211.
+    /// Textures whose construction path records no usage metadata
+    /// (placeholders, clones) report `false`; `GENERAL` is the legal
+    /// terminal layout for those.
+    pub fn supports_shader_read_only_optimal_layout(&self) -> bool {
+        self.vk_image_meta
+            .vk_image_usage_flags
+            .intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::INPUT_ATTACHMENT)
+    }
+
     /// Texture width in pixels.
     pub fn width(&self) -> u32 {
         self.width
