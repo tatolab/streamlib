@@ -1674,6 +1674,27 @@ fn resolve_supplied_compute_bindings(
     // kernel for its whole life.
     let planned = plan_supplied_compute_bindings(supplied, kernel.host_inner().bindings())?;
 
+    // One surface cannot serve two kinds in one dispatch. The descriptor
+    // layouts are fixed and disagree — a combined image sampler is written
+    // SHADER_READ_ONLY_OPTIMAL and a storage image GENERAL — so whatever
+    // layout the texture is put in, one of the two descriptors is wrong.
+    // Refused here rather than dispatched: `plan_supplied_compute_bindings`
+    // dedups on the shader's names, and two names legitimately reaching one
+    // surface is what this catches.
+    for (index, binding) in planned.iter().enumerate() {
+        if let Some(other) = planned[..index]
+            .iter()
+            .find(|prior| prior.target_id == binding.target_id && prior.kind != binding.kind)
+        {
+            return Err(Error::GpuError(format!(
+                "bindings `{}` and `{}` both name surface {:?} but as {:?} and {:?}; one \
+                 image cannot be in the layout both descriptors require, so a dispatch \
+                 reads and writes different surfaces or binds one of them alone",
+                other.name, binding.name, binding.target_id, other.kind, binding.kind
+            )));
+        }
+    }
+
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
         // Zero extent: a kernel binding names a surface the graph already has
@@ -5110,7 +5131,7 @@ void main() {
                     dispatches: vec![
                         batched_dispatch(
                             &brighten,
-                            ("unbrightened_image", "refused-brightened"),
+                            ("unbrightened_image", "refused-seed"),
                             ("brightened_image", "refused-brightened"),
                         ),
                         batched_dispatch(
@@ -5257,6 +5278,88 @@ void main() {
                 &read_back_rgba8(&sandbox, held[1].texture(), "after-abort-readback"),
                 CHAIN_BRIGHTENED_RGBA,
                 "the batch that ran after the aborted one",
+            );
+            drop(held);
+        }
+
+        /// A dispatch that reads and writes one surface is refused, because the
+        /// two descriptors want the image in two layouts at once.
+        ///
+        /// Reachable from Python — `bindings={"src": s, "dst": s}` is an
+        /// ordinary-looking mapping — and the shader's own names differ, so the
+        /// duplicate-name rule does not catch it. Left unrefused, the batch
+        /// records two contradictory barriers and the dispatch runs with one
+        /// descriptor's layout wrong; the single-dispatch path records no
+        /// barriers at all and is wrong the same way. Refused for both.
+        #[test]
+        fn one_surface_bound_as_two_kinds_in_one_dispatch_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("one surface at two kinds: no GPU — skipping");
+                return;
+            };
+            let kernel_id = register_read_one_write_another(&sandbox).handle_id;
+            let held = seeded_chain_textures(&sandbox, ["both-seed", "both-b", "both-c"]);
+
+            let read_and_written = supplied(&[
+                (
+                    "source_image",
+                    EscalateComputeBindingKind::SampledTexture,
+                    "both-seed",
+                ),
+                (
+                    "output_image",
+                    EscalateComputeBindingKind::StorageImage,
+                    "both-seed",
+                ),
+            ]);
+
+            // Refused on the single-dispatch path...
+            let single = handle_run_compute_kernel(
+                &sandbox,
+                "both-single".to_string(),
+                EscalateRequestRunComputeKernel {
+                    bindings: read_and_written.clone(),
+                    group_count_x: 8,
+                    group_count_y: 8,
+                    group_count_z: 1,
+                    kernel_id: kernel_id.clone(),
+                    push_constants_hex: "00000000".to_string(),
+                    request_id: "both-single".to_string(),
+                },
+            );
+            let message = refusal_message(single);
+            assert!(
+                message.contains("both-seed")
+                    && message.contains("`source_image`")
+                    && message.contains("`output_image`"),
+                "the refusal must name the surface and both bindings: {message}"
+            );
+
+            // ...and on the batch path, which shares the resolver.
+            let submissions_before = sandbox.host_inner().queue_submission_count();
+            let batched = handle_run_compute_kernel_batch(
+                &sandbox,
+                "both-batched".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![EscalateRequestRunComputeKernelBatchDispatch {
+                        bindings: read_and_written,
+                        group_count_x: 8,
+                        group_count_y: 8,
+                        group_count_z: 1,
+                        kernel_id,
+                        push_constants_hex: "00000000".to_string(),
+                    }],
+                    request_id: "both-batched".to_string(),
+                },
+            );
+            assert!(
+                refusal_message(batched).contains("both-seed"),
+                "the batch shares the resolver, so it refuses the same shape"
+            );
+            assert_eq!(
+                sandbox.host_inner().queue_submission_count(),
+                submissions_before,
+                "and submits nothing"
             );
             drop(held);
         }

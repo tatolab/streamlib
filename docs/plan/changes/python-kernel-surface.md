@@ -278,6 +278,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   length. The op therefore carries the whole array, accumulated helper-side and sent on
   leaving the scope; a raise inside the scope sends nothing. Recorded here because the
   delta did not anticipate it.
+
+  Two constraints ride the op, both consequences of bindings still stashing on the
+  kernel and both retiring with the Rust bindings-at-dispatch convergence this change
+  is sequenced ahead of. **One kernel may appear only once per batch** — a kernel owns
+  a single descriptor set, so a second bind would hand its earlier dispatch the later
+  one's bindings, silently, since nothing has executed yet. And **one surface may not
+  be bound at two kinds in a single dispatch** — a combined image sampler's descriptor
+  is written `SHADER_READ_ONLY_OPTIMAL` and a storage image's `GENERAL`, so no layout
+  satisfies both. Each refuses by name, engine-side as well as in the wheel.
 - ADDED: a read-before-write precondition on the readback wire. `run_cpu_readback_copy` /
   `try_run_cpu_readback_copy` with `direction: buffer_to_image` refuse unless a read of *that
   frame* landed in the staging first — the engine cannot tell a consumer's write from
