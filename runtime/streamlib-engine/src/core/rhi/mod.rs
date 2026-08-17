@@ -39,7 +39,7 @@ pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
 pub use compute_kernel::{
     ComputeBindingDeclaration, ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
-    derive_bindings_from_spirv,
+    SurfaceBoundComputeBindingKind, derive_bindings_from_spirv,
 };
 pub(crate) use compute_kernel::{
     quote_declared_shader_binding_names, reconcile_compute_binding_declarations,

@@ -27,6 +27,8 @@ pub use audio_clock::{
 pub use gpu_context::GpuCapabilitiesSnapshot;
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 #[cfg(target_os = "linux")]
+pub use gpu_context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
+#[cfg(target_os = "linux")]
 pub use graphics_kernel_bridge::{
     BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire, DepthFormatWire,
     DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,

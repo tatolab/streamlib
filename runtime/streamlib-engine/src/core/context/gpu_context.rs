@@ -601,6 +601,46 @@ pub struct GpuCapabilitiesSnapshot {
     pub supports_ray_tracing_pipeline: bool,
 }
 
+/// One dispatch inside a batched recording, with its bindings already resolved
+/// to registrations.
+///
+/// Resolution happens before the recording opens, on purpose: a name the shader
+/// does not declare, or a surface this graph cannot resolve, is a caller
+/// mistake, and refusing it while a command buffer is open would mean unwinding
+/// one.
+#[cfg(target_os = "linux")]
+pub struct BatchedComputeKernelDispatch<'a> {
+    /// The kernel to bind and dispatch. No kernel may appear twice in one
+    /// batch — see [`GpuContext::dispatch_compute_kernel_batch`].
+    pub kernel: &'a crate::vulkan::rhi::VulkanComputeKernel,
+    /// Every binding the kernel declares. Bindings do not persist on a kernel,
+    /// so this is complete for each dispatch.
+    pub bindings: &'a [BatchedComputeKernelDispatchBinding<'a>],
+    /// Push-constant payload for this dispatch alone — recorded into the
+    /// command buffer, so consecutive dispatches of different kernels keep
+    /// their own.
+    pub push_constants: &'a [u8],
+    /// `vkCmdDispatch` groupCountX.
+    pub group_count_x: u32,
+    /// `vkCmdDispatch` groupCountY.
+    pub group_count_y: u32,
+    /// `vkCmdDispatch` groupCountZ.
+    pub group_count_z: u32,
+}
+
+/// One resolved binding of a [`BatchedComputeKernelDispatch`].
+#[cfg(target_os = "linux")]
+pub struct BatchedComputeKernelDispatchBinding<'a> {
+    /// Descriptor binding number the kernel declares this resource at.
+    pub binding: u32,
+    /// How this dispatch uses the surface, which decides both the descriptor
+    /// write and the layout its barrier moves the texture into.
+    pub kind: crate::core::rhi::SurfaceBoundComputeBindingKind,
+    /// The bound texture and the layout it is currently tracked in — the
+    /// barrier's source layout.
+    pub registration: &'a TextureRegistration,
+}
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
@@ -676,6 +716,17 @@ pub struct GpuContext {
     /// compilation, that one spares the pipeline.
     #[cfg(target_os = "linux")]
     glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
+    /// The recorder every batched compute dispatch records into, built on
+    /// first use and kept for this context's lifetime.
+    ///
+    /// One recorder, not one per batch: its command pool, primary command
+    /// buffer and completion fence are exactly what a batch reuses, and
+    /// allocating them per frame would spend the submission the batch exists
+    /// to save. Serial use is what the recorder requires and what it gets —
+    /// batching runs inside the escalate gate, which serializes runtime-wide.
+    #[cfg(target_os = "linux")]
+    batched_compute_dispatch_recorder:
+        Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
     /// Host-side bridge for the graphics-kernel escalate ops
     /// (`register_graphics_kernel`, `run_graphics_draw`). Wired by
     /// application code that exposes the host's
@@ -723,6 +774,8 @@ impl GpuContext {
                 crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
             ),
             #[cfg(target_os = "linux")]
+            batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
@@ -753,6 +806,8 @@ impl GpuContext {
             glsl_shader_source_compiler: Arc::new(
                 crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
             ),
+            #[cfg(target_os = "linux")]
+            batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
@@ -2622,6 +2677,148 @@ impl GpuContext {
             .map(Arc::clone)
     }
 
+    /// Record every dispatch in `batch` into one command buffer, submit once,
+    /// and return when that submission has retired.
+    ///
+    /// The cost this exists to avoid is per-dispatch: `VulkanComputeKernel::dispatch`
+    /// submits and blocks on its own fence every time, so a two-pass filter pays
+    /// two of each. Here N passes cost one submission and one wait, and a caller
+    /// that leaves this call has its writes visible, exactly as after a single
+    /// dispatch.
+    ///
+    /// Each dispatch's bindings are barriered into the layout its descriptor
+    /// requires, from whatever layout the registration currently tracks. Those
+    /// barriers are also the write-then-read edge between consecutive passes:
+    /// they name `COMPUTE_SHADER`/`SHADER_WRITE` as the source, so pass N+1
+    /// observes pass N's stores.
+    ///
+    /// One kernel may appear only once. A kernel owns a single descriptor set,
+    /// so a second bind would retarget the dispatch already recorded against it
+    /// — silently, since nothing has executed yet. Refused by name rather than
+    /// dispatched wrong.
+    #[cfg(target_os = "linux")]
+    pub fn dispatch_compute_kernel_batch(
+        &self,
+        batch: &[BatchedComputeKernelDispatch<'_>],
+    ) -> Result<()> {
+        use crate::core::rhi::SurfaceBoundComputeBindingKind;
+
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        for (index, dispatch) in batch.iter().enumerate() {
+            if let Some(earlier) = batch[..index]
+                .iter()
+                .position(|prior| prior.kernel.handle == dispatch.kernel.handle)
+            {
+                return Err(Error::GpuError(format!(
+                    "dispatch {index} of this batch names the kernel dispatch {earlier} already \
+                     names; a kernel owns one descriptor set, so binding it twice in one \
+                     recording would give dispatch {earlier} this dispatch's bindings. Build a \
+                     second kernel, or run them as separate batches"
+                )));
+            }
+        }
+
+        let mut held = self.batched_compute_dispatch_recorder.lock();
+        let recorder = match held.as_mut() {
+            Some(recorder) => recorder,
+            None => held.insert(self.create_command_recorder("batched_compute_dispatch")?),
+        };
+
+        // From here on the recorder is open, and every early return has to
+        // close it or the next batch's begin() refuses.
+        recorder.begin()?;
+        let recorded = Self::record_compute_kernel_batch(recorder, batch);
+        if recorded.is_err() {
+            recorder.abort_recording();
+            return recorded;
+        }
+        recorder.submit_and_wait()?;
+
+        // Compute leaves a storage image in GENERAL and a sampled texture in
+        // SHADER_READ_ONLY_OPTIMAL — recorded only now, so a batch that failed
+        // mid-recording (and submitted nothing) leaves the tracked layouts
+        // describing what the textures are actually in.
+        for dispatch in batch {
+            for binding in dispatch.bindings {
+                binding.registration.update_layout(match binding.kind {
+                    SurfaceBoundComputeBindingKind::StorageImage => VulkanLayout::GENERAL,
+                    SurfaceBoundComputeBindingKind::SampledTexture => {
+                        VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+                    }
+                });
+            }
+        }
+
+        tracing::debug!(
+            rhi_op = "dispatch_compute_kernel_batch",
+            dispatches = batch.len(),
+            "GpuContext::dispatch_compute_kernel_batch — one submission, one wait"
+        );
+        Ok(())
+    }
+
+    /// The recording half of [`Self::dispatch_compute_kernel_batch`], split out
+    /// so every failure path funnels through one `abort_recording`.
+    #[cfg(target_os = "linux")]
+    fn record_compute_kernel_batch(
+        recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
+        batch: &[BatchedComputeKernelDispatch<'_>],
+    ) -> Result<()> {
+        use crate::core::rhi::SurfaceBoundComputeBindingKind;
+        use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+        for dispatch in batch {
+            for binding in dispatch.bindings {
+                let required_layout = match binding.kind {
+                    SurfaceBoundComputeBindingKind::StorageImage => VulkanLayout::GENERAL,
+                    SurfaceBoundComputeBindingKind::SampledTexture => {
+                        VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+                    }
+                };
+                // Recorded even when the layout already matches: the barrier is
+                // carrying the previous pass's stores to this pass's reads, and
+                // a same-layout transition is exactly that memory dependency.
+                recorder.record_image_barrier(
+                    binding.registration.texture(),
+                    binding.registration.current_layout(),
+                    required_layout,
+                    VulkanStage::COMPUTE_SHADER,
+                    VulkanStage::COMPUTE_SHADER,
+                    VulkanAccess::SHADER_WRITE,
+                    VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+                )?;
+            }
+
+            for binding in dispatch.bindings {
+                let texture = binding.registration.texture();
+                match binding.kind {
+                    SurfaceBoundComputeBindingKind::StorageImage => {
+                        dispatch.kernel.set_storage_image(binding.binding, texture)?;
+                    }
+                    SurfaceBoundComputeBindingKind::SampledTexture => {
+                        dispatch
+                            .kernel
+                            .set_sampled_texture(binding.binding, texture)?;
+                    }
+                }
+            }
+            if !dispatch.push_constants.is_empty() {
+                dispatch.kernel.set_push_constants(dispatch.push_constants)?;
+            }
+
+            recorder.record_dispatch(
+                dispatch.kernel,
+                dispatch.group_count_x,
+                dispatch.group_count_y,
+                dispatch.group_count_z,
+            )?;
+        }
+        Ok(())
+    }
+
     // =========================================================================
     // GraphicsKernelBridge — host-side dispatch for the graphics-kernel escalate ops
     // =========================================================================
@@ -3955,6 +4152,16 @@ impl GpuContextFullAccess {
         kernel_id: &str,
     ) -> Option<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner().compute_kernel_by_id(kernel_id)
+    }
+
+    /// [`GpuContext::dispatch_compute_kernel_batch`] — N dispatches, one
+    /// submission, one fence wait.
+    #[cfg(target_os = "linux")]
+    pub fn dispatch_compute_kernel_batch(
+        &self,
+        batch: &[BatchedComputeKernelDispatch<'_>],
+    ) -> Result<()> {
+        self.host_inner().dispatch_compute_kernel_batch(batch)
     }
 
     /// Get the registered graphics-kernel bridge, if any. Reachable only inside

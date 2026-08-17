@@ -61,6 +61,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "run_compute_kernel")]
     RunComputeKernel(EscalateRequestRunComputeKernel),
 
+    #[serde(rename = "run_compute_kernel_batch")]
+    RunComputeKernelBatch(EscalateRequestRunComputeKernelBatch),
+
     #[serde(rename = "run_cpu_readback_copy")]
     RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy),
 
@@ -1298,6 +1301,52 @@ pub(crate) struct EscalateRequestRunComputeKernel {
     /// `push_constant_size`. Empty string when the kernel has no push
     /// constants.
     pub(crate) push_constants_hex: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// One dispatch of a `run_compute_kernel_batch`, in the order it runs.
+///
+/// Carries everything `run_compute_kernel` does except the request id, which
+/// belongs to the batch: the whole array is one request, answered once.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestRunComputeKernelBatchDispatch {
+    /// Every binding this dispatch's kernel declares, supplied by name.
+    pub(crate) bindings: Vec<EscalateRequestRunComputeKernelBinding>,
+
+    /// vkCmdDispatch groupCountX.
+    pub(crate) group_count_x: u32,
+
+    /// vkCmdDispatch groupCountY.
+    pub(crate) group_count_y: u32,
+
+    /// vkCmdDispatch groupCountZ.
+    pub(crate) group_count_z: u32,
+
+    /// Handle returned by a prior `register_compute_kernel` response. No
+    /// kernel_id may appear twice in one batch: a kernel owns a single
+    /// descriptor set, so the second bind would retarget the dispatch already
+    /// recorded against it. Refused with an `err` response.
+    pub(crate) kernel_id: String,
+
+    /// Push-constant payload for this dispatch alone, encoded as lowercase hex.
+    pub(crate) push_constants_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestRunComputeKernelBatch {
+    /// The dispatches to record into one command buffer, in order. Each is
+    /// barriered against the one before it, so a later pass observes an
+    /// earlier pass's writes.
+    ///
+    /// The whole array is one submission and one fence wait — which is the
+    /// reason the op exists, and why a multi-pass filter sends this rather
+    /// than N `run_compute_kernel` requests. An empty array is accepted and
+    /// submits nothing.
+    pub(crate) dispatches: Vec<EscalateRequestRunComputeKernelBatchDispatch>,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,

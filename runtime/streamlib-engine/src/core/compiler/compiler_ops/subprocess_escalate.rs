@@ -53,8 +53,9 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRegisterRayTracingKernel, EscalateRequestRegisterRayTracingKernelBindingKind,
     EscalateRequestRegisterRayTracingKernelGroupKind,
     EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestReleaseHandle,
-    EscalateRequestRunComputeKernel, EscalateRequestRunComputeKernelBinding,
-    EscalateRequestRunCpuReadbackCopy, EscalateRequestRunCpuReadbackCopyDirection,
+    EscalateRequestRunComputeKernel, EscalateRequestRunComputeKernelBatch,
+    EscalateRequestRunComputeKernelBinding, EscalateRequestRunCpuReadbackCopy,
+    EscalateRequestRunCpuReadbackCopyDirection,
     EscalateRequestRunGraphicsDraw, EscalateRequestRunGraphicsDrawBindingKind,
     EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunGraphicsDrawIndexBufferIndexType,
     EscalateRequestRunRayTracingKernel, EscalateRequestRunRayTracingKernelBindingKind,
@@ -113,6 +114,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::TryRunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
+        EscalateRequest::RunComputeKernelBatch(p) => Some(&p.request_id),
         EscalateRequest::RegisterGraphicsKernel(p) => Some(&p.request_id),
         EscalateRequest::RunGraphicsDraw(p) => Some(&p.request_id),
         EscalateRequest::RegisterAccelerationStructureBlas(p) => Some(&p.request_id),
@@ -630,6 +632,20 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "run_compute_kernel is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RunComputeKernelBatch(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_run_compute_kernel_batch(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "run_compute_kernel_batch is only available on Linux".to_string(),
                 }))
             }
         }
@@ -1532,16 +1548,8 @@ fn handle_run_compute_kernel(
     }
 }
 
-/// The binding kinds a dispatch can name a surface for. Narrower than
-/// [`crate::core::rhi::ComputeBindingKind`] on purpose: a plan holding this
-/// type has already refused the buffer and samplerless kinds, so the bind
-/// loop's match is total with no panic arm to keep in sync.
 #[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SurfaceBoundComputeBindingKind {
-    StorageImage,
-    SampledTexture,
-}
+use crate::core::rhi::SurfaceBoundComputeBindingKind;
 
 /// What one validated binding resolved to: the slot to write, the kind to
 /// write it as, and the surface to look up.
@@ -1703,6 +1711,141 @@ fn bind_and_dispatch_compute_kernel(
     }
 
     kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z)
+}
+
+/// Run several dispatches as one recording: one submission, one fence wait.
+///
+/// The op exists because per-dispatch blocking is what a multi-pass filter
+/// would otherwise pay N times over — `run_compute_kernel` submits and waits
+/// every time. Here the caller pays once, and still returns with every write
+/// visible, so nothing about the synchronous contract changes.
+///
+/// Every refusal — a decode, an unknown kernel, a binding that does not match
+/// the shader, a surface this graph cannot resolve, one kernel named twice —
+/// raises before the recording opens or aborts it, so a batch either runs
+/// whole or submits nothing.
+#[cfg(target_os = "linux")]
+fn handle_run_compute_kernel_batch(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRunComputeKernelBatch,
+) -> EscalateResponse {
+    let mut push_constants_per_dispatch = Vec::with_capacity(req.dispatches.len());
+    for (index, dispatch) in req.dispatches.iter().enumerate() {
+        match decode_hex(&dispatch.push_constants_hex) {
+            Ok(bytes) => push_constants_per_dispatch.push(bytes),
+            Err(e) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!(
+                        "run_compute_kernel_batch: dispatch {index}: push_constants_hex decode: {e}"
+                    ),
+                });
+            }
+        }
+    }
+
+    let dispatched = sandbox.escalate(|full| {
+        bind_and_dispatch_compute_kernel_batch(full, &req, &push_constants_per_dispatch)
+    });
+
+    match dispatched {
+        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            ..Default::default()
+        }),
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("run_compute_kernel_batch failed: {e}"),
+        }),
+    }
+}
+
+/// Resolve every dispatch in a batch, then hand the lot to the recorder.
+///
+/// Resolution is complete before the first barrier is recorded: the same rule
+/// the single-dispatch path follows, for the same reason — a refusal while a
+/// command buffer is open costs an abort, and a partially-recorded batch is
+/// not something a caller asked for.
+#[cfg(target_os = "linux")]
+fn bind_and_dispatch_compute_kernel_batch(
+    full: &crate::core::context::GpuContextFullAccess,
+    req: &EscalateRequestRunComputeKernelBatch,
+    push_constants_per_dispatch: &[Vec<u8>],
+) -> crate::core::error::Result<()> {
+    use crate::core::context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
+    use crate::core::error::Error;
+
+    let mut kernels = Vec::with_capacity(req.dispatches.len());
+    for (index, dispatch) in req.dispatches.iter().enumerate() {
+        kernels.push(
+            full.compute_kernel_by_id(&dispatch.kernel_id)
+                .ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "dispatch {index} of this batch names no kernel registered under id {:?}",
+                        dispatch.kernel_id
+                    ))
+                })?,
+        );
+    }
+
+    let mut resolved_per_dispatch = Vec::with_capacity(req.dispatches.len());
+    for (index, (dispatch, kernel)) in req.dispatches.iter().zip(&kernels).enumerate() {
+        let planned =
+            plan_supplied_compute_bindings(&dispatch.bindings, kernel.host_inner().bindings())
+                .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        let mut resolved = Vec::with_capacity(planned.len());
+        for binding in &planned {
+            let registration = full
+                .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
+                .map_err(|e| {
+                    Error::GpuError(format!(
+                        "dispatch {index} of this batch binds `{}` to surface {:?}, which this \
+                         graph cannot resolve to a device texture: {e}",
+                        binding.name, binding.target_id
+                    ))
+                })?;
+            resolved.push((binding.binding, binding.kind, registration));
+        }
+        resolved_per_dispatch.push(resolved);
+    }
+
+    let bindings_per_dispatch: Vec<Vec<BatchedComputeKernelDispatchBinding<'_>>> =
+        resolved_per_dispatch
+            .iter()
+            .map(|resolved| {
+                resolved
+                    .iter()
+                    .map(
+                        |(binding, kind, registration)| BatchedComputeKernelDispatchBinding {
+                            binding: *binding,
+                            kind: *kind,
+                            registration,
+                        },
+                    )
+                    .collect()
+            })
+            .collect();
+
+    let batch: Vec<BatchedComputeKernelDispatch<'_>> = req
+        .dispatches
+        .iter()
+        .zip(&kernels)
+        .zip(&bindings_per_dispatch)
+        .zip(push_constants_per_dispatch)
+        .map(
+            |(((dispatch, kernel), bindings), push_constants)| BatchedComputeKernelDispatch {
+                kernel,
+                bindings,
+                push_constants,
+                group_count_x: dispatch.group_count_x,
+                group_count_y: dispatch.group_count_y,
+                group_count_z: dispatch.group_count_z,
+            },
+        )
+        .collect();
+
+    full.dispatch_compute_kernel_batch(&batch)
 }
 
 /// Map a wire-format `register_graphics_kernel` request through the
