@@ -1136,8 +1136,12 @@ impl HostVulkanDevice {
         // tone-curve kernel's storage images are declared with SPIR-V
         // format `Unknown` so one pipeline serves BGRA8 / RGBA8 /
         // RGBA16F views without tripping the storage-image
-        // format-match rule. The shader-side capability pairing is
-        // locked by `vulkan_tone_mapper::tests::`
+        // format-match rule. Requested unconditionally: universal on
+        // the platform floor (NVIDIA, radv, anv, llvmpipe all
+        // advertise both), and a driver without them fails device
+        // creation with FEATURE_NOT_PRESENT rather than reading
+        // undefined values per dispatch. The shader-side capability
+        // pairing is locked by `vulkan_tone_mapper::tests::`
         // `tone_curve_spirv_declares_the_without_format_capabilities`.
         #[cfg(target_os = "linux")]
         let enabled_device_features = vk::PhysicalDeviceFeatures::builder()

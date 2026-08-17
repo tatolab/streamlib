@@ -130,16 +130,11 @@ impl VulkanToneMapper {
         dst_current_layout: VulkanLayout,
         push: &ToneMapperPushConstants,
     ) -> Result<ToneMapperFinalTextureLayouts> {
-        // `vulkan_inner()` routes through `Texture::host_inner()`,
-        // which panics in cdylib mode by design — the host owns the
-        // RHI and cdylib code must reach `HostVulkanTexture` through
-        // the FullAccess vtable. `host_vulkan_texture_arc()` is the
-        // documented cdylib-safe accessor: in host mode it
-        // `Arc::clone`s the inner directly; in cdylib mode it
-        // dispatches through the v10 FullAccess vtable slot so the
-        // host returns its own `Arc<HostVulkanTexture>` and both the
-        // `VkImage` compare and the usage-driven layout choice run
-        // against the real host-side handles.
+        // `host_vulkan_texture_arc()` is the engine-internal host-mode
+        // accessor (see `HostTextureExt`) — no plugin ABI transit slot
+        // backs it, and this helper is host-only, so the `VkImage`
+        // compare and the usage-driven layout choice below run against
+        // the real host-side handles.
         let src_host_texture = src.host_vulkan_texture_arc()?;
         let dst_host_texture = dst.host_vulkan_texture_arc()?;
 
