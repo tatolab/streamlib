@@ -64,6 +64,7 @@ pub use graphics_kernel::{
 pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(target_os = "linux")]
 pub use index_buffer::IndexBuffer;
+pub(crate) use graphics_kernel::reconcile_graphics_binding_declarations;
 pub(crate) use kernel_binding_names::quote_declared_shader_binding_names;
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{

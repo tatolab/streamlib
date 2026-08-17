@@ -393,6 +393,20 @@ pub(crate) enum EscalateComputeBindingKind {
     UniformBuffer,
 }
 
+impl EscalateComputeBindingKind {
+    /// This kind's spelling on the wire — what a register response hands back
+    /// and the next dispatch echoes.
+    pub(crate) const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SampledImage => "sampled_image",
+            Self::SampledTexture => "sampled_texture",
+            Self::StorageBuffer => "storage_buffer",
+            Self::StorageImage => "storage_image",
+            Self::UniformBuffer => "uniform_buffer",
+        }
+    }
+}
+
 /// One binding a compute kernel declares at registration, named as the shader
 /// names it. The slot number is not on the wire — it comes from reflection,
 /// and the name is what a dispatch resolves against.
@@ -464,9 +478,13 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     pub(crate) spv_hex: String,
 }
 
-/// Resource kind for this binding slot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRegisterGraphicsKernelBindingKind {
+/// Resource kind for a graphics binding slot.
+///
+/// One enum for the register array, the draw array and the register response —
+/// they name the same four kinds, and two spellings of one set is two things to
+/// keep in lockstep forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum EscalateGraphicsBindingKind {
     #[serde(rename = "sampled_texture")]
     SampledTexture,
 
@@ -480,16 +498,39 @@ pub(crate) enum EscalateRequestRegisterGraphicsKernelBindingKind {
     UniformBuffer,
 }
 
+impl EscalateGraphicsBindingKind {
+    /// This kind's spelling on the wire — what a register response hands back
+    /// and the next draw echoes.
+    pub(crate) const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SampledTexture => "sampled_texture",
+            Self::StorageBuffer => "storage_buffer",
+            Self::StorageImage => "storage_image",
+            Self::UniformBuffer => "uniform_buffer",
+        }
+    }
+}
+
+/// One binding a graphics kernel declares at registration, named as the shaders
+/// name it. The slot number is not on the wire — it comes from reflection, and
+/// the name is what a draw resolves against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterGraphicsKernelBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller expects at this name. Checked against
+    /// reflection at registration; a mismatch is an `err` response.
+    pub(crate) kind: EscalateGraphicsBindingKind,
 
-    /// Resource kind for this binding slot.
-    pub(crate) kind: EscalateRequestRegisterGraphicsKernelBindingKind,
+    /// The shaders' own name for the binding.
+    pub(crate) name: String,
 
     /// Bitmask of stages the binding is visible to. `1 = VERTEX`, `2 =
-    /// FRAGMENT`, `3 = VERTEX_FRAGMENT`.
+    /// FRAGMENT`, `3 = VERTEX_FRAGMENT`. `0` asserts nothing about stages.
+    ///
+    /// A declaration may widen a binding's visibility past what the shaders
+    /// read, never narrow it below; naming a stage this kernel has no module
+    /// for is refused at registration, where the multi-stage declaration is
+    /// built.
     pub(crate) stages: u32,
 }
 
@@ -1072,9 +1113,13 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     pub(crate) vertex_spv_hex: String,
 }
 
-/// Resource kind for this binding slot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRegisterRayTracingKernelBindingKind {
+/// Resource kind for a ray-tracing binding slot.
+///
+/// One enum for the register array, the dispatch array and the register
+/// response — they name the same five kinds, and two spellings of one set is
+/// two things to keep in lockstep forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum EscalateRayTracingBindingKind {
     #[serde(rename = "acceleration_structure")]
     AccelerationStructure,
 
@@ -1091,17 +1136,42 @@ pub(crate) enum EscalateRequestRegisterRayTracingKernelBindingKind {
     UniformBuffer,
 }
 
+impl EscalateRayTracingBindingKind {
+    /// This kind's spelling on the wire — what a register response hands back
+    /// and the next dispatch echoes.
+    pub(crate) const fn wire_name(self) -> &'static str {
+        match self {
+            Self::AccelerationStructure => "acceleration_structure",
+            Self::SampledTexture => "sampled_texture",
+            Self::StorageBuffer => "storage_buffer",
+            Self::StorageImage => "storage_image",
+            Self::UniformBuffer => "uniform_buffer",
+        }
+    }
+}
+
+/// One binding a ray-tracing kernel declares at registration, named as the
+/// shaders name it. The slot number is not on the wire — it comes from
+/// reflection, and the name is what a dispatch resolves against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterRayTracingKernelBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller expects at this name. Checked against
+    /// reflection at registration; a mismatch is an `err` response.
+    pub(crate) kind: EscalateRayTracingBindingKind,
 
-    /// Resource kind for this binding slot.
-    pub(crate) kind: EscalateRequestRegisterRayTracingKernelBindingKind,
+    /// The shaders' own name for the binding.
+    pub(crate) name: String,
 
     /// Bitmask of RT stages the binding is visible to. Bits: `1=RAYGEN`,
     /// `2=MISS`, `4=CLOSEST_HIT`, `8=ANY_HIT`, `16=INTERSECTION`,
-    /// `32=CALLABLE`.
+    /// `32=CALLABLE`. `0` asserts nothing about stages.
+    ///
+    /// A declaration may widen a binding's visibility past what the shaders
+    /// read, never narrow it below; naming a stage this kernel has no module
+    /// for is refused at registration, where the multi-stage declaration is
+    /// built. A ray-tracing kernel's stage set varies per kernel, so that is
+    /// the case this refusal exists for.
     pub(crate) stages: u32,
 }
 
@@ -1407,27 +1477,21 @@ pub(crate) struct EscalateRequestRunCpuReadbackCopy {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRunGraphicsDrawBindingKind {
-    #[serde(rename = "sampled_texture")]
-    SampledTexture,
-
-    #[serde(rename = "storage_buffer")]
-    StorageBuffer,
-
-    #[serde(rename = "storage_image")]
-    StorageImage,
-
-    #[serde(rename = "uniform_buffer")]
-    UniformBuffer,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One resource bound for a single draw, named as the shaders name it.
 pub(crate) struct EscalateRequestRunGraphicsDrawBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller believes is at this name. Must match the
+    /// kernel's reflected kind; a mismatch is an `err` response raised before
+    /// anything is submitted.
+    pub(crate) kind: EscalateGraphicsBindingKind,
 
-    pub(crate) kind: EscalateRequestRunGraphicsDrawBindingKind,
+    /// The shaders' own name for the binding. Resolved against the kernel's
+    /// reflected bindings — a name the shaders do not declare, or a declared
+    /// name this array omits, is an `err` response.
+    pub(crate) name: String,
 
+    /// Surface id of the resource to bind, as the host registered it. The host
+    /// resolves it through `resolve_texture_registration_by_surface_id`.
     pub(crate) surface_uuid: String,
 }
 
@@ -1604,30 +1668,23 @@ pub(crate) struct EscalateRequestRunGraphicsDraw {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRunRayTracingKernelBindingKind {
-    #[serde(rename = "acceleration_structure")]
-    AccelerationStructure,
-
-    #[serde(rename = "sampled_texture")]
-    SampledTexture,
-
-    #[serde(rename = "storage_buffer")]
-    StorageBuffer,
-
-    #[serde(rename = "storage_image")]
-    StorageImage,
-
-    #[serde(rename = "uniform_buffer")]
-    UniformBuffer,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// One resource bound for a single trace, named as the shaders name it.
 pub(crate) struct EscalateRequestRunRayTracingKernelBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller believes is at this name. Must match the
+    /// kernel's reflected kind; a mismatch is an `err` response raised before
+    /// anything is submitted.
+    pub(crate) kind: EscalateRayTracingBindingKind,
 
-    pub(crate) kind: EscalateRequestRunRayTracingKernelBindingKind,
+    /// The shaders' own name for the binding. Resolved against the kernel's
+    /// reflected bindings — a name the shaders do not declare, or a declared
+    /// name this array omits, is an `err` response.
+    pub(crate) name: String,
 
+    /// What to bind. For `acceleration_structure` this is an `as_id` from a
+    /// prior `register_acceleration_structure_tlas`; for every other kind it is
+    /// a surface id the host resolves through
+    /// `resolve_texture_registration_by_surface_id`.
     pub(crate) target_id: String,
 }
 
