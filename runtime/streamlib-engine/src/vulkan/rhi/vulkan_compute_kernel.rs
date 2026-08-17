@@ -24,7 +24,7 @@ use vulkanalia::vk;
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
-use std::ffi::c_void;
+use std::ffi::{CStr, c_void};
 
 use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
 use crate::core::{Error, Result};
@@ -1374,7 +1374,7 @@ fn create_compute_pipeline_with_cache(
     entry_point: &std::ffi::CStr,
     label: &str,
 ) -> Result<vk::Pipeline> {
-    let cache_path = pipeline_cache_file_path(spv);
+    let cache_path = pipeline_cache_file_path(spv, entry_point);
     let initial_data = cache_path.as_deref().and_then(read_cache_blob);
     tracing::debug!(
         label,
@@ -1449,10 +1449,16 @@ fn pipeline_cache_dir() -> Option<PathBuf> {
 /// `.bin` suffix. Two SPIR-V blobs that differ by any byte produce
 /// distinct file paths; identical blobs hit the same cache file across
 /// process restarts.
-fn pipeline_cache_file_path(spv: &[u8]) -> Option<PathBuf> {
+fn pipeline_cache_file_path(spv: &[u8], entry_point: &CStr) -> Option<PathBuf> {
     let dir = pipeline_cache_dir()?;
     let mut hasher = Sha256::new();
     hasher.update(spv);
+    // One module can back several pipelines, one per entry point, and they are
+    // not interchangeable. Without this they would share a file and overwrite
+    // each other's blob — self-healing, since the driver validates its own
+    // header and recompiles on a miss, but a cold recompile every alternate
+    // run is not what a cache is for.
+    hasher.update(entry_point.to_bytes());
     let hash_hex = format!("{:x}", hasher.finalize());
     Some(dir.join(format!("{hash_hex}.bin")))
 }
@@ -2068,11 +2074,20 @@ mod tests {
     fn cache_file_path_is_stable_for_same_spirv_and_distinct_for_different() {
         let dir = unique_cache_dir("path-stability");
         with_pipeline_cache_dir(&dir, || {
-            let p1 = pipeline_cache_file_path(blend_spv(1)).expect("dir resolves");
-            let p2 = pipeline_cache_file_path(blend_spv(1)).expect("dir resolves");
-            let p4 = pipeline_cache_file_path(blend_spv(4)).expect("dir resolves");
+            let main = c"main";
+            let p1 = pipeline_cache_file_path(blend_spv(1), main).expect("dir resolves");
+            let p2 = pipeline_cache_file_path(blend_spv(1), main).expect("dir resolves");
+            let p4 = pipeline_cache_file_path(blend_spv(4), main).expect("dir resolves");
             assert_eq!(p1, p2, "same SPIR-V must hash to same path");
             assert_ne!(p1, p4, "different SPIR-V must hash to different paths");
+            // One module backs one pipeline per entry point, and they are not
+            // interchangeable — sharing a file would have them overwrite each
+            // other's blob.
+            let sharpen = pipeline_cache_file_path(blend_spv(1), c"sharpen").expect("dir resolves");
+            assert_ne!(
+                p1, sharpen,
+                "two entry points over one module must not share a cache file"
+            );
             assert!(p1.starts_with(&dir));
             assert!(
                 p1.file_name()
@@ -2152,7 +2167,7 @@ mod tests {
                 },
             )
             .expect("kernel creation");
-            let expected = pipeline_cache_file_path(blend_spv(1)).expect("path");
+            let expected = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
             assert!(
                 expected.exists(),
                 "cache file {} should exist after construction",
@@ -2199,7 +2214,7 @@ mod tests {
                 )
                 .expect("first construction"),
             );
-            let cache_path = pipeline_cache_file_path(blend_spv(1)).expect("path");
+            let cache_path = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
             let warm_blob = std::fs::read(&cache_path).expect("warm read");
             assert!(
                 !warm_blob.is_empty(),
@@ -2242,7 +2257,7 @@ mod tests {
         let dir = unique_cache_dir("corrupt-blob");
         with_pipeline_cache_dir(&dir, || {
             std::fs::create_dir_all(&dir).expect("mkdir");
-            let cache_path = pipeline_cache_file_path(blend_spv(1)).expect("path");
+            let cache_path = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
             // Plant a header-invalid blob that the driver will reject.
             // 32 bytes of zeros has header_version=0 ≠ 1 — driver ignores
             // the data and treats the cache as empty.
