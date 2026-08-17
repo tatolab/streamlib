@@ -1023,6 +1023,8 @@ unsafe impl Sync for HostVulkanBuffer {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::video_profile_test_fixture::VideoProfileWithOwnedCodecExtensionChain;
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -1813,16 +1815,17 @@ mod tests {
                 return;
             }
         };
-        let profile = vk::VideoProfileInfoKHR::default();
         for direction in [
             VideoBitstreamDirection::Encode,
             VideoBitstreamDirection::Decode,
         ] {
+            let profile =
+                VideoProfileWithOwnedCodecExtensionChain::h264_for_bitstream_direction(direction);
             let descriptor = VideoBitstreamBufferDescriptor {
                 label: "test/zero-size",
                 size: 0,
                 direction,
-                video_profile: &profile,
+                video_profile: profile.video_profile_info(),
             };
             match HostVulkanBuffer::new_video_bitstream(&device, &descriptor) {
                 Err(crate::core::Error::Configuration(msg)) => {
@@ -1846,10 +1849,11 @@ mod tests {
     /// `new_video_bitstream` encode + decode each pick the correct usage
     /// flag, allocate HOST_VISIBLE + persistently-mapped memory, and
     /// expose a non-null `mapped_ptr` + accurate `size`. Hardware-gated
-    /// because real VMA + a real `VkVideoProfileInfoKHR` are required;
-    /// the profile is left at default — the driver tolerates default
-    /// profiles for the buffer-creation path (the chain is validated
-    /// at codec-session bind time, not at buffer creation).
+    /// because real VMA + a real `VkVideoProfileInfoKHR` are required.
+    ///
+    /// A direction whose codec queue family the device does not expose is
+    /// skipped; a direction it does expose must allocate. Swallowing the
+    /// driver's rejection instead would leave the test unable to fail.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -1864,25 +1868,29 @@ mod tests {
                 return;
             }
         };
-        let profile = vk::VideoProfileInfoKHR::default();
         const SIZE: u64 = 1 << 20; // 1 MiB
         for direction in [
             VideoBitstreamDirection::Encode,
             VideoBitstreamDirection::Decode,
         ] {
+            let codec_queue_family = match direction {
+                VideoBitstreamDirection::Encode => device.video_encode_queue_family_index(),
+                VideoBitstreamDirection::Decode => device.video_decode_queue_family_index(),
+            };
+            if codec_queue_family.is_none() {
+                println!("Skipping {direction:?} - device exposes no such video queue family");
+                continue;
+            }
+            let profile =
+                VideoProfileWithOwnedCodecExtensionChain::h264_for_bitstream_direction(direction);
             let descriptor = VideoBitstreamBufferDescriptor {
                 label: "test/bitstream-positive",
                 size: SIZE,
                 direction,
-                video_profile: &profile,
+                video_profile: profile.video_profile_info(),
             };
-            let buf = match HostVulkanBuffer::new_video_bitstream(&device, &descriptor) {
-                Ok(b) => b,
-                Err(e) => {
-                    println!("Skipping {direction:?} - driver rejected bitstream buffer: {e}");
-                    continue;
-                }
-            };
+            let buf = HostVulkanBuffer::new_video_bitstream(&device, &descriptor)
+                .unwrap_or_else(|e| panic!("{direction:?}: bitstream allocation failed: {e}"));
             assert_eq!(buf.size(), SIZE, "size must match descriptor");
             assert!(
                 !buf.mapped_ptr().is_null(),

@@ -3828,9 +3828,17 @@ mod tests {
             return;
         }
 
+        // The export pool is what carries `VkExportMemoryAllocateInfo` onto
+        // the allocation, which `vkGetMemoryFdKHR` below requires. Allocating
+        // straight from `allocator()` — the default pool — yields memory that
+        // cannot legally be exported.
+        let Some(export_pool) = device.dma_buf_buffer_pool() else {
+            println!("Skipping test — DMA-BUF buffer export pool unavailable on this driver");
+            return;
+        };
+
         let buffer_size: vk::DeviceSize = 4096;
 
-        // Create exportable buffer via VMA
         let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
             .build();
@@ -3842,13 +3850,16 @@ mod tests {
             .push_next(&mut external_buffer_info);
 
         let alloc_opts = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
+                | vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
         };
 
-        let (buffer, allocation) =
-            unsafe { device.allocator().create_buffer(buffer_info, &alloc_opts) }
-                .expect("create exportable buffer via VMA");
+        let (buffer, allocation) = unsafe { export_pool.create_buffer(buffer_info, &alloc_opts) }
+            .expect("create exportable buffer from the DMA-BUF export pool");
 
         // Get allocation info to access the underlying DeviceMemory for export
         let alloc_info = device.allocator().get_allocation_info(allocation);

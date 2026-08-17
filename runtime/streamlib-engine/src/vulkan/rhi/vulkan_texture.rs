@@ -1645,6 +1645,8 @@ impl super::VulkanTextureLike for HostVulkanTexture {
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+    #[cfg(target_os = "linux")]
+    use crate::vulkan::rhi::video_profile_test_fixture::VideoProfileWithOwnedCodecExtensionChain;
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -2485,7 +2487,7 @@ mod tests {
                 return;
             }
         };
-        let profile = vk::VideoProfileInfoKHR::default();
+        let profile = VideoProfileWithOwnedCodecExtensionChain::h264_decode_420_8bit();
         for (w, h, layers) in [(0, 64, 4), (64, 0, 4), (64, 64, 0), (0, 0, 0)] {
             let descriptor = VideoDpbTextureDescriptor {
                 label: "test/zero-dim",
@@ -2496,7 +2498,7 @@ mod tests {
                 direction: VideoDpbDirection::Decode,
                 additional_usage: vk::ImageUsageFlags::empty(),
                 sharing_queue_families: &[],
-                video_profile: &profile,
+                video_profile: profile.video_profile_info(),
             };
             match HostVulkanTexture::new_video_dpb(&device, &descriptor) {
                 Err(crate::core::Error::Configuration(msg)) => {
@@ -2522,10 +2524,11 @@ mod tests {
     /// DEVICE_LOCAL allocation (verified indirectly: a non-null
     /// VkImage post-construction means VMA accepted the chain with
     /// the codec profile + DPB usage). Hardware-gated because real
-    /// VMA + driver are needed. Default profile is used for the same
-    /// reason as the bitstream positive test — image creation
-    /// tolerates default profiles; full validation happens at
-    /// `vkBindVideoSessionMemoryKHR`.
+    /// VMA + driver are needed.
+    ///
+    /// A direction whose codec queue family the device does not expose is
+    /// skipped; a direction it does expose must allocate. Swallowing the
+    /// driver's rejection instead would leave the test unable to fail.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -2540,8 +2543,15 @@ mod tests {
                 return;
             }
         };
-        let profile = vk::VideoProfileInfoKHR::default();
         for direction in [VideoDpbDirection::Decode, VideoDpbDirection::Encode] {
+            let codec_queue_family = match direction {
+                VideoDpbDirection::Decode => device.video_decode_queue_family_index(),
+                VideoDpbDirection::Encode => device.video_encode_queue_family_index(),
+            };
+            if codec_queue_family.is_none() {
+                println!("Skipping {direction:?} - device exposes no such video queue family");
+                continue;
+            }
             let additional_usage = match direction {
                 VideoDpbDirection::Decode => {
                     vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
@@ -2550,6 +2560,7 @@ mod tests {
                 }
                 VideoDpbDirection::Encode => vk::ImageUsageFlags::empty(),
             };
+            let profile = VideoProfileWithOwnedCodecExtensionChain::h264_for_dpb_direction(direction);
             let descriptor = VideoDpbTextureDescriptor {
                 label: "test/dpb-positive",
                 width: 1920,
@@ -2559,15 +2570,10 @@ mod tests {
                 direction,
                 additional_usage,
                 sharing_queue_families: &[],
-                video_profile: &profile,
+                video_profile: profile.video_profile_info(),
             };
-            let texture = match HostVulkanTexture::new_video_dpb(&device, &descriptor) {
-                Ok(t) => t,
-                Err(e) => {
-                    println!("Skipping {direction:?} - driver rejected DPB image: {e}");
-                    continue;
-                }
-            };
+            let texture = HostVulkanTexture::new_video_dpb(&device, &descriptor)
+                .unwrap_or_else(|e| panic!("{direction:?}: DPB image allocation failed: {e}"));
             assert_ne!(
                 texture.image(),
                 Some(vk::Image::null()),
