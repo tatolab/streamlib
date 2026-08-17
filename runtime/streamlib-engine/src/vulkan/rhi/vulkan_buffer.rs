@@ -1024,7 +1024,9 @@ unsafe impl Sync for HostVulkanBuffer {}
 mod tests {
     use super::*;
     #[cfg(target_os = "linux")]
-    use crate::vulkan::rhi::video_profile_test_fixture::VideoProfileWithOwnedCodecExtensionChain;
+    use crate::vulkan::rhi::video_profile_test_fixture::{
+        VideoProfileWithOwnedCodecExtensionChain, device_supports_h264_for_bitstream_direction,
+    };
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -1873,12 +1875,8 @@ mod tests {
             VideoBitstreamDirection::Encode,
             VideoBitstreamDirection::Decode,
         ] {
-            let codec_queue_family = match direction {
-                VideoBitstreamDirection::Encode => device.video_encode_queue_family_index(),
-                VideoBitstreamDirection::Decode => device.video_decode_queue_family_index(),
-            };
-            if codec_queue_family.is_none() {
-                println!("Skipping {direction:?} - device exposes no such video queue family");
+            if !device_supports_h264_for_bitstream_direction(&device, direction) {
+                println!("Skipping {direction:?} - device has no H.264 support in that direction");
                 continue;
             }
             let profile =

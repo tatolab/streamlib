@@ -1646,7 +1646,9 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
     #[cfg(target_os = "linux")]
-    use crate::vulkan::rhi::video_profile_test_fixture::VideoProfileWithOwnedCodecExtensionChain;
+    use crate::vulkan::rhi::video_profile_test_fixture::{
+        VideoProfileWithOwnedCodecExtensionChain, device_supports_h264_for_dpb_direction,
+    };
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -2544,12 +2546,8 @@ mod tests {
             }
         };
         for direction in [VideoDpbDirection::Decode, VideoDpbDirection::Encode] {
-            let codec_queue_family = match direction {
-                VideoDpbDirection::Decode => device.video_decode_queue_family_index(),
-                VideoDpbDirection::Encode => device.video_encode_queue_family_index(),
-            };
-            if codec_queue_family.is_none() {
-                println!("Skipping {direction:?} - device exposes no such video queue family");
+            if !device_supports_h264_for_dpb_direction(&device, direction) {
+                println!("Skipping {direction:?} - device has no H.264 support in that direction");
                 continue;
             }
             let additional_usage = match direction {

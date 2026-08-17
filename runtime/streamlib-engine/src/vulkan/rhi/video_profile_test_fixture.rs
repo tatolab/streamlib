@@ -14,7 +14,7 @@
 
 use vulkanalia::vk;
 
-use super::{VideoBitstreamDirection, VideoDpbDirection};
+use super::{HostVulkanDevice, VideoBitstreamDirection, VideoDpbDirection};
 
 /// A `VkVideoProfileInfoKHR` that owns the codec-specific structs its `pNext`
 /// chain points at.
@@ -108,8 +108,39 @@ impl VideoProfileWithOwnedCodecExtensionChain {
         }
     }
 
+    /// The profile to hand a descriptor. The borrow is what ties the `pNext`
+    /// chain's validity to `self` — the driver follows those pointers during
+    /// the call, so `self` must outlive it.
     pub(super) fn video_profile_info(&self) -> &vk::VideoProfileInfoKHR {
         &self.video_profile_info
+    }
+}
+
+/// Whether `device` can run H.264 in the direction a DPB image is built for.
+///
+/// `supports_video_{decode,encode}` is the enabled-extension answer, not
+/// `video_{decode,encode}_queue_family_index` — the latter is a bare queue-flag
+/// scan that reports `Some` even when `VK_KHR_video_*_h264` was never enabled,
+/// and a profile naming a codec whose extension is off gets refused.
+pub(super) fn device_supports_h264_for_dpb_direction(
+    device: &HostVulkanDevice,
+    direction: VideoDpbDirection,
+) -> bool {
+    match direction {
+        VideoDpbDirection::Decode => device.supports_video_decode(),
+        VideoDpbDirection::Encode => device.supports_video_encode(),
+    }
+}
+
+/// Whether `device` can run H.264 in the direction a bitstream buffer is built
+/// for. Same predicate as [`device_supports_h264_for_dpb_direction`].
+pub(super) fn device_supports_h264_for_bitstream_direction(
+    device: &HostVulkanDevice,
+    direction: VideoBitstreamDirection,
+) -> bool {
+    match direction {
+        VideoBitstreamDirection::Decode => device.supports_video_decode(),
+        VideoBitstreamDirection::Encode => device.supports_video_encode(),
     }
 }
 

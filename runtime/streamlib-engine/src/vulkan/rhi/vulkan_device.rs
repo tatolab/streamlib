@@ -3849,12 +3849,11 @@ mod tests {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .push_next(&mut external_buffer_info);
 
+        // No `required_flags`: the pool's memory type was fixed at
+        // `create_pool` time, and VMA ignores memory-type selection once
+        // `pool` is set.
         let alloc_opts = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
-                | vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
             ..Default::default()
         };
 
