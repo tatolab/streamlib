@@ -4995,7 +4995,6 @@ void main() {
             );
         }
 
-        #[test]
         /// The wire accepts GLSL for graphics too, and this is the only test
         /// that the acceptance is wired to anything: it asserts the bridge was
         /// handed real SPIR-V, by its magic number, rather than the text.
@@ -5039,6 +5038,7 @@ void main() {
             }
         }
 
+        #[test]
         fn register_returns_distinct_kernel_ids_for_different_spirv() {
             let bridge = RecordingGraphicsBridge::new();
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
@@ -6201,7 +6201,6 @@ void main() {
             assert_eq!(bridge.kernel_count(), 0);
         }
 
-        #[test]
         /// Every ray-tracing stage the wire can name maps to the pipeline stage
         /// the compiler builds for. `ray_tracing_pipeline_stage_from_wire` is a
         /// fresh six-arm mapping, and a swapped pair would compile a miss
@@ -6276,6 +6275,7 @@ void main() {
             }
         }
 
+        #[test]
         fn register_kernel_succeeds_and_caches() {
             let bridge = RecordingRayTracingBridge::new();
             let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
