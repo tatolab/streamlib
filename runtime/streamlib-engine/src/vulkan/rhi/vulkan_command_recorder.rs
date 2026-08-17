@@ -706,10 +706,7 @@ impl RhiCommandRecorderInner {
         if self.submission_in_flight {
             self.vulkan_device.wait_for_fences_blocking(
                 &[self.completion_fence],
-                &format!(
-                    "RhiCommandRecorder '{}' in wait_for_completion",
-                    self.label
-                ),
+                &format!("RhiCommandRecorder '{}' in wait_for_completion", self.label),
             )?;
         }
         Ok(())

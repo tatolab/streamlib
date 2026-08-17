@@ -55,12 +55,11 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestReleaseHandle,
     EscalateRequestRunComputeKernel, EscalateRequestRunComputeKernelBatch,
     EscalateRequestRunComputeKernelBinding, EscalateRequestRunCpuReadbackCopy,
-    EscalateRequestRunCpuReadbackCopyDirection,
-    EscalateRequestRunGraphicsDraw, EscalateRequestRunGraphicsDrawBindingKind,
-    EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunGraphicsDrawIndexBufferIndexType,
-    EscalateRequestRunRayTracingKernel, EscalateRequestRunRayTracingKernelBindingKind,
-    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
-    EscalateRequestWaitDeviceIdle,
+    EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
+    EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
+    EscalateRequestRunGraphicsDrawIndexBufferIndexType, EscalateRequestRunRayTracingKernel,
+    EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
+    EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
 };
 #[cfg(target_os = "linux")]
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseComputeBinding;
@@ -4821,10 +4820,8 @@ void main() {
                 .escalate(|full| {
                     let readback =
                         full.create_texture_readback(label, 64, 64, TextureFormat::Rgba8Unorm)?;
-                    let ticket = readback.submit(
-                        texture,
-                        crate::core::rhi::TextureSourceLayout::General,
-                    )?;
+                    let ticket =
+                        readback.submit(texture, crate::core::rhi::TextureSourceLayout::General)?;
                     Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
                 })
                 .expect("the texture reads back")
@@ -5004,7 +5001,8 @@ void main() {
             let separate_stalls = sandbox.host_inner().blocking_fence_wait_count() - stalls_before;
 
             assert_eq!(
-                separate_submissions, dispatches.len(),
+                separate_submissions,
+                dispatches.len(),
                 "the path the batch replaces submits once per dispatch — if this is 1 the \
                  counter is not counting and the assertion above proves nothing"
             );
@@ -5026,10 +5024,7 @@ void main() {
                 return;
             };
             let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
-            let held = seeded_chain_textures(
-                &sandbox,
-                ["twice-seed", "twice-middle", "twice-out"],
-            );
+            let held = seeded_chain_textures(&sandbox, ["twice-seed", "twice-middle", "twice-out"]);
 
             let response = handle_run_compute_kernel_batch(
                 &sandbox,
@@ -5104,7 +5099,10 @@ void main() {
                     request_id: "establish".to_string(),
                 },
             );
-            assert!(matches!(established, EscalateResponse::Ok(_)), "{established:?}");
+            assert!(
+                matches!(established, EscalateResponse::Ok(_)),
+                "{established:?}"
+            );
 
             let submissions_before = sandbox.host_inner().queue_submission_count();
             let refused = handle_run_compute_kernel_batch(

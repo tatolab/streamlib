@@ -2822,10 +2822,9 @@ impl GpuContext {
                                 .to_string(),
                         )
                     })?;
-                let entry = layout_during_recording.entry(image).or_insert((
-                    binding.registration,
-                    binding.registration.current_layout(),
-                ));
+                let entry = layout_during_recording
+                    .entry(image)
+                    .or_insert((binding.registration, binding.registration.current_layout()));
                 // Recorded even when the layout already matches: the barrier is
                 // carrying the previous pass's stores to this pass's reads, and
                 // a same-layout transition is exactly that memory dependency.
@@ -2845,7 +2844,9 @@ impl GpuContext {
                 let texture = binding.registration.texture();
                 match binding.kind {
                     SurfaceBoundComputeBindingKind::StorageImage => {
-                        dispatch.kernel.set_storage_image(binding.binding, texture)?;
+                        dispatch
+                            .kernel
+                            .set_storage_image(binding.binding, texture)?;
                     }
                     SurfaceBoundComputeBindingKind::SampledTexture => {
                         dispatch
@@ -2855,7 +2856,9 @@ impl GpuContext {
                 }
             }
             if !dispatch.push_constants.is_empty() {
-                dispatch.kernel.set_push_constants(dispatch.push_constants)?;
+                dispatch
+                    .kernel
+                    .set_push_constants(dispatch.push_constants)?;
             }
 
             recorder.record_dispatch(

@@ -540,7 +540,10 @@ impl VulkanComputeKernelInner {
         // descriptor set are safe to mutate.
         self.vulkan_device.wait_for_fences_blocking(
             &[self.fence],
-            &format!("Compute kernel '{}' draining its prior dispatch", self.label),
+            &format!(
+                "Compute kernel '{}' draining its prior dispatch",
+                self.label
+            ),
         )?;
         unsafe {
             self.device
