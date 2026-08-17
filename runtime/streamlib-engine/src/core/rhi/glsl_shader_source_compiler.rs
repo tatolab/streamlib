@@ -300,10 +300,7 @@ impl GlslShaderSourceToSpirvCompiler {
         let mut options = shaderc::CompileOptions::new().map_err(|e| {
             Error::GpuError(format!("shader compile options would not initialize: {e}"))
         })?;
-        options.set_target_env(
-            shaderc::TargetEnv::Vulkan,
-            target.vulkan_env_version as u32,
-        );
+        options.set_target_env(shaderc::TargetEnv::Vulkan, target.vulkan_env_version as u32);
         options.set_target_spirv(target.spirv_version);
         // No optimization level is set, and none may be: every level above
         // zero strips `OpName`, and a binding with no reflected name cannot be
@@ -315,7 +312,13 @@ impl GlslShaderSourceToSpirvCompiler {
         let compiler = self.compiler()?;
         self.invocation_count.fetch_add(1, Ordering::Relaxed);
         let compiled = compiler
-            .compile_into_spirv(source, stage.shaderc_kind(), label, entry_point, Some(&options))
+            .compile_into_spirv(
+                source,
+                stage.shaderc_kind(),
+                label,
+                entry_point,
+                Some(&options),
+            )
             .map_err(|e| {
                 Error::GpuError(format!(
                     "compiling the {} kernel source failed: {e}",
@@ -409,8 +412,7 @@ void main() {
             ),
         ];
         for (stage, body) in sources {
-            let source =
-                format!("#version 460\n#extension GL_EXT_ray_tracing : require\n{body}\n");
+            let source = format!("#version 460\n#extension GL_EXT_ray_tracing : require\n{body}\n");
             let spirv = compile(&compiler, &source, stage);
             assert!(
                 is_spirv_module(&spirv),
@@ -426,8 +428,8 @@ void main() {
     #[test]
     fn an_engine_compiled_module_keeps_its_binding_names() {
         let spirv = compile(&compiler(), COMPUTE_SOURCE, ShaderPipelineStage::Compute);
-        let (bindings, _push_constant_size) =
-            crate::core::rhi::derive_bindings_from_spirv(&spirv).expect(
+        let (bindings, _push_constant_size) = crate::core::rhi::derive_bindings_from_spirv(&spirv)
+            .expect(
                 "reflection refuses a name-stripped module, so this failing means the engine \
                  stripped names it must keep",
             );

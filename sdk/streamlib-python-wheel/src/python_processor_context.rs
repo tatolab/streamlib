@@ -819,7 +819,14 @@ impl PythonGpuContextFullAccess {
                 helper_process_exchange_client: Arc::clone(exchange_client),
             });
         }
-        let _ = (python, source, spirv, push_constant_size, bindings, entry_point);
+        let _ = (
+            python,
+            source,
+            spirv,
+            push_constant_size,
+            bindings,
+            entry_point,
+        );
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 

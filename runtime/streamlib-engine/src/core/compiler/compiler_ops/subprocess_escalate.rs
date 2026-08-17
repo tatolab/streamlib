@@ -2181,8 +2181,8 @@ fn handle_register_acceleration_structure_tlas(
 fn ray_tracing_pipeline_stage_from_wire(
     stage: EscalateRequestRegisterRayTracingKernelStageStage,
 ) -> crate::core::rhi::ShaderPipelineStage {
-    use EscalateRequestRegisterRayTracingKernelStageStage as Wire;
     use crate::core::rhi::ShaderPipelineStage as Compiled;
+    use EscalateRequestRegisterRayTracingKernelStageStage as Wire;
     match stage {
         Wire::AnyHit => Compiled::RayAnyHit,
         Wire::Callable => Compiled::RayCallable,
@@ -3736,15 +3736,10 @@ void main() {
         /// no device, so it runs everywhere CI does.
         #[test]
         fn a_register_op_supplying_neither_source_nor_spirv_is_refused_naming_both() {
-            let message = registered_shader_stage_source(
-                "",
-                "",
-                "",
-                ShaderPipelineStage::Compute,
-                "",
-            )
-            .err()
-            .expect("a register op with no shader at all must be refused");
+            let message =
+                registered_shader_stage_source("", "", "", ShaderPipelineStage::Compute, "")
+                    .err()
+                    .expect("a register op with no shader at all must be refused");
             assert!(message.contains("source"), "{message}");
             assert!(message.contains("spv_hex"), "{message}");
         }
@@ -3819,9 +3814,7 @@ void main() {
                 println!("GLSL compile cache: no GPU — skipping");
                 return;
             };
-            let before = sandbox
-                .host_inner()
-                .glsl_shader_compiler_invocation_count();
+            let before = sandbox.host_inner().glsl_shader_compiler_invocation_count();
             for _ in 0..2 {
                 let response = handle_register_compute_kernel(
                     &sandbox,
@@ -3831,10 +3824,7 @@ void main() {
                 assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
             }
             assert_eq!(
-                sandbox
-                    .host_inner()
-                    .glsl_shader_compiler_invocation_count()
-                    - before,
+                sandbox.host_inner().glsl_shader_compiler_invocation_count() - before,
                 1
             );
         }
