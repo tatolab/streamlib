@@ -263,9 +263,9 @@ impl RhiCommandRecorderInner {
 
         unsafe {
             if self.submission_in_flight {
-                self.vulkan_device.wait_for_fences_blocking(
+                self.vulkan_device.wait_for_fences_blocking_counted(
                     &[self.completion_fence],
-                    &format!("RhiCommandRecorder '{}' at begin()", self.label),
+                    format_args!("RhiCommandRecorder '{}' at begin()", self.label),
                 )?;
                 self.device
                     .reset_fences(&[self.completion_fence])
@@ -689,10 +689,7 @@ impl RhiCommandRecorderInner {
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
     pub fn submit_and_wait(&mut self) -> Result<()> {
         self.submit_inner(None)?;
-        self.vulkan_device.wait_for_fences_blocking(
-            &[self.completion_fence],
-            &format!("RhiCommandRecorder '{}' in submit_and_wait", self.label),
-        )
+        self.drain_completion_fence("submit_and_wait")
     }
 
     /// Host-block until this recorder's most recent submission drains,
@@ -703,12 +700,35 @@ impl RhiCommandRecorderInner {
     /// No-op when nothing is in flight (the fence is already signaled).
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
     pub fn wait_for_completion(&mut self) -> Result<()> {
-        if self.submission_in_flight {
-            self.vulkan_device.wait_for_fences_blocking(
-                &[self.completion_fence],
-                &format!("RhiCommandRecorder '{}' in wait_for_completion", self.label),
-            )?;
+        self.drain_completion_fence("wait_for_completion")
+    }
+
+    /// Wait out the in-flight submission, then reset the fence and clear the
+    /// in-flight flag so the next `begin()` has nothing left to wait for.
+    ///
+    /// Reclaiming here rather than leaving it to `begin()` is what makes a
+    /// caller that waits explicitly pay one stall per submission instead of
+    /// two: without it the fence stays marked in flight, and the next
+    /// `begin()` blocks a second time on a fence that is already signaled.
+    fn drain_completion_fence(&mut self, waited_in: &'static str) -> Result<()> {
+        if !self.submission_in_flight {
+            return Ok(());
         }
+        self.vulkan_device.wait_for_fences_blocking_counted(
+            &[self.completion_fence],
+            format_args!("RhiCommandRecorder '{}' in {waited_in}", self.label),
+        )?;
+        unsafe {
+            self.device
+                .reset_fences(&[self.completion_fence])
+                .map_err(|e| {
+                    Error::GpuError(format!(
+                        "RhiCommandRecorder '{}': reset_fences in {waited_in}: {e}",
+                        self.label
+                    ))
+                })?;
+        }
+        self.submission_in_flight = false;
         Ok(())
     }
 
@@ -1171,6 +1191,13 @@ impl RhiCommandRecorder {
     /// Submit and block until the GPU completes.
     pub fn submit_and_wait(&mut self) -> Result<()> {
         self.host_inner_mut().submit_and_wait()
+    }
+
+    /// Block until the most recent submission drains. No-op when nothing is in
+    /// flight. Pairs with [`Self::submit`] for a caller that must do something
+    /// between handing the queue its work and waiting on it.
+    pub fn wait_for_completion(&mut self) -> Result<()> {
+        self.host_inner_mut().wait_for_completion()
     }
 
     /// Engine-internal submit path supporting binary + timeline waits.

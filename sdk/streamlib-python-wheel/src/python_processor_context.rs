@@ -1495,15 +1495,25 @@ impl PythonComputeKernel {
     }
 }
 
-/// What a batch has accumulated, and whether its scope has closed.
+/// One recorded dispatch: the wire entry to send, and the kernel it names.
+struct RecordedKernelDispatch {
+    /// Kept beside the entry rather than read back out of it, so refusing a
+    /// repeated kernel cannot drift from the entry it refuses against.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    kernel_id: String,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    wire_entry: Py<PyDict>,
+}
+
+/// What a batch has accumulated, and where its scope stands.
 #[derive(Default)]
 struct KernelDispatchBatchRecording {
-    /// One wire entry per `dispatch()`, in the order they will run.
-    dispatches: Vec<Py<PyDict>>,
-    /// The kernel id each entry names, for refusing a repeat in the caller's
-    /// own stack. Parallel to `dispatches`.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
-    kernel_ids: Vec<String>,
+    /// One entry per `dispatch()`, in the order they will run.
+    dispatches: Vec<RecordedKernelDispatch>,
+    /// Set by `__enter__`. Dispatching into a batch that was never entered
+    /// would accumulate work no `__exit__` will ever send — the silently
+    /// discarded GPU work the ADR rejected an explicit `publish()` over.
+    entered: bool,
     /// Set on leaving the scope, however it was left. A batch is not
     /// reusable: the dispatches it holds have already run.
     closed: bool,
@@ -1532,6 +1542,7 @@ pub(crate) struct PythonKernelDispatchBatch {
 #[pymethods]
 impl PythonKernelDispatchBatch {
     fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        python_self.recording.lock().entered = true;
         python_self
     }
 
@@ -1582,22 +1593,35 @@ impl PythonKernelDispatchBatch {
     ) -> PyResult<()> {
         #[cfg(target_os = "linux")]
         {
-            // Before the bindings are looked at: a spent batch collects
-            // nothing, so a binding mistake here is the lesser of the two
-            // things wrong and must not mask it.
-            let mut recording = self.recording.lock();
-            if recording.closed {
-                return Err(PyRuntimeError::new_err(
-                    "this batch has already run; open a new `kernel_dispatch_batch()` scope \
-                     for the next one",
-                ));
+            // Scope state first, and the lock dropped before validation: a
+            // batch nobody entered or already ran collects nothing, so a
+            // binding mistake must not mask either — and validation calls back
+            // into the interpreter over caller-supplied objects, which is not
+            // something to do holding a non-reentrant lock.
+            {
+                let recording = self.recording.lock();
+                if recording.closed {
+                    return Err(PyRuntimeError::new_err(
+                        "this batch has already run; open a new `kernel_dispatch_batch()` \
+                         scope for the next one",
+                    ));
+                }
+                if !recording.entered {
+                    return Err(PyRuntimeError::new_err(
+                        "this batch was never entered, so nothing would ever run it; use it \
+                         as `with ctx.gpu_full_access.kernel_dispatch_batch() as batch:`",
+                    ));
+                }
             }
+
             let (wire_bindings, push_constants_hex) =
                 kernel.validated_wire_dispatch(python, bindings, push_constants)?;
+
+            let mut recording = self.recording.lock();
             if let Some(earlier) = recording
-                .kernel_ids
+                .dispatches
                 .iter()
-                .position(|already| already == &kernel.kernel_id)
+                .position(|already| already.kernel_id == kernel.kernel_id)
             {
                 return Err(PyValueError::new_err(format!(
                     "this kernel is already dispatch {earlier} of this batch; a kernel owns \
@@ -1606,15 +1630,18 @@ impl PythonKernelDispatchBatch {
                 )));
             }
 
-            let entry = PyDict::new(python);
-            entry.set_item("bindings", wire_bindings)?;
-            entry.set_item("group_count_x", group_count.0)?;
-            entry.set_item("group_count_y", group_count.1)?;
-            entry.set_item("group_count_z", group_count.2)?;
-            entry.set_item("kernel_id", &kernel.kernel_id)?;
-            entry.set_item("push_constants_hex", push_constants_hex)?;
-            recording.kernel_ids.push(kernel.kernel_id.clone());
-            recording.dispatches.push(entry.unbind());
+            let wire_entry =
+                crate::python_helper_process_pixel_exchange::compute_dispatch_wire_entry(
+                    python,
+                    &kernel.kernel_id,
+                    wire_bindings.as_any(),
+                    &push_constants_hex,
+                    group_count,
+                )?;
+            recording.dispatches.push(RecordedKernelDispatch {
+                kernel_id: kernel.kernel_id.clone(),
+                wire_entry: wire_entry.unbind(),
+            });
             Ok(())
         }
         #[cfg(not(target_os = "linux"))]
@@ -1627,13 +1654,13 @@ impl PythonKernelDispatchBatch {
 
 impl PythonKernelDispatchBatch {
     /// Send everything recorded as one op.
-    fn run(&self, python: Python<'_>, recorded: Vec<Py<PyDict>>) -> PyResult<()> {
+    fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
         #[cfg(target_os = "linux")]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let dispatches = PyList::empty(python);
-            for entry in recorded {
-                dispatches.append(entry.bind(python))?;
-            }
+            let dispatches = PyList::new(
+                python,
+                recorded.iter().map(|entry| entry.wire_entry.bind(python)),
+            )?;
             return exchange_client.run_compute_kernel_batch(python, dispatches.as_any());
         }
         let _ = (python, recorded);

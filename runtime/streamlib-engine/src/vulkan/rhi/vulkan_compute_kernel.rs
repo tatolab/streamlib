@@ -538,9 +538,9 @@ impl VulkanComputeKernelInner {
 
         // Wait for prior dispatch (if any) to drain so the command buffer +
         // descriptor set are safe to mutate.
-        self.vulkan_device.wait_for_fences_blocking(
+        self.vulkan_device.wait_for_fences_blocking_counted(
             &[self.fence],
-            &format!(
+            format_args!(
                 "Compute kernel '{}' draining its prior dispatch",
                 self.label
             ),
@@ -587,9 +587,9 @@ impl VulkanComputeKernelInner {
                 .submit_to_queue(self.queue, &[submit], self.fence)?;
         }
 
-        self.vulkan_device.wait_for_fences_blocking(
+        self.vulkan_device.wait_for_fences_blocking_counted(
             &[self.fence],
-            &format!("Compute kernel '{}' awaiting its dispatch", self.label),
+            format_args!("Compute kernel '{}' awaiting its dispatch", self.label),
         )
     }
 

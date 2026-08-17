@@ -57,7 +57,7 @@ def test_a_two_pass_filter_runs_as_one_batch(start_app_under_test):
     kernels, an intermediate surface, one scope."""
     observed = run_probe(start_app_under_test, "TwoPassBatchProbe")
 
-    assert observed["batched"] is True
+    assert observed["first_scope_returned"] is True
     assert (
         observed["source_surface_id"]
         != observed["intermediate_surface_id"]
@@ -65,14 +65,18 @@ def test_a_two_pass_filter_runs_as_one_batch(start_app_under_test):
     ), "a two-pass chain runs over three distinct surfaces"
 
 
-def test_a_batch_scope_leaves_the_capability_ready_for_the_next_one(
+def test_a_batch_scope_leaves_the_engines_recorder_ready_for_the_next_one(
     start_app_under_test,
 ):
-    """The probe opens a second scope after the first returned. A recorder
-    left open in the parent refuses the next `begin()`, so a second batch
-    running at all is the assertion."""
+    """The engine's batch recorder is shared and long-lived, and `begin()`
+    refuses while a recording is in progress. So a second scope over the same
+    surfaces is what catches a first scope that failed to close one — the
+    probe reports the refusal rather than raising, so a regression names it."""
     observed = run_probe(start_app_under_test, "TwoPassBatchProbe")
-    assert observed["batched"] is True
+    assert observed["second_scope_error"] is None, (
+        "the second batch must run; a 'recording is already in progress' here "
+        f"means the first scope stranded the recorder: {observed['second_scope_error']}"
+    )
 
 
 def test_a_raise_inside_a_batch_propagates_unsuppressed(start_app_under_test):
@@ -131,4 +135,22 @@ def test_a_batch_that_has_already_run_refuses_a_further_dispatch(
     assert "already run" in after, f"must say the batch is spent: {after}"
     assert "kernel_dispatch_batch()" in after, (
         f"must name what to open for the next one: {after}"
+    )
+
+
+def test_a_batch_that_was_never_entered_refuses_rather_than_swallowing_the_work(
+    start_app_under_test,
+):
+    """`__exit__` is the only thing that sends, so dispatching into a batch
+    nobody entered would collect GPU work that silently never runs — the shape
+    the ADR rejected an explicit `publish()` over. It refuses instead, naming
+    the `with` form."""
+    observed = run_probe(start_app_under_test, "BatchRefusalProbe")
+
+    never_entered = observed["never_entered"]
+    assert "never entered" in never_entered, (
+        f"must say the scope was never entered: {never_entered}"
+    )
+    assert "with ctx.gpu_full_access.kernel_dispatch_batch()" in never_entered, (
+        f"must show the form that works: {never_entered}"
     )

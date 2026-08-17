@@ -269,11 +269,11 @@ pub struct HostVulkanDevice {
     live_allocation_count: AtomicUsize,
     /// Every `vkQueueSubmit2` this device has made, across every queue.
     queue_submission_count: AtomicUsize,
-    /// Fence waits made through [`Self::wait_for_fences_blocking`]. Counts the
-    /// compute-dispatch paths that route through it — the command recorder and
-    /// [`VulkanComputeKernel`](super::VulkanComputeKernel) — not every
-    /// `vkWaitForFences` in the engine.
-    blocking_fence_wait_count: AtomicUsize,
+    /// Fence waits made through [`Self::wait_for_fences_blocking_counted`]:
+    /// every `RhiCommandRecorder` drain plus `VulkanComputeKernel::dispatch`.
+    /// Not every `vkWaitForFences` in the engine, and not compute-only — the
+    /// recorder is what present, staging and the tone mapper wait on too.
+    recorder_and_compute_kernel_fence_wait_count: AtomicUsize,
     /// Per-queue mutex for thread-safe queue submission (Vulkan spec requirement).
     graphics_queue_mutex: Mutex<()>,
     /// Per-queue mutex for the dedicated transfer queue.
@@ -1420,7 +1420,7 @@ impl HostVulkanDevice {
             drm_modifier_table,
             live_allocation_count: AtomicUsize::new(0),
             queue_submission_count: AtomicUsize::new(0),
-            blocking_fence_wait_count: AtomicUsize::new(0),
+            recorder_and_compute_kernel_fence_wait_count: AtomicUsize::new(0),
             graphics_queue_mutex: Mutex::new(()),
             transfer_queue_mutex: Mutex::new(()),
             video_encode_queue_mutex: Mutex::new(()),
@@ -2668,11 +2668,21 @@ impl HostVulkanDevice {
     /// The counted seam for work that trades submissions for stalls: batching N
     /// dispatches into one recording is a claim about how many times the caller
     /// blocks, and this is where that is observable rather than inferred from
-    /// elapsed time. Routed through by the command recorder and
-    /// [`VulkanComputeKernel`](super::VulkanComputeKernel); other engine fence
-    /// waits still call `vkWaitForFences` directly and are not counted.
-    pub fn wait_for_fences_blocking(&self, fences: &[vk::Fence], waited_by: &str) -> Result<()> {
-        self.blocking_fence_wait_count
+    /// elapsed time. Routed through by every
+    /// [`RhiCommandRecorder`](super::RhiCommandRecorder) drain and by
+    /// [`VulkanComputeKernel::dispatch`](super::VulkanComputeKernel::dispatch);
+    /// other engine fence waits call `vkWaitForFences` directly and are not
+    /// counted, so a reading is only about a batch when nothing else on this
+    /// device is recording.
+    ///
+    /// `waited_by` takes `format_args!` so the caller's label is rendered only
+    /// when the wait actually fails — this sits on the per-frame path.
+    pub fn wait_for_fences_blocking_counted(
+        &self,
+        fences: &[vk::Fence],
+        waited_by: std::fmt::Arguments<'_>,
+    ) -> Result<()> {
+        self.recorder_and_compute_kernel_fence_wait_count
             .fetch_add(1, Ordering::Relaxed);
         unsafe { self.device.wait_for_fences(fences, true, u64::MAX) }
             .map(|_| ())
@@ -2684,9 +2694,10 @@ impl HostVulkanDevice {
         self.queue_submission_count.load(Ordering::Relaxed)
     }
 
-    /// Fence waits made through [`Self::wait_for_fences_blocking`].
-    pub fn blocking_fence_wait_count(&self) -> usize {
-        self.blocking_fence_wait_count.load(Ordering::Relaxed)
+    /// Fence waits made through [`Self::wait_for_fences_blocking_counted`].
+    pub fn recorder_and_compute_kernel_fence_wait_count(&self) -> usize {
+        self.recorder_and_compute_kernel_fence_wait_count
+            .load(Ordering::Relaxed)
     }
 
     /// Present to a queue with per-queue mutex synchronization.

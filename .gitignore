@@ -117,3 +117,6 @@ docs/rig-profile.local.md
 
 # Per-developer amos focus state (machine-local, set by /amos:focus).
 .amosrc.toml
+
+# Scratch PR bodies — content belongs in the PR, not the tree.
+pr-*-body.md

@@ -269,6 +269,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   (`open_device_export_staging`); both now share one handler. Owner-approved at #1774's
   announce gate, recorded here because the delta did not anticipate it. The **Python spelling**
   for CPU-reading a texture-backed surface remains #1758's.
+- ADDED: `run_compute_kernel_batch` — the escalate op the `kernel_dispatch_batch()`
+  scope sends. The delta described the scope's behaviour but named no wire for it, and
+  the alternative shape (begin / dispatch×N / submit as three ops) is not available:
+  the scope would hold the escalate gate — which serializes runtime-wide and waits for
+  device idle — open across arbitrary user Python between the dispatch calls, so one
+  processor's saved submissions would cost every other processor a stall of unbounded
+  length. The op therefore carries the whole array, accumulated helper-side and sent on
+  leaving the scope; a raise inside the scope sends nothing. Recorded here because the
+  delta did not anticipate it.
 - ADDED: a read-before-write precondition on the readback wire. `run_cpu_readback_copy` /
   `try_run_cpu_readback_copy` with `direction: buffer_to_image` refuse unless a read of *that
   frame* landed in the staging first — the engine cannot tell a consumer's write from

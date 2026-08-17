@@ -49,6 +49,17 @@ pub enum SurfaceBoundComputeBindingKind {
     SampledTexture,
 }
 
+#[cfg(target_os = "linux")]
+impl SurfaceBoundComputeBindingKind {
+    /// The image layout this kind's descriptor requires at dispatch.
+    pub fn required_image_layout(self) -> streamlib_consumer_rhi::VulkanLayout {
+        match self {
+            Self::StorageImage => streamlib_consumer_rhi::VulkanLayout::GENERAL,
+            Self::SampledTexture => streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        }
+    }
+}
+
 /// One binding declaration: (binding index, resource kind, the shader's own
 /// name for the binding).
 ///

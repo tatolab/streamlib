@@ -19,11 +19,13 @@ import traceback
 
 from streamlib import (
     GpuContextFullAccess,
+    GpuSurfaceHandle,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     log,
     processor,
 )
+from streamlib._engine import ComputeKernel, KernelDispatchBatch
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 64
@@ -79,6 +81,8 @@ class _ComputeKernelProbeBase:
     names, not something handed to it.
     """
 
+    # Declared, not merely assigned: `setup` assigns it inside a nested
+    # closure, which a type checker does not walk for attribute inference.
     gpu_full_access: GpuContextFullAccess
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -260,6 +264,15 @@ class _TwoPassProbeBase:
     `setup()`, an intermediate surface neither the source nor the output.
     """
 
+    # Declared, not merely assigned: `setup` assigns them inside a nested
+    # closure, which a type checker does not walk for attribute inference.
+    gpu_full_access: GpuContextFullAccess
+    brighten: ComputeKernel
+    double: ComputeKernel
+    source: GpuSurfaceHandle
+    intermediate: GpuSurfaceHandle
+    output: GpuSurfaceHandle
+
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
@@ -283,7 +296,7 @@ class _TwoPassProbeBase:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         pass
 
-    def brighten_then_double(self, batch) -> None:
+    def brighten_then_double(self, batch: KernelDispatchBatch) -> None:
         """The two passes, in order, into whatever batch is handed in."""
         batch.dispatch(
             self.brighten,
@@ -317,12 +330,21 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
     def observe(self) -> dict:
         with self.gpu_full_access.kernel_dispatch_batch() as batch:
             self.brighten_then_double(batch)
-        # The scope returned, so the work has retired — dispatching again
-        # against the same surfaces is the proof that nothing was left open.
-        with self.gpu_full_access.kernel_dispatch_batch() as second:
-            self.brighten_then_double(second)
+        first_scope_returned = True
+
+        # A second scope over the same surfaces: the engine's batch recorder
+        # is shared and long-lived, so if the first scope had left it open
+        # this is where `begin()` refuses.
+        second_scope_error = None
+        try:
+            with self.gpu_full_access.kernel_dispatch_batch() as second:
+                self.brighten_then_double(second)
+        except Exception as refused:  # noqa: BLE001 — reported, then asserted on
+            second_scope_error = str(refused)
+
         return {
-            "batched": True,
+            "first_scope_returned": first_scope_returned,
+            "second_scope_error": second_scope_error,
             "source_surface_id": self.source.surface_id,
             "intermediate_surface_id": self.intermediate.surface_id,
             "output_surface_id": self.output.surface_id,
@@ -413,10 +435,24 @@ class BatchRefusalProbe(_TwoPassProbeBase):
                 group_count=GROUP_COUNT,
             )
         )
+
+        # Never entered: nothing would ever send what it collected, so it
+        # refuses rather than swallowing the work.
+        never_entered = _refusal_of(
+            lambda: self.gpu_full_access.kernel_dispatch_batch().dispatch(
+                self.double,
+                bindings={
+                    "brightened_image": self.intermediate,
+                    "doubled_image": self.output,
+                },
+                group_count=GROUP_COUNT,
+            )
+        )
         return {
             "unknown": unknown,
             "same_kernel_twice": same_kernel_twice,
             "after_the_scope": after_the_scope,
+            "never_entered": never_entered,
         }
 
 

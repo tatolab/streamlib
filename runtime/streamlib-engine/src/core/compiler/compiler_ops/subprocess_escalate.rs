@@ -1548,6 +1548,8 @@ fn handle_run_compute_kernel(
 }
 
 #[cfg(target_os = "linux")]
+use crate::core::context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
+#[cfg(target_os = "linux")]
 use crate::core::rhi::SurfaceBoundComputeBindingKind;
 
 /// What one validated binding resolved to: the slot to write, the kind to
@@ -1654,25 +1656,23 @@ fn plan_supplied_compute_bindings<'a>(
     Ok(planned)
 }
 
-/// Resolve every named binding onto the kernel's slots, then dispatch.
+/// Plan a dispatch's supplied bindings against the kernel, then resolve each
+/// one to the device texture it names.
 ///
-/// The plan is total and every surface is resolved before the first `set_*`
-/// call, so a refused dispatch never leaves the kernel holding a mix of this
-/// dispatch's bindings and the last one's. The kernel's staged bindings are
-/// shared across every caller of the cache; interleaving is prevented by the
-/// escalate gate, which serializes the whole surrounding scope runtime-wide.
+/// Shared by the two dispatch paths — one kernel on its own, and a kernel
+/// inside a batch — so the extent convention below and the refusal wording
+/// have one home rather than two that can drift.
 #[cfg(target_os = "linux")]
-fn bind_and_dispatch_compute_kernel(
+fn resolve_supplied_compute_bindings(
     full: &crate::core::context::GpuContextFullAccess,
+    supplied: &[EscalateRequestRunComputeKernelBinding],
     kernel: &crate::vulkan::rhi::VulkanComputeKernel,
-    req: &EscalateRequestRunComputeKernel,
-    push_constants: &[u8],
-) -> crate::core::error::Result<()> {
+) -> crate::core::error::Result<Vec<BatchedComputeKernelDispatchBinding>> {
     use crate::core::error::Error;
 
     // Borrowed, not cloned: this runs per frame, and the specs live on the
     // kernel for its whole life.
-    let planned = plan_supplied_compute_bindings(&req.bindings, kernel.host_inner().bindings())?;
+    let planned = plan_supplied_compute_bindings(supplied, kernel.host_inner().bindings())?;
 
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
@@ -1690,26 +1690,49 @@ fn bind_and_dispatch_compute_kernel(
                     binding.name, binding.target_id
                 ))
             })?;
-        resolved.push((binding, registration));
+        resolved.push(BatchedComputeKernelDispatchBinding {
+            binding: binding.binding,
+            kind: binding.kind,
+            registration,
+        });
+    }
+    Ok(resolved)
+}
+
+/// Resolve every named binding onto the kernel's slots, then dispatch.
+///
+/// The plan is total and every surface is resolved before the first `set_*`
+/// call, so a refused dispatch never leaves the kernel holding a mix of this
+/// dispatch's bindings and the last one's. The kernel's staged bindings are
+/// shared across every caller of the cache; interleaving is prevented by the
+/// escalate gate, which serializes the whole surrounding scope runtime-wide.
+#[cfg(target_os = "linux")]
+fn bind_and_dispatch_compute_kernel(
+    full: &crate::core::context::GpuContextFullAccess,
+    kernel: &crate::vulkan::rhi::VulkanComputeKernel,
+    req: &EscalateRequestRunComputeKernel,
+    push_constants: &[u8],
+) -> crate::core::error::Result<()> {
+    // Held across the dispatch, not consumed by the bind loop: a registration
+    // is a refcount on the texture the descriptor set now points at, and
+    // dropping the last one before the GPU has run frees the image out from
+    // under it.
+    let resolved = resolve_supplied_compute_bindings(full, &req.bindings, kernel)?;
+    for binding in &resolved {
+        binding.write_into_kernel(kernel)?;
     }
 
-    for (binding, registration) in &resolved {
-        let texture = registration.texture();
-        match binding.kind {
-            SurfaceBoundComputeBindingKind::StorageImage => {
-                kernel.set_storage_image(binding.binding, texture)?;
-            }
-            SurfaceBoundComputeBindingKind::SampledTexture => {
-                kernel.set_sampled_texture(binding.binding, texture)?;
-            }
-        }
-    }
-
-    if !push_constants.is_empty() {
+    // A kernel that declares push constants must be given them even when the
+    // payload is empty, so `set_push_constants` produces the size mismatch
+    // rather than the dispatch running against whatever the kernel's staged
+    // buffer last held.
+    if kernel.push_constant_size() > 0 || !push_constants.is_empty() {
         kernel.set_push_constants(push_constants)?;
     }
 
-    kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z)
+    let dispatched = kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z);
+    drop(resolved);
+    dispatched
 }
 
 /// Run several dispatches as one recording: one submission, one fence wait.
@@ -1744,8 +1767,8 @@ fn handle_run_compute_kernel_batch(
         }
     }
 
-    let dispatched = sandbox.escalate(|full| {
-        bind_and_dispatch_compute_kernel_batch(full, &req, &push_constants_per_dispatch)
+    let dispatched = sandbox.escalate(move |full| {
+        bind_and_dispatch_compute_kernel_batch(full, &req, push_constants_per_dispatch)
     });
 
     match dispatched {
@@ -1770,79 +1793,36 @@ fn handle_run_compute_kernel_batch(
 fn bind_and_dispatch_compute_kernel_batch(
     full: &crate::core::context::GpuContextFullAccess,
     req: &EscalateRequestRunComputeKernelBatch,
-    push_constants_per_dispatch: &[Vec<u8>],
+    push_constants_per_dispatch: Vec<Vec<u8>>,
 ) -> crate::core::error::Result<()> {
-    use crate::core::context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
     use crate::core::error::Error;
 
-    let mut kernels = Vec::with_capacity(req.dispatches.len());
-    for (index, dispatch) in req.dispatches.iter().enumerate() {
-        kernels.push(
-            full.compute_kernel_by_id(&dispatch.kernel_id)
-                .ok_or_else(|| {
-                    Error::GpuError(format!(
-                        "dispatch {index} of this batch names no kernel registered under id {:?}",
-                        dispatch.kernel_id
-                    ))
-                })?,
-        );
-    }
-
-    let mut resolved_per_dispatch = Vec::with_capacity(req.dispatches.len());
-    for (index, (dispatch, kernel)) in req.dispatches.iter().zip(&kernels).enumerate() {
-        let planned =
-            plan_supplied_compute_bindings(&dispatch.bindings, kernel.host_inner().bindings())
-                .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
-        let mut resolved = Vec::with_capacity(planned.len());
-        for binding in &planned {
-            let registration = full
-                .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "dispatch {index} of this batch binds `{}` to surface {:?}, which this \
-                         graph cannot resolve to a device texture: {e}",
-                        binding.name, binding.target_id
-                    ))
-                })?;
-            resolved.push((binding.binding, binding.kind, registration));
-        }
-        resolved_per_dispatch.push(resolved);
-    }
-
-    let bindings_per_dispatch: Vec<Vec<BatchedComputeKernelDispatchBinding<'_>>> =
-        resolved_per_dispatch
-            .iter()
-            .map(|resolved| {
-                resolved
-                    .iter()
-                    .map(
-                        |(binding, kind, registration)| BatchedComputeKernelDispatchBinding {
-                            binding: *binding,
-                            kind: *kind,
-                            registration,
-                        },
-                    )
-                    .collect()
-            })
-            .collect();
-
-    let batch: Vec<BatchedComputeKernelDispatch<'_>> = req
+    let mut batch = Vec::with_capacity(req.dispatches.len());
+    for ((index, dispatch), push_constants) in req
         .dispatches
         .iter()
-        .zip(&kernels)
-        .zip(&bindings_per_dispatch)
+        .enumerate()
         .zip(push_constants_per_dispatch)
-        .map(
-            |(((dispatch, kernel), bindings), push_constants)| BatchedComputeKernelDispatch {
-                kernel,
-                bindings,
-                push_constants,
-                group_count_x: dispatch.group_count_x,
-                group_count_y: dispatch.group_count_y,
-                group_count_z: dispatch.group_count_z,
-            },
-        )
-        .collect();
+    {
+        let kernel = full
+            .compute_kernel_by_id(&dispatch.kernel_id)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "dispatch {index} of this batch names no kernel registered under id {:?}",
+                    dispatch.kernel_id
+                ))
+            })?;
+        let bindings = resolve_supplied_compute_bindings(full, &dispatch.bindings, &kernel)
+            .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        batch.push(BatchedComputeKernelDispatch {
+            kernel,
+            bindings,
+            push_constants,
+            group_count_x: dispatch.group_count_x,
+            group_count_y: dispatch.group_count_y,
+            group_count_z: dispatch.group_count_z,
+        });
+    }
 
     full.dispatch_compute_kernel_batch(&batch)
 }
@@ -4954,20 +4934,32 @@ void main() {
                 ),
             ];
 
-            let submissions_before = sandbox.host_inner().queue_submission_count();
-            let stalls_before = sandbox.host_inner().blocking_fence_wait_count();
-            let response = handle_run_compute_kernel_batch(
-                &sandbox,
-                "counted".to_string(),
-                EscalateRequestRunComputeKernelBatch {
-                    dispatches: dispatches.clone(),
-                    request_id: "counted".to_string(),
-                },
-            );
-            assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
-            let batched_submissions =
-                sandbox.host_inner().queue_submission_count() - submissions_before;
-            let batched_stalls = sandbox.host_inner().blocking_fence_wait_count() - stalls_before;
+            // Measured on the second run, not the first: a per-frame claim is
+            // about the steady state, and the opening batch on a fresh context
+            // also builds the recorder and finds its fence already signaled.
+            let mut batched_submissions = 0;
+            let mut batched_stalls = 0;
+            for run in 0..2 {
+                let submissions_before = sandbox.host_inner().queue_submission_count();
+                let stalls_before = sandbox
+                    .host_inner()
+                    .recorder_and_compute_kernel_fence_wait_count();
+                let response = handle_run_compute_kernel_batch(
+                    &sandbox,
+                    format!("counted-{run}"),
+                    EscalateRequestRunComputeKernelBatch {
+                        dispatches: dispatches.clone(),
+                        request_id: format!("counted-{run}"),
+                    },
+                );
+                assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
+                batched_submissions =
+                    sandbox.host_inner().queue_submission_count() - submissions_before;
+                batched_stalls = sandbox
+                    .host_inner()
+                    .recorder_and_compute_kernel_fence_wait_count()
+                    - stalls_before;
+            }
 
             assert_eq!(
                 batched_submissions, 1,
@@ -4975,11 +4967,14 @@ void main() {
             );
             assert_eq!(
                 batched_stalls, 1,
-                "and cost the caller exactly one fence wait"
+                "and cost the caller exactly one fence wait — a second would mean the \
+                 recorder waits again at the next begin() on a fence it already drained"
             );
 
             let submissions_before = sandbox.host_inner().queue_submission_count();
-            let stalls_before = sandbox.host_inner().blocking_fence_wait_count();
+            let stalls_before = sandbox
+                .host_inner()
+                .recorder_and_compute_kernel_fence_wait_count();
             for dispatch in &dispatches {
                 let response = handle_run_compute_kernel(
                     &sandbox,
@@ -4998,7 +4993,10 @@ void main() {
             }
             let separate_submissions =
                 sandbox.host_inner().queue_submission_count() - submissions_before;
-            let separate_stalls = sandbox.host_inner().blocking_fence_wait_count() - stalls_before;
+            let separate_stalls = sandbox
+                .host_inner()
+                .recorder_and_compute_kernel_fence_wait_count()
+                - stalls_before;
 
             assert_eq!(
                 separate_submissions,
@@ -5166,6 +5164,99 @@ void main() {
                 &read_back_rgba8(&sandbox, held[2].texture(), "after-readback"),
                 CHAIN_DOUBLED_RGBA,
                 "the batch that ran after the refused one",
+            );
+            drop(held);
+        }
+
+        /// The one failure that lands *inside* an open recording, and the only
+        /// test that reaches `abort_recording`.
+        ///
+        /// Every other refusal — an unknown kernel, a binding the shader does
+        /// not declare, a surface that will not resolve, one kernel twice —
+        /// fires while resolving, before `begin()`. This one cannot: the
+        /// push-constant size is the kernel's own business and is only checked
+        /// when the payload is staged, which happens after the barriers are
+        /// recorded. So the recording is open when it fails, and a batch that
+        /// did not abort it would strand the recorder — the next `begin()`
+        /// refuses outright while a recording is in progress.
+        #[test]
+        fn a_batch_failing_inside_the_recording_aborts_it_and_the_recorder_survives() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("mid-recording batch failure: no GPU — skipping");
+                return;
+            };
+            // The conformance kernel declares 4 push-constant bytes; the batch
+            // below sends none.
+            let kernel_id = register_read_one_write_another(&sandbox).handle_id;
+            let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+            let held =
+                seeded_chain_textures(&sandbox, ["aborted-seed", "aborted-middle", "aborted-out"]);
+
+            let submissions_before = sandbox.host_inner().queue_submission_count();
+            let response = handle_run_compute_kernel_batch(
+                &sandbox,
+                "aborted".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![EscalateRequestRunComputeKernelBatchDispatch {
+                        bindings: supplied(&[
+                            (
+                                "source_image",
+                                EscalateComputeBindingKind::SampledTexture,
+                                "aborted-seed",
+                            ),
+                            (
+                                "output_image",
+                                EscalateComputeBindingKind::StorageImage,
+                                "aborted-middle",
+                            ),
+                        ]),
+                        group_count_x: 8,
+                        group_count_y: 8,
+                        group_count_z: 1,
+                        kernel_id,
+                        push_constants_hex: String::new(),
+                    }],
+                    request_id: "aborted".to_string(),
+                },
+            );
+            match response {
+                EscalateResponse::Err(err) => assert!(
+                    err.message.contains("push-constant size mismatch")
+                        && err.message.contains("kernel declares 4"),
+                    "the refusal must name the size the kernel wanted: {}",
+                    err.message
+                ),
+                other => panic!("a kernel needing push constants must refuse, got {other:?}"),
+            }
+            assert_eq!(
+                sandbox.host_inner().queue_submission_count(),
+                submissions_before,
+                "a batch that failed while recording submits nothing"
+            );
+
+            // The assertion this test exists for: the recorder took the next
+            // batch. Without the abort it is still in `Recording`, and
+            // `begin()` refuses a recording already in progress.
+            let after = handle_run_compute_kernel_batch(
+                &sandbox,
+                "after-abort".to_string(),
+                EscalateRequestRunComputeKernelBatch {
+                    dispatches: vec![batched_dispatch(
+                        &brighten,
+                        ("unbrightened_image", "aborted-seed"),
+                        ("brightened_image", "aborted-middle"),
+                    )],
+                    request_id: "after-abort".to_string(),
+                },
+            );
+            assert!(
+                matches!(after, EscalateResponse::Ok(_)),
+                "the recorder must be usable after a batch aborted mid-recording: {after:?}"
+            );
+            assert_every_pixel_is(
+                &read_back_rgba8(&sandbox, held[1].texture(), "after-abort-readback"),
+                CHAIN_BRIGHTENED_RGBA,
+                "the batch that ran after the aborted one",
             );
             drop(held);
         }
