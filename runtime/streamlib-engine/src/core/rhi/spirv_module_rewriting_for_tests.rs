@@ -16,6 +16,7 @@ const SPIRV_HEADER_WORD_COUNT: usize = 5;
 const OP_NAME: u16 = 5;
 const OP_DECORATE: u16 = 71;
 const DECORATION_BINDING: u32 = 33;
+const DECORATION_DESCRIPTOR_SET: u32 = 34;
 
 /// Drop every `OpName` from a module, reproducing what `glslc -O` emits
 /// without `-g`.
@@ -73,6 +74,32 @@ pub(crate) fn move_binding_to_another_slot_in_spirv_module(
     assert!(
         moved_count > 0,
         "the module decorates nothing with binding {current_slot}"
+    );
+    moved
+}
+
+/// Move one binding to another descriptor set, leaving its slot, its name and
+/// every other instruction alone.
+pub(crate) fn move_binding_to_another_descriptor_set_in_spirv_module(
+    spirv: &[u8],
+    current_set: u32,
+    replacement_set: u32,
+) -> Vec<u8> {
+    let (moved, moved_count) = rewrite_spirv_instructions(spirv, |opcode, instruction| {
+        if opcode != OP_DECORATE
+            || instruction.len() < 4
+            || instruction[2] != DECORATION_DESCRIPTOR_SET
+            || instruction[3] != current_set
+        {
+            return None;
+        }
+        let mut rewritten = instruction.to_vec();
+        rewritten[3] = replacement_set;
+        Some(rewritten)
+    });
+    assert!(
+        moved_count > 0,
+        "the module decorates nothing with descriptor set {current_set}"
     );
     moved
 }

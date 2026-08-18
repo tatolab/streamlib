@@ -96,6 +96,33 @@ pub fn geometry_instance_flags_from_raw_bitmask(
     })
 }
 
+/// Refuse an index that names a vertex the caller did not supply.
+///
+/// A triangle-geometry build reads `vertexData` through a buffer device address
+/// bounded only by `maxVertex`
+/// (VUID-VkAccelerationStructureBuildRangeInfoKHR-vertexData-10418), and an
+/// acceleration-structure build's input reads have no `robustBufferAccess`
+/// escape hatch the way an indexed draw's do. An index past the last vertex is
+/// therefore an out-of-bounds device read — garbage geometry or a device fault,
+/// reported by nothing, not even the validation layers, which cannot see index
+/// values that live in device memory.
+fn refuse_an_index_past_the_last_vertex(
+    acceleration_structure_label: &str,
+    vertex_count: u32,
+    indices: &[u32],
+) -> Result<()> {
+    let Some(&index_past_the_last_vertex) = indices.iter().find(|&&index| index >= vertex_count)
+    else {
+        return Ok(());
+    };
+    Err(Error::GpuError(format!(
+        "Acceleration structure '{acceleration_structure_label}': index \
+         {index_past_the_last_vertex} names a vertex outside the {vertex_count} supplied; every \
+         index must be less than {vertex_count}, and the build would otherwise read past the \
+         vertex buffer"
+    )))
+}
+
 /// Row-major 3×4 identity transform.
 pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
     [1.0, 0.0, 0.0, 0.0],
@@ -190,6 +217,7 @@ impl VulkanAccelerationStructureInner {
         let device = vulkan_device.device();
         let triangle_count = (indices.len() / 3) as u32;
         let vertex_count = (vertices.len() / 3) as u32;
+        refuse_an_index_past_the_last_vertex(label, vertex_count, indices)?;
         let vertex_bytes = mem::size_of_val(vertices) as vk::DeviceSize;
         let index_bytes = mem::size_of_val(indices) as vk::DeviceSize;
 
@@ -1071,6 +1099,27 @@ mod tests {
             )
             .expect("one defined bit"),
             vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE
+        );
+    }
+
+    #[test]
+    fn every_index_inside_the_supplied_vertices_is_accepted() {
+        refuse_an_index_past_the_last_vertex("in-range", 3, &[0, 1, 2])
+            .expect("three indices over three vertices name only vertices that exist");
+    }
+
+    #[test]
+    fn an_index_past_the_last_vertex_is_refused() {
+        let refusal = refuse_an_index_past_the_last_vertex("one-past-the-end", 3, &[0, 1, 3])
+            .expect_err("index 3 over three vertices reads past the vertex buffer");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("index 3") && message.contains("outside the 3 supplied"),
+            "the refusal must name the index and the vertex count: {message}"
+        );
+        assert!(
+            message.contains("one-past-the-end"),
+            "the refusal must name the acceleration structure: {message}"
         );
     }
 

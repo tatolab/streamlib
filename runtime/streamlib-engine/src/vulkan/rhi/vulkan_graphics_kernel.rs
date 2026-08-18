@@ -51,7 +51,7 @@ use crate::core::rhi::{
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
     PrimitiveTopology, ScissorRect, Texture, TextureFormat, VertexAttributeFormat, VertexInputRate,
     VertexInputState, Viewport, refuse_a_binding_the_shader_left_unnamed,
-    refuse_one_binding_name_that_identifies_two_slots,
+    refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
 };
 use crate::core::{Error, Result};
@@ -1481,14 +1481,11 @@ fn validate_against_spirv(
                 descriptor.label, stage.stage
             ))
         })?;
-        if sets.len() > 1 {
-            return Err(Error::GpuError(format!(
-                "Graphics kernel '{}': only descriptor set 0 is supported; SPIR-V {:?} stage uses sets {:?}",
-                descriptor.label,
-                stage.stage,
-                sets.keys().collect::<Vec<_>>()
-            )));
-        }
+        refuse_a_descriptor_set_other_than_set_0(
+            &kernel_kind_label,
+            Some(stage.stage),
+            sets.keys().copied(),
+        )?;
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
                 refuse_a_binding_the_shader_left_unnamed(
@@ -2333,6 +2330,7 @@ fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> 
 mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        move_binding_to_another_descriptor_set_in_spirv_module,
         move_binding_to_another_slot_in_spirv_module, rename_binding_in_spirv_module,
         strip_every_debug_name_from_spirv_module,
     };
@@ -2452,6 +2450,30 @@ mod tests {
                 && msg.contains("`cameraTexture`")
                 && msg.contains("one slot spelled two ways"),
             "expected both spellings of slot 0, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_stage_whose_only_set_is_not_set_0_is_refused_at_validation() {
+        let moved_to_set_1 =
+            move_binding_to_another_descriptor_set_in_spirv_module(frag_spv(), 0, 1);
+        let bindings = [GraphicsBindingSpec::sampled_texture(
+            0,
+            GraphicsShaderStageFlags::FRAGMENT,
+        )];
+        let stages = [
+            GraphicsStage::vertex(vert_spv()),
+            GraphicsStage::fragment(&moved_to_set_1),
+        ];
+        let pipeline_state = default_pipeline_state();
+        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let refusal = validate_against_spirv(&descriptor)
+            .err()
+            .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let message = format!("{refusal}");
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
         );
     }
 

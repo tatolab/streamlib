@@ -35,7 +35,7 @@ use crate::core::rhi::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingShaderGroup, RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
     Texture, ray_tracing_spirv_type_to_kind, refuse_a_binding_the_shader_left_unnamed,
-    refuse_one_binding_name_that_identifies_two_slots,
+    refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently, validate_shader_groups,
 };
 use crate::core::{Error, Result};
@@ -1104,14 +1104,11 @@ fn validate_bindings_against_spirv(
                 descriptor.label, stage.stage
             ))
         })?;
-        if sets.len() > 1 {
-            return Err(Error::GpuError(format!(
-                "Ray-tracing kernel '{}': only descriptor set 0 supported; stage {:?} uses sets {:?}",
-                descriptor.label,
-                stage.stage,
-                sets.keys().collect::<Vec<_>>()
-            )));
-        }
+        refuse_a_descriptor_set_other_than_set_0(
+            &kernel_kind_label,
+            Some(stage.stage),
+            sets.keys().copied(),
+        )?;
         let stage_flag = stage_to_stage_flag(stage.stage);
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
@@ -1838,7 +1835,8 @@ fn drop_sbt(sbt: &Sbt, vulkan_device: &Arc<HostVulkanDevice>) {
 mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
-        rename_binding_in_spirv_module, strip_every_debug_name_from_spirv_module,
+        move_binding_to_another_descriptor_set_in_spirv_module, rename_binding_in_spirv_module,
+        strip_every_debug_name_from_spirv_module,
     };
     use crate::core::rhi::{
         RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
@@ -1958,6 +1956,28 @@ mod tests {
                 && msg.contains("`sceneTlas`")
                 && msg.contains("one slot spelled two ways"),
             "expected both spellings of slot 0, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_stage_whose_only_set_is_not_set_0_is_refused_at_validation() {
+        let moved_to_set_1 =
+            move_binding_to_another_descriptor_set_in_spirv_module(rt_test_rgen_spv(), 0, 1);
+        let stages = [RayTracingStage::ray_gen(&moved_to_set_1)];
+        let groups = [RayTracingShaderGroup::General { general: 0 }];
+        let bindings = [
+            RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
+            RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
+        ];
+        let refusal = validate_bindings_against_spirv(&binding_validation_descriptor(
+            &stages, &groups, &bindings,
+        ))
+        .err()
+        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let message = format!("{refusal}");
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
         );
     }
 
@@ -2127,6 +2147,39 @@ mod tests {
         assert!(
             msg.contains("binding 0") && msg.contains("StorageBuffer"),
             "expected mismatch error mentioning binding 0 + StorageBuffer, got: {msg}"
+        );
+    }
+
+    /// An index past the last vertex must be refused before the build, not
+    /// handed to the driver: the AS build reads `vertexData` through a buffer
+    /// device address that no robustness guarantee bounds, so a device that
+    /// accepts it reads out of bounds and reports nothing.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_blas_build_refuses_an_index_past_the_last_vertex() {
+        let Some(device) = try_ray_tracing_device() else {
+            return;
+        };
+        let vertices: [f32; 9] = [
+            -0.6, -0.6, 0.5, //
+            0.6, -0.6, 0.5, //
+            0.0, 0.6, 0.5, //
+        ];
+        let refusal = VulkanAccelerationStructure::build_triangles_blas(
+            &device,
+            "rt-test-blas-out-of-range-index",
+            &vertices,
+            &[0, 1, 3],
+        )
+        .err()
+        .expect("index 3 over three vertices cannot be built in silence");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("index 3") && message.contains("outside the 3 supplied"),
+            "the refusal must name the index and the vertex count: {message}"
         );
     }
 

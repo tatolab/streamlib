@@ -14,7 +14,9 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::{Error, Result};
 
-use super::kernel_binding_names::quote_declared_shader_binding_names;
+use super::kernel_binding_names::{
+    quote_declared_shader_binding_names, refuse_a_descriptor_set_other_than_set_0,
+};
 
 /// Kind of resource bound at a particular slot in a compute kernel's
 /// descriptor set.
@@ -219,7 +221,7 @@ pub struct ComputeKernelDescriptor<'a> {
 /// derives the descriptor shape from reflection alone. Keeps the wire format
 /// minimal and the binding-shape source-of-truth in the shader.
 ///
-/// Rejects multi-set kernels — only descriptor set 0 is supported, matching
+/// Rejects any descriptor set other than set 0, matching
 /// `VulkanComputeKernel`'s contract.
 ///
 /// Every derived spec carries the shader's own name for its binding. A blob
@@ -236,12 +238,7 @@ pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>
         ))
     })?;
 
-    if sets.len() > 1 {
-        return Err(Error::GpuError(format!(
-            "Only descriptor set 0 is supported; SPIR-V uses sets {:?}",
-            sets.keys().collect::<Vec<_>>()
-        )));
-    }
+    refuse_a_descriptor_set_other_than_set_0("Compute kernel", None::<&str>, sets.keys().copied())?;
 
     let mut bindings: Vec<ComputeBindingSpec> = Vec::new();
     if let Some(set0) = sets.get(&0) {
@@ -300,7 +297,10 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::spirv_module_rewriting_for_tests::strip_every_debug_name_from_spirv_module;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        move_binding_to_another_descriptor_set_in_spirv_module,
+        strip_every_debug_name_from_spirv_module,
+    };
 
     // SPIR-V test fixtures live next to `vulkan_compute_kernel.rs` and are
     // built by `libs/streamlib/build.rs`. Reflection is a host-architecture
@@ -485,6 +485,24 @@ mod tests {
         assert_ne!(
             spirv_type_to_kind(RDescriptorType::COMBINED_IMAGE_SAMPLER),
             Some(ComputeBindingKind::SampledImage),
+        );
+    }
+
+    #[test]
+    fn a_shader_whose_only_set_is_not_set_0_is_refused_at_derive() {
+        let moved_to_set_1 =
+            move_binding_to_another_descriptor_set_in_spirv_module(blend_spv(2), 0, 1);
+        let message = match derive_bindings_from_spirv(&moved_to_set_1) {
+            Ok((derived, _)) => panic!(
+                "a binding outside set 0 cannot be bound, so it cannot be dropped in silence; \
+                 derive returned {} binding(s)",
+                derived.len()
+            ),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
         );
     }
 

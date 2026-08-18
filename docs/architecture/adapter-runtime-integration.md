@@ -310,14 +310,22 @@ The shape of what the hook does varies by seam:
   signals `consume_done` from `end_read_access`.
 
 No kernel dispatch flavour uses a bridge. Compute, graphics, ray tracing
-and CPU readback are always-present `GpuContext` capabilities served by the
-escalate handler directly, with no installation step and no runtime-absent
-case: `create_or_reuse_compute_kernel` / `compute_kernel_by_id`,
-`create_or_reuse_graphics_kernel` / `graphics_kernel_by_id`,
-`create_or_reuse_ray_tracing_kernel` / `ray_tracing_kernel_by_id`,
-`register_acceleration_structure` / `acceleration_structure_by_id`, and
-`run_cpu_readback_copy` / `try_run_cpu_readback_copy` /
-`open_cpu_readback_staging`.
+and CPU readback are `GpuContext` capabilities served by the escalate handler
+directly, with no installation step and no runtime-absent case. The set is
+Linux-only: the kernel and acceleration-structure methods are
+`#[cfg(target_os = "linux")]`, and every op in it answers `… is only available
+on Linux` off it. The methods are `create_or_reuse_compute_kernel` /
+`compute_kernel_by_id`, `create_or_reuse_graphics_kernel` /
+`graphics_kernel_by_id`, `create_or_reuse_ray_tracing_kernel` /
+`ray_tracing_kernel_by_id` and `register_acceleration_structure` /
+`acceleration_structure_by_id`. CPU readback has no `GpuContext` method of its
+own name — `run_cpu_readback_copy`, `try_run_cpu_readback_copy` and
+`open_cpu_readback_staging` are escalate ops, and they land on
+`GpuContextLimitedAccess`'s `refill_surface_export_staging` /
+`try_refill_surface_export_staging`,
+`copy_surface_export_staging_back_to_surface` /
+`try_copy_surface_export_staging_back_to_surface` and
+`surface_export_staging` + `share_surface_export_staging`.
 
 The hook is the canonical opt-in registration point for adapters that
 need pre-start GpuContext access. Application authors call

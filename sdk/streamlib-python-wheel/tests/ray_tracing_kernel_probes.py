@@ -464,10 +464,16 @@ class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
                 vertices=TRIANGLE_VERTICES, indices=[0, 1]
             )
         )
+        an_index_past_the_last_vertex = _refusal_of(
+            lambda: gpu.build_triangles_blas(
+                vertices=TRIANGLE_VERTICES, indices=[0, 1, 3]
+            )
+        )
         return {
             "a_surface_where_a_structure_belongs": a_surface_where_a_structure_belongs,
             "a_bottom_level_structure_at_the_trace": a_bottom_level_structure_at_the_trace,
             "a_top_level_structure_as_an_instance": a_top_level_structure_as_an_instance,
             "vertices_that_are_not_triangles": vertices_that_are_not_triangles,
             "indices_that_are_not_triangles": indices_that_are_not_triangles,
+            "an_index_past_the_last_vertex": an_index_past_the_last_vertex,
         }

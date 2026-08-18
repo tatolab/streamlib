@@ -40,6 +40,7 @@ pub use color_converter::{
 };
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
+#[cfg(target_os = "linux")]
 pub(crate) use compute_kernel::reconcile_compute_binding_declarations;
 pub use compute_kernel::{
     ComputeBindingDeclaration, ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
@@ -52,6 +53,7 @@ pub use gl_interop::{GlContext, GlTextureBinding, gl_constants};
 pub use glsl_shader_source_compiler::{
     DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderSourceToSpirvCompiler,
 };
+#[cfg(target_os = "linux")]
 pub(crate) use graphics_kernel::reconcile_graphics_binding_declarations;
 pub use graphics_kernel::{
     AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,
@@ -68,12 +70,10 @@ pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(target_os = "linux")]
 pub use index_buffer::IndexBuffer;
 #[cfg(target_os = "linux")]
-pub(crate) use kernel_binding_names::KernelShaderStageMask;
 pub(crate) use kernel_binding_names::{
-    quote_declared_shader_binding_names, quote_shader_stage_names,
-};
-pub(crate) use kernel_binding_names::{
-    refuse_a_binding_the_shader_left_unnamed, refuse_one_binding_name_that_identifies_two_slots,
+    KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,
+    refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
+    refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
 };
 pub use pixel_buffer::PixelBuffer;
@@ -88,6 +88,7 @@ pub use ray_tracing_kernel::{
     derive_ray_tracing_bindings_from_spirv_multistage, ray_tracing_stages_covered_by,
     validate_shader_groups,
 };
+#[cfg(target_os = "linux")]
 pub(crate) use ray_tracing_kernel::{
     ray_tracing_spirv_type_to_kind, reconcile_ray_tracing_binding_declarations,
 };

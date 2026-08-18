@@ -271,3 +271,16 @@ def test_geometry_that_is_not_whole_triangles_is_refused(start_app_under_test):
 
     indices = observed["indices_that_are_not_triangles"]
     assert "triangle" in indices and "three" in indices, indices
+
+
+def test_an_index_past_the_last_vertex_is_refused(start_app_under_test):
+    """The build reads the vertex buffer through a device address no robustness
+    guarantee bounds, so an index naming a vertex the caller did not supply
+    reads out of bounds — and no validation layer can see it, because the index
+    values live in device memory."""
+    observed = run_probe(
+        start_app_under_test, "AccelerationStructureHandleRefusalProbe"
+    )
+
+    refusal = observed["an_index_past_the_last_vertex"]
+    assert "index 3" in refusal and "outside the 3 supplied" in refusal, refusal

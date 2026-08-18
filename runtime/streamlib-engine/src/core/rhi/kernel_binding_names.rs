@@ -9,7 +9,8 @@
 //! reconciles in [`super::compute_kernel`]; graphics and ray tracing scope each
 //! binding to the stages that read it, and share both the multi-stage
 //! reflection merge and the reconciliation here because the only thing that
-//! differs between them is which newtypes they name.
+//! differs between them is which newtypes they name. The refusals every
+//! pipeline kind owes its callers live here too, compute included.
 
 use std::collections::BTreeMap;
 
@@ -177,6 +178,39 @@ where
     Ok(())
 }
 
+/// Refuse a descriptor set the kernel's single-set pipeline layout has no place
+/// for.
+///
+/// Reflection keys its result by the set number the shader decorated, so a
+/// shader whose only set is set 1 reports exactly one set — a count cannot tell
+/// it apart from a shader that uses set 0, and every binding in it would be
+/// dropped by a walk that reads set 0 alone.
+pub fn refuse_a_descriptor_set_other_than_set_0<Stage>(
+    kernel_kind_label: &str,
+    stage_the_spirv_fills: Option<Stage>,
+    descriptor_set_numbers_the_shader_declares: impl IntoIterator<Item = u32>,
+) -> Result<()>
+where
+    Stage: std::fmt::Debug,
+{
+    let declared_sets: Vec<u32> = descriptor_set_numbers_the_shader_declares
+        .into_iter()
+        .collect();
+    if !declared_sets.iter().any(|&set| set != 0) {
+        return Ok(());
+    }
+    Err(Error::GpuError(match stage_the_spirv_fills {
+        Some(stage) => format!(
+            "{kernel_kind_label}: only descriptor set 0 is supported; SPIR-V {stage:?} stage uses \
+             sets {declared_sets:?}"
+        ),
+        None => format!(
+            "{kernel_kind_label}: only descriptor set 0 is supported; SPIR-V uses sets \
+             {declared_sets:?}"
+        ),
+    }))
+}
+
 /// Refuse a binding the shader left unnamed.
 ///
 /// One of the three ways a name can fail to identify one binding slot. Every
@@ -321,13 +355,11 @@ where
                 "{kernel_kind_label}: failed to extract descriptor sets for {stage:?} stage: {e:?}"
             ))
         })?;
-        if sets.len() > 1 {
-            return Err(Error::GpuError(format!(
-                "{kernel_kind_label}: only descriptor set 0 is supported; SPIR-V {stage:?} stage \
-                 uses sets {:?}",
-                sets.keys().collect::<Vec<_>>()
-            )));
-        }
+        refuse_a_descriptor_set_other_than_set_0(
+            kernel_kind_label,
+            Some(stage),
+            sets.keys().copied(),
+        )?;
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
                 let kind = binding_kind_of_descriptor_type(info.ty).ok_or_else(|| {

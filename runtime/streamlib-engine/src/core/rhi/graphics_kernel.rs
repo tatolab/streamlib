@@ -689,8 +689,8 @@ pub struct DrawIndexedCall {
 /// `VERTEX | FRAGMENT`.
 ///
 /// Rejects descriptor-type conflicts (same binding declared as
-/// StorageBuffer in vertex and UniformBuffer in fragment) and multi-set
-/// kernels (only descriptor set 0 supported).
+/// StorageBuffer in vertex and UniformBuffer in fragment) and any descriptor
+/// set other than set 0.
 ///
 /// Every derived spec carries the shader's own name for its binding, and the
 /// two ways a name can fail to identify one binding are rejected here rather
@@ -752,6 +752,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<GraphicsBindingKind> {
 mod tests {
     use super::*;
     use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        move_binding_to_another_descriptor_set_in_spirv_module,
         move_binding_to_another_slot_in_spirv_module, rename_binding_in_spirv_module,
         strip_every_debug_name_from_spirv_module,
     };
@@ -837,6 +838,35 @@ mod tests {
             message.contains("bindings 0 and 1 are both named `cameraTexture`")
                 && message.contains("one name on two slots"),
             "the refusal must name both slots and the name: {message}"
+        );
+    }
+
+    #[test]
+    fn a_stage_whose_only_set_is_not_set_0_is_refused_at_derive() {
+        let moved_to_set_1 = move_binding_to_another_descriptor_set_in_spirv_module(
+            display_blit_fragment_spirv(),
+            0,
+            1,
+        );
+        let stages = [
+            GraphicsStage::vertex(display_blit_vertex_spirv()),
+            GraphicsStage::fragment(&moved_to_set_1),
+        ];
+        let message = match derive_bindings_from_spirv_multistage(&stages) {
+            Ok((derived, _)) => panic!(
+                "a binding outside set 0 cannot be bound, so it cannot be dropped in silence; \
+                 derive returned {} binding(s): {:?}",
+                derived.len(),
+                derived
+                    .iter()
+                    .map(|spec| spec.name.as_deref())
+                    .collect::<Vec<_>>()
+            ),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
         );
     }
 }
