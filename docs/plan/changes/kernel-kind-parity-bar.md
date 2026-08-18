@@ -112,7 +112,7 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
 - MODIFIED: §Graphics, the Python-parity DECIDED entry
   ARCHITECTURE.md:195-198. Today, verbatim:
 
-  ```
+  ```markdown
   - **DECIDED** — Python reaches every GPU capability Rust authoring reaches: compute,
     graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
     names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
@@ -124,7 +124,7 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
   inside the entry — the shape of the Apple-capture gap at ARCHITECTURE.md:246-248, putting the
   absence where the claim is read:
 
-  ```
+  ```markdown
   - **DECIDED** — Python reaches every kernel kind Rust authoring reaches: compute,
     graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
     names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
@@ -171,7 +171,7 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
   gaps 2 and 4, the shape §Networking's OPEN entry uses at ARCHITECTURE.md:286. They land here
   rather than inside the DECIDED entry because neither is a Python-reach gap:
 
-  ```
+  ```markdown
   - **OPEN** — Everything else, including the two graphics capabilities no language can
     render: depth attachments — Rust constructs a depth-testing pipeline that Python cannot
     name, and no pass in either language renders against one — and MSAA, refused for every
@@ -190,7 +190,7 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
   survivor :27-30) and `docs/decisions/media-io-layering.md` (blocks :15-23 and :25-28, survivor
   :30-31) both use:
 
-  ```
+  ```markdown
      > ~~Parity is the bar. Python reaches every GPU capability Rust authoring reaches~~
      > — Superseded 2026-08-17 by owner ruling. The bar is every kernel *kind*, which is
      > what the enumeration in this same sentence already names. Pipeline state and buffer
