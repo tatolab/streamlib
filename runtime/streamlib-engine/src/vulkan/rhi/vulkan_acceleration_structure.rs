@@ -77,6 +77,25 @@ impl TlasInstanceDesc {
     }
 }
 
+/// The `VkGeometryInstanceFlagsKHR` a raw bitmask names.
+///
+/// Exists for callers that receive the mask as an integer — an IPC payload has
+/// no way to name the typed constants — and keeps them out of `vulkanalia`.
+/// A bit no flag owns is refused rather than masked off: the caller meant a
+/// behaviour by it, and dropping it silently would build a different instance
+/// than the one asked for.
+pub fn geometry_instance_flags_from_raw_bitmask(
+    raw_bitmask: u32,
+) -> Result<vk::GeometryInstanceFlagsKHR> {
+    vk::GeometryInstanceFlagsKHR::from_bits(raw_bitmask).ok_or_else(|| {
+        Error::GpuError(format!(
+            "geometry instance flags {raw_bitmask:#x} set a bit no VkGeometryInstanceFlagsKHR \
+             value owns; the defined bits are {:#x}",
+            vk::GeometryInstanceFlagsKHR::all().bits()
+        ))
+    })
+}
+
 /// Row-major 3×4 identity transform.
 pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
     [1.0, 0.0, 0.0, 0.0],
@@ -1033,4 +1052,47 @@ fn instance_bytes(desc: &TlasInstanceDesc) -> [u8; INSTANCE_BYTES] {
     out[56..64].copy_from_slice(&desc.blas.device_address().to_ne_bytes());
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_defined_geometry_instance_flag_survives_the_raw_bitmask() {
+        let defined = vk::GeometryInstanceFlagsKHR::all();
+        assert_eq!(
+            geometry_instance_flags_from_raw_bitmask(defined.bits()).expect("every defined bit"),
+            defined
+        );
+        assert_eq!(
+            geometry_instance_flags_from_raw_bitmask(
+                vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE.bits()
+            )
+            .expect("one defined bit"),
+            vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE
+        );
+    }
+
+    #[test]
+    fn a_bit_no_geometry_instance_flag_owns_is_refused() {
+        let undefined_bit = !vk::GeometryInstanceFlagsKHR::all().bits() & (1 << 31);
+        assert_ne!(undefined_bit, 0, "bit 31 must stay undefined for this test");
+        let refusal = geometry_instance_flags_from_raw_bitmask(
+            vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE.bits() | undefined_bit,
+        )
+        .expect_err("a bit no flag owns cannot be silently dropped");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("set a bit no VkGeometryInstanceFlagsKHR value owns"),
+            "the refusal must say the bit is unowned: {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "{:#x}",
+                vk::GeometryInstanceFlagsKHR::all().bits()
+            )),
+            "the refusal must name the bits that are defined: {message}"
+        );
+    }
 }

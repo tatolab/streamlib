@@ -308,9 +308,9 @@ pub(crate) struct EscalateRequestRegisterAccelerationStructureBlas {
     /// `VulkanAccelerationStructure::build_triangles_blas`.
     pub(crate) indices_hex: String,
 
-    /// Human-readable label used in error messages and tracing on the host.
-    /// Echoed in the returned `as_id` derivation only via its bytes — purely
-    /// diagnostic.
+    /// Human-readable label the host gives the structure: it names this BLAS in
+    /// RHI errors and in validation-layer messages. The returned `as_id` is a
+    /// fresh UUID and derives nothing from it.
     pub(crate) label: String,
 
     /// Correlates request with response. UUID string.
@@ -359,15 +359,15 @@ pub(crate) struct EscalateRequestRegisterAccelerationStructureTlasInstance {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterAccelerationStructureTlas {
-    /// One TLAS instance per entry. The host resolves `blas_id`
-    /// to a previously-registered BLAS via the bridge's `as_id
-    /// → Arc<VulkanAccelerationStructure>` map and forwards to
+    /// One TLAS instance per entry. The host resolves each `blas_id` through
+    /// `GpuContext`'s acceleration-structure registry and forwards to
     /// `VulkanAccelerationStructure::build_tlas`. Empty array is rejected (TLAS
     /// must have at least one instance).
     pub(crate) instances: Vec<EscalateRequestRegisterAccelerationStructureTlasInstance>,
 
-    /// Human-readable label used in error messages and tracing on the host.
-    /// Diagnostic only.
+    /// Human-readable label the host gives the structure: it names this TLAS in
+    /// RHI errors and in validation-layer messages. The returned `as_id` is a
+    /// fresh UUID and derives nothing from it.
     pub(crate) label: String,
 
     /// Correlates request with response. UUID string.
@@ -391,6 +391,20 @@ pub(crate) enum EscalateComputeBindingKind {
 
     #[serde(rename = "uniform_buffer")]
     UniformBuffer,
+}
+
+impl EscalateComputeBindingKind {
+    /// This kind's spelling on the wire — what a register response hands back
+    /// and the next dispatch echoes.
+    pub(crate) const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SampledImage => "sampled_image",
+            Self::SampledTexture => "sampled_texture",
+            Self::StorageBuffer => "storage_buffer",
+            Self::StorageImage => "storage_image",
+            Self::UniformBuffer => "uniform_buffer",
+        }
+    }
 }
 
 /// One binding a compute kernel declares at registration, named as the shader
@@ -464,9 +478,13 @@ pub(crate) struct EscalateRequestRegisterComputeKernel {
     pub(crate) spv_hex: String,
 }
 
-/// Resource kind for this binding slot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRegisterGraphicsKernelBindingKind {
+/// Resource kind for a graphics binding slot.
+///
+/// One enum for the register array, the draw array and the register response —
+/// they name the same four kinds, and two spellings of one set is two things to
+/// keep in lockstep forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum EscalateGraphicsBindingKind {
     #[serde(rename = "sampled_texture")]
     SampledTexture,
 
@@ -480,16 +498,39 @@ pub(crate) enum EscalateRequestRegisterGraphicsKernelBindingKind {
     UniformBuffer,
 }
 
+impl EscalateGraphicsBindingKind {
+    /// This kind's spelling on the wire — what a register response hands back
+    /// and the next draw echoes.
+    pub(crate) const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SampledTexture => "sampled_texture",
+            Self::StorageBuffer => "storage_buffer",
+            Self::StorageImage => "storage_image",
+            Self::UniformBuffer => "uniform_buffer",
+        }
+    }
+}
+
+/// One binding a graphics kernel declares at registration, named as the shaders
+/// name it. The slot number is not on the wire — it comes from reflection, and
+/// the name is what a draw resolves against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterGraphicsKernelBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller expects at this name. Checked against
+    /// reflection at registration; a mismatch is an `err` response.
+    pub(crate) kind: EscalateGraphicsBindingKind,
 
-    /// Resource kind for this binding slot.
-    pub(crate) kind: EscalateRequestRegisterGraphicsKernelBindingKind,
+    /// The shaders' own name for the binding.
+    pub(crate) name: String,
 
     /// Bitmask of stages the binding is visible to. `1 = VERTEX`, `2 =
-    /// FRAGMENT`, `3 = VERTEX_FRAGMENT`.
+    /// FRAGMENT`, `3 = VERTEX_FRAGMENT`. `0` asserts nothing about stages.
+    ///
+    /// A declaration may widen a binding's visibility past what the shaders
+    /// read, never narrow it below; naming a stage this kernel has no module
+    /// for is refused at registration, where the multi-stage declaration is
+    /// built.
     pub(crate) stages: u32,
 }
 
@@ -916,8 +957,8 @@ pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDept
 
 /// Fixed-function pipeline state plus attachment formats for the graphics
 /// pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
-/// combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
-/// rejected with an `err` response.
+/// combinations — MSAA samples > 1, other than one colour attachment, either
+/// half of a depth attachment — are rejected with an `err` response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterGraphicsKernelPipelineState {
@@ -953,13 +994,16 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernelPipelineState {
     /// attachment's `color_write_mask` when enabled.
     pub(crate) color_write_mask: u32,
 
-    /// Depth compare op. Ignored when `depth_stencil_enabled` is false; the
-    /// wire field must still carry a valid value (use `always` as the default
-    /// placeholder when disabled).
+    /// Never read: `depth_stencil_enabled` must be false, so there is no depth
+    /// test to configure. Required on the wire, so send `always`.
     pub(crate) depth_compare_op: EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
 
+    /// Must be false. The offscreen pass a draw runs through attaches colour
+    /// targets only, so a depth-testing pipeline has no attachment to test
+    /// against; true is an `err` response.
     pub(crate) depth_stencil_enabled: bool,
 
+    /// Never read, for the same reason `depth_compare_op` is not. Send false.
     pub(crate) depth_write: bool,
 
     /// Which pipeline state is set dynamically per draw vs baked into the
@@ -985,21 +1029,24 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernelPipelineState {
 
     pub(crate) topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
 
-    /// Vertex attributes pulled from the bindings. Must be empty when
-    /// `vertex_input_bindings` is empty.
+    /// Must be empty, for the same reason `vertex_input_bindings` must be: an
+    /// attribute is pulled from a binding. A non-empty array is an `err`
+    /// response.
     pub(crate) vertex_input_attributes:
         Vec<EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute>,
 
-    /// Vertex buffer binding slots — stride and step rate per binding. Empty
-    /// array selects the `VertexInputState::None` (gl_VertexIndex-driven)
-    /// shape; non-empty selects `VertexInputState::Buffers` with the given
-    /// bindings + attributes.
+    /// Must be empty. No escalate op mints a `VertexBuffer` to fill a binding —
+    /// a helper can acquire a pixel buffer, a texture or an image, and the
+    /// vertex-buffer setter takes none of them — so a pipeline pulling from one
+    /// would register and then be refused at every draw. Vertices are
+    /// fabricated from `gl_VertexIndex`; a non-empty array is an `err` response.
     pub(crate) vertex_input_bindings:
         Vec<EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding>,
 
-    /// Depth attachment format. Absent disables depth attachments — the
-    /// depth_stencil flags must be consistent (`depth_stencil_enabled = false`
-    /// when this is absent).
+    /// Must be absent, for the same reason `depth_stencil_enabled` must be
+    /// false: the pass attaches colour targets only, so a pipeline declaring a
+    /// depth format would disagree with it at every draw. A present one is an
+    /// `err` response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) attachment_depth_format:
         Option<EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat>,
@@ -1033,14 +1080,17 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     #[serde(default)]
     pub(crate) fragment_spv_hex: String,
 
-    /// Human-readable label used in error messages and tracing on the host.
-    /// Echoed in `kernel_id` derivation only via its bytes — purely diagnostic.
+    /// Human-readable label the host gives the pipeline: it names this kernel
+    /// in RHI errors and in validation-layer messages. Outside the `kernel_id`
+    /// derivation — two registrations differing only in label are one pipeline,
+    /// and the first one's label is what the driver keeps.
     pub(crate) label: String,
 
     /// Fixed-function pipeline state plus attachment formats for the graphics
-    /// pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
-    /// combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
-    /// rejected with an `err` response.
+    /// pipeline. Mirrors the host `GraphicsPipelineState` shape; a shape a draw
+    /// cannot run is an `err` response — MSAA, other than exactly one colour
+    /// attachment, either half of a depth attachment, either half of a vertex
+    /// input, or a write mask no channel owns.
     pub(crate) pipeline_state: EscalateRequestRegisterGraphicsKernelPipelineState,
 
     /// Push-constant range size in bytes, validated against the merged shader
@@ -1072,9 +1122,13 @@ pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     pub(crate) vertex_spv_hex: String,
 }
 
-/// Resource kind for this binding slot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRegisterRayTracingKernelBindingKind {
+/// Resource kind for a ray-tracing binding slot.
+///
+/// One enum for the register array, the dispatch array and the register
+/// response — they name the same five kinds, and two spellings of one set is
+/// two things to keep in lockstep forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum EscalateRayTracingBindingKind {
     #[serde(rename = "acceleration_structure")]
     AccelerationStructure,
 
@@ -1091,19 +1145,49 @@ pub(crate) enum EscalateRequestRegisterRayTracingKernelBindingKind {
     UniformBuffer,
 }
 
+impl EscalateRayTracingBindingKind {
+    /// This kind's spelling on the wire — what a register response hands back
+    /// and the next dispatch echoes.
+    pub(crate) const fn wire_name(self) -> &'static str {
+        match self {
+            Self::AccelerationStructure => "acceleration_structure",
+            Self::SampledTexture => "sampled_texture",
+            Self::StorageBuffer => "storage_buffer",
+            Self::StorageImage => "storage_image",
+            Self::UniformBuffer => "uniform_buffer",
+        }
+    }
+}
+
+/// One binding a ray-tracing kernel declares at registration, named as the
+/// shaders name it. The slot number is not on the wire — it comes from
+/// reflection, and the name is what a dispatch resolves against.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRegisterRayTracingKernelBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller expects at this name. Checked against
+    /// reflection at registration; a mismatch is an `err` response.
+    pub(crate) kind: EscalateRayTracingBindingKind,
 
-    /// Resource kind for this binding slot.
-    pub(crate) kind: EscalateRequestRegisterRayTracingKernelBindingKind,
+    /// The shaders' own name for the binding.
+    pub(crate) name: String,
 
     /// Bitmask of RT stages the binding is visible to. Bits: `1=RAYGEN`,
     /// `2=MISS`, `4=CLOSEST_HIT`, `8=ANY_HIT`, `16=INTERSECTION`,
-    /// `32=CALLABLE`.
+    /// `32=CALLABLE`. `0` asserts nothing about stages.
+    ///
+    /// A declaration may widen a binding's visibility past what the shaders
+    /// read, never narrow it below; naming a stage this kernel has no module
+    /// for is refused at registration, where the multi-stage declaration is
+    /// built. A ray-tracing kernel's stage set varies per kernel, so that is
+    /// the case this refusal exists for.
     pub(crate) stages: u32,
 }
+
+/// Value a shader-group's optional stage index carries when the group names no
+/// stage there. Every stage-index field is always present on the wire, so
+/// "absent" needs a value rather than an omission.
+pub(crate) const RAY_TRACING_STAGE_INDEX_NONE: u32 = u32::MAX;
 
 /// - `general`: contributes one ray-gen, miss, or
 ///   callable stage via `general_stage`.
@@ -1212,8 +1296,10 @@ pub(crate) struct EscalateRequestRegisterRayTracingKernel {
     /// stage indices into `stages`.
     pub(crate) groups: Vec<EscalateRequestRegisterRayTracingKernelGroup>,
 
-    /// Human-readable label used in error messages and tracing. Diagnostic
-    /// only.
+    /// Human-readable label the host gives the pipeline: it names this kernel
+    /// in RHI errors and in validation-layer messages. Outside the `kernel_id`
+    /// derivation — two registrations differing only in label are one pipeline,
+    /// and the first one's label is what the driver keeps.
     pub(crate) label: String,
 
     /// Maximum ray recursion depth. Must be ≤ device's `maxRayRecursionDepth`.
@@ -1406,28 +1492,22 @@ pub(crate) struct EscalateRequestRunCpuReadbackCopy {
     pub(crate) surface_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRunGraphicsDrawBindingKind {
-    #[serde(rename = "sampled_texture")]
-    SampledTexture,
-
-    #[serde(rename = "storage_buffer")]
-    StorageBuffer,
-
-    #[serde(rename = "storage_image")]
-    StorageImage,
-
-    #[serde(rename = "uniform_buffer")]
-    UniformBuffer,
-}
-
+/// One resource bound for a single draw, named as the shaders name it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunGraphicsDrawBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller believes is at this name. Must match the
+    /// kernel's reflected kind; a mismatch is an `err` response raised before
+    /// anything is submitted.
+    pub(crate) kind: EscalateGraphicsBindingKind,
 
-    pub(crate) kind: EscalateRequestRunGraphicsDrawBindingKind,
+    /// The shaders' own name for the binding. Resolved against the kernel's
+    /// reflected bindings — a name the shaders do not declare, or a declared
+    /// name this array omits, is an `err` response.
+    pub(crate) name: String,
 
+    /// Surface id of the resource to bind, as the host registered it. The host
+    /// resolves it through `resolve_texture_registration_by_surface_id`.
     pub(crate) surface_uuid: String,
 }
 
@@ -1532,9 +1612,10 @@ pub(crate) struct EscalateRequestRunGraphicsDrawViewport {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunGraphicsDraw {
-    /// Per-draw bindings — each slot's `surface_uuid` must resolve through
-    /// the host bridge's UUID → resource map. `kind` must match the binding's
-    /// declared kind from register time.
+    /// Per-draw bindings, each named as the shaders name it. `kind` must match
+    /// the kind reflection found at register time, and `surface_uuid` must be a
+    /// surface the host can resolve to a device texture. Bindings do not
+    /// persist between draws, so every draw supplies all of them.
     pub(crate) bindings: Vec<EscalateRequestRunGraphicsDrawBinding>,
 
     /// UUIDs of color attachment textures. v1 requires exactly one entry —
@@ -1542,11 +1623,11 @@ pub(crate) struct EscalateRequestRunGraphicsDraw {
     /// host-side `Texture` registered as a render target.
     pub(crate) color_target_uuids: Vec<String>,
 
-    /// Draw call. `kind = "draw"` selects non-indexed (`vertex_count`-driven),
-    /// `kind = "draw_indexed"` requires `index_buffer` to be set and uses
-    /// `index_count` / `first_index` / `vertex_offset`. Fields not used by
-    /// the selected kind are ignored host-side; subprocesses should still send
-    /// valid placeholder values (zero is fine) to keep the wire shape regular.
+    /// Draw call. `kind = "draw"` is the only kind the host runs: it is
+    /// non-indexed and `vertex_count`-driven. `kind = "draw_indexed"` is
+    /// refused, because it needs an index buffer and no escalate op mints one.
+    /// The indexed fields — `index_count` / `first_index` / `vertex_offset` —
+    /// stay on the wire so its shape is regular; send zeros.
     pub(crate) draw: EscalateRequestRunGraphicsDrawDraw,
 
     /// Render-area height in pixels.
@@ -1574,21 +1655,22 @@ pub(crate) struct EscalateRequestRunGraphicsDraw {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// Per-draw vertex buffer bindings. Each entry's `surface_uuid` must
-    /// resolve to a host-side `PixelBuffer`. `offset` is the byte offset into
-    /// the buffer where vertex data starts (decimal-encoded u64 — JSON has no
-    /// 64-bit integer). Empty for vertex-fabricating shaders (`gl_VertexIndex`
-    /// patterns).
+    /// Per-draw vertex buffer bindings. Always empty: the host's vertex-buffer
+    /// setter takes a `VertexBuffer`, and no escalate op mints one — a helper
+    /// can acquire a pixel buffer, a texture or an image, none of which that
+    /// setter accepts. A non-empty array is an `err` response; a vertex stage
+    /// fabricates its positions from `gl_VertexIndex` instead.
     pub(crate) vertex_buffers: Vec<EscalateRequestRunGraphicsDrawVertexBuffer>,
 
-    /// UUID of a depth attachment texture. Reserved for future use — v1 rejects
-    /// depth attachments with an `err` response.
+    /// UUID of a depth attachment texture. Always absent: the offscreen pass
+    /// this op drives attaches colour targets only, so a depth attachment would
+    /// never be tested against. A present one is an `err` response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) depth_target_uuid: Option<String>,
 
-    /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    /// `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
-    /// into it.
+    /// Always absent, for the same reason `vertex_buffers` is always empty: the
+    /// host's index-buffer setter takes an `IndexBuffer` and no escalate op
+    /// mints one. A present one is an `err` response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) index_buffer: Option<EscalateRequestRunGraphicsDrawIndexBuffer>,
 
@@ -1603,44 +1685,43 @@ pub(crate) struct EscalateRequestRunGraphicsDraw {
     pub(crate) viewport: Option<EscalateRequestRunGraphicsDrawViewport>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestRunRayTracingKernelBindingKind {
-    #[serde(rename = "acceleration_structure")]
-    AccelerationStructure,
-
-    #[serde(rename = "sampled_texture")]
-    SampledTexture,
-
-    #[serde(rename = "storage_buffer")]
-    StorageBuffer,
-
-    #[serde(rename = "storage_image")]
-    StorageImage,
-
-    #[serde(rename = "uniform_buffer")]
-    UniformBuffer,
-}
-
+/// One resource bound for a single trace, named as the shaders name it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunRayTracingKernelBinding {
-    pub(crate) binding: u32,
+    /// Resource kind the caller believes is at this name. Must match the
+    /// kernel's reflected kind; a mismatch is an `err` response raised before
+    /// anything is submitted.
+    pub(crate) kind: EscalateRayTracingBindingKind,
 
-    pub(crate) kind: EscalateRequestRunRayTracingKernelBindingKind,
+    /// The shaders' own name for the binding. Resolved against the kernel's
+    /// reflected bindings — a name the shaders do not declare, or a declared
+    /// name this array omits, is an `err` response.
+    pub(crate) name: String,
 
+    /// What to bind. For `acceleration_structure` this is an `as_id` from a
+    /// prior `register_acceleration_structure_tlas`; for every other kind it is
+    /// a surface id the host resolves through
+    /// `resolve_texture_registration_by_surface_id`.
     pub(crate) target_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestRunRayTracingKernel {
-    /// Per-trace bindings. `kind` must match the binding's declared kind from
-    /// register time. The host bridge resolves `target_id` based on `kind`: -
-    /// `acceleration_structure`: `target_id` is an `as_id`
-    ///   from a prior `register_acceleration_structure_tlas`.
-    /// - all other kinds: `target_id` is the surface-share UUID
-    ///   of a host-side `PixelBuffer` / `Texture`
-    ///   (same convention compute and graphics use).
+    /// Per-trace bindings, each named as the shaders name it. `kind` must match
+    /// the kind reflection found at register time, and decides how the host
+    /// resolves `target_id`:
+    /// - `acceleration_structure`: an `as_id` from a prior
+    ///   `register_acceleration_structure_tlas`, resolved through
+    ///   `GpuContext`'s acceleration-structure registry.
+    /// - `sampled_texture` / `storage_image`: a surface id the host resolves to
+    ///   a device texture, the same convention compute and graphics use.
+    /// - `storage_buffer` / `uniform_buffer`: refused — a trace cannot name a
+    ///   surface for a buffer binding.
+    ///
+    /// Bindings do not persist between traces, so every trace supplies all of
+    /// them.
     pub(crate) bindings: Vec<EscalateRequestRunRayTracingKernelBinding>,
 
     /// vkCmdTraceRaysKHR depth (usually 1 for 2D output).

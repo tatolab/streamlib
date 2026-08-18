@@ -52,6 +52,9 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonGpuSurfaceHandle>()?;
     module.add_class::<python_processor_context::PythonGpuSurfaceCheckOutLease>()?;
     module.add_class::<python_processor_context::PythonComputeKernel>()?;
+    module.add_class::<python_processor_context::PythonGraphicsKernel>()?;
+    module.add_class::<python_processor_context::PythonRayTracingKernel>()?;
+    module.add_class::<python_processor_context::PythonAccelerationStructureHandle>()?;
     module.add_class::<python_processor_context::PythonKernelDispatchBatch>()?;
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;

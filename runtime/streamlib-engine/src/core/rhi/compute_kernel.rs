@@ -36,14 +36,15 @@ pub enum ComputeBindingKind {
     StorageImage,
 }
 
-/// The subset of [`ComputeBindingKind`] a dispatch can name a surface for.
+/// The subset of any kernel's binding kinds that a dispatch, draw or trace
+/// can name a surface for.
 ///
 /// Narrower than its parent on purpose: a caller holding this has already
 /// refused the buffer and samplerless kinds, so every match on it is total
 /// with no panic arm to keep in sync. It also carries the image layout the
 /// descriptor requires, which is what a batch's barriers move a texture into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SurfaceBoundComputeBindingKind {
+pub enum SurfaceBoundKernelBindingKind {
     /// Written through `imageStore`; the descriptor requires `GENERAL`.
     StorageImage,
     /// Read through a combined sampler; the descriptor requires
@@ -52,8 +53,8 @@ pub enum SurfaceBoundComputeBindingKind {
 }
 
 #[cfg(target_os = "linux")]
-impl SurfaceBoundComputeBindingKind {
-    /// The image layout this kind's descriptor requires at dispatch.
+impl SurfaceBoundKernelBindingKind {
+    /// The image layout this kind's descriptor requires when the pipeline runs.
     pub fn required_image_layout(self) -> streamlib_consumer_rhi::VulkanLayout {
         match self {
             Self::StorageImage => streamlib_consumer_rhi::VulkanLayout::GENERAL,
@@ -299,6 +300,7 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::strip_every_debug_name_from_spirv_module;
 
     // SPIR-V test fixtures live next to `vulkan_compute_kernel.rs` and are
     // built by `libs/streamlib/build.rs`. Reflection is a host-architecture
@@ -457,7 +459,7 @@ mod tests {
         // the engine only through the pre-compiled-SPIR-V escape hatch, and
         // it cannot be bound by name at all — so it fails here, at
         // construction, rather than confusingly at first dispatch.
-        let stripped = strip_debug_names(blend_spv(2));
+        let stripped = strip_every_debug_name_from_spirv_module(blend_spv(2));
         let err = derive_bindings_from_spirv(&stripped)
             .err()
             .expect("a name-stripped blob must be refused");
@@ -466,29 +468,6 @@ mod tests {
             msg.contains("carries no name") && msg.contains("glslc -g"),
             "the refusal must name the cause and the fix, got: {msg}"
         );
-    }
-
-    /// Drop every `OpName` (opcode 5) from a SPIR-V module, reproducing what
-    /// `glslc -O` emits without `-g`.
-    fn strip_debug_names(spv: &[u8]) -> Vec<u8> {
-        const HEADER_WORDS: usize = 5;
-        const OP_NAME: u16 = 5;
-        let words: Vec<u32> = spv
-            .chunks_exact(4)
-            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
-            .collect();
-        let mut kept: Vec<u32> = words[..HEADER_WORDS].to_vec();
-        let mut at = HEADER_WORDS;
-        while at < words.len() {
-            let word_count = (words[at] >> 16) as usize;
-            let opcode = (words[at] & 0xffff) as u16;
-            assert!(word_count > 0, "malformed SPIR-V instruction");
-            if opcode != OP_NAME {
-                kept.extend_from_slice(&words[at..at + word_count]);
-            }
-            at += word_count;
-        }
-        kept.iter().flat_map(|w| w.to_le_bytes()).collect()
     }
 
     #[test]

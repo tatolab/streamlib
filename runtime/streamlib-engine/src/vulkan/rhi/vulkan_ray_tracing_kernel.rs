@@ -34,7 +34,9 @@ use std::ffi::c_void;
 use crate::core::rhi::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingShaderGroup, RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
-    Texture, ray_tracing_spirv_type_to_kind, validate_shader_groups,
+    Texture, ray_tracing_spirv_type_to_kind, refuse_a_binding_the_shader_left_unnamed,
+    refuse_one_binding_name_that_identifies_two_slots,
+    refuse_one_binding_slot_two_stages_spell_differently, validate_shader_groups,
 };
 use crate::core::{Error, Result};
 
@@ -1083,6 +1085,8 @@ fn validate_bindings_against_spirv(
 ) -> Result<Vec<RayTracingBindingSpec>> {
     use std::collections::BTreeMap;
 
+    let kernel_kind_label = format!("Ray-tracing kernel '{}'", descriptor.label);
+
     // Merge per-stage SPIR-V reflection into a single map.
     let mut merged: BTreeMap<u32, (RayTracingBindingKind, RayTracingShaderStageFlags, String)> =
         BTreeMap::new();
@@ -1117,6 +1121,13 @@ fn validate_bindings_against_spirv(
                         descriptor.label, binding, stage.stage, info.ty
                     ))
                 })?;
+                refuse_a_binding_the_shader_left_unnamed(
+                    &kernel_kind_label,
+                    stage.stage,
+                    binding,
+                    kind,
+                    &info.name,
+                )?;
                 let entry = merged.entry(binding).or_insert((
                     kind,
                     RayTracingShaderStageFlags::NONE,
@@ -1128,18 +1139,24 @@ fn validate_bindings_against_spirv(
                         descriptor.label, binding, entry.0, kind
                     )));
                 }
-                if entry.2 != info.name {
-                    return Err(Error::GpuError(format!(
-                        "Ray-tracing kernel '{}': binding {} is named `{}` by one stage and `{}` \
-                         by the {:?} stage; bindings are resolved by name, so one slot spelled \
-                         two ways cannot be bound",
-                        descriptor.label, binding, entry.2, info.name, stage.stage
-                    )));
-                }
+                refuse_one_binding_slot_two_stages_spell_differently(
+                    &kernel_kind_label,
+                    stage.stage,
+                    binding,
+                    &entry.2,
+                    &info.name,
+                )?;
                 entry.1 |= stage_flag;
             }
         }
     }
+
+    refuse_one_binding_name_that_identifies_two_slots(
+        &kernel_kind_label,
+        merged
+            .iter()
+            .map(|(&binding, (_, _, name))| (binding, name.as_str())),
+    )?;
 
     // Every declared binding must exist in the merged SPIR-V map. The shader's
     // own name for the binding is adopted onto the returned spec — that is what
@@ -1175,9 +1192,7 @@ fn validate_bindings_against_spirv(
             )));
         }
         let mut adopted = spec.clone();
-        if !spirv_name.is_empty() {
-            adopted.name = Some(std::borrow::Cow::Owned(spirv_name.clone()));
-        }
+        adopted.name = Some(std::borrow::Cow::Owned(spirv_name.clone()));
         reconciled.push(adopted);
     }
 
@@ -1822,6 +1837,9 @@ fn drop_sbt(sbt: &Sbt, vulkan_device: &Arc<HostVulkanDevice>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        rename_binding_in_spirv_module, strip_every_debug_name_from_spirv_module,
+    };
     use crate::core::rhi::{
         RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
         RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, Texture,
@@ -1895,6 +1913,118 @@ mod tests {
                 max_recursion_depth: 1,
             },
         )
+    }
+
+    // ---- Validation rejections (host-only, no GPU device required) --------
+
+    fn binding_validation_descriptor<'a>(
+        stages: &'a [RayTracingStage<'a>],
+        groups: &'a [RayTracingShaderGroup],
+        bindings: &'a [RayTracingBindingSpec],
+    ) -> RayTracingKernelDescriptor<'a> {
+        RayTracingKernelDescriptor {
+            label: "rt-binding-validation",
+            stages,
+            groups,
+            bindings,
+            push_constants: RayTracingPushConstants::NONE,
+            max_recursion_depth: 1,
+        }
+    }
+
+    #[test]
+    fn rejects_one_slot_the_two_stages_spell_differently() {
+        // The miss and closest-hit shaders declare no binding, so the second
+        // spelling of slot 0 has to come from a rewrite of the ray-gen blob.
+        let respelled =
+            rename_binding_in_spirv_module(rt_test_rgen_spv(), "topLevelAS", "sceneTlas");
+        let stages = [
+            RayTracingStage::ray_gen(rt_test_rgen_spv()),
+            RayTracingStage::miss(&respelled),
+        ];
+        let groups = [RayTracingShaderGroup::General { general: 0 }];
+        let bindings = [
+            RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
+            RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
+        ];
+        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
+            &stages, &groups, &bindings,
+        ))
+        .err()
+        .expect("one slot cannot carry two names");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("binding 0 is named `topLevelAS`")
+                && msg.contains("`sceneTlas`")
+                && msg.contains("one slot spelled two ways"),
+            "expected both spellings of slot 0, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_name_stripped_stage() {
+        let stripped = strip_every_debug_name_from_spirv_module(rt_test_rgen_spv());
+        let stages = [RayTracingStage::ray_gen(&stripped)];
+        let groups = [RayTracingShaderGroup::General { general: 0 }];
+        let bindings = [
+            RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
+            RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
+        ];
+        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
+            &stages, &groups, &bindings,
+        ))
+        .err()
+        .expect("a name-stripped blob cannot be bound by name");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("carries no name") && msg.contains("glslc -g"),
+            "the refusal must name the cause and the fix, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_one_name_the_shader_puts_on_two_slots() {
+        let collided =
+            rename_binding_in_spirv_module(rt_test_rgen_spv(), "outputImage", "topLevelAS");
+        let stages = [RayTracingStage::ray_gen(&collided)];
+        let groups = [RayTracingShaderGroup::General { general: 0 }];
+        let bindings = [
+            RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
+            RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
+        ];
+        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
+            &stages, &groups, &bindings,
+        ))
+        .err()
+        .expect("one name cannot identify two slots");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("bindings 0 and 1 are both named `topLevelAS`")
+                && msg.contains("one name on two slots"),
+            "expected both slots and the name, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_declared_name_the_shader_spells_differently() {
+        let stages = [RayTracingStage::ray_gen(rt_test_rgen_spv())];
+        let groups = [RayTracingShaderGroup::General { general: 0 }];
+        let bindings = [
+            RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN)
+                .with_name("sceneTlas"),
+            RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
+        ];
+        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
+            &stages, &groups, &bindings,
+        ))
+        .err()
+        .expect("a declared name the shader does not use must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("declared name `sceneTlas`")
+                && msg.contains("SPIR-V names it `topLevelAS`"),
+            "expected both the declared and the reflected name, got: {msg}"
+        );
     }
 
     #[cfg_attr(

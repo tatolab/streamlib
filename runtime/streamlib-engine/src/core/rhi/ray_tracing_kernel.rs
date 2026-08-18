@@ -15,12 +15,13 @@
 
 use std::borrow::Cow;
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use rspirv_reflect::DescriptorType as RDescriptorType;
 
 use crate::core::{Error, Result};
 
 use super::kernel_binding_names::{
-    KernelBindingUnderReconciliation, KernelShaderStageMask,
+    KernelBindingUnderReconciliation, KernelShaderStageMask, KernelShaderStageSpirvModule,
+    derive_staged_kernel_bindings_from_shader_reflection,
     reconcile_staged_kernel_binding_declarations,
 };
 
@@ -196,6 +197,10 @@ pub struct RayTracingBindingDeclaration {
 }
 
 impl KernelShaderStageMask for RayTracingShaderStageFlags {
+    fn mask_naming_no_stages() -> Self {
+        Self::NONE
+    }
+
     fn named_stages(self) -> Vec<&'static str> {
         [
             (Self::RAYGEN, "ray_gen"),
@@ -276,115 +281,32 @@ pub(crate) fn reconcile_ray_tracing_binding_declarations(
 pub fn derive_ray_tracing_bindings_from_spirv_multistage(
     stages: &[RayTracingStage<'_>],
 ) -> Result<(Vec<RayTracingBindingSpec>, RayTracingPushConstants)> {
-    let mut merged: std::collections::BTreeMap<
-        u32,
-        (RayTracingBindingKind, RayTracingShaderStageFlags, String),
-    > = std::collections::BTreeMap::new();
-    let mut push_size: u32 = 0;
-    let mut push_stages = RayTracingShaderStageFlags::NONE;
-
-    for stage in stages {
-        let stage_flag = ray_tracing_stage_to_flag(stage.stage);
-        let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            Error::GpuError(format!(
-                "Ray-tracing kernel: failed to reflect SPIR-V for {:?} stage: {e:?}",
-                stage.stage
-            ))
-        })?;
-        let sets = reflection.get_descriptor_sets().map_err(|e| {
-            Error::GpuError(format!(
-                "Ray-tracing kernel: failed to extract descriptor sets for {:?} stage: {e:?}",
-                stage.stage
-            ))
-        })?;
-        if sets.len() > 1 {
-            return Err(Error::GpuError(format!(
-                "Ray-tracing kernel: only descriptor set 0 is supported; SPIR-V {:?} stage uses \
-                 sets {:?}",
-                stage.stage,
-                sets.keys().collect::<Vec<_>>()
-            )));
-        }
-        if let Some(set0) = sets.get(&0) {
-            for (&binding, info) in set0 {
-                let kind = ray_tracing_spirv_type_to_kind(info.ty).ok_or_else(|| {
-                    Error::GpuError(format!(
-                        "Ray-tracing kernel: SPIR-V {:?} stage binding {binding} has unsupported \
-                         descriptor type {:?}",
-                        stage.stage, info.ty
-                    ))
-                })?;
-                if info.name.is_empty() {
-                    return Err(Error::GpuError(format!(
-                        "Ray-tracing kernel: SPIR-V {:?} stage binding {binding} ({kind:?}) \
-                         carries no name — its OpName decorations were stripped, and bindings are \
-                         resolved by name. Compile with debug info retained (`glslc -g`) so the \
-                         shader's own binding names survive optimization",
-                        stage.stage
-                    )));
-                }
-                let entry = merged.entry(binding).or_insert((
-                    kind,
-                    RayTracingShaderStageFlags::NONE,
-                    info.name.clone(),
-                ));
-                if entry.0 != kind {
-                    return Err(Error::GpuError(format!(
-                        "Ray-tracing kernel: binding {binding} kind conflict — {:?} vs {:?} \
-                         (introduced by {:?})",
-                        entry.0, kind, stage.stage
-                    )));
-                }
-                if entry.2 != info.name {
-                    return Err(Error::GpuError(format!(
-                        "Ray-tracing kernel: binding {binding} is named `{}` by one stage and \
-                         `{}` by the {:?} stage; bindings are resolved by name, so one slot \
-                         spelled two ways cannot be bound",
-                        entry.2, info.name, stage.stage
-                    )));
-                }
-                entry.1 |= stage_flag;
-            }
-        }
-        if let Some(info) = reflection.get_push_constant_range().map_err(|e| {
-            Error::GpuError(format!(
-                "Ray-tracing kernel: failed to read push-constant range for {:?} stage: {e:?}",
-                stage.stage
-            ))
-        })? {
-            push_size = push_size.max(info.size);
-            push_stages |= stage_flag;
-        }
-    }
-
-    let bindings: Vec<RayTracingBindingSpec> = merged
-        .into_iter()
-        .map(|(binding, (kind, stages, name))| RayTracingBindingSpec {
-            binding,
-            kind,
-            stages,
-            name: Some(Cow::Owned(name)),
+    let stage_modules: Vec<_> = stages
+        .iter()
+        .map(|stage| KernelShaderStageSpirvModule {
+            stage: stage.stage,
+            spirv: stage.spv,
         })
         .collect();
-    for (index, spec) in bindings.iter().enumerate() {
-        if let Some(earlier) = bindings[..index]
-            .iter()
-            .find(|earlier| earlier.name == spec.name)
-        {
-            return Err(Error::GpuError(format!(
-                "Ray-tracing kernel: bindings {} and {} are both named `{}`; bindings are \
-                 resolved by name, so one name on two slots cannot be bound",
-                earlier.binding,
-                spec.binding,
-                spec.name.as_deref().unwrap_or_default()
-            )));
-        }
-    }
+    let (derived, push_constants) = derive_staged_kernel_bindings_from_shader_reflection(
+        "Ray-tracing kernel",
+        &stage_modules,
+        ray_tracing_stage_to_flag,
+        ray_tracing_spirv_type_to_kind,
+    )?;
     Ok((
-        bindings,
+        derived
+            .into_iter()
+            .map(|binding| RayTracingBindingSpec {
+                binding: binding.binding,
+                kind: binding.kind,
+                stages: binding.stages,
+                name: Some(Cow::Owned(binding.name)),
+            })
+            .collect(),
         RayTracingPushConstants {
-            size: push_size,
-            stages: push_stages,
+            size: push_constants.size,
+            stages: push_constants.stages,
         },
     ))
 }
@@ -411,9 +333,7 @@ const fn ray_tracing_stage_to_flag(stage: RayTracingShaderStage) -> RayTracingSh
 
 /// The binding kind a reflected descriptor type names, or `None` for a type no
 /// ray-tracing binding kind covers.
-pub(crate) fn ray_tracing_spirv_type_to_kind(
-    ty: RDescriptorType,
-) -> Option<RayTracingBindingKind> {
+pub(crate) fn ray_tracing_spirv_type_to_kind(ty: RDescriptorType) -> Option<RayTracingBindingKind> {
     match ty {
         RDescriptorType::STORAGE_BUFFER => Some(RayTracingBindingKind::StorageBuffer),
         RDescriptorType::UNIFORM_BUFFER => Some(RayTracingBindingKind::UniformBuffer),
@@ -688,6 +608,94 @@ fn expect_stage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        rename_binding_in_spirv_module, strip_every_debug_name_from_spirv_module,
+    };
+
+    // Reflection is host-side work on bytes the build already produced, so
+    // every test here runs without a Vulkan device.
+    fn ray_tracing_test_ray_gen_spirv() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/raytracing_test.rgen.spv"))
+    }
+
+    fn ray_tracing_test_miss_spirv() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/raytracing_test.rmiss.spv"))
+    }
+
+    #[test]
+    fn reflection_keeps_the_shaders_own_name_for_every_binding() {
+        let stages = [
+            RayTracingStage::ray_gen(ray_tracing_test_ray_gen_spirv()),
+            RayTracingStage::miss(ray_tracing_test_miss_spirv()),
+        ];
+        let (bindings, _) =
+            derive_ray_tracing_bindings_from_spirv_multistage(&stages).expect("derive");
+        let named: Vec<(u32, &str)> = bindings
+            .iter()
+            .map(|spec| {
+                (
+                    spec.binding,
+                    spec.name.as_deref().expect("every binding is named"),
+                )
+            })
+            .collect();
+        assert_eq!(named, vec![(0, "topLevelAS"), (1, "outputImage")]);
+    }
+
+    #[test]
+    fn a_name_stripped_stage_is_refused_at_derive() {
+        let stripped = strip_every_debug_name_from_spirv_module(ray_tracing_test_ray_gen_spirv());
+        let stages = [RayTracingStage::ray_gen(&stripped)];
+        let refusal = derive_ray_tracing_bindings_from_spirv_multistage(&stages)
+            .expect_err("a name-stripped blob cannot be bound by name");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("carries no name") && message.contains("glslc -g"),
+            "the refusal must name the cause and the fix: {message}"
+        );
+    }
+
+    #[test]
+    fn one_slot_spelled_two_ways_is_refused_at_derive() {
+        // The miss and closest-hit shaders declare no binding, so the second
+        // spelling of slot 0 has to come from a rewrite of the ray-gen blob.
+        let respelled = rename_binding_in_spirv_module(
+            ray_tracing_test_ray_gen_spirv(),
+            "topLevelAS",
+            "sceneTlas",
+        );
+        let stages = [
+            RayTracingStage::ray_gen(ray_tracing_test_ray_gen_spirv()),
+            RayTracingStage::miss(&respelled),
+        ];
+        let refusal = derive_ray_tracing_bindings_from_spirv_multistage(&stages)
+            .expect_err("one slot cannot carry two names");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("binding 0 is named `topLevelAS`")
+                && message.contains("`sceneTlas`")
+                && message.contains("one slot spelled two ways"),
+            "the refusal must name the slot and both spellings: {message}"
+        );
+    }
+
+    #[test]
+    fn one_name_on_two_slots_is_refused_at_derive() {
+        let collided = rename_binding_in_spirv_module(
+            ray_tracing_test_ray_gen_spirv(),
+            "outputImage",
+            "topLevelAS",
+        );
+        let stages = [RayTracingStage::ray_gen(&collided)];
+        let refusal = derive_ray_tracing_bindings_from_spirv_multistage(&stages)
+            .expect_err("one name cannot identify two slots");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("bindings 0 and 1 are both named `topLevelAS`")
+                && message.contains("one name on two slots"),
+            "the refusal must name both slots and the name: {message}"
+        );
+    }
 
     fn dummy_stage(stage: RayTracingShaderStage) -> RayTracingStage<'static> {
         RayTracingStage {

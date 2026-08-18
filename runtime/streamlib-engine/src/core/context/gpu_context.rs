@@ -3,6 +3,8 @@
 
 use crate::core::context::TextureRegistration;
 use crate::core::media_clock::MediaClock;
+#[cfg(target_os = "linux")]
+use crate::core::rhi::KernelShaderStageMask;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolSlotId,
     PixelFormat, PublishedPixelBufferFrameId, RhiBlitter, RhiColorConverter, RhiCommandQueue,
@@ -53,10 +55,6 @@ impl RhiBlitter for NoOpBlitter {
     fn clear_cache(&self) {}
 }
 
-#[cfg(target_os = "linux")]
-use super::graphics_kernel_bridge::GraphicsKernelBridge;
-#[cfg(target_os = "linux")]
-use super::ray_tracing_kernel_bridge::RayTracingKernelBridge;
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{
     PooledTextureHandle, TexturePool, TexturePoolConfig, TexturePoolDescriptor,
@@ -220,6 +218,116 @@ fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32, entry_point: &s
     hasher.update((entry_point.len() as u64).to_le_bytes());
     hasher.update(entry_point.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// Digest a variable-length part of a cache key.
+///
+/// The length prefix is what keeps two different splits of the same
+/// concatenated bytes from hashing the same.
+#[cfg(target_os = "linux")]
+fn digest_length_prefixed(hasher: &mut sha2::Sha256, bytes: &[u8]) {
+    use sha2::Digest as _;
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// Cache key for a graphics kernel.
+///
+/// Everything that changes the pipeline the driver builds is in the digest.
+/// The fixed-function state goes in through its `Debug` rendering because that
+/// is total: a field added to `GraphicsPipelineState` joins the key without
+/// anyone remembering to add it, which a hand-enumerated digest cannot promise.
+/// The key never leaves this process, so its stability across builds buys
+/// nothing that would justify the alternative.
+#[cfg(target_os = "linux")]
+fn graphics_kernel_cache_key(
+    stages: &[crate::core::rhi::GraphicsStage<'_>],
+    push_constants: crate::core::rhi::GraphicsPushConstants,
+    pipeline_state: &crate::core::rhi::GraphicsPipelineState,
+    descriptor_sets_in_flight: u32,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update((stages.len() as u64).to_le_bytes());
+    for stage in stages {
+        hasher.update((stage.stage as u32).to_le_bytes());
+        digest_length_prefixed(&mut hasher, stage.spv);
+        digest_length_prefixed(&mut hasher, stage.entry_point.as_bytes());
+    }
+    hasher.update(push_constants.size.to_le_bytes());
+    hasher.update(push_constants.stages.bits().to_le_bytes());
+    hasher.update(descriptor_sets_in_flight.to_le_bytes());
+    digest_length_prefixed(&mut hasher, format!("{pipeline_state:?}").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Cache key for a ray-tracing kernel.
+///
+/// Same shape as the graphics key; the shader-group layout and the recursion
+/// depth take the place of the fixed-function state, since those are what the
+/// driver builds the pipeline and its binding table from.
+#[cfg(target_os = "linux")]
+fn ray_tracing_kernel_cache_key(
+    stages: &[crate::core::rhi::RayTracingStage<'_>],
+    groups: &[crate::core::rhi::RayTracingShaderGroup],
+    push_constants: crate::core::rhi::RayTracingPushConstants,
+    max_recursion_depth: u32,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update((stages.len() as u64).to_le_bytes());
+    for stage in stages {
+        hasher.update((stage.stage as u32).to_le_bytes());
+        digest_length_prefixed(&mut hasher, stage.spv);
+        digest_length_prefixed(&mut hasher, stage.entry_point.as_bytes());
+    }
+    hasher.update(push_constants.size.to_le_bytes());
+    hasher.update(push_constants.stages.bits().to_le_bytes());
+    hasher.update(max_recursion_depth.to_le_bytes());
+    digest_length_prefixed(&mut hasher, format!("{groups:?}").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Settle a caller's push-constant declaration against what the shaders
+/// reflect, for a kernel kind whose push-constant range carries a stage mask.
+///
+/// The size must agree outright. The stage mask follows the same rule a
+/// binding's does — a declaration may widen visibility past what the shaders
+/// read, never narrow it below — and an empty mask asserts nothing, so the
+/// reflected one stands.
+///
+/// Generic over the mask rather than written once per kernel kind, for the same
+/// reason the shared binding reconciliation is: graphics and ray tracing differ
+/// only in which unrelated `u32` newtype they name, and
+/// [`KernelShaderStageMask`] is the seam that already spans both.
+#[cfg(target_os = "linux")]
+fn reconciled_push_constant_stages<Stages: KernelShaderStageMask>(
+    kernel_kind_label: &str,
+    declared_size: u32,
+    declared_stages: Stages,
+    reflected_size: u32,
+    reflected_stages: Stages,
+) -> Result<Stages> {
+    if declared_size != reflected_size {
+        return Err(Error::GpuError(format!(
+            "{kernel_kind_label} kernel declares {declared_size} push-constant bytes but its \
+             shaders reflect {reflected_size}"
+        )));
+    }
+    if declared_stages.names_no_stage() {
+        return Ok(reflected_stages);
+    }
+    if !declared_stages.contains_every_stage_in(reflected_stages) {
+        return Err(Error::GpuError(format!(
+            "{kernel_kind_label} kernel declares its push constants for {} but its shaders also \
+             read them from {}",
+            crate::core::rhi::quote_shader_stage_names(&declared_stages.named_stages()),
+            crate::core::rhi::quote_shader_stage_names(
+                &reflected_stages.stages_missing_from(declared_stages)
+            )
+        )));
+    }
+    Ok(declared_stages)
 }
 
 impl PixelBufferPoolManager {
@@ -639,7 +747,7 @@ pub struct BatchedComputeKernelDispatchBinding {
     pub binding: u32,
     /// How this dispatch uses the surface, which decides both the descriptor
     /// write and the layout its barrier moves the texture into.
-    pub kind: crate::core::rhi::SurfaceBoundComputeBindingKind,
+    pub kind: crate::core::rhi::SurfaceBoundKernelBindingKind,
     /// The bound texture and the layout it is currently tracked in — the
     /// barrier's source layout.
     pub registration: TextureRegistration,
@@ -655,13 +763,13 @@ impl BatchedComputeKernelDispatchBinding {
         &self,
         kernel: &crate::vulkan::rhi::VulkanComputeKernel,
     ) -> Result<()> {
-        use crate::core::rhi::SurfaceBoundComputeBindingKind;
+        use crate::core::rhi::SurfaceBoundKernelBindingKind;
         let texture = self.registration.texture();
         match self.kind {
-            SurfaceBoundComputeBindingKind::StorageImage => {
+            SurfaceBoundKernelBindingKind::StorageImage => {
                 kernel.set_storage_image(self.binding, texture)
             }
-            SurfaceBoundComputeBindingKind::SampledTexture => {
+            SurfaceBoundKernelBindingKind::SampledTexture => {
                 kernel.set_sampled_texture(self.binding, texture)
             }
         }
@@ -768,25 +876,28 @@ pub struct GpuContext {
     #[cfg(target_os = "linux")]
     batched_compute_dispatch_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
-    /// Host-side bridge for the graphics-kernel escalate ops
-    /// (`register_graphics_kernel`, `run_graphics_draw`). Wired by
-    /// application code that exposes the host's
-    /// [`crate::vulkan::rhi::VulkanGraphicsKernel`] to subprocess customers;
-    /// left unset on hosts that don't expose graphics dispatch (the
-    /// escalate handler responds with an `Err` in that case).
+    /// Graphics kernels built for the `register_graphics_kernel` escalate op,
+    /// keyed the same way `compute_kernel_cache` is and with the same
+    /// lifetime.
     #[cfg(target_os = "linux")]
-    graphics_kernel_bridge: Arc<Mutex<Option<Arc<dyn GraphicsKernelBridge>>>>,
-    /// Host-side bridge for the ray-tracing-kernel escalate ops
-    /// (`register_acceleration_structure_blas`,
-    /// `register_acceleration_structure_tlas`, `register_ray_tracing_kernel`,
-    /// `run_ray_tracing_kernel`). Wired by application code that exposes the
-    /// host's [`crate::vulkan::rhi::VulkanRayTracingKernel`] +
-    /// [`crate::vulkan::rhi::VulkanAccelerationStructure`] to subprocess
-    /// customers; left unset on hosts that don't expose RT dispatch (the
-    /// escalate handler responds with an `Err` in that case, as does any
-    /// device that lacks the `VK_KHR_ray_tracing_pipeline` extension chain).
+    graphics_kernel_cache:
+        Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanGraphicsKernel>>>>,
+    /// Ray-tracing kernels built for the `register_ray_tracing_kernel`
+    /// escalate op, keyed the same way `compute_kernel_cache` is and with the
+    /// same lifetime.
     #[cfg(target_os = "linux")]
-    ray_tracing_kernel_bridge: Arc<Mutex<Option<Arc<dyn RayTracingKernelBridge>>>>,
+    ray_tracing_kernel_cache:
+        Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>>>>,
+    /// Acceleration structures built for the
+    /// `register_acceleration_structure_blas` / `_tlas` escalate ops.
+    ///
+    /// A registry, not a cache: two builds of the same geometry are two
+    /// structures under two ids, because an acceleration structure holds
+    /// device memory proportional to its mesh and deduplicating them by
+    /// content would retain every mesh any helper ever built.
+    #[cfg(target_os = "linux")]
+    acceleration_structure_registry:
+        Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanAccelerationStructure>>>>,
 }
 
 impl GpuContext {
@@ -817,9 +928,11 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(target_os = "linux")]
-            graphics_kernel_bridge: Arc::new(Mutex::new(None)),
+            graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
-            ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
+            ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -850,9 +963,11 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(target_os = "linux")]
-            graphics_kernel_bridge: Arc::new(Mutex::new(None)),
+            graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
-            ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
+            ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -2745,6 +2860,274 @@ impl GpuContext {
             .map(Arc::clone)
     }
 
+    /// Build a graphics kernel for the `register_graphics_kernel` escalate op,
+    /// or hand back one an identical earlier registration already built.
+    ///
+    /// The twin of [`Self::create_or_reuse_compute_kernel`], and the same
+    /// contract: reflection is the source of truth for the binding shape, the
+    /// caller's declaration is checked against it by name rather than
+    /// replacing it, and the cache key is what the caller gets back as the
+    /// kernel id.
+    ///
+    /// `label` names the pipeline in RHI errors and validation-layer messages,
+    /// and is deliberately outside the cache key — two registrations differing
+    /// only in label are one pipeline, and the first one's label is the one the
+    /// driver keeps.
+    #[cfg(target_os = "linux")]
+    pub fn create_or_reuse_graphics_kernel(
+        &self,
+        label: &str,
+        stages: &[crate::core::rhi::GraphicsStage<'_>],
+        declared_push_constants: crate::core::rhi::GraphicsPushConstants,
+        pipeline_state: &crate::core::rhi::GraphicsPipelineState,
+        descriptor_sets_in_flight: u32,
+        declared_bindings: &[crate::core::rhi::GraphicsBindingDeclaration],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanGraphicsKernel>)> {
+        use crate::core::rhi::GraphicsShaderStageFlags;
+
+        // Both stages are always present — `VulkanGraphicsKernel::new` refuses
+        // anything else — so every graphics kernel is built from both.
+        let stages_the_kernel_was_built_from = GraphicsShaderStageFlags::VERTEX_FRAGMENT;
+        let kernel_id = graphics_kernel_cache_key(
+            stages,
+            declared_push_constants,
+            pipeline_state,
+            descriptor_sets_in_flight,
+        );
+        let cached_kernel = self
+            .graphics_kernel_cache
+            .lock()
+            .unwrap()
+            .get(&kernel_id)
+            .map(Arc::clone);
+        if let Some(cached) = cached_kernel {
+            // The declaration is checked on the hit path too: the cache key
+            // covers the shaders and the pipeline, not the caller's assertion,
+            // and a wrong assertion must refuse identically whether or not
+            // somebody registered this kernel first.
+            crate::core::rhi::reconcile_graphics_binding_declarations(
+                declared_bindings,
+                &cached.bindings(),
+                stages_the_kernel_was_built_from,
+            )?;
+            tracing::debug!(
+                rhi_op = "create_or_reuse_graphics_kernel",
+                kernel_id,
+                "GpuContext::create_or_reuse_graphics_kernel — cache hit"
+            );
+            return Ok((kernel_id, Arc::clone(&cached)));
+        }
+
+        let (reflected, reflected_push_constants) =
+            crate::core::rhi::derive_bindings_from_spirv_multistage(stages)?;
+        crate::core::rhi::reconcile_graphics_binding_declarations(
+            declared_bindings,
+            &reflected,
+            stages_the_kernel_was_built_from,
+        )?;
+        let push_constants = crate::core::rhi::GraphicsPushConstants {
+            size: reflected_push_constants.size,
+            stages: reconciled_push_constant_stages(
+                "graphics",
+                declared_push_constants.size,
+                declared_push_constants.stages,
+                reflected_push_constants.size,
+                reflected_push_constants.stages,
+            )?,
+        };
+
+        let kernel = Arc::new(self.create_graphics_kernel(
+            &crate::core::rhi::GraphicsKernelDescriptor {
+                label,
+                stages,
+                bindings: &reflected,
+                push_constants,
+                pipeline_state: pipeline_state.clone(),
+                descriptor_sets_in_flight,
+            },
+        )?);
+
+        Ok((
+            kernel_id.clone(),
+            Arc::clone(
+                self.graphics_kernel_cache
+                    .lock()
+                    .unwrap()
+                    .entry(kernel_id)
+                    .or_insert(kernel),
+            ),
+        ))
+    }
+
+    /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
+    /// returned.
+    #[cfg(target_os = "linux")]
+    pub fn graphics_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+        self.graphics_kernel_cache
+            .lock()
+            .unwrap()
+            .get(kernel_id)
+            .map(Arc::clone)
+    }
+
+    /// Build a ray-tracing kernel for the `register_ray_tracing_kernel`
+    /// escalate op, or hand back one an identical earlier registration already
+    /// built.
+    ///
+    /// The twin of [`Self::create_or_reuse_compute_kernel`]. Unlike graphics,
+    /// a ray-tracing kernel's stage set varies per kernel, so the stages it was
+    /// actually built from are what a declaration naming a stage is checked
+    /// against.
+    ///
+    /// `label` names the pipeline in RHI errors and validation-layer messages,
+    /// and is deliberately outside the cache key — two registrations differing
+    /// only in label are one pipeline, and the first one's label is the one the
+    /// driver keeps.
+    #[cfg(target_os = "linux")]
+    pub fn create_or_reuse_ray_tracing_kernel(
+        &self,
+        label: &str,
+        stages: &[crate::core::rhi::RayTracingStage<'_>],
+        groups: &[crate::core::rhi::RayTracingShaderGroup],
+        declared_push_constants: crate::core::rhi::RayTracingPushConstants,
+        max_recursion_depth: u32,
+        declared_bindings: &[crate::core::rhi::RayTracingBindingDeclaration],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>)> {
+        let stages_the_kernel_was_built_from =
+            crate::core::rhi::ray_tracing_stages_covered_by(stages);
+        let kernel_id = ray_tracing_kernel_cache_key(
+            stages,
+            groups,
+            declared_push_constants,
+            max_recursion_depth,
+        );
+        let cached_kernel = self
+            .ray_tracing_kernel_cache
+            .lock()
+            .unwrap()
+            .get(&kernel_id)
+            .map(Arc::clone);
+        if let Some(cached) = cached_kernel {
+            crate::core::rhi::reconcile_ray_tracing_binding_declarations(
+                declared_bindings,
+                &cached.bindings(),
+                stages_the_kernel_was_built_from,
+            )?;
+            tracing::debug!(
+                rhi_op = "create_or_reuse_ray_tracing_kernel",
+                kernel_id,
+                "GpuContext::create_or_reuse_ray_tracing_kernel — cache hit"
+            );
+            return Ok((kernel_id, Arc::clone(&cached)));
+        }
+
+        let (reflected, reflected_push_constants) =
+            crate::core::rhi::derive_ray_tracing_bindings_from_spirv_multistage(stages)?;
+        crate::core::rhi::reconcile_ray_tracing_binding_declarations(
+            declared_bindings,
+            &reflected,
+            stages_the_kernel_was_built_from,
+        )?;
+        let push_constants = crate::core::rhi::RayTracingPushConstants {
+            size: reflected_push_constants.size,
+            stages: reconciled_push_constant_stages(
+                "ray-tracing",
+                declared_push_constants.size,
+                declared_push_constants.stages,
+                reflected_push_constants.size,
+                reflected_push_constants.stages,
+            )?,
+        };
+
+        let kernel = Arc::new(self.create_ray_tracing_kernel(
+            &crate::core::rhi::RayTracingKernelDescriptor {
+                label,
+                stages,
+                groups,
+                bindings: &reflected,
+                push_constants,
+                max_recursion_depth,
+            },
+        )?);
+
+        Ok((
+            kernel_id.clone(),
+            Arc::clone(
+                self.ray_tracing_kernel_cache
+                    .lock()
+                    .unwrap()
+                    .entry(kernel_id)
+                    .or_insert(kernel),
+            ),
+        ))
+    }
+
+    /// Look up a ray-tracing kernel a prior
+    /// `create_or_reuse_ray_tracing_kernel` returned.
+    #[cfg(target_os = "linux")]
+    pub fn ray_tracing_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+        self.ray_tracing_kernel_cache
+            .lock()
+            .unwrap()
+            .get(kernel_id)
+            .map(Arc::clone)
+    }
+
+    /// Take ownership of a freshly built acceleration structure and return the
+    /// id a later trace names it by.
+    ///
+    /// Every call mints a fresh id: an acceleration structure holds device
+    /// memory proportional to its mesh, so unlike a kernel it is registered
+    /// rather than deduplicated by content.
+    #[cfg(target_os = "linux")]
+    pub fn register_acceleration_structure(
+        &self,
+        acceleration_structure: crate::vulkan::rhi::VulkanAccelerationStructure,
+    ) -> String {
+        let acceleration_structure_id = uuid::Uuid::new_v4().to_string();
+        self.acceleration_structure_registry.lock().unwrap().insert(
+            acceleration_structure_id.clone(),
+            Arc::new(acceleration_structure),
+        );
+        acceleration_structure_id
+    }
+
+    /// Look up an acceleration structure a prior
+    /// `register_acceleration_structure` returned the id of.
+    #[cfg(target_os = "linux")]
+    pub fn acceleration_structure_by_id(
+        &self,
+        acceleration_structure_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+        self.acceleration_structure_registry
+            .lock()
+            .unwrap()
+            .get(acceleration_structure_id)
+            .map(Arc::clone)
+    }
+
+    /// Drop the registry's strong reference to an acceleration structure,
+    /// answering whether an entry was there to drop.
+    ///
+    /// This is what a Rust caller's `VulkanAccelerationStructure` going out of
+    /// scope does. The device memory returns once the last reference does — a
+    /// TLAS holds its own reference to every BLAS it instances, so releasing a
+    /// BLAS a scene still uses frees nothing until the scene goes too.
+    #[cfg(target_os = "linux")]
+    pub fn release_acceleration_structure(&self, acceleration_structure_id: &str) -> bool {
+        self.acceleration_structure_registry
+            .lock()
+            .unwrap()
+            .remove(acceleration_structure_id)
+            .is_some()
+    }
+
     /// Record every dispatch in `batch` into one command buffer, submit once,
     /// and return when that submission has retired.
     ///
@@ -2924,48 +3307,6 @@ impl GpuContext {
             )?;
         }
         Ok(layout_during_recording)
-    }
-
-    // =========================================================================
-    // GraphicsKernelBridge — host-side dispatch for the graphics-kernel escalate ops
-    // =========================================================================
-
-    /// Register a [`GraphicsKernelBridge`] implementation. The escalate handler
-    /// dispatches `register_graphics_kernel` and `run_graphics_draw` requests
-    /// through this bridge; until it is set, those requests fail with an
-    /// "unsupported" error response. Linux-only: graphics escalate uses the
-    /// Linux-side `VulkanGraphicsKernel`.
-    #[cfg(target_os = "linux")]
-    pub fn set_graphics_kernel_bridge(&self, bridge: Arc<dyn GraphicsKernelBridge>) {
-        *self.graphics_kernel_bridge.lock().unwrap() = Some(bridge);
-    }
-
-    /// Get the registered [`GraphicsKernelBridge`], if any.
-    #[cfg(target_os = "linux")]
-    pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
-        self.graphics_kernel_bridge.lock().unwrap().clone()
-    }
-
-    // =========================================================================
-    // RayTracingKernelBridge — host-side dispatch for the RT-kernel escalate ops
-    // =========================================================================
-
-    /// Register a [`RayTracingKernelBridge`] implementation. The escalate
-    /// handler dispatches `register_acceleration_structure_blas`,
-    /// `register_acceleration_structure_tlas`, `register_ray_tracing_kernel`,
-    /// and `run_ray_tracing_kernel` requests through this bridge; until it
-    /// is set, those requests fail with an "unsupported" error response.
-    /// Linux-only: RT escalate uses the Linux-side `VulkanRayTracingKernel`
-    /// + `VulkanAccelerationStructure`.
-    #[cfg(target_os = "linux")]
-    pub fn set_ray_tracing_kernel_bridge(&self, bridge: Arc<dyn RayTracingKernelBridge>) {
-        *self.ray_tracing_kernel_bridge.lock().unwrap() = Some(bridge);
-    }
-
-    /// Get the registered [`RayTracingKernelBridge`], if any.
-    #[cfg(target_os = "linux")]
-    pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
-        self.ray_tracing_kernel_bridge.lock().unwrap().clone()
     }
 
     /// Check in a pixel buffer to the surface-share service, returning a surface ID.
@@ -3600,8 +3941,6 @@ impl GpuContextFullAccess {
 
     /// Wait for the GPU device to become idle.
     ///
-    /// Mode-routed; see [`Self::create_compute_kernel`] for the
-    /// dispatch contract.
     pub fn wait_device_idle(&self) -> Result<()> {
         self.host_inner().wait_device_idle()
     }
@@ -4018,8 +4357,6 @@ impl GpuContextFullAccess {
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding
     /// declaration, and fixed-function pipeline state.
     ///
-    /// Mode-routed; see [`Self::create_compute_kernel`] for the
-    /// dispatch contract.
     #[cfg(target_os = "linux")]
     pub fn create_graphics_kernel(
         &self,
@@ -4031,8 +4368,6 @@ impl GpuContextFullAccess {
     /// Create a ray-tracing kernel from shader stages, shader-group
     /// layout, binding declaration, and push-constant range.
     ///
-    /// Mode-routed; see [`Self::create_compute_kernel`] for the
-    /// dispatch contract.
     #[cfg(target_os = "linux")]
     pub fn create_ray_tracing_kernel(
         &self,
@@ -4271,24 +4606,94 @@ impl GpuContextFullAccess {
         self.host_inner().dispatch_compute_kernel_batch(batch)
     }
 
-    /// Get the registered graphics-kernel bridge, if any. Reachable only inside
-    /// `escalate(|full| ...)` since it requires `FullAccess`.
-    ///
-    /// **Engine-only** — trait-object return, which no cross-DSO surface
-    /// can carry.
+    /// Runs the host's [`GpuContext::create_or_reuse_graphics_kernel`].
     #[cfg(target_os = "linux")]
-    pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
-        self.host_inner().graphics_kernel_bridge()
+    pub fn create_or_reuse_graphics_kernel(
+        &self,
+        label: &str,
+        stages: &[crate::core::rhi::GraphicsStage<'_>],
+        declared_push_constants: crate::core::rhi::GraphicsPushConstants,
+        pipeline_state: &crate::core::rhi::GraphicsPipelineState,
+        descriptor_sets_in_flight: u32,
+        declared_bindings: &[crate::core::rhi::GraphicsBindingDeclaration],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanGraphicsKernel>)> {
+        self.host_inner().create_or_reuse_graphics_kernel(
+            label,
+            stages,
+            declared_push_constants,
+            pipeline_state,
+            descriptor_sets_in_flight,
+            declared_bindings,
+        )
     }
 
-    /// Get the registered ray-tracing-kernel bridge, if any. Reachable only
-    /// inside `escalate(|full| ...)` since it requires `FullAccess`.
-    ///
-    /// **Engine-only** — trait-object return, which no cross-DSO surface
-    /// can carry.
+    /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
+    /// returned.
     #[cfg(target_os = "linux")]
-    pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
-        self.host_inner().ray_tracing_kernel_bridge()
+    pub fn graphics_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+        self.host_inner().graphics_kernel_by_id(kernel_id)
+    }
+
+    /// Runs the host's [`GpuContext::create_or_reuse_ray_tracing_kernel`].
+    #[cfg(target_os = "linux")]
+    pub fn create_or_reuse_ray_tracing_kernel(
+        &self,
+        label: &str,
+        stages: &[crate::core::rhi::RayTracingStage<'_>],
+        groups: &[crate::core::rhi::RayTracingShaderGroup],
+        declared_push_constants: crate::core::rhi::RayTracingPushConstants,
+        max_recursion_depth: u32,
+        declared_bindings: &[crate::core::rhi::RayTracingBindingDeclaration],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>)> {
+        self.host_inner().create_or_reuse_ray_tracing_kernel(
+            label,
+            stages,
+            groups,
+            declared_push_constants,
+            max_recursion_depth,
+            declared_bindings,
+        )
+    }
+
+    /// Look up a ray-tracing kernel a prior
+    /// `create_or_reuse_ray_tracing_kernel` returned.
+    #[cfg(target_os = "linux")]
+    pub fn ray_tracing_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+        self.host_inner().ray_tracing_kernel_by_id(kernel_id)
+    }
+
+    /// Runs the host's [`GpuContext::register_acceleration_structure`].
+    #[cfg(target_os = "linux")]
+    pub fn register_acceleration_structure(
+        &self,
+        acceleration_structure: crate::vulkan::rhi::VulkanAccelerationStructure,
+    ) -> String {
+        self.host_inner()
+            .register_acceleration_structure(acceleration_structure)
+    }
+
+    /// Look up an acceleration structure a prior
+    /// `register_acceleration_structure` returned the id of.
+    #[cfg(target_os = "linux")]
+    pub fn acceleration_structure_by_id(
+        &self,
+        acceleration_structure_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+        self.host_inner()
+            .acceleration_structure_by_id(acceleration_structure_id)
+    }
+
+    /// Runs the host's [`GpuContext::release_acceleration_structure`].
+    #[cfg(target_os = "linux")]
+    pub fn release_acceleration_structure(&self, acceleration_structure_id: &str) -> bool {
+        self.host_inner()
+            .release_acceleration_structure(acceleration_structure_id)
     }
 }
 

@@ -12,8 +12,8 @@
 //! which carry an explicit null.
 
 use super::escalate_request::{
-    EscalateComputeBindingKind, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestRegisterGraphicsKernelBindingKind,
+    EscalateComputeBindingKind, EscalateGraphicsBindingKind, EscalateRayTracingBindingKind,
+    EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
@@ -29,12 +29,10 @@ use super::escalate_request::{
     EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
     EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
-    EscalateRequestRegisterRayTracingKernelBindingKind,
     EscalateRequestRegisterRayTracingKernelGroupKind,
     EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestRunCpuReadbackCopyDirection,
-    EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
-    EscalateRequestRunGraphicsDrawIndexBufferIndexType,
-    EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunGraphicsDrawIndexBufferIndexType,
+    EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 use super::escalate_response::EscalateResponseOk;
 use super::{EscalateRequest, EscalateResponse};
@@ -79,6 +77,31 @@ macro_rules! assert_wire_spellings {
     };
 }
 
+/// Assert every listed variant's `wire_name()` is exactly what serde writes for
+/// it, and refuse to compile when a variant is left off the list.
+macro_rules! assert_wire_name_is_the_serde_spelling {
+    ($($enum_type:ident { $($variant:ident),+ $(,)? })+) => {
+        $({
+            // Total only over the listed arms: a variant added to the enum and
+            // not to this list is a compile error, not a silently unpinned
+            // spelling.
+            let _every_variant_is_listed = |kind: $enum_type| match kind {
+                $($enum_type::$variant => ()),+
+            };
+            $(
+                assert_eq!(
+                    serde_json::to_string(&$enum_type::$variant).unwrap(),
+                    format!("\"{}\"", $enum_type::$variant.wire_name()),
+                    concat!(
+                        stringify!($enum_type), "::", stringify!($variant),
+                        ": wire_name() drifted from the serde spelling"
+                    )
+                );
+            )+
+        })+
+    };
+}
+
 /// Every `EscalateRequest` variant survives a decode/encode round trip unchanged.
 #[test]
 fn escalate_request_vectors_round_trip() {
@@ -94,14 +117,14 @@ fn escalate_request_vectors_round_trip() {
         RegisterAccelerationStructureBlas => r#"{"op":"register_acceleration_structure_blas","indices_hex":"register_acceleration_structure_blas.indices_hex-31","label":"register_acceleration_structure_blas.label-32","request_id":"register_acceleration_structure_blas.request_id-33","vertices_hex":"register_acceleration_structure_blas.vertices_hex-34"}"#,
         RegisterAccelerationStructureTlas => r#"{"op":"register_acceleration_structure_tlas","instances":[{"blas_id":"register_acceleration_structure_tlas.instances[0].blas_id-35","custom_index":36,"flags":37,"mask":38,"sbt_record_offset":39,"transform":[40.5,41.5]},{"blas_id":"register_acceleration_structure_tlas.instances[1].blas_id-42","custom_index":43,"flags":44,"mask":45,"sbt_record_offset":46,"transform":[47.5,48.5]}],"label":"register_acceleration_structure_tlas.label-49","request_id":"register_acceleration_structure_tlas.request_id-50"}"#,
         RegisterComputeKernel => r#"{"op":"register_compute_kernel","bindings":[{"kind":"storage_buffer","name":"register_compute_kernel.bindings[0].name-51"},{"kind":"storage_image","name":"register_compute_kernel.bindings[1].name-52"}],"push_constant_size":53,"request_id":"register_compute_kernel.request_id-54","source":"register_compute_kernel.source-210","stage":"register_compute_kernel.stage-211","entry_point":"register_compute_kernel.entry_point-212","spv_hex":"register_compute_kernel.spv_hex-55"}"#,
-        RegisterGraphicsKernel => r#"{"op":"register_graphics_kernel","bindings":[{"binding":54,"kind":"uniform_buffer","stages":56},{"binding":57,"kind":"storage_image","stages":59}],"descriptor_sets_in_flight":60,"fragment_entry_point":"register_graphics_kernel.fragment_entry_point-61","fragment_source":"register_graphics_kernel.fragment_source-213","fragment_spv_hex":"register_graphics_kernel.fragment_spv_hex-62","label":"register_graphics_kernel.label-63","pipeline_state":{"attachment_color_formats":["register_graphics_kernel.pipeline_state.attachment_color_formats[0]-64","register_graphics_kernel.pipeline_state.attachment_color_formats[1]-65"],"color_blend_alpha_op":"max","color_blend_color_op":"min","color_blend_dst_alpha_factor":"one_minus_dst_color","color_blend_dst_color_factor":"one_minus_src_alpha","color_blend_enabled":true,"color_blend_src_alpha_factor":"src_alpha","color_blend_src_color_factor":"src_alpha_saturate","color_write_mask":73,"depth_compare_op":"greater","depth_stencil_enabled":false,"depth_write":true,"dynamic_state":"viewport_scissor","multisample_samples":78,"rasterization_cull_mode":"none","rasterization_front_face":"clockwise","rasterization_line_width":81.5,"rasterization_polygon_mode":"line","topology":"triangle_strip","vertex_input_attributes":[{"binding":84,"format":"r32_sint","location":86,"offset":87},{"binding":88,"format":"rg32_uint","location":90,"offset":91}],"vertex_input_bindings":[{"binding":92,"input_rate":"vertex","stride":94},{"binding":95,"input_rate":"instance","stride":97}],"attachment_depth_format":"d32_sfloat"},"push_constant_size":99,"push_constant_stages":100,"request_id":"register_graphics_kernel.request_id-101","vertex_entry_point":"register_graphics_kernel.vertex_entry_point-102","vertex_source":"register_graphics_kernel.vertex_source-214","vertex_spv_hex":"register_graphics_kernel.vertex_spv_hex-103"}"#,
-        RegisterRayTracingKernel => r#"{"op":"register_ray_tracing_kernel","bindings":[{"binding":104,"kind":"acceleration_structure","stages":106},{"binding":107,"kind":"storage_image","stages":109}],"groups":[{"any_hit_stage":110,"closest_hit_stage":111,"general_stage":112,"intersection_stage":113,"kind":"general"},{"any_hit_stage":115,"closest_hit_stage":116,"general_stage":117,"intersection_stage":118,"kind":"triangles_hit"}],"label":"register_ray_tracing_kernel.label-120","max_recursion_depth":121,"push_constant_size":122,"push_constant_stages":123,"request_id":"register_ray_tracing_kernel.request_id-124","stages":[{"entry_point":"register_ray_tracing_kernel.stages[0].entry_point-125","source":"register_ray_tracing_kernel.stages[0].source-215","spv_hex":"register_ray_tracing_kernel.stages[0].spv_hex-126","stage":"callable"},{"entry_point":"register_ray_tracing_kernel.stages[1].entry_point-128","source":"register_ray_tracing_kernel.stages[1].source-216","spv_hex":"register_ray_tracing_kernel.stages[1].spv_hex-129","stage":"miss"}]}"#,
+        RegisterGraphicsKernel => r#"{"op":"register_graphics_kernel","bindings":[{"kind":"uniform_buffer","name":"register_graphics_kernel.bindings[0].name-54","stages":56},{"kind":"storage_image","name":"register_graphics_kernel.bindings[1].name-57","stages":59}],"descriptor_sets_in_flight":60,"fragment_entry_point":"register_graphics_kernel.fragment_entry_point-61","fragment_source":"register_graphics_kernel.fragment_source-213","fragment_spv_hex":"register_graphics_kernel.fragment_spv_hex-62","label":"register_graphics_kernel.label-63","pipeline_state":{"attachment_color_formats":["register_graphics_kernel.pipeline_state.attachment_color_formats[0]-64","register_graphics_kernel.pipeline_state.attachment_color_formats[1]-65"],"color_blend_alpha_op":"max","color_blend_color_op":"min","color_blend_dst_alpha_factor":"one_minus_dst_color","color_blend_dst_color_factor":"one_minus_src_alpha","color_blend_enabled":true,"color_blend_src_alpha_factor":"src_alpha","color_blend_src_color_factor":"src_alpha_saturate","color_write_mask":73,"depth_compare_op":"greater","depth_stencil_enabled":false,"depth_write":true,"dynamic_state":"viewport_scissor","multisample_samples":78,"rasterization_cull_mode":"none","rasterization_front_face":"clockwise","rasterization_line_width":81.5,"rasterization_polygon_mode":"line","topology":"triangle_strip","vertex_input_attributes":[{"binding":84,"format":"r32_sint","location":86,"offset":87},{"binding":88,"format":"rg32_uint","location":90,"offset":91}],"vertex_input_bindings":[{"binding":92,"input_rate":"vertex","stride":94},{"binding":95,"input_rate":"instance","stride":97}],"attachment_depth_format":"d32_sfloat"},"push_constant_size":99,"push_constant_stages":100,"request_id":"register_graphics_kernel.request_id-101","vertex_entry_point":"register_graphics_kernel.vertex_entry_point-102","vertex_source":"register_graphics_kernel.vertex_source-214","vertex_spv_hex":"register_graphics_kernel.vertex_spv_hex-103"}"#,
+        RegisterRayTracingKernel => r#"{"op":"register_ray_tracing_kernel","bindings":[{"kind":"acceleration_structure","name":"register_ray_tracing_kernel.bindings[0].name-104","stages":106},{"kind":"storage_image","name":"register_ray_tracing_kernel.bindings[1].name-107","stages":109}],"groups":[{"any_hit_stage":110,"closest_hit_stage":111,"general_stage":112,"intersection_stage":113,"kind":"general"},{"any_hit_stage":115,"closest_hit_stage":116,"general_stage":117,"intersection_stage":118,"kind":"triangles_hit"}],"label":"register_ray_tracing_kernel.label-120","max_recursion_depth":121,"push_constant_size":122,"push_constant_stages":123,"request_id":"register_ray_tracing_kernel.request_id-124","stages":[{"entry_point":"register_ray_tracing_kernel.stages[0].entry_point-125","source":"register_ray_tracing_kernel.stages[0].source-215","spv_hex":"register_ray_tracing_kernel.stages[0].spv_hex-126","stage":"callable"},{"entry_point":"register_ray_tracing_kernel.stages[1].entry_point-128","source":"register_ray_tracing_kernel.stages[1].source-216","spv_hex":"register_ray_tracing_kernel.stages[1].spv_hex-129","stage":"miss"}]}"#,
         ReleaseHandle => r#"{"op":"release_handle","handle_id":"release_handle.handle_id-131","request_id":"release_handle.request_id-132"}"#,
         RunComputeKernel => r#"{"op":"run_compute_kernel","bindings":[{"kind":"sampled_texture","name":"run_compute_kernel.bindings[0].name-133","target_id":"run_compute_kernel.bindings[0].target_id-134"},{"kind":"storage_image","name":"run_compute_kernel.bindings[1].name-135","target_id":"run_compute_kernel.bindings[1].target_id-136"}],"group_count_x":137,"group_count_y":138,"group_count_z":139,"kernel_id":"run_compute_kernel.kernel_id-140","push_constants_hex":"run_compute_kernel.push_constants_hex-141","request_id":"run_compute_kernel.request_id-142"}"#,
         RunComputeKernelBatch => r#"{"op":"run_compute_kernel_batch","dispatches":[{"bindings":[{"kind":"sampled_texture","name":"run_compute_kernel_batch.dispatches[0].bindings[0].name-217","target_id":"run_compute_kernel_batch.dispatches[0].bindings[0].target_id-218"},{"kind":"storage_image","name":"run_compute_kernel_batch.dispatches[0].bindings[1].name-219","target_id":"run_compute_kernel_batch.dispatches[0].bindings[1].target_id-220"}],"group_count_x":221,"group_count_y":222,"group_count_z":223,"kernel_id":"run_compute_kernel_batch.dispatches[0].kernel_id-224","push_constants_hex":"run_compute_kernel_batch.dispatches[0].push_constants_hex-225"},{"bindings":[{"kind":"sampled_texture","name":"run_compute_kernel_batch.dispatches[1].bindings[0].name-226","target_id":"run_compute_kernel_batch.dispatches[1].bindings[0].target_id-227"},{"kind":"storage_image","name":"run_compute_kernel_batch.dispatches[1].bindings[1].name-228","target_id":"run_compute_kernel_batch.dispatches[1].bindings[1].target_id-229"}],"group_count_x":230,"group_count_y":231,"group_count_z":232,"kernel_id":"run_compute_kernel_batch.dispatches[1].kernel_id-233","push_constants_hex":"run_compute_kernel_batch.dispatches[1].push_constants_hex-234"}],"request_id":"run_compute_kernel_batch.request_id-235"}"#,
         RunCpuReadbackCopy => r#"{"op":"run_cpu_readback_copy","direction":"buffer_to_image","request_id":"run_cpu_readback_copy.request_id-141","surface_id":"run_cpu_readback_copy.surface_id-142"}"#,
-        RunGraphicsDraw => r#"{"op":"run_graphics_draw","bindings":[{"binding":143,"kind":"sampled_texture","surface_uuid":"run_graphics_draw.bindings[0].surface_uuid-145"},{"binding":146,"kind":"uniform_buffer","surface_uuid":"run_graphics_draw.bindings[1].surface_uuid-148"}],"color_target_uuids":["run_graphics_draw.color_target_uuids[0]-149","run_graphics_draw.color_target_uuids[1]-150"],"draw":{"first_index":151,"first_instance":152,"first_vertex":153,"index_count":154,"instance_count":155,"kind":"draw","vertex_count":157,"vertex_offset":158},"extent_height":159,"extent_width":160,"frame_index":161,"kernel_id":"run_graphics_draw.kernel_id-162","push_constants_hex":"run_graphics_draw.push_constants_hex-163","request_id":"run_graphics_draw.request_id-164","vertex_buffers":[{"binding":165,"offset":"run_graphics_draw.vertex_buffers[0].offset-166","surface_uuid":"run_graphics_draw.vertex_buffers[0].surface_uuid-167"},{"binding":168,"offset":"run_graphics_draw.vertex_buffers[1].offset-169","surface_uuid":"run_graphics_draw.vertex_buffers[1].surface_uuid-170"}],"depth_target_uuid":"run_graphics_draw.depth_target_uuid-171","index_buffer":{"index_type":"uint16","offset":"run_graphics_draw.index_buffer.offset-173","surface_uuid":"run_graphics_draw.index_buffer.surface_uuid-174"},"scissor":{"height":175,"width":176,"x":177,"y":178},"viewport":{"height":179.5,"max_depth":180.5,"min_depth":181.5,"width":182.5,"x":183.5,"y":184.5}}"#,
-        RunRayTracingKernel => r#"{"op":"run_ray_tracing_kernel","bindings":[{"binding":185,"kind":"sampled_texture","target_id":"run_ray_tracing_kernel.bindings[0].target_id-187"},{"binding":188,"kind":"uniform_buffer","target_id":"run_ray_tracing_kernel.bindings[1].target_id-190"}],"depth":191,"height":192,"kernel_id":"run_ray_tracing_kernel.kernel_id-193","push_constants_hex":"run_ray_tracing_kernel.push_constants_hex-194","request_id":"run_ray_tracing_kernel.request_id-195","width":196}"#,
+        RunGraphicsDraw => r#"{"op":"run_graphics_draw","bindings":[{"kind":"sampled_texture","name":"run_graphics_draw.bindings[0].name-143","surface_uuid":"run_graphics_draw.bindings[0].surface_uuid-145"},{"kind":"uniform_buffer","name":"run_graphics_draw.bindings[1].name-146","surface_uuid":"run_graphics_draw.bindings[1].surface_uuid-148"}],"color_target_uuids":["run_graphics_draw.color_target_uuids[0]-149","run_graphics_draw.color_target_uuids[1]-150"],"draw":{"first_index":151,"first_instance":152,"first_vertex":153,"index_count":154,"instance_count":155,"kind":"draw","vertex_count":157,"vertex_offset":158},"extent_height":159,"extent_width":160,"frame_index":161,"kernel_id":"run_graphics_draw.kernel_id-162","push_constants_hex":"run_graphics_draw.push_constants_hex-163","request_id":"run_graphics_draw.request_id-164","vertex_buffers":[{"binding":165,"offset":"run_graphics_draw.vertex_buffers[0].offset-166","surface_uuid":"run_graphics_draw.vertex_buffers[0].surface_uuid-167"},{"binding":168,"offset":"run_graphics_draw.vertex_buffers[1].offset-169","surface_uuid":"run_graphics_draw.vertex_buffers[1].surface_uuid-170"}],"depth_target_uuid":"run_graphics_draw.depth_target_uuid-171","index_buffer":{"index_type":"uint16","offset":"run_graphics_draw.index_buffer.offset-173","surface_uuid":"run_graphics_draw.index_buffer.surface_uuid-174"},"scissor":{"height":175,"width":176,"x":177,"y":178},"viewport":{"height":179.5,"max_depth":180.5,"min_depth":181.5,"width":182.5,"x":183.5,"y":184.5}}"#,
+        RunRayTracingKernel => r#"{"op":"run_ray_tracing_kernel","bindings":[{"kind":"sampled_texture","name":"run_ray_tracing_kernel.bindings[0].name-185","target_id":"run_ray_tracing_kernel.bindings[0].target_id-187"},{"kind":"uniform_buffer","name":"run_ray_tracing_kernel.bindings[1].name-188","target_id":"run_ray_tracing_kernel.bindings[1].target_id-190"}],"depth":191,"height":192,"kernel_id":"run_ray_tracing_kernel.kernel_id-193","push_constants_hex":"run_ray_tracing_kernel.push_constants_hex-194","request_id":"run_ray_tracing_kernel.request_id-195","width":196}"#,
         TryRunCpuReadbackCopy => r#"{"op":"try_run_cpu_readback_copy","direction":"image_to_buffer","request_id":"try_run_cpu_readback_copy.request_id-198","surface_id":"try_run_cpu_readback_copy.surface_id-199"}"#,
         WaitDeviceIdle => r#"{"op":"wait_device_idle","request_id":"wait_device_idle.request_id-200"}"#,
     );
@@ -138,7 +161,14 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
             StorageImage => "storage_image",
             UniformBuffer => "uniform_buffer",
         }
-        EscalateRequestRegisterGraphicsKernelBindingKind {
+        EscalateGraphicsBindingKind {
+            SampledTexture => "sampled_texture",
+            StorageBuffer => "storage_buffer",
+            StorageImage => "storage_image",
+            UniformBuffer => "uniform_buffer",
+        }
+        EscalateRayTracingBindingKind {
+            AccelerationStructure => "acceleration_structure",
             SampledTexture => "sampled_texture",
             StorageBuffer => "storage_buffer",
             StorageImage => "storage_image",
@@ -288,13 +318,6 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
             D24UnormS8Uint => "d24_unorm_s8_uint",
             D32Sfloat => "d32_sfloat",
         }
-        EscalateRequestRegisterRayTracingKernelBindingKind {
-            AccelerationStructure => "acceleration_structure",
-            SampledTexture => "sampled_texture",
-            StorageBuffer => "storage_buffer",
-            StorageImage => "storage_image",
-            UniformBuffer => "uniform_buffer",
-        }
         EscalateRequestRegisterRayTracingKernelGroupKind {
             General => "general",
             ProceduralHit => "procedural_hit",
@@ -312,12 +335,6 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
             BufferToImage => "buffer_to_image",
             ImageToBuffer => "image_to_buffer",
         }
-        EscalateRequestRunGraphicsDrawBindingKind {
-            SampledTexture => "sampled_texture",
-            StorageBuffer => "storage_buffer",
-            StorageImage => "storage_image",
-            UniformBuffer => "uniform_buffer",
-        }
         EscalateRequestRunGraphicsDrawDrawKind {
             Draw => "draw",
             DrawIndexed => "draw_indexed",
@@ -326,16 +343,42 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
             Uint16 => "uint16",
             Uint32 => "uint32",
         }
-        EscalateRequestRunRayTracingKernelBindingKind {
-            AccelerationStructure => "acceleration_structure",
-            SampledTexture => "sampled_texture",
-            StorageBuffer => "storage_buffer",
-            StorageImage => "storage_image",
-            UniformBuffer => "uniform_buffer",
-        }
         EscalateRequestTryRunCpuReadbackCopyDirection {
             BufferToImage => "buffer_to_image",
             ImageToBuffer => "image_to_buffer",
+        }
+    }
+}
+
+/// A binding kind's `wire_name()` is the same string its `#[serde(rename)]`
+/// writes.
+///
+/// The two are hand-written copies of one spelling: a register response hands
+/// the name back through `wire_name()`, and the next run echoes it as a `kind`
+/// serde has to decode. A drift between them makes every such echo undecodable,
+/// and nothing but this test connects the pair.
+#[test]
+fn every_binding_kinds_wire_name_is_its_serde_spelling() {
+    assert_wire_name_is_the_serde_spelling! {
+        EscalateComputeBindingKind {
+            SampledImage,
+            SampledTexture,
+            StorageBuffer,
+            StorageImage,
+            UniformBuffer,
+        }
+        EscalateGraphicsBindingKind {
+            SampledTexture,
+            StorageBuffer,
+            StorageImage,
+            UniformBuffer,
+        }
+        EscalateRayTracingBindingKind {
+            AccelerationStructure,
+            SampledTexture,
+            StorageBuffer,
+            StorageImage,
+            UniformBuffer,
         }
     }
 }

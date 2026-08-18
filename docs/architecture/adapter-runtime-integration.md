@@ -254,8 +254,8 @@ Every surface adapter's host-side wiring runs through
 [`Runner::install_setup_hook`][hook]. The hook fires exactly
 once per `start()`, after `GpuContext::init_for_platform_sync` has
 created the live `GpuContext` but before any processor's `setup()`
-runs — the window where adapter bridges and pre-allocated host
-surfaces have to be in place.
+runs — the window where pre-allocated host surfaces have to be in
+place.
 
 [hook]: ../../runtime/streamlib-engine/src/core/runtime/runtime.rs
 
@@ -309,20 +309,22 @@ The shape of what the hook does varies by seam:
   adapter — and that submit signals `produce_done`. The cdylib
   signals `consume_done` from `end_read_access`.
 
-The graphics / ray-tracing kernel bridges still follow the older shape
-(`gpu.set_graphics_kernel_bridge`, `set_ray_tracing_kernel_bridge`) for
-adapters that escalate kernel dispatch through the host RHI. Compute and CPU
-readback have no bridge: `register_compute_kernel` / `run_compute_kernel`,
-`run_cpu_readback_copy` / `try_run_cpu_readback_copy` and
-`open_cpu_readback_staging` are always-present `GpuContext` capabilities
-served by the escalate handler directly.
+No kernel dispatch flavour uses a bridge. Compute, graphics, ray tracing
+and CPU readback are always-present `GpuContext` capabilities served by the
+escalate handler directly, with no installation step and no runtime-absent
+case: `create_or_reuse_compute_kernel` / `compute_kernel_by_id`,
+`create_or_reuse_graphics_kernel` / `graphics_kernel_by_id`,
+`create_or_reuse_ray_tracing_kernel` / `ray_tracing_kernel_by_id`,
+`register_acceleration_structure` / `acceleration_structure_by_id`, and
+`run_cpu_readback_copy` / `try_run_cpu_readback_copy` /
+`open_cpu_readback_staging`.
 
 The hook is the canonical opt-in registration point for adapters that
 need pre-start GpuContext access. Application authors call
 `install_setup_hook` exactly once per adapter they wire.
 
 Per-acquire host work on behalf of a subprocess is not an adapter
-concern. Compute dispatch and CPU readback are `GpuContext`
+concern. Kernel dispatch and CPU readback are `GpuContext`
 capabilities reached the same way by every caller, with no
 installation step and no runtime-absent case.
 
@@ -430,7 +432,7 @@ With `install_setup_hook` the model is:
 1. Add the adapter crate as a Cargo dep.
 2. Call `runtime.install_setup_hook(...)` exactly once at app
    startup, doing the adapter's required pre-start work (allocate
-   host surfaces, register in surface-share, set bridge if needed).
+   host surfaces, register in surface-share).
 
 The cost: one extra line of wiring per adapter at the application's
 `main.rs`. Compile-time presence is not enough — you have to
