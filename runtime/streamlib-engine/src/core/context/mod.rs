@@ -4,11 +4,7 @@
 mod audio_clock;
 pub(crate) mod escalate_gate;
 mod gpu_context;
-#[cfg(target_os = "linux")]
-mod graphics_kernel_bridge;
 pub(crate) mod isolation;
-#[cfg(target_os = "linux")]
-mod ray_tracing_kernel_bridge;
 mod runtime_context;
 pub(crate) mod surface_check_out_lease_registry;
 #[cfg(target_os = "linux")]
@@ -28,25 +24,8 @@ pub use gpu_context::GpuCapabilitiesSnapshot;
 #[cfg(target_os = "linux")]
 pub use gpu_context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
-#[cfg(target_os = "linux")]
-pub use graphics_kernel_bridge::{
-    BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire, DepthFormatWire,
-    DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
-    GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
-    GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
-    GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
-    ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl, VertexInputBindingDecl,
-    VertexInputRateWire, ViewportWire,
-};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
-#[cfg(target_os = "linux")]
-pub use ray_tracing_kernel_bridge::{
-    BlasRegisterDecl, RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl,
-    RayTracingBindingKindWire, RayTracingBindingValue, RayTracingKernelBridge,
-    RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
-    RayTracingShaderStageWire, RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
-};
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,

@@ -74,9 +74,9 @@ The canonical recipe:
 
 5. **Runtime wiring is a single `install_setup_hook` call** at app
    startup (see [Runtime wiring](#runtime-wiring) below). The hook
-   captures whatever pre-start state the adapter needs, allocates +
-   registers host surfaces, and (for escalate-trigger adapters)
-   sets the bridge on `GpuContext`.
+   captures whatever pre-start state the adapter needs and
+   allocates + registers host surfaces. Nothing is installed on
+   `GpuContext` — every escalate op it answers is always present.
 
 That's the full shape. Every in-tree adapter follows it, with the
 only meaningful axis of variation being the **handle type** (DMA-BUF

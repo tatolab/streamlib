@@ -37,8 +37,9 @@ use crate::python_gpu_surface_pixel_exchange::{
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    HelperAcquiredTexture, HelperCheckedOutPixelSurface, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceReleaseDebt,
+    HelperAcquiredTexture, HelperCheckedOutPixelSurface, HelperProcessGraphicsDraw,
+    HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
+    HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
 };
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -829,6 +830,288 @@ impl PythonGpuContextFullAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
+    /// Build a graphics kernel from GLSL source, or from pre-compiled SPIR-V.
+    ///
+    /// Constructed once in `setup()`, drawn per frame in `process()`. The
+    /// engine compiles both stages and reflects them at construction, taking
+    /// its binding names from them — those names are what `draw` resolves
+    /// against. Re-creating an identical kernel is free of compilation.
+    ///
+    /// The vertices are the shaders' own: no escalate op mints a vertex or
+    /// index buffer, so a vertex stage fabricates its positions from
+    /// `gl_VertexIndex`, and the pipeline carries no vertex input state. The
+    /// pass attaches colour targets only, so there is no depth state either.
+    #[pyo3(signature = (
+        color_attachment_formats,
+        vertex_source = None,
+        vertex_spirv = None,
+        vertex_entry_point = "main",
+        fragment_source = None,
+        fragment_spirv = None,
+        fragment_entry_point = "main",
+        push_constant_size = 0,
+        bindings = None,
+        label = "",
+        topology = "triangle_list",
+        polygon_mode = "fill",
+        cull_mode = "none",
+        front_face = "counter_clockwise",
+        line_width = 1.0,
+        color_write_channels = "rgba",
+        color_blend = None,
+        dynamic_state = "viewport_scissor",
+    ))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the pipeline state is keyword arguments mirroring the wire's own flat shape"
+    )]
+    fn create_graphics_kernel(
+        &self,
+        python: Python<'_>,
+        color_attachment_formats: Vec<String>,
+        vertex_source: Option<&str>,
+        vertex_spirv: Option<&[u8]>,
+        vertex_entry_point: &str,
+        fragment_source: Option<&str>,
+        fragment_spirv: Option<&[u8]>,
+        fragment_entry_point: &str,
+        push_constant_size: u32,
+        bindings: Option<&Bound<'_, PyDict>>,
+        label: &str,
+        topology: &str,
+        polygon_mode: &str,
+        cull_mode: &str,
+        front_face: &str,
+        line_width: f32,
+        color_write_channels: &str,
+        color_blend: Option<&Bound<'_, PyDict>>,
+        dynamic_state: &str,
+    ) -> PyResult<PythonGraphicsKernel> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let declared = declared_staged_kernel_bindings_to_wire(
+                python,
+                bindings,
+                "graphics binding kind",
+                GRAPHICS_BINDING_KIND_WIRE_NAMES,
+                "graphics stage",
+                GRAPHICS_SHADER_STAGE_WIRE_BITS,
+            )?;
+            let pipeline_state = graphics_pipeline_state_to_wire(
+                python,
+                &GraphicsPipelineStateArguments {
+                    color_attachment_formats: &color_attachment_formats,
+                    topology,
+                    polygon_mode,
+                    cull_mode,
+                    front_face,
+                    line_width,
+                    color_write_channels,
+                    color_blend,
+                    dynamic_state,
+                },
+            )?;
+            // Neither and both are refused engine-side, in the one place the
+            // rule is written; forwarding both fields keeps the wheel from
+            // becoming a second spelling of it that can drift.
+            let vertex_spirv_hex = vertex_spirv.map(encode_lowercase_hex).unwrap_or_default();
+            let fragment_spirv_hex = fragment_spirv.map(encode_lowercase_hex).unwrap_or_default();
+            let (kernel_id, reflected_binding_kinds) = exchange_client.register_graphics_kernel(
+                python,
+                &HelperProcessGraphicsKernelRegistration {
+                    label,
+                    vertex_source: vertex_source.unwrap_or_default(),
+                    vertex_spirv_hex: &vertex_spirv_hex,
+                    vertex_entry_point,
+                    fragment_source: fragment_source.unwrap_or_default(),
+                    fragment_spirv_hex: &fragment_spirv_hex,
+                    fragment_entry_point,
+                    push_constant_size,
+                    declared_bindings: &declared,
+                    pipeline_state: &pipeline_state,
+                },
+            )?;
+            return Ok(PythonGraphicsKernel {
+                kernel_id,
+                push_constant_size,
+                reflected_binding_kinds,
+                helper_process_exchange_client: Arc::clone(exchange_client),
+            });
+        }
+        let _ = (
+            python,
+            color_attachment_formats,
+            vertex_source,
+            vertex_spirv,
+            vertex_entry_point,
+            fragment_source,
+            fragment_spirv,
+            fragment_entry_point,
+            push_constant_size,
+            bindings,
+            label,
+            topology,
+            polygon_mode,
+            cull_mode,
+            front_face,
+            line_width,
+            color_write_channels,
+            color_blend,
+            dynamic_state,
+        );
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Build a ray-tracing kernel from GLSL sources, or from pre-compiled
+    /// SPIR-V.
+    ///
+    /// `stages` is one mapping per shader module — `{"stage": "ray_gen",
+    /// "source": …}` — and `groups` says how the shader binding table is laid
+    /// out over them, each group naming its modules by index into `stages`.
+    /// Two modules can fill the same stage, which is why a group points at an
+    /// index rather than a name.
+    #[pyo3(signature = (
+        stages,
+        groups,
+        max_recursion_depth = 1,
+        push_constant_size = 0,
+        bindings = None,
+        label = "",
+    ))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one field of the registration the wire carries"
+    )]
+    fn create_ray_tracing_kernel(
+        &self,
+        python: Python<'_>,
+        stages: &Bound<'_, PyAny>,
+        groups: &Bound<'_, PyAny>,
+        max_recursion_depth: u32,
+        push_constant_size: u32,
+        bindings: Option<&Bound<'_, PyDict>>,
+        label: &str,
+    ) -> PyResult<PythonRayTracingKernel> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let wire_stages = ray_tracing_stages_to_wire(python, stages)?;
+            let wire_groups = ray_tracing_shader_groups_to_wire(python, groups, wire_stages.len())?;
+            let declared = declared_staged_kernel_bindings_to_wire(
+                python,
+                bindings,
+                "ray-tracing binding kind",
+                RAY_TRACING_BINDING_KIND_WIRE_NAMES,
+                "ray-tracing stage",
+                RAY_TRACING_SHADER_STAGE_WIRE_BITS,
+            )?;
+            let (kernel_id, reflected_binding_kinds) = exchange_client
+                .register_ray_tracing_kernel(
+                    python,
+                    &HelperProcessRayTracingKernelRegistration {
+                        label,
+                        stages: &wire_stages,
+                        groups: &wire_groups,
+                        declared_bindings: &declared,
+                        max_recursion_depth,
+                        push_constant_size,
+                    },
+                )?;
+            return Ok(PythonRayTracingKernel {
+                kernel_id,
+                push_constant_size,
+                reflected_binding_kinds,
+                helper_process_exchange_client: Arc::clone(exchange_client),
+            });
+        }
+        let _ = (
+            python,
+            stages,
+            groups,
+            max_recursion_depth,
+            push_constant_size,
+            bindings,
+            label,
+        );
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Build a bottom-level acceleration structure over triangle geometry.
+    ///
+    /// `vertices` is `[x, y, z, x, y, z, …]` and `indices` is three per
+    /// triangle. The returned handle is what `build_tlas` places in a scene.
+    #[pyo3(signature = (vertices, indices, label = ""))]
+    fn build_triangles_blas(
+        &self,
+        python: Python<'_>,
+        vertices: Vec<f32>,
+        indices: Vec<u32>,
+        label: &str,
+    ) -> PyResult<PythonAccelerationStructureHandle> {
+        if !vertices.len().is_multiple_of(3) {
+            return Err(PyValueError::new_err(format!(
+                "{} vertex floats were supplied; a vertex is three of them, interleaved as \
+                 [x, y, z, x, y, z, …]",
+                vertices.len()
+            )));
+        }
+        if !indices.len().is_multiple_of(3) {
+            return Err(PyValueError::new_err(format!(
+                "{} indices were supplied; a triangle is three of them",
+                indices.len()
+            )));
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let acceleration_structure_id = exchange_client.register_acceleration_structure_blas(
+                python,
+                label,
+                &encode_little_endian_f32_hex(&vertices),
+                &encode_little_endian_u32_hex(&indices),
+            )?;
+            return Ok(PythonAccelerationStructureHandle {
+                acceleration_structure_id,
+                is_top_level: false,
+                structure_label: label.to_string(),
+                helper_process_exchange_client: Some(Arc::clone(exchange_client)),
+            });
+        }
+        let _ = (python, vertices, indices, label);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Build the top-level acceleration structure a trace binds, over
+    /// already-built bottom-level ones.
+    ///
+    /// Each instance is a mapping naming its `blas` and, optionally, the
+    /// row-major 3×4 `transform` that places it, its 8-bit `mask`, its 24-bit
+    /// `custom_index`, its `sbt_record_offset` and its geometry `flags`.
+    /// The structure keeps every bottom-level one it references alive.
+    #[pyo3(signature = (instances, label = ""))]
+    fn build_tlas(
+        &self,
+        python: Python<'_>,
+        instances: &Bound<'_, PyAny>,
+        label: &str,
+    ) -> PyResult<PythonAccelerationStructureHandle> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let wire_instances = tlas_instances_to_wire(python, instances)?;
+            let acceleration_structure_id = exchange_client.register_acceleration_structure_tlas(
+                python,
+                label,
+                &wire_instances,
+            )?;
+            return Ok(PythonAccelerationStructureHandle {
+                acceleration_structure_id,
+                is_top_level: true,
+                structure_label: label.to_string(),
+                helper_process_exchange_client: Some(Arc::clone(exchange_client)),
+            });
+        }
+        let _ = (python, instances, label);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
     /// Open a scope that records several dispatches and runs them as one.
     ///
     /// The Python equivalent of the engine's command-recorder flow, and the
@@ -1315,8 +1598,52 @@ fn encode_lowercase_hex(bytes: &[u8]) -> String {
     )
 }
 
-/// The binding kinds the wire spells, validated the same way texture formats
-/// are so the error text cannot drift from the accepted set.
+/// A geometry blob as the wire carries it: little-endian `f32`s, lowercase hex.
+#[cfg(target_os = "linux")]
+fn encode_little_endian_f32_hex(values: &[f32]) -> String {
+    encode_lowercase_hex(
+        &values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<u8>>(),
+    )
+}
+
+/// An index blob as the wire carries it: little-endian `u32`s, lowercase hex.
+#[cfg(target_os = "linux")]
+fn encode_little_endian_u32_hex(values: &[u32]) -> String {
+    encode_lowercase_hex(
+        &values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<u8>>(),
+    )
+}
+
+/// One word of a fixed wire vocabulary, or the refusal naming the whole set.
+///
+/// Every enum the escalate wire spells travels as a string the host parses, so
+/// checking the spelling here is what keeps a typo on the caller's own stack
+/// rather than arriving as an escalate failure a round trip later.
+#[cfg(target_os = "linux")]
+fn parse_wire_vocabulary_word(
+    vocabulary_label: &str,
+    supplied: &str,
+    accepted: &[&'static str],
+) -> PyResult<&'static str> {
+    accepted
+        .iter()
+        .find(|known| **known == supplied)
+        .copied()
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "unknown {vocabulary_label} {supplied:?}; the accepted spellings are {}",
+                accepted.join(", ")
+            ))
+        })
+}
+
+/// The binding kinds a compute kernel's wire spells.
 #[cfg(target_os = "linux")]
 const COMPUTE_BINDING_KIND_WIRE_NAMES: &[&str] = &[
     "sampled_image",
@@ -1326,18 +1653,92 @@ const COMPUTE_BINDING_KIND_WIRE_NAMES: &[&str] = &[
     "uniform_buffer",
 ];
 
+/// The binding kinds a graphics kernel's wire spells. No `sampled_image`: the
+/// graphics pipeline has no samplerless-texture descriptor.
 #[cfg(target_os = "linux")]
-fn parse_compute_binding_kind(kind: &str) -> PyResult<&'static str> {
-    COMPUTE_BINDING_KIND_WIRE_NAMES
-        .iter()
-        .find(|known| **known == kind)
-        .copied()
-        .ok_or_else(|| {
-            PyValueError::new_err(format!(
-                "unknown binding kind {kind:?}; a compute binding is one of {}",
-                COMPUTE_BINDING_KIND_WIRE_NAMES.join(", ")
-            ))
-        })
+const GRAPHICS_BINDING_KIND_WIRE_NAMES: &[&str] = &[
+    "sampled_texture",
+    "storage_buffer",
+    "storage_image",
+    "uniform_buffer",
+];
+
+/// The binding kinds a ray-tracing kernel's wire spells.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_BINDING_KIND_WIRE_NAMES: &[&str] = &[
+    ACCELERATION_STRUCTURE_BINDING_KIND_WIRE_NAME,
+    "sampled_texture",
+    "storage_buffer",
+    "storage_image",
+    "uniform_buffer",
+];
+
+/// The one binding kind whose value is an acceleration structure rather than a
+/// surface, which is why the dispatch path branches on it by name.
+#[cfg(target_os = "linux")]
+const ACCELERATION_STRUCTURE_BINDING_KIND_WIRE_NAME: &str = "acceleration_structure";
+
+/// The stage bits a graphics binding declaration may name. Host counterpart:
+/// `GraphicsShaderStageFlags`.
+#[cfg(target_os = "linux")]
+const GRAPHICS_SHADER_STAGE_WIRE_BITS: &[(&str, u32)] = &[("vertex", 1), ("fragment", 2)];
+
+/// The stage bits a ray-tracing binding declaration may name. Host
+/// counterpart: `RayTracingShaderStageFlags`.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_SHADER_STAGE_WIRE_BITS: &[(&str, u32)] = &[
+    ("ray_gen", 1),
+    ("miss", 2),
+    ("closest_hit", 4),
+    ("any_hit", 8),
+    ("intersection", 16),
+    ("callable", 32),
+];
+
+/// The stages a ray-tracing kernel's shader modules may fill.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_SHADER_STAGE_WIRE_NAMES: &[&str] = &[
+    "any_hit",
+    "callable",
+    "closest_hit",
+    "intersection",
+    "miss",
+    "ray_gen",
+];
+
+/// The shader-group kinds a ray-tracing kernel's binding table is built from.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_GROUP_KIND_WIRE_NAMES: &[&str] = &["general", "procedural_hit", "triangles_hit"];
+
+/// What a shader group's stage index carries when the group names no stage
+/// there. Every stage-index field is present on the wire, so absent needs a
+/// value; host counterpart: `RAY_TRACING_STAGE_INDEX_NONE`.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_STAGE_INDEX_NONE: u32 = u32::MAX;
+
+/// Turn a sequence of spelled-out names into the bitmask the wire carries.
+///
+/// Every bitmask the escalate wire carries — a binding's stage visibility, a
+/// TLAS instance's geometry flags — is spelled here rather than handed over as
+/// a raw integer, so a caller never writes a bit position. An empty sequence is
+/// an empty mask, which for stages asserts nothing and lets reflection stand.
+#[cfg(target_os = "linux")]
+fn named_bits_to_wire_bitmask(
+    vocabulary_label: &str,
+    named: &Bound<'_, PyAny>,
+    bit_vocabulary: &[(&'static str, u32)],
+) -> PyResult<u32> {
+    let accepted: Vec<&'static str> = bit_vocabulary.iter().map(|(name, _)| *name).collect();
+    let mut mask = 0u32;
+    for name in named.try_iter()? {
+        let name: String = name?.extract()?;
+        let named = parse_wire_vocabulary_word(vocabulary_label, &name, &accepted)?;
+        mask |= bit_vocabulary
+            .iter()
+            .find(|(candidate, _)| *candidate == named)
+            .map_or(0, |(_, bit)| *bit);
+    }
+    Ok(mask)
 }
 
 /// Turn `{name: kind}` into the wire's declaration array.
@@ -1353,19 +1754,698 @@ fn declared_compute_bindings_to_wire<'py>(
             let kind: String = kind.extract()?;
             let entry = PyDict::new(python);
             entry.set_item("name", name)?;
-            entry.set_item("kind", parse_compute_binding_kind(&kind)?)?;
+            entry.set_item(
+                "kind",
+                parse_wire_vocabulary_word(
+                    "compute binding kind",
+                    &kind,
+                    COMPUTE_BINDING_KIND_WIRE_NAMES,
+                )?,
+            )?;
             wire.append(entry)?;
         }
     }
     Ok(wire)
 }
 
-/// One binding of a registered kernel as reflection found it: the shader's
+/// Turn `{name: kind}` or `{name: (kind, stages)}` into the wire's declaration
+/// array, for a kernel kind whose bindings carry a stage mask.
+///
+/// Graphics and ray tracing differ only in which two vocabularies they name,
+/// which is also why the host reconciles both through one function.
+#[cfg(target_os = "linux")]
+fn declared_staged_kernel_bindings_to_wire<'py>(
+    python: Python<'py>,
+    declared: Option<&Bound<'py, PyDict>>,
+    binding_kind_label: &str,
+    binding_kind_vocabulary: &[&'static str],
+    stage_label: &str,
+    stage_bits: &[(&'static str, u32)],
+) -> PyResult<Bound<'py, PyList>> {
+    let wire = PyList::empty(python);
+    let Some(declared) = declared else {
+        return Ok(wire);
+    };
+    for (name, declaration) in declared.iter() {
+        let name: String = name.extract()?;
+        let (kind, stages) = match declaration.extract::<String>() {
+            Ok(kind) => (kind, 0),
+            Err(_) => {
+                let (kind, named_stages) = declaration
+                    .extract::<(String, Bound<'_, PyAny>)>()
+                    .map_err(|_| {
+                        PyTypeError::new_err(format!(
+                            "binding {name:?} must be declared as a kind, or as a (kind, stages) \
+                             pair naming the stages that read it"
+                        ))
+                    })?;
+                (
+                    kind,
+                    named_bits_to_wire_bitmask(stage_label, &named_stages, stage_bits)?,
+                )
+            }
+        };
+        let entry = PyDict::new(python);
+        entry.set_item("name", name)?;
+        entry.set_item(
+            "kind",
+            parse_wire_vocabulary_word(binding_kind_label, &kind, binding_kind_vocabulary)?,
+        )?;
+        entry.set_item("stages", stages)?;
+        wire.append(entry)?;
+    }
+    Ok(wire)
+}
+
+/// One entry of a list-of-mappings argument, refused by name when it is not a
+/// mapping.
+#[cfg(target_os = "linux")]
+fn mapping_argument_entry<'py>(
+    argument_label: &str,
+    index: usize,
+    entry: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyDict>> {
+    entry
+        .cast::<PyDict>()
+        .cloned()
+        .map_err(|_| PyTypeError::new_err(format!("{argument_label} {index} must be a dict")))
+}
+
+/// Refuse a mapping carrying a key this argument does not accept.
+///
+/// A misspelled key would otherwise travel as an absent one the wire fills with
+/// a default, which is the silently-wrong-result shape.
+#[cfg(target_os = "linux")]
+fn refuse_unaccepted_mapping_keys(
+    mapping_label: &str,
+    mapping: &Bound<'_, PyDict>,
+    accepted: &[&str],
+) -> PyResult<()> {
+    for key in mapping.keys() {
+        let key: String = key.extract()?;
+        if !accepted.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{mapping_label} was given an unknown key {key:?}; it accepts {}",
+                accepted.join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The `u32` at `key`, or `None` when the mapping does not carry it.
+#[cfg(target_os = "linux")]
+fn optional_u32_in(mapping: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u32>> {
+    match mapping.get_item(key)? {
+        Some(value) => Ok(Some(value.extract()?)),
+        None => Ok(None),
+    }
+}
+
+/// The string at `key`, or `None` when the mapping does not carry it.
+#[cfg(target_os = "linux")]
+fn optional_string_in(mapping: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
+    match mapping.get_item(key)? {
+        Some(value) => Ok(Some(value.extract()?)),
+        None => Ok(None),
+    }
+}
+
+/// The primitive topologies a graphics pipeline can assemble.
+#[cfg(target_os = "linux")]
+const GRAPHICS_TOPOLOGY_WIRE_NAMES: &[&str] = &[
+    "line_list",
+    "line_strip",
+    "point_list",
+    "triangle_fan",
+    "triangle_list",
+    "triangle_strip",
+];
+
+#[cfg(target_os = "linux")]
+const GRAPHICS_POLYGON_MODE_WIRE_NAMES: &[&str] = &["fill", "line", "point"];
+
+#[cfg(target_os = "linux")]
+const GRAPHICS_CULL_MODE_WIRE_NAMES: &[&str] = &["back", "front", "front_and_back", "none"];
+
+#[cfg(target_os = "linux")]
+const GRAPHICS_FRONT_FACE_WIRE_NAMES: &[&str] = &["clockwise", "counter_clockwise"];
+
+#[cfg(target_os = "linux")]
+const GRAPHICS_DYNAMIC_STATE_WIRE_NAMES: &[&str] = &["none", "viewport_scissor"];
+
+#[cfg(target_os = "linux")]
+const COLOR_BLEND_FACTOR_WIRE_NAMES: &[&str] = &[
+    "constant_alpha",
+    "constant_color",
+    "dst_alpha",
+    "dst_color",
+    "one",
+    "one_minus_constant_alpha",
+    "one_minus_constant_color",
+    "one_minus_dst_alpha",
+    "one_minus_dst_color",
+    "one_minus_src_alpha",
+    "one_minus_src_color",
+    "src_alpha",
+    "src_alpha_saturate",
+    "src_color",
+    "zero",
+];
+
+#[cfg(target_os = "linux")]
+const COLOR_BLEND_OP_WIRE_NAMES: &[&str] = &["add", "max", "min", "reverse_subtract", "subtract"];
+
+/// The keys the `color_blend` argument accepts, each defaulting to the
+/// conventional source-alpha-over blend when the mapping omits it.
+#[cfg(target_os = "linux")]
+const COLOR_BLEND_ARGUMENT_KEYS: &[&str] = &[
+    "alpha_op",
+    "color_op",
+    "dst_alpha_factor",
+    "dst_color_factor",
+    "src_alpha_factor",
+    "src_color_factor",
+];
+
+/// The colour channels a draw writes, as the bitmask the wire carries.
+#[cfg(target_os = "linux")]
+fn color_write_channels_to_wire(channels: &str) -> PyResult<u32> {
+    let mut mask = 0u32;
+    for channel in channels.chars() {
+        mask |= match channel {
+            'r' => 1,
+            'g' => 2,
+            'b' => 4,
+            'a' => 8,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown colour channel {channel:?} in {channels:?}; a write mask names some \
+                     of \"rgba\""
+                )));
+            }
+        };
+    }
+    Ok(mask)
+}
+
+/// The fixed-function state and attachment formats `create_graphics_kernel` was
+/// asked for.
+#[cfg(target_os = "linux")]
+struct GraphicsPipelineStateArguments<'a, 'py> {
+    color_attachment_formats: &'a [String],
+    topology: &'a str,
+    polygon_mode: &'a str,
+    cull_mode: &'a str,
+    front_face: &'a str,
+    line_width: f32,
+    color_write_channels: &'a str,
+    color_blend: Option<&'a Bound<'py, PyDict>>,
+    dynamic_state: &'a str,
+}
+
+/// Flatten the pipeline state into the one-level document the wire carries.
+///
+/// Every field is present because the wire is flat — JSON has no sum types —
+/// and the flags decide which ones mean anything. Three groups are pinned here
+/// rather than offered as arguments, because a caller could only ever set them
+/// to a shape that fails:
+/// - `multisample_samples`, since the host builds single-sampled pipelines only.
+/// - the vertex-input arrays, since no escalate op mints a vertex buffer for a
+///   draw to pull through them.
+/// - the depth fields, since the offscreen pass a draw runs attaches colour
+///   targets only.
+#[cfg(target_os = "linux")]
+fn graphics_pipeline_state_to_wire<'py>(
+    python: Python<'py>,
+    state: &GraphicsPipelineStateArguments<'_, '_>,
+) -> PyResult<Bound<'py, PyDict>> {
+    if let Some(color_blend) = state.color_blend {
+        refuse_unaccepted_mapping_keys("color_blend", color_blend, COLOR_BLEND_ARGUMENT_KEYS)?;
+    }
+    let blend_word = |key: &str,
+                      when_absent: &'static str,
+                      vocabulary: &[&'static str]|
+     -> PyResult<&'static str> {
+        let Some(color_blend) = state.color_blend else {
+            return Ok(when_absent);
+        };
+        match optional_string_in(color_blend, key)? {
+            Some(spelled) => parse_wire_vocabulary_word(key, &spelled, vocabulary),
+            None => Ok(when_absent),
+        }
+    };
+
+    let color_formats = PyList::empty(python);
+    for format in state.color_attachment_formats {
+        color_formats.append(parse_texture_format_name(format)?)?;
+    }
+
+    let wire = PyDict::new(python);
+    wire.set_item("attachment_color_formats", color_formats)?;
+    wire.set_item(
+        "topology",
+        parse_wire_vocabulary_word("topology", state.topology, GRAPHICS_TOPOLOGY_WIRE_NAMES)?,
+    )?;
+    wire.set_item(
+        "rasterization_polygon_mode",
+        parse_wire_vocabulary_word(
+            "polygon mode",
+            state.polygon_mode,
+            GRAPHICS_POLYGON_MODE_WIRE_NAMES,
+        )?,
+    )?;
+    wire.set_item(
+        "rasterization_cull_mode",
+        parse_wire_vocabulary_word("cull mode", state.cull_mode, GRAPHICS_CULL_MODE_WIRE_NAMES)?,
+    )?;
+    wire.set_item(
+        "rasterization_front_face",
+        parse_wire_vocabulary_word(
+            "front face",
+            state.front_face,
+            GRAPHICS_FRONT_FACE_WIRE_NAMES,
+        )?,
+    )?;
+    wire.set_item("rasterization_line_width", state.line_width)?;
+    wire.set_item("multisample_samples", 1u32)?;
+    wire.set_item("vertex_input_bindings", PyList::empty(python))?;
+    wire.set_item("vertex_input_attributes", PyList::empty(python))?;
+    wire.set_item("depth_stencil_enabled", false)?;
+    wire.set_item("depth_write", false)?;
+    wire.set_item("depth_compare_op", "always")?;
+    wire.set_item(
+        "color_write_mask",
+        color_write_channels_to_wire(state.color_write_channels)?,
+    )?;
+    wire.set_item("color_blend_enabled", state.color_blend.is_some())?;
+    wire.set_item(
+        "color_blend_src_color_factor",
+        blend_word(
+            "src_color_factor",
+            "src_alpha",
+            COLOR_BLEND_FACTOR_WIRE_NAMES,
+        )?,
+    )?;
+    wire.set_item(
+        "color_blend_dst_color_factor",
+        blend_word(
+            "dst_color_factor",
+            "one_minus_src_alpha",
+            COLOR_BLEND_FACTOR_WIRE_NAMES,
+        )?,
+    )?;
+    wire.set_item(
+        "color_blend_color_op",
+        blend_word("color_op", "add", COLOR_BLEND_OP_WIRE_NAMES)?,
+    )?;
+    wire.set_item(
+        "color_blend_src_alpha_factor",
+        blend_word("src_alpha_factor", "one", COLOR_BLEND_FACTOR_WIRE_NAMES)?,
+    )?;
+    wire.set_item(
+        "color_blend_dst_alpha_factor",
+        blend_word(
+            "dst_alpha_factor",
+            "one_minus_src_alpha",
+            COLOR_BLEND_FACTOR_WIRE_NAMES,
+        )?,
+    )?;
+    wire.set_item(
+        "color_blend_alpha_op",
+        blend_word("alpha_op", "add", COLOR_BLEND_OP_WIRE_NAMES)?,
+    )?;
+    wire.set_item(
+        "dynamic_state",
+        parse_wire_vocabulary_word(
+            "dynamic state",
+            state.dynamic_state,
+            GRAPHICS_DYNAMIC_STATE_WIRE_NAMES,
+        )?,
+    )?;
+    Ok(wire)
+}
+
+/// The keys one entry of the `stages` argument accepts.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_STAGE_ARGUMENT_KEYS: &[&str] = &["entry_point", "source", "spirv", "stage"];
+
+/// Turn `stages=[…]` into the wire's shader-stage array.
+///
+/// `source` and `spirv` both travel: exactly-one-of is refused host-side, in
+/// the one place that rule is written.
+#[cfg(target_os = "linux")]
+fn ray_tracing_stages_to_wire<'py>(
+    python: Python<'py>,
+    stages: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyList>> {
+    let wire = PyList::empty(python);
+    for (index, stage) in stages.try_iter()?.enumerate() {
+        let stage = mapping_argument_entry("stage", index, &stage?)?;
+        refuse_unaccepted_mapping_keys(
+            &format!("stage {index}"),
+            &stage,
+            RAY_TRACING_STAGE_ARGUMENT_KEYS,
+        )?;
+        let named_stage = optional_string_in(&stage, "stage")?.ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "stage {index} names no `stage`; every shader module says which stage it fills"
+            ))
+        })?;
+        let spirv: Vec<u8> = match stage.get_item("spirv")? {
+            Some(blob) => blob.extract()?,
+            None => Vec::new(),
+        };
+        let entry = PyDict::new(python);
+        entry.set_item(
+            "stage",
+            parse_wire_vocabulary_word(
+                "ray-tracing stage",
+                &named_stage,
+                RAY_TRACING_SHADER_STAGE_WIRE_NAMES,
+            )?,
+        )?;
+        entry.set_item(
+            "source",
+            optional_string_in(&stage, "source")?.unwrap_or_default(),
+        )?;
+        entry.set_item("spv_hex", encode_lowercase_hex(&spirv))?;
+        entry.set_item(
+            "entry_point",
+            optional_string_in(&stage, "entry_point")?.unwrap_or_else(|| "main".to_string()),
+        )?;
+        wire.append(entry)?;
+    }
+    Ok(wire)
+}
+
+/// The keys one entry of the `groups` argument accepts.
+#[cfg(target_os = "linux")]
+const RAY_TRACING_GROUP_ARGUMENT_KEYS: &[&str] = &[
+    "any_hit_stage",
+    "closest_hit_stage",
+    "general_stage",
+    "intersection_stage",
+    "kind",
+];
+
+/// Turn `groups=[…]` into the wire's shader-group array.
+///
+/// A group names its stages by index into the `stages` argument — the shader
+/// binding table is built in this order, and two modules can fill the same
+/// stage, so there is no name to use instead. Absent indices become the wire's
+/// sentinel here rather than in the caller's source.
+#[cfg(target_os = "linux")]
+fn ray_tracing_shader_groups_to_wire<'py>(
+    python: Python<'py>,
+    groups: &Bound<'_, PyAny>,
+    stage_count: usize,
+) -> PyResult<Bound<'py, PyList>> {
+    let wire = PyList::empty(python);
+    for (index, group) in groups.try_iter()?.enumerate() {
+        let group = mapping_argument_entry("group", index, &group?)?;
+        refuse_unaccepted_mapping_keys(
+            &format!("group {index}"),
+            &group,
+            RAY_TRACING_GROUP_ARGUMENT_KEYS,
+        )?;
+        let kind = optional_string_in(&group, "kind")?
+            .ok_or_else(|| PyValueError::new_err(format!("group {index} names no `kind`")))?;
+        let kind = parse_wire_vocabulary_word(
+            "shader group kind",
+            &kind,
+            RAY_TRACING_GROUP_KIND_WIRE_NAMES,
+        )?;
+
+        let named_stage = |key: &str| -> PyResult<Option<u32>> {
+            let Some(stage_index) = optional_u32_in(&group, key)? else {
+                return Ok(None);
+            };
+            if stage_index as usize >= stage_count {
+                return Err(PyValueError::new_err(format!(
+                    "group {index} names {key} {stage_index}, and only {stage_count} shader \
+                     module(s) were supplied"
+                )));
+            }
+            Ok(Some(stage_index))
+        };
+        let general = named_stage("general_stage")?;
+        let closest_hit = named_stage("closest_hit_stage")?;
+        let any_hit = named_stage("any_hit_stage")?;
+        let intersection = named_stage("intersection_stage")?;
+
+        match kind {
+            "general" if general.is_none() => {
+                return Err(PyValueError::new_err(format!(
+                    "group {index} is `general` and names no `general_stage`; a general group is \
+                     the one ray-gen, miss or callable module it points at"
+                )));
+            }
+            "triangles_hit" if closest_hit.is_none() && any_hit.is_none() => {
+                return Err(PyValueError::new_err(format!(
+                    "group {index} is `triangles_hit` and names neither `closest_hit_stage` nor \
+                     `any_hit_stage`; a hit group needs at least one of them"
+                )));
+            }
+            "procedural_hit" if intersection.is_none() => {
+                return Err(PyValueError::new_err(format!(
+                    "group {index} is `procedural_hit` and names no `intersection_stage`, which \
+                     is the module a procedural group intersects with"
+                )));
+            }
+            _ => {}
+        }
+
+        let entry = PyDict::new(python);
+        entry.set_item("kind", kind)?;
+        entry.set_item(
+            "general_stage",
+            general.unwrap_or(RAY_TRACING_STAGE_INDEX_NONE),
+        )?;
+        entry.set_item(
+            "closest_hit_stage",
+            closest_hit.unwrap_or(RAY_TRACING_STAGE_INDEX_NONE),
+        )?;
+        entry.set_item(
+            "any_hit_stage",
+            any_hit.unwrap_or(RAY_TRACING_STAGE_INDEX_NONE),
+        )?;
+        entry.set_item(
+            "intersection_stage",
+            intersection.unwrap_or(RAY_TRACING_STAGE_INDEX_NONE),
+        )?;
+        wire.append(entry)?;
+    }
+    Ok(wire)
+}
+
+/// The keys one entry of `build_tlas`'s `instances` argument accepts.
+#[cfg(target_os = "linux")]
+const TLAS_INSTANCE_ARGUMENT_KEYS: &[&str] = &[
+    "blas",
+    "custom_index",
+    "flags",
+    "mask",
+    "sbt_record_offset",
+    "transform",
+];
+
+/// The `VkGeometryInstanceFlagsKHR` bits an instance can name, spelled rather
+/// than passed as a raw mask.
+#[cfg(target_os = "linux")]
+const GEOMETRY_INSTANCE_FLAG_WIRE_BITS: &[(&str, u32)] = &[
+    ("triangle_facing_cull_disable", 1),
+    ("triangle_flip_facing", 2),
+    ("force_opaque", 4),
+    ("force_no_opaque", 8),
+];
+
+/// Row-major 3×4 identity — where an instance that names no transform sits.
+#[cfg(target_os = "linux")]
+const IDENTITY_TLAS_INSTANCE_TRANSFORM: [f32; 12] = [
+    1.0, 0.0, 0.0, 0.0, //
+    0.0, 1.0, 0.0, 0.0, //
+    0.0, 0.0, 1.0, 0.0,
+];
+
+/// The widest value an instance's 24-bit `gl_InstanceCustomIndexEXT` can carry.
+/// The host masks the high byte off silently, so it is refused here.
+#[cfg(target_os = "linux")]
+const WIDEST_TLAS_INSTANCE_CUSTOM_INDEX: u32 = 0x00ff_ffff;
+
+/// Turn `instances=[…]` into the wire's TLAS instance array.
+#[cfg(target_os = "linux")]
+fn tlas_instances_to_wire<'py>(
+    python: Python<'py>,
+    instances: &Bound<'_, PyAny>,
+) -> PyResult<Bound<'py, PyList>> {
+    let wire = PyList::empty(python);
+    for (index, instance) in instances.try_iter()?.enumerate() {
+        let instance = mapping_argument_entry("instance", index, &instance?)?;
+        refuse_unaccepted_mapping_keys(
+            &format!("instance {index}"),
+            &instance,
+            TLAS_INSTANCE_ARGUMENT_KEYS,
+        )?;
+        let named_blas = instance.get_item("blas")?.ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "instance {index} names no `blas`; an instance places one bottom-level structure \
+                 in the scene"
+            ))
+        })?;
+        let bottom_level = named_blas
+            .extract::<PyRef<'_, PythonAccelerationStructureHandle>>()
+            .map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "instance {index}'s `blas` must be the handle `build_triangles_blas` returned"
+                ))
+            })?;
+        if bottom_level.is_top_level {
+            return Err(PyValueError::new_err(format!(
+                "instance {index}'s `blas` is a top-level structure; an instance places a \
+                 bottom-level one, and the top-level structure is what a trace binds"
+            )));
+        }
+        let transform: Vec<f32> = match instance.get_item("transform")? {
+            Some(transform) => transform.extract()?,
+            None => IDENTITY_TLAS_INSTANCE_TRANSFORM.to_vec(),
+        };
+        if transform.len() != 12 {
+            return Err(PyValueError::new_err(format!(
+                "instance {index}'s transform has {} floats; it is a row-major 3×4 affine, so \
+                 exactly 12",
+                transform.len()
+            )));
+        }
+        let mask = optional_u32_in(&instance, "mask")?.unwrap_or(0xff);
+        if mask > 0xff {
+            return Err(PyValueError::new_err(format!(
+                "instance {index}'s mask is {mask}; a visibility mask is 8-bit, and a ray hits \
+                 the instance when `mask & cull_mask` is non-zero"
+            )));
+        }
+        let custom_index = optional_u32_in(&instance, "custom_index")?.unwrap_or(0);
+        if custom_index > WIDEST_TLAS_INSTANCE_CUSTOM_INDEX {
+            return Err(PyValueError::new_err(format!(
+                "instance {index}'s custom_index is {custom_index}; it reaches hit shaders as a \
+                 24-bit `gl_InstanceCustomIndexEXT`, so anything above \
+                 {WIDEST_TLAS_INSTANCE_CUSTOM_INDEX} would arrive truncated"
+            )));
+        }
+        let flags = match instance.get_item("flags")? {
+            Some(named_flags) => named_bits_to_wire_bitmask(
+                "geometry instance flag",
+                &named_flags,
+                GEOMETRY_INSTANCE_FLAG_WIRE_BITS,
+            )?,
+            None => 0,
+        };
+
+        let entry = PyDict::new(python);
+        entry.set_item("blas_id", bottom_level.acceleration_structure_id.as_str())?;
+        entry.set_item("transform", transform)?;
+        entry.set_item("mask", mask)?;
+        entry.set_item("custom_index", custom_index)?;
+        entry.set_item(
+            "sbt_record_offset",
+            optional_u32_in(&instance, "sbt_record_offset")?.unwrap_or(0),
+        )?;
+        entry.set_item("flags", flags)?;
+        wire.append(entry)?;
+    }
+    Ok(wire)
+}
+
+/// One binding of a registered kernel as reflection found it: the shaders'
 /// name and the wire spelling of its kind.
-pub(crate) struct ReflectedComputeBinding {
+///
+/// One type for all three pipeline kinds, because a register response carries
+/// the same two fields whichever op asked for it.
+pub(crate) struct ReflectedKernelBinding {
     pub(crate) name: String,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     pub(crate) kind: String,
+}
+
+/// The shaders' own names for a kernel's bindings, in slot order.
+fn reflected_binding_names(reflected: &[ReflectedKernelBinding]) -> Vec<String> {
+    reflected
+        .iter()
+        .map(|binding| binding.name.clone())
+        .collect()
+}
+
+/// The kind the shaders declare `name` as.
+///
+/// An unknown name is refused here rather than sent — the round trip would
+/// refuse it too, but the caller's own stack is where the mistake is.
+#[cfg(target_os = "linux")]
+fn reflected_kind_of_binding<'a>(
+    reflected: &'a [ReflectedKernelBinding],
+    name: &str,
+) -> PyResult<&'a str> {
+    reflected
+        .iter()
+        .find(|binding| binding.name == name)
+        .map(|binding| binding.kind.as_str())
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "no binding named {name:?}; these shaders declare {}",
+                reflected_binding_names(reflected)
+                    .iter()
+                    .map(|declared| format!("{declared:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+}
+
+/// Refuse a push-constant payload that is not the size the kernel declares.
+///
+/// The engine reconciles the declared size against reflection at construction,
+/// so a kernel that exists agrees with its shaders and this check is the
+/// shaders' own.
+#[cfg(target_os = "linux")]
+fn require_declared_push_constant_size(declared_size: u32, supplied: &[u8]) -> PyResult<()> {
+    if supplied.len() != declared_size as usize {
+        return Err(PyValueError::new_err(format!(
+            "this kernel declares {declared_size} push-constant bytes but {} were supplied",
+            supplied.len()
+        )));
+    }
+    Ok(())
+}
+
+/// One dispatch's bindings as the wire carries them, each resolved by the kind
+/// the shaders declare it.
+///
+/// `wire_target_field_name` is the wire's own name for the bound resource —
+/// `surface_uuid` on a graphics draw, `target_id` everywhere else. An
+/// `acceleration_structure` binding resolves through its own registry rather
+/// than through a surface, so it is the one kind that takes a different handle.
+#[cfg(target_os = "linux")]
+fn supplied_kernel_bindings_to_wire<'py>(
+    python: Python<'py>,
+    reflected: &[ReflectedKernelBinding],
+    supplied: &Bound<'py, PyDict>,
+    wire_target_field_name: &str,
+) -> PyResult<Bound<'py, PyList>> {
+    let wire_bindings = PyList::empty(python);
+    for (name, bound_to) in supplied.iter() {
+        let name: String = name.extract()?;
+        let kind = reflected_kind_of_binding(reflected, &name)?.to_string();
+        let target_id = if kind == ACCELERATION_STRUCTURE_BINDING_KIND_WIRE_NAME {
+            bound_acceleration_structure_id(&name, &bound_to)?
+        } else {
+            bound_surface_id(&name, &bound_to)?
+        };
+        let entry = PyDict::new(python);
+        entry.set_item(wire_target_field_name, target_id)?;
+        entry.set_item("name", name)?;
+        entry.set_item("kind", kind)?;
+        wire_bindings.append(entry)?;
+    }
+    Ok(wire_bindings)
 }
 
 /// A compute kernel the engine built and holds, dispatched by name.
@@ -1385,7 +2465,7 @@ pub(crate) struct PythonComputeKernel {
     push_constant_size: u32,
     /// The caller supplies surfaces by name; which kind each name is, is the
     /// shader's to say, so it is carried rather than guessed per dispatch.
-    reflected_binding_kinds: Vec<ReflectedComputeBinding>,
+    reflected_binding_kinds: Vec<ReflectedKernelBinding>,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
@@ -1395,10 +2475,7 @@ impl PythonComputeKernel {
     /// The shader's own names for this kernel's bindings, in slot order.
     #[getter]
     fn binding_names(&self) -> Vec<String> {
-        self.reflected_binding_kinds
-            .iter()
-            .map(|binding| binding.name.clone())
-            .collect()
+        reflected_binding_names(&self.reflected_binding_kinds)
     }
 
     /// Dispatch this kernel, binding each of the shader's declared resources
@@ -1451,47 +2528,14 @@ impl PythonComputeKernel {
         push_constants: Option<&[u8]>,
     ) -> PyResult<(Bound<'py, PyList>, String)> {
         let push_constants = push_constants.unwrap_or_default();
-        if push_constants.len() != self.push_constant_size as usize {
-            return Err(PyValueError::new_err(format!(
-                "this kernel declares {} push-constant bytes but {} were supplied",
-                self.push_constant_size,
-                push_constants.len()
-            )));
-        }
-
-        let wire_bindings = PyList::empty(python);
-        for (name, bound_to) in bindings.iter() {
-            let name: String = name.extract()?;
-            let kind = self.reflected_kind_of(&name)?.to_string();
-            let entry = PyDict::new(python);
-            entry.set_item("target_id", bound_surface_id(&name, &bound_to)?)?;
-            entry.set_item("name", name)?;
-            entry.set_item("kind", kind)?;
-            wire_bindings.append(entry)?;
-        }
+        require_declared_push_constant_size(self.push_constant_size, push_constants)?;
+        let wire_bindings = supplied_kernel_bindings_to_wire(
+            python,
+            &self.reflected_binding_kinds,
+            bindings,
+            "target_id",
+        )?;
         Ok((wire_bindings, encode_lowercase_hex(push_constants)))
-    }
-
-    /// The kind the shader declares this name as.
-    ///
-    /// An unknown name is refused here rather than sent — the round trip would
-    /// refuse it too, but the caller's own stack is where the mistake is.
-    #[cfg(target_os = "linux")]
-    fn reflected_kind_of(&self, name: &str) -> PyResult<&str> {
-        self.reflected_binding_kinds
-            .iter()
-            .find(|binding| binding.name == name)
-            .map(|binding| binding.kind.as_str())
-            .ok_or_else(|| {
-                PyValueError::new_err(format!(
-                    "no binding named {name:?}; this shader declares {}",
-                    self.binding_names()
-                        .iter()
-                        .map(|declared| format!("{declared:?}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            })
     }
 }
 
@@ -1679,6 +2723,251 @@ impl PythonKernelDispatchBatch {
     }
 }
 
+/// A graphics kernel the engine built and holds, drawn by name.
+///
+/// Constructed in `setup()` where the capability is Full; drawn per frame in
+/// `process()`. No kernel handle string, fence, timeline or descriptor slot
+/// number reaches Python — the object is the handle.
+///
+/// Defined on every platform so the stub's surface is honest everywhere; off
+/// Linux it is unconstructible, because `create_graphics_kernel` refuses before
+/// reaching it.
+#[pyclass(name = "GraphicsKernel", module = "streamlib", frozen)]
+pub(crate) struct PythonGraphicsKernel {
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    kernel_id: String,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    push_constant_size: u32,
+    /// The caller supplies surfaces by name; which kind each name is, is the
+    /// shaders' to say, so it is carried rather than guessed per draw.
+    reflected_binding_kinds: Vec<ReflectedKernelBinding>,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
+}
+
+#[pymethods]
+impl PythonGraphicsKernel {
+    /// The shaders' own names for this kernel's bindings, in slot order.
+    #[getter]
+    fn binding_names(&self) -> Vec<String> {
+        reflected_binding_names(&self.reflected_binding_kinds)
+    }
+
+    /// Render one offscreen pass into `color_targets`, binding each of the
+    /// shaders' declared resources by name.
+    ///
+    /// Bindings never persist on the kernel, so every draw supplies all of
+    /// them. The pass discards each colour target's previous contents and
+    /// starts from transparent black. Returns when the GPU work has retired and
+    /// the pixels are visible.
+    #[pyo3(signature = (
+        bindings,
+        color_targets,
+        extent,
+        vertex_count,
+        instance_count = 1,
+        first_vertex = 0,
+        first_instance = 0,
+        push_constants = None,
+    ))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each is one field of the draw the wire carries; a bundle would hide them"
+    )]
+    fn draw(
+        &self,
+        python: Python<'_>,
+        bindings: &Bound<'_, PyDict>,
+        color_targets: &Bound<'_, PyAny>,
+        extent: (u32, u32),
+        vertex_count: u32,
+        instance_count: u32,
+        first_vertex: u32,
+        first_instance: u32,
+        push_constants: Option<&[u8]>,
+    ) -> PyResult<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let push_constants = push_constants.unwrap_or_default();
+            require_declared_push_constant_size(self.push_constant_size, push_constants)?;
+            let target_surface_ids = PyList::empty(python);
+            for (index, target) in color_targets.try_iter()?.enumerate() {
+                target_surface_ids.append(bound_surface_id(
+                    &format!("colour target {index}"),
+                    &target?,
+                )?)?;
+            }
+            if target_surface_ids.len() != 1 {
+                return Err(PyValueError::new_err(format!(
+                    "this draw names {} colour targets; the pipeline is built for exactly one \
+                     colour attachment",
+                    target_surface_ids.len()
+                )));
+            }
+            let wire_bindings = supplied_kernel_bindings_to_wire(
+                python,
+                &self.reflected_binding_kinds,
+                bindings,
+                "surface_uuid",
+            )?;
+            self.helper_process_exchange_client.run_graphics_draw(
+                python,
+                &HelperProcessGraphicsDraw {
+                    kernel_id: &self.kernel_id,
+                    bindings: &wire_bindings,
+                    color_target_surface_ids: &target_surface_ids,
+                    push_constants_hex: &encode_lowercase_hex(push_constants),
+                    vertex_count,
+                    instance_count,
+                    first_vertex,
+                    first_instance,
+                    extent_width: extent.0,
+                    extent_height: extent.1,
+                },
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (
+                python,
+                bindings,
+                color_targets,
+                extent,
+                vertex_count,
+                instance_count,
+                first_vertex,
+                first_instance,
+                push_constants,
+            );
+            Err(gpu_unreachable_from_a_helper_process_error())
+        }
+    }
+}
+
+/// A ray-tracing kernel the engine built and holds, traced by name.
+///
+/// Constructed in `setup()` where the capability is Full; traced per frame in
+/// `process()`. Like the other two kernel objects, nothing about the engine's
+/// handle for it reaches Python.
+///
+/// Defined on every platform so the stub's surface is honest everywhere; off
+/// Linux it is unconstructible, because `create_ray_tracing_kernel` refuses
+/// before reaching it.
+#[pyclass(name = "RayTracingKernel", module = "streamlib", frozen)]
+pub(crate) struct PythonRayTracingKernel {
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    kernel_id: String,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    push_constant_size: u32,
+    /// The caller supplies targets by name; which kind each name is, is the
+    /// shaders' to say, and it is also what decides whether a name takes a
+    /// surface or an acceleration structure.
+    reflected_binding_kinds: Vec<ReflectedKernelBinding>,
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
+}
+
+#[pymethods]
+impl PythonRayTracingKernel {
+    /// The shaders' own names for this kernel's bindings, in slot order.
+    #[getter]
+    fn binding_names(&self) -> Vec<String> {
+        reflected_binding_names(&self.reflected_binding_kinds)
+    }
+
+    /// Trace a `(width, height, depth)` grid of rays, binding each of the
+    /// shaders' declared resources by name.
+    ///
+    /// An `acceleration_structure` binding takes the handle `build_tlas`
+    /// returned; every other kind takes a surface. Bindings never persist on
+    /// the kernel, so every trace supplies all of them. Returns when the GPU
+    /// work has retired and the writes are visible.
+    #[pyo3(signature = (bindings, grid, push_constants = None))]
+    fn trace(
+        &self,
+        python: Python<'_>,
+        bindings: &Bound<'_, PyDict>,
+        grid: (u32, u32, u32),
+        push_constants: Option<&[u8]>,
+    ) -> PyResult<()> {
+        #[cfg(target_os = "linux")]
+        {
+            let push_constants = push_constants.unwrap_or_default();
+            require_declared_push_constant_size(self.push_constant_size, push_constants)?;
+            let wire_bindings = supplied_kernel_bindings_to_wire(
+                python,
+                &self.reflected_binding_kinds,
+                bindings,
+                "target_id",
+            )?;
+            self.helper_process_exchange_client.run_ray_tracing_kernel(
+                python,
+                &self.kernel_id,
+                &wire_bindings,
+                &encode_lowercase_hex(push_constants),
+                grid,
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (python, bindings, grid, push_constants);
+            Err(gpu_unreachable_from_a_helper_process_error())
+        }
+    }
+}
+
+/// An acceleration structure the engine built and holds.
+///
+/// The object is the handle: a bottom-level structure is placed in a scene by
+/// `build_tlas`, and the top-level one it returns is what a trace binds. No id
+/// string reaches Python, and nothing publishes an acceleration structure for
+/// another processor to resolve.
+///
+/// Defined on every platform so the stub's surface is honest everywhere; off
+/// Linux it is unconstructible, because both builders refuse before reaching
+/// it.
+#[pyclass(name = "AccelerationStructureHandle", module = "streamlib", frozen)]
+pub(crate) struct PythonAccelerationStructureHandle {
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    acceleration_structure_id: String,
+    /// Which of the two builders minted this, so binding a bottom-level
+    /// structure at a trace — or instancing a top-level one — refuses in the
+    /// caller's own stack.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    is_top_level: bool,
+    structure_label: String,
+    /// The release this handle owes the engine, paid on drop. `None` only in
+    /// tests, which mint a handle without a parent to hand anything back to.
+    #[cfg(target_os = "linux")]
+    helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PythonAccelerationStructureHandle {
+    /// The engine holds a structure's device memory for as long as the handle
+    /// naming it lives, which is the lifetime a Rust caller's
+    /// `VulkanAccelerationStructure` has. A scene keeps every bottom-level
+    /// structure it instances alive, so letting go of a BLAS a live TLAS uses
+    /// frees nothing until the TLAS goes too.
+    fn drop(&mut self) {
+        let Some(exchange_client) = self.helper_process_exchange_client.take() else {
+            return;
+        };
+        Python::attach(|python| {
+            exchange_client.release_acceleration_structure(python, &self.acceleration_structure_id);
+        });
+    }
+}
+
+#[pymethods]
+impl PythonAccelerationStructureHandle {
+    /// The name this structure was built under, as it appears in engine logs.
+    #[getter]
+    fn label(&self) -> String {
+        self.structure_label.clone()
+    }
+}
+
 /// The surface id a value bound at `name` names.
 #[cfg(target_os = "linux")]
 fn bound_surface_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -1690,6 +2979,31 @@ fn bound_surface_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String>
             "binding {name:?} must be a GpuSurfaceHandle or a surface id string"
         ))
     })
+}
+
+/// The acceleration structure a value bound at `name` names.
+///
+/// The only binding kind that is not a surface, and the only one whose handle
+/// cannot be spelled as an id string — nothing publishes an acceleration
+/// structure for another processor to resolve, so the object a build returned
+/// is the whole way to name it.
+#[cfg(target_os = "linux")]
+fn bound_acceleration_structure_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
+    let structure = bound_to
+        .extract::<PyRef<'_, PythonAccelerationStructureHandle>>()
+        .map_err(|_| {
+            PyTypeError::new_err(format!(
+                "binding {name:?} is an acceleration_structure; bind the handle `build_tlas` \
+                 returned"
+            ))
+        })?;
+    if !structure.is_top_level {
+        return Err(PyValueError::new_err(format!(
+            "binding {name:?} was given a bottom-level structure; a trace binds the top-level one \
+             `build_tlas` returned, which is what holds the instances"
+        )));
+    }
+    Ok(structure.acceleration_structure_id.clone())
 }
 
 /// The typed cast's claim, over a real link and a real surface-share service.
@@ -1952,6 +3266,300 @@ class FrameSomebodyElseWrote:
             );
             assert_eq!(share.outstanding_claims_on(&surface_id), 0);
         });
+    }
+}
+
+/// What a caller can get wrong building a graphics or ray-tracing kernel,
+/// refused before anything is sent.
+///
+/// Each of these travels as a plain field of a `#[serde(deny_unknown_fields)]`
+/// escalate document, so a mistake the wheel forwards comes back as a parse
+/// failure naming a wire field the author never wrote. Provable with no GPU:
+/// nothing here reaches the exchange client.
+#[cfg(all(test, target_os = "linux"))]
+mod kernel_argument_tests {
+    use super::*;
+
+    fn wire_entries<'py>(wire: &Bound<'py, PyList>) -> Vec<Bound<'py, PyAny>> {
+        wire.iter().collect()
+    }
+
+    fn wire_text(entry: &Bound<'_, PyAny>, field: &str) -> String {
+        entry.get_item(field).unwrap().extract().unwrap()
+    }
+
+    fn wire_number(entry: &Bound<'_, PyAny>, field: &str) -> u32 {
+        entry.get_item(field).unwrap().extract().unwrap()
+    }
+
+    fn bottom_level_structure(python: Python<'_>) -> Py<PythonAccelerationStructureHandle> {
+        Py::new(
+            python,
+            PythonAccelerationStructureHandle {
+                acceleration_structure_id: "blas-under-test".to_string(),
+                is_top_level: false,
+                structure_label: "floor".to_string(),
+                helper_process_exchange_client: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// A declaration asserts the kind; naming stages is optional, and naming
+    /// none of them asserts nothing so reflection stands.
+    #[test]
+    fn a_binding_declaration_carries_the_stages_it_names_and_no_others() {
+        Python::initialize();
+        Python::attach(|python| {
+            let declared = PyDict::new(python);
+            declared
+                .set_item("scene_texture", "sampled_texture")
+                .unwrap();
+            declared
+                .set_item(
+                    "output_image",
+                    ("storage_image", vec!["vertex", "fragment"]),
+                )
+                .unwrap();
+
+            let wire = declared_staged_kernel_bindings_to_wire(
+                python,
+                Some(&declared),
+                "graphics binding kind",
+                GRAPHICS_BINDING_KIND_WIRE_NAMES,
+                "graphics stage",
+                GRAPHICS_SHADER_STAGE_WIRE_BITS,
+            )
+            .unwrap();
+
+            let entries = wire_entries(&wire);
+            assert_eq!(wire_text(&entries[0], "name"), "scene_texture");
+            assert_eq!(wire_text(&entries[0], "kind"), "sampled_texture");
+            assert_eq!(
+                wire_number(&entries[0], "stages"),
+                0,
+                "a declaration that names no stage must assert nothing about stages"
+            );
+            assert_eq!(wire_number(&entries[1], "stages"), 0b11);
+        });
+    }
+
+    #[test]
+    fn a_binding_kind_the_pipeline_does_not_have_is_refused_naming_the_set() {
+        Python::initialize();
+        Python::attach(|python| {
+            let declared = PyDict::new(python);
+            declared.set_item("scene_texture", "sampled_image").unwrap();
+            let refusal = declared_staged_kernel_bindings_to_wire(
+                python,
+                Some(&declared),
+                "graphics binding kind",
+                GRAPHICS_BINDING_KIND_WIRE_NAMES,
+                "graphics stage",
+                GRAPHICS_SHADER_STAGE_WIRE_BITS,
+            )
+            .expect_err("a graphics pipeline has no samplerless-texture descriptor");
+            let refusal = refusal.to_string();
+            assert!(refusal.contains("sampled_image"), "{refusal}");
+            assert!(refusal.contains("sampled_texture"), "{refusal}");
+        });
+    }
+
+    #[test]
+    fn a_stage_no_graphics_pipeline_runs_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let declared = PyDict::new(python);
+            declared
+                .set_item("output_image", ("storage_image", vec!["ray_gen"]))
+                .unwrap();
+            let refusal = declared_staged_kernel_bindings_to_wire(
+                python,
+                Some(&declared),
+                "graphics binding kind",
+                GRAPHICS_BINDING_KIND_WIRE_NAMES,
+                "graphics stage",
+                GRAPHICS_SHADER_STAGE_WIRE_BITS,
+            )
+            .expect_err("a graphics binding cannot be read from a ray-generation stage");
+            assert!(refusal.to_string().contains("ray_gen"), "{refusal}");
+        });
+    }
+
+    /// The wire has no way to omit a stage index, so a group that names none
+    /// carries the sentinel — which is the wheel's job, not the author's.
+    #[test]
+    fn a_shader_group_fills_the_stages_it_does_not_name_with_the_sentinel() {
+        Python::initialize();
+        Python::attach(|python| {
+            let hit_group = PyDict::new(python);
+            hit_group.set_item("kind", "triangles_hit").unwrap();
+            hit_group.set_item("closest_hit_stage", 1u32).unwrap();
+            let groups = PyList::new(python, [hit_group]).unwrap();
+
+            let wire = ray_tracing_shader_groups_to_wire(python, groups.as_any(), 2).unwrap();
+            let entries = wire_entries(&wire);
+            assert_eq!(wire_number(&entries[0], "closest_hit_stage"), 1);
+            assert_eq!(
+                wire_number(&entries[0], "any_hit_stage"),
+                RAY_TRACING_STAGE_INDEX_NONE
+            );
+            assert_eq!(
+                wire_number(&entries[0], "general_stage"),
+                RAY_TRACING_STAGE_INDEX_NONE
+            );
+        });
+    }
+
+    #[test]
+    fn a_shader_group_naming_a_module_that_was_not_supplied_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let group = PyDict::new(python);
+            group.set_item("kind", "general").unwrap();
+            group.set_item("general_stage", 4u32).unwrap();
+            let groups = PyList::new(python, [group]).unwrap();
+
+            let refusal = ray_tracing_shader_groups_to_wire(python, groups.as_any(), 2)
+                .expect_err("a group cannot point past the modules it was built from");
+            assert!(refusal.to_string().contains("general_stage 4"), "{refusal}");
+        });
+    }
+
+    #[test]
+    fn a_general_shader_group_that_names_no_module_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let group = PyDict::new(python);
+            group.set_item("kind", "general").unwrap();
+            let groups = PyList::new(python, [group]).unwrap();
+
+            let refusal = ray_tracing_shader_groups_to_wire(python, groups.as_any(), 2)
+                .expect_err("a general group is the module it points at");
+            assert!(refusal.to_string().contains("general_stage"), "{refusal}");
+        });
+    }
+
+    #[test]
+    fn a_misspelled_group_key_is_refused_rather_than_silently_dropped() {
+        Python::initialize();
+        Python::attach(|python| {
+            let group = PyDict::new(python);
+            group.set_item("kind", "general").unwrap();
+            group.set_item("general_stag", 0u32).unwrap();
+            let groups = PyList::new(python, [group]).unwrap();
+
+            let refusal = ray_tracing_shader_groups_to_wire(python, groups.as_any(), 1)
+                .expect_err("a misspelled key would otherwise read as an absent one");
+            assert!(refusal.to_string().contains("general_stag"), "{refusal}");
+        });
+    }
+
+    /// An instance that names only its structure sits at the origin, visible
+    /// to every cull mask — the placement a caller means by saying nothing.
+    #[test]
+    fn a_tlas_instance_that_names_only_its_structure_gets_the_conventional_placement() {
+        Python::initialize();
+        Python::attach(|python| {
+            let instance = PyDict::new(python);
+            instance
+                .set_item("blas", bottom_level_structure(python))
+                .unwrap();
+            let instances = PyList::new(python, [instance]).unwrap();
+
+            let wire = tlas_instances_to_wire(python, instances.as_any()).unwrap();
+            let entries = wire_entries(&wire);
+            assert_eq!(wire_text(&entries[0], "blas_id"), "blas-under-test");
+            assert_eq!(wire_number(&entries[0], "mask"), 0xff);
+            assert_eq!(wire_number(&entries[0], "custom_index"), 0);
+            assert_eq!(wire_number(&entries[0], "flags"), 0);
+            let transform: Vec<f32> = entries[0].get_item("transform").unwrap().extract().unwrap();
+            assert_eq!(transform, IDENTITY_TLAS_INSTANCE_TRANSFORM.to_vec());
+        });
+    }
+
+    #[test]
+    fn a_tlas_instance_transform_that_is_not_a_three_by_four_affine_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let instance = PyDict::new(python);
+            instance
+                .set_item("blas", bottom_level_structure(python))
+                .unwrap();
+            instance.set_item("transform", vec![1.0f32; 16]).unwrap();
+            let instances = PyList::new(python, [instance]).unwrap();
+
+            let refusal = tlas_instances_to_wire(python, instances.as_any())
+                .expect_err("a 4×4 transform is not what VkTransformMatrixKHR carries");
+            assert!(refusal.to_string().contains("16 floats"), "{refusal}");
+        });
+    }
+
+    /// The host masks the high byte off a custom index without saying so, so a
+    /// value that would arrive truncated is refused where it was written.
+    #[test]
+    fn a_tlas_instance_custom_index_wider_than_its_24_bits_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let instance = PyDict::new(python);
+            instance
+                .set_item("blas", bottom_level_structure(python))
+                .unwrap();
+            instance.set_item("custom_index", 0x0100_0000u32).unwrap();
+            let instances = PyList::new(python, [instance]).unwrap();
+
+            let refusal = tlas_instances_to_wire(python, instances.as_any())
+                .expect_err("a 25-bit custom index cannot reach a hit shader intact");
+            assert!(refusal.to_string().contains("truncated"), "{refusal}");
+        });
+    }
+
+    #[test]
+    fn a_tlas_instance_naming_a_top_level_structure_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let top_level = Py::new(
+                python,
+                PythonAccelerationStructureHandle {
+                    acceleration_structure_id: "tlas-under-test".to_string(),
+                    is_top_level: true,
+                    structure_label: "scene".to_string(),
+                    helper_process_exchange_client: None,
+                },
+            )
+            .unwrap();
+            let instance = PyDict::new(python);
+            instance.set_item("blas", top_level).unwrap();
+            let instances = PyList::new(python, [instance]).unwrap();
+
+            let refusal = tlas_instances_to_wire(python, instances.as_any())
+                .expect_err("a scene cannot instance itself");
+            assert!(refusal.to_string().contains("top-level"), "{refusal}");
+        });
+    }
+
+    /// The other half of the same rule: a trace binds the top-level structure,
+    /// and the bottom-level one it was built from is not a scene.
+    #[test]
+    fn binding_a_bottom_level_structure_at_a_trace_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let bottom_level = bottom_level_structure(python);
+            let refusal =
+                bound_acceleration_structure_id("scene", bottom_level.bind(python).as_any())
+                    .expect_err("a trace binds the structure `build_tlas` returned");
+            assert!(refusal.to_string().contains("bottom-level"), "{refusal}");
+        });
+    }
+
+    #[test]
+    fn a_colour_write_mask_names_its_channels() {
+        assert_eq!(color_write_channels_to_wire("rgba").unwrap(), 0b1111);
+        assert_eq!(color_write_channels_to_wire("rg").unwrap(), 0b0011);
+        assert_eq!(color_write_channels_to_wire("").unwrap(), 0);
+        let refusal = color_write_channels_to_wire("rgbx")
+            .expect_err("a colour write mask names only rgba channels");
+        assert!(refusal.to_string().contains('x'), "{refusal}");
     }
 }
 

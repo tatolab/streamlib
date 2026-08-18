@@ -42,12 +42,21 @@ pub(crate) struct EscalateResponseErr {
     pub(crate) request_id: String,
 }
 
-/// One binding of a registered compute kernel, as reflection found it.
+/// One binding of a registered kernel of any pipeline kind, as reflection
+/// found it.
+///
+/// `kind` is the wire spelling rather than one of the three request enums,
+/// because compute, graphics and ray tracing do not name the same set of kinds
+/// and a caller only ever echoes this value back on the next dispatch. The
+/// bytes are identical either way.
+///
+/// Stages are deliberately absent: a binding's stage visibility is settled at
+/// construction, and no dispatch carries it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EscalateResponseComputeBinding {
+pub(crate) struct EscalateResponseKernelBinding {
     /// Resource kind, in the same spelling the request's binding arrays use.
-    pub(crate) kind: super::escalate_request::EscalateComputeBindingKind,
+    pub(crate) kind: String,
 
     /// The shader's own name for the binding — what a dispatch supplies it by.
     pub(crate) name: String,
@@ -71,13 +80,13 @@ pub(crate) struct EscalateResponseOk {
     pub(crate) request_id: String,
 
     /// The kernel's binding shape as reflection found it, in slot order. Set on
-    /// `register_compute_kernel` responses.
+    /// every `register_*_kernel` response.
     ///
     /// The caller needs it to dispatch: bindings resolve by name, and only the
     /// shader knows which kind each name is. Without this the caller would have
     /// to guess a kind for every binding it supplies.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) bindings: Option<Vec<EscalateResponseComputeBinding>>,
+    pub(crate) bindings: Option<Vec<EscalateResponseKernelBinding>>,
 
     /// Decimal-string-encoded u64 row pitch of the device-export staging,
     /// derived from the staging's own geometry rather than from the requesting

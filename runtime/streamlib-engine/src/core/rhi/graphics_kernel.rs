@@ -12,11 +12,18 @@
 //! creation, validates the declaration matches, and from that point on the
 //! caller binds resources by slot via simple typed setters.
 
-use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
+use std::borrow::Cow;
 
-use crate::core::{Error, Result};
+use rspirv_reflect::DescriptorType as RDescriptorType;
+
+use crate::core::Result;
 
 use super::TextureFormat;
+use super::kernel_binding_names::{
+    KernelBindingUnderReconciliation, KernelShaderStageMask, KernelShaderStageSpirvModule,
+    derive_staged_kernel_bindings_from_shader_reflection,
+    reconcile_staged_kernel_binding_declarations,
+};
 
 /// Shader stages that contribute to a graphics pipeline.
 ///
@@ -51,6 +58,20 @@ impl GraphicsShaderStageFlags {
 
     pub const fn intersects(self, other: Self) -> bool {
         (self.0 & other.0) != 0
+    }
+
+    /// The mask a raw bitmask names, or `None` if it names a bit no graphics
+    /// stage owns.
+    ///
+    /// An unknown bit is refused rather than masked off: a caller that set it
+    /// meant a stage, and dropping it silently would make the declaration
+    /// assert less than it said.
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        if bits & !Self::VERTEX_FRAGMENT.0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
     }
 }
 
@@ -104,12 +125,99 @@ pub enum GraphicsBindingKind {
     StorageImage,
 }
 
-/// One binding declaration: (binding index, resource kind, visible stages).
-#[derive(Debug, Clone, Copy)]
+/// One binding declaration: (binding index, resource kind, visible stages, the
+/// shader's own name for the binding).
+///
+/// `name` is `None` on a declaration that asserts only slot, kind and stages,
+/// and `Some` on every spec the RHI has reconciled against the shader: the
+/// numeric binding is what the descriptor set is built from, the name is what a
+/// by-name draw resolves against.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphicsBindingSpec {
     pub binding: u32,
     pub kind: GraphicsBindingKind,
     pub stages: GraphicsShaderStageFlags,
+    pub name: Option<Cow<'static, str>>,
+}
+
+/// What a caller asserts about one graphics binding before reflection has
+/// assigned it a slot: the shader's name for it, the kind expected there, and
+/// the stages the caller believes read it.
+///
+/// Deliberately not a [`GraphicsBindingSpec`]: a declaration has no slot, and
+/// carrying a placeholder slot in a spec would put a meaningless number in a
+/// field every resolved path treats as load-bearing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphicsBindingDeclaration {
+    pub name: String,
+    pub kind: GraphicsBindingKind,
+    pub stages: GraphicsShaderStageFlags,
+}
+
+impl KernelShaderStageMask for GraphicsShaderStageFlags {
+    fn mask_naming_no_stages() -> Self {
+        Self::NONE
+    }
+
+    fn named_stages(self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.contains(Self::VERTEX) {
+            names.push("vertex");
+        }
+        if self.contains(Self::FRAGMENT) {
+            names.push("fragment");
+        }
+        names
+    }
+
+    fn names_no_stage(self) -> bool {
+        self == Self::NONE
+    }
+
+    fn stages_missing_from(self, available: Self) -> Vec<&'static str> {
+        Self(self.0 & !available.0).named_stages()
+    }
+
+    fn contains_every_stage_in(self, other: Self) -> bool {
+        self.contains(other)
+    }
+}
+
+/// Check a caller's graphics binding declarations against what the shaders'
+/// reflection actually found, by name.
+///
+/// Runs at kernel construction, where the multi-stage declaration is built —
+/// which is the only place a stage mismatch can be caught, because a draw
+/// never revisits which stage reads what.
+pub(crate) fn reconcile_graphics_binding_declarations(
+    declared: &[GraphicsBindingDeclaration],
+    reflected: &[GraphicsBindingSpec],
+    stages_the_kernel_was_built_from: GraphicsShaderStageFlags,
+) -> Result<()> {
+    let declared_view: Vec<_> = declared
+        .iter()
+        .map(|declaration| KernelBindingUnderReconciliation {
+            name: declaration.name.as_str(),
+            kind: declaration.kind,
+            stages: declaration.stages,
+        })
+        .collect();
+    let reflected_view: Vec<_> = reflected
+        .iter()
+        .filter_map(|spec| {
+            Some(KernelBindingUnderReconciliation {
+                name: spec.name.as_deref()?,
+                kind: spec.kind,
+                stages: spec.stages,
+            })
+        })
+        .collect();
+    reconcile_staged_kernel_binding_declarations(
+        "graphics",
+        &declared_view,
+        &reflected_view,
+        stages_the_kernel_was_built_from,
+    )
 }
 
 impl GraphicsBindingSpec {
@@ -118,6 +226,7 @@ impl GraphicsBindingSpec {
             binding,
             kind: GraphicsBindingKind::SampledTexture,
             stages,
+            name: None,
         }
     }
 
@@ -126,6 +235,7 @@ impl GraphicsBindingSpec {
             binding,
             kind: GraphicsBindingKind::StorageBuffer,
             stages,
+            name: None,
         }
     }
 
@@ -134,6 +244,7 @@ impl GraphicsBindingSpec {
             binding,
             kind: GraphicsBindingKind::UniformBuffer,
             stages,
+            name: None,
         }
     }
 
@@ -142,7 +253,15 @@ impl GraphicsBindingSpec {
             binding,
             kind: GraphicsBindingKind::StorageImage,
             stages,
+            name: None,
         }
+    }
+
+    /// Assert the shader's spelling of this binding as well as its slot.
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 }
 
@@ -293,7 +412,7 @@ pub enum DepthCompareOp {
 
 /// Depth/stencil test state. Stencil testing is not exposed today (no
 /// in-tree consumer needs it).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DepthStencilState {
     Disabled,
     Enabled {
@@ -343,6 +462,16 @@ impl ColorWriteMask {
 
     pub const fn bits(self) -> u32 {
         self.0
+    }
+
+    /// The mask a raw bitmask names, or `None` if it names a bit no color
+    /// channel owns.
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        if bits & !Self::RGBA.0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
+        }
     }
 }
 
@@ -560,86 +689,44 @@ pub struct DrawIndexedCall {
 /// `VERTEX | FRAGMENT`.
 ///
 /// Rejects descriptor-type conflicts (same binding declared as
-/// StorageBuffer in vertex and UniformBuffer in fragment) and multi-set
-/// kernels (only descriptor set 0 supported).
+/// StorageBuffer in vertex and UniformBuffer in fragment) and any descriptor
+/// set other than set 0.
+///
+/// Every derived spec carries the shader's own name for its binding, and the
+/// two ways a name can fail to identify one binding are rejected here rather
+/// than at draw time: a slot the two stages spell differently, and one name on
+/// two slots. A blob whose `OpName` decorations were stripped is rejected for
+/// the same reason — bindings are resolved by name in one spelling for both
+/// languages, so an unnamed binding cannot be bound at all.
 pub fn derive_bindings_from_spirv_multistage(
     stages: &[GraphicsStage<'_>],
 ) -> Result<(Vec<GraphicsBindingSpec>, GraphicsPushConstants)> {
-    let mut merged: std::collections::BTreeMap<
-        u32,
-        (GraphicsBindingKind, GraphicsShaderStageFlags),
-    > = std::collections::BTreeMap::new();
-    let mut push_size: u32 = 0;
-    let mut push_stages = GraphicsShaderStageFlags::NONE;
-
-    for stage in stages {
-        let stage_flag = stage_to_flag(stage.stage);
-        let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            Error::GpuError(format!(
-                "Graphics kernel: failed to reflect SPIR-V for {:?} stage: {e:?}",
-                stage.stage
-            ))
-        })?;
-        let sets = reflection.get_descriptor_sets().map_err(|e| {
-            Error::GpuError(format!(
-                "Graphics kernel: failed to extract descriptor sets for {:?} stage: {e:?}",
-                stage.stage
-            ))
-        })?;
-        if sets.len() > 1 {
-            return Err(Error::GpuError(format!(
-                "Graphics kernel: only descriptor set 0 is supported; SPIR-V {:?} stage uses sets {:?}",
-                stage.stage,
-                sets.keys().collect::<Vec<_>>()
-            )));
-        }
-        if let Some(set0) = sets.get(&0) {
-            for (&binding, info) in set0 {
-                let kind = spirv_type_to_kind(info.ty).ok_or_else(|| {
-                    Error::GpuError(format!(
-                        "Graphics kernel: SPIR-V {:?} stage binding {binding} has unsupported descriptor type {:?}",
-                        stage.stage, info.ty
-                    ))
-                })?;
-                let entry = merged
-                    .entry(binding)
-                    .or_insert((kind, GraphicsShaderStageFlags::NONE));
-                if entry.0 != kind {
-                    return Err(Error::GpuError(format!(
-                        "Graphics kernel: binding {binding} kind conflict — {:?} vs {:?} (introduced by {:?})",
-                        entry.0, kind, stage.stage
-                    )));
-                }
-                entry.1 |= stage_flag;
-            }
-        }
-        if let Some(info) = reflection.get_push_constant_range().map_err(|e| {
-            Error::GpuError(format!(
-                "Graphics kernel: failed to read push-constant range for {:?} stage: {e:?}",
-                stage.stage
-            ))
-        })? {
-            // Vulkan permits a push-constant block to span multiple stages
-            // with overlapping ranges; we report the maximum size touched
-            // by any stage and the union of stages.
-            push_size = push_size.max(info.size);
-            push_stages |= stage_flag;
-        }
-    }
-
-    let bindings: Vec<GraphicsBindingSpec> = merged
-        .into_iter()
-        .map(|(binding, (kind, stages))| GraphicsBindingSpec {
-            binding,
-            kind,
-            stages,
+    let stage_modules: Vec<_> = stages
+        .iter()
+        .map(|stage| KernelShaderStageSpirvModule {
+            stage: stage.stage,
+            spirv: stage.spv,
         })
         .collect();
+    let (derived, push_constants) = derive_staged_kernel_bindings_from_shader_reflection(
+        "Graphics kernel",
+        &stage_modules,
+        stage_to_flag,
+        spirv_type_to_kind,
+    )?;
     Ok((
-        bindings,
+        derived
+            .into_iter()
+            .map(|binding| GraphicsBindingSpec {
+                binding: binding.binding,
+                kind: binding.kind,
+                stages: binding.stages,
+                name: Some(Cow::Owned(binding.name)),
+            })
+            .collect(),
         GraphicsPushConstants {
-            size: push_size,
-            stages: push_stages,
+            size: push_constants.size,
+            stages: push_constants.stages,
         },
     ))
 }
@@ -658,5 +745,128 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<GraphicsBindingKind> {
         RDescriptorType::COMBINED_IMAGE_SAMPLER => Some(GraphicsBindingKind::SampledTexture),
         RDescriptorType::STORAGE_IMAGE => Some(GraphicsBindingKind::StorageImage),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        move_binding_to_another_descriptor_set_in_spirv_module,
+        move_binding_to_another_slot_in_spirv_module, rename_binding_in_spirv_module,
+        strip_every_debug_name_from_spirv_module,
+    };
+
+    // Reflection is host-side work on bytes the build already produced, so
+    // every test here runs without a Vulkan device.
+    fn display_blit_vertex_spirv() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.vert.spv"))
+    }
+
+    fn display_blit_fragment_spirv() -> &'static [u8] {
+        include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"))
+    }
+
+    #[test]
+    fn reflection_keeps_the_shaders_own_name_for_every_binding() {
+        let stages = [
+            GraphicsStage::vertex(display_blit_vertex_spirv()),
+            GraphicsStage::fragment(display_blit_fragment_spirv()),
+        ];
+        let (bindings, _) = derive_bindings_from_spirv_multistage(&stages).expect("derive");
+        let named: Vec<(u32, &str)> = bindings
+            .iter()
+            .map(|spec| {
+                (
+                    spec.binding,
+                    spec.name.as_deref().expect("every binding is named"),
+                )
+            })
+            .collect();
+        assert_eq!(named, vec![(0, "cameraTexture")]);
+    }
+
+    #[test]
+    fn a_name_stripped_stage_is_refused_at_derive() {
+        let stripped = strip_every_debug_name_from_spirv_module(display_blit_fragment_spirv());
+        let stages = [
+            GraphicsStage::vertex(display_blit_vertex_spirv()),
+            GraphicsStage::fragment(&stripped),
+        ];
+        let refusal = derive_bindings_from_spirv_multistage(&stages)
+            .expect_err("a name-stripped blob cannot be bound by name");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("carries no name") && message.contains("glslc -g"),
+            "the refusal must name the cause and the fix: {message}"
+        );
+    }
+
+    #[test]
+    fn one_slot_spelled_two_ways_is_refused_at_derive() {
+        // display_blit's vertex stage declares no binding, so the second
+        // spelling of slot 0 has to come from a rewrite of the fragment blob.
+        let respelled =
+            rename_binding_in_spirv_module(display_blit_fragment_spirv(), "cameraTexture", "cam");
+        let stages = [
+            GraphicsStage::vertex(&respelled),
+            GraphicsStage::fragment(display_blit_fragment_spirv()),
+        ];
+        let refusal = derive_bindings_from_spirv_multistage(&stages)
+            .expect_err("one slot cannot carry two names");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("binding 0 is named `cam`")
+                && message.contains("`cameraTexture`")
+                && message.contains("one slot spelled two ways"),
+            "the refusal must name the slot and both spellings: {message}"
+        );
+    }
+
+    #[test]
+    fn one_name_on_two_slots_is_refused_at_derive() {
+        let moved =
+            move_binding_to_another_slot_in_spirv_module(display_blit_fragment_spirv(), 0, 1);
+        let stages = [
+            GraphicsStage::vertex(&moved),
+            GraphicsStage::fragment(display_blit_fragment_spirv()),
+        ];
+        let refusal = derive_bindings_from_spirv_multistage(&stages)
+            .expect_err("one name cannot identify two slots");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("bindings 0 and 1 are both named `cameraTexture`")
+                && message.contains("one name on two slots"),
+            "the refusal must name both slots and the name: {message}"
+        );
+    }
+
+    #[test]
+    fn a_stage_whose_only_set_is_not_set_0_is_refused_at_derive() {
+        let moved_to_set_1 = move_binding_to_another_descriptor_set_in_spirv_module(
+            display_blit_fragment_spirv(),
+            0,
+            1,
+        );
+        let stages = [
+            GraphicsStage::vertex(display_blit_vertex_spirv()),
+            GraphicsStage::fragment(&moved_to_set_1),
+        ];
+        let message = match derive_bindings_from_spirv_multistage(&stages) {
+            Ok((derived, _)) => panic!(
+                "a binding outside set 0 cannot be bound, so it cannot be dropped in silence; \
+                 derive returned {} binding(s): {:?}",
+                derived.len(),
+                derived
+                    .iter()
+                    .map(|spec| spec.name.as_deref())
+                    .collect::<Vec<_>>()
+            ),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
+        );
     }
 }

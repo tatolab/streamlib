@@ -34,8 +34,12 @@ binding declaration, the kernel:
    [`rspirv-reflect`](https://docs.rs/rspirv-reflect), merges the
    per-stage descriptor sets, and validates that:
    - Declared `bindings` match the merged shader declaration (kind +
-     stage visibility, including the new
+     stage visibility, including the
      `RayTracingBindingKind::AccelerationStructure` variant).
+   - A spec that carries a `name` spells the slot the way the SPIR-V
+     does, and no two stages name the same slot differently —
+     bindings are resolved by name, so one slot spelled two ways
+     cannot be bound.
    - Push-constant size matches the largest declared push-constant
      range across all stages.
    - Only descriptor set 0 is used (multi-set is out of scope).
@@ -45,6 +49,13 @@ binding declaration, the kernel:
 
    Mismatches surface as `Result::Err` at *kernel creation*, not as
    undefined GPU behavior at first trace.
+
+   Reflection also **adopts the shader's own name onto each spec**:
+   wherever the SPIR-V carries an `OpName` for a slot, the spec the
+   kernel stores and `bindings()` returns comes back with that name,
+   whether or not the caller supplied one. The numeric binding is what
+   the descriptor set is built from; the name is what a by-name trace
+   resolves against.
 
 2. **Builds the descriptor-set layout, descriptor pool, descriptor
    set, pipeline layout, ray-tracing pipeline, and shader-binding
@@ -82,9 +93,11 @@ binding declaration, the kernel:
 2. **Wire the shaders into `build.rs`.** Add an entry per stage to
    the `rt_shaders` array in `runtime/streamlib-engine/build.rs`. RT shaders
    are compiled with `--target-env=vulkan1.2 --target-spv=spv1.4`
-   so `SPV_KHR_ray_tracing` opcodes are available; the helper
-   handles the per-stage `-fshader-stage=rgen|rmiss|rchit|...`
-   flag. SPIR-V is read via
+   so `SPV_KHR_ray_tracing` opcodes are available, and with `-g -O`;
+   the helper handles the per-stage
+   `-fshader-stage=rgen|rmiss|rchit|...` flag. The `-g` is not
+   optional: `-O` strips every `OpName`, and a binding whose name is
+   gone cannot be bound by name. SPIR-V is read via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.spv"))`.
 
 3. **Declare stages, groups, bindings, and push constants as data.**
@@ -108,7 +121,23 @@ binding declaration, the kernel:
        RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
        RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
    ];
+
+   // Or assert the shader's spelling too — creation fails if the SPIR-V
+   // names slot 0 anything else:
+   let bindings = vec![
+       RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN)
+           .with_name("top_level_acceleration_structure"),
+   ];
    ```
+
+   A `RayTracingBindingSpec` is `(binding, kind, stages, name)` — the
+   `acceleration_structure` / `storage_image` / `storage_buffer` /
+   `uniform_buffer` / `sampled_texture` constructors leave `name` as
+   `None`, and `with_name` fills it. A caller that knows the shader's
+   name but not its slot declares a `RayTracingBindingDeclaration`
+   (name + kind + stages, no slot) instead; it is reconciled against
+   reflection by name, stage by stage, and the slot comes back from the
+   shader.
 
 4. **Build the acceleration structures.** Triangle BLASes come from
    `GpuContext::build_triangles_blas(label, vertices, indices)` —

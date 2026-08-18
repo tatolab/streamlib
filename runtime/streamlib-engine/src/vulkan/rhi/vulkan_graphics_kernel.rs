@@ -50,7 +50,9 @@ use crate::core::rhi::{
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
     PrimitiveTopology, ScissorRect, Texture, TextureFormat, VertexAttributeFormat, VertexInputRate,
-    VertexInputState, Viewport,
+    VertexInputState, Viewport, refuse_a_binding_the_shader_left_unnamed,
+    refuse_a_descriptor_set_other_than_set_0, refuse_one_binding_name_that_identifies_two_slots,
+    refuse_one_binding_slot_two_stages_spell_differently,
 };
 use crate::core::{Error, Result};
 
@@ -213,7 +215,7 @@ impl VulkanGraphicsKernelInner {
             )));
         }
 
-        validate_against_spirv(descriptor)?;
+        let reconciled_bindings = validate_against_spirv(descriptor)?;
 
         let device = vulkan_device.device();
         let queue = vulkan_device.queue();
@@ -312,7 +314,7 @@ impl VulkanGraphicsKernelInner {
             device: device.clone(),
             queue,
             queue_family_index,
-            bindings: descriptor.bindings.to_vec(),
+            bindings: reconciled_bindings,
             push_constant_size: descriptor.push_constants.size,
             push_constant_stages: shader_stage_flags_to_vk(descriptor.push_constants.stages),
             pipeline_state: descriptor.pipeline_state.clone(),
@@ -1452,10 +1454,16 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
 
 // ---- Validation + creation helpers --------------------------------------------
 
-fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<()> {
+/// Validate the declaration against the shaders and return the specs with the
+/// shader's own binding names adopted onto them.
+fn validate_against_spirv(
+    descriptor: &GraphicsKernelDescriptor<'_>,
+) -> Result<Vec<GraphicsBindingSpec>> {
     use std::collections::BTreeMap;
 
-    let mut merged: BTreeMap<u32, (RDescriptorType, GraphicsShaderStageFlags)> = BTreeMap::new();
+    let kernel_kind_label = format!("Graphics kernel '{}'", descriptor.label);
+    let mut merged: BTreeMap<u32, (RDescriptorType, GraphicsShaderStageFlags, String)> =
+        BTreeMap::new();
     let mut spirv_push_size: u32 = 0;
     let mut spirv_push_stages = GraphicsShaderStageFlags::NONE;
 
@@ -1473,25 +1481,38 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
                 descriptor.label, stage.stage
             ))
         })?;
-        if sets.len() > 1 {
-            return Err(Error::GpuError(format!(
-                "Graphics kernel '{}': only descriptor set 0 is supported; SPIR-V {:?} stage uses sets {:?}",
-                descriptor.label,
-                stage.stage,
-                sets.keys().collect::<Vec<_>>()
-            )));
-        }
+        refuse_a_descriptor_set_other_than_set_0(
+            &kernel_kind_label,
+            Some(stage.stage),
+            sets.keys().copied(),
+        )?;
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
-                let entry = merged
-                    .entry(binding)
-                    .or_insert((info.ty, GraphicsShaderStageFlags::NONE));
+                refuse_a_binding_the_shader_left_unnamed(
+                    &kernel_kind_label,
+                    stage.stage,
+                    binding,
+                    info.ty,
+                    &info.name,
+                )?;
+                let entry = merged.entry(binding).or_insert((
+                    info.ty,
+                    GraphicsShaderStageFlags::NONE,
+                    info.name.clone(),
+                ));
                 if entry.0 != info.ty {
                     return Err(Error::GpuError(format!(
                         "Graphics kernel '{}': binding {binding} type conflict — {:?} vs {:?} (in {:?})",
                         descriptor.label, entry.0, info.ty, stage.stage
                     )));
                 }
+                refuse_one_binding_slot_two_stages_spell_differently(
+                    &kernel_kind_label,
+                    stage.stage,
+                    binding,
+                    &entry.2,
+                    &info.name,
+                )?;
                 entry.1 |= stage_flag;
             }
         }
@@ -1506,7 +1527,18 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         }
     }
 
-    // Each declared binding must agree with merged shader declaration.
+    refuse_one_binding_name_that_identifies_two_slots(
+        &kernel_kind_label,
+        merged
+            .iter()
+            .map(|(&binding, (_, _, name))| (binding, name.as_str())),
+    )?;
+
+    // Each declared binding must agree with merged shader declaration. The
+    // shader's own name for the binding is adopted onto the returned spec —
+    // that is what a by-name draw resolves against, and the shader is its
+    // source of truth.
+    let mut reconciled: Vec<GraphicsBindingSpec> = Vec::with_capacity(descriptor.bindings.len());
     for spec in descriptor.bindings {
         let merged_entry = merged.get(&spec.binding).ok_or_else(|| {
             Error::GpuError(format!(
@@ -1519,6 +1551,14 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
             return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': binding {} declared {:?} ({:?}), but SPIR-V has {:?}",
                 descriptor.label, spec.binding, spec.kind, expected, merged_entry.0
+            )));
+        }
+        if let Some(declared_name) = spec.name.as_deref()
+            && declared_name != merged_entry.2
+        {
+            return Err(Error::GpuError(format!(
+                "Graphics kernel '{}': binding {} declared name `{}`, but SPIR-V names it `{}`",
+                descriptor.label, spec.binding, declared_name, merged_entry.2
             )));
         }
         // Declared visibility must cover at least the SPIR-V's stages —
@@ -1534,16 +1574,20 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
                 merged_entry.1.bits()
             )));
         }
+        let mut adopted = spec.clone();
+        adopted.name = Some(std::borrow::Cow::Owned(merged_entry.2.clone()));
+        reconciled.push(adopted);
     }
 
     // Conversely, every SPIR-V binding must be declared.
-    for (&binding, (ty, stages)) in &merged {
+    for (&binding, (ty, stages, name)) in &merged {
         if !descriptor.bindings.iter().any(|s| s.binding == binding) {
             return Err(Error::GpuError(format!(
-                "Graphics kernel '{}': SPIR-V declares binding {} ({:?}, stages {:#b}) but it is missing from the descriptor",
+                "Graphics kernel '{}': SPIR-V declares binding {} ({:?}, name `{}`, stages {:#b}) but it is missing from the descriptor",
                 descriptor.label,
                 binding,
                 ty,
+                name,
                 stages.bits()
             )));
         }
@@ -1570,7 +1614,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         )));
     }
 
-    Ok(())
+    Ok(reconciled)
 }
 
 fn stage_to_flag(stage: GraphicsShaderStage) -> GraphicsShaderStageFlags {
@@ -2285,6 +2329,11 @@ fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        move_binding_to_another_descriptor_set_in_spirv_module,
+        move_binding_to_another_slot_in_spirv_module, rename_binding_in_spirv_module,
+        strip_every_debug_name_from_spirv_module,
+    };
     use crate::core::rhi::{
         AttachmentFormats, ColorBlendState, ColorWriteMask, DepthCompareOp, DepthStencilState,
         GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
@@ -2376,6 +2425,128 @@ mod tests {
     }
 
     // ---- Validation rejections (host-only, no GPU device required) --------
+
+    #[test]
+    fn rejects_one_slot_the_two_stages_spell_differently() {
+        // display_blit's vertex stage declares no binding, so the second
+        // spelling of slot 0 has to come from a rewrite of the fragment blob.
+        let respelled = rename_binding_in_spirv_module(frag_spv(), "cameraTexture", "cam");
+        let bindings = [GraphicsBindingSpec::sampled_texture(
+            0,
+            GraphicsShaderStageFlags::VERTEX_FRAGMENT,
+        )];
+        let stages = [
+            GraphicsStage::vertex(&respelled),
+            GraphicsStage::fragment(frag_spv()),
+        ];
+        let pipeline_state = default_pipeline_state();
+        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let err = validate_against_spirv(&descriptor)
+            .err()
+            .expect("one slot cannot carry two names");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("binding 0 is named `cam`")
+                && msg.contains("`cameraTexture`")
+                && msg.contains("one slot spelled two ways"),
+            "expected both spellings of slot 0, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_stage_whose_only_set_is_not_set_0_is_refused_at_validation() {
+        let moved_to_set_1 =
+            move_binding_to_another_descriptor_set_in_spirv_module(frag_spv(), 0, 1);
+        let bindings = [GraphicsBindingSpec::sampled_texture(
+            0,
+            GraphicsShaderStageFlags::FRAGMENT,
+        )];
+        let stages = [
+            GraphicsStage::vertex(vert_spv()),
+            GraphicsStage::fragment(&moved_to_set_1),
+        ];
+        let pipeline_state = default_pipeline_state();
+        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let refusal = validate_against_spirv(&descriptor)
+            .err()
+            .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let message = format!("{refusal}");
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_name_stripped_stage() {
+        let stripped = strip_every_debug_name_from_spirv_module(frag_spv());
+        let bindings = [GraphicsBindingSpec::sampled_texture(
+            0,
+            GraphicsShaderStageFlags::FRAGMENT,
+        )];
+        let stages = [
+            GraphicsStage::vertex(vert_spv()),
+            GraphicsStage::fragment(&stripped),
+        ];
+        let pipeline_state = default_pipeline_state();
+        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let err = validate_against_spirv(&descriptor)
+            .err()
+            .expect("a name-stripped blob cannot be bound by name");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("carries no name") && msg.contains("glslc -g"),
+            "the refusal must name the cause and the fix, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_one_name_the_two_stages_put_on_two_slots() {
+        let moved = move_binding_to_another_slot_in_spirv_module(frag_spv(), 0, 1);
+        let bindings = [
+            GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::VERTEX_FRAGMENT),
+            GraphicsBindingSpec::sampled_texture(1, GraphicsShaderStageFlags::VERTEX_FRAGMENT),
+        ];
+        let stages = [
+            GraphicsStage::vertex(&moved),
+            GraphicsStage::fragment(frag_spv()),
+        ];
+        let pipeline_state = default_pipeline_state();
+        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let err = validate_against_spirv(&descriptor)
+            .err()
+            .expect("one name cannot identify two slots");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("bindings 0 and 1 are both named `cameraTexture`")
+                && msg.contains("one name on two slots"),
+            "expected both slots and the name, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_declared_name_the_shader_spells_differently() {
+        let bindings =
+            [
+                GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT)
+                    .with_name("sourceTexture"),
+            ];
+        let stages = [
+            GraphicsStage::vertex(vert_spv()),
+            GraphicsStage::fragment(frag_spv()),
+        ];
+        let pipeline_state = default_pipeline_state();
+        let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
+        let err = validate_against_spirv(&descriptor)
+            .err()
+            .expect("a declared name the shader does not use must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("declared name `sourceTexture`")
+                && msg.contains("SPIR-V names it `cameraTexture`"),
+            "expected both the declared and the reflected name, got: {msg}"
+        );
+    }
 
     #[test]
     fn rejects_descriptor_with_mismatched_binding_kind() {

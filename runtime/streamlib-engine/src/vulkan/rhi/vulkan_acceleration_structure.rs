@@ -77,6 +77,52 @@ impl TlasInstanceDesc {
     }
 }
 
+/// The `VkGeometryInstanceFlagsKHR` a raw bitmask names.
+///
+/// Exists for callers that receive the mask as an integer — an IPC payload has
+/// no way to name the typed constants — and keeps them out of `vulkanalia`.
+/// A bit no flag owns is refused rather than masked off: the caller meant a
+/// behaviour by it, and dropping it silently would build a different instance
+/// than the one asked for.
+pub fn geometry_instance_flags_from_raw_bitmask(
+    raw_bitmask: u32,
+) -> Result<vk::GeometryInstanceFlagsKHR> {
+    vk::GeometryInstanceFlagsKHR::from_bits(raw_bitmask).ok_or_else(|| {
+        Error::GpuError(format!(
+            "geometry instance flags {raw_bitmask:#x} set a bit no VkGeometryInstanceFlagsKHR \
+             value owns; the defined bits are {:#x}",
+            vk::GeometryInstanceFlagsKHR::all().bits()
+        ))
+    })
+}
+
+/// Refuse an index that names a vertex the caller did not supply.
+///
+/// A triangle-geometry build reads `vertexData` through a buffer device address
+/// bounded only by `maxVertex`
+/// (VUID-VkAccelerationStructureBuildRangeInfoKHR-vertexData-10418), and an
+/// acceleration-structure build's input reads have no `robustBufferAccess`
+/// escape hatch the way an indexed draw's do. An index past the last vertex is
+/// therefore an out-of-bounds device read — garbage geometry or a device fault,
+/// reported by nothing, not even the validation layers, which cannot see index
+/// values that live in device memory.
+fn refuse_an_index_past_the_last_vertex(
+    acceleration_structure_label: &str,
+    vertex_count: u32,
+    indices: &[u32],
+) -> Result<()> {
+    let Some(&index_past_the_last_vertex) = indices.iter().find(|&&index| index >= vertex_count)
+    else {
+        return Ok(());
+    };
+    Err(Error::GpuError(format!(
+        "Acceleration structure '{acceleration_structure_label}': index \
+         {index_past_the_last_vertex} names a vertex outside the {vertex_count} supplied; every \
+         index must be less than {vertex_count}, and the build would otherwise read past the \
+         vertex buffer"
+    )))
+}
+
 /// Row-major 3×4 identity transform.
 pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
     [1.0, 0.0, 0.0, 0.0],
@@ -171,6 +217,7 @@ impl VulkanAccelerationStructureInner {
         let device = vulkan_device.device();
         let triangle_count = (indices.len() / 3) as u32;
         let vertex_count = (vertices.len() / 3) as u32;
+        refuse_an_index_past_the_last_vertex(label, vertex_count, indices)?;
         let vertex_bytes = mem::size_of_val(vertices) as vk::DeviceSize;
         let index_bytes = mem::size_of_val(indices) as vk::DeviceSize;
 
@@ -1033,4 +1080,68 @@ fn instance_bytes(desc: &TlasInstanceDesc) -> [u8; INSTANCE_BYTES] {
     out[56..64].copy_from_slice(&desc.blas.device_address().to_ne_bytes());
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_defined_geometry_instance_flag_survives_the_raw_bitmask() {
+        let defined = vk::GeometryInstanceFlagsKHR::all();
+        assert_eq!(
+            geometry_instance_flags_from_raw_bitmask(defined.bits()).expect("every defined bit"),
+            defined
+        );
+        assert_eq!(
+            geometry_instance_flags_from_raw_bitmask(
+                vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE.bits()
+            )
+            .expect("one defined bit"),
+            vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE
+        );
+    }
+
+    #[test]
+    fn every_index_inside_the_supplied_vertices_is_accepted() {
+        refuse_an_index_past_the_last_vertex("in-range", 3, &[0, 1, 2])
+            .expect("three indices over three vertices name only vertices that exist");
+    }
+
+    #[test]
+    fn an_index_past_the_last_vertex_is_refused() {
+        let refusal = refuse_an_index_past_the_last_vertex("one-past-the-end", 3, &[0, 1, 3])
+            .expect_err("index 3 over three vertices reads past the vertex buffer");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("index 3") && message.contains("outside the 3 supplied"),
+            "the refusal must name the index and the vertex count: {message}"
+        );
+        assert!(
+            message.contains("one-past-the-end"),
+            "the refusal must name the acceleration structure: {message}"
+        );
+    }
+
+    #[test]
+    fn a_bit_no_geometry_instance_flag_owns_is_refused() {
+        let undefined_bit = !vk::GeometryInstanceFlagsKHR::all().bits() & (1 << 31);
+        assert_ne!(undefined_bit, 0, "bit 31 must stay undefined for this test");
+        let refusal = geometry_instance_flags_from_raw_bitmask(
+            vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE.bits() | undefined_bit,
+        )
+        .expect_err("a bit no flag owns cannot be silently dropped");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("set a bit no VkGeometryInstanceFlagsKHR value owns"),
+            "the refusal must say the bit is unowned: {message}"
+        );
+        assert!(
+            message.contains(&format!(
+                "{:#x}",
+                vk::GeometryInstanceFlagsKHR::all().bits()
+            )),
+            "the refusal must name the bits that are defined: {message}"
+        );
+    }
 }

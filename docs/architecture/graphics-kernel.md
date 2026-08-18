@@ -23,6 +23,10 @@ declaration, the kernel:
    per-stage descriptor sets, and validates that:
    - Declared `bindings` match the merged shader declaration (kind +
      stage visibility).
+   - A spec that carries a `name` spells the slot the way the SPIR-V
+     does.
+   - No two stages name the same slot differently — bindings are
+     resolved by name, so one slot spelled two ways cannot be bound.
    - Push-constant size and stage visibility match.
    - Only descriptor set 0 is used (multi-set is out of scope).
    - Stage classification matches the SPIR-V (a Vertex stage's blob
@@ -30,6 +34,13 @@ declaration, the kernel:
 
    Mismatches surface as a `Result::Err` at *kernel creation*, not as
    undefined GPU behavior at first draw.
+
+   Reflection also **adopts the shader's own name onto each spec**:
+   wherever the SPIR-V carries an `OpName` for a slot, the spec the
+   kernel stores and `bindings()` returns comes back with that name,
+   whether or not the caller supplied one. The numeric binding is what
+   the descriptor set is built from; the name is what a by-name draw
+   resolves against.
 
 2. **Builds the descriptor-set layout, descriptor pool, descriptor-set
    ring, pipeline layout, graphics pipeline (with on-disk pipeline
@@ -105,8 +116,10 @@ serial-dispatch contract).
 
 2. **Wire the shaders into `build.rs`.** Append vertex + fragment
    entries to the `shaders` array in `runtime/streamlib-engine/build.rs`. The
-   build script invokes `glslc -O` per-stage and writes SPIR-V into
-   `OUT_DIR`. SPIR-V is read at compile time via
+   build script invokes `glslc -g -O` per-stage and writes SPIR-V into
+   `OUT_DIR`. The `-g` is not optional: `-O` strips every `OpName`, and
+   a binding whose name is gone cannot be bound by name. SPIR-V is read at
+   compile time via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.<stage>.spv"))`.
    Do not commit `.spv` files to the source tree — they're build
    artifacts.
@@ -117,6 +130,13 @@ serial-dispatch contract).
    ```rust
    const BINDINGS: &[GraphicsBindingSpec] = &[
        GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT),
+   ];
+
+   // Or assert the shader's spelling too — creation fails if the SPIR-V
+   // names slot 0 anything else:
+   let bindings = vec![
+       GraphicsBindingSpec::sampled_texture(0, GraphicsShaderStageFlags::FRAGMENT)
+           .with_name("input_texture"),
    ];
 
    let pipeline_state = GraphicsPipelineState {
@@ -132,6 +152,14 @@ serial-dispatch contract).
        dynamic_state: GraphicsDynamicState::ViewportScissor,
    };
    ```
+
+   A `GraphicsBindingSpec` is `(binding, kind, stages, name)` — the
+   `sampled_texture` / `storage_buffer` / `uniform_buffer` /
+   `storage_image` constructors leave `name` as `None`, and `with_name`
+   fills it. A caller that knows the shader's name but not its slot
+   declares a `GraphicsBindingDeclaration` (name + kind + stages, no
+   slot) instead; it is reconciled against reflection by name, stage by
+   stage, and the slot comes back from the shader.
 
 4. **Create the kernel via `GpuContext::create_graphics_kernel`** at
    setup time and store the `Arc<VulkanGraphicsKernel>`:

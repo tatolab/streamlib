@@ -170,7 +170,7 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - REMOVED: importing a foreign DMA-BUF is not reachable from a Python processor yet
   The refusal (`python_processor_context.rs:745-759`) and its stub entry (`_engine.pyi:381`).
 - REMOVED: writable: false
-  The `writable: false` texture arm (`surface_export_staging.rs:373`), which is the anchor this
+  The `writable: false` texture arm (`surface_export_staging.rs:394`), which is the anchor this
   bullet was re-cut to when #1774 implemented the readback half — the shared literal it named
   before ("device export is read-only") no longer distinguishes the two halves, because #1774
   reworded that refusal to name the surface. Only the texture arm retires, with the

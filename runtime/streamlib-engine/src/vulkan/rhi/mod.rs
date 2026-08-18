@@ -121,6 +121,7 @@ mod vulkan_acceleration_structure;
 #[cfg(target_os = "linux")]
 pub use vulkan_acceleration_structure::{
     AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
+    geometry_instance_flags_from_raw_bitmask,
 };
 // `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
 // the host's clone/drop callbacks in `core::plugin::host_services`

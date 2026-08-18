@@ -26,7 +26,10 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::{CStr, c_void};
 
-use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
+use crate::core::rhi::{
+    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
+    refuse_a_descriptor_set_other_than_set_0,
+};
 use crate::core::{Error, Result};
 
 /// Env var that overrides the default pipeline-cache directory. Used by tests
@@ -1174,14 +1177,11 @@ fn validate_against_spirv(
         ))
     })?;
 
-    // Reject multi-set kernels — out of scope.
-    if sets.len() > 1 {
-        return Err(Error::GpuError(format!(
-            "Compute kernel '{}': only descriptor set 0 is supported; SPIR-V uses sets {:?}",
-            descriptor.label,
-            sets.keys().collect::<Vec<_>>()
-        )));
-    }
+    refuse_a_descriptor_set_other_than_set_0(
+        &format!("Compute kernel '{}'", descriptor.label),
+        None::<&str>,
+        sets.keys().copied(),
+    )?;
 
     let set0 = sets.get(&0);
 
@@ -1631,6 +1631,7 @@ fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
 mod tests {
     use super::*;
     use crate::core::rhi::PixelBuffer;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::move_binding_to_another_descriptor_set_in_spirv_module;
     use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
@@ -1690,6 +1691,28 @@ mod tests {
             8 => include_bytes!(concat!(env!("OUT_DIR"), "/test_blend_8.spv")),
             _ => panic!("test_blend.spv variants are only built for 1/2/4/8"),
         }
+    }
+
+    #[test]
+    fn a_shader_whose_only_set_is_not_set_0_is_refused_at_validation() {
+        let moved_to_set_1 =
+            move_binding_to_another_descriptor_set_in_spirv_module(blend_spv(2), 0, 1);
+        let bindings = blend_descriptor(2);
+        let descriptor = ComputeKernelDescriptor {
+            label: "blend-in-set-1",
+            spv: &moved_to_set_1,
+            entry_point: "main",
+            bindings: &bindings,
+            push_constant_size: 0,
+        };
+        let refusal = validate_against_spirv(&descriptor)
+            .err()
+            .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
+        );
     }
 
     fn run_blend_kernel_for(

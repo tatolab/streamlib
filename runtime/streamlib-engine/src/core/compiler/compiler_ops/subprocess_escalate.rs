@@ -27,61 +27,55 @@ use crate::core::rhi::GlslCompilationTargetStage;
 use crate::host_rhi::HostSurfaceStoreExt;
 
 use super::subprocess_escalate_wire_types::escalate_request::{
-    EscalateComputeBindingKind, EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer,
-    EscalateRequestAcquireTexture, EscalateRequestCopyDeviceExportStagingBackToSurface,
-    EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestOpenCpuReadbackStaging, EscalateRequestOpenDeviceExportStaging,
-    EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateComputeBindingKind, EscalateGraphicsBindingKind, EscalateRayTracingBindingKind,
+    EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
+    EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestLog,
+    EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestOpenCpuReadbackStaging,
+    EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
+    EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
-    EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelBindingKind,
-    EscalateRequestRegisterGraphicsKernelPipelineState,
-    EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
+    EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelPipelineState,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
-    EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState,
     EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode,
     EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace,
     EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode,
     EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
-    EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
-    EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
-    EscalateRequestRegisterRayTracingKernel, EscalateRequestRegisterRayTracingKernelBindingKind,
-    EscalateRequestRegisterRayTracingKernelGroupKind,
+    EscalateRequestRegisterRayTracingKernel, EscalateRequestRegisterRayTracingKernelGroupKind,
     EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestReleaseHandle,
     EscalateRequestRunComputeKernel, EscalateRequestRunComputeKernelBatch,
     EscalateRequestRunComputeKernelBinding, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
-    EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
-    EscalateRequestRunGraphicsDrawIndexBufferIndexType, EscalateRequestRunRayTracingKernel,
-    EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
-    EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
+    EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunRayTracingKernel,
+    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestWaitDeviceIdle, RAY_TRACING_STAGE_INDEX_NONE,
+};
+// Each names a wire field the handler no longer reads: a depth attachment and
+// either half of a vertex input are refused, so only the tests that prove the
+// refusals still spell them.
+#[cfg(test)]
+use super::subprocess_escalate_wire_types::escalate_request::{
+    EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
+    EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
+    EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
+    EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
 };
 #[cfg(target_os = "linux")]
-use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseComputeBinding;
+use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseKernelBinding;
 use super::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use crate::core::context::{
-    BlasRegisterDecl, BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire,
-    DepthFormatWire, DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
-    GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
-    GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
-    GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
-    RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl, RayTracingBindingKindWire,
-    RayTracingBindingValue, RayTracingKernelBridge, RayTracingKernelRegisterDecl,
-    RayTracingKernelRunDispatch, RayTracingShaderGroupWire, RayTracingShaderStageWire,
-    RayTracingStageDecl, ScissorRectWire, SurfaceExportStagingResidency, TlasInstanceDeclWire,
-    TlasRegisterDecl, VertexAttributeFormatWire, VertexInputAttributeDecl, VertexInputBindingDecl,
-    VertexInputRateWire, ViewportWire,
-};
+use crate::core::context::SurfaceExportStagingResidency;
+#[cfg(target_os = "linux")]
+use crate::core::context::TextureRegistration;
 use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::logging::{LogLevel, LogRecord, Source, push_polyglot_record};
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
@@ -743,12 +737,18 @@ pub(crate) fn handle_escalate_op(
             handle_id,
         }) => {
             let removed = registry.remove_handle(&handle_id);
-            Some(if removed {
+            if removed {
                 // Pixel-buffer / texture / image acquires were
                 // checked into the surface-share service under the
                 // returned handle_id; pair the registry eviction
                 // with the matching service release.
                 release_surface_share_surface(sandbox, &handle_id);
+            }
+            // An acceleration structure is registered against `GpuContext`
+            // rather than against the per-subprocess handle registry, so its id
+            // reaches the same release verb through the device gate.
+            let released = removed || release_acceleration_structure(sandbox, &handle_id);
+            Some(if released {
                 EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
                     handle_id,
@@ -1455,29 +1455,17 @@ fn handle_register_compute_kernel(
         })
         .and_then(|(kernel_id, kernel)| {
             // The caller dispatches by name and only the shader knows which
-            // kind each name is, so the shape goes back with the id. Every
-            // binding this kernel holds came through reflection, which refuses
-            // an unnamed one — an absent name here is a broken invariant, not
-            // a case to skip over.
+            // kind each name is, so the shape goes back with the id.
             let bindings = kernel
                 .bindings()
                 .iter()
                 .map(|spec| {
-                    Ok(EscalateResponseComputeBinding {
-                        kind: compute_binding_kind_to_wire(spec.kind),
-                        name: spec
-                            .name
-                            .as_deref()
-                            .ok_or_else(|| {
-                                crate::core::error::Error::GpuError(format!(
-                                    "kernel {kernel_id} holds an unnamed binding at slot {}; \
-                                     reflection refuses these, so this kernel did not come \
-                                     through registration",
-                                    spec.binding
-                                ))
-                            })?
-                            .to_string(),
-                    })
+                    reflected_kernel_binding_response(
+                        &kernel_id,
+                        spec.binding,
+                        compute_binding_kind_to_wire(spec.kind).wire_name(),
+                        spec.name.as_deref(),
+                    )
                 })
                 .collect::<crate::core::error::Result<Vec<_>>>()?;
             Ok((kernel_id, bindings))
@@ -1550,7 +1538,7 @@ fn handle_run_compute_kernel(
 #[cfg(target_os = "linux")]
 use crate::core::context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 #[cfg(target_os = "linux")]
-use crate::core::rhi::SurfaceBoundComputeBindingKind;
+use crate::core::rhi::SurfaceBoundKernelBindingKind;
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt as _;
 
@@ -1560,7 +1548,7 @@ use crate::host_rhi::HostTextureExt as _;
 #[derive(Debug, PartialEq, Eq)]
 struct PlannedComputeBinding<'a> {
     binding: u32,
-    kind: SurfaceBoundComputeBindingKind,
+    kind: SurfaceBoundKernelBindingKind,
     name: &'a str,
     target_id: &'a str,
 }
@@ -1636,8 +1624,8 @@ fn plan_supplied_compute_bindings<'a>(
             )));
         }
         let surface_bound_kind = match spec.kind {
-            ComputeBindingKind::StorageImage => SurfaceBoundComputeBindingKind::StorageImage,
-            ComputeBindingKind::SampledTexture => SurfaceBoundComputeBindingKind::SampledTexture,
+            ComputeBindingKind::StorageImage => SurfaceBoundKernelBindingKind::StorageImage,
+            ComputeBindingKind::SampledTexture => SurfaceBoundKernelBindingKind::SampledTexture,
             ComputeBindingKind::SampledImage
             | ComputeBindingKind::StorageBuffer
             | ComputeBindingKind::UniformBuffer => {
@@ -1709,7 +1697,7 @@ fn resolve_supplied_compute_bindings(
     // texture (`<slot>#<generation>` resolves through the same cache entry as
     // `<slot>`), so a string comparison would let the pair through to exactly
     // the dispatch this refuses.
-    for (index, binding) in resolved.iter().enumerate() {
+    for (index, (binding, plan)) in resolved.iter().zip(&planned).enumerate() {
         // A texture carrying no image is its own error, raised where the
         // descriptor would be written. Skipped rather than compared, because
         // two absent images are not one texture and refusing them here would
@@ -1717,10 +1705,11 @@ fn resolve_supplied_compute_bindings(
         let Some(image) = binding.registration.texture().vulkan_inner().image() else {
             continue;
         };
-        if let Some(other) = resolved[..index].iter().position(|prior| {
+        let clashing = resolved[..index].iter().zip(&planned).find(|(prior, _)| {
             prior.kind != binding.kind
                 && prior.registration.texture().vulkan_inner().image() == Some(image)
-        }) {
+        });
+        if let Some((prior, prior_plan)) = clashing {
             // Both ids, as the caller wrote them: a published frame id and its
             // pool slot are different strings for one texture, so naming only
             // one would leave the reader looking for a duplicate that is not
@@ -1729,11 +1718,11 @@ fn resolve_supplied_compute_bindings(
                 "bindings `{}` (surface {:?}) and `{}` (surface {:?}) name one texture but \
                  as {:?} and {:?}; no image layout satisfies both descriptors, so a \
                  dispatch reads and writes different surfaces or binds one of them alone",
-                planned[other].name,
-                planned[other].target_id,
-                planned[index].name,
-                planned[index].target_id,
-                resolved[other].kind,
+                prior_plan.name,
+                prior_plan.target_id,
+                plan.name,
+                plan.target_id,
+                prior.kind,
                 binding.kind
             )));
         }
@@ -1869,52 +1858,546 @@ fn bind_and_dispatch_compute_kernel_batch(
     full.dispatch_compute_kernel_batch(&batch)
 }
 
-/// Map a wire-format `register_graphics_kernel` request through the
-/// registered [`GraphicsKernelBridge`].
+/// One binding a draw or a trace supplied, as the planner reads it — whichever
+/// wire array it arrived in.
+#[cfg(target_os = "linux")]
+struct SuppliedKernelBindingUnderPlanning<'a> {
+    name: &'a str,
+    target_id: &'a str,
+    kind_wire_name: &'static str,
+}
+
+/// One binding a kernel declares, as the planner reads it.
+#[cfg(target_os = "linux")]
+struct DeclaredKernelBindingUnderPlanning<'a> {
+    binding_slot: u32,
+    /// `None` on a binding reflection left unnamed, which nothing can resolve
+    /// by name.
+    name: Option<&'a str>,
+    kind_wire_name: &'static str,
+    /// `None` for a kind no surface can be named for — buffers, and the
+    /// acceleration structure a trace resolves through its own registry.
+    surface_bound_kind: Option<SurfaceBoundKernelBindingKind>,
+}
+
+/// What one validated binding resolved to: the slot to write, the kind to write
+/// it as, and the surface to look up.
+#[cfg(target_os = "linux")]
+struct PlannedSurfaceBoundKernelBinding<'a> {
+    binding_slot: u32,
+    kind: SurfaceBoundKernelBindingKind,
+    name: &'a str,
+    target_id: &'a str,
+}
+
+/// One planned binding carried together with the device texture it names.
 ///
-/// Resolves each stage's shader — GLSL source the engine compiles, or the
-/// pre-compiled hex escape hatch — translates the wire-format
-/// pipeline-state enums into the bridge's typed [`GraphicsPipelineStateWire`],
-/// and asks the bridge to register the kernel. The bridge returns a
-/// stable `kernel_id` (recommended: SHA-256 over a canonical
-/// representation of all register-time inputs); identical re-registration
-/// hits the bridge's cache and returns the same id.
+/// The pair travels as one value rather than as two collections read at a
+/// shared index: every step after resolution — the kind-clash check, the
+/// pre-run barrier, the colour-target check, the `set_*` calls — needs the plan
+/// and the registration together, and a shared index is a desynchronisation
+/// waiting to be introduced.
+#[cfg(target_os = "linux")]
+struct ResolvedSurfaceBoundKernelBinding<'a> {
+    planned: PlannedSurfaceBoundKernelBinding<'a>,
+    registration: TextureRegistration,
+}
+
+/// Refuse one binding name supplied twice in a single run's wire array.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. A stage supplies neither `*_source` nor `*_spv_hex`, or both; its
-///    `*_source` does not compile; or its `*_spv_hex` doesn't decode.
-/// 2. No bridge is registered.
-/// 3. Bridge `register` returned an error — typically reflection
-///    failure, push-constant size mismatch, pipeline-state validation
-///    failure, or pipeline build failure.
+/// Shared with the trace path, which runs this over the whole array before
+/// splitting the acceleration structures out of it — the planner never sees
+/// those, and one rule reads as one message wherever it fires. The names it saw
+/// come back, so a caller's missing-binding check does not walk the array again.
+#[cfg(target_os = "linux")]
+fn refuse_a_kernel_binding_name_supplied_twice<'a>(
+    invocation_noun: &str,
+    supplied_names: impl IntoIterator<Item = &'a str>,
+    declared_names: &[&str],
+) -> crate::core::error::Result<std::collections::HashSet<&'a str>> {
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for name in supplied_names {
+        if !seen.insert(name) {
+            return Err(crate::core::error::Error::GpuError(format!(
+                "binding `{name}` was supplied twice; this kernel declares {}, each supplied \
+                 exactly once per {invocation_noun}",
+                crate::core::rhi::quote_declared_shader_binding_names(declared_names)
+            )));
+        }
+    }
+    Ok(seen)
+}
+
+/// Match a draw's or a trace's supplied bindings against the kernel's declared
+/// ones.
+///
+/// The graphics and ray-tracing twin of [`plan_supplied_compute_bindings`],
+/// with the same rules: every failure raises before any resource is bound and
+/// long before a submission, and every message names the kernel's own bindings.
+/// Bindings do not persist on a kernel, so one run supplies all of them or
+/// none. `invocation_noun` is what one run of this pipeline kind is called, so
+/// the refusals read as the caller's op does.
+#[cfg(target_os = "linux")]
+fn plan_supplied_surface_bound_kernel_bindings<'a>(
+    invocation_noun: &str,
+    supplied: &[SuppliedKernelBindingUnderPlanning<'a>],
+    declared: &[DeclaredKernelBindingUnderPlanning<'a>],
+) -> crate::core::error::Result<Vec<PlannedSurfaceBoundKernelBinding<'a>>> {
+    use crate::core::error::Error;
+
+    let declared_names: Vec<&str> = declared.iter().filter_map(|d| d.name).collect();
+    // Built only when a refusal fires — this runs per frame, and the happy
+    // path should not pay for the error text.
+    let kernel_declares = || crate::core::rhi::quote_declared_shader_binding_names(&declared_names);
+
+    let seen = refuse_a_kernel_binding_name_supplied_twice(
+        invocation_noun,
+        supplied.iter().map(|entry| entry.name),
+        &declared_names,
+    )?;
+
+    for name in &declared_names {
+        if !seen.contains(name) {
+            return Err(Error::GpuError(format!(
+                "binding `{name}` was not supplied; bindings do not persist between \
+                 {invocation_noun}s, so every {invocation_noun} supplies all of {}",
+                kernel_declares()
+            )));
+        }
+    }
+
+    let mut planned = Vec::with_capacity(supplied.len());
+    for entry in supplied {
+        let declaration = declared
+            .iter()
+            .find(|d| d.name == Some(entry.name))
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "binding `{}` is not one this kernel declares; it declares {}",
+                    entry.name,
+                    kernel_declares()
+                ))
+            })?;
+        if declaration.kind_wire_name != entry.kind_wire_name {
+            return Err(Error::GpuError(format!(
+                "binding `{}` was supplied as {} but this kernel declares it {}",
+                entry.name, entry.kind_wire_name, declaration.kind_wire_name
+            )));
+        }
+        let kind = declaration.surface_bound_kind.ok_or_else(|| {
+            Error::GpuError(format!(
+                "binding `{}` is {}, which a {invocation_noun} cannot name a surface for — the \
+                 surface-backed kinds are storage_image and sampled_texture",
+                entry.name, declaration.kind_wire_name
+            ))
+        })?;
+        planned.push(PlannedSurfaceBoundKernelBinding {
+            binding_slot: declaration.binding_slot,
+            kind,
+            name: entry.name,
+            target_id: entry.target_id,
+        });
+    }
+    Ok(planned)
+}
+
+/// Resolve every planned binding to the device texture it names, keeping the
+/// two together.
+///
+/// Each registration is a refcount on the texture its descriptor will point at
+/// — the caller holds them across the submission, because dropping the last one
+/// before the GPU has run frees the image out from under it.
+#[cfg(target_os = "linux")]
+fn resolve_planned_surface_bound_kernel_bindings<'a>(
+    full: &crate::core::context::GpuContextFullAccess,
+    planned: Vec<PlannedSurfaceBoundKernelBinding<'a>>,
+) -> crate::core::error::Result<Vec<ResolvedSurfaceBoundKernelBinding<'a>>> {
+    use crate::core::error::Error;
+
+    let mut resolved = Vec::with_capacity(planned.len());
+    for binding in planned {
+        // Zero extent: a kernel binding names a surface the graph already has
+        // as a device texture, which resolves from the same-process cache or
+        // the surface-share service. The pixel-buffer fallback is the one path
+        // that consults the extent, and it refuses a zero one — a
+        // buffer-backed surface is not something a draw can bind.
+        let registration = full
+            .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "binding `{}` names surface {:?}, which this graph cannot resolve to a \
+                     device texture: {e}",
+                    binding.name, binding.target_id
+                ))
+            })?;
+        resolved.push(ResolvedSurfaceBoundKernelBinding {
+            planned: binding,
+            registration,
+        });
+    }
+
+    // One image cannot serve two kinds in one run. The descriptor layouts are
+    // fixed and disagree — a combined image sampler is written
+    // SHADER_READ_ONLY_OPTIMAL and a storage image GENERAL — so whatever layout
+    // the texture is put in, one of the two descriptors is wrong.
+    //
+    // Compared after resolution and on the image, not on the id the caller
+    // wrote: a published frame id and its pool slot are two spellings of one
+    // texture (`<slot>#<generation>` resolves through the same cache entry as
+    // `<slot>`), so a string comparison would let the pair through to exactly
+    // the run this refuses.
+    for (index, binding) in resolved.iter().enumerate() {
+        // A texture carrying no image is its own error, raised where the
+        // descriptor would be written. Skipped rather than compared, because
+        // two absent images are not one texture and refusing them here would
+        // send the caller looking for a duplicate they did not write.
+        let Some(image) = binding.registration.texture().vulkan_inner().image() else {
+            continue;
+        };
+        let clashing = resolved[..index].iter().find(|prior| {
+            prior.planned.kind != binding.planned.kind
+                && prior.registration.texture().vulkan_inner().image() == Some(image)
+        });
+        if let Some(prior) = clashing {
+            // Both ids, as the caller wrote them: a published frame id and its
+            // pool slot are different strings for one texture, so naming only
+            // one would leave the reader looking for a duplicate that is not
+            // there on the page.
+            return Err(Error::GpuError(format!(
+                "bindings `{}` (surface {:?}) and `{}` (surface {:?}) name one texture but as \
+                 {:?} and {:?}; no image layout satisfies both descriptors, so this run reads \
+                 and writes different surfaces or binds one of them alone",
+                prior.planned.name,
+                prior.planned.target_id,
+                binding.planned.name,
+                binding.planned.target_id,
+                prior.planned.kind,
+                binding.planned.kind
+            )));
+        }
+    }
+    Ok(resolved)
+}
+
+/// Barrier every bound input into the layout its descriptor requires, and
+/// publish the layout each one landed in.
+///
+/// Neither `VulkanGraphicsKernel::offscreen_render` nor
+/// `VulkanRayTracingKernel::trace_rays` barriers a bound input — the draw path
+/// transitions its colour targets and nothing else — so a surface arriving in
+/// `GENERAL` or `TRANSFER_DST_OPTIMAL` would be read through a descriptor its
+/// layout does not satisfy. A run whose inputs already sit in the right layout
+/// records nothing and mints no command buffer.
+#[cfg(target_os = "linux")]
+fn transition_bound_kernel_inputs_into_descriptor_layouts(
+    full: &crate::core::context::GpuContextFullAccess,
+    recorder_label: &str,
+    consuming_stage: crate::vulkan::rhi::VulkanStage,
+    bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
+) -> crate::core::error::Result<()> {
+    use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+    let mut images_already_barriered = Vec::new();
+    let mut bindings_to_barrier = Vec::new();
+    for binding in bound_inputs {
+        if binding.registration.current_layout() == binding.planned.kind.required_image_layout() {
+            continue;
+        }
+        // One texture bound at two slots is one image and one barrier — a
+        // second would name an oldLayout the first has already left, and the
+        // two slots agree on the layout anyway or the kind clash would have
+        // been refused already.
+        let image = binding.registration.texture().vulkan_inner().image();
+        if images_already_barriered.contains(&image) {
+            continue;
+        }
+        images_already_barriered.push(image);
+        bindings_to_barrier.push(binding);
+    }
+    if bindings_to_barrier.is_empty() {
+        return Ok(());
+    }
+
+    let mut recorder = full.create_command_recorder(recorder_label)?;
+    recorder.begin()?;
+    for binding in &bindings_to_barrier {
+        // Whatever wrote this surface before the run is not this run's to know
+        // — a transfer upload, a camera, another node — so the source scope is
+        // the wide one every other entry-from-an-unknown-producer barrier in
+        // the engine uses.
+        let recorded = recorder.record_image_barrier(
+            binding.registration.texture(),
+            binding.registration.current_layout(),
+            binding.planned.kind.required_image_layout(),
+            VulkanStage::ALL_COMMANDS,
+            consuming_stage,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+        );
+        if let Err(e) = recorded {
+            recorder.abort_recording();
+            return Err(e);
+        }
+    }
+    recorder.submit_and_wait()?;
+    // Published for every binding, not just the ones that were barriered: a
+    // cross-process import synthesizes a fresh registration per resolve, so two
+    // slots naming one surface hold two layout cells for the one image.
+    for binding in bound_inputs {
+        binding
+            .registration
+            .update_layout(binding.planned.kind.required_image_layout());
+    }
+    Ok(())
+}
+
+/// One reflected binding as a register response spells it.
+///
+/// Every binding a registered kernel holds came through reflection, which
+/// refuses an unnamed one — an absent name here is a broken invariant, not a
+/// case to skip over.
+#[cfg(target_os = "linux")]
+fn reflected_kernel_binding_response(
+    kernel_id: &str,
+    binding_slot: u32,
+    kind_wire_name: &str,
+    name: Option<&str>,
+) -> crate::core::error::Result<EscalateResponseKernelBinding> {
+    Ok(EscalateResponseKernelBinding {
+        kind: kind_wire_name.to_string(),
+        name: name
+            .ok_or_else(|| {
+                crate::core::error::Error::GpuError(format!(
+                    "kernel {kernel_id} holds an unnamed binding at slot {binding_slot}; \
+                     reflection refuses these, so this kernel did not come through registration"
+                ))
+            })?
+            .to_string(),
+    })
+}
+
+/// The RHI binding kind a graphics wire enum names.
+#[cfg(target_os = "linux")]
+fn graphics_binding_kind_from_wire(
+    kind: EscalateGraphicsBindingKind,
+) -> crate::core::rhi::GraphicsBindingKind {
+    use crate::core::rhi::GraphicsBindingKind;
+    match kind {
+        EscalateGraphicsBindingKind::SampledTexture => GraphicsBindingKind::SampledTexture,
+        EscalateGraphicsBindingKind::StorageBuffer => GraphicsBindingKind::StorageBuffer,
+        EscalateGraphicsBindingKind::StorageImage => GraphicsBindingKind::StorageImage,
+        EscalateGraphicsBindingKind::UniformBuffer => GraphicsBindingKind::UniformBuffer,
+    }
+}
+
+/// The wire enum for a graphics binding kind.
+#[cfg(target_os = "linux")]
+fn graphics_binding_kind_to_wire(
+    kind: crate::core::rhi::GraphicsBindingKind,
+) -> EscalateGraphicsBindingKind {
+    use crate::core::rhi::GraphicsBindingKind;
+    match kind {
+        GraphicsBindingKind::SampledTexture => EscalateGraphicsBindingKind::SampledTexture,
+        GraphicsBindingKind::StorageBuffer => EscalateGraphicsBindingKind::StorageBuffer,
+        GraphicsBindingKind::StorageImage => EscalateGraphicsBindingKind::StorageImage,
+        GraphicsBindingKind::UniformBuffer => EscalateGraphicsBindingKind::UniformBuffer,
+    }
+}
+
+/// Whether a graphics binding kind is one a draw can name a surface for.
+#[cfg(target_os = "linux")]
+fn surface_bound_graphics_binding_kind(
+    kind: crate::core::rhi::GraphicsBindingKind,
+) -> Option<SurfaceBoundKernelBindingKind> {
+    use crate::core::rhi::GraphicsBindingKind;
+    match kind {
+        GraphicsBindingKind::SampledTexture => Some(SurfaceBoundKernelBindingKind::SampledTexture),
+        GraphicsBindingKind::StorageImage => Some(SurfaceBoundKernelBindingKind::StorageImage),
+        GraphicsBindingKind::StorageBuffer | GraphicsBindingKind::UniformBuffer => None,
+    }
+}
+
+/// The RHI binding kind a ray-tracing wire enum names.
+#[cfg(target_os = "linux")]
+fn ray_tracing_binding_kind_from_wire(
+    kind: EscalateRayTracingBindingKind,
+) -> crate::core::rhi::RayTracingBindingKind {
+    use crate::core::rhi::RayTracingBindingKind;
+    match kind {
+        EscalateRayTracingBindingKind::AccelerationStructure => {
+            RayTracingBindingKind::AccelerationStructure
+        }
+        EscalateRayTracingBindingKind::SampledTexture => RayTracingBindingKind::SampledTexture,
+        EscalateRayTracingBindingKind::StorageBuffer => RayTracingBindingKind::StorageBuffer,
+        EscalateRayTracingBindingKind::StorageImage => RayTracingBindingKind::StorageImage,
+        EscalateRayTracingBindingKind::UniformBuffer => RayTracingBindingKind::UniformBuffer,
+    }
+}
+
+/// The wire enum for a ray-tracing binding kind.
+#[cfg(target_os = "linux")]
+fn ray_tracing_binding_kind_to_wire(
+    kind: crate::core::rhi::RayTracingBindingKind,
+) -> EscalateRayTracingBindingKind {
+    use crate::core::rhi::RayTracingBindingKind;
+    match kind {
+        RayTracingBindingKind::AccelerationStructure => {
+            EscalateRayTracingBindingKind::AccelerationStructure
+        }
+        RayTracingBindingKind::SampledTexture => EscalateRayTracingBindingKind::SampledTexture,
+        RayTracingBindingKind::StorageBuffer => EscalateRayTracingBindingKind::StorageBuffer,
+        RayTracingBindingKind::StorageImage => EscalateRayTracingBindingKind::StorageImage,
+        RayTracingBindingKind::UniformBuffer => EscalateRayTracingBindingKind::UniformBuffer,
+    }
+}
+
+/// Whether a ray-tracing binding kind is one a trace can name a surface for.
+///
+/// The acceleration structure is excluded because a trace resolves it through
+/// the acceleration-structure registry, not through a surface.
+#[cfg(target_os = "linux")]
+fn surface_bound_ray_tracing_binding_kind(
+    kind: crate::core::rhi::RayTracingBindingKind,
+) -> Option<SurfaceBoundKernelBindingKind> {
+    use crate::core::rhi::RayTracingBindingKind;
+    match kind {
+        RayTracingBindingKind::SampledTexture => {
+            Some(SurfaceBoundKernelBindingKind::SampledTexture)
+        }
+        RayTracingBindingKind::StorageImage => Some(SurfaceBoundKernelBindingKind::StorageImage),
+        RayTracingBindingKind::AccelerationStructure
+        | RayTracingBindingKind::StorageBuffer
+        | RayTracingBindingKind::UniformBuffer => None,
+    }
+}
+
+/// Everything a `register_graphics_kernel` settles before it takes the device
+/// gate: both stages compiled, the declaration read, the pipeline state
+/// flattened.
+#[cfg(target_os = "linux")]
+struct PreparedGraphicsKernelRegistration {
+    label: String,
+    vertex_spv: Arc<[u8]>,
+    fragment_spv: Arc<[u8]>,
+    vertex_entry_point: String,
+    fragment_entry_point: String,
+    declared_bindings: Vec<crate::core::rhi::GraphicsBindingDeclaration>,
+    push_constants: crate::core::rhi::GraphicsPushConstants,
+    pipeline_state: crate::core::rhi::GraphicsPipelineState,
+    descriptor_sets_in_flight: u32,
+}
+
+/// Read a `register_graphics_kernel` request into what `GpuContext` builds a
+/// kernel from, without touching the device.
+///
+/// Compilation is CPU work, and the escalate gate it would otherwise be holding
+/// serializes every processor's device work — the same reason
+/// [`RegisteredShaderStageSource::spirv`] takes the sandbox rather than a
+/// `GpuContextFullAccess`.
+#[cfg(target_os = "linux")]
+fn prepare_graphics_kernel_registration(
+    sandbox: &GpuContextLimitedAccess,
+    req: EscalateRequestRegisterGraphicsKernel,
+) -> std::result::Result<PreparedGraphicsKernelRegistration, String> {
+    use crate::core::rhi::{
+        GraphicsBindingDeclaration, GraphicsPushConstants, GraphicsShaderStageFlags,
+    };
+
+    let vertex_source = registered_shader_stage_source(
+        "vertex_",
+        &req.vertex_source,
+        &req.vertex_spv_hex,
+        GlslCompilationTargetStage::Vertex,
+        &req.vertex_entry_point,
+    )?;
+    let fragment_source = registered_shader_stage_source(
+        "fragment_",
+        &req.fragment_source,
+        &req.fragment_spv_hex,
+        GlslCompilationTargetStage::Fragment,
+        &req.fragment_entry_point,
+    )?;
+    let vertex_spv = vertex_source.spirv(sandbox).map_err(|e| e.to_string())?;
+    let fragment_spv = fragment_source.spirv(sandbox).map_err(|e| e.to_string())?;
+
+    let mut declared_bindings = Vec::with_capacity(req.bindings.len());
+    for wire in &req.bindings {
+        declared_bindings.push(GraphicsBindingDeclaration {
+            name: wire.name.clone(),
+            kind: graphics_binding_kind_from_wire(wire.kind),
+            stages: GraphicsShaderStageFlags::from_bits(wire.stages).ok_or_else(|| {
+                format!(
+                    "binding `{}` names stages {:#b}, which sets a bit no graphics stage owns \
+                     (1 = vertex, 2 = fragment)",
+                    wire.name, wire.stages
+                )
+            })?,
+        });
+    }
+
+    let push_constants = GraphicsPushConstants {
+        size: req.push_constant_size,
+        stages: GraphicsShaderStageFlags::from_bits(req.push_constant_stages).ok_or_else(|| {
+            format!(
+                "push_constant_stages {:#b} sets a bit no graphics stage owns (1 = vertex, \
+                 2 = fragment)",
+                req.push_constant_stages
+            )
+        })?,
+    };
+
+    let pipeline_state = graphics_pipeline_state_from_wire(req.pipeline_state)
+        .map_err(|e| format!("pipeline_state: {e}"))?;
+
+    Ok(PreparedGraphicsKernelRegistration {
+        label: req.label,
+        vertex_spv,
+        fragment_spv,
+        vertex_entry_point: vertex_source.entry_point().to_string(),
+        fragment_entry_point: fragment_source.entry_point().to_string(),
+        declared_bindings,
+        push_constants,
+        pipeline_state,
+        descriptor_sets_in_flight: req.descriptor_sets_in_flight,
+    })
+}
+
+/// Build a graphics kernel for a subprocess customer, against `GpuContext`.
+///
+/// The graphics twin of [`handle_register_compute_kernel`]: reflection over
+/// both stages derives the binding shape and its names, the request's own
+/// declaration is checked against it rather than replacing it, and
+/// re-registering an identical kernel is a cache hit that answers with the same
+/// `kernel_id`.
+///
+/// Each stage arrives as GLSL `*_source` the engine compiles, or as the
+/// pre-compiled `*_spv_hex` escape hatch.
+///
+/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
+/// 1. A stage supplies neither `*_source` nor `*_spv_hex`, or both; its source
+///    does not compile; or its hex doesn't decode.
+/// 2. A binding's or the push-constant range's `stages` mask sets a bit no
+///    graphics stage owns.
+/// 3. `pipeline_state` names a shape a draw cannot run — MSAA, other than
+///    exactly one colour attachment, `depth_stencil_enabled` or an
+///    `attachment_depth_format` (the offscreen pass a draw runs through
+///    attaches colour targets only), a `vertex_input_bindings` or
+///    `vertex_input_attributes` entry (no escalate op mints a `VertexBuffer` to
+///    fill one), an unknown colour format, or a write mask no channel owns.
+/// 4. The blobs' `OpName` decorations were stripped — bindings resolve by name,
+///    so an unnamed binding cannot be bound at all.
+/// 5. The declaration disagrees with reflection on a name, a kind, or a stage.
+/// 6. Push-constant size mismatch, or pipeline build failure.
 #[cfg(target_os = "linux")]
 fn handle_register_graphics_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
     req: EscalateRequestRegisterGraphicsKernel,
 ) -> EscalateResponse {
-    use std::sync::Arc;
+    use crate::core::rhi::{GraphicsShaderStage, GraphicsStage};
 
-    let stage_sources = registered_shader_stage_source(
-        "vertex_",
-        &req.vertex_source,
-        &req.vertex_spv_hex,
-        GlslCompilationTargetStage::Vertex,
-        &req.vertex_entry_point,
-    )
-    .and_then(|vertex| {
-        registered_shader_stage_source(
-            "fragment_",
-            &req.fragment_source,
-            &req.fragment_spv_hex,
-            GlslCompilationTargetStage::Fragment,
-            &req.fragment_entry_point,
-        )
-        .map(|fragment| (vertex, fragment))
-    });
-    let (vertex_source, fragment_source) = match stage_sources {
-        Ok(stage_sources) => stage_sources,
+    let prepared = match prepare_graphics_kernel_registration(sandbox, req) {
+        Ok(prepared) => prepared,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
@@ -1923,107 +2406,127 @@ fn handle_register_graphics_kernel(
         }
     };
 
-    let compiled = vertex_source
-        .spirv(sandbox)
-        .and_then(|vertex_spv| Ok((vertex_spv, fragment_source.spirv(sandbox)?)));
-    let (vertex_spv, fragment_spv) = match compiled {
-        Ok(compiled) => compiled,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: format!("register_graphics_kernel: {e}"),
-            });
-        }
-    };
+    let stages = [
+        GraphicsStage {
+            stage: GraphicsShaderStage::Vertex,
+            spv: &prepared.vertex_spv,
+            entry_point: &prepared.vertex_entry_point,
+        },
+        GraphicsStage {
+            stage: GraphicsShaderStage::Fragment,
+            spv: &prepared.fragment_spv,
+            entry_point: &prepared.fragment_entry_point,
+        },
+    ];
 
-    // Not re-prefixed with the op: this payload already opens with it, and
-    // `Error::Configuration` adds its own "Invalid configuration:" on top.
-    let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
-        full.graphics_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "register_graphics_kernel: no GraphicsKernelBridge registered on GpuContext"
-                    .to_string(),
+    let registered = sandbox
+        .escalate(|full| {
+            full.create_or_reuse_graphics_kernel(
+                &prepared.label,
+                &stages,
+                prepared.push_constants,
+                &prepared.pipeline_state,
+                prepared.descriptor_sets_in_flight,
+                &prepared.declared_bindings,
             )
         })
-    }) {
-        Ok(bridge) => bridge,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
+        .and_then(|(kernel_id, kernel)| {
+            // The caller draws by name and only the shaders know which kind
+            // each name is, so the shape goes back with the id.
+            let bindings = kernel
+                .bindings()
+                .iter()
+                .map(|spec| {
+                    reflected_kernel_binding_response(
+                        &kernel_id,
+                        spec.binding,
+                        graphics_binding_kind_to_wire(spec.kind).wire_name(),
+                        spec.name.as_deref(),
+                    )
+                })
+                .collect::<crate::core::error::Result<Vec<_>>>()?;
+            Ok((kernel_id, bindings))
+        });
 
-    let bindings: Vec<GraphicsBindingDecl> = req
-        .bindings
-        .into_iter()
-        .map(|b| GraphicsBindingDecl {
-            binding: b.binding,
-            kind: graphics_register_binding_kind_from_wire(b.kind),
-            stages: b.stages,
-        })
-        .collect();
-
-    let pipeline_state = match graphics_pipeline_state_from_wire(req.pipeline_state) {
-        Ok(p) => p,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: format!("register_graphics_kernel: pipeline_state: {e}"),
-            });
-        }
-    };
-
-    let decl = GraphicsKernelRegisterDecl {
-        label: req.label,
-        vertex_spv: vertex_spv.to_vec(),
-        fragment_spv: fragment_spv.to_vec(),
-        vertex_entry_point: vertex_source.entry_point().to_string(),
-        fragment_entry_point: fragment_source.entry_point().to_string(),
-        bindings,
-        push_constant_size: req.push_constant_size,
-        push_constant_stages: req.push_constant_stages,
-        descriptor_sets_in_flight: req.descriptor_sets_in_flight,
-        pipeline_state,
-    };
-
-    match bridge.register(&decl) {
-        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+    match registered {
+        Ok((kernel_id, bindings)) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
+            bindings: Some(bindings),
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("register_graphics_kernel bridge call failed: {msg}"),
+            message: format!("register_graphics_kernel failed: {e}"),
         }),
     }
 }
 
-/// Map a wire-format `run_graphics_draw` request through the registered
-/// [`GraphicsKernelBridge`].
+/// Render one offscreen pass with a registered graphics kernel, its bindings
+/// resolved by name.
 ///
-/// Graphics dispatch on the host is synchronous (the bridge calls
-/// [`crate::vulkan::rhi::VulkanGraphicsKernel::offscreen_render`] which
-/// submits + waits on its own command buffer + fence), so by the time
-/// this function returns `Ok`, the GPU work has retired and the host's
-/// writes to the color attachments are visible.
+/// The draw is synchronous on the host — `offscreen_render` submits and waits
+/// on its own fence — so by the time this emits an `Ok`, the GPU work has
+/// retired and the writes to the colour targets are visible to any later
+/// submission on the same device.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. `push_constants_hex` doesn't decode as hex bytes.
-/// 2. Vertex/index buffer offset doesn't parse as decimal u64.
-/// 3. No bridge is registered.
-/// 4. Bridge `run_draw` returned an error — typically unrecognized
-///    `kernel_id`, surface lookup failure, or Vulkan submit failure.
+/// Three shapes the wire carries have no host path and are refused rather than
+/// silently dropped:
+/// - `vertex_buffers` / `index_buffer` / an indexed draw. The setters take a
+///   [`crate::core::rhi::VertexBuffer`] / [`crate::core::rhi::IndexBuffer`],
+///   and no escalate op mints either — a helper can acquire a pixel buffer, a
+///   texture or an image, none of which those setters accept.
+/// - `depth_target_uuid`. The offscreen pass attaches colour targets only, so a
+///   depth attachment would never be tested against.
+///
+/// Every binding error raises before anything is submitted, and names the
+/// kernel's own bindings so the caller can see what it should have supplied.
 #[cfg(target_os = "linux")]
 fn handle_run_graphics_draw(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
     req: EscalateRequestRunGraphicsDraw,
 ) -> EscalateResponse {
-    use std::sync::Arc;
+    let unsupported = if !req.vertex_buffers.is_empty() {
+        Some(format!(
+            "vertex_buffers names {} buffer(s), and no escalate op mints a VertexBuffer — a \
+             helper can acquire a pixel buffer, a texture or an image, and the vertex-buffer \
+             setter takes none of them. Fabricate vertices from gl_VertexIndex instead",
+            req.vertex_buffers.len()
+        ))
+    } else if req.index_buffer.is_some()
+        || matches!(
+            req.draw.kind,
+            EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed
+        )
+    {
+        Some(
+            "an indexed draw needs an IndexBuffer, and no escalate op mints one — a helper can \
+             acquire a pixel buffer, a texture or an image, and the index-buffer setter takes \
+             none of them"
+                .to_string(),
+        )
+    } else if req.depth_target_uuid.is_some() {
+        Some(
+            "depth_target_uuid is set, and the offscreen pass this op drives attaches colour \
+             targets only — the depth attachment would never be tested against"
+                .to_string(),
+        )
+    } else if req.color_target_uuids.len() != 1 {
+        Some(format!(
+            "color_target_uuids names {} targets; the pipeline is built for exactly one colour \
+             attachment",
+            req.color_target_uuids.len()
+        ))
+    } else {
+        None
+    };
+    if let Some(message) = unsupported {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("run_graphics_draw: {message}"),
+        });
+    }
 
     let push_constants = match decode_hex(&req.push_constants_hex) {
         Ok(b) => b,
@@ -2035,165 +2538,213 @@ fn handle_run_graphics_draw(
         }
     };
 
-    let bindings: Vec<GraphicsBindingValue> = req
-        .bindings
-        .into_iter()
-        .map(|b| GraphicsBindingValue {
-            binding: b.binding,
-            kind: graphics_run_binding_kind_from_wire(b.kind),
-            surface_uuid: b.surface_uuid,
-        })
-        .collect();
-
-    let mut vertex_buffers: Vec<GraphicsVertexBufferBinding> =
-        Vec::with_capacity(req.vertex_buffers.len());
-    for vb in req.vertex_buffers.into_iter() {
-        let offset = match vb.offset.parse::<u64>() {
-            Ok(v) => v,
-            Err(e) => {
-                return EscalateResponse::Err(EscalateResponseErr {
-                    request_id: rid,
-                    message: format!(
-                        "run_graphics_draw: vertex_buffer.offset '{}' is not a decimal u64: {e}",
-                        vb.offset
-                    ),
-                });
-            }
-        };
-        vertex_buffers.push(GraphicsVertexBufferBinding {
-            binding: vb.binding,
-            surface_uuid: vb.surface_uuid,
-            offset,
-        });
-    }
-
-    let index_buffer = if let Some(ib) = req.index_buffer {
-        let offset = match ib.offset.parse::<u64>() {
-            Ok(v) => v,
-            Err(e) => {
-                return EscalateResponse::Err(EscalateResponseErr {
-                    request_id: rid,
-                    message: format!(
-                        "run_graphics_draw: index_buffer.offset '{}' is not a decimal u64: {e}",
-                        ib.offset
-                    ),
-                });
-            }
-        };
-        Some(GraphicsIndexBufferBinding {
-            surface_uuid: ib.surface_uuid,
-            offset,
-            index_type: match ib.index_type {
-                EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint16 => IndexTypeWire::Uint16,
-                EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint32 => IndexTypeWire::Uint32,
-            },
-        })
-    } else {
-        None
-    };
-
-    let viewport = req.viewport.map(|v| ViewportWire {
-        x: v.x,
-        y: v.y,
-        width: v.width,
-        height: v.height,
-        min_depth: v.min_depth,
-        max_depth: v.max_depth,
-    });
-    let scissor = req.scissor.map(|s| ScissorRectWire {
-        x: s.x,
-        y: s.y,
-        width: s.width,
-        height: s.height,
+    let drawn = sandbox.escalate(|full| {
+        let kernel = full.graphics_kernel_by_id(&req.kernel_id).ok_or_else(|| {
+            crate::core::error::Error::GpuError(format!(
+                "run_graphics_draw: no kernel registered under id {:?}",
+                req.kernel_id
+            ))
+        })?;
+        bind_and_render_graphics_kernel(full, &kernel, &req, &push_constants)
     });
 
-    let draw = match req.draw.kind {
-        EscalateRequestRunGraphicsDrawDrawKind::Draw => GraphicsDrawSpec::Draw {
-            vertex_count: req.draw.vertex_count,
-            instance_count: req.draw.instance_count,
-            first_vertex: req.draw.first_vertex,
-            first_instance: req.draw.first_instance,
-        },
-        EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed => GraphicsDrawSpec::DrawIndexed {
-            index_count: req.draw.index_count,
-            instance_count: req.draw.instance_count,
-            first_index: req.draw.first_index,
-            vertex_offset: req.draw.vertex_offset,
-            first_instance: req.draw.first_instance,
-        },
-    };
-
-    let kernel_id = req.kernel_id;
-    let domain = GraphicsKernelRunDraw {
-        kernel_id: kernel_id.clone(),
-        frame_index: req.frame_index,
-        bindings,
-        vertex_buffers,
-        index_buffer,
-        color_target_uuids: req.color_target_uuids,
-        depth_target_uuid: req.depth_target_uuid,
-        extent: (req.extent_width, req.extent_height),
-        push_constants,
-        viewport,
-        scissor,
-        draw,
-    };
-
-    let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
-        full.graphics_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "run_graphics_draw: no GraphicsKernelBridge registered on GpuContext".to_string(),
-            )
-        })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
-
-    match bridge.run_draw(&domain) {
+    match drawn {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
-            handle_id: kernel_id,
+            // Echo the kernel_id back — the draw is sync host-side, so no
+            // separate handle is allocated per draw.
+            handle_id: req.kernel_id,
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("run_graphics_draw bridge call failed: {msg}"),
+            message: format!("run_graphics_draw failed: {e}"),
         }),
     }
 }
 
-/// Map a wire-format `register_acceleration_structure_blas` request
-/// through the registered [`RayTracingKernelBridge`].
+/// Resolve every named binding onto the kernel's slots, render, and publish the
+/// layout each colour target was left in.
 ///
-/// Decodes the hex-encoded vertex (`f32` triples) and index (`u32`
-/// triples) blobs, validates triangle-shape consistency, and asks the
-/// bridge to build a triangle BLAS. Returns the bridge-assigned
-/// `as_id` on success.
+/// The plan is total and every surface is resolved before the first `set_*`
+/// call, so a refused draw never leaves the kernel holding a mix of this draw's
+/// bindings and the last one's. The kernel's staged bindings are shared across
+/// every caller of the cache; interleaving is prevented by the escalate gate,
+/// which serializes the whole surrounding scope runtime-wide.
+#[cfg(target_os = "linux")]
+fn bind_and_render_graphics_kernel(
+    full: &crate::core::context::GpuContextFullAccess,
+    kernel: &crate::vulkan::rhi::VulkanGraphicsKernel,
+    req: &EscalateRequestRunGraphicsDraw,
+    push_constants: &[u8],
+) -> crate::core::error::Result<()> {
+    use crate::core::error::Error;
+    use crate::core::rhi::{DrawCall, ScissorRect, Viewport, VulkanLayout};
+    use crate::vulkan::rhi::{OffscreenColorTarget, OffscreenDraw, VulkanStage};
+
+    let declared_specs = kernel.bindings();
+    let declared: Vec<DeclaredKernelBindingUnderPlanning<'_>> = declared_specs
+        .iter()
+        .map(|spec| DeclaredKernelBindingUnderPlanning {
+            binding_slot: spec.binding,
+            name: spec.name.as_deref(),
+            kind_wire_name: graphics_binding_kind_to_wire(spec.kind).wire_name(),
+            surface_bound_kind: surface_bound_graphics_binding_kind(spec.kind),
+        })
+        .collect();
+    let supplied: Vec<SuppliedKernelBindingUnderPlanning<'_>> = req
+        .bindings
+        .iter()
+        .map(|wire| SuppliedKernelBindingUnderPlanning {
+            name: wire.name.as_str(),
+            target_id: wire.surface_uuid.as_str(),
+            kind_wire_name: wire.kind.wire_name(),
+        })
+        .collect();
+    let planned = plan_supplied_surface_bound_kernel_bindings("draw", &supplied, &declared)?;
+
+    // Held across the render, not consumed by the bind loop: a registration is
+    // a refcount on the texture the descriptor set now points at, and dropping
+    // the last one before the GPU has run frees the image out from under it.
+    let bound_inputs = resolve_planned_surface_bound_kernel_bindings(full, planned)?;
+    transition_bound_kernel_inputs_into_descriptor_layouts(
+        full,
+        "escalate_graphics_draw_input_layouts",
+        VulkanStage::ALL_GRAPHICS,
+        &bound_inputs,
+    )?;
+
+    let mut color_targets = Vec::with_capacity(req.color_target_uuids.len());
+    for surface_id in &req.color_target_uuids {
+        let registration = full
+            .resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "colour target {surface_id:?} is not something this graph can resolve to a \
+                     device texture: {e}"
+                ))
+            })?;
+        // A colour target enters the pass from UNDEFINED, which discards what
+        // it held — so a binding reading the very image this draw renders into
+        // reads discarded pixels. A target carrying no image is its own error,
+        // raised where the attachment is built.
+        let clashing_binding =
+            registration
+                .texture()
+                .vulkan_inner()
+                .image()
+                .and_then(|target_image| {
+                    bound_inputs.iter().find(|input| {
+                        input.registration.texture().vulkan_inner().image() == Some(target_image)
+                    })
+                });
+        if let Some(clashing) = clashing_binding {
+            return Err(Error::GpuError(format!(
+                "binding `{}` (surface {:?}) and colour target {surface_id:?} name one texture; \
+                 the pass discards a colour target's contents on entry, so the binding would \
+                 read pixels this draw has already thrown away",
+                clashing.planned.name, clashing.planned.target_id
+            )));
+        }
+        color_targets.push(registration);
+    }
+
+    for binding in &bound_inputs {
+        let texture = binding.registration.texture();
+        match binding.planned.kind {
+            SurfaceBoundKernelBindingKind::SampledTexture => kernel.set_sampled_texture(
+                req.frame_index,
+                binding.planned.binding_slot,
+                texture,
+            )?,
+            SurfaceBoundKernelBindingKind::StorageImage => {
+                kernel.set_storage_image(req.frame_index, binding.planned.binding_slot, texture)?
+            }
+        }
+    }
+
+    // A kernel that declares push constants must be given them even when the
+    // payload is empty, so `set_push_constants` produces the size mismatch
+    // rather than the draw running against whatever the kernel's staged buffer
+    // last held.
+    if kernel.push_constant_size() > 0 || !push_constants.is_empty() {
+        kernel.set_push_constants(req.frame_index, push_constants)?;
+    }
+
+    let draw = OffscreenDraw::Draw(DrawCall {
+        vertex_count: req.draw.vertex_count,
+        instance_count: req.draw.instance_count,
+        first_vertex: req.draw.first_vertex,
+        first_instance: req.draw.first_instance,
+        viewport: req.viewport.as_ref().map(|v| Viewport {
+            x: v.x,
+            y: v.y,
+            width: v.width,
+            height: v.height,
+            min_depth: v.min_depth,
+            max_depth: v.max_depth,
+        }),
+        scissor: req.scissor.as_ref().map(|s| ScissorRect {
+            x: s.x,
+            y: s.y,
+            width: s.width,
+            height: s.height,
+        }),
+    });
+
+    // `clear_color: None` would load an attachment the pass has just
+    // transitioned from UNDEFINED, whose contents are undefined by then. The
+    // op carries no clear colour of its own, so transparent black is what a
+    // discarded target starts from.
+    let attachments: Vec<OffscreenColorTarget<'_>> = color_targets
+        .iter()
+        .map(|registration| OffscreenColorTarget {
+            texture: registration.texture(),
+            clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+        })
+        .collect();
+    let rendered = kernel.offscreen_render(
+        req.frame_index,
+        &attachments,
+        (req.extent_width, req.extent_height),
+        draw,
+    );
+    drop(attachments);
+
+    // `offscreen_render` transitions each colour target into
+    // COLOR_ATTACHMENT_OPTIMAL and never tells its registration, so the record
+    // would otherwise keep claiming the pre-draw layout and the next consumer's
+    // barrier would name the wrong oldLayout. A refused draw transitioned
+    // nothing, so only a rendered one publishes.
+    if rendered.is_ok() {
+        for registration in &color_targets {
+            registration.update_layout(VulkanLayout::COLOR_ATTACHMENT_OPTIMAL);
+        }
+    }
+    drop(color_targets);
+    drop(bound_inputs);
+    rendered
+}
+
+/// Build a triangle-geometry BLAS for a subprocess customer, against
+/// `GpuContext`.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
+/// Decodes the hex-encoded vertex (`f32` triples) and index (`u32` triples)
+/// blobs, checks triangle-shape consistency, and registers the built structure
+/// under a fresh `as_id` a later trace names it by.
+///
+/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
 /// 1. `vertices_hex` / `indices_hex` doesn't decode as hex bytes.
-/// 2. Vertex blob length is not a multiple of 12 (one f32 = 4 bytes;
-///    one vertex = 3 floats = 12 bytes).
-/// 3. Index blob length is not a multiple of 12 (one u32 = 4 bytes;
-///    one triangle = 3 indices = 12 bytes).
-/// 4. No bridge is registered.
-/// 5. Bridge `register_blas` returned an error — typically empty
-///    geometry, missing RT extensions, or AS-build submit failure.
+/// 2. Vertex blob length is not a multiple of 12 (one vertex = 3 × f32).
+/// 3. Index blob length is not a multiple of 12 (one triangle = 3 × u32).
+/// 4. The device does not expose the `VK_KHR_ray_tracing_pipeline` chain.
+/// 5. Empty geometry, or an acceleration-structure build failure.
 #[cfg(target_os = "linux")]
 fn handle_register_acceleration_structure_blas(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
     req: EscalateRequestRegisterAccelerationStructureBlas,
 ) -> EscalateResponse {
-    use std::sync::Arc;
-
     let vertex_bytes = match decode_hex(&req.vertices_hex) {
         Ok(b) => b,
         Err(e) => {
@@ -2242,65 +2793,44 @@ fn handle_register_acceleration_structure_blas(
         .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
 
-    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
-        full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "register_acceleration_structure_blas: no RayTracingKernelBridge \
-                 registered on GpuContext"
-                    .to_string(),
-            )
-        })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
+    let registered = sandbox.escalate(|full| {
+        refuse_a_device_without_ray_tracing(full, "register_acceleration_structure_blas")?;
+        let blas = full.build_triangles_blas(&req.label, &vertices, &indices)?;
+        Ok(full.register_acceleration_structure(blas))
+    });
 
-    let decl = BlasRegisterDecl {
-        label: req.label,
-        vertices,
-        indices,
-    };
-    match bridge.register_blas(&decl) {
-        Ok(as_id) => EscalateResponse::Ok(EscalateResponseOk {
+    match registered {
+        Ok(acceleration_structure_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
-            handle_id: as_id,
+            handle_id: acceleration_structure_id,
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("register_acceleration_structure_blas bridge call failed: {msg}"),
+            message: format!("register_acceleration_structure_blas failed: {e}"),
         }),
     }
 }
 
-/// Map a wire-format `register_acceleration_structure_tlas` request
-/// through the registered [`RayTracingKernelBridge`].
+/// Build a TLAS over previously-registered BLASes, against `GpuContext`.
 ///
-/// Validates each instance's transform layout (exactly 12 floats —
-/// row-major 3×4) and 8-bit mask, then asks the bridge to build a
-/// TLAS. The bridge resolves each `blas_id` against its own map.
+/// Each instance's transform is exactly 12 floats (row-major 3×4) and its mask
+/// is 8-bit; the `blas_id` resolves through the acceleration-structure registry
+/// and must name a bottom-level structure. The TLAS keeps every referenced BLAS
+/// alive for its own lifetime.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. Instance `transform` length isn't 12 floats.
-/// 2. Instance `mask` exceeds 0xff (the wire form is a u32).
-/// 3. No bridge is registered.
-/// 4. Bridge `register_tlas` returned an error — typically empty
-///    instance list, unknown blas_id, kind mismatch (a TLAS appearing
-///    as a BLAS reference), or AS-build submit failure.
+/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
+/// 1. Empty instance list — a TLAS needs at least one instance per the spec.
+/// 2. An instance transform is not 12 floats, or its mask exceeds 0xff.
+/// 3. An instance's `flags` sets a bit no `VkGeometryInstanceFlagsKHR` owns.
+/// 4. The device does not expose the `VK_KHR_ray_tracing_pipeline` chain.
+/// 5. An unknown `blas_id`, a `blas_id` naming a TLAS, or a build failure.
 #[cfg(target_os = "linux")]
 fn handle_register_acceleration_structure_tlas(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
     req: EscalateRequestRegisterAccelerationStructureTlas,
 ) -> EscalateResponse {
-    use std::sync::Arc;
-
     if req.instances.is_empty() {
         return EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -2309,8 +2839,7 @@ fn handle_register_acceleration_structure_tlas(
                 .to_string(),
         });
     }
-    let mut instances: Vec<TlasInstanceDeclWire> = Vec::with_capacity(req.instances.len());
-    for (idx, inst) in req.instances.into_iter().enumerate() {
+    for (idx, inst) in req.instances.iter().enumerate() {
         if inst.transform.len() != 12 {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
@@ -2331,62 +2860,89 @@ fn handle_register_acceleration_structure_tlas(
                 ),
             });
         }
-        let t = &inst.transform;
-        let transform = [
-            [t[0], t[1], t[2], t[3]],
-            [t[4], t[5], t[6], t[7]],
-            [t[8], t[9], t[10], t[11]],
-        ];
-        instances.push(TlasInstanceDeclWire {
-            blas_id: inst.blas_id,
-            transform,
-            custom_index: inst.custom_index,
-            mask: inst.mask as u8,
-            sbt_record_offset: inst.sbt_record_offset,
-            flags: inst.flags,
-        });
     }
 
-    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
-        full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "register_acceleration_structure_tlas: no RayTracingKernelBridge \
-                 registered on GpuContext"
-                    .to_string(),
-            )
-        })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
+    let registered = sandbox.escalate(|full| {
+        use crate::core::error::Error;
+        use crate::vulkan::rhi::{
+            AccelerationStructureKind, TlasInstanceDesc, geometry_instance_flags_from_raw_bitmask,
+        };
+
+        refuse_a_device_without_ray_tracing(full, "register_acceleration_structure_tlas")?;
+
+        let mut instances = Vec::with_capacity(req.instances.len());
+        for (idx, inst) in req.instances.iter().enumerate() {
+            let blas = full
+                .acceleration_structure_by_id(&inst.blas_id)
+                .ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "instance {idx} names no acceleration structure registered under id {:?}",
+                        inst.blas_id
+                    ))
+                })?;
+            if blas.kind() != AccelerationStructureKind::BottomLevel {
+                return Err(Error::GpuError(format!(
+                    "instance {idx} names {:?}, which is a top-level structure; a TLAS instance \
+                     references a bottom-level one",
+                    inst.blas_id
+                )));
+            }
+            let t = &inst.transform;
+            instances.push(TlasInstanceDesc {
+                transform: [
+                    [t[0], t[1], t[2], t[3]],
+                    [t[4], t[5], t[6], t[7]],
+                    [t[8], t[9], t[10], t[11]],
+                ],
+                custom_index: inst.custom_index,
+                mask: inst.mask as u8,
+                sbt_record_offset: inst.sbt_record_offset,
+                flags: geometry_instance_flags_from_raw_bitmask(inst.flags)
+                    .map_err(|e| Error::GpuError(format!("instance {idx}: {e}")))?,
+                blas: (*blas).clone(),
             });
         }
-    };
 
-    let decl = TlasRegisterDecl {
-        label: req.label,
-        instances,
-    };
-    match bridge.register_tlas(&decl) {
-        Ok(as_id) => EscalateResponse::Ok(EscalateResponseOk {
+        let tlas = full.build_tlas(&req.label, &instances)?;
+        Ok(full.register_acceleration_structure(tlas))
+    });
+
+    match registered {
+        Ok(acceleration_structure_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
-            handle_id: as_id,
+            handle_id: acceleration_structure_id,
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("register_acceleration_structure_tlas bridge call failed: {msg}"),
+            message: format!("register_acceleration_structure_tlas failed: {e}"),
         }),
     }
+}
+
+/// Refuse an op that needs the ray-tracing pipeline on a device without it.
+///
+/// Raised before any build so the caller gets the device's own answer rather
+/// than an extension-missing failure from inside a structure build.
+#[cfg(target_os = "linux")]
+fn refuse_a_device_without_ray_tracing(
+    full: &crate::core::context::GpuContextFullAccess,
+    op: &str,
+) -> crate::core::error::Result<()> {
+    if full.supports_ray_tracing_pipeline() {
+        return Ok(());
+    }
+    Err(crate::core::error::Error::GpuError(format!(
+        "{op}: this device does not expose the VK_KHR_ray_tracing_pipeline extension chain, so \
+         it can build neither acceleration structures nor ray-tracing pipelines"
+    )))
 }
 
 /// The compiler's name for a ray-tracing wire stage.
 ///
 /// Distinct from [`ray_tracing_stage_from_wire`], which maps the same wire
-/// value to the bridge's stage vocabulary: one names a pipeline stage to
-/// compile for, the other names a stage to build a shader group from.
+/// value to the stage a shader group is built from: one names a pipeline stage
+/// to compile for, the other names the stage a module fills.
 #[cfg(target_os = "linux")]
 fn ray_tracing_pipeline_stage_from_wire(
     stage: EscalateRequestRegisterRayTracingKernelStageStage,
@@ -2403,68 +2959,153 @@ fn ray_tracing_pipeline_stage_from_wire(
     }
 }
 
-/// Map a wire-format `register_ray_tracing_kernel` request through
-/// the registered [`RayTracingKernelBridge`].
+/// One compiled ray-tracing stage: which pipeline stage it fills, the SPIR-V
+/// that fills it, and the entry point inside that blob.
+#[cfg(target_os = "linux")]
+struct PreparedRayTracingKernelStage {
+    stage: crate::core::rhi::RayTracingShaderStage,
+    spirv: Arc<[u8]>,
+    entry_point: String,
+}
+
+/// Everything a `register_ray_tracing_kernel` settles before it takes the
+/// device gate: every stage compiled, the group layout read, the declaration
+/// read.
+#[cfg(target_os = "linux")]
+struct PreparedRayTracingKernelRegistration {
+    label: String,
+    stages: Vec<PreparedRayTracingKernelStage>,
+    groups: Vec<crate::core::rhi::RayTracingShaderGroup>,
+    declared_bindings: Vec<crate::core::rhi::RayTracingBindingDeclaration>,
+    push_constants: crate::core::rhi::RayTracingPushConstants,
+    max_recursion_depth: u32,
+}
+
+/// Read a `register_ray_tracing_kernel` request into what `GpuContext` builds a
+/// kernel from, without touching the device.
+#[cfg(target_os = "linux")]
+fn prepare_ray_tracing_kernel_registration(
+    sandbox: &GpuContextLimitedAccess,
+    req: EscalateRequestRegisterRayTracingKernel,
+) -> std::result::Result<PreparedRayTracingKernelRegistration, String> {
+    use crate::core::rhi::{
+        RayTracingBindingDeclaration, RayTracingPushConstants, RayTracingShaderGroup,
+        RayTracingShaderStageFlags,
+    };
+
+    let mut stages = Vec::with_capacity(req.stages.len());
+    for (idx, st) in req.stages.iter().enumerate() {
+        let stage_source = registered_shader_stage_source(
+            &format!("stages[{idx}]."),
+            &st.source,
+            &st.spv_hex,
+            ray_tracing_pipeline_stage_from_wire(st.stage),
+            &st.entry_point,
+        )?;
+        stages.push(PreparedRayTracingKernelStage {
+            stage: ray_tracing_stage_from_wire(st.stage),
+            spirv: stage_source.spirv(sandbox).map_err(|e| e.to_string())?,
+            entry_point: stage_source.entry_point().to_string(),
+        });
+    }
+
+    let mut groups: Vec<RayTracingShaderGroup> = Vec::with_capacity(req.groups.len());
+    for (idx, g) in req.groups.iter().enumerate() {
+        groups.push(match g.kind {
+            EscalateRequestRegisterRayTracingKernelGroupKind::General => {
+                RayTracingShaderGroup::General {
+                    general: g.general_stage,
+                }
+            }
+            EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit => {
+                RayTracingShaderGroup::TrianglesHit {
+                    closest_hit: optional_stage(g.closest_hit_stage),
+                    any_hit: optional_stage(g.any_hit_stage),
+                }
+            }
+            EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit => {
+                if g.intersection_stage == RAY_TRACING_STAGE_INDEX_NONE {
+                    return Err(format!(
+                        "groups[{idx}] procedural_hit must set intersection_stage (got \
+                         {RAY_TRACING_STAGE_INDEX_NONE} which is the absent-sentinel)"
+                    ));
+                }
+                RayTracingShaderGroup::ProceduralHit {
+                    intersection: g.intersection_stage,
+                    closest_hit: optional_stage(g.closest_hit_stage),
+                    any_hit: optional_stage(g.any_hit_stage),
+                }
+            }
+        });
+    }
+
+    let mut declared_bindings = Vec::with_capacity(req.bindings.len());
+    for wire in &req.bindings {
+        declared_bindings.push(RayTracingBindingDeclaration {
+            name: wire.name.clone(),
+            kind: ray_tracing_binding_kind_from_wire(wire.kind),
+            stages: RayTracingShaderStageFlags::from_bits(wire.stages).ok_or_else(|| {
+                format!(
+                    "binding `{}` names stages {:#b}, which sets a bit no ray-tracing stage owns \
+                     (1 = ray_gen, 2 = miss, 4 = closest_hit, 8 = any_hit, 16 = intersection, \
+                     32 = callable)",
+                    wire.name, wire.stages
+                )
+            })?,
+        });
+    }
+
+    let push_constants = RayTracingPushConstants {
+        size: req.push_constant_size,
+        stages: RayTracingShaderStageFlags::from_bits(req.push_constant_stages).ok_or_else(
+            || {
+                format!(
+                    "push_constant_stages {:#b} sets a bit no ray-tracing stage owns",
+                    req.push_constant_stages
+                )
+            },
+        )?,
+    };
+
+    Ok(PreparedRayTracingKernelRegistration {
+        label: req.label,
+        stages,
+        groups,
+        declared_bindings,
+        push_constants,
+        max_recursion_depth: req.max_recursion_depth,
+    })
+}
+
+/// Build a ray-tracing kernel for a subprocess customer, against `GpuContext`.
 ///
-/// Resolves each stage's shader — GLSL source the engine compiles, or the
-/// pre-compiled hex escape hatch — translates the wire-format
-/// stage / group / binding kinds into the bridge's typed mirrors, and
-/// asks the bridge to register the kernel. The bridge returns a
-/// stable `kernel_id` (typically SHA-256 over a canonical
-/// representation of all register-time inputs); identical
-/// re-registration hits the bridge's cache and returns the same id.
+/// The ray-tracing twin of [`handle_register_compute_kernel`], over N stages
+/// rather than one: reflection across every stage derives the binding shape and
+/// its names, the request's own declaration is checked against it, and
+/// re-registering an identical kernel is a cache hit that answers with the same
+/// `kernel_id`.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. Any stage supplies neither `source` nor `spv_hex`, or both; its
-///    `source` does not compile; or its `spv_hex` doesn't decode.
-/// 2. No bridge is registered.
-/// 3. Bridge `register_kernel` returned an error — typically
-///    reflection failure, push-constant size mismatch, group/stage
-///    inconsistency, or pipeline build failure.
+/// Failure modes (each an [`EscalateResponse::Err`] keyed by the request_id):
+/// 1. A stage supplies neither `source` nor `spv_hex`, or both; its source does
+///    not compile; or its hex doesn't decode.
+/// 2. A `procedural_hit` group leaves `intersection_stage` at the sentinel.
+/// 3. A binding's or the push-constant range's `stages` mask sets a bit no
+///    ray-tracing stage owns.
+/// 4. The device does not expose the `VK_KHR_ray_tracing_pipeline` chain.
+/// 5. The blobs' `OpName` decorations were stripped, or the declaration
+///    disagrees with reflection on a name, a kind, or a stage.
+/// 6. Group/stage inconsistency, push-constant size mismatch, or pipeline build
+///    failure.
 #[cfg(target_os = "linux")]
 fn handle_register_ray_tracing_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
     req: EscalateRequestRegisterRayTracingKernel,
 ) -> EscalateResponse {
-    use std::sync::Arc;
+    use crate::core::rhi::RayTracingStage;
 
-    // One consuming pass pairs each stage's shader with the bridge stage it
-    // fills, so nothing downstream has to keep two vectors index-aligned.
-    let mut stage_sources = Vec::with_capacity(req.stages.len());
-    for (idx, st) in req.stages.into_iter().enumerate() {
-        match registered_shader_stage_source(
-            &format!("stages[{idx}]."),
-            &st.source,
-            &st.spv_hex,
-            ray_tracing_pipeline_stage_from_wire(st.stage),
-            &st.entry_point,
-        ) {
-            Ok(stage_source) => {
-                stage_sources.push((stage_source, ray_tracing_stage_from_wire(st.stage)));
-            }
-            Err(e) => {
-                return EscalateResponse::Err(EscalateResponseErr {
-                    request_id: rid,
-                    message: format!("register_ray_tracing_kernel: {e}"),
-                });
-            }
-        }
-    }
-
-    let resolved_stages = stage_sources
-        .iter()
-        .map(|(stage_source, bridge_stage)| {
-            Ok(RayTracingStageDecl {
-                stage: *bridge_stage,
-                spv: stage_source.spirv(sandbox)?.to_vec(),
-                entry_point: stage_source.entry_point().to_string(),
-            })
-        })
-        .collect::<crate::core::error::Result<Vec<_>>>();
-    let stages = match resolved_stages {
-        Ok(stages) => stages,
+    let prepared = match prepare_ray_tracing_kernel_registration(sandbox, req) {
+        Ok(prepared) => prepared,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
@@ -2473,117 +3114,76 @@ fn handle_register_ray_tracing_kernel(
         }
     };
 
-    let mut groups: Vec<RayTracingShaderGroupWire> = Vec::with_capacity(req.groups.len());
-    for (idx, g) in req.groups.into_iter().enumerate() {
-        let group = match g.kind {
-            EscalateRequestRegisterRayTracingKernelGroupKind::General => {
-                RayTracingShaderGroupWire::General {
-                    general_stage: g.general_stage,
-                }
-            }
-            EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit => {
-                RayTracingShaderGroupWire::TrianglesHit {
-                    closest_hit_stage: optional_stage(g.closest_hit_stage),
-                    any_hit_stage: optional_stage(g.any_hit_stage),
-                }
-            }
-            EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit => {
-                if g.intersection_stage == RAY_TRACING_STAGE_INDEX_NONE {
-                    return EscalateResponse::Err(EscalateResponseErr {
-                        request_id: rid,
-                        message: format!(
-                            "register_ray_tracing_kernel: groups[{idx}] procedural_hit \
-                             must set intersection_stage (got {RAY_TRACING_STAGE_INDEX_NONE} \
-                             which is the absent-sentinel)"
-                        ),
-                    });
-                }
-                RayTracingShaderGroupWire::ProceduralHit {
-                    intersection_stage: g.intersection_stage,
-                    closest_hit_stage: optional_stage(g.closest_hit_stage),
-                    any_hit_stage: optional_stage(g.any_hit_stage),
-                }
-            }
-        };
-        groups.push(group);
-    }
-
-    let bindings: Vec<RayTracingBindingDecl> = req
-        .bindings
-        .into_iter()
-        .map(|b| RayTracingBindingDecl {
-            binding: b.binding,
-            kind: ray_tracing_register_binding_kind_from_wire(b.kind),
-            stages: b.stages,
+    let stages: Vec<RayTracingStage<'_>> = prepared
+        .stages
+        .iter()
+        .map(|prepared_stage| RayTracingStage {
+            stage: prepared_stage.stage,
+            spv: &prepared_stage.spirv,
+            entry_point: &prepared_stage.entry_point,
         })
         .collect();
 
-    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
-        full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "register_ray_tracing_kernel: no RayTracingKernelBridge registered on \
-                 GpuContext"
-                    .to_string(),
+    let registered = sandbox
+        .escalate(|full| {
+            refuse_a_device_without_ray_tracing(full, "register_ray_tracing_kernel")?;
+            full.create_or_reuse_ray_tracing_kernel(
+                &prepared.label,
+                &stages,
+                &prepared.groups,
+                prepared.push_constants,
+                prepared.max_recursion_depth,
+                &prepared.declared_bindings,
             )
         })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
+        .and_then(|(kernel_id, kernel)| {
+            let bindings = kernel
+                .bindings()
+                .iter()
+                .map(|spec| {
+                    reflected_kernel_binding_response(
+                        &kernel_id,
+                        spec.binding,
+                        ray_tracing_binding_kind_to_wire(spec.kind).wire_name(),
+                        spec.name.as_deref(),
+                    )
+                })
+                .collect::<crate::core::error::Result<Vec<_>>>()?;
+            Ok((kernel_id, bindings))
+        });
 
-    let decl = RayTracingKernelRegisterDecl {
-        label: req.label,
-        stages,
-        groups,
-        bindings,
-        push_constant_size: req.push_constant_size,
-        push_constant_stages: req.push_constant_stages,
-        max_recursion_depth: req.max_recursion_depth,
-    };
-
-    match bridge.register_kernel(&decl) {
-        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+    match registered {
+        Ok((kernel_id, bindings)) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
+            bindings: Some(bindings),
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("register_ray_tracing_kernel bridge call failed: {msg}"),
+            message: format!("register_ray_tracing_kernel failed: {e}"),
         }),
     }
 }
 
-/// Map a wire-format `run_ray_tracing_kernel` request through the
-/// registered [`RayTracingKernelBridge`].
+/// Trace one grid with a registered ray-tracing kernel, its bindings resolved
+/// by name.
 ///
-/// RT dispatch on the host is synchronous (the bridge calls
-/// [`crate::vulkan::rhi::VulkanRayTracingKernel::trace_rays`] which
-/// submits + waits on its own command buffer + fence), so by the time
-/// this function returns `Ok`, the GPU work has retired and the
-/// host's writes to the storage image are visible.
+/// The trace is synchronous on the host — `trace_rays` submits and waits on its
+/// own fence — so by the time this emits an `Ok`, the GPU work has retired and
+/// the writes to the output storage image are visible to any later submission
+/// on the same device.
 ///
-/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
-/// by the original request_id):
-/// 1. `push_constants_hex` doesn't decode as hex bytes.
-/// 2. No bridge is registered.
-/// 3. Bridge `run_kernel` returned an error — typically unrecognized
-///    `kernel_id`, target lookup failure (binding `target_id` doesn't
-///    resolve in the bridge's surface / AS map), or Vulkan submit
-///    failure.
+/// An `acceleration_structure` binding names an `as_id` a prior
+/// `register_acceleration_structure_tlas` returned; every other kind names a
+/// surface. Every binding error raises before anything is submitted, and names
+/// the kernel's own bindings.
 #[cfg(target_os = "linux")]
 fn handle_run_ray_tracing_kernel(
     sandbox: &GpuContextLimitedAccess,
     rid: String,
     req: EscalateRequestRunRayTracingKernel,
 ) -> EscalateResponse {
-    use std::sync::Arc;
-
     let push_constants = match decode_hex(&req.push_constants_hex) {
         Ok(b) => b,
         Err(e) => {
@@ -2594,55 +3194,182 @@ fn handle_run_ray_tracing_kernel(
         }
     };
 
-    let bindings: Vec<RayTracingBindingValue> = req
-        .bindings
-        .into_iter()
-        .map(|b| RayTracingBindingValue {
-            binding: b.binding,
-            kind: ray_tracing_run_binding_kind_from_wire(b.kind),
-            target_id: b.target_id,
-        })
-        .collect();
+    let traced = sandbox.escalate(|full| {
+        let kernel = full
+            .ray_tracing_kernel_by_id(&req.kernel_id)
+            .ok_or_else(|| {
+                crate::core::error::Error::GpuError(format!(
+                    "run_ray_tracing_kernel: no kernel registered under id {:?}",
+                    req.kernel_id
+                ))
+            })?;
+        bind_and_trace_ray_tracing_kernel(full, &kernel, &req, &push_constants)
+    });
 
-    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
-        full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::Error::Configuration(
-                "run_ray_tracing_kernel: no RayTracingKernelBridge registered on \
-                 GpuContext"
-                    .to_string(),
-            )
-        })
-    }) {
-        Ok(b) => b,
-        Err(e) => {
-            return EscalateResponse::Err(EscalateResponseErr {
-                request_id: rid,
-                message: e.to_string(),
-            });
-        }
-    };
-
-    let kernel_id = req.kernel_id;
-    let dispatch = RayTracingKernelRunDispatch {
-        kernel_id: kernel_id.clone(),
-        bindings,
-        push_constants,
-        width: req.width,
-        height: req.height,
-        depth: req.depth,
-    };
-
-    match bridge.run_kernel(&dispatch) {
+    match traced {
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
-            handle_id: kernel_id,
+            // Echo the kernel_id back — the trace is sync host-side, so no
+            // separate handle is allocated per trace.
+            handle_id: req.kernel_id,
             ..Default::default()
         }),
-        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+        Err(e) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
-            message: format!("run_ray_tracing_kernel bridge call failed: {msg}"),
+            message: format!("run_ray_tracing_kernel failed: {e}"),
         }),
     }
+}
+
+/// Resolve every named binding onto the kernel's slots, then trace.
+///
+/// The plan is total and every target is resolved before the first `set_*`
+/// call, so a refused trace never leaves the kernel holding a mix of this
+/// trace's bindings and the last one's.
+#[cfg(target_os = "linux")]
+fn bind_and_trace_ray_tracing_kernel(
+    full: &crate::core::context::GpuContextFullAccess,
+    kernel: &crate::vulkan::rhi::VulkanRayTracingKernel,
+    req: &EscalateRequestRunRayTracingKernel,
+    push_constants: &[u8],
+) -> crate::core::error::Result<()> {
+    use crate::core::error::Error;
+    use crate::core::rhi::RayTracingBindingKind;
+    use crate::vulkan::rhi::{AccelerationStructureKind, VulkanStage};
+
+    let declared_specs = kernel.bindings();
+
+    // Checked over the whole array before it is split, so a name supplied twice
+    // is refused whichever half each copy would land in.
+    let declared_names: Vec<&str> = declared_specs
+        .iter()
+        .filter_map(|spec| spec.name.as_deref())
+        .collect();
+    refuse_a_kernel_binding_name_supplied_twice(
+        "trace",
+        req.bindings.iter().map(|wire| wire.name.as_str()),
+        &declared_names,
+    )?;
+
+    // The acceleration structures come out first: they resolve through their
+    // own registry rather than through a surface, so the surface planner never
+    // sees them and the kernel's declaration for them is checked here.
+    let mut acceleration_structure_bindings = Vec::new();
+    let mut surface_supplied = Vec::with_capacity(req.bindings.len());
+    for wire in &req.bindings {
+        let declared_as_acceleration_structure = declared_specs
+            .iter()
+            .find(|spec| spec.name.as_deref() == Some(wire.name.as_str()))
+            .filter(|spec| spec.kind == RayTracingBindingKind::AccelerationStructure);
+        let Some(declaration) = declared_as_acceleration_structure else {
+            surface_supplied.push(SuppliedKernelBindingUnderPlanning {
+                name: wire.name.as_str(),
+                target_id: wire.target_id.as_str(),
+                kind_wire_name: wire.kind.wire_name(),
+            });
+            continue;
+        };
+        if ray_tracing_binding_kind_from_wire(wire.kind)
+            != RayTracingBindingKind::AccelerationStructure
+        {
+            return Err(Error::GpuError(format!(
+                "binding `{}` was supplied as {} but this kernel declares it \
+                 acceleration_structure",
+                wire.name,
+                wire.kind.wire_name()
+            )));
+        }
+        let slot = declaration.binding;
+        let tlas = full
+            .acceleration_structure_by_id(&wire.target_id)
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "binding `{}` names no acceleration structure registered under id {:?}",
+                    wire.name, wire.target_id
+                ))
+            })?;
+        if tlas.kind() != AccelerationStructureKind::TopLevel {
+            return Err(Error::GpuError(format!(
+                "binding `{}` names {:?}, which is a bottom-level structure; a trace binds the \
+                 top-level one a `register_acceleration_structure_tlas` returned",
+                wire.name, wire.target_id
+            )));
+        }
+        acceleration_structure_bindings.push((slot, tlas));
+    }
+
+    // Declared acceleration structures are dropped from the surface planner's
+    // view of the declaration too, so its missing-binding check counts only
+    // what it is responsible for.
+    let declared: Vec<DeclaredKernelBindingUnderPlanning<'_>> = declared_specs
+        .iter()
+        .filter(|spec| spec.kind != RayTracingBindingKind::AccelerationStructure)
+        .map(|spec| DeclaredKernelBindingUnderPlanning {
+            binding_slot: spec.binding,
+            name: spec.name.as_deref(),
+            kind_wire_name: ray_tracing_binding_kind_to_wire(spec.kind).wire_name(),
+            surface_bound_kind: surface_bound_ray_tracing_binding_kind(spec.kind),
+        })
+        .collect();
+    let planned =
+        plan_supplied_surface_bound_kernel_bindings("trace", &surface_supplied, &declared)?;
+    for spec in declared_specs
+        .iter()
+        .filter(|spec| spec.kind == RayTracingBindingKind::AccelerationStructure)
+    {
+        if acceleration_structure_bindings
+            .iter()
+            .any(|(slot, _)| *slot == spec.binding)
+        {
+            continue;
+        }
+        let declared_name = spec.name.as_deref().ok_or_else(|| {
+            Error::GpuError(format!(
+                "this kernel holds an unnamed acceleration-structure binding at slot {}; \
+                 reflection refuses these, so this kernel did not come through registration",
+                spec.binding
+            ))
+        })?;
+        return Err(Error::GpuError(format!(
+            "binding `{declared_name}` was not supplied; bindings do not persist between traces, \
+             so every trace supplies all of them"
+        )));
+    }
+
+    let bound_inputs = resolve_planned_surface_bound_kernel_bindings(full, planned)?;
+    transition_bound_kernel_inputs_into_descriptor_layouts(
+        full,
+        "escalate_ray_tracing_trace_input_layouts",
+        VulkanStage::ALL_COMMANDS,
+        &bound_inputs,
+    )?;
+
+    for (slot, tlas) in &acceleration_structure_bindings {
+        kernel.set_acceleration_structure(*slot, tlas)?;
+    }
+    for binding in &bound_inputs {
+        let texture = binding.registration.texture();
+        match binding.planned.kind {
+            SurfaceBoundKernelBindingKind::SampledTexture => {
+                kernel.set_sampled_texture(binding.planned.binding_slot, texture)?
+            }
+            SurfaceBoundKernelBindingKind::StorageImage => {
+                kernel.set_storage_image(binding.planned.binding_slot, texture)?
+            }
+        }
+    }
+
+    // A kernel that declares push constants must be given them even when the
+    // payload is empty, so `set_push_constants` produces the size mismatch
+    // rather than the trace running against whatever the kernel's staged buffer
+    // last held.
+    if kernel.push_constant_size() > 0 || !push_constants.is_empty() {
+        kernel.set_push_constants(push_constants)?;
+    }
+
+    let traced = kernel.trace_rays(req.width, req.height, req.depth);
+    drop(bound_inputs);
+    traced
 }
 
 /// Convert a sentinel-encoded wire stage index back into an
@@ -2657,362 +3384,273 @@ fn optional_stage(idx: u32) -> Option<u32> {
     }
 }
 
+/// The pipeline stage a ray-tracing wire stage's module fills.
 #[cfg(target_os = "linux")]
 fn ray_tracing_stage_from_wire(
     stage: EscalateRequestRegisterRayTracingKernelStageStage,
-) -> RayTracingShaderStageWire {
+) -> crate::core::rhi::RayTracingShaderStage {
+    use crate::core::rhi::RayTracingShaderStage;
     use EscalateRequestRegisterRayTracingKernelStageStage as W;
     match stage {
-        W::RayGen => RayTracingShaderStageWire::RayGen,
-        W::Miss => RayTracingShaderStageWire::Miss,
-        W::ClosestHit => RayTracingShaderStageWire::ClosestHit,
-        W::AnyHit => RayTracingShaderStageWire::AnyHit,
-        W::Intersection => RayTracingShaderStageWire::Intersection,
-        W::Callable => RayTracingShaderStageWire::Callable,
+        W::RayGen => RayTracingShaderStage::RayGen,
+        W::Miss => RayTracingShaderStage::Miss,
+        W::ClosestHit => RayTracingShaderStage::ClosestHit,
+        W::AnyHit => RayTracingShaderStage::AnyHit,
+        W::Intersection => RayTracingShaderStage::Intersection,
+        W::Callable => RayTracingShaderStage::Callable,
     }
 }
 
+/// One arm-for-arm mapping from a wire blend-factor enum to the RHI's.
+///
+/// A macro rather than a function per enum: the wire carries four separate
+/// factor enums with identical arms, and four hand-written copies of the same
+/// fifteen-arm match is four things to keep in step.
 #[cfg(target_os = "linux")]
-fn ray_tracing_register_binding_kind_from_wire(
-    kind: EscalateRequestRegisterRayTracingKernelBindingKind,
-) -> RayTracingBindingKindWire {
-    use EscalateRequestRegisterRayTracingKernelBindingKind as W;
-    match kind {
-        W::StorageBuffer => RayTracingBindingKindWire::StorageBuffer,
-        W::UniformBuffer => RayTracingBindingKindWire::UniformBuffer,
-        W::SampledTexture => RayTracingBindingKindWire::SampledTexture,
-        W::StorageImage => RayTracingBindingKindWire::StorageImage,
-        W::AccelerationStructure => RayTracingBindingKindWire::AccelerationStructure,
-    }
+macro_rules! blend_factor_from_wire {
+    ($enum:ident, $value:expr) => {{
+        use crate::core::rhi::BlendFactor;
+        use $enum as W;
+        match $value {
+            W::Zero => BlendFactor::Zero,
+            W::One => BlendFactor::One,
+            W::SrcColor => BlendFactor::SrcColor,
+            W::OneMinusSrcColor => BlendFactor::OneMinusSrcColor,
+            W::DstColor => BlendFactor::DstColor,
+            W::OneMinusDstColor => BlendFactor::OneMinusDstColor,
+            W::SrcAlpha => BlendFactor::SrcAlpha,
+            W::OneMinusSrcAlpha => BlendFactor::OneMinusSrcAlpha,
+            W::DstAlpha => BlendFactor::DstAlpha,
+            W::OneMinusDstAlpha => BlendFactor::OneMinusDstAlpha,
+            W::ConstantColor => BlendFactor::ConstantColor,
+            W::OneMinusConstantColor => BlendFactor::OneMinusConstantColor,
+            W::ConstantAlpha => BlendFactor::ConstantAlpha,
+            W::OneMinusConstantAlpha => BlendFactor::OneMinusConstantAlpha,
+            W::SrcAlphaSaturate => BlendFactor::SrcAlphaSaturate,
+        }
+    }};
 }
 
+/// One arm-for-arm mapping from a wire blend-op enum to the RHI's, for the same
+/// reason [`blend_factor_from_wire`] is a macro.
 #[cfg(target_os = "linux")]
-fn ray_tracing_run_binding_kind_from_wire(
-    kind: EscalateRequestRunRayTracingKernelBindingKind,
-) -> RayTracingBindingKindWire {
-    use EscalateRequestRunRayTracingKernelBindingKind as W;
-    match kind {
-        W::StorageBuffer => RayTracingBindingKindWire::StorageBuffer,
-        W::UniformBuffer => RayTracingBindingKindWire::UniformBuffer,
-        W::SampledTexture => RayTracingBindingKindWire::SampledTexture,
-        W::StorageImage => RayTracingBindingKindWire::StorageImage,
-        W::AccelerationStructure => RayTracingBindingKindWire::AccelerationStructure,
-    }
+macro_rules! blend_op_from_wire {
+    ($enum:ident, $value:expr) => {{
+        use crate::core::rhi::BlendOp;
+        use $enum as W;
+        match $value {
+            W::Add => BlendOp::Add,
+            W::Subtract => BlendOp::Subtract,
+            W::ReverseSubtract => BlendOp::ReverseSubtract,
+            W::Min => BlendOp::Min,
+            W::Max => BlendOp::Max,
+        }
+    }};
 }
 
-#[cfg(target_os = "linux")]
-fn graphics_register_binding_kind_from_wire(
-    kind: EscalateRequestRegisterGraphicsKernelBindingKind,
-) -> GraphicsBindingKindWire {
-    match kind {
-        EscalateRequestRegisterGraphicsKernelBindingKind::SampledTexture => {
-            GraphicsBindingKindWire::SampledTexture
-        }
-        EscalateRequestRegisterGraphicsKernelBindingKind::StorageBuffer => {
-            GraphicsBindingKindWire::StorageBuffer
-        }
-        EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer => {
-            GraphicsBindingKindWire::UniformBuffer
-        }
-        EscalateRequestRegisterGraphicsKernelBindingKind::StorageImage => {
-            GraphicsBindingKindWire::StorageImage
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn graphics_run_binding_kind_from_wire(
-    kind: EscalateRequestRunGraphicsDrawBindingKind,
-) -> GraphicsBindingKindWire {
-    match kind {
-        EscalateRequestRunGraphicsDrawBindingKind::SampledTexture => {
-            GraphicsBindingKindWire::SampledTexture
-        }
-        EscalateRequestRunGraphicsDrawBindingKind::StorageBuffer => {
-            GraphicsBindingKindWire::StorageBuffer
-        }
-        EscalateRequestRunGraphicsDrawBindingKind::UniformBuffer => {
-            GraphicsBindingKindWire::UniformBuffer
-        }
-        EscalateRequestRunGraphicsDrawBindingKind::StorageImage => {
-            GraphicsBindingKindWire::StorageImage
-        }
-    }
-}
-
+/// Flatten the wire's one-level pipeline state into the RHI's nested one.
+///
+/// The wire is flat because JSON has no sum types: every field is present and
+/// the flags decide which ones mean anything. The RHI's sum types are what the
+/// pipeline is actually built from, so the two shapes meet here.
+///
+/// Refuses what a draw over this op has no path for — MSAA beyond one sample,
+/// other than exactly one colour attachment, either half of a depth attachment,
+/// either half of a vertex input, a colour format the texture vocabulary doesn't
+/// name, and a write mask naming a bit no channel owns.
 #[cfg(target_os = "linux")]
 fn graphics_pipeline_state_from_wire(
     p: EscalateRequestRegisterGraphicsKernelPipelineState,
-) -> std::result::Result<GraphicsPipelineStateWire, String> {
+) -> std::result::Result<crate::core::rhi::GraphicsPipelineState, String> {
+    use crate::core::rhi::{
+        AttachmentFormats, ColorBlendAttachment, ColorBlendState, ColorWriteMask, CullMode,
+        DepthStencilState, FrontFace, GraphicsDynamicState, GraphicsPipelineState,
+        MultisampleState, PolygonMode, PrimitiveTopology, RasterizationState, VertexInputState,
+    };
+
+    if p.multisample_samples != 1 {
+        return Err(format!(
+            "multisample_samples is {}; the graphics kernel builds single-sampled pipelines only",
+            p.multisample_samples
+        ));
+    }
+    if p.attachment_color_formats.len() != 1 {
+        return Err(format!(
+            "attachment_color_formats names {} formats; the graphics kernel targets exactly one \
+             colour attachment",
+            p.attachment_color_formats.len()
+        ));
+    }
+    // The offscreen pass a draw runs through attaches colour targets only, so a
+    // pipeline declaring a depth attachment mismatches the rendering info at
+    // every draw. `run_graphics_draw` refuses `depth_target_uuid` for the same
+    // reason; refusing only there would let the mismatch be built at register
+    // time and surface as a driver error a draw away from its cause.
+    if p.depth_stencil_enabled {
+        return Err(
+            "depth_stencil_enabled is set, and the offscreen pass a draw runs through attaches \
+             colour targets only — a depth-testing pipeline has no attachment to test against"
+                .to_string(),
+        );
+    }
+    if p.attachment_depth_format.is_some() {
+        return Err(
+            "attachment_depth_format names a depth attachment, and the offscreen pass a draw runs \
+             through attaches colour targets only — the pipeline's formats would disagree with \
+             the pass at every draw"
+                .to_string(),
+        );
+    }
+
+    // A pipeline pulling from a vertex binding could register and then never
+    // draw: `run_graphics_draw` refuses `vertex_buffers` because no escalate op
+    // mints a `VertexBuffer`, and the kernel refuses a declared binding whose
+    // buffer was never set at every draw. Refused here, the caller meets the
+    // reason where the shape is asked for rather than a submission away from it.
+    if !p.vertex_input_bindings.is_empty() {
+        return Err(format!(
+            "vertex_input_bindings names {} binding(s), and no escalate op mints a VertexBuffer to \
+             fill one — a helper can acquire a pixel buffer, a texture or an image, and the \
+             vertex-buffer setter takes none of them, so this pipeline would register and then be \
+             refused at every draw. Fabricate vertices from gl_VertexIndex instead",
+            p.vertex_input_bindings.len()
+        ));
+    }
+    if !p.vertex_input_attributes.is_empty() {
+        return Err(format!(
+            "vertex_input_attributes names {} attribute(s), and an attribute is pulled from a \
+             vertex binding no escalate op can mint a buffer for. Fabricate vertices from \
+             gl_VertexIndex instead",
+            p.vertex_input_attributes.len()
+        ));
+    }
+
     let topology = match p.topology {
         EscalateRequestRegisterGraphicsKernelPipelineStateTopology::PointList => {
-            PrimitiveTopologyWire::PointList
+            PrimitiveTopology::PointList
         }
         EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineList => {
-            PrimitiveTopologyWire::LineList
+            PrimitiveTopology::LineList
         }
         EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineStrip => {
-            PrimitiveTopologyWire::LineStrip
+            PrimitiveTopology::LineStrip
         }
         EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList => {
-            PrimitiveTopologyWire::TriangleList
+            PrimitiveTopology::TriangleList
         }
         EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip => {
-            PrimitiveTopologyWire::TriangleStrip
+            PrimitiveTopology::TriangleStrip
         }
         EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleFan => {
-            PrimitiveTopologyWire::TriangleFan
+            PrimitiveTopology::TriangleFan
         }
     };
-    let vertex_input_bindings = p
-        .vertex_input_bindings
-        .into_iter()
-        .map(|b| VertexInputBindingDecl {
-            binding: b.binding,
-            stride: b.stride,
-            input_rate: match b.input_rate {
-                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Vertex => {
-                    VertexInputRateWire::Vertex
-                }
-                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Instance => {
-                    VertexInputRateWire::Instance
-                }
-            },
+
+    let rasterization = RasterizationState {
+        polygon_mode: match p.rasterization_polygon_mode {
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill => {
+                PolygonMode::Fill
+            }
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line => {
+                PolygonMode::Line
+            }
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Point => {
+                PolygonMode::Point
+            }
+        },
+        cull_mode: match p.rasterization_cull_mode {
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None => {
+                CullMode::None
+            }
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Front => {
+                CullMode::Front
+            }
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back => {
+                CullMode::Back
+            }
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::FrontAndBack => {
+                CullMode::FrontAndBack
+            }
+        },
+        front_face: match p.rasterization_front_face {
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise => {
+                FrontFace::CounterClockwise
+            }
+            EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise => {
+                FrontFace::Clockwise
+            }
+        },
+        line_width: p.rasterization_line_width,
+    };
+
+    let color_write_mask = ColorWriteMask::from_bits(p.color_write_mask).ok_or_else(|| {
+        format!(
+            "color_write_mask {:#b} sets a bit no colour channel owns (1 = R, 2 = G, 4 = B, \
+             8 = A)",
+            p.color_write_mask
+        )
+    })?;
+    let color_blend = if p.color_blend_enabled {
+        ColorBlendState::Enabled(ColorBlendAttachment {
+            src_color_blend_factor: blend_factor_from_wire!(
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
+                p.color_blend_src_color_factor
+            ),
+            dst_color_blend_factor: blend_factor_from_wire!(
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
+                p.color_blend_dst_color_factor
+            ),
+            color_blend_op: blend_op_from_wire!(
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
+                p.color_blend_color_op
+            ),
+            src_alpha_blend_factor: blend_factor_from_wire!(
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
+                p.color_blend_src_alpha_factor
+            ),
+            dst_alpha_blend_factor: blend_factor_from_wire!(
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
+                p.color_blend_dst_alpha_factor
+            ),
+            alpha_blend_op: blend_op_from_wire!(
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
+                p.color_blend_alpha_op
+            ),
+            color_write_mask,
         })
-        .collect::<Vec<_>>();
-    let vertex_input_attributes = p
-        .vertex_input_attributes
-        .into_iter()
-        .map(|a| {
-            Ok::<_, String>(VertexInputAttributeDecl {
-                location: a.location,
-                binding: a.binding,
-                format: vertex_attribute_format_from_wire(a.format),
-                offset: a.offset,
-            })
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let rasterization_polygon_mode = match p.rasterization_polygon_mode {
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill => {
-            PolygonModeWire::Fill
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line => {
-            PolygonModeWire::Line
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Point => {
-            PolygonModeWire::Point
-        }
+    } else {
+        ColorBlendState::Disabled { color_write_mask }
     };
-    let rasterization_cull_mode = match p.rasterization_cull_mode {
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None => {
-            CullModeWire::None
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Front => {
-            CullModeWire::Front
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back => {
-            CullModeWire::Back
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::FrontAndBack => {
-            CullModeWire::FrontAndBack
-        }
-    };
-    let rasterization_front_face = match p.rasterization_front_face {
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise => {
-            FrontFaceWire::CounterClockwise
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise => {
-            FrontFaceWire::Clockwise
-        }
-    };
-    let depth_compare_op = depth_compare_op_from_wire(p.depth_compare_op);
-    let color_blend_src_color_factor =
-        blend_factor_from_wire_src_color(p.color_blend_src_color_factor);
-    let color_blend_dst_color_factor =
-        blend_factor_from_wire_dst_color(p.color_blend_dst_color_factor);
-    let color_blend_color_op = blend_op_from_wire_color(p.color_blend_color_op);
-    let color_blend_src_alpha_factor =
-        blend_factor_from_wire_src_alpha(p.color_blend_src_alpha_factor);
-    let color_blend_dst_alpha_factor =
-        blend_factor_from_wire_dst_alpha(p.color_blend_dst_alpha_factor);
-    let color_blend_alpha_op = blend_op_from_wire_alpha(p.color_blend_alpha_op);
-    let attachment_depth_format = p.attachment_depth_format.map(|d| match d {
-        EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D16Unorm => {
-            DepthFormatWire::D16Unorm
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat => {
-            DepthFormatWire::D32Sfloat
-        }
-        EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D24UnormS8Uint => {
-            DepthFormatWire::D24UnormS8Uint
-        }
-    });
+
+    let mut color = Vec::with_capacity(p.attachment_color_formats.len());
+    for format in &p.attachment_color_formats {
+        color.push(
+            parse_texture_format(format).map_err(|e| format!("attachment_color_formats: {e}"))?,
+        );
+    }
+    let attachment_formats = AttachmentFormats { color, depth: None };
+
     let dynamic_state = match p.dynamic_state {
         EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None => {
-            DynamicStateWire::None
+            GraphicsDynamicState::None
         }
         EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor => {
-            DynamicStateWire::ViewportScissor
+            GraphicsDynamicState::ViewportScissor
         }
     };
 
-    Ok(GraphicsPipelineStateWire {
+    Ok(GraphicsPipelineState {
         topology,
-        vertex_input_bindings,
-        vertex_input_attributes,
-        rasterization_polygon_mode,
-        rasterization_cull_mode,
-        rasterization_front_face,
-        rasterization_line_width: p.rasterization_line_width,
-        multisample_samples: p.multisample_samples,
-        depth_stencil_enabled: p.depth_stencil_enabled,
-        depth_compare_op,
-        depth_write: p.depth_write,
-        color_blend_enabled: p.color_blend_enabled,
-        color_write_mask: p.color_write_mask,
-        color_blend_src_color_factor,
-        color_blend_dst_color_factor,
-        color_blend_color_op,
-        color_blend_src_alpha_factor,
-        color_blend_dst_alpha_factor,
-        color_blend_alpha_op,
-        attachment_color_formats: p.attachment_color_formats,
-        attachment_depth_format,
+        vertex_input: VertexInputState::None,
+        rasterization,
+        multisample: MultisampleState {
+            samples: p.multisample_samples,
+        },
+        depth_stencil: DepthStencilState::Disabled,
+        color_blend,
+        attachment_formats,
         dynamic_state,
     })
-}
-
-#[cfg(target_os = "linux")]
-fn vertex_attribute_format_from_wire(
-    fmt: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
-) -> VertexAttributeFormatWire {
-    use EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat as W;
-    match fmt {
-        W::R32Float => VertexAttributeFormatWire::R32Float,
-        W::Rg32Float => VertexAttributeFormatWire::Rg32Float,
-        W::Rgb32Float => VertexAttributeFormatWire::Rgb32Float,
-        W::Rgba32Float => VertexAttributeFormatWire::Rgba32Float,
-        W::R32Uint => VertexAttributeFormatWire::R32Uint,
-        W::Rg32Uint => VertexAttributeFormatWire::Rg32Uint,
-        W::Rgb32Uint => VertexAttributeFormatWire::Rgb32Uint,
-        W::Rgba32Uint => VertexAttributeFormatWire::Rgba32Uint,
-        W::R32Sint => VertexAttributeFormatWire::R32Sint,
-        W::Rg32Sint => VertexAttributeFormatWire::Rg32Sint,
-        W::Rgb32Sint => VertexAttributeFormatWire::Rgb32Sint,
-        W::Rgba32Sint => VertexAttributeFormatWire::Rgba32Sint,
-        W::Rgba8Unorm => VertexAttributeFormatWire::Rgba8Unorm,
-        W::Rgba8Snorm => VertexAttributeFormatWire::Rgba8Snorm,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn depth_compare_op_from_wire(
-    op: EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
-) -> DepthCompareOpWire {
-    use EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp as W;
-    match op {
-        W::Never => DepthCompareOpWire::Never,
-        W::Less => DepthCompareOpWire::Less,
-        W::Equal => DepthCompareOpWire::Equal,
-        W::LessOrEqual => DepthCompareOpWire::LessOrEqual,
-        W::Greater => DepthCompareOpWire::Greater,
-        W::NotEqual => DepthCompareOpWire::NotEqual,
-        W::GreaterOrEqual => DepthCompareOpWire::GreaterOrEqual,
-        W::Always => DepthCompareOpWire::Always,
-    }
-}
-
-#[cfg(target_os = "linux")]
-macro_rules! blend_factor_match {
-    ($enum:ident, $val:expr) => {{
-        use $enum as W;
-        match $val {
-            W::Zero => BlendFactorWire::Zero,
-            W::One => BlendFactorWire::One,
-            W::SrcColor => BlendFactorWire::SrcColor,
-            W::OneMinusSrcColor => BlendFactorWire::OneMinusSrcColor,
-            W::DstColor => BlendFactorWire::DstColor,
-            W::OneMinusDstColor => BlendFactorWire::OneMinusDstColor,
-            W::SrcAlpha => BlendFactorWire::SrcAlpha,
-            W::OneMinusSrcAlpha => BlendFactorWire::OneMinusSrcAlpha,
-            W::DstAlpha => BlendFactorWire::DstAlpha,
-            W::OneMinusDstAlpha => BlendFactorWire::OneMinusDstAlpha,
-            W::ConstantColor => BlendFactorWire::ConstantColor,
-            W::OneMinusConstantColor => BlendFactorWire::OneMinusConstantColor,
-            W::ConstantAlpha => BlendFactorWire::ConstantAlpha,
-            W::OneMinusConstantAlpha => BlendFactorWire::OneMinusConstantAlpha,
-            W::SrcAlphaSaturate => BlendFactorWire::SrcAlphaSaturate,
-        }
-    }};
-}
-
-#[cfg(target_os = "linux")]
-macro_rules! blend_op_match {
-    ($enum:ident, $val:expr) => {{
-        use $enum as W;
-        match $val {
-            W::Add => BlendOpWire::Add,
-            W::Subtract => BlendOpWire::Subtract,
-            W::ReverseSubtract => BlendOpWire::ReverseSubtract,
-            W::Min => BlendOpWire::Min,
-            W::Max => BlendOpWire::Max,
-        }
-    }};
-}
-
-#[cfg(target_os = "linux")]
-fn blend_factor_from_wire_src_color(
-    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
-) -> BlendFactorWire {
-    blend_factor_match!(
-        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
-        f
-    )
-}
-#[cfg(target_os = "linux")]
-fn blend_factor_from_wire_dst_color(
-    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
-) -> BlendFactorWire {
-    blend_factor_match!(
-        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
-        f
-    )
-}
-#[cfg(target_os = "linux")]
-fn blend_factor_from_wire_src_alpha(
-    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
-) -> BlendFactorWire {
-    blend_factor_match!(
-        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
-        f
-    )
-}
-#[cfg(target_os = "linux")]
-fn blend_factor_from_wire_dst_alpha(
-    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
-) -> BlendFactorWire {
-    blend_factor_match!(
-        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
-        f
-    )
-}
-#[cfg(target_os = "linux")]
-fn blend_op_from_wire_color(
-    o: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
-) -> BlendOpWire {
-    blend_op_match!(
-        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
-        o
-    )
-}
-#[cfg(target_os = "linux")]
-fn blend_op_from_wire_alpha(
-    o: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
-) -> BlendOpWire {
-    blend_op_match!(
-        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
-        o
-    )
 }
 
 /// Decode lowercase hex into bytes, returning a clean error message on
@@ -3043,6 +3681,27 @@ fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
         out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
     }
     Ok(out)
+}
+
+/// Drop `GpuContext`'s strong reference to an acceleration structure, answering
+/// whether the id named one.
+///
+/// A structure the caller built and then let go of is the only escalate-minted
+/// resource whose device memory is proportional to what the caller supplied, so
+/// it is the one a long-running helper must be able to hand back. Off Linux
+/// nothing can have built one, so nothing can be released.
+fn release_acceleration_structure(sandbox: &GpuContextLimitedAccess, handle_id: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        sandbox
+            .escalate(|full| Ok(full.release_acceleration_structure(handle_id)))
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (sandbox, handle_id);
+        false
+    }
 }
 
 /// Best-effort surface-share service release paired with registry eviction on Linux.
@@ -4140,10 +4799,7 @@ void main() {
             assert_eq!(planned.len(), 2);
             assert_eq!(planned[0].name, "output_image");
             assert_eq!(planned[0].binding, 1);
-            assert_eq!(
-                planned[0].kind,
-                SurfaceBoundComputeBindingKind::StorageImage
-            );
+            assert_eq!(planned[0].kind, SurfaceBoundKernelBindingKind::StorageImage);
             assert_eq!(planned[0].target_id, "surface-out");
             assert_eq!(planned[1].name, "source_image");
             assert_eq!(planned[1].binding, 0);
@@ -4373,11 +5029,11 @@ void main() {
             assert_eq!(
                 bindings
                     .iter()
-                    .map(|b| (b.name.as_str(), b.kind))
+                    .map(|b| (b.name.as_str(), b.kind.as_str()))
                     .collect::<Vec<_>>(),
                 vec![
-                    ("source_image", EscalateComputeBindingKind::SampledTexture),
-                    ("output_image", EscalateComputeBindingKind::StorageImage),
+                    ("source_image", "sampled_texture"),
+                    ("output_image", "storage_image"),
                 ],
                 "the two bindings differ in name and in kind, so binding by slot order \
                  rather than by name would swap them"
@@ -5494,132 +6150,134 @@ void main() {
     }
 
     /// Host-Rust unit tests for the `register_graphics_kernel` /
-    /// `run_graphics_draw` escalate handlers. Mirrors the
-    /// `compute_kernel_dispatch` shape — the synthetic
-    /// `RecordingGraphicsBridge` keeps tests independent of a working
-    /// VkDevice, so handler-shape regressions surface even on
-    /// machines without a GPU.
+    /// `run_graphics_draw` escalate handlers.
+    ///
+    /// Mirrors `compute_kernel_dispatch`: the binding planner and the wire→RHI
+    /// pipeline-state translation are pure functions that run everywhere CI
+    /// does, and only the tests that build a real pipeline need a device.
     #[cfg(target_os = "linux")]
     mod graphics_kernel_dispatch {
         use super::super::*;
         use super::EscalateHandleRegistry;
-        use std::sync::{Arc, Mutex};
 
         use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
             EscalateRequestRegisterGraphicsKernelBinding,
             EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute,
             EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding,
             EscalateRequestRunGraphicsDrawBinding, EscalateRequestRunGraphicsDrawDraw,
-            EscalateRequestRunGraphicsDrawIndexBuffer, EscalateRequestRunGraphicsDrawScissor,
-            EscalateRequestRunGraphicsDrawVertexBuffer, EscalateRequestRunGraphicsDrawViewport,
+            EscalateRequestRunGraphicsDrawIndexBuffer,
+            EscalateRequestRunGraphicsDrawIndexBufferIndexType,
+            EscalateRequestRunGraphicsDrawScissor, EscalateRequestRunGraphicsDrawVertexBuffer,
         };
-        use crate::core::context::{
-            GpuContext, GpuContextLimitedAccess, GraphicsKernelBridge, GraphicsKernelRegisterDecl,
-            GraphicsKernelRunDraw,
-        };
+        use crate::core::context::GpuContext;
+        use crate::core::rhi::GraphicsBindingKind;
 
-        /// Synthetic bridge — registers any caller-provided vertex+fragment
-        /// SPIR-V (no SPV reflection or pipeline build), keys the kernel id by
-        /// SHA-256 over the canonicalized inputs so identical descriptors
-        /// hit the cache, and records each `run_draw` for later assertion.
-        struct RecordingGraphicsBridge {
-            registered: Mutex<std::collections::HashMap<String, GraphicsKernelRegisterDecl>>,
-            runs: Mutex<Vec<GraphicsKernelRunDraw>>,
+        /// Graphics is an always-present capability now, so there is no bridge
+        /// to install — only a device to have or not have.
+        fn make_gpu_sandbox_if_available() -> Option<GpuContextLimitedAccess> {
+            GpuContext::init_for_platform_sync()
+                .ok()
+                .map(GpuContextLimitedAccess::new)
         }
 
-        impl RecordingGraphicsBridge {
-            fn new() -> Arc<Self> {
-                Arc::new(Self {
-                    registered: Mutex::new(std::collections::HashMap::new()),
-                    runs: Mutex::new(Vec::new()),
-                })
-            }
-
-            fn registered_count(&self) -> usize {
-                self.registered.lock().unwrap().len()
-            }
-
-            fn last_registered(&self) -> Option<GraphicsKernelRegisterDecl> {
-                // The tests register at most one descriptor each so
-                // returning a snapshot of the first entry is enough.
-                self.registered.lock().unwrap().values().next().cloned()
-            }
-
-            fn runs(&self) -> Vec<GraphicsKernelRunDraw> {
-                self.runs.lock().unwrap().clone()
-            }
-
-            fn key(decl: &GraphicsKernelRegisterDecl) -> String {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(b"v=");
-                h.update(&decl.vertex_spv);
-                h.update(b"|f=");
-                h.update(&decl.fragment_spv);
-                h.update(b"|ve=");
-                h.update(decl.vertex_entry_point.as_bytes());
-                h.update(b"|fe=");
-                h.update(decl.fragment_entry_point.as_bytes());
-                h.update(b"|pcs=");
-                h.update(&decl.push_constant_size.to_le_bytes());
-                h.update(b"|pcst=");
-                h.update(&decl.push_constant_stages.to_le_bytes());
-                h.update(b"|dsi=");
-                h.update(&decl.descriptor_sets_in_flight.to_le_bytes());
-                h.update(b"|nb=");
-                h.update(&(decl.bindings.len() as u32).to_le_bytes());
-                format!("{:x}", h.finalize())
+        fn refusal_message(response: EscalateResponse) -> String {
+            match response {
+                EscalateResponse::Err(err) => err.message,
+                other => panic!("expected Err, got {other:?}"),
             }
         }
 
-        impl GraphicsKernelBridge for RecordingGraphicsBridge {
-            fn register(
-                &self,
-                decl: &GraphicsKernelRegisterDecl,
-            ) -> std::result::Result<String, String> {
-                let id = Self::key(decl);
-                self.registered
-                    .lock()
-                    .unwrap()
-                    .entry(id.clone())
-                    .or_insert_with(|| decl.clone());
-                Ok(id)
-            }
+        /// Fabricates a full-screen triangle out of `gl_VertexIndex` alone —
+        /// the only vertex source a draw over this op can have, since no
+        /// escalate op mints a vertex buffer.
+        const FULL_SCREEN_TRIANGLE_VERTEX_GLSL: &str = "\
+#version 450
+void main() {
+    vec2 corner = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+";
 
-            fn run_draw(&self, draw: &GraphicsKernelRunDraw) -> std::result::Result<(), String> {
-                if !self
-                    .registered
-                    .lock()
-                    .unwrap()
-                    .contains_key(&draw.kernel_id)
-                {
-                    return Err(format!(
-                        "kernel_id '{}' not registered with this bridge",
-                        draw.kernel_id
-                    ));
-                }
-                self.runs.lock().unwrap().push(draw.clone());
-                Ok(())
+        /// Inverts the sampled input's colour and keeps its alpha, so the
+        /// rendered pixels prove which surface the named binding resolved to.
+        const INVERT_SAMPLED_INPUT_FRAGMENT_GLSL: &str = "\
+#version 450
+layout(set = 0, binding = 0) uniform sampler2D source_image;
+layout(location = 0) out vec4 painted_colour;
+void main() {
+    vec4 source = texelFetch(source_image, ivec2(gl_FragCoord.xy), 0);
+    painted_colour = vec4(vec3(1.0) - source.rgb, source.a);
+}
+";
+
+        /// The same pass with the fragment constant folded in, so registering
+        /// it produces a different pipeline — and therefore a different kernel
+        /// id — from [`INVERT_SAMPLED_INPUT_FRAGMENT_GLSL`].
+        const HALVE_SAMPLED_INPUT_FRAGMENT_GLSL: &str = "\
+#version 450
+layout(set = 0, binding = 0) uniform sampler2D source_image;
+layout(location = 0) out vec4 painted_colour;
+void main() {
+    vec4 source = texelFetch(source_image, ivec2(gl_FragCoord.xy), 0);
+    painted_colour = vec4(source.rgb * 0.5, source.a);
+}
+";
+
+        /// Each seed channel inverts exactly in unorm8: out = 255 - in.
+        const SEED_RGBA: [u8; 4] = [10, 20, 30, 255];
+        const INVERTED_RGBA: [u8; 4] = [245, 235, 225, 255];
+
+        /// Seeded into a colour target no draw fully covers: neither stage of
+        /// the kernel writes it, so a pixel still carrying it was loaded rather
+        /// than cleared.
+        const UNCOVERED_SENTINEL_RGBA: [u8; 4] = [3, 5, 7, 255];
+
+        /// What the handler's clear colour leaves in a pixel the draw missed.
+        const TRANSPARENT_BLACK_RGBA: [u8; 4] = [0, 0, 0, 0];
+
+        /// The baseline pipeline state every register request starts from —
+        /// TriangleList, no blending, no depth, one `rgba8_unorm` attachment.
+        fn baseline_pipeline_state() -> EscalateRequestRegisterGraphicsKernelPipelineState {
+            EscalateRequestRegisterGraphicsKernelPipelineState {
+                topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList,
+                vertex_input_bindings: Vec::new(),
+                vertex_input_attributes: Vec::new(),
+                rasterization_polygon_mode:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill,
+                rasterization_cull_mode:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None,
+                rasterization_front_face:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise,
+                rasterization_line_width: 1.0,
+                multisample_samples: 1,
+                depth_stencil_enabled: false,
+                depth_compare_op:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Always,
+                depth_write: false,
+                color_blend_enabled: false,
+                color_write_mask: 0b1111,
+                color_blend_src_color_factor:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::One,
+                color_blend_dst_color_factor:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::Zero,
+                color_blend_color_op:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Add,
+                color_blend_src_alpha_factor:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::One,
+                color_blend_dst_alpha_factor:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::Zero,
+                color_blend_alpha_op:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Add,
+                attachment_color_formats: vec!["rgba8_unorm".to_string()],
+                dynamic_state:
+                    EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor,
+                attachment_depth_format: None,
             }
         }
 
-        fn make_sandbox_with_bridge(
-            bridge: Option<Arc<dyn GraphicsKernelBridge>>,
-        ) -> Option<GpuContextLimitedAccess> {
-            let gpu = match GpuContext::init_for_platform_sync() {
-                Ok(g) => g,
-                Err(_) => return None,
-            };
-            if let Some(b) = bridge {
-                gpu.set_graphics_kernel_bridge(b);
-            }
-            Some(GpuContextLimitedAccess::new(gpu))
-        }
-
-        /// Build a baseline `register_graphics_kernel` request — vertex
-        /// + fragment SPIR-V hex, default-shaped TriangleList pipeline
-        /// state with no blending and no depth. Tests that need a
-        /// specific shape mutate fields after calling.
+        /// A `register_graphics_kernel` request carrying pre-compiled SPIR-V
+        /// hex for both stages. Tests that need a specific shape mutate fields
+        /// after calling.
         fn make_register_req(
             request_id: &str,
             vertex_hex: &str,
@@ -5638,47 +6296,25 @@ void main() {
                 push_constant_size: 0,
                 push_constant_stages: 0,
                 descriptor_sets_in_flight: 2,
-                pipeline_state: EscalateRequestRegisterGraphicsKernelPipelineState {
-                    topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList,
-                    vertex_input_bindings: Vec::new(),
-                    vertex_input_attributes: Vec::new(),
-                    rasterization_polygon_mode:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill,
-                    rasterization_cull_mode:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None,
-                    rasterization_front_face:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise,
-                    rasterization_line_width: 1.0,
-                    multisample_samples: 1,
-                    depth_stencil_enabled: false,
-                    depth_compare_op:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Always,
-                    depth_write: false,
-                    color_blend_enabled: false,
-                    color_write_mask: 0b1111,
-                    color_blend_src_color_factor:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::One,
-                    color_blend_dst_color_factor:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::Zero,
-                    color_blend_color_op:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Add,
-                    color_blend_src_alpha_factor:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::One,
-                    color_blend_dst_alpha_factor:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::Zero,
-                    color_blend_alpha_op:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Add,
-                    attachment_color_formats: vec!["rgba8_unorm".to_string()],
-                    dynamic_state:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor,
-                    attachment_depth_format: None,
-                },
+                pipeline_state: baseline_pipeline_state(),
             }
         }
 
-        /// Baseline `run_graphics_draw` request — vertex-fabricating
-        /// (no vertex buffers, no index buffer), single color target,
-        /// 320x240 extent, simple Draw of 3 vertices.
+        /// The same request built from GLSL, which is what the wire carries
+        /// now that the engine owns compilation.
+        fn register_from_glsl(
+            request_id: &str,
+            fragment_source: &str,
+        ) -> EscalateRequestRegisterGraphicsKernel {
+            let mut req = make_register_req(request_id, "", "");
+            req.vertex_source = FULL_SCREEN_TRIANGLE_VERTEX_GLSL.to_string();
+            req.fragment_source = fragment_source.to_string();
+            req
+        }
+
+        /// Baseline `run_graphics_draw` request — vertex-fabricating (no vertex
+        /// buffers, no index buffer), one colour target, a simple Draw of the
+        /// full-screen triangle's three vertices.
         fn make_run_req(
             request_id: &str,
             kernel_id: &str,
@@ -5711,84 +6347,637 @@ void main() {
             }
         }
 
-        #[test]
-        fn register_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("register_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "req-reg-1",
-                "deadbeef",
-                "cafebabe",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
+        fn register_graphics_kernel_or_panic(
+            sandbox: &GpuContextLimitedAccess,
+            registry: &EscalateHandleRegistry,
+            req: EscalateRequestRegisterGraphicsKernel,
+        ) -> EscalateResponseOk {
+            let response = handle_escalate_op(
+                sandbox,
+                registry,
+                EscalateRequest::RegisterGraphicsKernel(req),
+            )
+            .expect("must produce a response");
             match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-reg-1");
-                    assert!(
-                        err.message.contains("GraphicsKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
+                EscalateResponse::Ok(ok) => ok,
+                other => panic!("registering the graphics kernel failed: {other:?}"),
             }
         }
 
+        // ----- the binding planner --------------------------------------
+        //
+        // Pure wire validation shared with the trace path, driven here through
+        // the graphics kinds: no device, so these run everywhere CI does.
+
+        fn declared_graphics_bindings(
+            entries: &'static [(u32, &'static str, GraphicsBindingKind)],
+        ) -> Vec<DeclaredKernelBindingUnderPlanning<'static>> {
+            entries
+                .iter()
+                .map(
+                    |(binding_slot, name, kind)| DeclaredKernelBindingUnderPlanning {
+                        binding_slot: *binding_slot,
+                        name: Some(name),
+                        kind_wire_name: graphics_binding_kind_to_wire(*kind).wire_name(),
+                        surface_bound_kind: surface_bound_graphics_binding_kind(*kind),
+                    },
+                )
+                .collect()
+        }
+
+        /// The shape the planner tests measure against: one sampled input and
+        /// one storage output, deliberately different kinds so binding by slot
+        /// order rather than by name would swap them.
+        const A_DRAWING_KERNELS_BINDINGS: &[(u32, &str, GraphicsBindingKind)] = &[
+            (0, "source_image", GraphicsBindingKind::SampledTexture),
+            (1, "painted_output", GraphicsBindingKind::StorageImage),
+        ];
+
+        /// A kernel whose one binding is a uniform buffer — a kind a draw
+        /// cannot name a surface for.
+        const A_TINTING_KERNELS_BINDINGS: &[(u32, &str, GraphicsBindingKind)] =
+            &[(0, "tint_parameters", GraphicsBindingKind::UniformBuffer)];
+
+        fn supplied_graphics_bindings<'a>(
+            entries: &'a [(&'a str, EscalateGraphicsBindingKind, &'a str)],
+        ) -> Vec<SuppliedKernelBindingUnderPlanning<'a>> {
+            entries
+                .iter()
+                .map(
+                    |(name, kind, target_id)| SuppliedKernelBindingUnderPlanning {
+                        name,
+                        target_id,
+                        kind_wire_name: kind.wire_name(),
+                    },
+                )
+                .collect()
+        }
+
+        fn draw_plan_refusal(
+            declared: &'static [(u32, &'static str, GraphicsBindingKind)],
+            supplied: &[(&str, EscalateGraphicsBindingKind, &str)],
+        ) -> String {
+            let declared = declared_graphics_bindings(declared);
+            let supplied = supplied_graphics_bindings(supplied);
+            plan_supplied_surface_bound_kernel_bindings("draw", &supplied, &declared)
+                .err()
+                .expect("expected the plan to be refused")
+                .to_string()
+        }
+
         #[test]
-        fn run_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("run_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
+        fn a_complete_draw_resolves_every_name_to_its_slot() {
+            let declared = declared_graphics_bindings(A_DRAWING_KERNELS_BINDINGS);
+            let supplied = supplied_graphics_bindings(&[
+                (
+                    "painted_output",
+                    EscalateGraphicsBindingKind::StorageImage,
+                    "surface-out",
+                ),
+                (
+                    "source_image",
+                    EscalateGraphicsBindingKind::SampledTexture,
+                    "surface-in",
+                ),
+            ]);
+            let planned = plan_supplied_surface_bound_kernel_bindings("draw", &supplied, &declared)
+                .expect("a complete, correctly-typed draw");
+
+            // Resolution is by name, so the order the caller supplied them in
+            // is not the order the shaders declared them in — and that is fine.
+            assert_eq!(planned.len(), 2);
+            assert_eq!(planned[0].name, "painted_output");
+            assert_eq!(planned[0].binding_slot, 1);
+            assert_eq!(planned[0].kind, SurfaceBoundKernelBindingKind::StorageImage);
+            assert_eq!(planned[0].target_id, "surface-out");
+            assert_eq!(planned[1].name, "source_image");
+            assert_eq!(planned[1].binding_slot, 0);
+            assert_eq!(
+                planned[1].kind,
+                SurfaceBoundKernelBindingKind::SampledTexture
+            );
+        }
+
+        /// Not expressible in a Python mapping — a dict cannot carry one key
+        /// twice — so the wire array is the only layer that can guard it.
+        #[test]
+        fn a_name_supplied_twice_is_refused() {
+            let message = draw_plan_refusal(
+                A_DRAWING_KERNELS_BINDINGS,
+                &[
+                    (
+                        "source_image",
+                        EscalateGraphicsBindingKind::SampledTexture,
+                        "surface-in",
+                    ),
+                    (
+                        "source_image",
+                        EscalateGraphicsBindingKind::SampledTexture,
+                        "surface-other",
+                    ),
+                    (
+                        "painted_output",
+                        EscalateGraphicsBindingKind::StorageImage,
+                        "surface-out",
+                    ),
+                ],
+            );
+            assert!(
+                message.contains("binding `source_image` was supplied twice"),
+                "must name the duplicate, got: {message}"
+            );
+            assert!(
+                message.contains("`source_image`, `painted_output`"),
+                "must name the kernel's declared bindings, got: {message}"
+            );
+        }
+
+        #[test]
+        fn a_name_the_shaders_do_not_declare_is_refused() {
+            let message = draw_plan_refusal(
+                A_DRAWING_KERNELS_BINDINGS,
+                &[
+                    (
+                        "source_image",
+                        EscalateGraphicsBindingKind::SampledTexture,
+                        "surface-in",
+                    ),
+                    (
+                        "painted_output",
+                        EscalateGraphicsBindingKind::StorageImage,
+                        "surface-out",
+                    ),
+                    (
+                        "sharpen_amount",
+                        EscalateGraphicsBindingKind::UniformBuffer,
+                        "surface-x",
+                    ),
+                ],
+            );
+            assert!(
+                message.contains("binding `sharpen_amount` is not one this kernel declares"),
+                "must name the unknown binding, got: {message}"
+            );
+            assert!(
+                message.contains("`source_image`, `painted_output`"),
+                "must name the kernel's declared bindings, got: {message}"
+            );
+        }
+
+        /// No implicit default and no carried-over value: the kernel holds no
+        /// binding state between draws to fall back on.
+        #[test]
+        fn a_declared_binding_left_out_is_refused() {
+            let message = draw_plan_refusal(
+                A_DRAWING_KERNELS_BINDINGS,
+                &[(
+                    "source_image",
+                    EscalateGraphicsBindingKind::SampledTexture,
+                    "surface-in",
+                )],
+            );
+            assert!(
+                message.contains("binding `painted_output` was not supplied"),
+                "must name the missing binding, got: {message}"
+            );
+            assert!(
+                message.contains("do not persist between draws"),
+                "must say why there is no fallback, got: {message}"
+            );
+        }
+
+        #[test]
+        fn a_binding_supplied_as_the_wrong_kind_is_refused() {
+            let message = draw_plan_refusal(
+                A_DRAWING_KERNELS_BINDINGS,
+                &[
+                    (
+                        "source_image",
+                        EscalateGraphicsBindingKind::SampledTexture,
+                        "surface-in",
+                    ),
+                    (
+                        "painted_output",
+                        EscalateGraphicsBindingKind::StorageBuffer,
+                        "surface-out",
+                    ),
+                ],
+            );
+            assert!(
+                message.contains("binding `painted_output` was supplied as storage_buffer"),
+                "must name the binding and the kind supplied, got: {message}"
+            );
+            assert!(
+                message.contains("declares it storage_image"),
+                "must name the kind the kernel declares, got: {message}"
+            );
+        }
+
+        /// A buffer binding is legal in a shader and legal on the wire, but no
+        /// escalate op mints a buffer a descriptor can point at — so the draw
+        /// that would need one is refused rather than silently unbound.
+        #[test]
+        fn a_binding_of_a_kind_no_surface_can_back_is_refused() {
+            let message = draw_plan_refusal(
+                A_TINTING_KERNELS_BINDINGS,
+                &[(
+                    "tint_parameters",
+                    EscalateGraphicsBindingKind::UniformBuffer,
+                    "surface-x",
+                )],
+            );
+            assert!(
+                message.contains("binding `tint_parameters` is uniform_buffer"),
+                "must name the binding and its kind, got: {message}"
+            );
+            assert!(
+                message.contains("storage_image and sampled_texture"),
+                "must name the kinds a draw can bind, got: {message}"
+            );
+        }
+
+        /// A kernel with no bindings at all draws — the empty case is not an
+        /// error, and the "missing" rule has nothing to fire on.
+        #[test]
+        fn a_kernel_declaring_nothing_needs_nothing_supplied() {
+            let planned = plan_supplied_surface_bound_kernel_bindings("draw", &[], &[])
+                .expect("an unbound kernel draws");
+            assert!(planned.is_empty());
+        }
+
+        // ----- wire → RHI pipeline state --------------------------------
+
+        /// Lock in the wire→RHI pipeline-state translation. Mentally reverting
+        /// any single arm of `graphics_pipeline_state_from_wire` (e.g. swapping
+        /// `Add ↔ Subtract`) must fail this test — nothing else checks the
+        /// ~200 lines of enum mapping in the handler, and a wrong arm builds a
+        /// pipeline the caller did not ask for without complaint.
+        #[test]
+        fn pipeline_state_translates_every_enum_arm() {
+            use crate::core::rhi::{
+                BlendFactor, BlendOp, ColorBlendState, ColorWriteMask, CullMode, DepthStencilState,
+                FrontFace, GraphicsDynamicState, PolygonMode, PrimitiveTopology, VertexInputState,
             };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunGraphicsDraw(make_run_req(
-                "req-run-1",
-                "kernel-x",
-                "surface-y",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-run-1");
-                    assert!(
-                        err.message.contains("GraphicsKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
+
+            // Every value is chosen to differ from the matching default, so a
+            // wrong arm in the translation lands in the wrong RHI variant and
+            // the assertion fails.
+            let mut wire = baseline_pipeline_state();
+            wire.topology =
+                EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip;
+            wire.rasterization_polygon_mode =
+                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line;
+            wire.rasterization_cull_mode =
+                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back;
+            wire.rasterization_front_face =
+                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise;
+            wire.rasterization_line_width = 2.5;
+            wire.color_blend_enabled = true;
+            wire.color_write_mask = 0b0101; // R | B only
+            wire.color_blend_src_color_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcAlpha;
+            wire.color_blend_dst_color_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusSrcAlpha;
+            wire.color_blend_color_op =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Subtract;
+            wire.color_blend_src_alpha_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::ConstantAlpha;
+            wire.color_blend_dst_alpha_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusConstantAlpha;
+            wire.color_blend_alpha_op =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Max;
+            wire.attachment_color_formats = vec!["bgra8_unorm_srgb".to_string()];
+            wire.dynamic_state =
+                EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None;
+
+            let state = graphics_pipeline_state_from_wire(wire).expect("a buildable shape");
+
+            assert_eq!(state.topology, PrimitiveTopology::TriangleStrip);
+            // Not a translated arm: both halves of a vertex input are refused
+            // below, so the only vertex-input state this can produce is the
+            // gl_VertexIndex-driven one.
+            assert!(
+                matches!(state.vertex_input, VertexInputState::None),
+                "expected the gl_VertexIndex-driven shape, got {:?}",
+                state.vertex_input
+            );
+            assert_eq!(state.rasterization.polygon_mode, PolygonMode::Line);
+            assert_eq!(state.rasterization.cull_mode, CullMode::Back);
+            assert_eq!(state.rasterization.front_face, FrontFace::Clockwise);
+            assert_eq!(state.rasterization.line_width, 2.5);
+            assert_eq!(state.multisample.samples, 1);
+            // Not a translated arm: both halves of a depth attachment are
+            // refused above, so the only depth state this can produce is off.
+            assert_eq!(state.depth_stencil, DepthStencilState::Disabled);
+            match state.color_blend {
+                ColorBlendState::Enabled(attachment) => {
+                    assert_eq!(attachment.src_color_blend_factor, BlendFactor::SrcAlpha);
+                    assert_eq!(
+                        attachment.dst_color_blend_factor,
+                        BlendFactor::OneMinusSrcAlpha
+                    );
+                    assert_eq!(attachment.color_blend_op, BlendOp::Subtract);
+                    assert_eq!(
+                        attachment.src_alpha_blend_factor,
+                        BlendFactor::ConstantAlpha
+                    );
+                    assert_eq!(
+                        attachment.dst_alpha_blend_factor,
+                        BlendFactor::OneMinusConstantAlpha
+                    );
+                    assert_eq!(attachment.alpha_blend_op, BlendOp::Max);
+                    assert_eq!(
+                        attachment.color_write_mask,
+                        ColorWriteMask::R | ColorWriteMask::B
                     );
                 }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
+                other => panic!("expected blending on, got {other:?}"),
+            }
+            assert_eq!(
+                state.attachment_formats.color,
+                vec![TextureFormat::Bgra8UnormSrgb]
+            );
+            assert_eq!(state.attachment_formats.depth, None);
+            assert_eq!(state.dynamic_state, GraphicsDynamicState::None);
+        }
+
+        /// The four blend-factor fields and the two blend-op fields share one
+        /// macro each, so a swapped arm there is wrong in every field at once
+        /// and the single-value test above would only catch the arm it picked.
+        #[test]
+        fn every_blend_factor_and_blend_op_arm_reaches_the_rhi_attachment() {
+            use crate::core::rhi::{BlendFactor, BlendOp, ColorBlendState};
+            use EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp as AlphaOpWire;
+            use EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp as ColorOpWire;
+            use EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor as DstAlphaWire;
+            use EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor as DstColorWire;
+            use EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor as SrcAlphaWire;
+            use EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor as SrcColorWire;
+
+            let factor_arms = [
+                (
+                    SrcColorWire::Zero,
+                    DstColorWire::Zero,
+                    SrcAlphaWire::Zero,
+                    DstAlphaWire::Zero,
+                    BlendFactor::Zero,
+                ),
+                (
+                    SrcColorWire::One,
+                    DstColorWire::One,
+                    SrcAlphaWire::One,
+                    DstAlphaWire::One,
+                    BlendFactor::One,
+                ),
+                (
+                    SrcColorWire::SrcColor,
+                    DstColorWire::SrcColor,
+                    SrcAlphaWire::SrcColor,
+                    DstAlphaWire::SrcColor,
+                    BlendFactor::SrcColor,
+                ),
+                (
+                    SrcColorWire::OneMinusSrcColor,
+                    DstColorWire::OneMinusSrcColor,
+                    SrcAlphaWire::OneMinusSrcColor,
+                    DstAlphaWire::OneMinusSrcColor,
+                    BlendFactor::OneMinusSrcColor,
+                ),
+                (
+                    SrcColorWire::DstColor,
+                    DstColorWire::DstColor,
+                    SrcAlphaWire::DstColor,
+                    DstAlphaWire::DstColor,
+                    BlendFactor::DstColor,
+                ),
+                (
+                    SrcColorWire::OneMinusDstColor,
+                    DstColorWire::OneMinusDstColor,
+                    SrcAlphaWire::OneMinusDstColor,
+                    DstAlphaWire::OneMinusDstColor,
+                    BlendFactor::OneMinusDstColor,
+                ),
+                (
+                    SrcColorWire::SrcAlpha,
+                    DstColorWire::SrcAlpha,
+                    SrcAlphaWire::SrcAlpha,
+                    DstAlphaWire::SrcAlpha,
+                    BlendFactor::SrcAlpha,
+                ),
+                (
+                    SrcColorWire::OneMinusSrcAlpha,
+                    DstColorWire::OneMinusSrcAlpha,
+                    SrcAlphaWire::OneMinusSrcAlpha,
+                    DstAlphaWire::OneMinusSrcAlpha,
+                    BlendFactor::OneMinusSrcAlpha,
+                ),
+                (
+                    SrcColorWire::DstAlpha,
+                    DstColorWire::DstAlpha,
+                    SrcAlphaWire::DstAlpha,
+                    DstAlphaWire::DstAlpha,
+                    BlendFactor::DstAlpha,
+                ),
+                (
+                    SrcColorWire::OneMinusDstAlpha,
+                    DstColorWire::OneMinusDstAlpha,
+                    SrcAlphaWire::OneMinusDstAlpha,
+                    DstAlphaWire::OneMinusDstAlpha,
+                    BlendFactor::OneMinusDstAlpha,
+                ),
+                (
+                    SrcColorWire::ConstantColor,
+                    DstColorWire::ConstantColor,
+                    SrcAlphaWire::ConstantColor,
+                    DstAlphaWire::ConstantColor,
+                    BlendFactor::ConstantColor,
+                ),
+                (
+                    SrcColorWire::OneMinusConstantColor,
+                    DstColorWire::OneMinusConstantColor,
+                    SrcAlphaWire::OneMinusConstantColor,
+                    DstAlphaWire::OneMinusConstantColor,
+                    BlendFactor::OneMinusConstantColor,
+                ),
+                (
+                    SrcColorWire::ConstantAlpha,
+                    DstColorWire::ConstantAlpha,
+                    SrcAlphaWire::ConstantAlpha,
+                    DstAlphaWire::ConstantAlpha,
+                    BlendFactor::ConstantAlpha,
+                ),
+                (
+                    SrcColorWire::OneMinusConstantAlpha,
+                    DstColorWire::OneMinusConstantAlpha,
+                    SrcAlphaWire::OneMinusConstantAlpha,
+                    DstAlphaWire::OneMinusConstantAlpha,
+                    BlendFactor::OneMinusConstantAlpha,
+                ),
+                (
+                    SrcColorWire::SrcAlphaSaturate,
+                    DstColorWire::SrcAlphaSaturate,
+                    SrcAlphaWire::SrcAlphaSaturate,
+                    DstAlphaWire::SrcAlphaSaturate,
+                    BlendFactor::SrcAlphaSaturate,
+                ),
+            ];
+            for (src_color, dst_color, src_alpha, dst_alpha, expected) in factor_arms {
+                let mut wire = baseline_pipeline_state();
+                wire.color_blend_enabled = true;
+                wire.color_blend_src_color_factor = src_color;
+                wire.color_blend_dst_color_factor = dst_color;
+                wire.color_blend_src_alpha_factor = src_alpha;
+                wire.color_blend_dst_alpha_factor = dst_alpha;
+                let state = graphics_pipeline_state_from_wire(wire).expect("a buildable shape");
+                match state.color_blend {
+                    ColorBlendState::Enabled(attachment) => {
+                        assert_eq!(attachment.src_color_blend_factor, expected);
+                        assert_eq!(attachment.dst_color_blend_factor, expected);
+                        assert_eq!(attachment.src_alpha_blend_factor, expected);
+                        assert_eq!(attachment.dst_alpha_blend_factor, expected);
+                    }
+                    other => panic!("expected blending on, got {other:?}"),
+                }
+            }
+
+            let op_arms = [
+                (ColorOpWire::Add, AlphaOpWire::Add, BlendOp::Add),
+                (
+                    ColorOpWire::Subtract,
+                    AlphaOpWire::Subtract,
+                    BlendOp::Subtract,
+                ),
+                (
+                    ColorOpWire::ReverseSubtract,
+                    AlphaOpWire::ReverseSubtract,
+                    BlendOp::ReverseSubtract,
+                ),
+                (ColorOpWire::Min, AlphaOpWire::Min, BlendOp::Min),
+                (ColorOpWire::Max, AlphaOpWire::Max, BlendOp::Max),
+            ];
+            for (color_op, alpha_op, expected) in op_arms {
+                let mut wire = baseline_pipeline_state();
+                wire.color_blend_enabled = true;
+                wire.color_blend_color_op = color_op;
+                wire.color_blend_alpha_op = alpha_op;
+                let state = graphics_pipeline_state_from_wire(wire).expect("a buildable shape");
+                match state.color_blend {
+                    ColorBlendState::Enabled(attachment) => {
+                        assert_eq!(attachment.color_blend_op, expected);
+                        assert_eq!(attachment.alpha_blend_op, expected);
+                    }
+                    other => panic!("expected blending on, got {other:?}"),
+                }
             }
         }
 
+        /// The wire promises these refusals and nothing downstream enforces
+        /// them: an MSAA pipeline, a multi-attachment one, and either half of a
+        /// depth attachment or of a vertex input are shapes a draw over this op
+        /// has no path for.
+        #[test]
+        fn a_pipeline_state_the_kernel_cannot_build_is_refused() {
+            let mut multisampled = baseline_pipeline_state();
+            multisampled.multisample_samples = 4;
+            let message = graphics_pipeline_state_from_wire(multisampled)
+                .err()
+                .expect("MSAA must be refused");
+            assert!(message.contains("single-sampled"), "{message}");
+
+            let mut two_attachments = baseline_pipeline_state();
+            two_attachments.attachment_color_formats =
+                vec!["rgba8_unorm".to_string(), "rgba8_unorm".to_string()];
+            let message = graphics_pipeline_state_from_wire(two_attachments)
+                .err()
+                .expect("two colour attachments must be refused");
+            assert!(message.contains("exactly one"), "{message}");
+
+            // The draw op refuses `depth_target_uuid` for the same reason; a
+            // pipeline built with depth state would otherwise disagree with the
+            // colour-only pass at every draw, a submission away from its cause.
+            let mut depth_testing = baseline_pipeline_state();
+            depth_testing.depth_stencil_enabled = true;
+            let message = graphics_pipeline_state_from_wire(depth_testing)
+                .err()
+                .expect("depth testing must be refused");
+            assert!(message.contains("colour targets only"), "{message}");
+
+            let mut depth_attachment = baseline_pipeline_state();
+            depth_attachment.attachment_depth_format = Some(
+                EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat,
+            );
+            let message = graphics_pipeline_state_from_wire(depth_attachment)
+                .err()
+                .expect("a depth attachment must be refused");
+            assert!(message.contains("colour targets only"), "{message}");
+
+            let mut unowned_write_mask = baseline_pipeline_state();
+            unowned_write_mask.color_write_mask = 0b1_0000;
+            let message = graphics_pipeline_state_from_wire(unowned_write_mask)
+                .err()
+                .expect("a bit no channel owns must be refused");
+            assert!(message.contains("no colour channel owns"), "{message}");
+
+            // The draw op refuses `vertex_buffers` for the same reason. A
+            // pipeline pulling from a vertex binding would otherwise register
+            // and then be refused at every draw, for a buffer no escalate op
+            // can mint to fill it.
+            let mut buffer_fed_vertices = baseline_pipeline_state();
+            buffer_fed_vertices.vertex_input_bindings = vec![
+                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding {
+                    binding: 0,
+                    stride: 12,
+                    input_rate:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Vertex,
+                },
+            ];
+            let message = graphics_pipeline_state_from_wire(buffer_fed_vertices)
+                .err()
+                .expect("a vertex binding no buffer can fill must be refused");
+            assert!(
+                message.contains("no escalate op mints a VertexBuffer"),
+                "{message}"
+            );
+            assert!(message.contains("gl_VertexIndex"), "{message}");
+
+            let mut unfed_attributes = baseline_pipeline_state();
+            unfed_attributes.vertex_input_attributes = vec![
+                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute {
+                    location: 0,
+                    binding: 0,
+                    format:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgb32Float,
+                    offset: 0,
+                },
+            ];
+            let message = graphics_pipeline_state_from_wire(unfed_attributes)
+                .err()
+                .expect("an attribute with no binding it could be fed from must be refused");
+            assert!(message.contains("pulled from a"), "{message}");
+            assert!(message.contains("gl_VertexIndex"), "{message}");
+        }
+
+        // ----- the handlers ---------------------------------------------
+
+        /// Both hex fields are decoded before the escalate hop, so a malformed
+        /// one is refused without touching the GPU at all.
         #[test]
         fn register_with_invalid_vertex_hex_returns_err() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_with_invalid_vertex_hex_returns_err: no GPU — skipping");
-                    return;
-                }
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_with_invalid_vertex_hex: no GPU — skipping");
+                return;
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "req-bad-v",
-                "xyz123",
-                "cafebabe",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                    "req-bad-v",
+                    "xyz123",
+                    "cafebabe",
+                )),
+            )
+            .expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-v");
@@ -5800,31 +6989,25 @@ void main() {
                 }
                 other => panic!("expected Err for malformed vertex hex, got {other:?}"),
             }
-            assert_eq!(
-                bridge.registered_count(),
-                0,
-                "bridge.register must not have been called on the parse-error path"
-            );
         }
 
         #[test]
         fn register_with_invalid_fragment_hex_returns_err() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_with_invalid_fragment_hex_returns_err: no GPU — skipping");
-                    return;
-                }
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_with_invalid_fragment_hex: no GPU — skipping");
+                return;
             };
             let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "req-bad-f",
-                "deadbeef",
-                "qq",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                    "req-bad-f",
+                    "deadbeef",
+                    "qq",
+                )),
+            )
+            .expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-f");
@@ -5836,18 +7019,13 @@ void main() {
                 }
                 other => panic!("expected Err for malformed fragment hex, got {other:?}"),
             }
-            assert_eq!(bridge.registered_count(), 0);
         }
 
         #[test]
         fn run_with_invalid_push_constants_hex_returns_err() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("run_with_invalid_push_constants_hex_returns_err: no GPU — skipping");
-                    return;
-                }
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("run_with_invalid_push_constants_hex: no GPU — skipping");
+                return;
             };
             let registry = EscalateHandleRegistry::new();
             let mut req = make_run_req("req-bad-push", "kernel-x", "surface-y");
@@ -5866,493 +7044,679 @@ void main() {
                 }
                 other => panic!("expected Err for malformed push hex, got {other:?}"),
             }
-            assert!(bridge.runs().is_empty());
         }
 
+        /// The three shapes the wire carries that the host has no path for.
+        /// Each is refused rather than silently dropped: a caller who sent one
+        /// would otherwise get a draw that ignored half of what it asked for.
         #[test]
-        fn run_with_malformed_vertex_buffer_offset_returns_err() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "run_with_malformed_vertex_buffer_offset_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let mut req = make_run_req("req-bad-vb", "kernel-x", "surface-y");
-            req.vertex_buffers = vec![EscalateRequestRunGraphicsDrawVertexBuffer {
-                binding: 0,
-                surface_uuid: "vb-uuid".to_string(),
-                offset: "not-a-number".to_string(),
-            }];
-            let response =
-                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-                    .expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-vb");
-                    assert!(
-                        err.message.contains("vertex_buffer.offset"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for malformed vb.offset, got {other:?}"),
-            }
-            assert!(bridge.runs().is_empty());
-        }
-
-        #[test]
-        fn register_returns_stable_kernel_id_for_identical_descriptor() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_returns_stable_kernel_id_for_identical_descriptor: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let make_req = |rid: &str| {
-                EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                    rid,
-                    "deadbeefcafebabe",
-                    "00112233445566778899aabbccddeeff",
-                ))
-            };
-            let id1 = match handle_escalate_op(&sandbox, &registry, make_req("a")).unwrap() {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("first register expected Ok, got {other:?}"),
-            };
-            let id2 = match handle_escalate_op(&sandbox, &registry, make_req("b")).unwrap() {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("second register expected Ok, got {other:?}"),
-            };
-            assert_eq!(
-                id1, id2,
-                "identical descriptor must produce the same kernel_id"
-            );
-        }
-
-        /// The wire accepts GLSL for graphics too, and this is the only test
-        /// that the acceptance is wired to anything: it asserts the bridge was
-        /// handed real SPIR-V, by its magic number, rather than the text.
-        #[test]
-        fn glsl_source_reaches_the_graphics_bridge_as_compiled_spirv() {
-            let bridge = RecordingGraphicsBridge::new();
-            let Some(sandbox) = make_sandbox_with_bridge(Some(bridge.clone())) else {
-                println!("glsl_source_reaches_the_graphics_bridge: no GPU — skipping");
+        fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_draw_naming_an_unmintable_resource: no GPU — skipping");
                 return;
             };
             let registry = EscalateHandleRegistry::new();
-            let mut req = make_register_req("glsl", "", "");
-            req.vertex_source =
-                "#version 450\nvoid main() { gl_Position = vec4(0.0); }\n".to_string();
-            req.fragment_source = "#version 450\nlayout(location = 0) out vec4 colour;\n\
-                                   void main() { colour = vec4(1.0); }\n"
-                .to_string();
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RegisterGraphicsKernel(req),
-            )
-            .expect("must produce a response");
-            let kernel_id = match response {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            let registered = bridge.registered.lock().unwrap();
-            let decl = registered
-                .get(&kernel_id)
-                .expect("the bridge saw the kernel");
-            for (stage, spv) in [
-                ("vertex", &decl.vertex_spv),
-                ("fragment", &decl.fragment_spv),
-            ] {
-                assert_eq!(
-                    spv.get(..4),
-                    Some(&SPIRV_MAGIC_LE[..]),
-                    "the {stage} stage reached the bridge as something other than SPIR-V"
-                );
-            }
-        }
 
-        #[test]
-        fn register_returns_distinct_kernel_ids_for_different_spirv() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_returns_distinct_kernel_ids_for_different_spirv: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req_a = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "a", "deadbeef", "cafebabe",
-            ));
-            let req_b = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "b", "11223344", "cafebabe",
-            ));
-            let id_a = match handle_escalate_op(&sandbox, &registry, req_a).unwrap() {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            let id_b = match handle_escalate_op(&sandbox, &registry, req_b).unwrap() {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            assert_ne!(
-                id_a, id_b,
-                "different vertex SPIR-V must produce different kernel_ids"
-            );
-        }
-
-        /// Lock in the wire→domain pipeline-state translation. Mentally
-        /// reverting any single arm of `graphics_pipeline_state_from_wire`
-        /// (e.g. swapping `BlendOpWire::Add ↔ Subtract`) must fail this
-        /// test — the synthetic `RecordingGraphicsBridge` accepts the
-        /// translated `GraphicsPipelineStateWire` value but doesn't itself
-        /// validate any arm, so without this test the ~200 lines of enum
-        /// mapping in the handler would have no regression coverage.
-        #[test]
-        fn pipeline_state_translates_every_enum_arm() {
-            use crate::core::context::{
-                BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire, DepthFormatWire,
-                DynamicStateWire, FrontFaceWire, GraphicsBindingKindWire, PolygonModeWire,
-                PrimitiveTopologyWire, VertexAttributeFormatWire, VertexInputRateWire,
-            };
-
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("pipeline_state_translates_every_enum_arm: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-
-            // Build a request that uses non-default values for every
-            // pipeline-state arm we want to lock down. Each value is
-            // chosen to be DIFFERENT from the matching default so a
-            // wrong arm in the translation would land in the wrong
-            // wire-mirror variant and the assertion would fail.
-            let mut req = make_register_req("req-translate", "deadbeef", "cafebabe");
-            req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
-                binding: 7,
-                kind: EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer,
-                stages: 3, // VERTEX | FRAGMENT
-            }];
-            req.pipeline_state.topology =
-                EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip;
-            req.pipeline_state.vertex_input_bindings = vec![
-                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding {
-                    binding: 2,
-                    stride: 28,
-                    input_rate:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Instance,
-                },
-            ];
-            req.pipeline_state.vertex_input_attributes = vec![
-                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute {
-                    location: 5,
-                    binding: 2,
-                    format:
-                        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgb32Float,
-                    offset: 12,
-                },
-            ];
-            req.pipeline_state.rasterization_polygon_mode =
-                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line;
-            req.pipeline_state.rasterization_cull_mode =
-                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back;
-            req.pipeline_state.rasterization_front_face =
-                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise;
-            req.pipeline_state.rasterization_line_width = 2.5;
-            req.pipeline_state.depth_stencil_enabled = true;
-            req.pipeline_state.depth_compare_op =
-                EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::LessOrEqual;
-            req.pipeline_state.depth_write = true;
-            req.pipeline_state.color_blend_enabled = true;
-            req.pipeline_state.color_write_mask = 0b0101; // R | B only
-            req.pipeline_state.color_blend_src_color_factor =
-                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcAlpha;
-            req.pipeline_state.color_blend_dst_color_factor =
-                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusSrcAlpha;
-            req.pipeline_state.color_blend_color_op =
-                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Subtract;
-            req.pipeline_state.color_blend_src_alpha_factor =
-                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::ConstantAlpha;
-            req.pipeline_state.color_blend_dst_alpha_factor =
-                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusConstantAlpha;
-            req.pipeline_state.color_blend_alpha_op =
-                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Max;
-            req.pipeline_state.attachment_color_formats = vec!["bgra8_unorm_srgb".to_string()];
-            req.pipeline_state.attachment_depth_format = Some(
-                EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat,
-            );
-            req.pipeline_state.dynamic_state =
-                EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None;
-            req.push_constant_size = 16;
-            req.push_constant_stages = 3;
-            req.descriptor_sets_in_flight = 4;
-
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RegisterGraphicsKernel(req),
-            )
-            .expect("must produce a response");
-            match response {
-                EscalateResponse::Ok(ok) => assert_eq!(ok.request_id, "req-translate"),
-                other => panic!("expected Ok, got {other:?}"),
-            }
-
-            let registered = bridge
-                .last_registered()
-                .expect("bridge should have stored the descriptor");
-
-            // Top-level fields.
-            assert_eq!(registered.label, "test-graphics");
-            assert_eq!(registered.vertex_spv, vec![0xde, 0xad, 0xbe, 0xef]);
-            assert_eq!(registered.fragment_spv, vec![0xca, 0xfe, 0xba, 0xbe]);
-            assert_eq!(registered.push_constant_size, 16);
-            assert_eq!(registered.push_constant_stages, 3);
-            assert_eq!(registered.descriptor_sets_in_flight, 4);
-
-            // Bindings translation.
-            assert_eq!(registered.bindings.len(), 1);
-            assert_eq!(registered.bindings[0].binding, 7);
-            assert_eq!(
-                registered.bindings[0].kind,
-                GraphicsBindingKindWire::UniformBuffer
-            );
-            assert_eq!(registered.bindings[0].stages, 3);
-
-            let p = &registered.pipeline_state;
-            assert_eq!(p.topology, PrimitiveTopologyWire::TriangleStrip);
-            assert_eq!(p.vertex_input_bindings.len(), 1);
-            assert_eq!(p.vertex_input_bindings[0].binding, 2);
-            assert_eq!(p.vertex_input_bindings[0].stride, 28);
-            assert_eq!(
-                p.vertex_input_bindings[0].input_rate,
-                VertexInputRateWire::Instance
-            );
-            assert_eq!(p.vertex_input_attributes.len(), 1);
-            assert_eq!(p.vertex_input_attributes[0].location, 5);
-            assert_eq!(p.vertex_input_attributes[0].binding, 2);
-            assert_eq!(
-                p.vertex_input_attributes[0].format,
-                VertexAttributeFormatWire::Rgb32Float
-            );
-            assert_eq!(p.vertex_input_attributes[0].offset, 12);
-            assert_eq!(p.rasterization_polygon_mode, PolygonModeWire::Line);
-            assert_eq!(p.rasterization_cull_mode, CullModeWire::Back);
-            assert_eq!(p.rasterization_front_face, FrontFaceWire::Clockwise);
-            assert_eq!(p.rasterization_line_width, 2.5);
-            assert_eq!(p.multisample_samples, 1);
-            assert!(p.depth_stencil_enabled);
-            assert_eq!(p.depth_compare_op, DepthCompareOpWire::LessOrEqual);
-            assert!(p.depth_write);
-            assert!(p.color_blend_enabled);
-            assert_eq!(p.color_write_mask, 0b0101);
-            assert_eq!(p.color_blend_src_color_factor, BlendFactorWire::SrcAlpha);
-            assert_eq!(
-                p.color_blend_dst_color_factor,
-                BlendFactorWire::OneMinusSrcAlpha
-            );
-            assert_eq!(p.color_blend_color_op, BlendOpWire::Subtract);
-            assert_eq!(
-                p.color_blend_src_alpha_factor,
-                BlendFactorWire::ConstantAlpha
-            );
-            assert_eq!(
-                p.color_blend_dst_alpha_factor,
-                BlendFactorWire::OneMinusConstantAlpha
-            );
-            assert_eq!(p.color_blend_alpha_op, BlendOpWire::Max);
-            assert_eq!(p.attachment_color_formats, vec!["bgra8_unorm_srgb"]);
-            assert_eq!(p.attachment_depth_format, Some(DepthFormatWire::D32Sfloat));
-            assert_eq!(p.dynamic_state, DynamicStateWire::None);
-        }
-
-        #[test]
-        fn run_with_unregistered_kernel_id_returns_err() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("run_with_unregistered_kernel_id_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunGraphicsDraw(make_run_req(
-                "req-bad-id",
-                "never-registered",
-                "surface-y",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-id");
-                    assert!(
-                        err.message.contains("not registered")
-                            || err.message.contains("never-registered"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for unregistered kernel_id, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn run_forwards_payload_to_bridge_and_echoes_kernel_id() {
-            let bridge = RecordingGraphicsBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "run_forwards_payload_to_bridge_and_echoes_kernel_id: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-
-            // Register first so the bridge has the kernel_id cached.
-            let reg = EscalateRequest::RegisterGraphicsKernel(make_register_req(
-                "reg",
-                "abcdef0123456789",
-                "fedcba9876543210",
-            ));
-            let kernel_id = match handle_escalate_op(&sandbox, &registry, reg).unwrap() {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("register expected Ok, got {other:?}"),
-            };
-
-            // Indexed draw with a vertex buffer + push constants — exercises
-            // every translation arm in the wire→domain mapper.
-            let mut run = make_run_req("run", &kernel_id, "color-target-uuid");
-            run.frame_index = 1;
-            run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
-                binding: 0,
-                kind: EscalateRequestRunGraphicsDrawBindingKind::SampledTexture,
-                surface_uuid: "tex-uuid".to_string(),
-            }];
-            run.vertex_buffers = vec![EscalateRequestRunGraphicsDrawVertexBuffer {
+            let mut with_vertex_buffer = make_run_req("req-vb", "kernel-x", "surface-y");
+            with_vertex_buffer.vertex_buffers = vec![EscalateRequestRunGraphicsDrawVertexBuffer {
                 binding: 0,
                 surface_uuid: "vb-uuid".to_string(),
                 offset: "128".to_string(),
             }];
-            run.index_buffer = Some(EscalateRequestRunGraphicsDrawIndexBuffer {
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RunGraphicsDraw(with_vertex_buffer),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("no escalate op mints a VertexBuffer"),
+                "must say what is missing, got: {message}"
+            );
+
+            let mut indexed = make_run_req("req-ib", "kernel-x", "surface-y");
+            indexed.index_buffer = Some(EscalateRequestRunGraphicsDrawIndexBuffer {
                 surface_uuid: "ib-uuid".to_string(),
                 offset: "64".to_string(),
                 index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint32,
             });
-            run.push_constants_hex = "00112233aabbccdd".to_string();
-            run.draw = EscalateRequestRunGraphicsDrawDraw {
-                kind: EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed,
-                vertex_count: 0,
-                index_count: 6,
-                instance_count: 2,
-                first_vertex: 0,
-                first_instance: 1,
-                first_index: 3,
-                vertex_offset: -4,
-            };
-            run.viewport = Some(EscalateRequestRunGraphicsDrawViewport {
-                x: 0.0,
-                y: 0.0,
-                width: 320.0,
-                height: 240.0,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            });
-            run.scissor = Some(EscalateRequestRunGraphicsDrawScissor {
-                x: 0,
-                y: 0,
-                width: 320,
-                height: 240,
-            });
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RunGraphicsDraw(indexed),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("an indexed draw needs an IndexBuffer"),
+                "must say what is missing, got: {message}"
+            );
 
+            // The index buffer is what a `draw_indexed` names its indices in,
+            // so the draw kind alone is refused for the same reason.
+            let mut indexed_without_a_buffer = make_run_req("req-ib-kind", "kernel-x", "surface-y");
+            indexed_without_a_buffer.draw.kind =
+                EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed;
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RunGraphicsDraw(indexed_without_a_buffer),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("an indexed draw needs an IndexBuffer"),
+                "must say what is missing, got: {message}"
+            );
+        }
+
+        /// The offscreen pass attaches colour targets only, so a depth target
+        /// would never be tested against — and a caller who set one is asking
+        /// for depth testing that would not happen.
+        #[test]
+        fn a_draw_naming_a_depth_target_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_draw_naming_a_depth_target: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_run_req("req-depth", "kernel-x", "surface-y");
+            req.depth_target_uuid = Some("depth-uuid".to_string());
+            let message = refusal_message(
+                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
+                    .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("depth_target_uuid is set"),
+                "must name the field, got: {message}"
+            );
+            assert!(
+                message.contains("colour targets only"),
+                "must say why, got: {message}"
+            );
+        }
+
+        #[test]
+        fn a_draw_naming_other_than_one_colour_target_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_draw_naming_other_than_one_colour_target: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_run_req("req-targets", "kernel-x", "surface-y");
+            req.color_target_uuids = vec!["a".to_string(), "b".to_string()];
+            let message = refusal_message(
+                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
+                    .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("exactly one colour attachment"),
+                "got: {message}"
+            );
+        }
+
+        #[test]
+        fn drawing_with_an_unregistered_kernel_id_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("drawing_with_an_unregistered_kernel_id: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RunGraphicsDraw(make_run_req(
+                        "req-bad-id",
+                        "never-registered",
+                        "surface-y",
+                    )),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("no kernel registered under id")
+                    && message.contains("never-registered"),
+                "got: {message}"
+            );
+        }
+
+        /// A stage mask is a bitfield the caller writes by hand, and a bit
+        /// outside vertex|fragment names a stage a graphics pipeline has no
+        /// module for at all.
+        #[test]
+        fn a_binding_declared_for_a_stage_no_graphics_pipeline_has_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_binding_declared_for_an_unowned_stage: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = register_from_glsl("req-stage", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL);
+            req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
+                kind: EscalateGraphicsBindingKind::SampledTexture,
+                name: "source_image".to_string(),
+                stages: 0b100,
+            }];
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterGraphicsKernel(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("no graphics stage owns"),
+                "must say the bit belongs to no stage, got: {message}"
+            );
+        }
+
+        /// GLSL where bytes used to go: the engine compiles each stage itself,
+        /// and what it hands the pipeline is a module rather than the text.
+        #[test]
+        fn glsl_for_each_stage_reaches_the_engine_as_compiled_spirv() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("glsl_for_each_stage_reaches_the_engine: no GPU — skipping");
+                return;
+            };
+            for (field_prefix, source, stage) in [
+                (
+                    "vertex_",
+                    FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
+                    GlslCompilationTargetStage::Vertex,
+                ),
+                (
+                    "fragment_",
+                    INVERT_SAMPLED_INPUT_FRAGMENT_GLSL,
+                    GlslCompilationTargetStage::Fragment,
+                ),
+            ] {
+                let compiled = registered_shader_stage_source(field_prefix, source, "", stage, "")
+                    .expect("GLSL alone is one of the two alternatives")
+                    .spirv(&sandbox)
+                    .expect("the engine compiles it");
+                assert_eq!(
+                    compiled.get(..4),
+                    Some(&SPIRV_MAGIC_LE[..]),
+                    "the {stage:?} stage reached the pipeline as something other than SPIR-V"
+                );
+            }
+        }
+
+        /// Registration hands back the shape a draw needs: the shaders' own
+        /// names, each with the kind only the shaders know. No bridge is
+        /// installed — graphics is a capability the context always has.
+        #[test]
+        fn registration_answers_with_the_shaders_binding_names_and_kinds() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("registration_answers_with_the_shaders_bindings: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let ok = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("reg", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            );
+            let bindings = ok.bindings.expect("a register response carries the shape");
+            assert_eq!(
+                bindings
+                    .iter()
+                    .map(|binding| (binding.name.as_str(), binding.kind.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("source_image", "sampled_texture")],
+                "the fragment shader's own binding, named and kinded as it declares it"
+            );
+        }
+
+        /// Re-registering an identical kernel is free and keeps its id; a
+        /// different fragment stage is a different pipeline and gets its own.
+        #[test]
+        fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_own() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("an_identical_registration_keeps_its_kernel_id: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let first = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("a", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            )
+            .handle_id;
+            let second = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("b", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            )
+            .handle_id;
+            assert_eq!(
+                first, second,
+                "an identical descriptor must produce the same kernel_id"
+            );
+
+            let other = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("c", HALVE_SAMPLED_INPUT_FRAGMENT_GLSL),
+            )
+            .handle_id;
+            assert_ne!(
+                first, other,
+                "a different fragment stage must produce a different kernel_id"
+            );
+
+            let held = sandbox
+                .escalate(|full| {
+                    Ok((
+                        full.graphics_kernel_by_id(&first),
+                        full.graphics_kernel_by_id(&second),
+                    ))
+                })
+                .expect("the cache answers inside an escalate scope");
+            let (a, b) = (held.0.expect("cached"), held.1.expect("cached"));
+            assert!(
+                std::sync::Arc::ptr_eq(&a, &b),
+                "the second registration must reuse the first kernel, not build another"
+            );
+        }
+
+        /// The cache key covers the shaders and the pipeline, not the caller's
+        /// assertion — so a wrong declaration refuses identically whether or
+        /// not somebody registered this kernel first.
+        #[test]
+        fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_wrong_declaration_is_refused_when_cached: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("warm", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            );
+
+            let mut req = register_from_glsl("reg-wrong", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL);
+            req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
+                kind: EscalateGraphicsBindingKind::StorageBuffer,
+                name: "sharpen_amount".to_string(),
+                stages: 0,
+            }];
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterGraphicsKernel(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("`sharpen_amount`") && message.contains("`source_image`"),
+                "the refusal must name the bogus binding and the shaders' own: {message}"
+            );
+        }
+
+        /// The op end to end, over a real device: a draw resolves its binding
+        /// by the fragment shader's own name, renders into the surface the
+        /// request named, and leaves the engine's layout record agreeing with
+        /// the layout the pass left the image in.
+        ///
+        /// The source is seeded with a known value and the target is read back
+        /// and compared against the shader's own arithmetic, so a draw that
+        /// bound nothing — or bound the target to itself — fails on the pixels
+        /// rather than passing silently. The seeded source is then moved to
+        /// `GENERAL`, which a combined image sampler does not satisfy: a draw
+        /// that did not barrier its bound inputs would read it through a
+        /// descriptor its layout disagrees with, and would leave the engine's
+        /// record still saying `GENERAL`.
+        #[test]
+        fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_draw_reads_the_surface_its_binding_names: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let kernel_id = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("reg-draw", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            )
+            .handle_id;
+
+            // Held for the draw: dropping a pooled handle hands its slot back,
+            // and the registration would then name a recycled texture.
+            let held = sandbox
+                .escalate(|full| {
+                    let source = full.acquire_texture(
+                        &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                            .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
+                    )?;
+                    let target = full.acquire_texture(
+                        &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                            .with_usage(TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC),
+                    )?;
+                    full.register_texture("draw-source", source.texture().clone());
+                    full.register_texture("draw-target", target.texture().clone());
+
+                    let (_pool_id, seed_buffer) =
+                        full.acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)?;
+                    let plane = seed_buffer.buffer_ref().plane_base_address(0);
+                    unsafe {
+                        for pixel in 0..(64 * 64) {
+                            std::ptr::copy_nonoverlapping(
+                                SEED_RGBA.as_ptr(),
+                                plane.add(pixel * 4),
+                                4,
+                            );
+                        }
+                    }
+                    full.copy_pixel_buffer_to_texture(
+                        &seed_buffer,
+                        source.texture(),
+                        "draw-source",
+                        64,
+                        64,
+                    )?;
+
+                    // The seed publishes SHADER_READ_ONLY_OPTIMAL — the very
+                    // layout a sampled binding wants — so the draw's input
+                    // barrier would have nothing to do and this test would end
+                    // by re-reading what setup established. GENERAL is a layout
+                    // the descriptor does not satisfy, which is the state a
+                    // storage-image producer upstream leaves behind.
+                    let mut recorder = full.create_command_recorder("draw_source_into_general")?;
+                    recorder.begin()?;
+                    recorder.record_image_barrier(
+                        source.texture(),
+                        crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                        crate::core::rhi::VulkanLayout::GENERAL,
+                        crate::vulkan::rhi::VulkanStage::ALL_COMMANDS,
+                        crate::vulkan::rhi::VulkanStage::ALL_COMMANDS,
+                        crate::vulkan::rhi::VulkanAccess::MEMORY_WRITE,
+                        crate::vulkan::rhi::VulkanAccess::MEMORY_READ,
+                    )?;
+                    recorder.submit_and_wait()?;
+                    full.resolve_texture_registration_by_surface_id("draw-source", None, 64, 64)?
+                        .update_layout(crate::core::rhi::VulkanLayout::GENERAL);
+                    Ok((source, target))
+                })
+                .expect("a seeded source and a colour target");
+
+            let mut run = make_run_req("run-draw", &kernel_id, "draw-target");
+            run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
+                kind: EscalateGraphicsBindingKind::SampledTexture,
+                name: "source_image".to_string(),
+                surface_uuid: "draw-source".to_string(),
+            }];
+            run.extent_width = 64;
+            run.extent_height = 64;
             let response =
                 handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-                    .unwrap();
+                    .expect("must produce a response");
             match response {
                 EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "run");
+                    assert_eq!(ok.request_id, "run-draw");
                     assert_eq!(
                         ok.handle_id, kernel_id,
-                        "run response handle_id must echo the kernel_id"
+                        "the run response echoes the kernel_id"
                     );
                     assert!(
                         ok.timeline_value.is_none(),
                         "run_graphics_draw responses carry no timeline"
                     );
                 }
-                other => panic!("run expected Ok, got {other:?}"),
+                other => panic!("the draw failed: {other:?}"),
             }
-            let runs = bridge.runs();
-            assert_eq!(runs.len(), 1, "bridge.run_draw must have been called once");
-            let r = &runs[0];
-            assert_eq!(r.kernel_id, kernel_id);
-            assert_eq!(r.frame_index, 1);
-            assert_eq!(r.color_target_uuids, vec!["color-target-uuid".to_string()]);
-            assert_eq!(r.extent, (320, 240));
-            assert_eq!(r.bindings.len(), 1);
-            assert_eq!(r.bindings[0].surface_uuid, "tex-uuid");
-            assert_eq!(r.vertex_buffers.len(), 1);
-            assert_eq!(r.vertex_buffers[0].surface_uuid, "vb-uuid");
-            assert_eq!(r.vertex_buffers[0].offset, 128);
-            let ib = r.index_buffer.as_ref().expect("index_buffer present");
-            assert_eq!(ib.surface_uuid, "ib-uuid");
-            assert_eq!(ib.offset, 64);
-            assert_eq!(ib.index_type, IndexTypeWire::Uint32);
-            assert_eq!(r.push_constants.len(), 8);
-            assert!(r.viewport.is_some());
-            assert!(r.scissor.is_some());
-            match r.draw {
-                GraphicsDrawSpec::DrawIndexed {
-                    index_count,
-                    instance_count,
-                    first_index,
-                    vertex_offset,
-                    first_instance,
-                } => {
-                    assert_eq!(index_count, 6);
-                    assert_eq!(instance_count, 2);
-                    assert_eq!(first_index, 3);
-                    assert_eq!(vertex_offset, -4);
-                    assert_eq!(first_instance, 1);
+
+            // Asserted before the readback, which transitions the image itself:
+            // `offscreen_render` leaves every colour target in
+            // COLOR_ATTACHMENT_OPTIMAL and tells no registration, so an
+            // unpublished layout would leave the next consumer's barrier
+            // naming an oldLayout the image has already left.
+            let published = sandbox
+                .escalate(|full| {
+                    Ok(full
+                        .resolve_texture_registration_by_surface_id("draw-target", None, 64, 64)?
+                        .current_layout())
+                })
+                .expect("the colour target still resolves");
+            assert_eq!(
+                published,
+                streamlib_consumer_rhi::VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+                "the draw must publish the layout it left the colour target in"
+            );
+
+            let rendered = sandbox
+                .escalate(|full| {
+                    let readback = full.create_texture_readback(
+                        "draw-readback",
+                        64,
+                        64,
+                        TextureFormat::Rgba8Unorm,
+                    )?;
+                    let ticket = readback.submit(
+                        held.1.texture(),
+                        crate::core::rhi::TextureSourceLayout::ColorAttachment,
+                    )?;
+                    Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
+                })
+                .expect("the colour target reads back");
+            for (pixel_index, pixel) in rendered.chunks_exact(4).enumerate() {
+                assert_eq!(
+                    pixel, INVERTED_RGBA,
+                    "pixel {pixel_index} must be the inverted seed — the draw read \
+                     `source_image`, by name, and painted the target it was given"
+                );
+            }
+
+            // The bound input left GENERAL for the layout its descriptor
+            // required, which is where the next consumer's barrier starts from.
+            let source_layout = sandbox
+                .escalate(|full| {
+                    Ok(full
+                        .resolve_texture_registration_by_surface_id("draw-source", None, 64, 64)?
+                        .current_layout())
+                })
+                .expect("the source still resolves");
+            assert_eq!(
+                source_layout,
+                streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                "a sampled binding is barriered out of GENERAL into the layout its descriptor \
+                 requires"
+            );
+            drop(held);
+        }
+
+        /// The pixels a draw does not cover are the load op's, and this op
+        /// carries no clear colour of its own — so the handler's choice of
+        /// transparent black over `LOAD` is what they read.
+        ///
+        /// The draw is scissored to the left half of a target seeded with a
+        /// sentinel no stage writes, so nothing but the load op ever touches the
+        /// right half. `LOAD` there reads an attachment the pass has just
+        /// transitioned from `UNDEFINED`, whose contents the spec stops defining
+        /// at that point — on this device the seeded sentinel survives it, which
+        /// is what makes the assertion discriminate.
+        #[test]
+        fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("the_pixels_a_draw_does_not_cover: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let kernel_id = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("reg-scissored", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            )
+            .handle_id;
+
+            let held = sandbox
+                .escalate(|full| {
+                    let source = full.acquire_texture(
+                        &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
+                            .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
+                    )?;
+                    let target = full.acquire_texture(
+                        &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm).with_usage(
+                            TextureUsages::RENDER_ATTACHMENT
+                                | TextureUsages::COPY_SRC
+                                | TextureUsages::COPY_DST,
+                        ),
+                    )?;
+                    full.register_texture("scissored-source", source.texture().clone());
+                    full.register_texture("scissored-target", target.texture().clone());
+
+                    for (texture, surface_id, seed) in [
+                        (source.texture(), "scissored-source", SEED_RGBA),
+                        (
+                            target.texture(),
+                            "scissored-target",
+                            UNCOVERED_SENTINEL_RGBA,
+                        ),
+                    ] {
+                        let (_pool_id, seed_buffer) =
+                            full.acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)?;
+                        let plane = seed_buffer.buffer_ref().plane_base_address(0);
+                        unsafe {
+                            for pixel in 0..(64 * 64) {
+                                std::ptr::copy_nonoverlapping(
+                                    seed.as_ptr(),
+                                    plane.add(pixel * 4),
+                                    4,
+                                );
+                            }
+                        }
+                        full.copy_pixel_buffer_to_texture(
+                            &seed_buffer,
+                            texture,
+                            surface_id,
+                            64,
+                            64,
+                        )?;
+                    }
+                    Ok((source, target))
+                })
+                .expect("a seeded source and a seeded colour target");
+
+            let mut run = make_run_req("run-scissored", &kernel_id, "scissored-target");
+            run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
+                kind: EscalateGraphicsBindingKind::SampledTexture,
+                name: "source_image".to_string(),
+                surface_uuid: "scissored-source".to_string(),
+            }];
+            run.extent_width = 64;
+            run.extent_height = 64;
+            run.scissor = Some(EscalateRequestRunGraphicsDrawScissor {
+                x: 0,
+                y: 0,
+                width: 32,
+                height: 64,
+            });
+            match handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
+                .expect("must produce a response")
+            {
+                EscalateResponse::Ok(_) => {}
+                other => panic!("the scissored draw failed: {other:?}"),
+            }
+
+            let rendered = sandbox
+                .escalate(|full| {
+                    let readback = full.create_texture_readback(
+                        "scissored-readback",
+                        64,
+                        64,
+                        TextureFormat::Rgba8Unorm,
+                    )?;
+                    let ticket = readback.submit(
+                        held.1.texture(),
+                        crate::core::rhi::TextureSourceLayout::ColorAttachment,
+                    )?;
+                    Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
+                })
+                .expect("the colour target reads back");
+            for (pixel_index, pixel) in rendered.chunks_exact(4).enumerate() {
+                if pixel_index % 64 < 32 {
+                    assert_eq!(
+                        pixel, INVERTED_RGBA,
+                        "pixel {pixel_index} is inside the scissor and must be the inverted seed"
+                    );
+                } else {
+                    assert_eq!(
+                        pixel, TRANSPARENT_BLACK_RGBA,
+                        "pixel {pixel_index} is outside the scissor, so nothing painted it — the \
+                         pass must have cleared it rather than loaded contents its own transition \
+                         from UNDEFINED had already discarded"
+                    );
                 }
-                other => panic!("expected DrawIndexed, got {other:?}"),
             }
+            drop(held);
+        }
+
+        /// A draw whose binding and colour target are one texture is refused:
+        /// the pass discards a colour target's contents on entry, so the
+        /// binding would read pixels the draw has already thrown away.
+        #[test]
+        fn a_draw_binding_its_own_colour_target_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_draw_binding_its_own_colour_target: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let kernel_id = register_graphics_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("reg-alias", INVERT_SAMPLED_INPUT_FRAGMENT_GLSL),
+            )
+            .handle_id;
+            let held = sandbox
+                .escalate(|full| {
+                    let texture = full.acquire_texture(
+                        &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm).with_usage(
+                            TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
+                        ),
+                    )?;
+                    full.register_texture("alias-surface", texture.texture().clone());
+                    Ok(texture)
+                })
+                .expect("one texture to name twice");
+
+            let mut run = make_run_req("run-alias", &kernel_id, "alias-surface");
+            run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
+                kind: EscalateGraphicsBindingKind::SampledTexture,
+                name: "source_image".to_string(),
+                surface_uuid: "alias-surface".to_string(),
+            }];
+            run.extent_width = 64;
+            run.extent_height = 64;
+            let message = refusal_message(
+                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
+                    .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("already thrown away"),
+                "must say why the alias is refused, got: {message}"
+            );
+            drop(held);
         }
     }
 
-    /// Tests for the ray-tracing-kernel + acceleration-structure
-    /// escalate ops (issue #667).
+    /// Host-Rust unit tests for the acceleration-structure and ray-tracing
+    /// escalate handlers.
     ///
-    /// Mirrors the `graphics_kernel_dispatch` mod above: a synthetic
-    /// `RecordingRayTracingBridge` keeps the tests independent of a
-    /// working `VkDevice` (and an RT-capable GPU), so handler-shape
-    /// regressions surface even on machines without a GPU.
+    /// Mirrors `graphics_kernel_dispatch`: the wire validation that raises
+    /// before the device gate runs everywhere CI does, and everything that
+    /// builds a structure or a pipeline gates on a device that exposes the
+    /// ray-tracing extension chain.
     #[cfg(target_os = "linux")]
     mod ray_tracing_kernel_dispatch {
         use super::super::*;
         use super::EscalateHandleRegistry;
-        use std::sync::{Arc, Mutex};
 
         use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
             EscalateRequestRegisterAccelerationStructureTlasInstance,
@@ -6361,204 +7725,157 @@ void main() {
             EscalateRequestRegisterRayTracingKernelStage,
             EscalateRequestRunRayTracingKernelBinding,
         };
-        use crate::core::context::{
-            BlasRegisterDecl, GpuContext, GpuContextLimitedAccess, RAY_TRACING_STAGE_INDEX_NONE,
-            RayTracingKernelBridge, RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch,
-            TlasRegisterDecl,
-        };
+        use crate::core::context::GpuContext;
+        use crate::core::rhi::{RayTracingShaderStage, RayTracingShaderStageFlags};
 
-        /// Synthetic bridge — accepts any caller-provided BLAS/TLAS/kernel
-        /// (no SPIR-V reflection or AS build), keys handles by SHA-256
-        /// over the canonicalized inputs so identical descriptors hit
-        /// the cache, and records every `run_kernel` for later assertion.
-        struct RecordingRayTracingBridge {
-            blases: Mutex<std::collections::HashMap<String, BlasRegisterDecl>>,
-            tlases: Mutex<std::collections::HashMap<String, TlasRegisterDecl>>,
-            kernels: Mutex<std::collections::HashMap<String, RayTracingKernelRegisterDecl>>,
-            runs: Mutex<Vec<RayTracingKernelRunDispatch>>,
+        /// Ray tracing is a device capability rather than an installed bridge,
+        /// so there is nothing to set up — only a device to have or not have.
+        fn make_gpu_sandbox_if_available() -> Option<GpuContextLimitedAccess> {
+            GpuContext::init_for_platform_sync()
+                .ok()
+                .map(GpuContextLimitedAccess::new)
         }
 
-        impl RecordingRayTracingBridge {
-            fn new() -> Arc<Self> {
-                Arc::new(Self {
-                    blases: Mutex::new(std::collections::HashMap::new()),
-                    tlases: Mutex::new(std::collections::HashMap::new()),
-                    kernels: Mutex::new(std::collections::HashMap::new()),
-                    runs: Mutex::new(Vec::new()),
-                })
-            }
+        /// A sandbox whose device exposes the `VK_KHR_ray_tracing_pipeline`
+        /// chain — what every structure build and every pipeline build needs.
+        fn make_ray_tracing_sandbox_if_available() -> Option<GpuContextLimitedAccess> {
+            let sandbox = make_gpu_sandbox_if_available()?;
+            let ray_tracing_capable = sandbox
+                .escalate(|full| Ok(full.supports_ray_tracing_pipeline()))
+                .unwrap_or(false);
+            ray_tracing_capable.then_some(sandbox)
+        }
 
-            fn blas_count(&self) -> usize {
-                self.blases.lock().unwrap().len()
-            }
-
-            fn tlas_count(&self) -> usize {
-                self.tlases.lock().unwrap().len()
-            }
-
-            fn kernel_count(&self) -> usize {
-                self.kernels.lock().unwrap().len()
-            }
-
-            fn last_kernel(&self) -> Option<RayTracingKernelRegisterDecl> {
-                self.kernels.lock().unwrap().values().next().cloned()
-            }
-
-            fn last_tlas(&self) -> Option<TlasRegisterDecl> {
-                self.tlases.lock().unwrap().values().next().cloned()
-            }
-
-            fn runs(&self) -> Vec<RayTracingKernelRunDispatch> {
-                self.runs.lock().unwrap().clone()
-            }
-
-            fn blas_key(decl: &BlasRegisterDecl) -> String {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(b"blas|v=");
-                for f in &decl.vertices {
-                    h.update(&f.to_le_bytes());
-                }
-                h.update(b"|i=");
-                for i in &decl.indices {
-                    h.update(&i.to_le_bytes());
-                }
-                format!("{:x}", h.finalize())
-            }
-
-            fn tlas_key(decl: &TlasRegisterDecl) -> String {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(b"tlas|n=");
-                h.update(&(decl.instances.len() as u32).to_le_bytes());
-                for inst in &decl.instances {
-                    h.update(b"|b=");
-                    h.update(inst.blas_id.as_bytes());
-                    h.update(b"|c=");
-                    h.update(&inst.custom_index.to_le_bytes());
-                    h.update(b"|m=");
-                    h.update(&[inst.mask]);
-                }
-                format!("{:x}", h.finalize())
-            }
-
-            fn kernel_key(decl: &RayTracingKernelRegisterDecl) -> String {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(b"k|s=");
-                h.update(&(decl.stages.len() as u32).to_le_bytes());
-                for s in &decl.stages {
-                    h.update(&s.spv);
-                    h.update(b"|");
-                }
-                h.update(b"|g=");
-                h.update(&(decl.groups.len() as u32).to_le_bytes());
-                h.update(b"|nb=");
-                h.update(&(decl.bindings.len() as u32).to_le_bytes());
-                h.update(b"|pcs=");
-                h.update(&decl.push_constant_size.to_le_bytes());
-                h.update(b"|mrd=");
-                h.update(&decl.max_recursion_depth.to_le_bytes());
-                format!("{:x}", h.finalize())
+        fn refusal_message(response: EscalateResponse) -> String {
+            match response {
+                EscalateResponse::Err(err) => err.message,
+                other => panic!("expected Err, got {other:?}"),
             }
         }
 
-        impl RayTracingKernelBridge for RecordingRayTracingBridge {
-            fn register_blas(
-                &self,
-                decl: &BlasRegisterDecl,
-            ) -> std::result::Result<String, String> {
-                if decl.vertices.is_empty() || decl.indices.is_empty() {
-                    return Err("BLAS requires non-empty vertices + indices".into());
-                }
-                let id = Self::blas_key(decl);
-                self.blases
-                    .lock()
-                    .unwrap()
-                    .entry(id.clone())
-                    .or_insert_with(|| decl.clone());
-                Ok(id)
-            }
+        /// Traces one ray per pixel straight down `-Z` at the bound structure
+        /// and writes whatever the hit or miss stage left in the payload. Both
+        /// bindings are resolved by the names this source gives them.
+        const TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL: &str = "\
+#version 460
+#extension GL_EXT_ray_tracing : require
+layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_geometry;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_output;
+layout(location = 0) rayPayloadEXT vec3 traced_colour;
+void main() {
+    vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    vec2 normalized_device_coordinate =
+        pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
+    traced_colour = vec3(0.0);
+    traceRayEXT(
+        scene_geometry,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        0, 0, 0,
+        vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
+        0.001,
+        vec3(0.0, 0.0, -1.0),
+        100.0,
+        0
+    );
+    imageStore(traced_output, ivec2(gl_LaunchIDEXT.xy), vec4(traced_colour, 1.0));
+}
+";
 
-            fn register_tlas(
-                &self,
-                decl: &TlasRegisterDecl,
-            ) -> std::result::Result<String, String> {
-                if decl.instances.is_empty() {
-                    return Err("TLAS must have at least one instance".into());
-                }
-                let blases = self.blases.lock().unwrap();
-                for (i, inst) in decl.instances.iter().enumerate() {
-                    if !blases.contains_key(&inst.blas_id) {
-                        return Err(format!(
-                            "TLAS instance {i} references unknown blas_id '{}'",
-                            inst.blas_id
-                        ));
-                    }
-                }
-                drop(blases);
-                let id = Self::tlas_key(decl);
-                self.tlases
-                    .lock()
-                    .unwrap()
-                    .entry(id.clone())
-                    .or_insert_with(|| decl.clone());
-                Ok(id)
-            }
+        /// The same pass with the payload inverted before it is stored, so
+        /// registering it produces a different pipeline — and therefore a
+        /// different kernel id — from [`TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL`].
+        const TRACE_AND_INVERT_RAY_GEN_GLSL: &str = "\
+#version 460
+#extension GL_EXT_ray_tracing : require
+layout(set = 0, binding = 0) uniform accelerationStructureEXT scene_geometry;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D traced_output;
+layout(location = 0) rayPayloadEXT vec3 traced_colour;
+void main() {
+    vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    vec2 normalized_device_coordinate =
+        pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
+    traced_colour = vec3(0.0);
+    traceRayEXT(
+        scene_geometry,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        0, 0, 0,
+        vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
+        0.001,
+        vec3(0.0, 0.0, -1.0),
+        100.0,
+        0
+    );
+    imageStore(
+        traced_output,
+        ivec2(gl_LaunchIDEXT.xy),
+        vec4(vec3(1.0) - traced_colour, 1.0)
+    );
+}
+";
 
-            fn register_kernel(
-                &self,
-                decl: &RayTracingKernelRegisterDecl,
-            ) -> std::result::Result<String, String> {
-                if decl.stages.is_empty() {
-                    return Err("kernel requires at least one shader stage".into());
-                }
-                if decl.groups.is_empty() {
-                    return Err("kernel requires at least one shader group".into());
-                }
-                let id = Self::kernel_key(decl);
-                self.kernels
-                    .lock()
-                    .unwrap()
-                    .entry(id.clone())
-                    .or_insert_with(|| decl.clone());
-                Ok(id)
-            }
+        /// A ray that hit nothing paints black.
+        const MISS_PAINTS_BLACK_GLSL: &str = "\
+#version 460
+#extension GL_EXT_ray_tracing : require
+layout(location = 0) rayPayloadInEXT vec3 traced_colour;
+void main() {
+    traced_colour = vec3(0.0);
+}
+";
 
-            fn run_kernel(
-                &self,
-                dispatch: &RayTracingKernelRunDispatch,
-            ) -> std::result::Result<(), String> {
-                if !self
-                    .kernels
-                    .lock()
-                    .unwrap()
-                    .contains_key(&dispatch.kernel_id)
-                {
-                    return Err(format!(
-                        "kernel_id '{}' not registered with this bridge",
-                        dispatch.kernel_id
-                    ));
-                }
-                self.runs.lock().unwrap().push(dispatch.clone());
-                Ok(())
+        /// A ray that hit the scene's one triangle paints white, so a traced
+        /// pixel says which of the two stages ran for it.
+        const CLOSEST_HIT_PAINTS_WHITE_GLSL: &str = "\
+#version 460
+#extension GL_EXT_ray_tracing : require
+layout(location = 0) rayPayloadInEXT vec3 traced_colour;
+void main() {
+    traced_colour = vec3(1.0);
+}
+";
+
+        /// A pixel the ray hit, a pixel it missed, and the sentinel the storage
+        /// image is seeded with so an untouched pixel is distinguishable from
+        /// either.
+        const HIT_RGBA: [u8; 4] = [255, 255, 255, 255];
+        const MISSED_RGBA: [u8; 4] = [0, 0, 0, 255];
+        const UNTRACED_SENTINEL_RGBA: [u8; 4] = [255, 0, 255, 255];
+
+        /// One triangle facing the launch grid, centred on the origin so a
+        /// trace over the whole grid both hits and misses it.
+        const A_SCENES_TRIANGLE_VERTICES: &[f32] = &[0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0];
+        const A_SCENES_TRIANGLE_INDICES: &[u32] = &[0, 1, 2];
+
+        const TRACED_GRID_WIDTH: u32 = 64;
+        const TRACED_GRID_HEIGHT: u32 = 64;
+
+        fn bytes_to_hex(bytes: &[u8]) -> String {
+            let mut hex = String::with_capacity(bytes.len() * 2);
+            for byte in bytes {
+                hex.push_str(&format!("{byte:02x}"));
             }
+            hex
         }
 
-        fn make_sandbox_with_bridge(
-            bridge: Option<Arc<dyn RayTracingKernelBridge>>,
-        ) -> Option<GpuContextLimitedAccess> {
-            let gpu = match GpuContext::init_for_platform_sync() {
-                Ok(g) => g,
-                Err(_) => return None,
-            };
-            if let Some(b) = bridge {
-                gpu.set_ray_tracing_kernel_bridge(b);
+        /// Encode `[f32]` as the lowercase hex blob the wire expects.
+        fn vertex_hex(vertices: &[f32]) -> String {
+            let mut bytes = Vec::with_capacity(vertices.len() * 4);
+            for vertex in vertices {
+                bytes.extend_from_slice(&vertex.to_le_bytes());
             }
-            Some(GpuContextLimitedAccess::new(gpu))
+            bytes_to_hex(&bytes)
         }
 
-        // ----- BLAS register tests --------------------------------------
+        /// Encode `[u32]` as the lowercase hex blob the wire expects.
+        fn index_hex(indices: &[u32]) -> String {
+            let mut bytes = Vec::with_capacity(indices.len() * 4);
+            for index in indices {
+                bytes.extend_from_slice(&index.to_le_bytes());
+            }
+            bytes_to_hex(&bytes)
+        }
 
         fn make_blas_req(
             request_id: &str,
@@ -6567,218 +7884,11 @@ void main() {
         ) -> EscalateRequestRegisterAccelerationStructureBlas {
             EscalateRequestRegisterAccelerationStructureBlas {
                 request_id: request_id.to_string(),
-                label: "test-blas".to_string(),
+                label: "a-scenes-triangle".to_string(),
                 vertices_hex: vertices_hex.to_string(),
                 indices_hex: indices_hex.to_string(),
             }
         }
-
-        /// Encode `[f32]` as the lowercase hex blob the wire expects.
-        fn vertex_hex(vs: &[f32]) -> String {
-            let mut bytes = Vec::with_capacity(vs.len() * 4);
-            for v in vs {
-                bytes.extend_from_slice(&v.to_le_bytes());
-            }
-            bytes_to_hex(&bytes)
-        }
-
-        /// Encode `[u32]` as the lowercase hex blob the wire expects.
-        fn index_hex(is: &[u32]) -> String {
-            let mut bytes = Vec::with_capacity(is.len() * 4);
-            for i in is {
-                bytes.extend_from_slice(&i.to_le_bytes());
-            }
-            bytes_to_hex(&bytes)
-        }
-
-        fn bytes_to_hex(b: &[u8]) -> String {
-            let mut s = String::with_capacity(b.len() * 2);
-            for &x in b {
-                s.push_str(&format!("{:02x}", x));
-            }
-            s
-        }
-
-        const TRIANGLE_VERTS: &[f32] = &[
-            0.0, 0.5, 0.0, // top
-            -0.5, -0.5, 0.0, // bottom-left
-            0.5, -0.5, 0.0, // bottom-right
-        ];
-        const TRIANGLE_INDICES: &[u32] = &[0, 1, 2];
-
-        #[test]
-        fn register_blas_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("register_blas_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-blas-1",
-                &vertex_hex(TRIANGLE_VERTS),
-                &index_hex(TRIANGLE_INDICES),
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-blas-1");
-                    assert!(
-                        err.message.contains("RayTracingKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn register_blas_with_invalid_vertex_hex_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_blas_with_invalid_vertex_hex_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-bad-v",
-                "xyz123",
-                &index_hex(TRIANGLE_INDICES),
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-v");
-                    assert!(err.message.contains("vertices_hex"), "got: {}", err.message);
-                }
-                other => panic!("expected Err for bad vertices_hex, got {other:?}"),
-            }
-            assert_eq!(bridge.blas_count(), 0);
-        }
-
-        #[test]
-        fn register_blas_with_misaligned_vertex_blob_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_blas_with_misaligned_vertex_blob_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            // 11 bytes (not a multiple of 12 — should be rejected before the
-            // bridge is even called).
-            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-misaligned-v",
-                &"00".repeat(11),
-                &index_hex(TRIANGLE_INDICES),
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-misaligned-v");
-                    assert!(
-                        err.message.contains("multiple of 12"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for misaligned vertex blob, got {other:?}"),
-            }
-            assert_eq!(bridge.blas_count(), 0);
-        }
-
-        #[test]
-        fn register_blas_with_misaligned_index_blob_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_blas_with_misaligned_index_blob_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            // 8 bytes (not a multiple of 12 — should be rejected).
-            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-misaligned-i",
-                &vertex_hex(TRIANGLE_VERTS),
-                &"00".repeat(8),
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-misaligned-i");
-                    assert!(
-                        err.message.contains("multiple of 12"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for misaligned index blob, got {other:?}"),
-            }
-            assert_eq!(bridge.blas_count(), 0);
-        }
-
-        #[test]
-        fn register_blas_succeeds_and_caches() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_blas_succeeds_and_caches: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req1 = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-blas-a",
-                &vertex_hex(TRIANGLE_VERTS),
-                &index_hex(TRIANGLE_INDICES),
-            ));
-            let resp1 =
-                handle_escalate_op(&sandbox, &registry, req1).expect("must produce a response");
-            let id1 = match resp1 {
-                EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "req-blas-a");
-                    ok.handle_id
-                }
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            // Re-register identical descriptor — bridge cache hit, same id.
-            let req2 = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-blas-b",
-                &vertex_hex(TRIANGLE_VERTS),
-                &index_hex(TRIANGLE_INDICES),
-            ));
-            let resp2 =
-                handle_escalate_op(&sandbox, &registry, req2).expect("must produce a response");
-            let id2 = match resp2 {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok on re-register, got {other:?}"),
-            };
-            assert_eq!(id1, id2, "identical BLAS descriptors must collide on as_id");
-            assert_eq!(bridge.blas_count(), 1, "cache must coalesce identical BLAS");
-        }
-
-        // ----- TLAS register tests --------------------------------------
 
         fn make_tlas_req(
             request_id: &str,
@@ -6786,13 +7896,13 @@ void main() {
         ) -> EscalateRequestRegisterAccelerationStructureTlas {
             EscalateRequestRegisterAccelerationStructureTlas {
                 request_id: request_id.to_string(),
-                label: "test-tlas".to_string(),
+                label: "a-scenes-instance".to_string(),
                 instances: vec![EscalateRequestRegisterAccelerationStructureTlasInstance {
                     blas_id: blas_id.to_string(),
                     transform: vec![
-                        1.0, 0.0, 0.0, 0.0, // row 0
-                        0.0, 1.0, 0.0, 0.0, // row 1
-                        0.0, 0.0, 1.0, 0.0, // row 2
+                        1.0, 0.0, 0.0, 0.0, //
+                        0.0, 1.0, 0.0, 0.0, //
+                        0.0, 0.0, 1.0, 0.0,
                     ],
                     custom_index: 7,
                     mask: 0xff,
@@ -6802,320 +7912,473 @@ void main() {
             }
         }
 
-        #[test]
-        fn register_tlas_with_wrong_transform_length_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_tlas_with_wrong_transform_length_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let mut req = make_tlas_req("req-bad-tx", "blas-x");
-            req.instances[0].transform = vec![1.0; 11]; // wrong length
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RegisterAccelerationStructureTlas(req),
-            )
-            .expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-tx");
-                    assert!(err.message.contains("transform"), "got: {}", err.message);
-                }
-                other => panic!("expected Err for wrong-length transform, got {other:?}"),
+        fn general_group(stage_index: u32) -> EscalateRequestRegisterRayTracingKernelGroup {
+            EscalateRequestRegisterRayTracingKernelGroup {
+                kind: EscalateRequestRegisterRayTracingKernelGroupKind::General,
+                general_stage: stage_index,
+                closest_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
             }
-            assert_eq!(bridge.tlas_count(), 0);
         }
 
-        #[test]
-        fn register_tlas_with_oversized_mask_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_tlas_with_oversized_mask_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let mut req = make_tlas_req("req-bad-mask", "blas-x");
-            req.instances[0].mask = 0xfff; // > 0xff, should be rejected
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RegisterAccelerationStructureTlas(req),
-            )
-            .expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-mask");
-                    assert!(err.message.contains("mask"), "got: {}", err.message);
-                }
-                other => panic!("expected Err for oversized mask, got {other:?}"),
+        fn triangles_hit_group(
+            closest_hit_stage_index: u32,
+        ) -> EscalateRequestRegisterRayTracingKernelGroup {
+            EscalateRequestRegisterRayTracingKernelGroup {
+                kind: EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit,
+                general_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                closest_hit_stage: closest_hit_stage_index,
+                any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
             }
-            assert_eq!(bridge.tlas_count(), 0);
         }
 
-        #[test]
-        fn register_tlas_succeeds_after_blas() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_tlas_succeeds_after_blas: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            // 1. Register a BLAS first to obtain a real as_id.
-            let blas_req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
-                "req-blas",
-                &vertex_hex(TRIANGLE_VERTS),
-                &index_hex(TRIANGLE_INDICES),
-            ));
-            let blas_resp =
-                handle_escalate_op(&sandbox, &registry, blas_req).expect("must produce a response");
-            let blas_id = match blas_resp {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok for BLAS register, got {other:?}"),
-            };
-            // 2. Now register a TLAS pointing at it.
-            let tlas_req = EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
-                "req-tlas", &blas_id,
-            ));
-            let tlas_resp =
-                handle_escalate_op(&sandbox, &registry, tlas_req).expect("must produce a response");
-            let tlas_id = match tlas_resp {
-                EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "req-tlas");
-                    ok.handle_id
-                }
-                other => panic!("expected Ok for TLAS register, got {other:?}"),
-            };
-            assert!(!tlas_id.is_empty(), "TLAS id must be non-empty");
-            // Verify the bridge actually saw the right shape.
-            let tlas_decl = bridge
-                .last_tlas()
-                .expect("bridge must have stored the TLAS decl");
-            assert_eq!(tlas_decl.instances.len(), 1);
-            assert_eq!(tlas_decl.instances[0].blas_id, blas_id);
-            assert_eq!(tlas_decl.instances[0].custom_index, 7);
-            assert_eq!(tlas_decl.instances[0].mask, 0xff);
-            assert_eq!(
-                tlas_decl.instances[0].transform,
-                [
-                    [1.0, 0.0, 0.0, 0.0],
-                    [0.0, 1.0, 0.0, 0.0],
-                    [0.0, 0.0, 1.0, 0.0],
-                ]
-            );
-        }
-
-        #[test]
-        fn register_tlas_with_unknown_blas_id_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_tlas_with_unknown_blas_id_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
-                "req-tlas-bad",
-                "definitely-not-a-real-blas-id",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-tlas-bad");
-                    assert!(
-                        err.message.contains("unknown blas_id"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for unknown blas_id, got {other:?}"),
+        fn stage_from_glsl(
+            stage: EscalateRequestRegisterRayTracingKernelStageStage,
+            source: &str,
+        ) -> EscalateRequestRegisterRayTracingKernelStage {
+            EscalateRequestRegisterRayTracingKernelStage {
+                entry_point: String::new(),
+                source: source.to_string(),
+                spv_hex: String::new(),
+                stage,
             }
-            assert_eq!(bridge.tlas_count(), 0);
         }
 
-        // ----- Kernel register + run tests ------------------------------
-
-        fn make_kernel_req(request_id: &str) -> EscalateRequestRegisterRayTracingKernel {
+        /// The three-stage kernel every registration test starts from, built
+        /// from GLSL — which is what the wire carries now that the engine owns
+        /// compilation. Tests that need a specific shape mutate fields after
+        /// calling.
+        fn register_from_glsl(
+            request_id: &str,
+            ray_gen_source: &str,
+        ) -> EscalateRequestRegisterRayTracingKernel {
             EscalateRequestRegisterRayTracingKernel {
-                request_id: request_id.to_string(),
-                label: "test-rt-kernel".to_string(),
-                stages: vec![
-                    EscalateRequestRegisterRayTracingKernelStage {
-                        source: "".to_string(),
-                        stage: EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
-                        spv_hex: "deadbeef".to_string(),
-                        entry_point: "main".to_string(),
-                    },
-                    EscalateRequestRegisterRayTracingKernelStage {
-                        source: "".to_string(),
-                        stage: EscalateRequestRegisterRayTracingKernelStageStage::Miss,
-                        spv_hex: "cafebabe".to_string(),
-                        entry_point: "main".to_string(),
-                    },
-                    EscalateRequestRegisterRayTracingKernelStage {
-                        source: "".to_string(),
-                        stage: EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
-                        spv_hex: "facefeed".to_string(),
-                        entry_point: "main".to_string(),
-                    },
-                ],
-                groups: vec![
-                    EscalateRequestRegisterRayTracingKernelGroup {
-                        kind: EscalateRequestRegisterRayTracingKernelGroupKind::General,
-                        general_stage: 0,
-                        closest_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                        any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                        intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                    },
-                    EscalateRequestRegisterRayTracingKernelGroup {
-                        kind: EscalateRequestRegisterRayTracingKernelGroupKind::General,
-                        general_stage: 1,
-                        closest_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                        any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                        intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                    },
-                    EscalateRequestRegisterRayTracingKernelGroup {
-                        kind: EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit,
-                        general_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                        closest_hit_stage: 2,
-                        any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                        intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
-                    },
-                ],
                 bindings: vec![
                     EscalateRequestRegisterRayTracingKernelBinding {
-                        binding: 0,
-                        kind: EscalateRequestRegisterRayTracingKernelBindingKind::AccelerationStructure,
-                        stages: 1, // RAYGEN
+                        kind: EscalateRayTracingBindingKind::AccelerationStructure,
+                        name: "scene_geometry".to_string(),
+                        stages: RayTracingShaderStageFlags::RAYGEN.bits(),
                     },
                     EscalateRequestRegisterRayTracingKernelBinding {
-                        binding: 1,
-                        kind: EscalateRequestRegisterRayTracingKernelBindingKind::StorageImage,
-                        stages: 1, // RAYGEN
+                        kind: EscalateRayTracingBindingKind::StorageImage,
+                        name: "traced_output".to_string(),
+                        stages: RayTracingShaderStageFlags::RAYGEN.bits(),
                     },
                 ],
-                push_constant_size: 16,
-                push_constant_stages: 1, // RAYGEN
+                groups: vec![general_group(0), general_group(1), triangles_hit_group(2)],
+                label: "a-tracing-kernel".to_string(),
                 max_recursion_depth: 1,
+                push_constant_size: 0,
+                push_constant_stages: 0,
+                request_id: request_id.to_string(),
+                stages: vec![
+                    stage_from_glsl(
+                        EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
+                        ray_gen_source,
+                    ),
+                    stage_from_glsl(
+                        EscalateRequestRegisterRayTracingKernelStageStage::Miss,
+                        MISS_PAINTS_BLACK_GLSL,
+                    ),
+                    stage_from_glsl(
+                        EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
+                        CLOSEST_HIT_PAINTS_WHITE_GLSL,
+                    ),
+                ],
             }
         }
 
-        fn make_run_req(request_id: &str, kernel_id: &str) -> EscalateRequestRunRayTracingKernel {
+        /// Baseline `run_ray_tracing_kernel` request — the scene bound by the
+        /// raygen's own name for it, the storage image by its own.
+        fn make_run_req(
+            request_id: &str,
+            kernel_id: &str,
+            tlas_id: &str,
+            output_surface_uuid: &str,
+        ) -> EscalateRequestRunRayTracingKernel {
             EscalateRequestRunRayTracingKernel {
-                request_id: request_id.to_string(),
-                kernel_id: kernel_id.to_string(),
                 bindings: vec![
                     EscalateRequestRunRayTracingKernelBinding {
-                        binding: 0,
-                        kind: EscalateRequestRunRayTracingKernelBindingKind::AccelerationStructure,
-                        target_id: "test-tlas-uuid".to_string(),
+                        kind: EscalateRayTracingBindingKind::AccelerationStructure,
+                        name: "scene_geometry".to_string(),
+                        target_id: tlas_id.to_string(),
                     },
                     EscalateRequestRunRayTracingKernelBinding {
-                        binding: 1,
-                        kind: EscalateRequestRunRayTracingKernelBindingKind::StorageImage,
-                        target_id: "test-storage-uuid".to_string(),
+                        kind: EscalateRayTracingBindingKind::StorageImage,
+                        name: "traced_output".to_string(),
+                        target_id: output_surface_uuid.to_string(),
                     },
                 ],
-                push_constants_hex: "00".repeat(16),
-                width: 1280,
-                height: 720,
                 depth: 1,
+                height: TRACED_GRID_HEIGHT,
+                kernel_id: kernel_id.to_string(),
+                push_constants_hex: String::new(),
+                request_id: request_id.to_string(),
+                width: TRACED_GRID_WIDTH,
             }
         }
 
-        #[test]
-        fn register_kernel_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("register_kernel_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-1"));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-k-1");
-                    assert!(
-                        err.message.contains("RayTracingKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn register_kernel_with_invalid_stage_hex_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_kernel_with_invalid_stage_hex_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let mut req = make_kernel_req("req-bad-stage");
-            req.stages[1].spv_hex = "qq".to_string();
+        fn register_ray_tracing_kernel_or_panic(
+            sandbox: &GpuContextLimitedAccess,
+            registry: &EscalateHandleRegistry,
+            req: EscalateRequestRegisterRayTracingKernel,
+        ) -> EscalateResponseOk {
             let response = handle_escalate_op(
-                &sandbox,
-                &registry,
+                sandbox,
+                registry,
                 EscalateRequest::RegisterRayTracingKernel(req),
             )
             .expect("must produce a response");
             match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-stage");
-                    assert!(
-                        err.message.contains("stages[1].spv_hex"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for bad stage SPIR-V hex, got {other:?}"),
+                EscalateResponse::Ok(ok) => ok,
+                other => panic!("registering the ray-tracing kernel failed: {other:?}"),
             }
-            assert_eq!(bridge.kernel_count(), 0);
+        }
+
+        fn register_acceleration_structure_or_panic(
+            sandbox: &GpuContextLimitedAccess,
+            registry: &EscalateHandleRegistry,
+            req: EscalateRequest,
+        ) -> String {
+            let response =
+                handle_escalate_op(sandbox, registry, req).expect("must produce a response");
+            match response {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("registering the acceleration structure failed: {other:?}"),
+            }
+        }
+
+        /// One registered kernel over one registered scene, writing into one
+        /// registered storage image seeded with [`UNTRACED_SENTINEL_RGBA`].
+        ///
+        /// The pooled handle is held for the caller's lifetime: dropping it
+        /// hands the slot back, and the registration would then name a recycled
+        /// texture.
+        struct ARayTracedSceneUnderTest {
+            sandbox: GpuContextLimitedAccess,
+            registry: std::sync::Arc<EscalateHandleRegistry>,
+            kernel_id: String,
+            blas_id: String,
+            tlas_id: String,
+            _held_output: PooledTextureHandle,
+        }
+
+        const A_TRACED_SCENES_OUTPUT_SURFACE_UUID: &str = "traced-output-surface";
+
+        fn make_ray_traced_scene_if_available() -> Option<ARayTracedSceneUnderTest> {
+            let sandbox = make_ray_tracing_sandbox_if_available()?;
+            let registry = EscalateHandleRegistry::new();
+            let blas_id = register_acceleration_structure_or_panic(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                    "scene-blas",
+                    &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+                    &index_hex(A_SCENES_TRIANGLE_INDICES),
+                )),
+            );
+            let tlas_id = register_acceleration_structure_or_panic(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+                    "scene-tlas",
+                    &blas_id,
+                )),
+            );
+            let kernel_id = register_ray_tracing_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("scene-kernel", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+            )
+            .handle_id;
+
+            let held_output = sandbox
+                .escalate(|full| {
+                    let output = full.acquire_texture(
+                        &TexturePoolDescriptor::new(
+                            TRACED_GRID_WIDTH,
+                            TRACED_GRID_HEIGHT,
+                            TextureFormat::Rgba8Unorm,
+                        )
+                        .with_usage(
+                            TextureUsages::STORAGE_BINDING
+                                | TextureUsages::COPY_DST
+                                | TextureUsages::COPY_SRC,
+                        ),
+                    )?;
+                    full.register_texture(
+                        A_TRACED_SCENES_OUTPUT_SURFACE_UUID,
+                        output.texture().clone(),
+                    );
+
+                    let (_pool_id, seed_buffer) = full.acquire_pixel_buffer(
+                        TRACED_GRID_WIDTH,
+                        TRACED_GRID_HEIGHT,
+                        PixelFormat::Rgba32,
+                    )?;
+                    let plane = seed_buffer.buffer_ref().plane_base_address(0);
+                    unsafe {
+                        for pixel in 0..(TRACED_GRID_WIDTH as usize * TRACED_GRID_HEIGHT as usize) {
+                            std::ptr::copy_nonoverlapping(
+                                UNTRACED_SENTINEL_RGBA.as_ptr(),
+                                plane.add(pixel * 4),
+                                4,
+                            );
+                        }
+                    }
+                    full.copy_pixel_buffer_to_texture(
+                        &seed_buffer,
+                        output.texture(),
+                        A_TRACED_SCENES_OUTPUT_SURFACE_UUID,
+                        TRACED_GRID_WIDTH,
+                        TRACED_GRID_HEIGHT,
+                    )?;
+                    Ok(output)
+                })
+                .expect("a seeded storage image to trace into");
+
+            Some(ARayTracedSceneUnderTest {
+                sandbox,
+                registry,
+                kernel_id,
+                blas_id,
+                tlas_id,
+                _held_output: held_output,
+            })
+        }
+
+        impl ARayTracedSceneUnderTest {
+            fn run_req(&self, request_id: &str) -> EscalateRequestRunRayTracingKernel {
+                make_run_req(
+                    request_id,
+                    &self.kernel_id,
+                    &self.tlas_id,
+                    A_TRACED_SCENES_OUTPUT_SURFACE_UUID,
+                )
+            }
+
+            fn trace(&self, req: EscalateRequestRunRayTracingKernel) -> EscalateResponse {
+                handle_escalate_op(
+                    &self.sandbox,
+                    &self.registry,
+                    EscalateRequest::RunRayTracingKernel(req),
+                )
+                .expect("must produce a response")
+            }
+        }
+
+        // ----- wire validation, before any device -----------------------
+
+        /// Both blobs are decoded before the escalate hop, so a malformed one
+        /// is refused without touching the GPU at all.
+        #[test]
+        fn register_blas_with_invalid_vertex_hex_returns_err() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_blas_with_invalid_vertex_hex: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                        "blas-bad-vertices",
+                        "xyz123",
+                        &index_hex(A_SCENES_TRIANGLE_INDICES),
+                    )),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("vertices_hex"), "got: {message}");
         }
 
         #[test]
-        fn register_kernel_with_procedural_missing_intersection_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "register_kernel_with_procedural_missing_intersection_returns_err: \
-                         no GPU — skipping"
-                    );
-                    return;
-                }
+        fn register_blas_with_invalid_index_hex_returns_err() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_blas_with_invalid_index_hex: no GPU — skipping");
+                return;
             };
             let registry = EscalateHandleRegistry::new();
-            let mut req = make_kernel_req("req-bad-proc");
-            // Replace the third group with a procedural_hit that lacks
-            // an intersection stage (sentinel-encoded "absent").
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                        "blas-bad-indices",
+                        &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+                        "xyz123",
+                    )),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("indices_hex"), "got: {message}");
+        }
+
+        /// A blob that is not a whole number of vertices — or of triangles —
+        /// names geometry that does not exist, and is refused before a build.
+        #[test]
+        fn register_blas_with_a_partial_vertex_or_triangle_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_blas_with_a_partial_vertex_or_triangle: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            for (request_id, vertices_hex, indices_hex) in [
+                (
+                    "blas-partial-vertex",
+                    "00".repeat(11),
+                    index_hex(A_SCENES_TRIANGLE_INDICES),
+                ),
+                (
+                    "blas-partial-triangle",
+                    vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+                    "00".repeat(8),
+                ),
+            ] {
+                let message = refusal_message(
+                    handle_escalate_op(
+                        &sandbox,
+                        &registry,
+                        EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                            request_id,
+                            &vertices_hex,
+                            &indices_hex,
+                        )),
+                    )
+                    .expect("must produce a response"),
+                );
+                assert!(
+                    message.contains("multiple of 12"),
+                    "{request_id} got: {message}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_tlas_with_no_instances_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_tlas_with_no_instances: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_tlas_req("tlas-empty", "unused");
+            req.instances.clear();
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterAccelerationStructureTlas(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("at least one instance"), "got: {message}");
+        }
+
+        #[test]
+        fn register_tlas_with_a_transform_that_is_not_a_row_major_3x4_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_tlas_with_a_wrong_length_transform: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_tlas_req("tlas-bad-transform", "unused");
+            req.instances[0].transform = vec![1.0; 11];
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterAccelerationStructureTlas(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("transform"), "got: {message}");
+        }
+
+        #[test]
+        fn register_tlas_with_a_mask_wider_than_eight_bits_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_tlas_with_an_oversized_mask: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_tlas_req("tlas-bad-mask", "unused");
+            req.instances[0].mask = 0xfff;
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterAccelerationStructureTlas(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("mask"), "got: {message}");
+        }
+
+        #[test]
+        fn run_with_invalid_push_constants_hex_returns_err() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("run_with_invalid_push_constants_hex: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_run_req("trace-bad-push", "kernel-x", "tlas-x", "surface-x");
+            req.push_constants_hex = "qq".to_string();
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RunRayTracingKernel(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("push_constants_hex"), "got: {message}");
+        }
+
+        /// A stage mask is a bitfield the caller writes by hand, and a bit
+        /// outside the six ray-tracing stages names a stage no pipeline has a
+        /// module for at all.
+        #[test]
+        fn a_stage_mask_naming_a_bit_no_ray_tracing_stage_owns_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_stage_mask_naming_an_unowned_bit: no GPU — skipping");
+                return;
+            };
+            let bit_no_stage_owns = RayTracingShaderStageFlags::ALL.bits() + 1;
+
+            let mut declaration = register_from_glsl("k", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+            declaration.bindings[0].stages = bit_no_stage_owns;
+            let message = prepare_ray_tracing_kernel_registration(&sandbox, declaration)
+                .err()
+                .expect("a binding declared for a stage no pipeline has must be refused");
+            assert!(
+                message.contains("scene_geometry") && message.contains("no ray-tracing stage owns"),
+                "must name the binding and why the mask is wrong, got: {message}"
+            );
+
+            let mut push_constants = register_from_glsl("k", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+            push_constants.push_constant_stages = bit_no_stage_owns;
+            let message = prepare_ray_tracing_kernel_registration(&sandbox, push_constants)
+                .err()
+                .expect("a push-constant range declared for the same stage must be refused");
+            assert!(
+                message.contains("push_constant_stages"),
+                "must name the field, got: {message}"
+            );
+        }
+
+        /// A procedural hit group without an intersection stage is a group with
+        /// nothing to intersect, and the sentinel is what "absent" looks like on
+        /// a wire where the field is always present.
+        #[test]
+        fn a_procedural_group_leaving_intersection_at_the_sentinel_is_refused() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("a_procedural_group_without_an_intersection: no GPU — skipping");
+                return;
+            };
+            let mut req = register_from_glsl("k-proc", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
             req.groups[2] = EscalateRequestRegisterRayTracingKernelGroup {
                 kind: EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit,
                 general_stage: RAY_TRACING_STAGE_INDEX_NONE,
@@ -7123,293 +8386,604 @@ void main() {
                 any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
                 intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
             };
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::RegisterRayTracingKernel(req),
-            )
-            .expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-proc");
-                    assert!(
-                        err.message.contains("procedural_hit"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!(
-                    "expected Err for procedural_hit missing intersection_stage, got {other:?}"
-                ),
-            }
-            assert_eq!(bridge.kernel_count(), 0);
+            let message = prepare_ray_tracing_kernel_registration(&sandbox, req)
+                .err()
+                .expect("a procedural group with no intersection stage must be refused");
+            assert!(message.contains("procedural_hit"), "got: {message}");
         }
 
-        /// Every ray-tracing stage the wire can name maps to the pipeline stage
-        /// the compiler builds for. `ray_tracing_pipeline_stage_from_wire` is a
-        /// fresh six-arm mapping, and a swapped pair would compile a miss
-        /// shader as a closest-hit without complaint — so each arm is driven
-        /// through the handler with source only that stage can compile.
+        /// A stage's hex is decoded before the escalate hop, and the refusal
+        /// names the stage it came from rather than just "the kernel".
         #[test]
-        fn every_ray_tracing_wire_stage_compiles_glsl_for_the_stage_it_names() {
-            let bridge = RecordingRayTracingBridge::new();
-            let Some(sandbox) = make_sandbox_with_bridge(Some(bridge.clone())) else {
-                println!("ray-tracing GLSL stage mapping: no GPU — skipping");
+        fn register_with_invalid_stage_hex_returns_err() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("register_with_invalid_stage_hex: no GPU — skipping");
                 return;
             };
             let registry = EscalateHandleRegistry::new();
-            // Each body is legal only in its own stage: `rayPayloadEXT` is
-            // raygen-only, `rayPayloadInEXT` is miss/hit-only, and
-            // `reportIntersectionEXT` is intersection-only. A mis-mapped arm
-            // fails to compile rather than quietly producing the wrong module.
-            let stages = [
-                (
-                    EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
-                    "layout(location = 0) rayPayloadEXT vec3 p;\nvoid main() { p = vec3(1.0); }",
-                ),
-                (
-                    EscalateRequestRegisterRayTracingKernelStageStage::Miss,
-                    "layout(location = 0) rayPayloadInEXT vec3 p;\nvoid main() { p = vec3(0.0); }",
-                ),
-                (
-                    EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
-                    "layout(location = 0) rayPayloadInEXT vec3 p;\nvoid main() { p = vec3(0.5); }",
-                ),
-                (
-                    EscalateRequestRegisterRayTracingKernelStageStage::AnyHit,
-                    "layout(location = 0) rayPayloadInEXT vec3 p;\nvoid main() { ignoreIntersectionEXT; }",
-                ),
-                (
-                    EscalateRequestRegisterRayTracingKernelStageStage::Intersection,
-                    "hitAttributeEXT vec2 a;\nvoid main() { reportIntersectionEXT(1.0, 0u); }",
-                ),
-                (
-                    EscalateRequestRegisterRayTracingKernelStageStage::Callable,
-                    "layout(location = 0) callableDataInEXT vec3 c;\nvoid main() { c = vec3(1.0); }",
-                ),
-            ];
-            for (index, (wire_stage, body)) in stages.into_iter().enumerate() {
-                let mut req = make_kernel_req(&format!("rt-glsl-{index}"));
-                req.stages.truncate(1);
-                req.stages[0].stage = wire_stage;
-                req.stages[0].spv_hex = String::new();
-                req.stages[0].source =
-                    format!("#version 460\n#extension GL_EXT_ray_tracing : require\n{body}\n");
-                let response = handle_escalate_op(
+            let mut req = register_from_glsl("k-bad-hex", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+            req.stages[1].source = String::new();
+            req.stages[1].spv_hex = "qq".to_string();
+            let message = refusal_message(
+                handle_escalate_op(
                     &sandbox,
                     &registry,
                     EscalateRequest::RegisterRayTracingKernel(req),
                 )
-                .expect("must produce a response");
-                let kernel_id = match response {
-                    EscalateResponse::Ok(ok) => ok.handle_id,
-                    other => panic!("{wire_stage:?} was refused: {other:?}"),
-                };
-                let kernels = bridge.kernels.lock().unwrap();
-                let decl = kernels.get(&kernel_id).expect("the bridge saw the kernel");
+                .expect("must produce a response"),
+            );
+            assert!(message.contains("stages[1].spv_hex"), "got: {message}");
+        }
+
+        /// Every ray-tracing stage the wire can name compiles for the stage it
+        /// names, and reaches the kernel classified as that stage.
+        ///
+        /// Two separate six-arm mappings run per stage —
+        /// `ray_tracing_pipeline_stage_from_wire` picks what the compiler
+        /// targets and `ray_tracing_stage_from_wire` picks what the shader
+        /// group is built from — so a swapped pair in either would build a miss
+        /// shader as a closest-hit without complaint. Each body below is legal
+        /// only in its own stage: `rayPayloadEXT` is raygen-only,
+        /// `rayPayloadInEXT` is miss/hit-only, `reportIntersectionEXT` is
+        /// intersection-only and `callableDataInEXT` is callable-only, so a
+        /// mis-mapped compile target fails to compile rather than quietly
+        /// producing the wrong module.
+        #[test]
+        fn every_ray_tracing_wire_stage_compiles_for_the_stage_it_names() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("every_ray_tracing_wire_stage_compiles: no GPU — skipping");
+                return;
+            };
+            let stages = [
+                (
+                    EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
+                    RayTracingShaderStage::RayGen,
+                    "layout(location = 0) rayPayloadEXT vec3 payload;\nvoid main() { payload = vec3(1.0); }",
+                ),
+                (
+                    EscalateRequestRegisterRayTracingKernelStageStage::Miss,
+                    RayTracingShaderStage::Miss,
+                    "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { payload = vec3(0.0); }",
+                ),
+                (
+                    EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
+                    RayTracingShaderStage::ClosestHit,
+                    "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { payload = vec3(0.5); }",
+                ),
+                (
+                    EscalateRequestRegisterRayTracingKernelStageStage::AnyHit,
+                    RayTracingShaderStage::AnyHit,
+                    "layout(location = 0) rayPayloadInEXT vec3 payload;\nvoid main() { ignoreIntersectionEXT; }",
+                ),
+                (
+                    EscalateRequestRegisterRayTracingKernelStageStage::Intersection,
+                    RayTracingShaderStage::Intersection,
+                    "hitAttributeEXT vec2 barycentric;\nvoid main() { reportIntersectionEXT(1.0, 0u); }",
+                ),
+                (
+                    EscalateRequestRegisterRayTracingKernelStageStage::Callable,
+                    RayTracingShaderStage::Callable,
+                    "layout(location = 0) callableDataInEXT vec3 callable_payload;\nvoid main() { callable_payload = vec3(1.0); }",
+                ),
+            ];
+            for (index, (wire_stage, expected_stage, body)) in stages.into_iter().enumerate() {
+                let mut req = register_from_glsl(
+                    &format!("rt-glsl-{index}"),
+                    TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL,
+                );
+                req.bindings = Vec::new();
+                req.groups = vec![general_group(0)];
+                req.stages = vec![stage_from_glsl(
+                    wire_stage,
+                    &format!("#version 460\n#extension GL_EXT_ray_tracing : require\n{body}\n"),
+                )];
+                let prepared = prepare_ray_tracing_kernel_registration(&sandbox, req)
+                    .unwrap_or_else(|e| panic!("{wire_stage:?} did not compile as itself: {e}"));
                 assert_eq!(
-                    decl.stages[0].spv.get(..4),
+                    prepared.stages[0].spirv.get(..4),
                     Some(&SPIRV_MAGIC_LE[..]),
-                    "{wire_stage:?} reached the bridge as something other than SPIR-V"
+                    "{wire_stage:?} reached the kernel as something other than SPIR-V"
                 );
                 assert_eq!(
-                    decl.stages[0].stage,
-                    ray_tracing_stage_from_wire(wire_stage)
+                    prepared.stages[0].stage, expected_stage,
+                    "{wire_stage:?} was classified as the wrong pipeline stage"
                 );
             }
         }
 
+        // ----- registration, over a ray-tracing device ------------------
+
+        /// Registration hands back the shape a trace needs: the shaders' own
+        /// names, each with the kind only the shaders know.
         #[test]
-        fn register_kernel_succeeds_and_caches() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("register_kernel_succeeds_and_caches: no GPU — skipping");
-                    return;
-                }
+        fn registration_answers_with_the_shaders_binding_names_and_kinds() {
+            let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+                println!("registration_answers_with_the_shaders_bindings: no RT device — skipping");
+                return;
             };
             let registry = EscalateHandleRegistry::new();
-            let req1 = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-a"));
-            let resp1 =
-                handle_escalate_op(&sandbox, &registry, req1).expect("must produce a response");
-            let id1 = match resp1 {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            let req2 = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-b"));
-            let resp2 =
-                handle_escalate_op(&sandbox, &registry, req2).expect("must produce a response");
-            let id2 = match resp2 {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok, got {other:?}"),
-            };
-            assert_eq!(id1, id2, "identical kernel descriptors must collide on id");
-            assert_eq!(bridge.kernel_count(), 1);
-
-            // Verify the bridge stored what we sent — sanity check on the
-            // wire→domain conversion.
-            let stored = bridge.last_kernel().expect("must have a stored decl");
-            assert_eq!(stored.stages.len(), 3);
-            assert_eq!(stored.groups.len(), 3);
-            assert_eq!(stored.bindings.len(), 2);
-            assert_eq!(stored.push_constant_size, 16);
-            assert_eq!(stored.max_recursion_depth, 1);
-        }
-
-        #[test]
-        fn run_kernel_without_bridge_returns_err() {
-            let sandbox = match make_sandbox_with_bridge(None) {
-                Some(s) => s,
-                None => {
-                    println!("run_kernel_without_bridge_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunRayTracingKernel(make_run_req("req-run-1", "kernel-x"));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-run-1");
-                    assert!(
-                        err.message.contains("RayTracingKernelBridge"),
-                        "expected bridge-not-registered error, got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err when no bridge registered, got {other:?}"),
-            }
-        }
-
-        #[test]
-        fn run_kernel_with_invalid_push_constants_hex_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!(
-                        "run_kernel_with_invalid_push_constants_hex_returns_err: no GPU — skipping"
-                    );
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let mut req = make_run_req("req-bad-push", "kernel-x");
-            req.push_constants_hex = "qq".to_string();
-            let response = handle_escalate_op(
+            let ok = register_ray_tracing_kernel_or_panic(
                 &sandbox,
                 &registry,
-                EscalateRequest::RunRayTracingKernel(req),
+                register_from_glsl("reg", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+            );
+            let bindings = ok.bindings.expect("a register response carries the shape");
+            assert_eq!(
+                bindings
+                    .iter()
+                    .map(|binding| (binding.name.as_str(), binding.kind.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("scene_geometry", "acceleration_structure"),
+                    ("traced_output", "storage_image"),
+                ],
+                "the raygen's own bindings, named and kinded as it declares them"
+            );
+        }
+
+        /// Re-registering an identical kernel is free and keeps its id; a
+        /// different raygen stage is a different pipeline and gets its own.
+        #[test]
+        fn an_identical_registration_keeps_its_kernel_id_and_a_different_one_gets_its_own() {
+            let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+                println!("an_identical_registration_keeps_its_kernel_id: no RT device — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let first = register_ray_tracing_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("a", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+            )
+            .handle_id;
+            let second = register_ray_tracing_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("b", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+            )
+            .handle_id;
+            assert_eq!(
+                first, second,
+                "an identical descriptor must produce the same kernel_id"
+            );
+
+            let other = register_ray_tracing_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("c", TRACE_AND_INVERT_RAY_GEN_GLSL),
+            )
+            .handle_id;
+            assert_ne!(
+                first, other,
+                "a different raygen stage must produce a different kernel_id"
+            );
+
+            let held = sandbox
+                .escalate(|full| {
+                    Ok((
+                        full.ray_tracing_kernel_by_id(&first),
+                        full.ray_tracing_kernel_by_id(&second),
+                    ))
+                })
+                .expect("the cache answers inside an escalate scope");
+            let (a, b) = (held.0.expect("cached"), held.1.expect("cached"));
+            assert!(
+                std::sync::Arc::ptr_eq(&a, &b),
+                "the second registration must reuse the first kernel, not build another"
+            );
+        }
+
+        /// The cache key covers the shaders and the pipeline, not the caller's
+        /// assertion — so a wrong declaration refuses identically whether or
+        /// not somebody registered this kernel first.
+        #[test]
+        fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
+            let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+                println!("a_wrong_declaration_is_refused_when_cached: no RT device — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            register_ray_tracing_kernel_or_panic(
+                &sandbox,
+                &registry,
+                register_from_glsl("warm", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL),
+            );
+
+            let mut req = register_from_glsl("reg-wrong", TRACE_ONE_RAY_PER_PIXEL_RAY_GEN_GLSL);
+            req.bindings = vec![EscalateRequestRegisterRayTracingKernelBinding {
+                kind: EscalateRayTracingBindingKind::StorageBuffer,
+                name: "scene_parameters".to_string(),
+                stages: 0,
+            }];
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterRayTracingKernel(req),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("`scene_parameters`") && message.contains("`scene_geometry`"),
+                "the refusal must name the bogus binding and the shaders' own: {message}"
+            );
+        }
+
+        // ----- acceleration structures, over a ray-tracing device --------
+
+        /// Unlike a kernel, a structure holds device memory proportional to its
+        /// mesh — so every registration mints its own id rather than colliding
+        /// on content, and a TLAS is a different structure from its BLAS.
+        #[test]
+        fn every_acceleration_structure_registration_gets_its_own_id() {
+            let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+                println!("every_acceleration_structure_registration: no RT device — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let first_blas = register_acceleration_structure_or_panic(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                    "blas-a",
+                    &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+                    &index_hex(A_SCENES_TRIANGLE_INDICES),
+                )),
+            );
+            let second_blas = register_acceleration_structure_or_panic(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                    "blas-b",
+                    &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+                    &index_hex(A_SCENES_TRIANGLE_INDICES),
+                )),
+            );
+            assert_ne!(
+                first_blas, second_blas,
+                "an identical mesh registered twice is two structures, not one"
+            );
+
+            let tlas = register_acceleration_structure_or_panic(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+                    "tlas-a",
+                    &first_blas,
+                )),
+            );
+            assert_ne!(tlas, first_blas);
+            assert_ne!(tlas, second_blas);
+        }
+
+        /// A structure is the one escalate-minted resource whose device memory
+        /// is proportional to what the caller supplied, so a long-running helper
+        /// has to be able to hand it back — the same `release_handle` a surface
+        /// is handed back through, since nothing else would reach the registry.
+        #[test]
+        fn a_registered_acceleration_structure_is_released_through_release_handle() {
+            let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+                println!(
+                    "a_registered_acceleration_structure_is_released: no RT device — skipping"
+                );
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let blas = register_acceleration_structure_or_panic(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                    "blas-to-release",
+                    &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
+                    &index_hex(A_SCENES_TRIANGLE_INDICES),
+                )),
+            );
+
+            let released = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+                    request_id: "release-blas".to_string(),
+                    handle_id: blas.clone(),
+                }),
             )
             .expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-bad-push");
-                    assert!(
-                        err.message.contains("push_constants_hex"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for malformed push hex, got {other:?}"),
-            }
-            assert!(bridge.runs().is_empty());
-        }
-
-        #[test]
-        fn run_kernel_with_unknown_kernel_id_returns_err() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("run_kernel_with_unknown_kernel_id_returns_err: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            let req = EscalateRequest::RunRayTracingKernel(make_run_req(
-                "req-run-x",
-                "definitely-not-a-real-kernel-id",
-            ));
-            let response =
-                handle_escalate_op(&sandbox, &registry, req).expect("must produce a response");
-            match response {
-                EscalateResponse::Err(err) => {
-                    assert_eq!(err.request_id, "req-run-x");
-                    assert!(
-                        err.message.contains("not registered"),
-                        "got: {}",
-                        err.message
-                    );
-                }
-                other => panic!("expected Err for unknown kernel_id, got {other:?}"),
-            }
-            assert!(bridge.runs().is_empty());
-        }
-
-        #[test]
-        fn run_kernel_succeeds_after_register() {
-            let bridge = RecordingRayTracingBridge::new();
-            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
-                Some(s) => s,
-                None => {
-                    println!("run_kernel_succeeds_after_register: no GPU — skipping");
-                    return;
-                }
-            };
-            let registry = EscalateHandleRegistry::new();
-            // 1. Register the kernel.
-            let kernel_req = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k"));
-            let kernel_resp = handle_escalate_op(&sandbox, &registry, kernel_req)
-                .expect("must produce a response");
-            let kernel_id = match kernel_resp {
-                EscalateResponse::Ok(ok) => ok.handle_id,
-                other => panic!("expected Ok for kernel register, got {other:?}"),
-            };
-            // 2. Now dispatch it.
-            let run_req =
-                EscalateRequest::RunRayTracingKernel(make_run_req("req-run-k", &kernel_id));
-            let run_resp =
-                handle_escalate_op(&sandbox, &registry, run_req).expect("must produce a response");
-            match run_resp {
-                EscalateResponse::Ok(ok) => {
-                    assert_eq!(ok.request_id, "req-run-k");
-                    assert_eq!(
-                        ok.handle_id, kernel_id,
-                        "Ok response must echo kernel_id back"
-                    );
-                }
-                other => panic!("expected Ok for run, got {other:?}"),
-            }
-            // Verify the bridge actually saw the dispatch with the right
-            // shape.
-            let runs = bridge.runs();
-            assert_eq!(runs.len(), 1);
-            assert_eq!(runs[0].kernel_id, kernel_id);
-            assert_eq!(runs[0].width, 1280);
-            assert_eq!(runs[0].height, 720);
-            assert_eq!(runs[0].depth, 1);
-            assert_eq!(runs[0].bindings.len(), 2);
-            assert_eq!(runs[0].push_constants.len(), 16);
-            // Lock the per-binding wire→domain conversion: a handler
-            // bug that swapped, dropped, or overwrote `target_id`
-            // during conversion would slip past the length check
-            // alone. The test request used "test-tlas-uuid" for
-            // binding 0 (acceleration_structure) and
-            // "test-storage-uuid" for binding 1 (storage_image).
-            assert_eq!(runs[0].bindings[0].binding, 0);
-            assert_eq!(runs[0].bindings[0].target_id, "test-tlas-uuid");
-            assert_eq!(
-                runs[0].bindings[0].kind,
-                RayTracingBindingKindWire::AccelerationStructure
+            assert!(
+                matches!(released, EscalateResponse::Ok(_)),
+                "releasing a registered structure must succeed: {released:?}"
             );
-            assert_eq!(runs[0].bindings[1].binding, 1);
-            assert_eq!(runs[0].bindings[1].target_id, "test-storage-uuid");
+
+            // The id is gone, not merely unreferenced: a second release finds
+            // nothing, and a trace naming it would too.
+            let released_twice = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+                    request_id: "release-blas-again".to_string(),
+                    handle_id: blas,
+                }),
+            )
+            .expect("must produce a response");
+            let message = refusal_message(released_twice);
+            assert!(message.contains("not found in registry"), "{message}");
+        }
+
+        #[test]
+        fn a_tlas_instance_naming_an_unregistered_structure_is_refused() {
+            let Some(sandbox) = make_ray_tracing_sandbox_if_available() else {
+                println!(
+                    "a_tlas_instance_naming_an_unregistered_structure: no RT device — skipping"
+                );
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            let message = refusal_message(
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+                        "tlas-unknown",
+                        "definitely-not-a-registered-structure",
+                    )),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("names no acceleration structure registered under id"),
+                "got: {message}"
+            );
+        }
+
+        /// A TLAS instance references a bottom-level structure. Naming a
+        /// top-level one is a caller mistake the registry can catch, and every
+        /// id looks alike from the outside.
+        #[test]
+        fn a_tlas_instance_naming_a_top_level_structure_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("a_tlas_instance_naming_a_top_level_structure: no RT device — skipping");
+                return;
+            };
+            let message = refusal_message(
+                handle_escalate_op(
+                    &scene.sandbox,
+                    &scene.registry,
+                    EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+                        "tlas-over-tlas",
+                        &scene.tlas_id,
+                    )),
+                )
+                .expect("must produce a response"),
+            );
+            assert!(
+                message.contains("is a top-level structure"),
+                "got: {message}"
+            );
+        }
+
+        // ----- tracing, over a ray-tracing device ------------------------
+
+        #[test]
+        fn tracing_with_an_unregistered_kernel_id_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("tracing_with_an_unregistered_kernel_id: no RT device — skipping");
+                return;
+            };
+            let mut req = scene.run_req("trace-unknown-kernel");
+            req.kernel_id = "definitely-not-a-registered-kernel".to_string();
+            let message = refusal_message(scene.trace(req));
+            assert!(
+                message.contains("no kernel registered under id"),
+                "got: {message}"
+            );
+        }
+
+        /// An acceleration-structure binding resolves through the structure
+        /// registry rather than through a surface, so an id no registration
+        /// minted is refused there rather than falling through to the surface
+        /// planner and getting a surface's error text.
+        #[test]
+        fn a_trace_naming_an_unregistered_acceleration_structure_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("a_trace_naming_an_unregistered_structure: no RT device — skipping");
+                return;
+            };
+            let mut req = scene.run_req("trace-unknown-structure");
+            req.bindings[0].target_id = "definitely-not-a-registered-structure".to_string();
+            let message = refusal_message(scene.trace(req));
+            assert!(
+                message.contains("binding `scene_geometry` names no acceleration structure"),
+                "must name the binding, got: {message}"
+            );
+        }
+
+        /// The structure a trace binds is the top-level one a
+        /// `register_acceleration_structure_tlas` returned; a BLAS id is the
+        /// same shape of string and would otherwise reach the descriptor.
+        #[test]
+        fn a_trace_binding_a_bottom_level_structure_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("a_trace_binding_a_bottom_level_structure: no RT device — skipping");
+                return;
+            };
+            let mut req = scene.run_req("trace-blas");
+            req.bindings[0].target_id = scene.blas_id.clone();
+            let message = refusal_message(scene.trace(req));
+            assert!(
+                message.contains("is a bottom-level structure"),
+                "got: {message}"
+            );
+        }
+
+        /// The acceleration structure never reaches the surface planner, so its
+        /// missing-binding rule is enforced separately — and has to fire.
+        #[test]
+        fn a_declared_acceleration_structure_left_out_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("a_declared_acceleration_structure_left_out: no RT device — skipping");
+                return;
+            };
+            let mut req = scene.run_req("trace-no-structure");
+            req.bindings
+                .retain(|binding| binding.name != "scene_geometry");
+            let message = refusal_message(scene.trace(req));
+            assert!(
+                message.contains("binding `scene_geometry` was not supplied"),
+                "must name the missing binding, got: {message}"
+            );
+            assert!(
+                message.contains("do not persist between traces"),
+                "must say why there is no fallback, got: {message}"
+            );
+        }
+
+        /// Supplying the structure under another kind would otherwise send it
+        /// to the surface planner, which would look for a surface named by an
+        /// `as_id`.
+        #[test]
+        fn an_acceleration_structure_supplied_as_another_kind_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("an_acceleration_structure_supplied_as_another_kind: no RT — skipping");
+                return;
+            };
+            let mut req = scene.run_req("trace-wrong-kind");
+            req.bindings[0].kind = EscalateRayTracingBindingKind::StorageImage;
+            let message = refusal_message(scene.trace(req));
+            assert!(
+                message.contains("binding `scene_geometry` was supplied as storage_image"),
+                "must name the binding and the kind supplied, got: {message}"
+            );
+            assert!(
+                message.contains("declares it acceleration_structure"),
+                "must name the kind the kernel declares, got: {message}"
+            );
+        }
+
+        /// The whole array is checked before the acceleration structures are
+        /// split out of it, so a name supplied twice is refused whichever half
+        /// the second copy would land in — and by the one rule the surface
+        /// planner spells, not a second wording of it.
+        #[test]
+        fn a_name_supplied_twice_is_refused() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("a_name_supplied_twice: no RT device — skipping");
+                return;
+            };
+            let mut req = scene.run_req("trace-twice");
+            let structure_binding = req.bindings[0].clone();
             assert_eq!(
-                runs[0].bindings[1].kind,
-                RayTracingBindingKindWire::StorageImage
+                structure_binding.name, "scene_geometry",
+                "the duplicate has to be the structure, which the surface planner never sees"
+            );
+            req.bindings.push(structure_binding);
+            let message = refusal_message(scene.trace(req));
+            assert!(
+                message.contains("binding `scene_geometry` was supplied twice"),
+                "must name the duplicate, got: {message}"
+            );
+            assert!(
+                message.contains("`traced_output`"),
+                "must name every binding this kernel declares, got: {message}"
+            );
+            assert!(
+                message.contains("exactly once per trace"),
+                "must state the rule in the caller's own noun, got: {message}"
+            );
+        }
+
+        /// The op end to end, over a real device: a trace resolves the scene
+        /// and the storage image by the raygen's own names for them, launches
+        /// the grid, and leaves the engine's layout record agreeing with the
+        /// layout the trace left the image in.
+        ///
+        /// The storage image is seeded by a transfer with a sentinel no stage
+        /// can produce, so a trace that bound nothing fails on the pixels
+        /// rather than passing on undefined contents — and because that seed
+        /// leaves the image in `TRANSFER_DST_OPTIMAL`, a trace that did not
+        /// barrier its bound inputs would write it through a descriptor its
+        /// layout does not satisfy. Both the hit and the miss stage must have
+        /// run, which is what proves the structure reached the descriptor.
+        #[test]
+        fn a_trace_resolves_its_bindings_by_name_and_writes_the_storage_image() {
+            let Some(scene) = make_ray_traced_scene_if_available() else {
+                println!("a_trace_resolves_its_bindings_by_name: no RT device — skipping");
+                return;
+            };
+            match scene.trace(scene.run_req("trace-scene")) {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "trace-scene");
+                    assert_eq!(
+                        ok.handle_id, scene.kernel_id,
+                        "the trace response echoes the kernel_id"
+                    );
+                    assert!(
+                        ok.timeline_value.is_none(),
+                        "run_ray_tracing_kernel responses carry no timeline"
+                    );
+                }
+                other => panic!("the trace failed: {other:?}"),
+            }
+
+            // Asserted before the readback, which transitions the image itself:
+            // an unpublished layout would leave the next consumer's barrier
+            // naming an oldLayout the image has already left.
+            let published = scene
+                .sandbox
+                .escalate(|full| {
+                    Ok(full
+                        .resolve_texture_registration_by_surface_id(
+                            A_TRACED_SCENES_OUTPUT_SURFACE_UUID,
+                            None,
+                            TRACED_GRID_WIDTH,
+                            TRACED_GRID_HEIGHT,
+                        )?
+                        .current_layout())
+                })
+                .expect("the storage image still resolves");
+            assert_eq!(
+                published,
+                streamlib_consumer_rhi::VulkanLayout::GENERAL,
+                "the trace must publish the layout it left the storage image in"
+            );
+
+            let traced = scene
+                .sandbox
+                .escalate(|full| {
+                    let readback = full.create_texture_readback(
+                        "trace-readback",
+                        TRACED_GRID_WIDTH,
+                        TRACED_GRID_HEIGHT,
+                        TextureFormat::Rgba8Unorm,
+                    )?;
+                    let ticket = readback.submit(
+                        scene._held_output.texture(),
+                        crate::core::rhi::TextureSourceLayout::General,
+                    )?;
+                    Ok(readback.wait_and_read(ticket, 2_000_000_000)?.to_vec())
+                })
+                .expect("the storage image reads back");
+
+            let mut hit_pixels = 0usize;
+            let mut missed_pixels = 0usize;
+            for (pixel_index, pixel) in traced.chunks_exact(4).enumerate() {
+                if pixel == HIT_RGBA {
+                    hit_pixels += 1;
+                } else if pixel == MISSED_RGBA {
+                    missed_pixels += 1;
+                } else {
+                    panic!(
+                        "pixel {pixel_index} is {pixel:?}, which no stage of this kernel writes — \
+                         the trace left the seeded sentinel, so `traced_output` was never written"
+                    );
+                }
+            }
+            assert!(
+                hit_pixels > 0,
+                "no pixel hit the scene's triangle — `scene_geometry` did not reach the descriptor"
+            );
+            assert!(
+                missed_pixels > 0,
+                "every pixel hit, so the launch grid never left the triangle and the miss stage \
+                 proved nothing"
             );
         }
     }

@@ -14,6 +14,10 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::{Error, Result};
 
+use super::kernel_binding_names::{
+    quote_declared_shader_binding_names, refuse_a_descriptor_set_other_than_set_0,
+};
+
 /// Kind of resource bound at a particular slot in a compute kernel's
 /// descriptor set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,14 +38,15 @@ pub enum ComputeBindingKind {
     StorageImage,
 }
 
-/// The subset of [`ComputeBindingKind`] a dispatch can name a surface for.
+/// The subset of any kernel's binding kinds that a dispatch, draw or trace
+/// can name a surface for.
 ///
 /// Narrower than its parent on purpose: a caller holding this has already
 /// refused the buffer and samplerless kinds, so every match on it is total
 /// with no panic arm to keep in sync. It also carries the image layout the
 /// descriptor requires, which is what a batch's barriers move a texture into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SurfaceBoundComputeBindingKind {
+pub enum SurfaceBoundKernelBindingKind {
     /// Written through `imageStore`; the descriptor requires `GENERAL`.
     StorageImage,
     /// Read through a combined sampler; the descriptor requires
@@ -50,8 +55,8 @@ pub enum SurfaceBoundComputeBindingKind {
 }
 
 #[cfg(target_os = "linux")]
-impl SurfaceBoundComputeBindingKind {
-    /// The image layout this kind's descriptor requires at dispatch.
+impl SurfaceBoundKernelBindingKind {
+    /// The image layout this kind's descriptor requires when the pipeline runs.
     pub fn required_image_layout(self) -> streamlib_consumer_rhi::VulkanLayout {
         match self {
             Self::StorageImage => streamlib_consumer_rhi::VulkanLayout::GENERAL,
@@ -86,18 +91,6 @@ pub struct ComputeBindingSpec {
 pub struct ComputeBindingDeclaration {
     pub name: String,
     pub kind: ComputeBindingKind,
-}
-
-/// Render a shader's declared binding names for an error message.
-pub(crate) fn quote_declared_shader_binding_names(names: &[&str]) -> String {
-    if names.is_empty() {
-        return "no named bindings".to_string();
-    }
-    names
-        .iter()
-        .map(|name| format!("`{name}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Check a caller's binding declarations against what the shader's reflection
@@ -228,7 +221,7 @@ pub struct ComputeKernelDescriptor<'a> {
 /// derives the descriptor shape from reflection alone. Keeps the wire format
 /// minimal and the binding-shape source-of-truth in the shader.
 ///
-/// Rejects multi-set kernels — only descriptor set 0 is supported, matching
+/// Rejects any descriptor set other than set 0, matching
 /// `VulkanComputeKernel`'s contract.
 ///
 /// Every derived spec carries the shader's own name for its binding. A blob
@@ -245,12 +238,7 @@ pub fn derive_bindings_from_spirv(spv: &[u8]) -> Result<(Vec<ComputeBindingSpec>
         ))
     })?;
 
-    if sets.len() > 1 {
-        return Err(Error::GpuError(format!(
-            "Only descriptor set 0 is supported; SPIR-V uses sets {:?}",
-            sets.keys().collect::<Vec<_>>()
-        )));
-    }
+    refuse_a_descriptor_set_other_than_set_0("Compute kernel", None::<&str>, sets.keys().copied())?;
 
     let mut bindings: Vec<ComputeBindingSpec> = Vec::new();
     if let Some(set0) = sets.get(&0) {
@@ -309,6 +297,10 @@ fn spirv_type_to_kind(ty: RDescriptorType) -> Option<ComputeBindingKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::rhi::spirv_module_rewriting_for_tests::{
+        move_binding_to_another_descriptor_set_in_spirv_module,
+        strip_every_debug_name_from_spirv_module,
+    };
 
     // SPIR-V test fixtures live next to `vulkan_compute_kernel.rs` and are
     // built by `libs/streamlib/build.rs`. Reflection is a host-architecture
@@ -467,7 +459,7 @@ mod tests {
         // the engine only through the pre-compiled-SPIR-V escape hatch, and
         // it cannot be bound by name at all — so it fails here, at
         // construction, rather than confusingly at first dispatch.
-        let stripped = strip_debug_names(blend_spv(2));
+        let stripped = strip_every_debug_name_from_spirv_module(blend_spv(2));
         let err = derive_bindings_from_spirv(&stripped)
             .err()
             .expect("a name-stripped blob must be refused");
@@ -476,29 +468,6 @@ mod tests {
             msg.contains("carries no name") && msg.contains("glslc -g"),
             "the refusal must name the cause and the fix, got: {msg}"
         );
-    }
-
-    /// Drop every `OpName` (opcode 5) from a SPIR-V module, reproducing what
-    /// `glslc -O` emits without `-g`.
-    fn strip_debug_names(spv: &[u8]) -> Vec<u8> {
-        const HEADER_WORDS: usize = 5;
-        const OP_NAME: u16 = 5;
-        let words: Vec<u32> = spv
-            .chunks_exact(4)
-            .map(|w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
-            .collect();
-        let mut kept: Vec<u32> = words[..HEADER_WORDS].to_vec();
-        let mut at = HEADER_WORDS;
-        while at < words.len() {
-            let word_count = (words[at] >> 16) as usize;
-            let opcode = (words[at] & 0xffff) as u16;
-            assert!(word_count > 0, "malformed SPIR-V instruction");
-            if opcode != OP_NAME {
-                kept.extend_from_slice(&words[at..at + word_count]);
-            }
-            at += word_count;
-        }
-        kept.iter().flat_map(|w| w.to_le_bytes()).collect()
     }
 
     #[test]
@@ -516,6 +485,24 @@ mod tests {
         assert_ne!(
             spirv_type_to_kind(RDescriptorType::COMBINED_IMAGE_SAMPLER),
             Some(ComputeBindingKind::SampledImage),
+        );
+    }
+
+    #[test]
+    fn a_shader_whose_only_set_is_not_set_0_is_refused_at_derive() {
+        let moved_to_set_1 =
+            move_binding_to_another_descriptor_set_in_spirv_module(blend_spv(2), 0, 1);
+        let message = match derive_bindings_from_spirv(&moved_to_set_1) {
+            Ok((derived, _)) => panic!(
+                "a binding outside set 0 cannot be bound, so it cannot be dropped in silence; \
+                 derive returned {} binding(s)",
+                derived.len()
+            ),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            message.contains("only descriptor set 0 is supported") && message.contains('1'),
+            "the refusal must name the unsupported set: {message}"
         );
     }
 

@@ -15,7 +15,7 @@ binary no longer exports still reads as complete.
 
 from pathlib import Path
 from types import TracebackType
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, TypeVar, final, overload
 
 from typing_extensions import disjoint_base
@@ -24,9 +24,12 @@ _EscalateResult = TypeVar("_EscalateResult")
 _BagReadTarget = TypeVar("_BagReadTarget")
 
 __all__ = [
+    "AccelerationStructureHandle",
     "AddedProcessor",
     "ComputeKernel",
+    "GraphicsKernel",
     "KernelDispatchBatch",
+    "RayTracingKernel",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
@@ -440,6 +443,106 @@ class GpuContextFullAccess:
         `storage_image`, `uniform_buffer`.
         """
 
+    def create_graphics_kernel(
+        self,
+        color_attachment_formats: Sequence[str],
+        vertex_source: str | None = None,
+        vertex_spirv: bytes | None = None,
+        vertex_entry_point: str = "main",
+        fragment_source: str | None = None,
+        fragment_spirv: bytes | None = None,
+        fragment_entry_point: str = "main",
+        push_constant_size: int = 0,
+        bindings: dict[str, str | tuple[str, Sequence[str]]] | None = None,
+        label: str = "",
+        topology: str = "triangle_list",
+        polygon_mode: str = "fill",
+        cull_mode: str = "none",
+        front_face: str = "counter_clockwise",
+        line_width: float = 1.0,
+        color_write_channels: str = "rgba",
+        color_blend: Mapping[str, str] | None = None,
+        dynamic_state: str = "viewport_scissor",
+    ) -> GraphicsKernel:
+        """Build a graphics kernel from GLSL sources, or from pre-compiled SPIR-V.
+
+        Constructed once in `setup()`, drawn per frame in `process()`. The
+        engine compiles both stages and reflects them at construction, taking
+        its binding names from them — those names are what `draw` resolves
+        against. Re-creating an identical kernel is free of compilation.
+
+        Each stage takes `*_source` or `*_spirv`, never both. The vertices are
+        the shaders' own: no vertex or index buffer is reachable from a Python
+        processor, so a vertex stage fabricates its positions from
+        `gl_VertexIndex`. The pass attaches colour targets only, so the
+        pipeline carries no depth state.
+
+        `bindings` optionally asserts the shape against reflection — `{name:
+        kind}`, or `{name: (kind, stages)}` to assert which stages read a
+        binding. Each kind is one of `sampled_texture`, `storage_buffer`,
+        `storage_image`, `uniform_buffer`; each stage is `vertex` or
+        `fragment`.
+
+        `color_blend` is `None` for no blending, or a mapping of any of
+        `src_color_factor`, `dst_color_factor`, `color_op`,
+        `src_alpha_factor`, `dst_alpha_factor`, `alpha_op` — the rest default
+        to source-alpha-over.
+        """
+
+    def create_ray_tracing_kernel(
+        self,
+        stages: Sequence[Mapping[str, Any]],
+        groups: Sequence[Mapping[str, Any]],
+        max_recursion_depth: int = 1,
+        push_constant_size: int = 0,
+        bindings: dict[str, str | tuple[str, Sequence[str]]] | None = None,
+        label: str = "",
+    ) -> RayTracingKernel:
+        """Build a ray-tracing kernel from GLSL sources, or from pre-compiled SPIR-V.
+
+        `stages` is one mapping per shader module — `{"stage": "ray_gen",
+        "source": …}`, where `stage` is one of `ray_gen`, `miss`,
+        `closest_hit`, `any_hit`, `intersection`, `callable`, and the module
+        itself is `source` or `spirv` with an optional `entry_point`.
+
+        `groups` says how the shader binding table is laid out over them:
+        `{"kind": "general", "general_stage": 0}`, `{"kind": "triangles_hit",
+        "closest_hit_stage": 2}`, or `{"kind": "procedural_hit",
+        "intersection_stage": 3}`. A group names its modules by index into
+        `stages`, because two modules can fill the same stage.
+
+        `bindings` takes the same shape `create_graphics_kernel` does, plus the
+        `acceleration_structure` kind.
+        """
+
+    def build_triangles_blas(
+        self,
+        vertices: Sequence[float],
+        indices: Sequence[int],
+        label: str = "",
+    ) -> AccelerationStructureHandle:
+        """Build a bottom-level acceleration structure over triangle geometry.
+
+        `vertices` is `[x, y, z, x, y, z, …]` and `indices` is three per
+        triangle. The returned handle is what `build_tlas` places in a scene.
+        """
+
+    def build_tlas(
+        self,
+        instances: Sequence[Mapping[str, Any]],
+        label: str = "",
+    ) -> AccelerationStructureHandle:
+        """Build the top-level acceleration structure a trace binds.
+
+        Each instance names its `blas` and, optionally, the row-major 3×4
+        `transform` that places it (12 floats, identity by default), its 8-bit
+        `mask`, its 24-bit `custom_index`, its `sbt_record_offset`, and its
+        geometry `flags` — some of `triangle_facing_cull_disable`,
+        `triangle_flip_facing`, `force_opaque`, `force_no_opaque`.
+
+        The structure keeps every bottom-level one it references alive.
+        """
+
     def kernel_dispatch_batch(self) -> KernelDispatchBatch:
         """Open a scope that records several dispatches and runs them as one.
 
@@ -591,6 +694,92 @@ class ComputeKernel:
 
         Returns when the GPU work has retired and the writes are visible.
         """
+
+@final
+class GraphicsKernel:
+    """A graphics kernel the engine built and holds, drawn by name.
+
+    Constructed in `setup()` where the capability is Full, drawn per frame in
+    `process()`. No kernel handle string, fence, timeline or slot number
+    reaches Python — the object is the handle.
+    """
+
+    @property
+    def binding_names(self) -> list[str]:
+        """The shaders' own names for this kernel's bindings, in slot order."""
+
+    def draw(
+        self,
+        bindings: dict[str, GpuSurfaceHandle | str],
+        color_targets: Sequence[GpuSurfaceHandle | str],
+        extent: tuple[int, int],
+        vertex_count: int,
+        instance_count: int = 1,
+        first_vertex: int = 0,
+        first_instance: int = 0,
+        push_constants: bytes | None = None,
+    ) -> None:
+        """Render one offscreen pass, binding each declared resource by name.
+
+        Exactly one colour target, `extent` pixels of it. The pass discards
+        what the target held and starts from transparent black, so a draw
+        paints the whole frame it publishes.
+
+        Bindings never persist on the kernel, so every draw supplies all of
+        them. Supplying an unknown name or omitting a declared one raises
+        before anything is submitted. Each binding's kind comes from the
+        shaders' own reflection, never from the caller.
+
+        Returns when the GPU work has retired and the pixels are visible.
+        """
+
+@final
+class RayTracingKernel:
+    """A ray-tracing kernel the engine built and holds, traced by name.
+
+    Constructed in `setup()` where the capability is Full, traced per frame in
+    `process()`. No kernel handle string, fence, timeline or slot number
+    reaches Python — the object is the handle.
+    """
+
+    @property
+    def binding_names(self) -> list[str]:
+        """The shaders' own names for this kernel's bindings, in slot order."""
+
+    def trace(
+        self,
+        bindings: dict[str, GpuSurfaceHandle | AccelerationStructureHandle | str],
+        grid: tuple[int, int, int],
+        push_constants: bytes | None = None,
+    ) -> None:
+        """Trace a `(width, height, depth)` grid of rays.
+
+        An `acceleration_structure` binding takes the handle `build_tlas`
+        returned; every other kind takes a surface. Bindings never persist on
+        the kernel, so every trace supplies all of them, and an unknown or
+        omitted name raises before anything is submitted.
+
+        Returns when the GPU work has retired and the writes are visible.
+        """
+
+@final
+class AccelerationStructureHandle:
+    """An acceleration structure the engine built and holds.
+
+    The object is the handle: a bottom-level structure is placed in a scene by
+    `build_tlas`, and the top-level one it returns is what a trace binds. No id
+    string reaches Python, and nothing publishes an acceleration structure for
+    another processor to resolve.
+
+    The engine holds the structure's device memory for as long as this object
+    lives, and releases it when the last reference goes away. A scene keeps
+    every bottom-level structure it instances alive, so dropping a BLAS a live
+    TLAS uses frees nothing until the TLAS goes too.
+    """
+
+    @property
+    def label(self) -> str:
+        """The name this structure was built under, as engine logs show it."""
 
 @final
 class KernelDispatchBatch:
