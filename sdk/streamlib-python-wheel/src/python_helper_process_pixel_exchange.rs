@@ -41,7 +41,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::{
-    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
+    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
+    ConsumerVulkanTimelineSemaphore, TextureFormat, VulkanLayout,
 };
 
 #[cfg(target_os = "linux")]
@@ -223,6 +224,189 @@ impl HelperCheckedOutPixelSurface {
     }
 }
 
+/// A texture-backed surface this helper imported: the engine's tiled image
+/// reconstructed as a `VkImage` on this process's own device, plus the
+/// timeline edges and the layout cell that keep the crossing coordinated.
+///
+/// No host mapping exists — the memory is tiled DEVICE_LOCAL. What this arm
+/// offers is the image itself for this process's Vulkan work, and the fds it
+/// was checked out with for native code that imports memory.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperCheckedOutTextureSurface {
+    pub(crate) surface_id: String,
+    pub(crate) consumer_texture: ConsumerVulkanTexture,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: TextureFormat,
+    /// True when the registration's handle type is OPAQUE_FD — the fds then
+    /// import through Vulkan/CUDA external memory, never as DMA-BUFs.
+    pub(crate) handle_is_opaque_fd: bool,
+    /// The host allocation's byte size, from the registration — what a
+    /// native import must pass to its own allocator.
+    pub(crate) allocation_byte_size: u64,
+    /// The producer's edge of the single-writer-per-edge pair, when the
+    /// registration carried one. This side only ever waits on it; today the
+    /// escalate dispatch is synchronous so the wait is satisfied at import,
+    /// and the join exists so an async producer cannot tear frames under a
+    /// consumer built to wait.
+    #[expect(
+        dead_code,
+        reason = "held so the imported semaphore outlives the image it orders; \
+                  the import-time wait is the only read today"
+    )]
+    produce_done_timeline: Option<ConsumerVulkanTimelineSemaphore>,
+    /// This side's edge, signalled once at release.
+    consume_done_timeline: Option<ConsumerVulkanTimelineSemaphore>,
+    /// The layout this side's image sits in — seeded from the checkout's
+    /// published cell, republished at release so the next consumer's acquire
+    /// barrier names the right source.
+    current_image_layout: VulkanLayout,
+    /// The checkout lease this surface owes the surface-share service.
+    #[expect(
+        dead_code,
+        reason = "settled by its own Drop; nothing reads it, and that is the point"
+    )]
+    release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
+    /// The plane fds this checkout was delivered, kept so `export_dma_buf`
+    /// can hand the texture itself to native code.
+    exported_plane_fds: Vec<OwnedFd>,
+    pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
+}
+
+#[cfg(target_os = "linux")]
+impl HelperCheckedOutTextureSurface {
+    /// A DMA-BUF fd for the texture's first plane and the allocation's
+    /// byte size — the handle itself, not a linear view of it.
+    ///
+    /// Refused by name for an OPAQUE_FD-flavoured texture: that fd is not
+    /// a DMA-BUF, and handing it out under this name would fail at the
+    /// receiver's EGL or V4L2 import with a driver error instead of here.
+    pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
+        if self.handle_is_opaque_fd {
+            return Err(PyRuntimeError::new_err(
+                "this texture's memory is OPAQUE_FD-flavoured: it imports through Vulkan or \
+                 CUDA external memory, not as a DMA-BUF. Only an explicit-DRM-modifier \
+                 DMA-BUF texture exports under this name",
+            ));
+        }
+        let first_plane_fd = self.exported_plane_fds.first().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "this texture was checked out with no plane fd to export; nothing to hand to \
+                 native code",
+            )
+        })?;
+        let exported = first_plane_fd.try_clone().map_err(|duplicate_failure| {
+            PyRuntimeError::new_err(format!(
+                "could not duplicate this texture's DMA-BUF fd: {duplicate_failure}"
+            ))
+        })?;
+        Ok((exported.into_raw_fd(), self.allocation_byte_size))
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HelperCheckedOutTextureSurface {
+    /// The release half of the crossing: signal this side's consume edge,
+    /// hand queue-family ownership back, republish the layout. Best-effort
+    /// throughout — a parent that is gone reclaims everything with the
+    /// connection — and the lease debt field settles after this body.
+    fn drop(&mut self) {
+        let mut release_failures: Vec<String> = Vec::new();
+        if let Some(consume_done) = &self.consume_done_timeline {
+            let signalled = consume_done
+                .current_value()
+                .and_then(|value| consume_done.signal_host(value + 1));
+            if let Err(signal_failure) = signalled {
+                release_failures.push(format!("consume_done signal failed: {signal_failure}"));
+            }
+        }
+        if self.current_image_layout.0 != VulkanLayout::UNDEFINED.0 {
+            if let Err(barrier_failure) = self
+                .consumer_texture
+                .release_to_foreign_layout(self.current_image_layout, self.current_image_layout)
+            {
+                release_failures.push(format!("QFOT release failed: {barrier_failure}"));
+            }
+            if let Err(publish_failure) = self
+                .exchange_client
+                .publish_image_layout_to_surface_share(&self.surface_id, self.current_image_layout.0)
+            {
+                release_failures.push(format!("layout publish failed: {publish_failure}"));
+            }
+        }
+        if !release_failures.is_empty() {
+            let surface_id = self.surface_id.clone();
+            Python::attach(|python| {
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "releasing texture surface {surface_id} left the crossing uncoordinated \
+                         ({}); the service reclaims the claim when this helper's connection \
+                         closes",
+                        release_failures.join("; ")
+                    ),
+                );
+            });
+        }
+    }
+}
+
+/// The two backings one surface id can resolve to, behind one checkout and
+/// one lifetime story.
+#[cfg(target_os = "linux")]
+pub(crate) enum HelperCheckedOutSurface {
+    PixelBuffer(HelperCheckedOutPixelSurface),
+    Texture(HelperCheckedOutTextureSurface),
+}
+
+#[cfg(target_os = "linux")]
+impl HelperCheckedOutSurface {
+    pub(crate) fn surface_id(&self) -> &str {
+        match self {
+            Self::PixelBuffer(pixel_surface) => &pixel_surface.surface_id,
+            Self::Texture(texture_surface) => &texture_surface.surface_id,
+        }
+    }
+
+    pub(crate) fn width(&self) -> u32 {
+        match self {
+            Self::PixelBuffer(pixel_surface) => pixel_surface.width,
+            Self::Texture(texture_surface) => texture_surface.width,
+        }
+    }
+
+    pub(crate) fn height(&self) -> u32 {
+        match self {
+            Self::PixelBuffer(pixel_surface) => pixel_surface.height,
+            Self::Texture(texture_surface) => texture_surface.height,
+        }
+    }
+
+    /// The snake-case format name the Python surface spells.
+    pub(crate) fn format_wire_name(&self) -> &'static str {
+        match self {
+            Self::PixelBuffer(pixel_surface) => pixel_surface.format.wire_name(),
+            Self::Texture(texture_surface) => texture_surface.format.wire_name(),
+        }
+    }
+
+    pub(crate) fn exchange_client(&self) -> &Arc<HelperProcessGpuExchangeClient> {
+        match self {
+            Self::PixelBuffer(pixel_surface) => &pixel_surface.exchange_client,
+            Self::Texture(texture_surface) => &texture_surface.exchange_client,
+        }
+    }
+
+    /// A DMA-BUF fd for the surface's first plane plus its byte size,
+    /// whichever backing answers.
+    pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
+        match self {
+            Self::PixelBuffer(pixel_surface) => pixel_surface.export_dma_buf(),
+            Self::Texture(texture_surface) => texture_surface.export_dma_buf(),
+        }
+    }
+}
+
 /// What the parent answered when asked to open a surface's device export.
 ///
 /// A struct rather than eight positional arguments: `staging_byte_size`
@@ -370,6 +554,12 @@ pub(crate) struct HelperProcessGpuExchangeClient {
 #[cfg(target_os = "linux")]
 const DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
 
+/// Bound on the import-time join of a texture's produce_done edge. The
+/// wait targets a value the producer already signalled, so reaching this
+/// bound means a wedged device, not a slow producer.
+#[cfg(target_os = "linux")]
+const TEXTURE_IMPORT_PRODUCE_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
+
 /// The binding shape a `register_*_kernel` response carries, in slot order.
 ///
 /// All three register ops answer with the same array — a dispatch resolves by
@@ -511,19 +701,27 @@ impl HelperProcessGpuExchangeClient {
             escalate_request_to_parent: self.escalate_request_to_parent.clone_ref(python),
             handle_id: handle_id.clone(),
         };
-        let mut checked_out = python.detach(|| self.check_out_and_import(&handle_id))?;
-        checked_out.release_to_parent = Some(release_to_parent);
-        Ok(checked_out)
+        let checked_out = python.detach(|| self.check_out_and_import(&handle_id))?;
+        let HelperCheckedOutSurface::PixelBuffer(mut checked_out_pixel_surface) = checked_out
+        else {
+            return Err(PyRuntimeError::new_err(format!(
+                "acquire_pixel_buffer's allocation {handle_id:?} resolved to a texture \
+                 registration; a pool cannot answer a buffer acquire with an image"
+            )));
+        };
+        checked_out_pixel_surface.release_to_parent = Some(release_to_parent);
+        Ok(checked_out_pixel_surface)
     }
 
-    /// Check out a surface another processor published. No release debt:
-    /// the surface belongs to its acquirer.
+    /// Check out a surface another processor published — pixel buffer or
+    /// texture, whichever its registration names. No release debt: the
+    /// surface belongs to its acquirer.
     #[cfg(target_os = "linux")]
     pub(crate) fn resolve_surface(
         self: &Arc<Self>,
         python: Python<'_>,
         surface_id: &str,
-    ) -> PyResult<HelperCheckedOutPixelSurface> {
+    ) -> PyResult<HelperCheckedOutSurface> {
         python.detach(|| self.check_out_and_import(surface_id))
     }
 
@@ -547,12 +745,13 @@ impl HelperProcessGpuExchangeClient {
         })
     }
 
-    /// `check_out` over the surface-share socket, then the DMA-BUF import.
+    /// `check_out` over the surface-share socket, then the import of
+    /// whichever backing the registration names.
     #[cfg(target_os = "linux")]
     fn check_out_and_import(
         self: &Arc<Self>,
         surface_id: &str,
-    ) -> PyResult<HelperCheckedOutPixelSurface> {
+    ) -> PyResult<HelperCheckedOutSurface> {
         let (response, received_fds) = self.check_out_surface(surface_id)?;
         self.import_checked_out_surface(surface_id, &response, received_fds)
     }
@@ -1122,31 +1321,56 @@ impl HelperProcessGpuExchangeClient {
         }))
     }
 
-    /// Validate the checkout metadata and turn the plane fds into mapped
-    /// memory. The fds are `OwnedFd`s, so every early return closes them by
-    /// scope rather than by remembering to.
+    /// Publish the layout this side left a texture in, so the next
+    /// consumer's acquire barrier names the right source layout.
+    #[cfg(target_os = "linux")]
+    fn publish_image_layout_to_surface_share(
+        &self,
+        surface_id: &str,
+        current_image_layout_raw: i32,
+    ) -> PyResult<()> {
+        let (response, _no_fds) = self.surface_share_request(&serde_json::json!({
+            "op": "update_layout",
+            "surface_id": surface_id,
+            "current_image_layout": current_image_layout_raw,
+        }))?;
+        if let Some(publish_error) = response.get("error").and_then(|value| value.as_str()) {
+            return Err(PyRuntimeError::new_err(format!(
+                "the surface-share service refused the layout publish for {surface_id:?}: \
+                 {publish_error}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Validate the checkout metadata and turn the plane fds into this
+    /// process's view of the surface — mapped memory for a pixel buffer, an
+    /// imported `VkImage` for a texture. The fds are `OwnedFd`s, so every
+    /// early return closes them by scope rather than by remembering to.
     #[cfg(target_os = "linux")]
     fn import_checked_out_surface(
         self: &Arc<Self>,
         surface_id: &str,
         response: &serde_json::Value,
         received_fds: Vec<OwnedFd>,
-    ) -> PyResult<HelperCheckedOutPixelSurface> {
+    ) -> PyResult<HelperCheckedOutSurface> {
         refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), response)?;
 
-        // Trailing timeline-semaphore fds arrive after the plane fds when the
-        // registration carried them. A pixel-buffer checkout carries none
-        // today; peeled rather than assumed absent, so a registration that
-        // gains them cannot corrupt the plane list.
-        let trailing_timeline_fd_count = ["has_produce_done_fd", "has_consume_done_fd"]
-            .into_iter()
-            .filter(|flag| {
-                response
-                    .get(flag)
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false)
-            })
-            .count();
+        // Trailing timeline-semaphore fds arrive after the plane fds when
+        // the registration carried them — texture registrations do; a
+        // pixel-buffer checkout carries none today. Peeled rather than
+        // assumed absent, so a registration that gains them cannot corrupt
+        // the plane list.
+        let has_timeline_fd = |flag: &str| {
+            response
+                .get(flag)
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        };
+        let has_produce_done_fd = has_timeline_fd("has_produce_done_fd");
+        let has_consume_done_fd = has_timeline_fd("has_consume_done_fd");
+        let trailing_timeline_fd_count =
+            usize::from(has_produce_done_fd) + usize::from(has_consume_done_fd);
         if received_fds.len() < trailing_timeline_fd_count + 1 {
             return Err(PyRuntimeError::new_err(format!(
                 "check_out of {surface_id:?} returned {} fds, fewer than the {} its metadata \
@@ -1156,7 +1380,31 @@ impl HelperProcessGpuExchangeClient {
             )));
         }
         let mut plane_fds = received_fds;
-        drop(plane_fds.split_off(plane_fds.len() - trailing_timeline_fd_count));
+        let mut trailing_timeline_fds = plane_fds
+            .split_off(plane_fds.len() - trailing_timeline_fd_count)
+            .into_iter();
+        let produce_done_fd = has_produce_done_fd
+            .then(|| trailing_timeline_fds.next())
+            .flatten();
+        let consume_done_fd = has_consume_done_fd
+            .then(|| trailing_timeline_fds.next())
+            .flatten();
+
+        let resource_type = response
+            .get("resource_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("pixel_buffer");
+        if resource_type == "texture" {
+            return self
+                .import_checked_out_texture(
+                    surface_id,
+                    response,
+                    plane_fds,
+                    produce_done_fd,
+                    consume_done_fd,
+                )
+                .map(HelperCheckedOutSurface::Texture);
+        }
 
         let handle_type = response
             .get("handle_type")
@@ -1255,14 +1503,250 @@ impl HelperProcessGpuExchangeClient {
             }
         };
 
-        Ok(HelperCheckedOutPixelSurface {
+        Ok(HelperCheckedOutSurface::PixelBuffer(
+            HelperCheckedOutPixelSurface {
+                surface_id: surface_id.to_string(),
+                consumer_buffer,
+                width,
+                height,
+                format,
+                bytes_per_row,
+                release_to_parent: None,
+                release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
+                    exchange_client: Arc::clone(self),
+                    surface_id: surface_id.to_string(),
+                },
+                exported_plane_fds: plane_fds,
+                exchange_client: Arc::clone(self),
+            },
+        ))
+    }
+
+    /// The texture arm of a checkout: rebuild the engine's tiled image on
+    /// this process's device from the flavour the registration carries,
+    /// join the timeline pair, and take the published layout as this
+    /// side's starting point.
+    #[cfg(target_os = "linux")]
+    fn import_checked_out_texture(
+        self: &Arc<Self>,
+        surface_id: &str,
+        response: &serde_json::Value,
+        plane_fds: Vec<OwnedFd>,
+        produce_done_fd: Option<OwnedFd>,
+        consume_done_fd: Option<OwnedFd>,
+    ) -> PyResult<HelperCheckedOutTextureSurface> {
+        let required_positive_u32_metadata_field = |field: &str| -> PyResult<u32> {
+            response
+                .get(field)
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    PyRuntimeError::new_err(format!(
+                        "check_out of {surface_id:?} carried no usable {field}"
+                    ))
+                })
+        };
+        let width = required_positive_u32_metadata_field("width")?;
+        let height = required_positive_u32_metadata_field("height")?;
+        let format_debug_name = response
+            .get("format")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let format = TextureFormat::from_debug_name(format_debug_name).ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "texture {surface_id:?} is registered with format {format_debug_name:?}, \
+                 which this consumer does not know"
+            ))
+        })?;
+        let allocation_byte_size = response
+            .get("vk_image_allocation_size")
+            .and_then(|value| value.as_u64())
+            .filter(|size| *size > 0)
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "texture {surface_id:?} was registered without its allocation byte size; \
+                     binding imported memory of unknown extent reads past the allocation \
+                     instead of failing here"
+                ))
+            })?;
+        let current_image_layout = VulkanLayout(
+            response
+                .get("current_image_layout")
+                .and_then(|value| value.as_i64())
+                .unwrap_or(0) as i32,
+        );
+        let handle_type = response
+            .get("handle_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("dma_buf");
+
+        let vulkan_device = self.consumer_vulkan_device()?;
+        // Import from dups so the originals stay this surface's to export —
+        // the same ownership dance the pixel arm documents.
+        let dup_fds: Vec<OwnedFd> = plane_fds
+            .iter()
+            .map(|plane_fd| {
+                plane_fd.try_clone().map_err(|duplicate_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "could not duplicate a plane fd for import: {duplicate_failure}"
+                    ))
+                })
+            })
+            .collect::<PyResult<_>>()?;
+        let dup_raw_fds: Vec<RawFd> = dup_fds.into_iter().map(OwnedFd::into_raw_fd).collect();
+        // Vulkan takes fd ownership only on success; a refused single-plane
+        // fd is ours to close. Multi-plane failure ownership is ambiguous
+        // and bounded by plane count, exactly as on the pixel arm.
+        let close_dups_on_import_failure = |dup_raw_fds: &[RawFd]| {
+            if let [only_plane_fd] = dup_raw_fds {
+                // SAFETY: an fd Vulkan refused ownership of; ours alone.
+                unsafe { libc::close(*only_plane_fd) };
+            }
+        };
+        let consumer_texture = match handle_type {
+            "opaque_fd" => {
+                let [memory_fd] = dup_raw_fds[..] else {
+                    close_dups_on_import_failure(&dup_raw_fds);
+                    return Err(PyRuntimeError::new_err(format!(
+                        "opaque_fd texture {surface_id:?} arrived with {} fds; its whole \
+                         allocation travels as exactly one",
+                        dup_raw_fds.len()
+                    )));
+                };
+                ConsumerVulkanTexture::from_opaque_fd(
+                    &vulkan_device,
+                    memory_fd,
+                    width,
+                    height,
+                    format,
+                    allocation_byte_size,
+                )
+            }
+            "dma_buf" => {
+                let drm_format_modifier = response
+                    .get("drm_format_modifier")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                if drm_format_modifier == 0 {
+                    close_dups_on_import_failure(&dup_raw_fds);
+                    return Err(PyRuntimeError::new_err(format!(
+                        "texture {surface_id:?} was registered without an explicit DRM \
+                         modifier: its image layout is driver-opaque and no other process \
+                         can reconstruct it. Acquire the texture with a cross-process-\
+                         importable flavour (a render-attachment usage, or a CUDA-mappable \
+                         format within the OPAQUE_FD usage set)"
+                    )));
+                }
+                let plane_u64_array = |field: &str| -> Vec<u64> {
+                    response
+                        .get(field)
+                        .and_then(|value| value.as_array())
+                        .map(|entries| entries.iter().filter_map(|entry| entry.as_u64()).collect())
+                        .unwrap_or_default()
+                };
+                let plane_offsets = plane_u64_array("plane_offsets");
+                let plane_strides = plane_u64_array("plane_strides");
+                ConsumerVulkanTexture::import_render_target_dma_buf(
+                    &vulkan_device,
+                    &dup_raw_fds,
+                    &plane_offsets,
+                    &plane_strides,
+                    drm_format_modifier,
+                    width,
+                    height,
+                    format,
+                    allocation_byte_size,
+                )
+            }
+            other => {
+                close_dups_on_import_failure(&dup_raw_fds);
+                return Err(PyRuntimeError::new_err(format!(
+                    "texture {surface_id:?} is registered with handle type {other:?}, which \
+                     this consumer does not know"
+                )));
+            }
+        };
+        let consumer_texture = consumer_texture.map_err(|import_failure| {
+            close_dups_on_import_failure(&dup_raw_fds);
+            PyRuntimeError::new_err(format!(
+                "Vulkan could not import texture {surface_id:?} ({handle_type}): \
+                 {import_failure}"
+            ))
+        })?;
+
+        // Both timeline imports must land or the join is a fiction — an
+        // edge that failed to import refuses the checkout by name.
+        let import_timeline_edge =
+            |edge_name: &str, edge_fd: Option<OwnedFd>| -> PyResult<Option<ConsumerVulkanTimelineSemaphore>> {
+                let Some(edge_fd) = edge_fd else {
+                    return Ok(None);
+                };
+                let raw_edge_fd = edge_fd.into_raw_fd();
+                match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+                    &vulkan_device,
+                    raw_edge_fd,
+                ) {
+                    Ok(imported_edge) => Ok(Some(imported_edge)),
+                    Err(import_failure) => {
+                        // SAFETY: Vulkan takes fd ownership only on success.
+                        unsafe { libc::close(raw_edge_fd) };
+                        Err(PyRuntimeError::new_err(format!(
+                            "texture {surface_id:?}'s {edge_name} timeline would not import \
+                             ({import_failure}); a consumer outside the timeline pair is an \
+                             unsynchronised reader"
+                        )))
+                    }
+                }
+            };
+        let produce_done_timeline = import_timeline_edge("produce_done", produce_done_fd)?;
+        let consume_done_timeline = import_timeline_edge("consume_done", consume_done_fd)?;
+
+        // Join the producer's edge: order after the last completed write it
+        // signalled. Today's escalate dispatch is synchronous, so the wait
+        // is satisfied at import; it exists so an async producer cannot
+        // tear a frame under a consumer built to wait.
+        if let Some(produce_done) = &produce_done_timeline {
+            let last_signalled = produce_done.current_value().map_err(|read_failure| {
+                PyRuntimeError::new_err(format!(
+                    "texture {surface_id:?}'s produce_done timeline would not answer its \
+                     current value: {read_failure}"
+                ))
+            })?;
+            produce_done
+                .wait(last_signalled, TEXTURE_IMPORT_PRODUCE_WAIT_TIMEOUT_NS)
+                .map_err(|wait_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "waiting on texture {surface_id:?}'s produce_done timeline failed: \
+                         {wait_failure}"
+                    ))
+                })?;
+        }
+
+        // The consumer-side acquire barrier per the layout protocol: start
+        // this side's layout tracking from the layout the producer
+        // published. A no-op when the published layout is UNDEFINED.
+        consumer_texture
+            .acquire_from_foreign_layout(current_image_layout)
+            .map_err(|acquire_failure| {
+                PyRuntimeError::new_err(format!(
+                    "the QFOT acquire barrier for texture {surface_id:?} failed \
+                     ({acquire_failure}); an image whose layout tracking never started is \
+                     not usable"
+                ))
+            })?;
+
+        Ok(HelperCheckedOutTextureSurface {
             surface_id: surface_id.to_string(),
-            consumer_buffer,
+            consumer_texture,
             width,
             height,
             format,
-            bytes_per_row,
-            release_to_parent: None,
+            handle_is_opaque_fd: handle_type == "opaque_fd",
+            allocation_byte_size,
+            produce_done_timeline,
+            consume_done_timeline,
+            current_image_layout,
             release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
                 exchange_client: Arc::clone(self),
                 surface_id: surface_id.to_string(),

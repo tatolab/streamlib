@@ -1479,6 +1479,11 @@ impl SurfaceStoreInner {
                 "plane_offsets": plane_offsets,
                 "plane_strides": plane_strides,
                 "drm_format_modifier": drm_format_modifier,
+                // The host allocation's byte size, which a consumer-side
+                // `import_render_target_dma_buf` must pass to
+                // `vkAllocateMemory` — deriving it from extent × stride
+                // under-sizes tiled allocations and fails the bind.
+                "vk_image_allocation_size": texture.vulkan_inner().vma_allocation_size() as u64,
                 "has_produce_done_fd": produce_done_fd.is_some(),
                 "has_consume_done_fd": consume_done_fd.is_some(),
                 // The producer's declared `VkImageLayout`: the

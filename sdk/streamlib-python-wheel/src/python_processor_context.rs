@@ -37,7 +37,7 @@ use crate::python_gpu_surface_pixel_exchange::{
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    HelperAcquiredTexture, HelperCheckedOutPixelSurface, HelperProcessGraphicsDraw,
+    HelperAcquiredTexture, HelperCheckedOutSurface, HelperProcessGraphicsDraw,
     HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
     HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
 };
@@ -155,17 +155,19 @@ impl PythonGpuSurfaceHandle {
         }
     }
 
-    /// A surface a helper process checked out of its parent: consumer-imported
-    /// memory behind the same handle surface the engine path mints.
+    /// A surface a helper process checked out of its parent — pixel buffer
+    /// or texture, whichever the registration named — behind the same handle
+    /// surface the engine path mints.
     #[cfg(target_os = "linux")]
-    fn from_helper_checked_out_surface(checked_out: HelperCheckedOutPixelSurface) -> Self {
-        let surface_id = checked_out.surface_id.clone();
-        let (width, height, format) = (checked_out.width, checked_out.height, checked_out.format);
+    fn from_helper_checked_out_surface(checked_out: HelperCheckedOutSurface) -> Self {
+        let surface_id = checked_out.surface_id().to_string();
+        let (width, height) = (checked_out.width(), checked_out.height());
+        let format_wire_name = checked_out.format_wire_name().to_string();
         Self::new(
             Some(surface_id.clone()),
             width,
             height,
-            format.wire_name().to_string(),
+            format_wire_name,
             // The release an acquired surface owes its parent rides the
             // debt inside the checked-out value, so this holds nothing but
             // the value and the id it travels under.
@@ -615,7 +617,7 @@ impl PythonGpuContextLimitedAccess {
                 pixel_format.wire_name(),
             )?;
             return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
-                checked_out,
+                HelperCheckedOutSurface::PixelBuffer(checked_out),
             ));
         }
         let _ = (python, width, height, pixel_format);
@@ -751,7 +753,7 @@ impl PythonGpuContextFullAccess {
                 pixel_format.wire_name(),
             )?;
             return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
-                checked_out,
+                HelperCheckedOutSurface::PixelBuffer(checked_out),
             ));
         }
         let _ = (python, width, height, pixel_format);

@@ -43,6 +43,35 @@ impl TextureFormat {
     pub fn is_srgb(&self) -> bool {
         matches!(self, Self::Rgba8UnormSrgb | Self::Bgra8UnormSrgb)
     }
+
+    /// Parse the `Debug` spelling (`"Rgba8Unorm"`) — the form the
+    /// surface-share texture registration writes on the wire.
+    pub fn from_debug_name(name: &str) -> Option<Self> {
+        match name {
+            "Rgba8Unorm" => Some(Self::Rgba8Unorm),
+            "Rgba8UnormSrgb" => Some(Self::Rgba8UnormSrgb),
+            "Bgra8Unorm" => Some(Self::Bgra8Unorm),
+            "Bgra8UnormSrgb" => Some(Self::Bgra8UnormSrgb),
+            "Rgba16Float" => Some(Self::Rgba16Float),
+            "Rgba32Float" => Some(Self::Rgba32Float),
+            "Nv12" => Some(Self::Nv12),
+            _ => None,
+        }
+    }
+
+    /// The lowercase snake-case name the escalate wire and the Python
+    /// surface spell this format as.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Self::Rgba8Unorm => "rgba8_unorm",
+            Self::Rgba8UnormSrgb => "rgba8_unorm_srgb",
+            Self::Bgra8Unorm => "bgra8_unorm",
+            Self::Bgra8UnormSrgb => "bgra8_unorm_srgb",
+            Self::Rgba16Float => "rgba16_float",
+            Self::Rgba32Float => "rgba32_float",
+            Self::Nv12 => "nv12",
+        }
+    }
 }
 
 /// Texture usage flags.
