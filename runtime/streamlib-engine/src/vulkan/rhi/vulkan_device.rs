@@ -2516,8 +2516,7 @@ impl HostVulkanDevice {
         self: &Arc<Self>,
         desc: &TextureDescriptor,
     ) -> Result<HostVulkanTexture> {
-        let Some(fourcc) =
-            drm_modifier_probe::fourcc::drm_fourcc_for_texture_format(desc.format)
+        let Some(fourcc) = drm_modifier_probe::fourcc::drm_fourcc_for_texture_format(desc.format)
         else {
             return Err(Error::GpuError(format!(
                 "create_texture_render_target_dma_buf: format {:?} has no DRM FOURCC \

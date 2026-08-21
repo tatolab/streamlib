@@ -330,9 +330,11 @@ impl Drop for HelperCheckedOutTextureSurface {
             {
                 release_failures.push(format!("QFOT release failed: {barrier_failure}"));
             }
-            if let Err(publish_failure) = self
-                .exchange_client
-                .publish_image_layout_to_surface_share(&self.surface_id, self.current_image_layout.0)
+            if let Err(publish_failure) =
+                self.exchange_client.publish_image_layout_to_surface_share(
+                    &self.surface_id,
+                    self.current_image_layout.0,
+                )
             {
                 release_failures.push(format!("layout publish failed: {publish_failure}"));
             }
@@ -1486,8 +1488,7 @@ impl HelperProcessGpuExchangeClient {
                      registration; check_in registers pixel buffers only"
                 )));
             };
-            checked_out_pixel_surface.unregister_foreign_from_surface_share =
-                Some(unregister_debt);
+            checked_out_pixel_surface.unregister_foreign_from_surface_share = Some(unregister_debt);
             Ok(checked_out_pixel_surface)
         })?;
         Ok(checked_out)
@@ -1846,28 +1847,29 @@ impl HelperProcessGpuExchangeClient {
 
         // Both timeline imports must land or the join is a fiction — an
         // edge that failed to import refuses the checkout by name.
-        let import_timeline_edge =
-            |edge_name: &str, edge_fd: Option<OwnedFd>| -> PyResult<Option<ConsumerVulkanTimelineSemaphore>> {
-                let Some(edge_fd) = edge_fd else {
-                    return Ok(None);
-                };
-                let raw_edge_fd = edge_fd.into_raw_fd();
-                match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
-                    &vulkan_device,
-                    raw_edge_fd,
-                ) {
-                    Ok(imported_edge) => Ok(Some(imported_edge)),
-                    Err(import_failure) => {
-                        // SAFETY: Vulkan takes fd ownership only on success.
-                        unsafe { libc::close(raw_edge_fd) };
-                        Err(PyRuntimeError::new_err(format!(
-                            "texture {surface_id:?}'s {edge_name} timeline would not import \
+        let import_timeline_edge = |edge_name: &str,
+                                    edge_fd: Option<OwnedFd>|
+         -> PyResult<Option<ConsumerVulkanTimelineSemaphore>> {
+            let Some(edge_fd) = edge_fd else {
+                return Ok(None);
+            };
+            let raw_edge_fd = edge_fd.into_raw_fd();
+            match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+                &vulkan_device,
+                raw_edge_fd,
+            ) {
+                Ok(imported_edge) => Ok(Some(imported_edge)),
+                Err(import_failure) => {
+                    // SAFETY: Vulkan takes fd ownership only on success.
+                    unsafe { libc::close(raw_edge_fd) };
+                    Err(PyRuntimeError::new_err(format!(
+                        "texture {surface_id:?}'s {edge_name} timeline would not import \
                              ({import_failure}); a consumer outside the timeline pair is an \
                              unsynchronised reader"
-                        )))
-                    }
+                    )))
                 }
-            };
+            }
+        };
         let produce_done_timeline = import_timeline_edge("produce_done", produce_done_fd)?;
         let consume_done_timeline = import_timeline_edge("consume_done", consume_done_fd)?;
 
@@ -2116,9 +2118,8 @@ mod foreign_dma_buf_adoption_tests {
 
     /// A sized memfd standing in for a foreign DMA-BUF.
     fn a_foreign_memory_fd() -> OwnedFd {
-        let raw_fd = unsafe {
-            libc::memfd_create(c"adopted-foreign-plane".as_ptr(), libc::MFD_CLOEXEC)
-        };
+        let raw_fd =
+            unsafe { libc::memfd_create(c"adopted-foreign-plane".as_ptr(), libc::MFD_CLOEXEC) };
         assert!(raw_fd >= 0, "memfd_create failed");
         // SAFETY: a fresh fd memfd_create just returned; ours alone.
         let owned = unsafe { OwnedFd::from_raw_fd(raw_fd) };

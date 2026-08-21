@@ -336,16 +336,13 @@ pub(crate) fn handle_escalate_op(
                 // import refuses by name instead of the acquire failing.
                 let desc = TexturePoolDescriptor::new(width, height, parsed_format)
                     .with_usage(parsed_usage)
-                    .with_cross_process_importability(
-                        derive_texture_cross_process_importability(
-                            parsed_format,
-                            parsed_usage,
-                            full.host_vulkan_device_arc().is_ok_and(|device| {
-                                device
-                                    .has_render_target_modifier_for_texture_format(parsed_format)
-                            }),
-                        ),
-                    );
+                    .with_cross_process_importability(derive_texture_cross_process_importability(
+                        parsed_format,
+                        parsed_usage,
+                        full.host_vulkan_device_arc().is_ok_and(|device| {
+                            device.has_render_target_modifier_for_texture_format(parsed_format)
+                        }),
+                    ));
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id, produce_done, consume_done) =
                     assign_texture_handle_id(full, &texture)?;

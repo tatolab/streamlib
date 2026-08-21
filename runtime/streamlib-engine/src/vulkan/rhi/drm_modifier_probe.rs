@@ -47,17 +47,11 @@ pub mod fourcc {
     /// FOURCC — they cross processes as OPAQUE_FD, never as DMA-BUF).
     ///
     /// [`TextureFormat`]: crate::core::rhi::TextureFormat
-    pub fn drm_fourcc_for_texture_format(
-        format: crate::core::rhi::TextureFormat,
-    ) -> Option<u32> {
+    pub fn drm_fourcc_for_texture_format(format: crate::core::rhi::TextureFormat) -> Option<u32> {
         use crate::core::rhi::TextureFormat;
         match format {
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
-                Some(DRM_FORMAT_ARGB8888)
-            }
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
-                Some(DRM_FORMAT_ABGR8888)
-            }
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Some(DRM_FORMAT_ARGB8888),
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Some(DRM_FORMAT_ABGR8888),
             TextureFormat::Nv12 => Some(DRM_FORMAT_NV12),
             TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => None,
         }

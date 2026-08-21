@@ -1206,7 +1206,8 @@ impl PythonGpuContextFullAccess {
             // exporter's own byte size is the honest input whenever padding
             // is in play, because a stride cannot be conjured from an fd.
             let plane_byte_size = byte_size.unwrap_or_else(|| {
-                u64::from(width) * u64::from(pixel_format.bits_per_pixel().div_ceil(8))
+                u64::from(width)
+                    * u64::from(pixel_format.bits_per_pixel().div_ceil(8))
                     * u64::from(height)
             });
             let checked_out = exchange_client.import_foreign_dma_buf(
