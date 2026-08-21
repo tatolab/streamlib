@@ -15,6 +15,29 @@ use crate::core::rhi::{
 };
 use crate::core::{Error, Result};
 
+/// How a pooled texture's allocation crosses a process boundary, decided at
+/// allocation because the memory flavor cannot change afterwards.
+///
+/// The default flavor exports a DMA-BUF fd whose image layout is
+/// driver-opaque (`VK_IMAGE_TILING_OPTIMAL`, no modifier), so no other
+/// process can reconstruct the image from it — importable flavors must be
+/// asked for. Part of the pool bucket key: one slot serves one flavor.
+#[derive(Clone, Copy, Debug, Default, Hash, Eq, PartialEq)]
+pub enum TextureCrossProcessImportability {
+    /// The exported fd carries memory only; the image layout is
+    /// driver-opaque and a foreign process cannot rebuild the image.
+    #[default]
+    NotImportable,
+    /// OPAQUE_FD allocation — a foreign Vulkan device or CUDA imports the
+    /// whole memory block and rebuilds the image from the registered
+    /// `VkImageCreateInfo` shape.
+    OpaqueFd,
+    /// Explicit-DRM-modifier DMA-BUF allocation — a foreign process
+    /// reproduces the tiled image via
+    /// `VkImageDrmFormatModifierExplicitCreateInfoEXT` or EGL.
+    RenderTargetDmaBuf,
+}
+
 /// Request descriptor for acquiring a pooled texture.
 #[derive(Clone, Debug)]
 pub struct TexturePoolDescriptor {
@@ -23,6 +46,7 @@ pub struct TexturePoolDescriptor {
     pub format: TextureFormat,
     pub usage: TextureUsages,
     pub label: Option<&'static str>,
+    pub cross_process_importability: TextureCrossProcessImportability,
 }
 
 impl TexturePoolDescriptor {
@@ -34,6 +58,7 @@ impl TexturePoolDescriptor {
             format,
             usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
             label: None,
+            cross_process_importability: TextureCrossProcessImportability::default(),
         }
     }
 
@@ -48,19 +73,29 @@ impl TexturePoolDescriptor {
         self.label = Some(label);
         self
     }
+
+    /// Set how the allocation crosses a process boundary.
+    pub fn with_cross_process_importability(
+        mut self,
+        cross_process_importability: TextureCrossProcessImportability,
+    ) -> Self {
+        self.cross_process_importability = cross_process_importability;
+        self
+    }
 }
 
 /// Unique identifier for a pool slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PoolSlotId(u64);
 
-/// Key for texture bucket lookup (dimension + format + usage).
+/// Key for texture bucket lookup (dimension + format + usage + importability).
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub struct TexturePoolKey {
     pub width: u32,
     pub height: u32,
     pub format: TextureFormat,
     pub usage: TextureUsages,
+    pub cross_process_importability: TextureCrossProcessImportability,
 }
 
 impl TexturePoolKey {
@@ -70,6 +105,7 @@ impl TexturePoolKey {
             height: desc.height,
             format: desc.format,
             usage: desc.usage,
+            cross_process_importability: desc.cross_process_importability,
         }
     }
 }
@@ -531,7 +567,28 @@ impl TexturePool {
         let texture_desc =
             TextureDescriptor::new(desc.width, desc.height, desc.format).with_usage(desc.usage);
 
-        let texture = self.inner.device.create_texture(&texture_desc)?;
+        let texture = match desc.cross_process_importability {
+            TextureCrossProcessImportability::NotImportable => {
+                self.inner.device.create_texture(&texture_desc)?
+            }
+            #[cfg(target_os = "linux")]
+            TextureCrossProcessImportability::OpaqueFd => self
+                .inner
+                .device
+                .create_texture_opaque_fd_export(&texture_desc)?,
+            #[cfg(target_os = "linux")]
+            TextureCrossProcessImportability::RenderTargetDmaBuf => self
+                .inner
+                .device
+                .create_texture_render_target_dma_buf(&texture_desc)?,
+            #[cfg(not(target_os = "linux"))]
+            other => {
+                return Err(Error::TextureError(format!(
+                    "pooled texture importability {other:?} is a Linux capability; \
+                     this platform allocates only NotImportable pool textures"
+                )));
+            }
+        };
 
         Ok(Arc::new(PoolSlot {
             id: self.inner.next_slot_id(),

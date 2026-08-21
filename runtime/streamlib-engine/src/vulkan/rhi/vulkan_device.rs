@@ -2490,6 +2490,52 @@ impl HostVulkanDevice {
         HostVulkanTexture::new_device_local(self, desc)
     }
 
+    /// Create an OPAQUE_FD-exportable texture whose memory a foreign device
+    /// (a helper child's Vulkan import, CUDA) can adopt whole.
+    ///
+    /// Thin wrapper over [`HostVulkanTexture::new_opaque_fd_export`]; that
+    /// constructor's fixed usage set and CUDA-mappable format subset apply.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_opaque_fd_export(
+        self: &Arc<Self>,
+        desc: &TextureDescriptor,
+    ) -> Result<HostVulkanTexture> {
+        HostVulkanTexture::new_opaque_fd_export(self, desc)
+    }
+
+    /// Create a DMA-BUF-exportable texture with an explicit DRM format
+    /// modifier, importable by a foreign process as the same tiled image.
+    ///
+    /// The modifier candidates come from this device's EGL probe
+    /// (`external_only=FALSE` — render-target-capable). Errors when the
+    /// format has no DRM FOURCC or the probe advertised no RT-capable
+    /// modifier for it — there is no fallback to LINEAR (sampler-only on
+    /// NVIDIA, see `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_render_target_dma_buf(
+        self: &Arc<Self>,
+        desc: &TextureDescriptor,
+    ) -> Result<HostVulkanTexture> {
+        let Some(fourcc) =
+            drm_modifier_probe::fourcc::drm_fourcc_for_texture_format(desc.format)
+        else {
+            return Err(Error::GpuError(format!(
+                "create_texture_render_target_dma_buf: format {:?} has no DRM FOURCC \
+                 mapping; it cannot cross a process boundary as a DMA-BUF image",
+                desc.format
+            )));
+        };
+        let modifiers: Vec<u64> = self.drm_modifier_table().rt_modifiers(fourcc).to_vec();
+        if modifiers.is_empty() {
+            return Err(Error::GpuError(format!(
+                "create_texture_render_target_dma_buf: no RT-capable DRM modifier for \
+                 {:?} (fourcc=0x{fourcc:08x}); EGL probe returned an empty list",
+                desc.format
+            )));
+        }
+        HostVulkanTexture::new_render_target_dma_buf(self, desc, &modifiers)
+    }
+
     /// Create a VulkanCommandQueue wrapper for the shared command queue.
     pub fn create_command_queue_wrapper(self: &Arc<Self>) -> VulkanCommandQueue {
         VulkanCommandQueue::new(Arc::clone(self), self.queue, self.queue_family_index)
@@ -3393,6 +3439,18 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     pub fn drm_modifier_table(&self) -> &Arc<DrmModifierTable> {
         &self.drm_modifier_table
+    }
+
+    /// Whether this device can allocate a cross-process-importable DMA-BUF
+    /// image for `format`: the format has a DRM FOURCC and the EGL probe
+    /// advertised at least one RT-capable modifier for it.
+    #[cfg(target_os = "linux")]
+    pub fn has_render_target_modifier_for_texture_format(
+        &self,
+        format: crate::core::rhi::TextureFormat,
+    ) -> bool {
+        drm_modifier_probe::fourcc::drm_fourcc_for_texture_format(format)
+            .is_some_and(|fourcc| self.drm_modifier_table.has_rt_modifier(fourcc))
     }
 
     /// Free device memory allocated via raw vkAllocateMemory (import path only).

@@ -76,7 +76,9 @@ use crate::core::context::GpuContextLimitedAccess;
 use crate::core::context::SurfaceExportStagingResidency;
 #[cfg(target_os = "linux")]
 use crate::core::context::TextureRegistration;
-use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
+use crate::core::context::{
+    PooledTextureHandle, TextureCrossProcessImportability, TexturePoolDescriptor,
+};
 use crate::core::logging::{LogLevel, LogRecord, Source, push_polyglot_record};
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
 
@@ -326,10 +328,24 @@ pub(crate) fn handle_escalate_op(
                     }));
                 }
             };
-            let desc =
-                TexturePoolDescriptor::new(width, height, parsed_format).with_usage(parsed_usage);
             #[cfg(target_os = "linux")]
             let acquired = sandbox.escalate(|full| {
+                // The importability flavor is derived engine-side from the
+                // request — there is no Python dial for it, and a flavor the
+                // request cannot take falls back to NotImportable so a later
+                // import refuses by name instead of the acquire failing.
+                let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+                    .with_usage(parsed_usage)
+                    .with_cross_process_importability(
+                        derive_texture_cross_process_importability(
+                            parsed_format,
+                            parsed_usage,
+                            full.host_vulkan_device_arc().is_ok_and(|device| {
+                                device
+                                    .has_render_target_modifier_for_texture_format(parsed_format)
+                            }),
+                        ),
+                    );
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id, produce_done, consume_done) =
                     assign_texture_handle_id(full, &texture)?;
@@ -337,6 +353,8 @@ pub(crate) fn handle_escalate_op(
             });
             #[cfg(not(target_os = "linux"))]
             let acquired = sandbox.escalate(|full| {
+                let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+                    .with_usage(parsed_usage);
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id,) = assign_texture_handle_id(full, &texture)?;
                 Ok((handle_id, texture))
@@ -3771,6 +3789,41 @@ fn texture_format_to_wire(fmt: TextureFormat) -> &'static str {
     }
 }
 
+/// Which cross-process-importable allocation flavor an `acquire_texture`
+/// request can take, derived from the request alone — never a Python dial.
+///
+/// Render-attachment requests need the explicit-modifier DMA-BUF flavor (the
+/// OPAQUE_FD constructor's fixed usage set has no COLOR_ATTACHMENT); requests
+/// whose format is CUDA-mappable and whose usage fits that fixed set take
+/// OPAQUE_FD. Everything else keeps today's non-importable allocation, and a
+/// later cross-process import refuses by naming the flavor.
+#[cfg(target_os = "linux")]
+fn derive_texture_cross_process_importability(
+    format: TextureFormat,
+    usage: TextureUsages,
+    render_target_modifier_available: bool,
+) -> TextureCrossProcessImportability {
+    if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+        return if render_target_modifier_available {
+            TextureCrossProcessImportability::RenderTargetDmaBuf
+        } else {
+            TextureCrossProcessImportability::NotImportable
+        };
+    }
+    let cuda_mappable = matches!(
+        format,
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float
+    );
+    let opaque_fd_fixed_usage_set = TextureUsages::COPY_SRC
+        | TextureUsages::COPY_DST
+        | TextureUsages::TEXTURE_BINDING
+        | TextureUsages::STORAGE_BINDING;
+    if cuda_mappable && opaque_fd_fixed_usage_set.contains(usage) {
+        return TextureCrossProcessImportability::OpaqueFd;
+    }
+    TextureCrossProcessImportability::NotImportable
+}
+
 /// Parse an array of usage tokens into a combined [`TextureUsages`] bitmask.
 ///
 /// An empty list is rejected — a texture must have at least one usage or the
@@ -4155,6 +4208,65 @@ mod tests {
     fn parse_texture_usages_rejects_empty_and_unknown() {
         assert!(parse_texture_usages(&[]).is_err());
         assert!(parse_texture_usages(&["bogus".to_string()]).is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_render_attachment_request_takes_the_modifier_flavor_when_the_probe_has_one() {
+        let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+        assert_eq!(
+            derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, true),
+            TextureCrossProcessImportability::RenderTargetDmaBuf,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_render_attachment_request_without_a_modifier_stays_not_importable() {
+        let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+        assert_eq!(
+            derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, false),
+            TextureCrossProcessImportability::NotImportable,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_cuda_mappable_format_within_the_fixed_usage_set_takes_opaque_fd() {
+        let usage = TextureUsages::TEXTURE_BINDING
+            | TextureUsages::STORAGE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST;
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+        ] {
+            assert_eq!(
+                derive_texture_cross_process_importability(format, usage, false),
+                TextureCrossProcessImportability::OpaqueFd,
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_format_cuda_cannot_map_stays_not_importable_without_render_attachment() {
+        for format in [
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Nv12,
+        ] {
+            assert_eq!(
+                derive_texture_cross_process_importability(
+                    format,
+                    TextureUsages::TEXTURE_BINDING,
+                    true,
+                ),
+                TextureCrossProcessImportability::NotImportable,
+            );
+        }
     }
 
     #[test]

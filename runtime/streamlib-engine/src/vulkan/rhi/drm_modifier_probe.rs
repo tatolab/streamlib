@@ -41,6 +41,27 @@ pub mod fourcc {
     pub const DRM_FORMAT_ABGR8888: u32 = 0x3432_4241;
     /// `'N'|'V'<<8|'1'<<16|'2'<<24` — NV12 (Y plane + interleaved UV).
     pub const DRM_FORMAT_NV12: u32 = 0x3231_564E;
+
+    /// The DRM FOURCC an engine [`TextureFormat`] maps to, or `None` for
+    /// formats with no DMA-BUF wire representation (float formats have no
+    /// FOURCC — they cross processes as OPAQUE_FD, never as DMA-BUF).
+    ///
+    /// [`TextureFormat`]: crate::core::rhi::TextureFormat
+    pub fn drm_fourcc_for_texture_format(
+        format: crate::core::rhi::TextureFormat,
+    ) -> Option<u32> {
+        use crate::core::rhi::TextureFormat;
+        match format {
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
+                Some(DRM_FORMAT_ARGB8888)
+            }
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
+                Some(DRM_FORMAT_ABGR8888)
+            }
+            TextureFormat::Nv12 => Some(DRM_FORMAT_NV12),
+            TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => None,
+        }
+    }
 }
 
 /// `DRM_FORMAT_MOD_LINEAR` — sampler-only on NVIDIA Linux; included as the
