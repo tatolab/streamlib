@@ -469,6 +469,30 @@ impl ConsumerVulkanTexture {
         self.drm_format_modifier
     }
 
+    /// Consumer-side QFOT acquire into `target` — the barrier a foreign
+    /// process issues after importing so its layout tracking starts from
+    /// the layout the producer published. No-op when `target` is
+    /// UNDEFINED. Thin vk-free wrapper over
+    /// [`ConsumerVulkanDevice::acquire_from_foreign`] so non-RHI callers
+    /// (the Python wheel) can join the layout protocol without touching
+    /// Vulkan types.
+    pub fn acquire_from_foreign_layout(&self, target: crate::VulkanLayout) -> Result<()> {
+        self.vulkan_device
+            .acquire_from_foreign(self.image, target.as_vk())
+    }
+
+    /// Producer-side QFOT release declaring `dst` as the post-use layout
+    /// and returning ownership to the external family. Thin vk-free
+    /// wrapper over [`ConsumerVulkanDevice::release_to_foreign`].
+    pub fn release_to_foreign_layout(
+        &self,
+        src: crate::VulkanLayout,
+        dst: crate::VulkanLayout,
+    ) -> Result<()> {
+        self.vulkan_device
+            .release_to_foreign(self.image, src.as_vk(), dst.as_vk())
+    }
+
     /// Lazy-cached `VkImageView` covering the texture's full subresource
     /// range. Created on first call; subsequent calls return the cached
     /// handle.

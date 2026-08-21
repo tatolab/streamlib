@@ -193,6 +193,27 @@ impl GpuDevice {
         Ok(Texture::from_vulkan(vulkan_texture))
     }
 
+    /// Create an OPAQUE_FD-exportable texture a foreign process can import
+    /// whole — see [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
+    /// for the fixed usage set and the CUDA-mappable format subset.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_opaque_fd_export(&self, desc: &TextureDescriptor) -> Result<Texture> {
+        let vulkan_texture = self.inner.create_texture_opaque_fd_export(desc)?;
+        Ok(Texture::from_vulkan(vulkan_texture))
+    }
+
+    /// Create an explicit-DRM-modifier DMA-BUF texture a foreign process can
+    /// import as the same tiled image. Errors when the format has no DRM
+    /// FOURCC or the EGL probe advertised no RT-capable modifier for it.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_render_target_dma_buf(
+        &self,
+        desc: &TextureDescriptor,
+    ) -> Result<Texture> {
+        let vulkan_texture = self.inner.create_texture_render_target_dma_buf(desc)?;
+        Ok(Texture::from_vulkan(vulkan_texture))
+    }
+
     /// Get the shared command queue.
     ///
     /// All processors should use this shared queue rather than creating their own.

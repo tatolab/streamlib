@@ -563,6 +563,11 @@ class GpuContextFullAccess:
         takes ownership. Answered without leaving this process: the fds arrived
         over SCM_RIGHTS when the surface was checked out, and they are the same
         ones a host-side export would mint.
+
+        Refuses by name for an OPAQUE_FD-flavoured texture — that fd imports
+        through Vulkan or CUDA external memory, not as a DMA-BUF — and for a
+        pooled-texture handle whose memory was never checked out into this
+        process (resolve the surface id first).
         """
 
     def import_dma_buf(
@@ -573,10 +578,18 @@ class GpuContextFullAccess:
         format: str = "bgra",
         byte_size: int | None = None,
     ) -> GpuSurfaceHandle:
-        """Refuses from a Python processor: the surface registry a graph reads
-        lives in the app process, and handing it an fd needs a wire that carries
-        one. Exporting works — `export_dma_buf` answers from this process. See
-        #1756."""
+        """Adopt a foreign single-plane DMA-BUF fd as a surface this graph can
+        resolve.
+
+        The fd crosses to the engine's surface-share service over SCM_RIGHTS —
+        the caller keeps ownership and may close it once this returns. The
+        returned handle maps the same memory and travels under a freshly minted
+        surface id; closing its last holder removes the registration. When
+        `byte_size` is omitted a tight plane is assumed — pass the exporter's
+        own byte size whenever the buffer carries row padding. The fd must
+        reference host-mappable linear memory (a pixel-buffer export); a
+        tiled or device-local exporter's fd fails at the Vulkan import.
+        """
 
     def wait_device_idle(self) -> None: ...
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:

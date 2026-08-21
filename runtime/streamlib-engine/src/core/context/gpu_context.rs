@@ -1711,8 +1711,6 @@ impl GpuContext {
         height: u32,
         format: TextureFormat,
     ) -> Result<Texture> {
-        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
-
         tracing::debug!(
             rhi_op = "acquire_render_target_dma_buf_image",
             width,
@@ -1720,33 +1718,6 @@ impl GpuContext {
             format = ?format,
             "GpuContext::acquire_render_target_dma_buf_image"
         );
-
-        let fourcc = match format {
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
-                fourcc::DRM_FORMAT_ARGB8888
-            }
-            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
-                fourcc::DRM_FORMAT_ABGR8888
-            }
-            TextureFormat::Nv12 => fourcc::DRM_FORMAT_NV12,
-            other => {
-                return Err(Error::GpuError(format!(
-                    "acquire_render_target_dma_buf_image: format {other:?} has no DRM FOURCC mapping"
-                )));
-            }
-        };
-
-        let vulkan_device = &self.device.inner;
-        let modifiers: Vec<u64> = vulkan_device
-            .drm_modifier_table()
-            .rt_modifiers(fourcc)
-            .to_vec();
-
-        if modifiers.is_empty() {
-            return Err(Error::GpuError(format!(
-                "acquire_render_target_dma_buf_image: no RT-capable DRM modifier for {format:?} (fourcc=0x{fourcc:08x}); EGL probe returned empty list"
-            )));
-        }
 
         let desc = TextureDescriptor::new(width, height, format).with_usage(
             TextureUsages::RENDER_ATTACHMENT
@@ -1773,12 +1744,7 @@ impl GpuContext {
                 // streamlib runs on.
                 | TextureUsages::STORAGE_BINDING,
         );
-        let texture = crate::vulkan::rhi::HostVulkanTexture::new_render_target_dma_buf(
-            vulkan_device,
-            &desc,
-            &modifiers,
-        )?;
-        Ok(Texture::from_vulkan(texture))
+        self.device.create_texture_render_target_dma_buf(&desc)
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.

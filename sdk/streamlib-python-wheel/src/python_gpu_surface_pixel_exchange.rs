@@ -33,7 +33,7 @@ use streamlib::sdk::rhi::PixelFormat;
 
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    HelperCheckedOutPixelSurface, HelperDeviceExport, HelperProcessGpuExchangeClient,
+    HelperCheckedOutSurface, HelperDeviceExport, HelperProcessGpuExchangeClient,
 };
 use streamlib_adapter_cuda::dlpack::{
     self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor, ManagedTensorVersioned,
@@ -71,27 +71,28 @@ pub(crate) struct HostVisiblePixelPlaneView {
 /// settles the debt, whether that is the handle or a capsule Python is
 /// still holding.
 pub(crate) struct GpuSurfaceOwnedMemory {
-    /// The surface itself. There is one kind, because there is one
-    /// placement: every processor runs in its own helper process, so every
-    /// surface it holds came out of the parent's surface-share service.
+    /// The surface itself — one checkout, whichever backing its
+    /// registration names. There is one placement: every processor runs in
+    /// its own helper process, so every surface it holds came out of the
+    /// parent's surface-share service.
     ///
     /// Linux-gated because the exchange is: the service, the SCM_RIGHTS
     /// check-out and the consumer import are all Linux paths, and on a
     /// platform without them no handle is constructible at all — every
     /// entry point refuses before reaching this type.
     #[cfg(target_os = "linux")]
-    checked_out_pixel_surface: HelperCheckedOutPixelSurface,
+    checked_out_surface: HelperCheckedOutSurface,
     minted_surface_id: Option<String>,
 }
 
 impl GpuSurfaceOwnedMemory {
     #[cfg(target_os = "linux")]
     pub(crate) fn new(
-        checked_out_pixel_surface: HelperCheckedOutPixelSurface,
+        checked_out_surface: HelperCheckedOutSurface,
         minted_surface_id: Option<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            checked_out_pixel_surface,
+            checked_out_surface,
             minted_surface_id,
         })
     }
@@ -103,7 +104,7 @@ impl GpuSurfaceOwnedMemory {
     /// on the way over, so there is nothing to ask the parent for.
     #[cfg(target_os = "linux")]
     pub(crate) fn export_dma_buf(&self) -> PyResult<(i32, u64)> {
-        self.checked_out_pixel_surface.export_dma_buf()
+        self.checked_out_surface.export_dma_buf()
     }
 
     /// The host-mapped pixel view, or a refusal naming why this surface
@@ -111,7 +112,16 @@ impl GpuSurfaceOwnedMemory {
     /// — every host-side accessor routes through it.
     #[cfg(target_os = "linux")]
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
-        let checked_out = &self.checked_out_pixel_surface;
+        let checked_out = match &self.checked_out_surface {
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => pixel_surface,
+            HelperCheckedOutSurface::Texture(_) => {
+                return Err(PyRuntimeError::new_err(
+                    "this surface is texture-backed: its memory is tiled device memory with \
+                     no host mapping. A kernel dispatch reaches it by surface id, and \
+                     `export_dma_buf` hands the texture handle itself to native code",
+                ));
+            }
+        };
         Ok(HostVisiblePixelPlaneView {
             base_address: checked_out.consumer_buffer.mapped_ptr(),
             bytes_per_row: checked_out.bytes_per_row,
@@ -490,13 +500,11 @@ pub(crate) fn surface_device_export_for(
              tensors come from graph frames (resolve_surface) or published pixel buffers",
         )
     })?;
-    let checked_out = &owned_memory.checked_out_pixel_surface;
+    let exchange_client = owned_memory.checked_out_surface.exchange_client();
     Ok(SurfaceDeviceExport {
         surface_id: surface_id.to_string(),
-        helper_device_export: checked_out
-            .exchange_client
-            .open_device_export(python, surface_id)?,
-        exchange_client: Arc::clone(&checked_out.exchange_client),
+        helper_device_export: exchange_client.open_device_export(python, surface_id)?,
+        exchange_client: Arc::clone(exchange_client),
     })
 }
 

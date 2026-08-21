@@ -43,6 +43,50 @@ impl TextureFormat {
     pub fn is_srgb(&self) -> bool {
         matches!(self, Self::Rgba8UnormSrgb | Self::Bgra8UnormSrgb)
     }
+
+    /// Memory planes this format occupies — what a DMA-BUF crossing must
+    /// carry one fd (or one offset/stride entry) per.
+    pub fn plane_count(&self) -> u32 {
+        match self {
+            Self::Nv12 => 2,
+            Self::Rgba8Unorm
+            | Self::Rgba8UnormSrgb
+            | Self::Bgra8Unorm
+            | Self::Bgra8UnormSrgb
+            | Self::Rgba16Float
+            | Self::Rgba32Float => 1,
+        }
+    }
+
+    /// Parse the wire spelling — the inverse of [`Self::wire_name`], and the
+    /// one vocabulary the escalate wire, the surface-share registration and
+    /// the Python surface all speak.
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        match name {
+            "rgba8_unorm" => Some(Self::Rgba8Unorm),
+            "rgba8_unorm_srgb" => Some(Self::Rgba8UnormSrgb),
+            "bgra8_unorm" => Some(Self::Bgra8Unorm),
+            "bgra8_unorm_srgb" => Some(Self::Bgra8UnormSrgb),
+            "rgba16_float" => Some(Self::Rgba16Float),
+            "rgba32_float" => Some(Self::Rgba32Float),
+            "nv12" => Some(Self::Nv12),
+            _ => None,
+        }
+    }
+
+    /// The lowercase snake-case name the escalate wire and the Python
+    /// surface spell this format as.
+    pub fn wire_name(&self) -> &'static str {
+        match self {
+            Self::Rgba8Unorm => "rgba8_unorm",
+            Self::Rgba8UnormSrgb => "rgba8_unorm_srgb",
+            Self::Bgra8Unorm => "bgra8_unorm",
+            Self::Bgra8UnormSrgb => "bgra8_unorm_srgb",
+            Self::Rgba16Float => "rgba16_float",
+            Self::Rgba32Float => "rgba32_float",
+            Self::Nv12 => "nv12",
+        }
+    }
 }
 
 /// Texture usage flags.
@@ -170,5 +214,31 @@ mod layout_tests {
         let known = TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
         let with_unknown = TextureUsages::from_bits_truncate(known.bits() | 0xFFFF_0000);
         assert_eq!(with_unknown, known);
+    }
+}
+
+#[cfg(test)]
+mod texture_format_wire_name_tests {
+    use super::TextureFormat;
+
+    /// Every variant round-trips through the one wire spelling, so the
+    /// engine's producer and every consumer parse cannot drift apart.
+    #[test]
+    fn every_texture_format_round_trips_through_its_wire_name() {
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+            TextureFormat::Nv12,
+        ] {
+            assert_eq!(
+                TextureFormat::from_wire_name(format.wire_name()),
+                Some(format)
+            );
+        }
+        assert_eq!(TextureFormat::from_wire_name("Rgba8Unorm"), None);
     }
 }

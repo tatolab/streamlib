@@ -32,6 +32,7 @@ import pytest
 
 from device_exchange_probes import (
     DLPACK_DEVICE_CUDA,
+    FILL_CONSTANT_RGBA,
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
 )
@@ -217,25 +218,68 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test
 # ---------------------------------------------------------------------------
 
 
-def test_a_child_exports_its_surfaces_dma_buf_without_asking_the_parent(
+def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
     start_app_under_test,
 ):
     """The shape third-party native code gets: an fd it can hand to EGL, a V4L2
-    output device, or another process.
+    output device, or another process — and the way one comes back.
 
-    The child answers from the fds it was already handed at check-out, so this
-    costs no round trip. The import direction refuses by name — a foreign fd
-    has to reach the surface registry in the app process, which needs a wire
-    that carries an fd.
+    Export answers from the fds the checkout delivered, costing no round trip.
+    Import adopts the fd as a fresh registration the graph can resolve; the
+    adopted mapping reads the very pixels the exporter wrote, so the handle is
+    genuinely the same memory, not a copy.
     """
     observation = run_probe(start_app_under_test, "DmaBufExportProbe")
     assert observation["fd_is_real"]
     assert observation["byte_size"] == observation["expected_byte_size"]
     assert observation["fd_closes_cleanly"]
-    assert "export_dma_buf" in observation["import_refusal"], (
-        f"the import refusal should point at the direction that does work: "
-        f"{observation['import_refusal']!r}"
+    assert observation["adopted_pixel"] == [21, 43, 65, 87], (
+        f"the adopted surface must map the exporter's memory: "
+        f"{observation['adopted_pixel']!r}"
     )
+    assert observation["adopted_surface_id"] != observation["exported_surface_id"], (
+        "an adoption is a fresh registration, not an alias of the exporter's id"
+    )
+
+
+def test_a_texture_handle_round_trips_across_the_process_boundary(
+    start_app_under_test,
+):
+    """A kernel output reaches a consumer as the texture itself, both handle
+    flavours where the format allows.
+
+    The OPAQUE_FD flavour resolves — the child rebuilt the tiled image on its
+    own device — and the kernel's pixels read back through the device export,
+    which only happens when the layout chain (dispatch publish, checkout,
+    acquire barrier, staging refill) named the truth at every step. Its CPU
+    accessors and DMA-BUF export refuse by naming the backing. The
+    render-target flavour is kernel-written too and exports the fd native
+    code imports — the demo shape. A second resolve after release proves the
+    round trip left the frame usable.
+    """
+    observation = run_probe(start_app_under_test, "TextureHandleRoundTripProbe")
+    assert observation["kernel_dispatched"]
+    assert observation["opaque_resolved_extent"] == [SURFACE_WIDTH, SURFACE_HEIGHT]
+    assert observation["opaque_resolved_format"] == "rgba8_unorm"
+    assert observation["opaque_device_pixel"] == FILL_CONSTANT_RGBA, (
+        f"the imported texture must read the kernel's own pixels: "
+        f"{observation['opaque_device_pixel']!r}"
+    )
+    assert "texture-backed" in observation["opaque_pixel_refusal"], (
+        f"the pixel refusal should name the tiled backing: "
+        f"{observation['opaque_pixel_refusal']!r}"
+    )
+    assert "OPAQUE_FD" in observation["opaque_export_refusal"], (
+        f"the export refusal should name the handle flavour: "
+        f"{observation['opaque_export_refusal']!r}"
+    )
+    assert observation["opaque_second_resolve_extent"] == [
+        SURFACE_WIDTH,
+        SURFACE_HEIGHT,
+    ]
+    assert observation["rt_export_fd_is_real"]
+    assert observation["rt_export_byte_size"] > 0
+    assert observation["rt_fd_closes_cleanly"]
 
 
 # ---------------------------------------------------------------------------

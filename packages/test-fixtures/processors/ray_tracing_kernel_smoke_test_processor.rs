@@ -150,13 +150,13 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
         return Ok(());
     }
 
-    let pool_descriptor = TexturePoolDescriptor {
-        width: SMOKE_SURFACE_SIZE,
-        height: SMOKE_SURFACE_SIZE,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING,
-        label: Some("ray_tracing_kernel_smoke_target"),
-    };
+    let pool_descriptor = TexturePoolDescriptor::new(
+        SMOKE_SURFACE_SIZE,
+        SMOKE_SURFACE_SIZE,
+        TextureFormat::Rgba8Unorm,
+    )
+    .with_usage(TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING)
+    .with_label("ray_tracing_kernel_smoke_target");
     let texture_handle = gpu_limited
         .acquire_texture(&pool_descriptor)
         .map_err(|e| Error::Runtime(format!("acquire_texture: {e}")))?;

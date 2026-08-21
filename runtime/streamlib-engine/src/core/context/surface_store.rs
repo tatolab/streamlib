@@ -1432,7 +1432,7 @@ impl SurfaceStoreInner {
                 "runtime_id": self.runtime_id,
                 "width": texture.width(),
                 "height": texture.height(),
-                "format": format!("{:?}", texture.format()),
+                "format": texture.format().wire_name(),
                 "resource_type": "texture",
                 "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
                 "plane_sizes": [allocation_size],
@@ -1474,11 +1474,16 @@ impl SurfaceStoreInner {
                 "runtime_id": self.runtime_id,
                 "width": texture.width(),
                 "height": texture.height(),
-                "format": format!("{:?}", texture.format()),
+                "format": texture.format().wire_name(),
                 "resource_type": "texture",
                 "plane_offsets": plane_offsets,
                 "plane_strides": plane_strides,
                 "drm_format_modifier": drm_format_modifier,
+                // The host allocation's byte size, which a consumer-side
+                // `import_render_target_dma_buf` must pass to
+                // `vkAllocateMemory` — deriving it from extent × stride
+                // under-sizes tiled allocations and fails the bind.
+                "vk_image_allocation_size": texture.vulkan_inner().vma_allocation_size() as u64,
                 "has_produce_done_fd": produce_done_fd.is_some(),
                 "has_consume_done_fd": consume_done_fd.is_some(),
                 // The producer's declared `VkImageLayout`: the
@@ -1808,21 +1813,9 @@ impl SurfaceStoreInner {
 
         use crate::core::rhi::TextureFormat;
 
-        let format = match format_str {
-            "Rgba8Unorm" => TextureFormat::Rgba8Unorm,
-            "Rgba8UnormSrgb" => TextureFormat::Rgba8UnormSrgb,
-            "Bgra8Unorm" => TextureFormat::Bgra8Unorm,
-            "Bgra8UnormSrgb" => TextureFormat::Bgra8UnormSrgb,
-            "Rgba16Float" => TextureFormat::Rgba16Float,
-            "Rgba32Float" => TextureFormat::Rgba32Float,
-            "Nv12" => TextureFormat::Nv12,
-            _ => {
-                return Err(Error::Configuration(format!(
-                    "lookup_texture: unknown format '{}'",
-                    format_str
-                )));
-            }
-        };
+        let format = TextureFormat::from_wire_name(format_str).ok_or_else(|| {
+            Error::Configuration(format!("lookup_texture: unknown format '{}'", format_str))
+        })?;
 
         let allocation_size = (width as u64) * (height as u64) * (format.bytes_per_pixel() as u64);
 
