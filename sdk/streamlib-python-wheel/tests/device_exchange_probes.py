@@ -462,12 +462,21 @@ class TextureHandleRoundTripProbe:
                 )
                 del device_view
                 resolved_texture.unlock()
+                # Both outcomes recorded: a refusal that never arrives must
+                # fail the assertion that names it, not raise a KeyError.
                 try:
-                    resolved_texture.bytes_per_row
+                    observation["opaque_pixel_refusal"] = (
+                        f"no refusal: bytes_per_row answered "
+                        f"{resolved_texture.bytes_per_row}"
+                    )
                 except RuntimeError as refusal:
                     observation["opaque_pixel_refusal"] = str(refusal)
                 try:
-                    ctx.gpu_full_access.export_dma_buf(resolved_texture)
+                    exported = ctx.gpu_full_access.export_dma_buf(resolved_texture)
+                    observation["opaque_export_refusal"] = (
+                        f"no refusal: export answered {exported!r}"
+                    )
+                    os.close(exported[0])
                 except RuntimeError as refusal:
                     observation["opaque_export_refusal"] = str(refusal)
 

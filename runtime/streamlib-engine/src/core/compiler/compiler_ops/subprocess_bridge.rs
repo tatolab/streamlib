@@ -291,6 +291,16 @@ impl SubprocessBridge {
 impl Drop for SubprocessBridge {
     fn drop(&mut self) {
         self.mark_dead();
+        // Shut the socket down before draining: until the reader thread sees
+        // EOF it keeps dispatching escalate requests, and an acquire landing
+        // after the drain would strand its cache entry — the very leak the
+        // drain exists to close. A request already executing when the
+        // shutdown lands can still slip through; closing that too would mean
+        // joining the reader, which this path deliberately never blocks on.
+        // The OS reaps the thread on process exit.
+        if let Ok(writer) = self.writer.lock() {
+            let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+        }
         // Run the release path's kind-specific cleanup for everything the
         // helper never released — a crashed child must not strand cache
         // entries in a GpuContext that outlives every respawn.
@@ -298,12 +308,6 @@ impl Drop for SubprocessBridge {
             if removed_handle.is_texture_backed() {
                 self.sandbox.unregister_texture(&handle_id);
             }
-        }
-        // Shut down the write half so the reader thread sees EOF on its
-        // clone if the subprocess is still alive. The OS reaps the
-        // thread on process exit; we avoid blocking on join.
-        if let Ok(writer) = self.writer.lock() {
-            let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
         }
         if let Some(reader) = self.reader.take() {
             drop(reader);

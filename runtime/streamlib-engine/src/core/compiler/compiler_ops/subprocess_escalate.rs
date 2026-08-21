@@ -1713,7 +1713,11 @@ fn publish_bound_surface_layouts_to_surface_share(
         return;
     };
     let mut published_surface_ids: Vec<&str> = Vec::with_capacity(bound_surfaces.len());
-    for (surface_id, registration) in bound_surfaces {
+    // Walked back to front: a surface several dispatches of one batch bind
+    // ends in the layout its *last* use required, and a cross-process
+    // resolve holds a separate layout cell per occurrence — so the dedup
+    // must keep the last one, not the first.
+    for (surface_id, registration) in bound_surfaces.iter().rev() {
         if published_surface_ids.contains(&surface_id.as_str()) {
             continue;
         }

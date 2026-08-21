@@ -1872,10 +1872,15 @@ impl HelperProcessGpuExchangeClient {
     ) -> PyResult<HelperCheckedOutTextureSurface> {
         let metadata =
             TextureCheckOutRegistrationMetadata::from_check_out_response(surface_id, response)?;
-        if metadata.handle_is_opaque_fd && plane_fds.len() != 1 {
+        // Both flavours travel as exactly one memory fd — OPAQUE_FD is the
+        // whole allocation, and the engine's DMA-BUF texture export is one
+        // fd with per-plane offsets. Refused before any dup exists to leak:
+        // the import consumes only the first fd, so a foreign registration
+        // shipping more would leak one dup per extra plane per checkout.
+        if plane_fds.len() != 1 {
             return Err(PyRuntimeError::new_err(format!(
-                "opaque_fd texture {surface_id:?} arrived with {} fds; its whole allocation \
-                 travels as exactly one",
+                "texture {surface_id:?} arrived with {} fds; a texture checkout carries \
+                 its memory as exactly one",
                 plane_fds.len()
             )));
         }
