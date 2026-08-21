@@ -573,10 +573,16 @@ class GpuContextFullAccess:
         format: str = "bgra",
         byte_size: int | None = None,
     ) -> GpuSurfaceHandle:
-        """Refuses from a Python processor: the surface registry a graph reads
-        lives in the app process, and handing it an fd needs a wire that carries
-        one. Exporting works — `export_dma_buf` answers from this process. See
-        #1756."""
+        """Adopt a foreign single-plane DMA-BUF fd as a surface this graph can
+        resolve.
+
+        The fd crosses to the engine's surface-share service over SCM_RIGHTS —
+        the caller keeps ownership and may close it once this returns. The
+        returned handle maps the same memory and travels under a freshly minted
+        surface id; closing its last holder removes the registration. When
+        `byte_size` is omitted a tight plane is assumed — pass the exporter's
+        own byte size whenever the buffer carries row padding.
+        """
 
     def wait_device_idle(self) -> None: ...
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:

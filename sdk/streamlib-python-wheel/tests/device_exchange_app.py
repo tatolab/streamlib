@@ -56,7 +56,11 @@ if __name__ == "__main__":
     scenario = sys.argv[1]
     if scenario == "camera":
         scenario_camera_probe()
-    elif scenario in ("DmaBufExportProbe", "PrivilegedCapabilityProbe"):
+    elif scenario in (
+        "DmaBufExportProbe",
+        "PrivilegedCapabilityProbe",
+        "TextureHandleRoundTripProbe",
+    ):
         scenario_standalone_probe(scenario)
     else:
         scenario_frame_probe(scenario)

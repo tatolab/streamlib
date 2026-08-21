@@ -337,7 +337,13 @@ class LaggedConsumerHoldsItsFrameProbe:
 
 @processor(execution="manual")
 class DmaBufExportProbe:
-    """Exports a checked-out surface's DMA-BUF fd from the child that holds it."""
+    """Round-trips a surface's DMA-BUF fd out of and back into the graph.
+
+    Export answers from the fds the checkout delivered; import adopts a
+    foreign fd as a fresh registration the graph can resolve. Both ends run
+    in the child, and the pixels prove the adopted mapping is the same
+    memory the export named.
+    """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report(lambda: self._probe(ctx))
@@ -356,14 +362,115 @@ class DmaBufExportProbe:
                 "fd_is_real": fd >= 0,
                 "byte_size": byte_size,
                 "expected_byte_size": SURFACE_WIDTH * SURFACE_HEIGHT * 4,
-                # The fd belongs to the caller; nothing else will close it.
-                "fd_closes_cleanly": os.close(fd) is None,
             }
             try:
-                ctx.gpu_full_access.import_dma_buf(0, SURFACE_WIDTH, SURFACE_HEIGHT)
-            except RuntimeError as refusal:
-                observation["import_refusal"] = str(refusal)
+                with ctx.gpu_full_access.import_dma_buf(
+                    fd, SURFACE_WIDTH, SURFACE_HEIGHT, byte_size=byte_size
+                ) as adopted_surface:
+                    observation["adopted_surface_id"] = adopted_surface.surface_id
+                    observation["exported_surface_id"] = exported_surface.surface_id
+                    adopted_surface.lock()
+                    observation["adopted_pixel"] = (
+                        adopted_surface.as_numpy()[7, 9].tolist()
+                    )
+                    adopted_surface.unlock()
+            finally:
+                # The fd stays the caller's through the import; nothing else
+                # will close it.
+                observation["fd_closes_cleanly"] = os.close(fd) is None
             return observation
+
+
+# GLSL that fills its one bound texture with a constant — the smallest
+# engine-kernel producer a cross-process texture consumer can stand behind.
+FILL_CONSTANT_GLSL = """\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba8) uniform writeonly image2D output_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(output_image);
+    if (at.x >= extent.x || at.y >= extent.y) { return; }
+    imageStore(output_image, at, vec4(0.25, 0.5, 0.75, 1.0));
+}
+"""
+
+# The usage sets that pick each cross-process-importable allocation flavour:
+# the OPAQUE_FD constructor's fixed set, and a render-attachment set that
+# takes the explicit-DRM-modifier DMA-BUF arm.
+OPAQUE_FD_FLAVOUR_USAGE = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+RENDER_TARGET_FLAVOUR_USAGE = ["render_attachment", "texture_binding", "copy_src"]
+
+
+@processor(execution="manual")
+class TextureHandleRoundTripProbe:
+    """A kernel output crosses the process boundary as the texture itself.
+
+    Both handle flavours where the format allows: an OPAQUE_FD storage
+    texture an engine kernel wrote, and an explicit-DRM-modifier DMA-BUF
+    render target whose fd goes to native code. The resolve is the
+    cross-process import — the child rebuilds the engine's tiled image on
+    its own device, which is what a token-for-a-texture could never do.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        observation = {}
+        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=FILL_CONSTANT_GLSL,
+            bindings={"output_image": "storage_image"},
+        )
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
+        ) as kernel_output:
+            fill_kernel.dispatch(
+                bindings={"output_image": kernel_output},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
+            observation["kernel_dispatched"] = True
+
+            with ctx.gpu_limited_access.resolve_surface(
+                kernel_output.surface_id
+            ) as resolved_texture:
+                observation["opaque_resolved_extent"] = [
+                    resolved_texture.width,
+                    resolved_texture.height,
+                ]
+                observation["opaque_resolved_format"] = resolved_texture.format
+                try:
+                    resolved_texture.bytes_per_row
+                except RuntimeError as refusal:
+                    observation["opaque_pixel_refusal"] = str(refusal)
+                try:
+                    ctx.gpu_full_access.export_dma_buf(resolved_texture)
+                except RuntimeError as refusal:
+                    observation["opaque_export_refusal"] = str(refusal)
+
+            # The frame is still usable after a consumer's release: the
+            # release republished the layout and signalled its edge.
+            with ctx.gpu_limited_access.resolve_surface(
+                kernel_output.surface_id
+            ) as resolved_again:
+                observation["opaque_second_resolve_extent"] = [
+                    resolved_again.width,
+                    resolved_again.height,
+                ]
+
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", RENDER_TARGET_FLAVOUR_USAGE
+        ) as render_target:
+            with ctx.gpu_limited_access.resolve_surface(
+                render_target.surface_id
+            ) as resolved_render_target:
+                fd, byte_size = ctx.gpu_full_access.export_dma_buf(
+                    resolved_render_target
+                )
+                observation["rt_export_fd_is_real"] = fd >= 0
+                observation["rt_export_byte_size"] = byte_size
+                observation["rt_fd_closes_cleanly"] = os.close(fd) is None
+        return observation
 
 
 @processor(execution="manual")
