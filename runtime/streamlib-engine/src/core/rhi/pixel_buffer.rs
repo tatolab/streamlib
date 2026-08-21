@@ -144,6 +144,8 @@ impl PixelBuffer {
             0x52474241 => PixelFormat::Rgba32,
             0x00000020 => PixelFormat::Argb32,
             0x52476841 => PixelFormat::Rgba64,
+            0x52476846 => PixelFormat::Rgba16Float,
+            0x52476641 => PixelFormat::Rgba32Float,
             0x34323076 => PixelFormat::Nv12VideoRange,
             0x34323066 => PixelFormat::Nv12FullRange,
             0x32767579 => PixelFormat::Uyvy422,

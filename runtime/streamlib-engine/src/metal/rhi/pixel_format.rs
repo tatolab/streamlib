@@ -9,6 +9,8 @@ use crate::core::rhi::PixelFormat;
 const MTL_PIXEL_FORMAT_BGRA8_UNORM: u64 = 80;
 const MTL_PIXEL_FORMAT_RGBA8_UNORM: u64 = 70;
 const MTL_PIXEL_FORMAT_RGBA16_UNORM: u64 = 90;
+const MTL_PIXEL_FORMAT_RGBA16_FLOAT: u64 = 115;
+const MTL_PIXEL_FORMAT_RGBA32_FLOAT: u64 = 125;
 const MTL_PIXEL_FORMAT_R8_UNORM: u64 = 10;
 
 impl PixelFormat {
@@ -19,6 +21,8 @@ impl PixelFormat {
             Self::Rgba32 => MTL_PIXEL_FORMAT_RGBA8_UNORM,
             Self::Argb32 => MTL_PIXEL_FORMAT_BGRA8_UNORM, // Metal doesn't have ARGB, use BGRA
             Self::Rgba64 => MTL_PIXEL_FORMAT_RGBA16_UNORM,
+            Self::Rgba16Float => MTL_PIXEL_FORMAT_RGBA16_FLOAT,
+            Self::Rgba32Float => MTL_PIXEL_FORMAT_RGBA32_FLOAT,
             Self::Gray8 => MTL_PIXEL_FORMAT_R8_UNORM,
             // For YUV formats, return BGRA as default for texture cache
             // Actual YUV→RGB conversion happens in shader

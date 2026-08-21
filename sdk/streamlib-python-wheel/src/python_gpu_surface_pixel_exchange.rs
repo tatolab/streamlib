@@ -176,6 +176,24 @@ fn single_plane_shape(format: PixelFormat) -> Option<(u32, DataType, Option<i64>
             },
             Some(4),
         ),
+        // The float formats a kernel output carries: the element is the
+        // channel, so torch sees float16 / float32 directly.
+        PixelFormat::Rgba16Float => (
+            DataType {
+                code: DataTypeCode::Float,
+                bits: 16,
+                lanes: 1,
+            },
+            Some(4),
+        ),
+        PixelFormat::Rgba32Float => (
+            DataType {
+                code: DataTypeCode::Float,
+                bits: 32,
+                lanes: 1,
+            },
+            Some(4),
+        ),
         PixelFormat::Gray8 => (DataType::U8, None),
         // Packed 4:2:2 — two bytes per pixel, but the byte pair is not a
         // per-pixel channel tuple. Exported as raw bytes with the trailing
