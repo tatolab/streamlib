@@ -398,6 +398,31 @@ void main() {
 
 FILL_CONSTANT_RGBA = [64, 128, 192, 255]
 
+# The float fill, chosen exact in float16 and doubled exactly by the scope
+# demo: (0.25, 0.5, 1.5, 2.0) -> (0.5, 1.0, 3.0, 4.0).
+FILL_FLOAT_GLSL = """\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D output_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(output_image);
+    if (at.x >= extent.x || at.y >= extent.y) { return; }
+    imageStore(output_image, at, vec4(0.25, 0.5, 1.5, 2.0));
+}
+"""
+
+FILL_FLOAT_RGBA = [0.25, 0.5, 1.5, 2.0]
+DOUBLED_FLOAT_RGBA = [0.5, 1.0, 3.0, 4.0]
+
+
+def _cuda_unavailable_or_reraise(failure: Exception) -> dict:
+    """Report a missing CUDA runtime as the skip the tests understand, and
+    re-raise anything else — a real defect must fail the test, not skip it."""
+    if "cuda" in str(failure).lower():
+        return {"cuda_unavailable": str(failure)}
+    raise failure
+
 # The usage sets that pick each cross-process-importable allocation flavour:
 # the OPAQUE_FD constructor's fixed set, and a render-attachment set that
 # takes the explicit-DRM-modifier DMA-BUF arm (storage included so the same
@@ -555,3 +580,192 @@ class PrivilegedCapabilityProbe:
                 acquired_texture.height,
             ]
         return observation
+
+
+@processor(execution="manual")
+class DeviceTensorScopeDoublesAKernelOutputProbe:
+    """The demo: torch doubles a kernel output in place through the scope.
+
+    An rgba16_float output — the common HDR compute shape — reaches torch as
+    a float16 tensor, `mul_(2.0)` edits it in place, and leaving the scope
+    blits the edit back into the engine's texture. A second scope entry
+    re-blits from the texture, so doubled values there prove the write-back
+    reached the texture rather than lingering in the staging.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import torch
+
+        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=FILL_FLOAT_GLSL,
+            bindings={"output_image": "storage_image"},
+        )
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba16_float", OPAQUE_FD_FLAVOUR_USAGE
+        ) as kernel_output:
+            fill_kernel.dispatch(
+                bindings={"output_image": kernel_output},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
+            observation: dict = {"surface_id": kernel_output.surface_id}
+            try:
+                with kernel_output.as_device_tensor() as tensor:
+                    torch_view = torch.from_dlpack(tensor)
+                    observation["tensor_dtype"] = str(torch_view.dtype)
+                    observation["tensor_shape"] = list(torch_view.shape)
+                    observation["tensor_device"] = str(torch_view.device)
+                    observation["filled_pixel"] = (
+                        torch_view[3, 5].to(torch.float32).cpu().tolist()
+                    )
+                    torch_view.mul_(2.0)
+                    torch.cuda.synchronize()
+            except Exception as failure:  # noqa: BLE001 — narrowed inside
+                return _cuda_unavailable_or_reraise(failure)
+
+            with kernel_output.as_device_tensor() as reread:
+                observation["doubled_pixel"] = (
+                    torch.from_dlpack(reread)[3, 5].to(torch.float32).cpu().tolist()
+                )
+            return observation
+
+
+@processor(execution="manual")
+class DeviceTensorScopeDiscardsOnRaiseProbe:
+    """A raise mid-scope leaves the surface holding its pre-scope content.
+
+    The write did not finish, so publishing it would hand downstream a torn
+    frame; the scope discards instead, the exception propagates unsuppressed,
+    and the surface — and the kernel that writes it — keep working afterwards.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import torch
+
+        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=FILL_CONSTANT_GLSL,
+            bindings={"output_image": "storage_image"},
+        )
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
+        ) as kernel_output:
+            fill_kernel.dispatch(
+                bindings={"output_image": kernel_output},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
+            observation = {}
+            exception_seen = None
+            try:
+                with kernel_output.as_device_tensor() as tensor:
+                    torch_view = torch.from_dlpack(tensor)
+                    torch_view[:, :, :] = 0
+                    torch.cuda.synchronize()
+                    raise ValueError("deliberate mid-scope failure")
+            except ValueError as propagated:
+                exception_seen = str(propagated)
+            except Exception as failure:  # noqa: BLE001 — narrowed inside
+                return _cuda_unavailable_or_reraise(failure)
+            observation["exception_propagated"] = exception_seen
+
+            with kernel_output.as_device_tensor() as reread:
+                observation["pixel_after_raise"] = (
+                    torch.from_dlpack(reread)[3, 5].cpu().tolist()
+                )
+
+            # Usable on the next frame: the kernel writes it again and the
+            # scope reads the fresh dispatch.
+            fill_kernel.dispatch(
+                bindings={"output_image": kernel_output},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
+            with kernel_output.as_device_tensor() as after_redispatch:
+                observation["pixel_after_redispatch"] = (
+                    torch.from_dlpack(after_redispatch)[3, 5].cpu().tolist()
+                )
+            return observation
+
+
+@processor
+class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
+    """One rule for both scopes: the CPU pixel-buffer scope discards a pending
+    device write when the block is left by a raise.
+
+    This deliberately changes what shipped: the handle used to publish however
+    the block was left, and two scopes with two behaviours is not shippable.
+    """
+
+    def _probe(self, ctx, frame) -> dict:
+        import torch
+
+        gpu = ctx.gpu_limited_access
+        with gpu.resolve_surface(frame.surface_id) as before_handle:
+            before_handle.lock()
+            pixel_before = numpy.from_dlpack(before_handle, device="cpu")[9, 11].tolist()
+            before_handle.unlock()
+
+        exception_seen = None
+        try:
+            with gpu.resolve_surface(frame.surface_id) as surface:
+                surface.lock(read_only=False)
+                if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                    return {"cuda_unavailable": "device side not reachable"}
+                tensor = torch.from_dlpack(surface)
+                tensor[:, :, :] = 0
+                torch.cuda.synchronize()
+                raise ValueError("deliberate mid-scope failure")
+        except ValueError as propagated:
+            exception_seen = str(propagated)
+
+        with gpu.resolve_surface(frame.surface_id) as reread:
+            reread.lock()
+            pixel_after = numpy.from_dlpack(reread, device="cpu")[9, 11].tolist()
+            reread.unlock()
+        return {
+            "exception_propagated": exception_seen,
+            "pixel_before": pixel_before,
+            "pixel_after": pixel_after,
+        }
+
+
+@processor(execution="manual")
+class PooledTextureExportProbe:
+    """Resurrected from #1737 (removed by #1754, carried by #1757): a pooled
+    texture acquired by a Python processor exports a device tensor of correct
+    shape through the handle itself.
+
+    The original also asserted a `pooled-texture-` id prefix (the escalate
+    acquire now mints a UUID handle id), a read-only tensor (this ticket makes
+    texture-backed exports writable), and a lease-bound full-access host-side
+    arm (that capability shape no longer exists) — the live substance is the
+    export itself.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import torch
+
+        outcomes = {}
+        with ctx.gpu_limited_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
+        ) as texture_handle:
+            outcomes["texture_surface_id"] = texture_handle.surface_id
+            try:
+                device = texture_handle.__dlpack_device__()
+            except Exception as failure:  # noqa: BLE001 — narrowed inside
+                return _cuda_unavailable_or_reraise(failure)
+            outcomes["texture_device"] = list(device)
+            if device[0] == DLPACK_DEVICE_CUDA:
+                texture_handle.lock()
+                tensor = torch.from_dlpack(texture_handle)
+                outcomes["texture_tensor_shape"] = list(tensor.shape)
+                outcomes["texture_tensor_device"] = str(tensor.device)
+                del tensor
+                texture_handle.unlock()
+        return outcomes

@@ -309,3 +309,80 @@ def test_the_privileged_capability_works_from_a_helper_process(start_app_under_t
         "surface id a kernel dispatch binds"
     )
     assert observation["acquired_texture_extent"] == [SURFACE_WIDTH, SURFACE_HEIGHT]
+
+
+# ---------------------------------------------------------------------------
+# The scoped device-tensor view over a kernel output
+# ---------------------------------------------------------------------------
+
+
+def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
+    start_app_under_test,
+):
+    """The demo, in the user's own spelling: `with output.as_device_tensor()
+    as tensor: torch.from_dlpack(tensor).mul_(2.0)`.
+
+    The rgba16_float output reaches torch as float16 — the float-format
+    acceptance this ticket adds — and the doubled values survive a second
+    scope entry, whose blit re-reads the engine's texture: the write-back
+    landed in the texture, not just the staging.
+    """
+    observation = run_probe(
+        start_app_under_test, "DeviceTensorScopeDoublesAKernelOutputProbe"
+    )
+    skip_without_cuda(observation)
+    assert observation["tensor_dtype"] == "torch.float16"
+    assert observation["tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
+    assert observation["tensor_device"].startswith("cuda")
+    assert observation["filled_pixel"] == [0.25, 0.5, 1.5, 2.0]
+    assert observation["doubled_pixel"] == [0.5, 1.0, 3.0, 4.0], (
+        "the in-place edit must survive the scope's blit-back into the texture"
+    )
+
+
+def test_a_raise_inside_the_device_tensor_scope_discards_the_write(
+    start_app_under_test,
+):
+    """Owner decision 2026-08-07: leaving the scope by a propagating exception
+    discards the write — the engine's texture keeps the kernel output it
+    already held, the exception is not suppressed, and the surface (and the
+    kernel writing it) keep working on the next frame.
+    """
+    observation = run_probe(start_app_under_test, "DeviceTensorScopeDiscardsOnRaiseProbe")
+    skip_without_cuda(observation)
+    assert observation["exception_propagated"] == "deliberate mid-scope failure"
+    assert observation["pixel_after_raise"] == FILL_CONSTANT_RGBA, (
+        f"a raise mid-scope must leave the pre-scope pixels in place: "
+        f"{observation['pixel_after_raise']!r}"
+    )
+    assert observation["pixel_after_redispatch"] == FILL_CONSTANT_RGBA
+
+
+def test_a_raise_inside_the_pixel_buffer_scope_discards_the_write(
+    start_app_under_test,
+):
+    """One rule for both scopes (owner, 2026-08-07): the CPU pixel-buffer
+    scope stops publishing a pending device write when the block is left by
+    a raise. This deliberately changes shipped behaviour — two scopes with
+    two behaviours is not shippable.
+    """
+    observation = run_probe(start_app_under_test, "PixelBufferScopeDiscardsOnRaiseProbe")
+    skip_without_cuda(observation)
+    assert observation["exception_propagated"] == "deliberate mid-scope failure"
+    assert observation["pixel_after"] == observation["pixel_before"], (
+        "a raise inside the with-block must leave the frame's pixels untouched"
+    )
+
+
+def test_a_pooled_texture_exports_a_device_tensor(start_app_under_test):
+    """Resurrected from #1737 (removed by #1754, carried by #1757): the
+    texture-first blit arm serves an acquired pooled texture through the
+    handle itself — registration at acquire keys the export, and the tensor
+    is device memory of the texture's extent."""
+    observation = run_probe(start_app_under_test, "PooledTextureExportProbe")
+    skip_without_cuda(observation)
+    assert observation["texture_surface_id"]
+    if observation["texture_device"][0] != DLPACK_DEVICE_CUDA:
+        pytest.skip(f"no usable CUDA runtime: {observation['texture_device']}")
+    assert observation["texture_tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
+    assert observation["texture_tensor_device"].startswith("cuda")
