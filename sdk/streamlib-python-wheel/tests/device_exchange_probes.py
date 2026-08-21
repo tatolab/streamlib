@@ -455,11 +455,13 @@ class TextureHandleRoundTripProbe:
                 # step. A wrong layout reads garbage, not FILL_CONSTANT_RGBA.
                 import torch
 
+                resolved_texture.lock()
                 device_view = torch.from_dlpack(resolved_texture)
                 observation["opaque_device_pixel"] = (
                     device_view[11, 13].to("cpu").tolist()
                 )
                 del device_view
+                resolved_texture.unlock()
                 try:
                     resolved_texture.bytes_per_row
                 except RuntimeError as refusal:
