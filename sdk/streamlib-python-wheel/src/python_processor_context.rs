@@ -509,7 +509,9 @@ impl PythonGpuSurfaceHandle {
     /// frame it already held. Construction does no GPU work — the blit
     /// runs at `__enter__`.
     fn as_device_tensor(&self) -> PyResult<PythonGpuSurfaceDeviceTensorScope> {
-        Ok(PythonGpuSurfaceDeviceTensorScope::over(self.owned_memory()?))
+        Ok(PythonGpuSurfaceDeviceTensorScope::over(
+            self.owned_memory()?,
+        ))
     }
 
     /// A numpy view of the pixels, sharing memory with the surface.

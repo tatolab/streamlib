@@ -101,7 +101,12 @@ impl PixelFormat {
     pub const fn is_rgb(&self) -> bool {
         matches!(
             self,
-            Self::Bgra32 | Self::Rgba32 | Self::Argb32 | Self::Rgba64 | Self::Rgba16Float | Self::Rgba32Float
+            Self::Bgra32
+                | Self::Rgba32
+                | Self::Argb32
+                | Self::Rgba64
+                | Self::Rgba16Float
+                | Self::Rgba32Float
         )
     }
 

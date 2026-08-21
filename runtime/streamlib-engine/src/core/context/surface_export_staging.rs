@@ -1009,7 +1009,9 @@ impl GpuContext {
                         staging.surface_height,
                     )));
                 }
-                Ok(ResolvedWriteBackDestination::RegisteredTexture(registration))
+                Ok(ResolvedWriteBackDestination::RegisteredTexture(
+                    registration,
+                ))
             }
         }
     }
@@ -1668,7 +1670,9 @@ mod tests {
         let descriptor =
             TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba16Float)
                 .with_usage(
-                    TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING,
+                    TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::STORAGE_BINDING,
                 );
         let float_texture = gpu
             .device()
