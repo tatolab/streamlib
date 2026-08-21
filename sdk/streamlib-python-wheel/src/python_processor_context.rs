@@ -1179,31 +1179,49 @@ impl PythonGpuContextFullAccess {
         python.detach(|| owned_memory.export_dma_buf())
     }
 
-    /// Import a DMA-BUF file descriptor as a surface this graph can read.
+    /// Import a foreign DMA-BUF file descriptor as a surface this graph can
+    /// resolve. The caller keeps ownership of `fd` — the kernel dups it on
+    /// the SCM_RIGHTS crossing — and may close it once this returns.
     #[cfg(target_os = "linux")]
-    #[expect(
-        clippy::unused_self,
-        reason = "the refusal is this capability's whole answer for imports"
-    )]
-    #[expect(
-        unused_variables,
-        reason = "the Python-visible parameter names are the API; stubtest compares them"
-    )]
     #[pyo3(signature = (fd, width, height, format = "bgra", byte_size = None))]
     fn import_dma_buf(
         &self,
+        python: Python<'_>,
         fd: i32,
         width: u32,
         height: u32,
         format: &str,
         byte_size: Option<u64>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        Err(PyRuntimeError::new_err(
-            "importing a foreign DMA-BUF is not reachable from a Python processor yet: the \
-             surface registry a graph reads lives in the app process, and handing it an fd \
-             needs a wire that carries one. Exporting works — `export_dma_buf` answers from \
-             this process",
-        ))
+        let pixel_format = parse_pixel_format_name(format)?;
+        if pixel_format.plane_count() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "import_dma_buf adopts one plane behind one fd; {format:?} carries \
+                 {} planes",
+                pixel_format.plane_count()
+            )));
+        }
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            // A tight single plane when the caller states no size — the
+            // exporter's own byte size is the honest input whenever padding
+            // is in play, because a stride cannot be conjured from an fd.
+            let plane_byte_size = byte_size.unwrap_or_else(|| {
+                u64::from(width) * u64::from(pixel_format.bits_per_pixel().div_ceil(8))
+                    * u64::from(height)
+            });
+            let checked_out = exchange_client.import_foreign_dma_buf(
+                python,
+                fd,
+                width,
+                height,
+                pixel_format,
+                plane_byte_size,
+            )?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+                HelperCheckedOutSurface::PixelBuffer(checked_out),
+            ));
+        }
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 
     /// Block until the GPU device is idle.
@@ -1267,6 +1285,11 @@ impl PythonRuntimeContextFullAccess {
                 Some(Arc::new(HelperProcessGpuExchangeClient::new(
                     requester.clone().unbind(),
                     surface_socket_path.into(),
+                    // Child-scoped, never the node's own runtime id — the
+                    // service's crash watchdog sweeps registrations by
+                    // runtime id, and this child's crash must sweep only
+                    // this child's adoptions.
+                    format!("helper:{processor_id}"),
                 )))
             }
             _ => None,
@@ -3118,6 +3141,7 @@ class FrameSomebodyElseWrote:
         let exchange_client = Arc::new(HelperProcessGpuExchangeClient::new(
             python.None(),
             share.socket_path.clone(),
+            "helper:read-under-test".to_string(),
         ));
         ReadUnderTest {
             source,

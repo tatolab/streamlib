@@ -29,7 +29,7 @@ use pyo3::types::PyDict;
 use pyo3::types::PyList;
 
 #[cfg(target_os = "linux")]
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd as _, FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
 #[cfg(target_os = "linux")]
@@ -181,6 +181,13 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// Present only on an acquired surface — a resolved one belongs to its
     /// acquirer, and releasing it here would evict somebody else's frame.
     pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
+    /// Present only on an adopted foreign DMA-BUF — the registration this
+    /// import created is this surface's to remove.
+    #[expect(
+        dead_code,
+        reason = "settled by its own Drop; nothing reads it, and that is the point"
+    )]
+    pub(crate) unregister_foreign_from_surface_share: Option<HelperForeignSurfaceUnregisterDebt>,
     /// The checkout lease this surface owes, whoever owns the surface itself.
     #[expect(
         dead_code,
@@ -520,6 +527,40 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
     }
 }
 
+/// The unregistration a foreign-fd adoption owes the surface-share service:
+/// one `release` op under the child-scoped registration id, closing the
+/// service's dups and removing the entry the graph resolved.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperForeignSurfaceUnregisterDebt {
+    exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    surface_id: String,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HelperForeignSurfaceUnregisterDebt {
+    /// Best-effort: a service that is already gone released everything with
+    /// its socket, and the crash watchdog covers a child that never gets
+    /// here — so a failure is logged, never raised.
+    fn drop(&mut self) {
+        Python::attach(|python| {
+            let released = python.detach(|| {
+                self.exchange_client
+                    .unregister_foreign_surface(&self.surface_id)
+            });
+            if let Err(release_failure) = released {
+                warn_through_the_childs_log_module(
+                    python,
+                    format!(
+                        "unregistering adopted surface {} failed ({release_failure}); the \
+                         service's dup of the foreign fd stays open until this node stops",
+                        self.surface_id
+                    ),
+                );
+            }
+        });
+    }
+}
+
 /// The child-side client that fulfills `ctx.gpu_limited_access` calls by
 /// crossing to the parent: escalate for allocation, surface-share for the
 /// memory, one consumer Vulkan device per child for the import.
@@ -528,6 +569,15 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     escalate_request_to_parent: Py<PyAny>,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     surface_socket_path: PathBuf,
+    /// The runtime id this client's foreign-surface adoptions register and
+    /// release under. Deliberately **not** the node's own runtime id: the
+    /// service's crash watchdog releases every surface a disconnected
+    /// subprocess registered *by runtime id*, so a child registering under
+    /// the node's id would have its crash sweep the parent's own
+    /// registrations. A child-scoped id makes the sweep exactly this
+    /// child's adoptions.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    foreign_surface_registration_runtime_id: String,
     /// One connection per child, opened at first checkout. Taken out for
     /// each exchange and put back only on success, so a stream with half a
     /// frame in it is dropped rather than reused.
@@ -653,10 +703,15 @@ pub(crate) fn compute_dispatch_wire_entry<'py>(
 }
 
 impl HelperProcessGpuExchangeClient {
-    pub(crate) fn new(escalate_request_to_parent: Py<PyAny>, surface_socket_path: PathBuf) -> Self {
+    pub(crate) fn new(
+        escalate_request_to_parent: Py<PyAny>,
+        surface_socket_path: PathBuf,
+        foreign_surface_registration_runtime_id: String,
+    ) -> Self {
         Self {
             escalate_request_to_parent,
             surface_socket_path,
+            foreign_surface_registration_runtime_id,
             #[cfg(target_os = "linux")]
             surface_share_connection: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -1265,6 +1320,18 @@ impl HelperProcessGpuExchangeClient {
         &self,
         request: &serde_json::Value,
     ) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+        self.surface_share_request_with_fds(request, &[])
+    }
+
+    /// The same exchange with outbound fds riding the request via
+    /// SCM_RIGHTS — the adoption path's crossing. The kernel dups each fd
+    /// into the service's table; the caller keeps its own.
+    #[cfg(target_os = "linux")]
+    fn surface_share_request_with_fds(
+        &self,
+        request: &serde_json::Value,
+        outbound_fds: &[RawFd],
+    ) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
         let mut connection = self.surface_share_connection.lock();
         let stream = match connection.take() {
             Some(open_stream) => open_stream,
@@ -1282,7 +1349,7 @@ impl HelperProcessGpuExchangeClient {
         let (response, received_raw_fds) = streamlib_surface_client::send_request_with_fds(
             &stream,
             request,
-            &[],
+            outbound_fds,
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
         )
         .map_err(|io_failure| {
@@ -1341,6 +1408,111 @@ impl HelperProcessGpuExchangeClient {
             )));
         }
         Ok(())
+    }
+
+    /// Adopt a foreign DMA-BUF fd as a surface this graph can resolve.
+    ///
+    /// The fd crosses to the surface-share service over SCM_RIGHTS on a
+    /// `check_in` (the kernel and the service each dup it — the caller keeps
+    /// ownership of the original), the service mints a surface id, and the
+    /// checkout of that id lands this process's own mapping of the memory.
+    /// The returned surface carries the unregister debt: dropping the last
+    /// share removes the service entry the adoption created.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn import_foreign_dma_buf(
+        self: &Arc<Self>,
+        python: Python<'_>,
+        foreign_dma_buf_fd: RawFd,
+        width: u32,
+        height: u32,
+        pixel_format: PixelFormat,
+        plane_byte_size: u64,
+    ) -> PyResult<HelperCheckedOutPixelSurface> {
+        if width == 0 || height == 0 {
+            return Err(PyValueError::new_err(
+                "import_dma_buf needs a non-zero width and height; the fd carries no geometry \
+                 of its own",
+            ));
+        }
+        if plane_byte_size == 0 || !plane_byte_size.is_multiple_of(u64::from(height)) {
+            return Err(PyValueError::new_err(format!(
+                "import_dma_buf byte_size {plane_byte_size} is not a whole number of {height} \
+                 rows; every consumer derives the row pitch from it"
+            )));
+        }
+        let bytes_per_row = plane_byte_size / u64::from(height);
+        let checked_out = python.detach(|| {
+            let (check_in_response, _no_fds_back) = self.surface_share_request_with_fds(
+                &serde_json::json!({
+                    "op": "check_in",
+                    "runtime_id": self.foreign_surface_registration_runtime_id,
+                    "width": width,
+                    "height": height,
+                    "format": pixel_format.wire_name(),
+                    "resource_type": "pixel_buffer",
+                    "handle_type": "dma_buf",
+                    "plane_sizes": [plane_byte_size],
+                    "plane_offsets": [0u64],
+                    "plane_strides": [bytes_per_row],
+                }),
+                &[foreign_dma_buf_fd],
+            )?;
+            if let Some(check_in_error) = check_in_response
+                .get("error")
+                .and_then(|value| value.as_str())
+            {
+                return Err(PyRuntimeError::new_err(format!(
+                    "the surface-share service refused to adopt the foreign DMA-BUF: \
+                     {check_in_error}"
+                )));
+            }
+            let adopted_surface_id: String = check_in_response
+                .get("surface_id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| {
+                    PyRuntimeError::new_err(
+                        "the surface-share service's check_in answered without a surface_id",
+                    )
+                })?
+                .to_string();
+            // The debt exists from the moment the service registered: if the
+            // checkout below fails, this drops on the error path and removes
+            // the entry instead of stranding the service's fd dup.
+            let unregister_debt = HelperForeignSurfaceUnregisterDebt {
+                exchange_client: Arc::clone(self),
+                surface_id: adopted_surface_id.clone(),
+            };
+            let checked_out = self.check_out_and_import(&adopted_surface_id)?;
+            let HelperCheckedOutSurface::PixelBuffer(mut checked_out_pixel_surface) = checked_out
+            else {
+                return Err(PyRuntimeError::new_err(format!(
+                    "adopted surface {adopted_surface_id:?} resolved to a texture \
+                     registration; check_in registers pixel buffers only"
+                )));
+            };
+            checked_out_pixel_surface.unregister_foreign_from_surface_share =
+                Some(unregister_debt);
+            Ok(checked_out_pixel_surface)
+        })?;
+        Ok(checked_out)
+    }
+
+    /// Remove an adopted surface's registration, closing the service's fd
+    /// dups. The one place the `release` op is spelled for adoptions; every
+    /// caller is a [`HelperForeignSurfaceUnregisterDebt`].
+    #[cfg(target_os = "linux")]
+    fn unregister_foreign_surface(&self, surface_id: &str) -> PyResult<()> {
+        let (response, _no_fds) = self.surface_share_request(&serde_json::json!({
+            "op": "release",
+            "surface_id": surface_id,
+            "runtime_id": self.foreign_surface_registration_runtime_id,
+        }))?;
+        match response.get("success").and_then(|value| value.as_bool()) {
+            Some(true) => Ok(()),
+            _ => Err(PyRuntimeError::new_err(format!(
+                "the surface-share service did not release adopted surface {surface_id:?}"
+            ))),
+        }
     }
 
     /// Validate the checkout metadata and turn the plane fds into this
@@ -1512,6 +1684,7 @@ impl HelperProcessGpuExchangeClient {
                 format,
                 bytes_per_row,
                 release_to_parent: None,
+                unregister_foreign_from_surface_share: None,
                 release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
                     exchange_client: Arc::clone(self),
                     surface_id: surface_id.to_string(),
@@ -1791,6 +1964,7 @@ mod surface_check_out_lease_debt_tests {
             Arc::new(HelperProcessGpuExchangeClient::new(
                 python.None(),
                 share.socket_path.clone(),
+                "helper:lease-debt-under-test".to_string(),
             ))
         })
     }
@@ -1913,6 +2087,152 @@ mod surface_check_out_lease_debt_tests {
         assert!(
             refusal.to_string().contains("no-such-surface"),
             "the refusal must name the surface: {refusal}"
+        );
+    }
+}
+
+/// The adoption round trip against a real surface-share service, at the
+/// socket seam the Vulkan-free half of `import_dma_buf` rides.
+///
+/// Provable without a GPU — the fd genuinely crosses via SCM_RIGHTS and the
+/// service dups it, so a sized memfd stands in for a DMA-BUF: registration
+/// bookkeeping never touches the memory. The Vulkan mapping of an adopted
+/// surface is `requires_gpu` and runs on the rig.
+#[cfg(all(test, target_os = "linux"))]
+mod foreign_dma_buf_adoption_tests {
+    use super::*;
+    use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
+
+    const ADOPTED_WIDTH: u32 = 64;
+    const ADOPTED_HEIGHT: u32 = 16;
+    const ADOPTED_BYTE_SIZE: u64 = 64 * 4 * 16;
+
+    fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
+        Python::initialize();
+        Python::attach(|python| {
+            Arc::new(HelperProcessGpuExchangeClient::new(
+                python.None(),
+                share.socket_path.clone(),
+                "helper:adoption-under-test".to_string(),
+            ))
+        })
+    }
+
+    /// A sized memfd standing in for a foreign DMA-BUF.
+    fn a_foreign_memory_fd() -> OwnedFd {
+        let raw_fd = unsafe {
+            libc::memfd_create(c"adopted-foreign-plane".as_ptr(), libc::MFD_CLOEXEC)
+        };
+        assert!(raw_fd >= 0, "memfd_create failed");
+        // SAFETY: a fresh fd memfd_create just returned; ours alone.
+        let owned = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let sized = unsafe { libc::ftruncate(owned.as_raw_fd(), ADOPTED_BYTE_SIZE as i64) };
+        assert_eq!(sized, 0, "ftruncate failed");
+        owned
+    }
+
+    fn check_in_request() -> serde_json::Value {
+        serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "helper:adoption-under-test",
+            "width": ADOPTED_WIDTH,
+            "height": ADOPTED_HEIGHT,
+            "format": "bgra32",
+            "resource_type": "pixel_buffer",
+            "handle_type": "dma_buf",
+            "plane_sizes": [ADOPTED_BYTE_SIZE],
+            "plane_offsets": [0u64],
+            "plane_strides": [ADOPTED_BYTE_SIZE / u64::from(ADOPTED_HEIGHT)],
+        })
+    }
+
+    /// The fd crosses, the service mints a resolvable id, and the checkout
+    /// hands the plane back with the geometry the adoption declared.
+    #[test]
+    fn an_adopted_foreign_fd_is_resolvable_with_its_declared_geometry() {
+        let share = SurfaceShareUnderTest::start("adoption");
+        let exchange_client = exchange_client_on(&share);
+        let foreign_fd = a_foreign_memory_fd();
+
+        let (check_in_response, _no_fds) = exchange_client
+            .surface_share_request_with_fds(&check_in_request(), &[foreign_fd.as_raw_fd()])
+            .expect("the check_in round trip completes");
+        let adopted_surface_id = check_in_response
+            .get("surface_id")
+            .and_then(|value| value.as_str())
+            .expect("check_in answers with a surface_id")
+            .to_string();
+        // The original stays the caller's — the kernel and the service each
+        // dup'd it on the way over.
+        drop(foreign_fd);
+
+        let (check_out_response, received_fds) = exchange_client
+            .check_out_surface(&adopted_surface_id)
+            .expect("the adopted surface checks out");
+        assert!(
+            check_out_response.get("error").is_none(),
+            "the checkout must not refuse: {check_out_response}"
+        );
+        assert_eq!(
+            check_out_response.get("width").and_then(|v| v.as_u64()),
+            Some(u64::from(ADOPTED_WIDTH)),
+        );
+        assert_eq!(
+            check_out_response.get("height").and_then(|v| v.as_u64()),
+            Some(u64::from(ADOPTED_HEIGHT)),
+        );
+        assert_eq!(
+            check_out_response.get("format").and_then(|v| v.as_str()),
+            Some("bgra32"),
+        );
+        assert_eq!(
+            check_out_response
+                .get("plane_sizes")
+                .and_then(|v| v.as_array())
+                .map(|sizes| sizes.iter().filter_map(|s| s.as_u64()).collect::<Vec<_>>()),
+            Some(vec![ADOPTED_BYTE_SIZE]),
+        );
+        assert_eq!(
+            received_fds.len(),
+            1,
+            "one adopted plane crosses back as one fd"
+        );
+        drop(received_fds);
+        let _ = exchange_client.release_check_out(&adopted_surface_id);
+    }
+
+    /// The unregister debt's op removes the registration: the id stops
+    /// resolving, and a second release reports nothing left to remove.
+    #[test]
+    fn releasing_an_adoption_removes_the_registration() {
+        let share = SurfaceShareUnderTest::start("adoption-release");
+        let exchange_client = exchange_client_on(&share);
+        let foreign_fd = a_foreign_memory_fd();
+
+        let (check_in_response, _no_fds) = exchange_client
+            .surface_share_request_with_fds(&check_in_request(), &[foreign_fd.as_raw_fd()])
+            .expect("the check_in round trip completes");
+        let adopted_surface_id = check_in_response
+            .get("surface_id")
+            .and_then(|value| value.as_str())
+            .expect("check_in answers with a surface_id")
+            .to_string();
+
+        exchange_client
+            .unregister_foreign_surface(&adopted_surface_id)
+            .expect("the adoption unregisters");
+
+        let (after_release, _no_fds_after) = exchange_client
+            .check_out_surface(&adopted_surface_id)
+            .expect("the socket round trip still completes");
+        assert!(
+            after_release.get("error").is_some(),
+            "a released adoption must stop resolving: {after_release}"
+        );
+        let second_release = exchange_client.unregister_foreign_surface(&adopted_surface_id);
+        assert!(
+            second_release.is_err(),
+            "a second release must report nothing left to remove"
         );
     }
 }
