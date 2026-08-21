@@ -120,6 +120,7 @@ fn run_graphics_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             | TextureUsages::TEXTURE_BINDING
             | TextureUsages::RENDER_ATTACHMENT,
         label: Some("graphics_kernel_smoke_target"),
+        cross_process_importability: Default::default(),
     };
     let texture_handle = gpu_limited
         .acquire_texture(&pool_descriptor)

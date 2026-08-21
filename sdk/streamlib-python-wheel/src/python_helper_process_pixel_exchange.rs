@@ -182,11 +182,7 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// acquirer, and releasing it here would evict somebody else's frame.
     pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
     /// Present only on an adopted foreign DMA-BUF — the registration this
-    /// import created is this surface's to remove.
-    #[expect(
-        dead_code,
-        reason = "settled by its own Drop; nothing reads it, and that is the point"
-    )]
+    /// import created is this surface's to remove; settled by its own Drop.
     pub(crate) unregister_foreign_from_surface_share: Option<HelperForeignSurfaceUnregisterDebt>,
     /// The checkout lease this surface owes, whoever owns the surface itself.
     #[expect(

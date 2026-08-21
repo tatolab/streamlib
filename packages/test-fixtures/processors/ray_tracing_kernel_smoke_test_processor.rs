@@ -156,6 +156,7 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
         format: TextureFormat::Rgba8Unorm,
         usage: TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING,
         label: Some("ray_tracing_kernel_smoke_target"),
+        cross_process_importability: Default::default(),
     };
     let texture_handle = gpu_limited
         .acquire_texture(&pool_descriptor)
