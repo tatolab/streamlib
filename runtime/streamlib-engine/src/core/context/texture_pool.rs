@@ -54,6 +54,7 @@ pub struct TexturePoolDescriptor {
 
 impl TexturePoolDescriptor {
     /// Create a new pool descriptor.
+    #[must_use]
     pub fn new(width: u32, height: u32, format: TextureFormat) -> Self {
         Self {
             width,
@@ -66,18 +67,21 @@ impl TexturePoolDescriptor {
     }
 
     /// Set usage flags.
+    #[must_use]
     pub fn with_usage(mut self, usage: TextureUsages) -> Self {
         self.usage = usage;
         self
     }
 
     /// Set label.
+    #[must_use]
     pub fn with_label(mut self, label: &'static str) -> Self {
         self.label = Some(label);
         self
     }
 
     /// Set how the allocation crosses a process boundary.
+    #[must_use]
     pub fn with_cross_process_importability(
         mut self,
         cross_process_importability: TextureCrossProcessImportability,

@@ -171,6 +171,10 @@ pub struct SubprocessBridge {
     writer: SharedWriter,
     lifecycle_rx: Receiver<serde_json::Value>,
     registry: Arc<EscalateHandleRegistry>,
+    /// Held for teardown: the drop path evicts what the registry's acquires
+    /// entered into the parent's texture cache, which needs the same
+    /// capability the reader thread dispatches against.
+    sandbox: GpuContextLimitedAccess,
     reader: Option<JoinHandle<()>>,
     dead: Arc<Mutex<bool>>,
 }
@@ -201,6 +205,7 @@ impl SubprocessBridge {
         let reader_registry = Arc::clone(&registry);
         let reader_dead = Arc::clone(&dead);
         let reader_processor_id = processor_id.clone();
+        let teardown_sandbox = sandbox.clone();
 
         let reader = thread::Builder::new()
             .name(thread_name)
@@ -222,6 +227,7 @@ impl SubprocessBridge {
             writer,
             lifecycle_rx: rx,
             registry,
+            sandbox: teardown_sandbox,
             reader: Some(reader),
             dead,
         })
@@ -285,7 +291,14 @@ impl SubprocessBridge {
 impl Drop for SubprocessBridge {
     fn drop(&mut self) {
         self.mark_dead();
-        self.registry.clear();
+        // Run the release path's kind-specific cleanup for everything the
+        // helper never released — a crashed child must not strand cache
+        // entries in a GpuContext that outlives every respawn.
+        for (handle_id, removed_handle) in self.registry.drain_handles() {
+            if removed_handle.is_texture_backed() {
+                self.sandbox.unregister_texture(&handle_id);
+            }
+        }
         // Shut down the write half so the reader thread sees EOF on its
         // clone if the subprocess is still alive. The OS reaps the
         // thread on process exit; we avoid blocking on join.

@@ -297,8 +297,8 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   implementation found pooled textures were importable in **no** flavour
   (`VK_IMAGE_TILING_OPTIMAL`, modifier zero — `HostVulkanTexture::new_opaque_fd_export`
   had no caller outside adapter tests), so the axis is the missing parent half.
-  Owner-approved at #1778's announce gate, recorded here because the delta did not
-  anticipate it. The escalate acquire also lands the pooled texture in `GpuContext`'s
+  Owner-approved at #1778's announce gate (the approval is recorded in that
+  ticket's comments), recorded here because the delta did not anticipate it. The escalate acquire also lands the pooled texture in `GpuContext`'s
   own texture cache, so the parent's binding resolution answers from what it holds
   instead of re-importing its own allocation through the surface-share socket.
 - ADDED: the escalate dispatch handlers publish each bound surface's post-dispatch

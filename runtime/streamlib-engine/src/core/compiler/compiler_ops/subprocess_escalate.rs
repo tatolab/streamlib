@@ -162,6 +162,20 @@ pub(crate) enum RegisteredHandle {
     },
 }
 
+impl RegisteredHandle {
+    /// Whether releasing this handle also owes the parent's texture-cache
+    /// entry an eviction — textures and images enter it at acquire, pixel
+    /// buffers never do.
+    pub(crate) fn is_texture_backed(&self) -> bool {
+        match self {
+            Self::PixelBuffer(_) => false,
+            Self::Texture { .. } => true,
+            #[cfg(target_os = "linux")]
+            Self::Image { .. } => true,
+        }
+    }
+}
+
 /// Tracks resources acquired on behalf of a subprocess so `release_handle` —
 /// or subprocess death — can drop the host's strong reference. Resources stay
 /// alive for the duration of the host pool; this map simply prevents the
@@ -227,17 +241,19 @@ impl EscalateHandleRegistry {
         );
     }
 
-    /// Remove a handle by id. Returns `true` when an entry was found
-    /// and removed; `false` when the id was unknown. Used by the
-    /// escalate `release_handle` path.
-    pub(crate) fn remove_handle(&self, handle_id: &str) -> bool {
+    /// Remove a handle by id, handing back what was held so the caller can
+    /// pair its removal with the kind-specific cleanup. `None` when the id
+    /// was unknown. Used by the escalate `release_handle` path.
+    pub(crate) fn remove_handle(&self, handle_id: &str) -> Option<RegisteredHandle> {
         let mut map = self.handles.lock().expect("poisoned");
-        map.remove(handle_id).is_some()
+        map.remove(handle_id)
     }
 
-    pub(crate) fn clear(&self) {
+    /// Take every held handle, ids included, so a teardown path can run the
+    /// same kind-specific cleanup the explicit release path does.
+    pub(crate) fn drain_handles(&self) -> Vec<(String, RegisteredHandle)> {
         let mut map = self.handles.lock().expect("poisoned");
-        map.clear();
+        map.drain().collect()
     }
 
     /// Number of currently-held handles; visible for tests.
@@ -353,11 +369,7 @@ pub(crate) fn handle_escalate_op(
                 // own allocation through the surface-share socket, a path
                 // that cannot rebuild every flavour and re-interprets the
                 // ones it can.
-                full.register_texture_with_layout(
-                    &handle_id,
-                    texture.texture_clone(),
-                    streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
-                );
+                full.register_texture(&handle_id, texture.texture_clone());
                 Ok((handle_id, texture, produce_done, consume_done))
             });
             #[cfg(not(target_os = "linux"))]
@@ -764,16 +776,22 @@ pub(crate) fn handle_escalate_op(
             request_id: _,
             handle_id,
         }) => {
-            let removed = registry.remove_handle(&handle_id);
-            if removed {
+            let removed_handle = registry.remove_handle(&handle_id);
+            let removed = removed_handle.is_some();
+            if let Some(removed_handle) = removed_handle {
                 // Pixel-buffer / texture / image acquires were
                 // checked into the surface-share service under the
                 // returned handle_id; pair the registry eviction
-                // with the matching service release, and evict the
-                // parent's own texture-cache entry (a no-op for
-                // buffer handles, which the cache never holds).
+                // with the matching service release.
                 release_surface_share_surface(sandbox, &handle_id);
-                sandbox.unregister_texture(&handle_id);
+                // Texture and image acquires also entered the parent's
+                // same-process texture cache; `unregister_texture` removes
+                // that entry and tears down the surface's export stagings
+                // with it. Scoped to texture-backed handles so a buffer
+                // release keeps its staging lifetime unchanged.
+                if removed_handle.is_texture_backed() {
+                    sandbox.unregister_texture(&handle_id);
+                }
             }
             // An acceleration structure is registered against `GpuContext`
             // rather than against the per-subprocess handle registry, so its id
@@ -1677,12 +1695,6 @@ fn plan_supplied_compute_bindings<'a>(
     Ok(planned)
 }
 
-/// Plan a dispatch's supplied bindings against the kernel, then resolve each
-/// one to the device texture it names.
-///
-/// Shared by the two dispatch paths — one kernel on its own, and a kernel
-/// inside a batch — so the extent convention below and the refusal wording
-/// have one home rather than two that can drift.
 /// Publish each bound surface's post-dispatch layout to the surface-share
 /// service, so a cross-process consumer's checkout names the layout the
 /// dispatch actually left the image in — the service cell is otherwise
@@ -1718,19 +1730,34 @@ fn publish_bound_surface_layouts_to_surface_share(
     }
 }
 
+/// One resolved compute binding carried with the surface id it named, so
+/// the transition and the layout publish pair by construction rather than
+/// by a shared index — the desynchronisation rule
+/// [`ResolvedSurfaceBoundKernelBinding`] documents.
+#[cfg(target_os = "linux")]
+struct ResolvedComputeKernelDispatchBindingWithSurfaceId {
+    surface_id: String,
+    dispatch_binding: BatchedComputeKernelDispatchBinding,
+}
+
+/// Plan a dispatch's supplied bindings against the kernel, then resolve each
+/// one to the device texture it names.
+///
+/// Shared by the two dispatch paths — one kernel on its own, and a kernel
+/// inside a batch — so the extent convention below and the refusal wording
+/// have one home rather than two that can drift.
 #[cfg(target_os = "linux")]
 fn resolve_supplied_compute_bindings(
     full: &crate::core::context::GpuContextFullAccess,
     supplied: &[EscalateRequestRunComputeKernelBinding],
     kernel: &crate::vulkan::rhi::VulkanComputeKernel,
-) -> crate::core::error::Result<(Vec<BatchedComputeKernelDispatchBinding>, Vec<String>)> {
+) -> crate::core::error::Result<Vec<ResolvedComputeKernelDispatchBindingWithSurfaceId>> {
     use crate::core::error::Error;
 
     // Borrowed, not cloned: this runs per frame, and the specs live on the
     // kernel for its whole life.
     let planned = plan_supplied_compute_bindings(supplied, kernel.host_inner().bindings())?;
 
-    let mut bound_surface_ids = Vec::with_capacity(planned.len());
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
         // Zero extent: a kernel binding names a surface the graph already has
@@ -1747,11 +1774,13 @@ fn resolve_supplied_compute_bindings(
                     binding.name, binding.target_id
                 ))
             })?;
-        bound_surface_ids.push(binding.target_id.to_string());
-        resolved.push(BatchedComputeKernelDispatchBinding {
-            binding: binding.binding,
-            kind: binding.kind,
-            registration,
+        resolved.push(ResolvedComputeKernelDispatchBindingWithSurfaceId {
+            surface_id: binding.target_id.to_string(),
+            dispatch_binding: BatchedComputeKernelDispatchBinding {
+                binding: binding.binding,
+                kind: binding.kind,
+                registration,
+            },
         });
     }
 
@@ -1770,12 +1799,24 @@ fn resolve_supplied_compute_bindings(
         // descriptor would be written. Skipped rather than compared, because
         // two absent images are not one texture and refusing them here would
         // send the caller looking for a duplicate they did not write.
-        let Some(image) = binding.registration.texture().vulkan_inner().image() else {
+        let Some(image) = binding
+            .dispatch_binding
+            .registration
+            .texture()
+            .vulkan_inner()
+            .image()
+        else {
             continue;
         };
         let clashing = resolved[..index].iter().zip(&planned).find(|(prior, _)| {
-            prior.kind != binding.kind
-                && prior.registration.texture().vulkan_inner().image() == Some(image)
+            prior.dispatch_binding.kind != binding.dispatch_binding.kind
+                && prior
+                    .dispatch_binding
+                    .registration
+                    .texture()
+                    .vulkan_inner()
+                    .image()
+                    == Some(image)
         });
         if let Some((prior, prior_plan)) = clashing {
             // Both ids, as the caller wrote them: a published frame id and its
@@ -1790,12 +1831,12 @@ fn resolve_supplied_compute_bindings(
                 prior_plan.target_id,
                 plan.name,
                 plan.target_id,
-                prior.kind,
-                binding.kind
+                prior.dispatch_binding.kind,
+                binding.dispatch_binding.kind
             )));
         }
     }
-    Ok((resolved, bound_surface_ids))
+    Ok(resolved)
 }
 
 /// Resolve every named binding onto the kernel's slots, then dispatch.
@@ -1816,10 +1857,29 @@ fn bind_and_dispatch_compute_kernel(
     // is a refcount on the texture the descriptor set now points at, and
     // dropping the last one before the GPU has run frees the image out from
     // under it.
-    let (resolved, bound_surface_ids) =
-        resolve_supplied_compute_bindings(full, &req.bindings, kernel)?;
+    let resolved = resolve_supplied_compute_bindings(full, &req.bindings, kernel)?;
+    // `VulkanComputeKernel::dispatch` records no image barrier of its own,
+    // so without this the bound images run in whatever layout their last
+    // producer left — and their registrations, and everything published from
+    // them, would keep claiming it.
+    let transition_pairs: Vec<(&TextureRegistration, crate::core::rhi::VulkanLayout)> = resolved
+        .iter()
+        .map(|binding| {
+            (
+                &binding.dispatch_binding.registration,
+                binding.dispatch_binding.kind.required_image_layout(),
+            )
+        })
+        .collect();
+    transition_bound_kernel_inputs_into_descriptor_layouts(
+        full,
+        "escalate_compute_dispatch_input_layouts",
+        crate::vulkan::rhi::VulkanStage::COMPUTE_SHADER,
+        &transition_pairs,
+    )?;
+    drop(transition_pairs);
     for binding in &resolved {
-        binding.write_into_kernel(kernel)?;
+        binding.dispatch_binding.write_into_kernel(kernel)?;
     }
 
     // A kernel that declares push constants must be given them even when the
@@ -1832,9 +1892,14 @@ fn bind_and_dispatch_compute_kernel(
 
     let dispatched = kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z);
     if dispatched.is_ok() {
-        let bound_surfaces: Vec<(String, TextureRegistration)> = bound_surface_ids
-            .into_iter()
-            .zip(resolved.iter().map(|binding| binding.registration.clone()))
+        let bound_surfaces: Vec<(String, TextureRegistration)> = resolved
+            .iter()
+            .map(|binding| {
+                (
+                    binding.surface_id.clone(),
+                    binding.dispatch_binding.registration.clone(),
+                )
+            })
             .collect();
         publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
     }
@@ -1920,14 +1985,18 @@ fn bind_and_dispatch_compute_kernel_batch(
                     dispatch.kernel_id
                 ))
             })?;
-        let (bindings, bound_surface_ids) =
-            resolve_supplied_compute_bindings(full, &dispatch.bindings, &kernel)
-                .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
-        bound_surfaces_across_the_batch.extend(
-            bound_surface_ids
-                .into_iter()
-                .zip(bindings.iter().map(|binding| binding.registration.clone())),
-        );
+        let resolved = resolve_supplied_compute_bindings(full, &dispatch.bindings, &kernel)
+            .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        bound_surfaces_across_the_batch.extend(resolved.iter().map(|binding| {
+            (
+                binding.surface_id.clone(),
+                binding.dispatch_binding.registration.clone(),
+            )
+        }));
+        let bindings = resolved
+            .into_iter()
+            .map(|binding| binding.dispatch_binding)
+            .collect();
         batch.push(BatchedComputeKernelDispatch {
             kernel,
             bindings,
@@ -2169,37 +2238,39 @@ fn resolve_planned_surface_bound_kernel_bindings<'a>(
 /// Barrier every bound input into the layout its descriptor requires, and
 /// publish the layout each one landed in.
 ///
-/// Neither `VulkanGraphicsKernel::offscreen_render` nor
-/// `VulkanRayTracingKernel::trace_rays` barriers a bound input — the draw path
-/// transitions its colour targets and nothing else — so a surface arriving in
-/// `GENERAL` or `TRANSFER_DST_OPTIMAL` would be read through a descriptor its
-/// layout does not satisfy. A run whose inputs already sit in the right layout
-/// records nothing and mints no command buffer.
+/// Neither `VulkanComputeKernel::dispatch`, `VulkanGraphicsKernel::
+/// offscreen_render` nor `VulkanRayTracingKernel::trace_rays` barriers a
+/// bound input — the draw path transitions its colour targets and nothing
+/// else — so a surface arriving in the wrong layout would be read or written
+/// through a descriptor its layout does not satisfy, and its registration
+/// would keep claiming a layout the run has left behind. A run whose inputs
+/// already sit in the right layout records nothing and mints no command
+/// buffer.
 #[cfg(target_os = "linux")]
 fn transition_bound_kernel_inputs_into_descriptor_layouts(
     full: &crate::core::context::GpuContextFullAccess,
     recorder_label: &str,
     consuming_stage: crate::vulkan::rhi::VulkanStage,
-    bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
+    bound_inputs: &[(&TextureRegistration, crate::core::rhi::VulkanLayout)],
 ) -> crate::core::error::Result<()> {
     use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
 
     let mut images_already_barriered = Vec::new();
     let mut bindings_to_barrier = Vec::new();
-    for binding in bound_inputs {
-        if binding.registration.current_layout() == binding.planned.kind.required_image_layout() {
+    for (registration, required_layout) in bound_inputs {
+        if registration.current_layout() == *required_layout {
             continue;
         }
         // One texture bound at two slots is one image and one barrier — a
         // second would name an oldLayout the first has already left, and the
         // two slots agree on the layout anyway or the kind clash would have
         // been refused already.
-        let image = binding.registration.texture().vulkan_inner().image();
+        let image = registration.texture().vulkan_inner().image();
         if images_already_barriered.contains(&image) {
             continue;
         }
         images_already_barriered.push(image);
-        bindings_to_barrier.push(binding);
+        bindings_to_barrier.push((registration, *required_layout));
     }
     if bindings_to_barrier.is_empty() {
         return Ok(());
@@ -2207,15 +2278,15 @@ fn transition_bound_kernel_inputs_into_descriptor_layouts(
 
     let mut recorder = full.create_command_recorder(recorder_label)?;
     recorder.begin()?;
-    for binding in &bindings_to_barrier {
+    for (registration, required_layout) in &bindings_to_barrier {
         // Whatever wrote this surface before the run is not this run's to know
         // — a transfer upload, a camera, another node — so the source scope is
         // the wide one every other entry-from-an-unknown-producer barrier in
         // the engine uses.
         let recorded = recorder.record_image_barrier(
-            binding.registration.texture(),
-            binding.registration.current_layout(),
-            binding.planned.kind.required_image_layout(),
+            registration.texture(),
+            registration.current_layout(),
+            *required_layout,
             VulkanStage::ALL_COMMANDS,
             consuming_stage,
             VulkanAccess::MEMORY_WRITE,
@@ -2230,12 +2301,45 @@ fn transition_bound_kernel_inputs_into_descriptor_layouts(
     // Published for every binding, not just the ones that were barriered: a
     // cross-process import synthesizes a fresh registration per resolve, so two
     // slots naming one surface hold two layout cells for the one image.
-    for binding in bound_inputs {
-        binding
-            .registration
-            .update_layout(binding.planned.kind.required_image_layout());
+    for (registration, required_layout) in bound_inputs {
+        registration.update_layout(*required_layout);
     }
     Ok(())
+}
+
+/// The `(registration, required layout)` pairs the transition fn consumes,
+/// derived from planner-resolved bindings.
+#[cfg(target_os = "linux")]
+fn descriptor_layout_transition_pairs<'a>(
+    bound_inputs: &'a [ResolvedSurfaceBoundKernelBinding<'_>],
+) -> Vec<(&'a TextureRegistration, crate::core::rhi::VulkanLayout)> {
+    bound_inputs
+        .iter()
+        .map(|binding| {
+            (
+                &binding.registration,
+                binding.planned.kind.required_image_layout(),
+            )
+        })
+        .collect()
+}
+
+/// The `(surface id, registration)` pairs the post-dispatch layout publish
+/// consumes, from planner-resolved bindings — paired by construction, never
+/// by a shared index.
+#[cfg(target_os = "linux")]
+fn bound_surface_layout_publish_pairs(
+    bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
+) -> Vec<(String, TextureRegistration)> {
+    bound_inputs
+        .iter()
+        .map(|binding| {
+            (
+                binding.planned.target_id.to_string(),
+                binding.registration.clone(),
+            )
+        })
+        .collect()
 }
 
 /// One reflected binding as a register response spells it.
@@ -2698,7 +2802,7 @@ fn bind_and_render_graphics_kernel(
         full,
         "escalate_graphics_draw_input_layouts",
         VulkanStage::ALL_GRAPHICS,
-        &bound_inputs,
+        &descriptor_layout_transition_pairs(&bound_inputs),
     )?;
 
     let mut color_targets = Vec::with_capacity(req.color_target_uuids.len());
@@ -2807,21 +2911,13 @@ fn bind_and_render_graphics_kernel(
         for registration in &color_targets {
             registration.update_layout(VulkanLayout::COLOR_ATTACHMENT_OPTIMAL);
         }
-        let bound_surfaces: Vec<(String, TextureRegistration)> = bound_inputs
-            .iter()
-            .map(|binding| {
-                (
-                    binding.planned.target_id.to_string(),
-                    binding.registration.clone(),
-                )
-            })
-            .chain(
-                req.color_target_uuids
-                    .iter()
-                    .cloned()
-                    .zip(color_targets.iter().cloned()),
-            )
-            .collect();
+        let mut bound_surfaces = bound_surface_layout_publish_pairs(&bound_inputs);
+        bound_surfaces.extend(
+            req.color_target_uuids
+                .iter()
+                .cloned()
+                .zip(color_targets.iter().cloned()),
+        );
         publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
     }
     drop(color_targets);
@@ -3444,7 +3540,7 @@ fn bind_and_trace_ray_tracing_kernel(
         full,
         "escalate_ray_tracing_trace_input_layouts",
         VulkanStage::ALL_COMMANDS,
-        &bound_inputs,
+        &descriptor_layout_transition_pairs(&bound_inputs),
     )?;
 
     for (slot, tlas) in &acceleration_structure_bindings {
@@ -3472,16 +3568,10 @@ fn bind_and_trace_ray_tracing_kernel(
 
     let traced = kernel.trace_rays(req.width, req.height, req.depth);
     if traced.is_ok() {
-        let bound_surfaces: Vec<(String, TextureRegistration)> = bound_inputs
-            .iter()
-            .map(|binding| {
-                (
-                    binding.planned.target_id.to_string(),
-                    binding.registration.clone(),
-                )
-            })
-            .collect();
-        publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
+        publish_bound_surface_layouts_to_surface_share(
+            full,
+            &bound_surface_layout_publish_pairs(&bound_inputs),
+        );
     }
     drop(bound_inputs);
     traced
@@ -3886,7 +3976,7 @@ fn derive_texture_cross_process_importability(
     opaque_fd_image_pool_available: bool,
 ) -> TextureCrossProcessImportability {
     if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
-        let format_is_single_plane = format != TextureFormat::Nv12;
+        let format_is_single_plane = format.plane_count() == 1;
         return if render_target_modifier_available && format_is_single_plane {
             TextureCrossProcessImportability::RenderTargetDmaBuf
         } else {
@@ -4262,7 +4352,7 @@ mod tests {
         // suite.
         let registry = EscalateHandleRegistry::new();
         assert_eq!(registry.handle_count(), 0);
-        assert!(!registry.remove_handle("missing"));
+        assert!(registry.remove_handle("missing").is_none());
     }
 
     #[test]
@@ -5956,11 +6046,12 @@ void main() {
                 .recorder_and_compute_kernel_fence_wait_count()
                 - stalls_before;
 
-            assert_eq!(
-                separate_submissions,
-                dispatches.len(),
-                "the path the batch replaces submits once per dispatch — if this is 1 the \
-                 counter is not counting and the assertion above proves nothing"
+            assert!(
+                separate_submissions >= dispatches.len(),
+                "the path the batch replaces submits at least once per dispatch, plus an \
+                 input-layout transition when a binding arrives in the wrong layout — if \
+                 this is fewer than the dispatch count the counter is not counting and \
+                 the assertion above proves nothing: {separate_submissions}"
             );
             assert!(
                 separate_stalls > batched_stalls,

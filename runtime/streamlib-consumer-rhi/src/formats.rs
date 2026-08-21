@@ -44,6 +44,20 @@ impl TextureFormat {
         matches!(self, Self::Rgba8UnormSrgb | Self::Bgra8UnormSrgb)
     }
 
+    /// Memory planes this format occupies — what a DMA-BUF crossing must
+    /// carry one fd (or one offset/stride entry) per.
+    pub fn plane_count(&self) -> u32 {
+        match self {
+            Self::Nv12 => 2,
+            Self::Rgba8Unorm
+            | Self::Rgba8UnormSrgb
+            | Self::Bgra8Unorm
+            | Self::Bgra8UnormSrgb
+            | Self::Rgba16Float
+            | Self::Rgba32Float => 1,
+        }
+    }
+
     /// Parse the wire spelling — the inverse of [`Self::wire_name`], and the
     /// one vocabulary the escalate wire, the surface-share registration and
     /// the Python surface all speak.

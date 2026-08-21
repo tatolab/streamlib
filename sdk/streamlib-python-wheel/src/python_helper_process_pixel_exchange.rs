@@ -131,13 +131,6 @@ fn parse_device_uuid(as_hex: &str) -> PyResult<[u8; 16]> {
     Ok(uuid)
 }
 
-/// Raise the service's own refusal of a checkout, if it refused one.
-///
-/// `checked_out_subject` names what was being checked out, because the caller
-/// knows whether it asked for a published surface or the staging behind one and
-/// the response does not. Taken as `format_args!` so the happy path — every
-/// frame a consumer claims or resolves — formats nothing.
-#[cfg(target_os = "linux")]
 /// One `u32` field of a checkout's registration metadata, present and
 /// positive or refused naming the field.
 #[cfg(target_os = "linux")]
@@ -173,9 +166,13 @@ fn plane_u64_array_check_out_metadata_field(response: &serde_json::Value, field:
 /// surface so later exports answer locally. vkAllocateMemory takes fd
 /// ownership only on success, so importing the originals would leave their
 /// ownership ambiguous on a partial multi-plane failure.
+///
+/// Returned raw: ownership hands to the very next Vulkan import call. The
+/// dups are collected as `OwnedFd` first so a partial duplication failure
+/// closes the successes by scope.
 #[cfg(target_os = "linux")]
-fn duplicate_plane_fds_for_import(plane_fds: &[OwnedFd]) -> PyResult<Vec<OwnedFd>> {
-    plane_fds
+fn duplicate_plane_fds_for_import(plane_fds: &[OwnedFd]) -> PyResult<Vec<RawFd>> {
+    let duplicated: Vec<OwnedFd> = plane_fds
         .iter()
         .map(|plane_fd| {
             plane_fd.try_clone().map_err(|duplicate_failure| {
@@ -184,7 +181,8 @@ fn duplicate_plane_fds_for_import(plane_fds: &[OwnedFd]) -> PyResult<Vec<OwnedFd
                 ))
             })
         })
-        .collect()
+        .collect::<PyResult<_>>()?;
+    Ok(duplicated.into_iter().map(OwnedFd::into_raw_fd).collect())
 }
 
 /// Close a dup Vulkan refused ownership of — and this path can run per
@@ -343,6 +341,13 @@ impl TextureCheckOutRegistrationMetadata {
     }
 }
 
+/// Raise the service's own refusal of a checkout, if it refused one.
+///
+/// `checked_out_subject` names what was being checked out, because the caller
+/// knows whether it asked for a published surface or the staging behind one and
+/// the response does not. Taken as `format_args!` so the happy path — every
+/// frame a consumer claims or resolves — formats nothing.
+#[cfg(target_os = "linux")]
 fn refuse_check_out_the_service_declined(
     checked_out_subject: std::fmt::Arguments<'_>,
     response: &serde_json::Value,
@@ -1594,9 +1599,13 @@ impl HelperProcessGpuExchangeClient {
         }
         match response.get("success").and_then(|value| value.as_bool()) {
             Some(true) => Ok(()),
-            _ => Err(PyRuntimeError::new_err(format!(
+            Some(false) => Err(PyRuntimeError::new_err(format!(
                 "the surface-share service did not record the layout publish for \
                  {surface_id:?} — it knows no such registration"
+            ))),
+            None => Err(PyRuntimeError::new_err(format!(
+                "the surface-share service's layout-publish answer for {surface_id:?} \
+                 carried no success field"
             ))),
         }
     }
@@ -1817,10 +1826,7 @@ impl HelperProcessGpuExchangeClient {
         let bytes_per_row = plane0_size / u64::from(height);
 
         let vulkan_device = self.consumer_vulkan_device()?;
-        let dup_fds = duplicate_plane_fds_for_import(&plane_fds)?;
-        // Ownership hands over here: nothing can fail between the unwrap to
-        // raw fds and the import call that adopts them.
-        let dup_raw_fds: Vec<RawFd> = dup_fds.into_iter().map(OwnedFd::into_raw_fd).collect();
+        let dup_raw_fds = duplicate_plane_fds_for_import(&plane_fds)?;
         let consumer_buffer =
             ConsumerVulkanBuffer::from_dma_buf_fds(&vulkan_device, &dup_raw_fds, &plane_sizes)
                 .map_err(|import_failure| {
@@ -1875,21 +1881,27 @@ impl HelperProcessGpuExchangeClient {
         }
 
         let vulkan_device = self.consumer_vulkan_device()?;
-        let dup_fds = duplicate_plane_fds_for_import(&plane_fds)?;
-        // Ownership hands over here: nothing can fail between the unwrap to
-        // raw fds and the import call that adopts them.
-        let dup_raw_fds: Vec<RawFd> = dup_fds.into_iter().map(OwnedFd::into_raw_fd).collect();
-        let imported = if metadata.handle_is_opaque_fd {
-            ConsumerVulkanTexture::from_opaque_fd(
+        let dup_raw_fds = duplicate_plane_fds_for_import(&plane_fds)?;
+        let imported = match (metadata.handle_is_opaque_fd, dup_raw_fds.as_slice()) {
+            (true, &[opaque_memory_fd]) => ConsumerVulkanTexture::from_opaque_fd(
                 &vulkan_device,
-                dup_raw_fds[0],
+                opaque_memory_fd,
                 metadata.width,
                 metadata.height,
                 metadata.format,
                 metadata.allocation_byte_size,
-            )
-        } else {
-            ConsumerVulkanTexture::import_render_target_dma_buf(
+            ),
+            // Unreachable past the arity refusal above; destructured rather
+            // than indexed so a broken invariant refuses instead of panicking.
+            (true, _) => {
+                close_single_plane_dup_vulkan_refused(&dup_raw_fds);
+                return Err(PyRuntimeError::new_err(format!(
+                    "opaque_fd texture {surface_id:?} duplicated {} fds where its whole \
+                     allocation travels as exactly one",
+                    dup_raw_fds.len()
+                )));
+            }
+            (false, _) => ConsumerVulkanTexture::import_render_target_dma_buf(
                 &vulkan_device,
                 &dup_raw_fds,
                 &metadata.plane_offsets,
@@ -1899,7 +1911,7 @@ impl HelperProcessGpuExchangeClient {
                 metadata.height,
                 metadata.format,
                 metadata.allocation_byte_size,
-            )
+            ),
         };
         let consumer_texture = imported.map_err(|import_failure| {
             close_single_plane_dup_vulkan_refused(&dup_raw_fds);
