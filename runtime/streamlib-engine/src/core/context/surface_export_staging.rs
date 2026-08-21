@@ -117,11 +117,12 @@ impl std::fmt::Display for SurfaceExportStagingResidency {
 }
 
 /// The pixel shape a texture-backed export presents to its consumer.
-/// Restricted to 4-byte color: the refill's geometry guard, the
-/// tightly-packed copy region, and the consumer-side layout all express
-/// exactly that today — accepting a wider format here would size a
-/// staging no refill can fill. BGRA stays BGRA: relabeling those bytes
-/// RGBA would silently swap channels.
+/// Restricted to single-plane color: the tightly-packed copy region and
+/// the consumer-side layout both express one strided buffer. BGRA stays
+/// BGRA: relabeling those bytes RGBA would silently swap channels, and
+/// the float formats keep their float identity for the same reason —
+/// a kernel's HDR output reaches the consumer as float16/float32
+/// elements, never as bytes wearing an integer label.
 ///
 /// Residency-neutral, because the constraint is: a staging is one
 /// buffer, and both residencies hand out exactly that one buffer.
@@ -129,10 +130,8 @@ fn export_pixel_shape_for_texture(format: TextureFormat) -> Result<PixelFormat> 
     match format {
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba32),
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra32),
-        TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => Err(Error::GpuError(format!(
-            "a surface export supports 4-byte color textures today; {format:?} needs the wider \
-             layouts no consumer path expresses yet"
-        ))),
+        TextureFormat::Rgba16Float => Ok(PixelFormat::Rgba16Float),
+        TextureFormat::Rgba32Float => Ok(PixelFormat::Rgba32Float),
         TextureFormat::Nv12 => Err(Error::GpuError(
             "a surface export refuses NV12: it is two planes, and a one-buffer export would drop \
              chroma"
@@ -198,9 +197,14 @@ pub struct SurfaceExportStaging {
     /// format, or the 4-byte color shape a texture source maps to.
     pixel_format: Option<PixelFormat>,
     /// Whether [`GpuContext::copy_surface_export_staging_back_to_surface`]
-    /// can honour a write — true only when the surface's sole backing is
-    /// its own pooled allocation.
+    /// can honour a write. True when the surface's sole backing is its
+    /// own pooled allocation, and always for a texture-backed staging —
+    /// the texture arm is reached only when the surface has no pooled
+    /// member (a kernel output), so the pool-member rule never applies.
     writable: bool,
+    /// Which backing kind the staging was minted over — what the
+    /// write-back resolves its destination against.
+    backing_kind_at_mint: SurfaceExportStagingBackingKind,
     /// The frame id a refill last read into this staging, if any.
     ///
     /// Names a *frame*, not a flag, because the staging is cached per pool
@@ -295,9 +299,28 @@ impl SurfaceExportStaging {
     }
 }
 
+/// Which backing kind the staging was minted over. The write-back
+/// publishes into the same kind: a pool-backed staging's edit lands in
+/// the pooled allocation under the pool-member rule, a texture-backed
+/// staging's in the registered texture itself, and a surface whose
+/// backing kind changed since mint refuses rather than publishing into
+/// a different world than the consumer was reading.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SurfaceExportStagingBackingKind {
+    RegisteredTexture,
+    PooledPixelBuffer,
+}
+
 /// What a refill resolved this frame — looked up fresh on every copy so
 /// a rotating producer's re-registration is honoured, never a snapshot.
 enum ResolvedBlitSource {
+    RegisteredTexture(crate::core::context::TextureRegistration),
+    PixelBuffer(crate::core::rhi::PixelBuffer),
+}
+
+/// Where a write-back publishes the staged edit — the same backing kind
+/// the staging was minted over, re-resolved and re-guarded at publish.
+enum ResolvedWriteBackDestination {
     RegisteredTexture(crate::core::context::TextureRegistration),
     PixelBuffer(crate::core::rhi::PixelBuffer),
 }
@@ -309,10 +332,11 @@ struct SurfaceExportStagingShape {
     surface_width: u32,
     surface_height: u32,
     pixel_format: PixelFormat,
-    /// The advertised write-back capability. A snapshot: the write-back
-    /// itself re-tests, because a producer can register a texture under
-    /// this id after the staging was minted.
+    /// The advertised write-back capability. A snapshot for the
+    /// pool-backed kind: that write-back re-tests, because a producer
+    /// can register a texture under the id after the staging was minted.
     writable: bool,
+    backing_kind_at_mint: SurfaceExportStagingBackingKind,
 }
 
 impl GpuContext {
@@ -382,16 +406,22 @@ impl GpuContext {
             ResolvedBlitSource::RegisteredTexture(registration) => {
                 let texture = registration.texture();
                 let pixel_format = export_pixel_shape_for_texture(texture.format())?;
+                let export_bytes_per_pixel = export_bytes_per_pixel_for_pixel_format(pixel_format)?;
                 let (surface_width, surface_height) = (texture.width(), texture.height());
                 SurfaceExportStagingShape {
-                    // 4-byte color by `export_pixel_shape_for_texture`'s
-                    // restriction — the same arithmetic the refill guard
-                    // and the copy region assume.
-                    staging_byte_size: u64::from(surface_width) * u64::from(surface_height) * 4,
+                    staging_byte_size: u64::from(surface_width)
+                        * u64::from(surface_height)
+                        * u64::from(export_bytes_per_pixel),
                     surface_width,
                     surface_height,
                     pixel_format,
-                    writable: false,
+                    // The texture arm answers only for a surface with no
+                    // pooled member (a kernel output), whose id↔backing
+                    // binding is stable — the pool-member rule the buffer
+                    // arm computes below has nothing to protect here, and
+                    // the scope's write-back publishes into the texture.
+                    writable: true,
+                    backing_kind_at_mint: SurfaceExportStagingBackingKind::RegisteredTexture,
                 }
             }
             ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
@@ -417,6 +447,7 @@ impl GpuContext {
                     surface_height: pixel_buffer.height,
                     pixel_format,
                     writable: pooled_allocation_is_the_only_backing,
+                    backing_kind_at_mint: SurfaceExportStagingBackingKind::PooledPixelBuffer,
                 }
             }
         };
@@ -453,6 +484,7 @@ impl GpuContext {
             surface_height: shape.surface_height,
             pixel_format: Some(shape.pixel_format),
             writable: shape.writable,
+            backing_kind_at_mint: shape.backing_kind_at_mint,
             frame_last_read_into_this_staging: Mutex::new(None),
             #[cfg(target_os = "linux")]
             surface_share_registration_id: Mutex::new(None),
@@ -718,7 +750,22 @@ impl GpuContext {
         match source {
             ResolvedBlitSource::RegisteredTexture(registration) => {
                 let texture = registration.texture();
-                if u64::from(texture.width()) * u64::from(texture.height()) * 4
+                let export_pixel_format = export_pixel_shape_for_texture(texture.format())?;
+                // Format identity, not just byte size: two 4-byte formats
+                // (RGBA vs BGRA) match on size, and staging the bytes of
+                // one under the label of the other swaps channels.
+                if Some(export_pixel_format) != staging.pixel_format {
+                    return Err(Error::GpuError(format!(
+                        "surface {} was re-registered as {:?}; the cached staging presents \
+                         {:?} — resolve the surface again",
+                        staging.source_surface_key, export_pixel_format, staging.pixel_format,
+                    )));
+                }
+                let export_bytes_per_pixel =
+                    export_bytes_per_pixel_for_pixel_format(export_pixel_format)?;
+                if u64::from(texture.width())
+                    * u64::from(texture.height())
+                    * u64::from(export_bytes_per_pixel)
                     != staging.staging_byte_size
                 {
                     return Err(Error::GpuError(format!(
@@ -800,15 +847,17 @@ impl GpuContext {
     /// Copy a written staging buffer back into its source surface, so an
     /// in-place consumer-side edit is visible to every other holder.
     ///
-    /// Only for a surface whose sole backing is its own pooled
-    /// allocation. A frame its producer also published as a registered
-    /// texture is still the producer's, and a texture-backed export has
-    /// no write-back path at all (buffer→image plus the layout dance has
-    /// no consumer).
+    /// The destination is the backing kind the staging was minted over:
+    /// a pooled allocation for a pool-backed staging — only when it is
+    /// the surface's sole backing, because a frame its producer also
+    /// published as a registered texture is still the producer's — or
+    /// the registered texture itself for a texture-backed staging (a
+    /// kernel output), via buffer→image plus the same layout dance the
+    /// refill's read direction records.
     ///
-    /// Tested twice: the staging's `writable` is the capability the
-    /// consumer was told about when it opened the export, and the
-    /// registration test is re-run here. The two can disagree — a
+    /// The pool arm is tested twice: the staging's `writable` is the
+    /// capability the consumer was told about when it opened the export,
+    /// and the registration test is re-run here. The two can disagree — a
     /// producer can register a texture over the slot after the export
     /// was opened, and while a recycled *frame id* is refused above, a
     /// registration alone advances no generation.
@@ -853,88 +902,183 @@ impl GpuContext {
         )
     }
 
-    /// The guards every write-back runs, plus the pooled allocation the
-    /// staged edit publishes into.
+    /// Refuse publishing a staging that holds no frame, or another frame
+    /// than the one named — the read-before-write rule both backing
+    /// kinds share, because a write-back is an edit *of the frame that
+    /// was read in* whichever memory it lands in.
+    fn refuse_a_write_of_a_frame_this_staging_does_not_hold(
+        staging: &SurfaceExportStaging,
+        surface_id: &str,
+    ) -> Result<()> {
+        match staging.frame_last_read_into_this_staging.lock().as_deref() {
+            None => Err(Error::GpuError(format!(
+                "surface {surface_id}'s export staging has never been read into; publishing \
+                 it would write uninitialised memory over a live frame — read the frame in \
+                 before publishing an edit of it"
+            ))),
+            Some(read_in) if read_in != surface_id => Err(Error::GpuError(format!(
+                "surface {surface_id}'s export staging currently holds frame {read_in}; \
+                 publishing it would write that frame's pixels over this one — read this \
+                 frame in before publishing an edit of it"
+            ))),
+            Some(_) => Ok(()),
+        }
+    }
+
+    /// The guards every write-back runs, plus the backing the staged
+    /// edit publishes into — the kind the staging was minted over.
     fn resolve_write_back_destination(
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
-    ) -> Result<crate::core::rhi::PixelBuffer> {
+    ) -> Result<ResolvedWriteBackDestination> {
         Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
         if !staging.writable {
             return Err(Error::GpuError(format!(
-                "surface {surface_id}'s export is read-only: the write-back path belongs to \
-                 surfaces whose only backing is their own pooled allocation"
+                "surface {surface_id}'s export is read-only: this frame is a pool member its \
+                 producer still owns, and a pooled allocation publishes an edit only when it \
+                 is the surface's sole backing"
             )));
         }
-        if self
-            .producer_registered_texture_for_surface_id(surface_id)
-            .is_some()
-        {
-            return Err(Error::GpuError(format!(
-                "surface {surface_id} has gained a producer's registered texture since its \
-                 export was opened read-write; the pooled allocation now backs someone else's \
-                 frame and the staged edit cannot be published into it"
-            )));
-        }
-        match staging.frame_last_read_into_this_staging.lock().as_deref() {
-            None => {
-                return Err(Error::GpuError(format!(
-                    "surface {surface_id}'s export staging has never been read into; publishing \
-                     it would write uninitialised memory over a live frame — read the frame in \
-                     before publishing an edit of it"
-                )));
+        match staging.backing_kind_at_mint {
+            SurfaceExportStagingBackingKind::PooledPixelBuffer => {
+                if self
+                    .producer_registered_texture_for_surface_id(surface_id)
+                    .is_some()
+                {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} has gained a producer's registered texture since \
+                         its export was opened read-write; the pooled allocation now backs \
+                         someone else's frame and the staged edit cannot be published into it"
+                    )));
+                }
+                Self::refuse_a_write_of_a_frame_this_staging_does_not_hold(staging, surface_id)?;
+                let ResolvedBlitSource::PixelBuffer(pixel_buffer) =
+                    self.resolve_device_export_source(surface_id)?
+                else {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} no longer resolves to a pooled allocation; the \
+                         staged edit has nowhere to be published"
+                    )));
+                };
+                if pixel_buffer.plane_size(0) != staging.staging_byte_size {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} now resolves to a {}-byte buffer; the staged \
+                         write is sized for {} — the edit cannot be published",
+                        pixel_buffer.plane_size(0),
+                        staging.staging_byte_size,
+                    )));
+                }
+                Ok(ResolvedWriteBackDestination::PixelBuffer(pixel_buffer))
             }
-            Some(read_in) if read_in != surface_id => {
-                return Err(Error::GpuError(format!(
-                    "surface {surface_id}'s export staging currently holds frame {read_in}; \
-                     publishing it would write that frame's pixels over this one — read this \
-                     frame in before publishing an edit of it"
-                )));
+            SurfaceExportStagingBackingKind::RegisteredTexture => {
+                Self::refuse_a_write_of_a_frame_this_staging_does_not_hold(staging, surface_id)?;
+                let ResolvedBlitSource::RegisteredTexture(registration) =
+                    self.resolve_device_export_source(surface_id)?
+                else {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} has gained a pooled backing since its \
+                         texture-backed export was opened; the staged edit's destination is no \
+                         longer the texture the consumer read — resolve the surface again"
+                    )));
+                };
+                let texture = registration.texture();
+                let export_pixel_format = export_pixel_shape_for_texture(texture.format())?;
+                if Some(export_pixel_format) != staging.pixel_format {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} was re-registered as {:?}; the staged write \
+                         presents {:?} — the edit cannot be published",
+                        export_pixel_format, staging.pixel_format,
+                    )));
+                }
+                let export_bytes_per_pixel =
+                    export_bytes_per_pixel_for_pixel_format(export_pixel_format)?;
+                if u64::from(texture.width())
+                    * u64::from(texture.height())
+                    * u64::from(export_bytes_per_pixel)
+                    != staging.staging_byte_size
+                {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} was re-registered with different geometry \
+                         ({}x{}); the staged write is sized for {}x{} — the edit cannot be \
+                         published",
+                        texture.width(),
+                        texture.height(),
+                        staging.surface_width,
+                        staging.surface_height,
+                    )));
+                }
+                Ok(ResolvedWriteBackDestination::RegisteredTexture(registration))
             }
-            Some(_) => {}
         }
-        let ResolvedBlitSource::PixelBuffer(pixel_buffer) =
-            self.resolve_device_export_source(surface_id)?
-        else {
-            return Err(Error::GpuError(format!(
-                "surface {surface_id} no longer resolves to a pooled allocation; the staged \
-                 edit has nowhere to be published"
-            )));
-        };
-        if pixel_buffer.plane_size(0) != staging.staging_byte_size {
-            return Err(Error::GpuError(format!(
-                "surface {surface_id} now resolves to a {}-byte buffer; the staged write is \
-                 sized for {} — the edit cannot be published",
-                pixel_buffer.plane_size(0),
-                staging.staging_byte_size,
-            )));
-        }
-        Ok(pixel_buffer)
     }
 
-    /// Record one staging→surface copy.
+    /// Record one staging→surface copy, into whichever backing kind the
+    /// staging was minted over.
     fn record_write_back(
         staging: &SurfaceExportStaging,
-        destination: &crate::core::rhi::PixelBuffer,
+        destination: &ResolvedWriteBackDestination,
         recorder: &mut RhiCommandRecorder,
     ) -> Result<()> {
-        recorder.record_copy_buffer_to_buffer(
-            staging.staging_buffer.as_ref(),
-            destination,
-            staging.staging_byte_size,
-        )?;
-        // The published edit must be visible to whoever reads next —
-        // downstream GPU consumers and, via the coherent mapping the
-        // host wait covers, CPU readers.
-        recorder.record_buffer_barrier(
-            destination,
-            VulkanStage::ALL_TRANSFER,
-            VulkanStage::ALL_COMMANDS,
-            VulkanAccess::TRANSFER_WRITE,
-            VulkanAccess::MEMORY_READ,
-        )
+        match destination {
+            ResolvedWriteBackDestination::PixelBuffer(pixel_buffer) => {
+                recorder.record_copy_buffer_to_buffer(
+                    staging.staging_buffer.as_ref(),
+                    pixel_buffer,
+                    staging.staging_byte_size,
+                )?;
+                // The published edit must be visible to whoever reads next —
+                // downstream GPU consumers and, via the coherent mapping the
+                // host wait covers, CPU readers.
+                recorder.record_buffer_barrier(
+                    pixel_buffer,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanStage::ALL_COMMANDS,
+                    VulkanAccess::TRANSFER_WRITE,
+                    VulkanAccess::MEMORY_READ,
+                )
+            }
+            ResolvedWriteBackDestination::RegisteredTexture(registration) => {
+                let texture = registration.texture();
+                // The same layout dance as the refill's read direction,
+                // with the transfer arrow reversed. UNDEFINED cannot be a
+                // restore target, so such a texture comes to rest in
+                // GENERAL and the registration records that.
+                let resting_layout = registration.current_layout();
+                let restore_layout = if resting_layout == VulkanLayout::UNDEFINED {
+                    VulkanLayout::GENERAL
+                } else {
+                    resting_layout
+                };
+                recorder.record_image_barrier(
+                    texture,
+                    resting_layout,
+                    VulkanLayout::TRANSFER_DST_OPTIMAL,
+                    VulkanStage::ALL_COMMANDS,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanAccess::MEMORY_WRITE,
+                    VulkanAccess::TRANSFER_WRITE,
+                )?;
+                recorder.record_copy_buffer_to_image(
+                    staging.staging_buffer.as_ref(),
+                    texture,
+                    VulkanLayout::TRANSFER_DST_OPTIMAL,
+                    ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
+                )?;
+                recorder.record_image_barrier(
+                    texture,
+                    VulkanLayout::TRANSFER_DST_OPTIMAL,
+                    restore_layout,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanStage::ALL_COMMANDS,
+                    VulkanAccess::TRANSFER_WRITE,
+                    VulkanAccess::MEMORY_READ,
+                )?;
+                registration.update_layout(restore_layout);
+                Ok(())
+            }
+        }
     }
 
     /// Export the staging buffer's OPAQUE_FD plus byte size and the
@@ -1421,8 +1565,9 @@ mod tests {
             .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
             .expect("device-export staging for the kernel output");
         assert!(
-            !staging.writable(),
-            "a texture-backed export has no write-back path"
+            staging.writable(),
+            "a texture-backed export is writable: a kernel output has no pooled member, so \
+             the pool-member rule has nothing to protect"
         );
 
         gpu.refill_surface_export_staging(&staging, &surface_id)
@@ -1432,6 +1577,119 @@ mod tests {
             KERNEL_OUTPUT_STAMP,
             "the device export of a surface with no pooled backing",
         );
+    }
+
+    /// The scope's write direction: an edit staged over a texture-backed
+    /// export publishes back into the registered texture itself, proven
+    /// by a second refill reading the edit out of the texture.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_texture_backed_export_publishes_its_edit_back_into_the_texture() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        let kernel_output_texture = create_producer_owned_texture(&gpu);
+        gpu.register_texture_with_layout(
+            &surface_id,
+            kernel_output_texture.clone(),
+            VulkanLayout::UNDEFINED,
+        );
+        let (_, upload_source) = gpu
+            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the kernel output's upload source");
+        stamp_every_byte_of_pooled_backing(&upload_source, KERNEL_OUTPUT_STAMP);
+        gpu.copy_pixel_buffer_to_texture(
+            &upload_source,
+            &kernel_output_texture,
+            &surface_id,
+            SURFACE_WIDTH,
+            SURFACE_HEIGHT,
+        )
+        .expect("render into the kernel output texture");
+
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("device-export staging for the kernel output");
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("read the kernel output into the staging");
+        stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect("publish the edit into the texture");
+
+        // Round trip: a fresh refill reads the texture, not the staging's
+        // leftover bytes, so the edit surviving it proves the texture took
+        // the write.
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("re-read the texture after the write-back");
+        assert_every_byte_is(
+            &read_device_export_staging_into_host_bytes(&gpu, &staging),
+            CONSUMER_EDIT_STAMP,
+            "the texture's pixels after a staged edit published back",
+        );
+    }
+
+    /// The read-before-write rule holds for the texture arm too: a
+    /// staging never refilled has nothing to edit, and publishing it
+    /// would write allocator garbage over the kernel's output.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_texture_backed_write_back_of_a_never_filled_staging_is_refused() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        gpu.register_texture_with_layout(
+            &surface_id,
+            create_producer_owned_texture(&gpu),
+            VulkanLayout::UNDEFINED,
+        );
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("device-export staging for the kernel output");
+        let refusal = gpu
+            .copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect_err("a never-filled texture staging must not publish");
+        assert!(
+            refusal.to_string().contains("never been read into"),
+            "the refusal must name the missing read, got: {refusal}"
+        );
+    }
+
+    /// A float kernel output sizes its staging by its own pixel width
+    /// and presents its float identity — the HDR shape the scope exists
+    /// for. GPU-gated: skips when no device is present.
+    #[test]
+    fn a_float_format_texture_sizes_its_staging_by_its_own_pixel_width() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        let descriptor =
+            TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba16Float)
+                .with_usage(
+                    TextureUsages::COPY_SRC | TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING,
+                );
+        let float_texture = gpu
+            .device()
+            .create_texture(&descriptor)
+            .expect("rgba16_float kernel output texture");
+        gpu.register_texture_with_layout(&surface_id, float_texture, VulkanLayout::UNDEFINED);
+
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("a float texture's export staging");
+        assert_eq!(
+            staging.staging_byte_size(),
+            u64::from(SURFACE_WIDTH) * u64::from(SURFACE_HEIGHT) * 8,
+            "an rgba16_float staging spans 8 bytes per pixel"
+        );
+        assert_eq!(
+            staging.pixel_format(),
+            Some(PixelFormat::Rgba16Float),
+            "the staged shape keeps its float identity"
+        );
+        assert!(staging.writable(), "a texture-backed export is writable");
     }
 
     /// The bytes of a host-visible staging, read the way its consumer
