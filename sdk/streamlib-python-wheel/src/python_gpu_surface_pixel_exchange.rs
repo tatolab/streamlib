@@ -121,6 +121,14 @@ impl GpuSurfaceOwnedMemory {
                      `export_dma_buf` hands the texture handle itself to native code",
                 ));
             }
+            HelperCheckedOutSurface::AcquiredDeviceTexture(_) => {
+                return Err(PyRuntimeError::new_err(
+                    "this surface is a device texture whose memory is not mapped into this \
+                     process: its pixels are reachable to a kernel dispatch, which binds it by \
+                     surface id, and to a device tensor through `as_device_tensor()`, not to \
+                     the CPU directly",
+                ));
+            }
         };
         Ok(HostVisiblePixelPlaneView {
             base_address: checked_out.consumer_buffer.mapped_ptr(),
@@ -146,7 +154,7 @@ impl GpuSurfaceOwnedMemory {
 // =============================================================================
 
 /// The DLPack shape a pixel format maps to.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PixelExchangeTensorLayout {
     pub(crate) shape: Vec<i64>,
     /// Strides in **elements**, per the DLPack spec — not numpy's bytes.
@@ -503,6 +511,14 @@ pub(crate) struct SurfaceDeviceExport {
     exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
+#[cfg(target_os = "linux")]
+impl SurfaceDeviceExport {
+    /// The DLPack device CUDA's import of the staging lives on.
+    pub(crate) fn imported_dlpack_device(&self) -> Device {
+        self.helper_device_export.cuda_import.dlpack_device()
+    }
+}
+
 /// This surface's device export, opening it on first ask.
 ///
 /// The escalate round trip needs the GIL attached to make the call at all;
@@ -532,6 +548,7 @@ pub(crate) fn surface_device_export_for(
 /// crosses to the parent, which needs the GIL attached to make the call
 /// and releases it inside its own wait.
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 pub(crate) struct PreparedDeviceExport {
     pub(crate) export: SurfaceDeviceExport,
     pub(crate) layout: PixelExchangeTensorLayout,

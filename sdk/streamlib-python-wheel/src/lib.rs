@@ -50,6 +50,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonGpuContextFullAccess>()?;
     module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;
     module.add_class::<python_processor_context::PythonGpuSurfaceHandle>()?;
+    module.add_class::<python_processor_context::PythonGpuSurfaceDeviceTensorScope>()?;
     module.add_class::<python_processor_context::PythonGpuSurfaceCheckOutLease>()?;
     module.add_class::<python_processor_context::PythonComputeKernel>()?;
     module.add_class::<python_processor_context::PythonGraphicsKernel>()?;

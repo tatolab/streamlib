@@ -33,6 +33,7 @@ __all__ = [
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
+    "GpuSurfaceDeviceTensorScope",
     "GpuSurfaceHandle",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
@@ -643,6 +644,16 @@ class GpuSurfaceHandle:
     def as_numpy(self) -> Any:
         """A numpy view sharing memory with the surface. Requires a lock."""
 
+    def as_device_tensor(self) -> GpuSurfaceDeviceTensorScope:
+        """The scoped device-tensor view over this surface's pixels.
+
+        Entering blits the surface to a linear DLPack view a third-party
+        GPU package writes in place; leaving normally blits the write
+        back, ordered by the engine ahead of its next read; leaving by a
+        propagating exception discards it, and the surface keeps the
+        frame it already held.
+        """
+
     def __dlpack_device__(self) -> tuple[int, int]: ...
     def __dlpack__(
         self,
@@ -662,6 +673,37 @@ class GpuSurfaceHandle:
 
         The tensor may outlive this handle: it holds its own share of the
         surface, so the pool slot is not reused until the tensor is released.
+        """
+
+@final
+class GpuSurfaceDeviceTensorScope:
+    """A scope handing a surface's pixels to a third-party GPU package.
+
+    Entering blits the surface to a linear DLPack view; leaving normally
+    blits any write back, ordered ahead of the engine's next read; leaving
+    by a propagating exception discards the write and the surface keeps
+    the frame it already held. The engine owns the ordering — no fence or
+    timeline vocabulary appears here.
+    """
+
+    def __enter__(self) -> GpuSurfaceDeviceTensorScope: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = ...,
+        exception: BaseException | None = ...,
+        traceback: TracebackType | None = ...,
+    ) -> Literal[False]: ...
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __dlpack__(
+        self,
+        stream: Any | None = ...,
+        max_version: tuple[int, int] | None = ...,
+        dl_device: tuple[int, int] | None = ...,
+        copy: bool | None = ...,
+    ) -> Any:
+        """A DLPack capsule over the blitted view — what `torch.from_dlpack`
+        consumes. Writable when the surface's export is; a writable capsule
+        is what arms the blit-back on leaving the scope.
         """
 
 @final

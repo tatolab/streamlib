@@ -31,7 +31,7 @@ use crate::python_gpu_surface_pixel_exchange::{
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
-    device_dlpack_capsule, imported_device_for, prepare_device_export,
+    PreparedDeviceExport, device_dlpack_capsule, imported_device_for, prepare_device_export,
     publish_device_write_back_to_surface,
 };
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
@@ -39,7 +39,7 @@ use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_helper_process_pixel_exchange::{
     HelperAcquiredTexture, HelperCheckedOutSurface, HelperProcessGraphicsDraw,
     HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
-    HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
+    HelperSurfaceCheckOutLeaseDebt,
 };
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -104,11 +104,6 @@ pub(crate) struct PythonGpuSurfaceHandle {
     /// `__dlpack__` cannot disagree across calls.
     #[cfg(target_os = "linux")]
     natural_dlpack_side_is_device: std::sync::OnceLock<bool>,
-    /// Set when this handle names a device texture the engine allocated but
-    /// whose memory was never mapped into this process. It holds the pool-slot
-    /// debt directly, because there is no owned memory here to hold it.
-    #[cfg(target_os = "linux")]
-    device_texture_without_a_local_mapping: Mutex<Option<HelperSurfaceReleaseDebt>>,
 }
 
 impl PythonGpuSurfaceHandle {
@@ -130,29 +125,31 @@ impl PythonGpuSurfaceHandle {
             device_write_pending: std::sync::atomic::AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             natural_dlpack_side_is_device: std::sync::OnceLock::new(),
-            #[cfg(target_os = "linux")]
-            device_texture_without_a_local_mapping: Mutex::new(None),
         }
     }
 
     /// A pooled device texture the parent acquired for this helper.
     ///
-    /// It carries the name a kernel dispatch binds and a downstream processor
-    /// resolves, and nothing else: the texture's memory is not mapped into
-    /// this process, so every pixel accessor refuses by saying so.
+    /// It carries the name a kernel dispatch binds and a downstream
+    /// processor resolves — the texture's memory is not mapped into this
+    /// process, so every CPU accessor refuses by saying so — and the
+    /// owned-memory anchor its device-tensor scope and release debt ride,
+    /// so a tensor outliving the handle keeps the pool slot alive.
     #[cfg(target_os = "linux")]
     fn from_helper_acquired_texture(acquired: HelperAcquiredTexture) -> Self {
-        Self {
-            minted_surface_id: Some(acquired.surface_id),
-            surface_width: acquired.width,
-            surface_height: acquired.height,
-            surface_format_name: acquired.format_name,
-            owned_memory: Mutex::new(None),
-            cpu_access: CpuAccessGate::new_unlocked(),
-            device_write_pending: std::sync::atomic::AtomicBool::new(false),
-            natural_dlpack_side_is_device: std::sync::OnceLock::new(),
-            device_texture_without_a_local_mapping: Mutex::new(Some(acquired.release_to_parent)),
-        }
+        let surface_id = acquired.surface_id.clone();
+        let (width, height) = (acquired.width, acquired.height);
+        let format_wire_name = acquired.format.wire_name().to_string();
+        Self::new(
+            Some(surface_id.clone()),
+            width,
+            height,
+            format_wire_name,
+            GpuSurfaceOwnedMemory::new(
+                HelperCheckedOutSurface::AcquiredDeviceTexture(acquired),
+                Some(surface_id),
+            ),
+        )
     }
 
     /// A surface a helper process checked out of its parent — pixel buffer
@@ -186,23 +183,10 @@ impl PythonGpuSurfaceHandle {
     fn release_owned_engine_value(&self) {
         let released_share = self.owned_memory.lock().take();
         drop(released_share);
-        #[cfg(target_os = "linux")]
-        {
-            let released_slot = self.device_texture_without_a_local_mapping.lock().take();
-            drop(released_slot);
-        }
     }
 
     /// Borrow the shared memory anchor, or fail if the handle is closed.
     fn owned_memory(&self) -> PyResult<Arc<GpuSurfaceOwnedMemory>> {
-        #[cfg(target_os = "linux")]
-        if self.device_texture_without_a_local_mapping.lock().is_some() {
-            return Err(PyRuntimeError::new_err(
-                "this surface is a device texture whose memory is not mapped into this process: \
-                 its pixels are reachable to a kernel dispatch, which binds it by surface id, \
-                 not to this process directly",
-            ));
-        }
         self.owned_memory.lock().clone().ok_or_else(|| {
             PyRuntimeError::new_err("this surface is closed; acquire or resolve it again")
         })
@@ -224,6 +208,17 @@ impl PythonGpuSurfaceHandle {
             device_export_available(owned_memory)
                 && imported_device_for(python, owned_memory).is_ok()
         })
+    }
+
+    /// Discard a pending device-side write instead of publishing it —
+    /// the exception path's arm. A raise means the third-party write did
+    /// not finish, and blitting a half-written view back publishes a
+    /// torn frame that surfaces as corruption far from the raise; the
+    /// surface keeps the frame it already held.
+    #[cfg(target_os = "linux")]
+    fn discard_pending_device_write(&self) {
+        self.device_write_pending
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Publish a pending device-side write, once. Shared by `unlock` and
@@ -337,12 +332,25 @@ impl PythonGpuSurfaceHandle {
         python_self
     }
 
-    #[pyo3(signature = (*_exception_details))]
+    /// Leaving normally publishes any pending device write via `close`;
+    /// leaving by a propagating exception discards it first — the write
+    /// did not finish, and the surface keeps the frame it already held.
+    /// The scope still closes, and `False` never suppresses the raise.
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
     fn __exit__(
         &self,
         python: Python<'_>,
-        _exception_details: &Bound<'_, PyAny>,
+        exception_type: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
+        let _ = (exception, traceback);
+        #[cfg(target_os = "linux")]
+        if exception_type.is_some() {
+            self.discard_pending_device_write();
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = exception_type;
         self.close(python)?;
         Ok(false)
     }
@@ -492,6 +500,18 @@ impl PythonGpuSurfaceHandle {
         }
     }
 
+    /// The scoped device-tensor view over this surface's pixels.
+    ///
+    /// Entering blits the surface to a linear DLPack view a third-party
+    /// GPU package writes in place; leaving normally blits the write
+    /// back, ordered by the engine ahead of its next read; leaving by a
+    /// propagating exception discards it, and the surface keeps the
+    /// frame it already held. Construction does no GPU work — the blit
+    /// runs at `__enter__`.
+    fn as_device_tensor(&self) -> PyResult<PythonGpuSurfaceDeviceTensorScope> {
+        Ok(PythonGpuSurfaceDeviceTensorScope::over(self.owned_memory()?))
+    }
+
     /// A numpy view of the pixels, sharing memory with the surface.
     ///
     /// `(height, width, channels)` `uint8` for the 8-bit formats, with the
@@ -529,6 +549,176 @@ impl PythonGpuSurfaceHandle {
                 }
                 from_dlpack_failure
             })
+    }
+}
+
+// =============================================================================
+// The scoped device-tensor view
+// =============================================================================
+
+/// The scope a third-party GPU package reaches a surface's pixels through.
+///
+/// Entering blits the surface into its linear device-export staging and
+/// serves DLPack capsules over it; leaving normally blits any write back,
+/// ordered on the surface's timeline ahead of the engine's next read;
+/// leaving by a propagating exception discards the write. The engine owns
+/// the ordering — no fence or timeline vocabulary appears here.
+///
+/// Holds its own share of the owned memory, so the surface (and an
+/// acquired texture's pool slot) outlives the handle for as long as the
+/// scope or any capsule minted inside it does.
+#[pyclass(name = "GpuSurfaceDeviceTensorScope", module = "streamlib", frozen)]
+pub(crate) struct PythonGpuSurfaceDeviceTensorScope {
+    owned_memory: Arc<GpuSurfaceOwnedMemory>,
+    /// The export prepared at `__enter__` — the blit has run and the
+    /// layout is derived, so every capsule this scope mints serves that
+    /// one blit instead of re-reading the surface mid-scope.
+    #[cfg(target_os = "linux")]
+    prepared_device_export: Mutex<Option<PreparedDeviceExport>>,
+    /// A writable capsule was minted inside this scope; leaving normally
+    /// publishes the staging back, a propagating exception discards it.
+    #[cfg(target_os = "linux")]
+    device_write_pending: AtomicBool,
+}
+
+impl PythonGpuSurfaceDeviceTensorScope {
+    fn over(owned_memory: Arc<GpuSurfaceOwnedMemory>) -> Self {
+        Self {
+            owned_memory,
+            #[cfg(target_os = "linux")]
+            prepared_device_export: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            device_write_pending: AtomicBool::new(false),
+        }
+    }
+
+    /// The export `__enter__` prepared, or the refusal that says this
+    /// scope is not entered — the structural guard on every capsule.
+    #[cfg(target_os = "linux")]
+    fn entered_device_export(&self) -> PyResult<PreparedDeviceExport> {
+        self.prepared_device_export.lock().clone().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "this device-tensor scope is not entered: use it as a context manager \
+                 (`with surface.as_device_tensor() as tensor:`) — entering is what runs the \
+                 blit the tensor reads",
+            )
+        })
+    }
+}
+
+#[pymethods]
+impl PythonGpuSurfaceDeviceTensorScope {
+    fn __enter__(python_self: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        #[cfg(target_os = "linux")]
+        {
+            let prepared = prepare_device_export(python_self.py(), &python_self.owned_memory)?;
+            *python_self.prepared_device_export.lock() = Some(prepared);
+            Ok(python_self)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err(PyNotImplementedError::new_err(
+            "the device-tensor scope is a Linux capability: it rides the CUDA device export, \
+             which this platform does not carry",
+        ))
+    }
+
+    /// Leaving normally blits any write back into the surface; leaving by
+    /// a propagating exception discards it — the write did not finish,
+    /// and blitting a half-written view back would publish a torn frame.
+    /// Always answers `False`: discarding never suppresses the raise.
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
+    fn __exit__(
+        &self,
+        python: Python<'_>,
+        exception_type: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let _ = (exception, traceback);
+        #[cfg(target_os = "linux")]
+        {
+            let _prepared_released = self.prepared_device_export.lock().take();
+            let write_was_pending = self
+                .device_write_pending
+                .swap(false, std::sync::atomic::Ordering::SeqCst);
+            if exception_type.is_none() && write_was_pending {
+                publish_device_write_back_to_surface(python, &self.owned_memory)?;
+            }
+            Ok(false)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (python, exception_type);
+            Ok(false)
+        }
+    }
+
+    /// The CUDA device the scope's tensors live on.
+    fn __dlpack_device__(&self) -> PyResult<(i32, i32)> {
+        #[cfg(target_os = "linux")]
+        {
+            let prepared = self.entered_device_export()?;
+            let device = prepared.export.imported_dlpack_device();
+            Ok((device.device_type as i32, device.device_id))
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err(PyNotImplementedError::new_err(
+            "the device-tensor scope is a Linux capability",
+        ))
+    }
+
+    /// A DLPack capsule over the blitted view — what `torch.from_dlpack`
+    /// consumes. Writable when the surface's export is; a writable
+    /// capsule is what arms the blit-back at `__exit__`.
+    #[pyo3(signature = (stream = None, max_version = None, dl_device = None, copy = None))]
+    fn __dlpack__<'py>(
+        &self,
+        python: Python<'py>,
+        stream: Option<&Bound<'py, PyAny>>,
+        max_version: Option<(u32, u32)>,
+        dl_device: Option<(i32, i32)>,
+        copy: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // No stream to order against: the blit retired before `__enter__`
+        // returned, and the blit-back orders engine-side at `__exit__`.
+        let _ = stream;
+        if copy == Some(true) {
+            return Err(PyBufferError::new_err(
+                "this scope exports in place; ask the consumer to copy the tensor instead",
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some((device_type, _)) = dl_device
+                && device_type == DeviceType::Cpu as i32
+            {
+                return Err(PyBufferError::new_err(
+                    "this scope serves the device side only; for the host mapping use the \
+                     surface handle itself — lock() plus as_numpy or __dlpack__",
+                ));
+            }
+            let prepared = self.entered_device_export()?;
+            let writable_export = prepared.writable;
+            let capsule = device_dlpack_capsule(
+                python,
+                &self.owned_memory,
+                prepared,
+                exchange_shape_for_max_version(max_version),
+                false,
+            )?;
+            if writable_export {
+                self.device_write_pending
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(capsule)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (python, max_version, dl_device);
+            Err(PyNotImplementedError::new_err(
+                "the device-tensor scope is a Linux capability",
+            ))
+        }
     }
 }
 

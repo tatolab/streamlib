@@ -19,6 +19,7 @@ from ._engine import AddedProcessor as AddedProcessor
 from ._engine import GpuContextFullAccess as GpuContextFullAccess
 from ._engine import GpuContextLimitedAccess as GpuContextLimitedAccess
 from ._engine import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
+from ._engine import GpuSurfaceDeviceTensorScope as GpuSurfaceDeviceTensorScope
 from ._engine import GpuSurfaceHandle as GpuSurfaceHandle
 from ._engine import LinkInputDataReader as LinkInputDataReader
 from ._engine import LinkOutputDataWriter as LinkOutputDataWriter
@@ -55,6 +56,7 @@ __all__ = [
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
+    "GpuSurfaceDeviceTensorScope",
     "GpuSurfaceHandle",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
