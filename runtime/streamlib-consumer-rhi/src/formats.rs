@@ -44,17 +44,18 @@ impl TextureFormat {
         matches!(self, Self::Rgba8UnormSrgb | Self::Bgra8UnormSrgb)
     }
 
-    /// Parse the `Debug` spelling (`"Rgba8Unorm"`) — the form the
-    /// surface-share texture registration writes on the wire.
-    pub fn from_debug_name(name: &str) -> Option<Self> {
+    /// Parse the wire spelling — the inverse of [`Self::wire_name`], and the
+    /// one vocabulary the escalate wire, the surface-share registration and
+    /// the Python surface all speak.
+    pub fn from_wire_name(name: &str) -> Option<Self> {
         match name {
-            "Rgba8Unorm" => Some(Self::Rgba8Unorm),
-            "Rgba8UnormSrgb" => Some(Self::Rgba8UnormSrgb),
-            "Bgra8Unorm" => Some(Self::Bgra8Unorm),
-            "Bgra8UnormSrgb" => Some(Self::Bgra8UnormSrgb),
-            "Rgba16Float" => Some(Self::Rgba16Float),
-            "Rgba32Float" => Some(Self::Rgba32Float),
-            "Nv12" => Some(Self::Nv12),
+            "rgba8_unorm" => Some(Self::Rgba8Unorm),
+            "rgba8_unorm_srgb" => Some(Self::Rgba8UnormSrgb),
+            "bgra8_unorm" => Some(Self::Bgra8Unorm),
+            "bgra8_unorm_srgb" => Some(Self::Bgra8UnormSrgb),
+            "rgba16_float" => Some(Self::Rgba16Float),
+            "rgba32_float" => Some(Self::Rgba32Float),
+            "nv12" => Some(Self::Nv12),
             _ => None,
         }
     }
@@ -199,5 +200,31 @@ mod layout_tests {
         let known = TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
         let with_unknown = TextureUsages::from_bits_truncate(known.bits() | 0xFFFF_0000);
         assert_eq!(with_unknown, known);
+    }
+}
+
+#[cfg(test)]
+mod texture_format_wire_name_tests {
+    use super::TextureFormat;
+
+    /// Every variant round-trips through the one wire spelling, so the
+    /// engine's producer and every consumer parse cannot drift apart.
+    #[test]
+    fn every_texture_format_round_trips_through_its_wire_name() {
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+            TextureFormat::Nv12,
+        ] {
+            assert_eq!(
+                TextureFormat::from_wire_name(format.wire_name()),
+                Some(format)
+            );
+        }
+        assert_eq!(TextureFormat::from_wire_name("Rgba8Unorm"), None);
     }
 }

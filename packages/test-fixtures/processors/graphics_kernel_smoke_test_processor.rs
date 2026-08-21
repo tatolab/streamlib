@@ -112,16 +112,15 @@ fn run_graphics_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
 
     let gpu_limited = ctx.gpu_limited_access();
 
-    let pool_descriptor = TexturePoolDescriptor {
-        width: SMOKE_SURFACE_SIZE,
-        height: SMOKE_SURFACE_SIZE,
-        format: TextureFormat::Rgba8Unorm,
-        usage: TextureUsages::COPY_DST
-            | TextureUsages::TEXTURE_BINDING
-            | TextureUsages::RENDER_ATTACHMENT,
-        label: Some("graphics_kernel_smoke_target"),
-        cross_process_importability: Default::default(),
-    };
+    let pool_descriptor = TexturePoolDescriptor::new(
+        SMOKE_SURFACE_SIZE,
+        SMOKE_SURFACE_SIZE,
+        TextureFormat::Rgba8Unorm,
+    )
+    .with_usage(
+        TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
+    )
+    .with_label("graphics_kernel_smoke_target");
     let texture_handle = gpu_limited
         .acquire_texture(&pool_descriptor)
         .map_err(|e| Error::Runtime(format!("acquire_texture: {e}")))?;

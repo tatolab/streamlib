@@ -32,6 +32,7 @@ import pytest
 
 from device_exchange_probes import (
     DLPACK_DEVICE_CUDA,
+    FILL_CONSTANT_RGBA,
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
 )
@@ -248,15 +249,22 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     flavours where the format allows.
 
     The OPAQUE_FD flavour resolves — the child rebuilt the tiled image on its
-    own device — while its pixel accessors and DMA-BUF export refuse by
-    naming the backing. The render-target flavour exports the fd native code
-    imports. A second resolve after release proves the round trip left the
-    frame usable — the release republished the layout it acquired at.
+    own device — and the kernel's pixels read back through the device export,
+    which only happens when the layout chain (dispatch publish, checkout,
+    acquire barrier, staging refill) named the truth at every step. Its CPU
+    accessors and DMA-BUF export refuse by naming the backing. The
+    render-target flavour is kernel-written too and exports the fd native
+    code imports — the demo shape. A second resolve after release proves the
+    round trip left the frame usable.
     """
     observation = run_probe(start_app_under_test, "TextureHandleRoundTripProbe")
     assert observation["kernel_dispatched"]
     assert observation["opaque_resolved_extent"] == [SURFACE_WIDTH, SURFACE_HEIGHT]
     assert observation["opaque_resolved_format"] == "rgba8_unorm"
+    assert observation["opaque_device_pixel"] == FILL_CONSTANT_RGBA, (
+        f"the imported texture must read the kernel's own pixels: "
+        f"{observation['opaque_device_pixel']!r}"
+    )
     assert "texture-backed" in observation["opaque_pixel_refusal"], (
         f"the pixel refusal should name the tiled backing: "
         f"{observation['opaque_pixel_refusal']!r}"

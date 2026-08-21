@@ -1561,7 +1561,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 64,
             "height": 64,
-            "format": "Bgra8Unorm",
+            "format": "bgra8_unorm",
             "resource_type": "pixel_buffer",
             "handle_type": "opaque_fd",
             "plane_sizes": [64u64 * 64 * 4],
@@ -1604,7 +1604,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 64,
             "height": 64,
-            "format": "Bgra8Unorm",
+            "format": "bgra8_unorm",
             "resource_type": "pixel_buffer",
             "plane_sizes": [64u64 * 64 * 4],
             "plane_offsets": [0u64],
@@ -1682,7 +1682,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 1920,
             "height": 1080,
-            "format": "Bgra8Unorm",
+            "format": "bgra8_unorm",
             "resource_type": "texture",
             "plane_sizes": [pitch * 1080],
             "plane_offsets": [0u64],
@@ -2009,7 +2009,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 256,
             "height": 256,
-            "format": "Rgba16Float",
+            "format": "rgba16_float",
             "resource_type": "texture",
             "handle_type": "opaque_fd",
             "vk_image_type": 2,               // VK_IMAGE_TYPE_3D
@@ -2293,7 +2293,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 64,
             "height": 64,
-            "format": "Rgba8Unorm",
+            "format": "rgba8_unorm",
             "resource_type": "texture",
             // No vk_image_* fields — exercise the defaults path.
         });
@@ -2399,7 +2399,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 16,
             "height": 16,
-            "format": "Rgba8Unorm",
+            "format": "rgba8_unorm",
             "resource_type": "texture",
             "current_image_layout": 1,
         });

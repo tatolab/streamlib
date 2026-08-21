@@ -383,6 +383,7 @@ class DmaBufExportProbe:
 
 # GLSL that fills its one bound texture with a constant — the smallest
 # engine-kernel producer a cross-process texture consumer can stand behind.
+# The constant is chosen to be exact in unorm8: 64, 128, 192, 255.
 FILL_CONSTANT_GLSL = """\
 #version 450
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -391,15 +392,23 @@ void main() {
     ivec2 at = ivec2(gl_GlobalInvocationID.xy);
     ivec2 extent = imageSize(output_image);
     if (at.x >= extent.x || at.y >= extent.y) { return; }
-    imageStore(output_image, at, vec4(0.25, 0.5, 0.75, 1.0));
+    imageStore(output_image, at, vec4(64.0 / 255.0, 128.0 / 255.0, 192.0 / 255.0, 1.0));
 }
 """
 
+FILL_CONSTANT_RGBA = [64, 128, 192, 255]
+
 # The usage sets that pick each cross-process-importable allocation flavour:
 # the OPAQUE_FD constructor's fixed set, and a render-attachment set that
-# takes the explicit-DRM-modifier DMA-BUF arm.
+# takes the explicit-DRM-modifier DMA-BUF arm (storage included so the same
+# kernel can write both flavours).
 OPAQUE_FD_FLAVOUR_USAGE = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
-RENDER_TARGET_FLAVOUR_USAGE = ["render_attachment", "texture_binding", "copy_src"]
+RENDER_TARGET_FLAVOUR_USAGE = [
+    "render_attachment",
+    "storage_binding",
+    "texture_binding",
+    "copy_src",
+]
 
 
 @processor(execution="manual")
@@ -439,6 +448,18 @@ class TextureHandleRoundTripProbe:
                     resolved_texture.height,
                 ]
                 observation["opaque_resolved_format"] = resolved_texture.format
+                # The layout-correctness assertion: reading the kernel's
+                # pixels through the cross-process device export only works
+                # if the published layout chain — dispatch publish, checkout,
+                # acquire barrier, staging refill — named the truth at every
+                # step. A wrong layout reads garbage, not FILL_CONSTANT_RGBA.
+                import torch
+
+                device_view = torch.from_dlpack(resolved_texture)
+                observation["opaque_device_pixel"] = (
+                    device_view[11, 13].to("cpu").tolist()
+                )
+                del device_view
                 try:
                     resolved_texture.bytes_per_row
                 except RuntimeError as refusal:
@@ -461,6 +482,13 @@ class TextureHandleRoundTripProbe:
         with ctx.gpu_full_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", RENDER_TARGET_FLAVOUR_USAGE
         ) as render_target:
+            # The demo shape: an engine kernel writes the texture, and the
+            # texture handle itself — the fd native code imports — crosses
+            # out, not a linear view of it.
+            fill_kernel.dispatch(
+                bindings={"output_image": render_target},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
             with ctx.gpu_limited_access.resolve_surface(
                 render_target.surface_id
             ) as resolved_render_target:

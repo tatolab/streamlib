@@ -38,8 +38,11 @@ pub enum TextureCrossProcessImportability {
     RenderTargetDmaBuf,
 }
 
-/// Request descriptor for acquiring a pooled texture.
+/// Request descriptor for acquiring a pooled texture. Constructed through
+/// [`Self::new`] and the `with_*` builders — non-exhaustive so the next
+/// axis is a non-breaking addition rather than shotgun surgery.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct TexturePoolDescriptor {
     pub width: u32,
     pub height: u32,

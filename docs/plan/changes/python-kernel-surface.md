@@ -287,6 +287,28 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   be bound at two kinds in a single dispatch** — a combined image sampler's descriptor
   is written `SHADER_READ_ONLY_OPTIMAL` and a storage image's `GENERAL`, so no layout
   satisfies both. Each refuses by name, engine-side as well as in the wheel.
+- ADDED: `TextureCrossProcessImportability` — the texture pool's allocation-flavour
+  axis, derived engine-side per `acquire_texture` request and never a Python dial:
+  render-attachment usage with an EGL-probed RT modifier (single-plane formats only)
+  → explicit-DRM-modifier DMA-BUF; a CUDA-mappable format within the OPAQUE_FD
+  constructor's fixed usage set, pool present → OPAQUE_FD; everything else keeps the
+  non-importable allocation and a later cross-process import refuses by name. The
+  delta stated the parent half of texture checkout already existed; recon at
+  implementation found pooled textures were importable in **no** flavour
+  (`VK_IMAGE_TILING_OPTIMAL`, modifier zero — `HostVulkanTexture::new_opaque_fd_export`
+  had no caller outside adapter tests), so the axis is the missing parent half.
+  Owner-approved at #1778's announce gate, recorded here because the delta did not
+  anticipate it. The escalate acquire also lands the pooled texture in `GpuContext`'s
+  own texture cache, so the parent's binding resolution answers from what it holds
+  instead of re-importing its own allocation through the surface-share socket.
+- ADDED: the escalate dispatch handlers publish each bound surface's post-dispatch
+  layout to the surface-share service (best-effort, escalate path only, one local
+  socket message per bound texture on a path that already waits for full GPU
+  retirement). Without it the service's layout cell stays at registration-time
+  UNDEFINED forever and the helper-path layout protocol this change delivers would
+  read a fiction; the in-process `TextureRegistration` cell was already kept current,
+  the service cell was not. This is the producer half the "layout protocol on the
+  helper path" bullet implies.
 - ADDED: a read-before-write precondition on the readback wire. `run_cpu_readback_copy` /
   `try_run_cpu_readback_copy` with `direction: buffer_to_image` refuse unless a read of *that
   frame* landed in the staging first — the engine cannot tell a consumer's write from

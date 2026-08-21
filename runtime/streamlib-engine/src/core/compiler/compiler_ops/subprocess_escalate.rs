@@ -336,16 +336,28 @@ pub(crate) fn handle_escalate_op(
                 // import refuses by name instead of the acquire failing.
                 let desc = TexturePoolDescriptor::new(width, height, parsed_format)
                     .with_usage(parsed_usage)
-                    .with_cross_process_importability(derive_texture_cross_process_importability(
-                        parsed_format,
-                        parsed_usage,
-                        full.host_vulkan_device_arc().is_ok_and(|device| {
-                            device.has_render_target_modifier_for_texture_format(parsed_format)
-                        }),
-                    ));
+                    .with_cross_process_importability(match full.host_vulkan_device_arc() {
+                        Ok(device) => derive_texture_cross_process_importability(
+                            parsed_format,
+                            parsed_usage,
+                            device.has_render_target_modifier_for_texture_format(parsed_format),
+                            device.opaque_fd_image_pool().is_some(),
+                        ),
+                        Err(_) => TextureCrossProcessImportability::NotImportable,
+                    });
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id, produce_done, consume_done) =
                     assign_texture_handle_id(full, &texture)?;
+                // The parent answers its own binding resolutions from the
+                // texture cache — without this entry it would re-import its
+                // own allocation through the surface-share socket, a path
+                // that cannot rebuild every flavour and re-interprets the
+                // ones it can.
+                full.register_texture_with_layout(
+                    &handle_id,
+                    texture.texture_clone(),
+                    streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+                );
                 Ok((handle_id, texture, produce_done, consume_done))
             });
             #[cfg(not(target_os = "linux"))]
@@ -354,6 +366,7 @@ pub(crate) fn handle_escalate_op(
                     .with_usage(parsed_usage);
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id,) = assign_texture_handle_id(full, &texture)?;
+                full.register_texture(&handle_id, texture.texture_clone());
                 Ok((handle_id, texture))
             });
             Some(match acquired {
@@ -365,7 +378,7 @@ pub(crate) fn handle_escalate_op(
                         handle_id,
                         width: Some(width),
                         height: Some(height),
-                        format: Some(texture_format_to_wire(parsed_format).to_string()),
+                        format: Some(parsed_format.wire_name().to_string()),
                         usage: Some(texture_usages_to_wire(parsed_usage)),
                         ..Default::default()
                     })
@@ -378,7 +391,7 @@ pub(crate) fn handle_escalate_op(
                         handle_id,
                         width: Some(width),
                         height: Some(height),
-                        format: Some(texture_format_to_wire(parsed_format).to_string()),
+                        format: Some(parsed_format.wire_name().to_string()),
                         usage: Some(texture_usages_to_wire(parsed_usage)),
                         ..Default::default()
                     })
@@ -434,7 +447,7 @@ pub(crate) fn handle_escalate_op(
                             handle_id,
                             width: Some(width),
                             height: Some(height),
-                            format: Some(texture_format_to_wire(parsed_format).to_string()),
+                            format: Some(parsed_format.wire_name().to_string()),
                             usage: Some(vec![
                                 "render_attachment".to_string(),
                                 "texture_binding".to_string(),
@@ -756,8 +769,11 @@ pub(crate) fn handle_escalate_op(
                 // Pixel-buffer / texture / image acquires were
                 // checked into the surface-share service under the
                 // returned handle_id; pair the registry eviction
-                // with the matching service release.
+                // with the matching service release, and evict the
+                // parent's own texture-cache entry (a no-op for
+                // buffer handles, which the cache never holds).
                 release_surface_share_surface(sandbox, &handle_id);
+                sandbox.unregister_texture(&handle_id);
             }
             // An acceleration structure is registered against `GpuContext`
             // rather than against the per-subprocess handle registry, so its id
@@ -1667,18 +1683,54 @@ fn plan_supplied_compute_bindings<'a>(
 /// Shared by the two dispatch paths — one kernel on its own, and a kernel
 /// inside a batch — so the extent convention below and the refusal wording
 /// have one home rather than two that can drift.
+/// Publish each bound surface's post-dispatch layout to the surface-share
+/// service, so a cross-process consumer's checkout names the layout the
+/// dispatch actually left the image in — the service cell is otherwise
+/// frozen at its registration-time UNDEFINED while the in-process
+/// registration moves on.
+///
+/// Best-effort, escalate-path only: an id the service does not hold is an
+/// in-process-only surface, not an error, and a publish failure costs the
+/// consumer its content-preserving acquire, never the dispatch.
+#[cfg(target_os = "linux")]
+fn publish_bound_surface_layouts_to_surface_share(
+    full: &crate::core::context::GpuContextFullAccess,
+    bound_surfaces: &[(String, TextureRegistration)],
+) {
+    let Some(store) = full.surface_store() else {
+        return;
+    };
+    let mut published_surface_ids: Vec<&str> = Vec::with_capacity(bound_surfaces.len());
+    for (surface_id, registration) in bound_surfaces {
+        if published_surface_ids.contains(&surface_id.as_str()) {
+            continue;
+        }
+        published_surface_ids.push(surface_id);
+        if let Err(publish_failure) =
+            store.update_image_layout(surface_id, registration.current_layout())
+        {
+            tracing::debug!(
+                "[escalate] layout publish for '{}' skipped: {}",
+                surface_id,
+                publish_failure
+            );
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn resolve_supplied_compute_bindings(
     full: &crate::core::context::GpuContextFullAccess,
     supplied: &[EscalateRequestRunComputeKernelBinding],
     kernel: &crate::vulkan::rhi::VulkanComputeKernel,
-) -> crate::core::error::Result<Vec<BatchedComputeKernelDispatchBinding>> {
+) -> crate::core::error::Result<(Vec<BatchedComputeKernelDispatchBinding>, Vec<String>)> {
     use crate::core::error::Error;
 
     // Borrowed, not cloned: this runs per frame, and the specs live on the
     // kernel for its whole life.
     let planned = plan_supplied_compute_bindings(supplied, kernel.host_inner().bindings())?;
 
+    let mut bound_surface_ids = Vec::with_capacity(planned.len());
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
         // Zero extent: a kernel binding names a surface the graph already has
@@ -1695,6 +1747,7 @@ fn resolve_supplied_compute_bindings(
                     binding.name, binding.target_id
                 ))
             })?;
+        bound_surface_ids.push(binding.target_id.to_string());
         resolved.push(BatchedComputeKernelDispatchBinding {
             binding: binding.binding,
             kind: binding.kind,
@@ -1742,7 +1795,7 @@ fn resolve_supplied_compute_bindings(
             )));
         }
     }
-    Ok(resolved)
+    Ok((resolved, bound_surface_ids))
 }
 
 /// Resolve every named binding onto the kernel's slots, then dispatch.
@@ -1763,7 +1816,8 @@ fn bind_and_dispatch_compute_kernel(
     // is a refcount on the texture the descriptor set now points at, and
     // dropping the last one before the GPU has run frees the image out from
     // under it.
-    let resolved = resolve_supplied_compute_bindings(full, &req.bindings, kernel)?;
+    let (resolved, bound_surface_ids) =
+        resolve_supplied_compute_bindings(full, &req.bindings, kernel)?;
     for binding in &resolved {
         binding.write_into_kernel(kernel)?;
     }
@@ -1777,6 +1831,13 @@ fn bind_and_dispatch_compute_kernel(
     }
 
     let dispatched = kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z);
+    if dispatched.is_ok() {
+        let bound_surfaces: Vec<(String, TextureRegistration)> = bound_surface_ids
+            .into_iter()
+            .zip(resolved.iter().map(|binding| binding.registration.clone()))
+            .collect();
+        publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
+    }
     drop(resolved);
     dispatched
 }
@@ -1843,6 +1904,7 @@ fn bind_and_dispatch_compute_kernel_batch(
 ) -> crate::core::error::Result<()> {
     use crate::core::error::Error;
 
+    let mut bound_surfaces_across_the_batch: Vec<(String, TextureRegistration)> = Vec::new();
     let mut batch = Vec::with_capacity(req.dispatches.len());
     for ((index, dispatch), push_constants) in req
         .dispatches
@@ -1858,8 +1920,14 @@ fn bind_and_dispatch_compute_kernel_batch(
                     dispatch.kernel_id
                 ))
             })?;
-        let bindings = resolve_supplied_compute_bindings(full, &dispatch.bindings, &kernel)
-            .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        let (bindings, bound_surface_ids) =
+            resolve_supplied_compute_bindings(full, &dispatch.bindings, &kernel)
+                .map_err(|e| Error::GpuError(format!("dispatch {index} of this batch: {e}")))?;
+        bound_surfaces_across_the_batch.extend(
+            bound_surface_ids
+                .into_iter()
+                .zip(bindings.iter().map(|binding| binding.registration.clone())),
+        );
         batch.push(BatchedComputeKernelDispatch {
             kernel,
             bindings,
@@ -1870,7 +1938,11 @@ fn bind_and_dispatch_compute_kernel_batch(
         });
     }
 
-    full.dispatch_compute_kernel_batch(&batch)
+    let dispatched = full.dispatch_compute_kernel_batch(&batch);
+    if dispatched.is_ok() {
+        publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces_across_the_batch);
+    }
+    dispatched
 }
 
 /// One binding a draw or a trace supplied, as the planner reads it — whichever
@@ -2735,6 +2807,22 @@ fn bind_and_render_graphics_kernel(
         for registration in &color_targets {
             registration.update_layout(VulkanLayout::COLOR_ATTACHMENT_OPTIMAL);
         }
+        let bound_surfaces: Vec<(String, TextureRegistration)> = bound_inputs
+            .iter()
+            .map(|binding| {
+                (
+                    binding.planned.target_id.to_string(),
+                    binding.registration.clone(),
+                )
+            })
+            .chain(
+                req.color_target_uuids
+                    .iter()
+                    .cloned()
+                    .zip(color_targets.iter().cloned()),
+            )
+            .collect();
+        publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
     }
     drop(color_targets);
     drop(bound_inputs);
@@ -3383,6 +3471,18 @@ fn bind_and_trace_ray_tracing_kernel(
     }
 
     let traced = kernel.trace_rays(req.width, req.height, req.depth);
+    if traced.is_ok() {
+        let bound_surfaces: Vec<(String, TextureRegistration)> = bound_inputs
+            .iter()
+            .map(|binding| {
+                (
+                    binding.planned.target_id.to_string(),
+                    binding.registration.clone(),
+                )
+            })
+            .collect();
+        publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
+    }
     drop(bound_inputs);
     traced
 }
@@ -3762,46 +3862,32 @@ pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
 /// formats include float variants that pixel buffers don't.
 fn parse_texture_format(s: &str) -> std::result::Result<TextureFormat, String> {
     let normalized = s.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "rgba8_unorm" => Ok(TextureFormat::Rgba8Unorm),
-        "rgba8_unorm_srgb" => Ok(TextureFormat::Rgba8UnormSrgb),
-        "bgra8_unorm" => Ok(TextureFormat::Bgra8Unorm),
-        "bgra8_unorm_srgb" => Ok(TextureFormat::Bgra8UnormSrgb),
-        "rgba16_float" => Ok(TextureFormat::Rgba16Float),
-        "rgba32_float" => Ok(TextureFormat::Rgba32Float),
-        "nv12" => Ok(TextureFormat::Nv12),
-        other => Err(format!("unknown texture format '{other}'")),
-    }
-}
-
-fn texture_format_to_wire(fmt: TextureFormat) -> &'static str {
-    match fmt {
-        TextureFormat::Rgba8Unorm => "rgba8_unorm",
-        TextureFormat::Rgba8UnormSrgb => "rgba8_unorm_srgb",
-        TextureFormat::Bgra8Unorm => "bgra8_unorm",
-        TextureFormat::Bgra8UnormSrgb => "bgra8_unorm_srgb",
-        TextureFormat::Rgba16Float => "rgba16_float",
-        TextureFormat::Rgba32Float => "rgba32_float",
-        TextureFormat::Nv12 => "nv12",
-    }
+    TextureFormat::from_wire_name(&normalized)
+        .ok_or_else(|| format!("unknown texture format '{normalized}'"))
 }
 
 /// Which cross-process-importable allocation flavor an `acquire_texture`
 /// request can take, derived from the request alone — never a Python dial.
 ///
 /// Render-attachment requests need the explicit-modifier DMA-BUF flavor (the
-/// OPAQUE_FD constructor's fixed usage set has no COLOR_ATTACHMENT); requests
-/// whose format is CUDA-mappable and whose usage fits that fixed set take
-/// OPAQUE_FD. Everything else keeps today's non-importable allocation, and a
-/// later cross-process import refuses by naming the flavor.
+/// OPAQUE_FD constructor's fixed usage set has no COLOR_ATTACHMENT), and only
+/// single-plane formats take it — a multi-plane registration ships one fd
+/// against N plane offsets, which every consumer import rejects. Requests
+/// whose format is CUDA-mappable and whose usage fits the fixed set take
+/// OPAQUE_FD when the device has the pool for it. Everything else keeps
+/// today's non-importable allocation — a flavor the device or format cannot
+/// take falls back rather than failing the acquire, and a later
+/// cross-process import refuses by naming the flavor.
 #[cfg(target_os = "linux")]
 fn derive_texture_cross_process_importability(
     format: TextureFormat,
     usage: TextureUsages,
     render_target_modifier_available: bool,
+    opaque_fd_image_pool_available: bool,
 ) -> TextureCrossProcessImportability {
     if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
-        return if render_target_modifier_available {
+        let format_is_single_plane = format != TextureFormat::Nv12;
+        return if render_target_modifier_available && format_is_single_plane {
             TextureCrossProcessImportability::RenderTargetDmaBuf
         } else {
             TextureCrossProcessImportability::NotImportable
@@ -3815,7 +3901,8 @@ fn derive_texture_cross_process_importability(
         | TextureUsages::COPY_DST
         | TextureUsages::TEXTURE_BINDING
         | TextureUsages::STORAGE_BINDING;
-    if cuda_mappable && opaque_fd_fixed_usage_set.contains(usage) {
+    if cuda_mappable && opaque_fd_image_pool_available && opaque_fd_fixed_usage_set.contains(usage)
+    {
         return TextureCrossProcessImportability::OpaqueFd;
     }
     TextureCrossProcessImportability::NotImportable
@@ -4212,7 +4299,12 @@ mod tests {
     fn a_render_attachment_request_takes_the_modifier_flavor_when_the_probe_has_one() {
         let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
         assert_eq!(
-            derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, true),
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                usage,
+                true,
+                true
+            ),
             TextureCrossProcessImportability::RenderTargetDmaBuf,
         );
     }
@@ -4222,7 +4314,37 @@ mod tests {
     fn a_render_attachment_request_without_a_modifier_stays_not_importable() {
         let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
         assert_eq!(
-            derive_texture_cross_process_importability(TextureFormat::Rgba8Unorm, usage, false),
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                usage,
+                false,
+                true
+            ),
+            TextureCrossProcessImportability::NotImportable,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_multi_plane_format_never_takes_the_modifier_flavor() {
+        let usage = TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING;
+        assert_eq!(
+            derive_texture_cross_process_importability(TextureFormat::Nv12, usage, true, true),
+            TextureCrossProcessImportability::NotImportable,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_device_without_the_opaque_fd_pool_falls_back_to_not_importable() {
+        let usage = TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING;
+        assert_eq!(
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                usage,
+                false,
+                false
+            ),
             TextureCrossProcessImportability::NotImportable,
         );
     }
@@ -4240,7 +4362,7 @@ mod tests {
             TextureFormat::Rgba32Float,
         ] {
             assert_eq!(
-                derive_texture_cross_process_importability(format, usage, false),
+                derive_texture_cross_process_importability(format, usage, false, true),
                 TextureCrossProcessImportability::OpaqueFd,
             );
         }
@@ -4259,6 +4381,7 @@ mod tests {
                 derive_texture_cross_process_importability(
                     format,
                     TextureUsages::TEXTURE_BINDING,
+                    true,
                     true,
                 ),
                 TextureCrossProcessImportability::NotImportable,

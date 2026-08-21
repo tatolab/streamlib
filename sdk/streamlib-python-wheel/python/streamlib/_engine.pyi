@@ -563,6 +563,11 @@ class GpuContextFullAccess:
         takes ownership. Answered without leaving this process: the fds arrived
         over SCM_RIGHTS when the surface was checked out, and they are the same
         ones a host-side export would mint.
+
+        Refuses by name for an OPAQUE_FD-flavoured texture — that fd imports
+        through Vulkan or CUDA external memory, not as a DMA-BUF — and for a
+        pooled-texture handle whose memory was never checked out into this
+        process (resolve the surface id first).
         """
 
     def import_dma_buf(
@@ -581,7 +586,9 @@ class GpuContextFullAccess:
         returned handle maps the same memory and travels under a freshly minted
         surface id; closing its last holder removes the registration. When
         `byte_size` is omitted a tight plane is assumed — pass the exporter's
-        own byte size whenever the buffer carries row padding.
+        own byte size whenever the buffer carries row padding. The fd must
+        reference host-mappable linear memory (a pixel-buffer export); a
+        tiled or device-local exporter's fd fails at the Vulkan import.
         """
 
     def wait_device_idle(self) -> None: ...
