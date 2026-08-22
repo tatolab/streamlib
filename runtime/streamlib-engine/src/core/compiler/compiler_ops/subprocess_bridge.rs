@@ -39,7 +39,10 @@ use std::time::Duration;
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::{Error, Result};
 
-use super::subprocess_escalate::{EscalateHandleRegistry, process_bridge_message};
+use super::subprocess_escalate::{
+    EscalateHandleRegistry, process_bridge_message,
+    release_surface_share_and_texture_cache_for_handle,
+};
 
 /// Env var advertising the inherited child-end fd number of the escalate
 /// socketpair. The subprocess opens this fd as a duplex UNIX socket and
@@ -303,11 +306,16 @@ impl Drop for SubprocessBridge {
         }
         // Run the release path's kind-specific cleanup for everything the
         // helper never released — a crashed child must not strand cache
-        // entries in a GpuContext that outlives every respawn.
+        // entries in a GpuContext that outlives every respawn, nor
+        // surface-share registrations and their fd dups: the host's own
+        // connection registered those on the helper's behalf, so the
+        // service's disconnect watchdog rightly never reclaims them.
         for (handle_id, removed_handle) in self.registry.drain_handles() {
-            if removed_handle.is_texture_backed() {
-                self.sandbox.unregister_texture(&handle_id);
-            }
+            release_surface_share_and_texture_cache_for_handle(
+                &self.sandbox,
+                &handle_id,
+                &removed_handle,
+            );
         }
         if let Some(reader) = self.reader.take() {
             drop(reader);
@@ -519,14 +527,18 @@ mod tests {
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc::RecvTimeoutError;
 
-    fn gpu_sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {
-            Ok(gpu) => Some(GpuContextLimitedAccess::new(gpu)),
+            Ok(gpu) => Some(gpu),
             Err(e) => {
                 println!("{test_name}: no GPU device ({e}) — skipping");
                 None
             }
         }
+    }
+
+    fn gpu_sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+        gpu_or_skip(test_name).map(GpuContextLimitedAccess::new)
     }
 
     fn log_frame() -> serde_json::Value {
@@ -677,5 +689,136 @@ mod tests {
                 .to_string()
                 .contains("did not report a protocol version")
         );
+    }
+
+    /// The crash-path mirror of the explicit `release_handle` op (#1901): a
+    /// helper that dies without releasing its escalate acquires must not
+    /// leave their surface-share registrations behind. The disconnect
+    /// watchdog rightly never reclaims them — the host's own connection
+    /// registered them on the helper's behalf, and the watchdog skips
+    /// same-process peers — so bridge teardown is the only reclaimer.
+    ///
+    /// Each cycle acquires both kinds the drain distinguishes — a pixel
+    /// buffer and a texture, the latter carrying the produce/consume
+    /// timeline-fd pair the ticket names — and runs two crash-respawn
+    /// cycles because the leak's bite is accumulation across respawns.
+    /// Asserts the post-teardown table equals the post-acquire table minus
+    /// exactly the helper's handles, so teardown is also shown to leave
+    /// the pool's own long-lived registrations alone. Mental-revert: drop
+    /// the surface-share half from the `SubprocessBridge::drop` drain and
+    /// the post-drop assertion goes red on the first cycle.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn bridge_drop_releases_a_crashed_helpers_surface_share_registrations() {
+        const TEST: &str = "bridge_drop_releases_a_crashed_helpers_surface_share_registrations";
+        use std::collections::HashSet;
+
+        use crate::core::context::SurfaceStore;
+        use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+
+        let Some(gpu) = gpu_or_skip(TEST) else {
+            return;
+        };
+
+        let state = SurfaceShareState::new();
+        let socket_dir = tempfile::TempDir::new().expect("socket dir");
+        let socket_path = socket_dir.path().join("bridge-teardown.sock");
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+
+        let runtime_id = "bridge-teardown-test-runtime";
+        let store = SurfaceStore::new(
+            socket_path.to_string_lossy().into_owned(),
+            runtime_id.to_string(),
+        );
+        store
+            .connect()
+            .expect("connect to the test surface-share service");
+        gpu.set_surface_store(store);
+        let sandbox = GpuContextLimitedAccess::new(gpu);
+        let registered_surface_ids = || -> HashSet<String> {
+            state
+                .surface_ids_by_runtime(runtime_id)
+                .into_iter()
+                .collect()
+        };
+
+        for cycle in 0..2 {
+            let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
+            let bridge =
+                SubprocessBridge::new(parent_end, sandbox.clone(), format!("p-crash-{cycle}"))
+                    .expect("bridge construction");
+
+            let mut child_writer = BufWriter::new(child_end.try_clone().expect("clone child end"));
+            let mut child_reader = BufReader::new(child_end);
+            let mut acquire_via_bridge = |request: serde_json::Value| -> String {
+                let op = request["op"]
+                    .as_str()
+                    .expect("request names an op")
+                    .to_string();
+                write_frame(&mut child_writer, &request).expect("write acquire frame");
+                let response = read_frame(&mut child_reader).expect("acquire response");
+                assert_eq!(
+                    response.get("result").and_then(|v| v.as_str()),
+                    Some("ok"),
+                    "cycle {cycle}: {op} failed: {response}"
+                );
+                response
+                    .get("handle_id")
+                    .and_then(|v| v.as_str())
+                    .expect("ok response carries a handle_id")
+                    .to_string()
+            };
+            let pixel_buffer_handle_id = acquire_via_bridge(serde_json::json!({
+                "rpc": "escalate_request",
+                "op": "acquire_pixel_buffer",
+                "request_id": format!("r-crash-buffer-{cycle}"),
+                "width": 64,
+                "height": 64,
+                "format": "bgra",
+            }));
+            let texture_handle_id = acquire_via_bridge(serde_json::json!({
+                "rpc": "escalate_request",
+                "op": "acquire_texture",
+                "request_id": format!("r-crash-texture-{cycle}"),
+                "width": 64,
+                "height": 64,
+                "format": "rgba8_unorm",
+                "usage": ["texture_binding", "copy_src"],
+            }));
+
+            // The acquires register their check-in ids, and (first cycle
+            // only) create the pixel-buffer pool, whose pre-allocated slots
+            // register themselves for cross-process lookup. Those pool
+            // registrations live as long as the runtime — teardown must
+            // release the helper's acquires and leave them alone.
+            let registered_after_acquire = registered_surface_ids();
+            for helper_handle_id in [&pixel_buffer_handle_id, &texture_handle_id] {
+                assert!(
+                    registered_after_acquire.contains(helper_handle_id),
+                    "cycle {cycle}: the acquire must have registered '{helper_handle_id}' \
+                     with the surface-share service"
+                );
+            }
+
+            // The crash: the helper dies without a release_handle; bridge
+            // teardown is everything that runs.
+            drop(child_writer);
+            drop(child_reader);
+            drop(bridge);
+
+            let mut expected_after_teardown = registered_after_acquire.clone();
+            expected_after_teardown.remove(&pixel_buffer_handle_id);
+            expected_after_teardown.remove(&texture_handle_id);
+            let registered_after_teardown = registered_surface_ids();
+            assert_eq!(
+                registered_after_teardown, expected_after_teardown,
+                "cycle {cycle}: bridge teardown must release the crashed helper's \
+                 surface-share registrations and nothing else"
+            );
+        }
+
+        service.stop();
     }
 }
