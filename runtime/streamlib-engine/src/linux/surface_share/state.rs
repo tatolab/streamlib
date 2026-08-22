@@ -694,7 +694,7 @@ mod tests {
                 vk_image_array_layers: 6,
                 vk_image_samples: 4,         // _4
                 vk_image_tiling: 1000158000, // DRM_FORMAT_MODIFIER_EXT
-                vk_image_usage: 0x4F,        // 0x0F | COLOR_ATTACHMENT (0x40)
+                vk_image_usage: 0x4F,        // 0x0F | TRANSIENT_ATTACHMENT (1 << 6)
                 vk_image_allocation_size: 16_777_216,
                 vk_memory_type_index: Some(7),
                 exporting_device_uuid: Some("00112233445566778899aabbccddeeff".to_string()),

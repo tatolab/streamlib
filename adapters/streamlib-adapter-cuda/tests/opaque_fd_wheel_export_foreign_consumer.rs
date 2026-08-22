@@ -76,9 +76,9 @@ impl ChildAppUnderTest {
     /// The last stretch of a captured output file, for skip diagnostics.
     /// The app's own log lines land on stdout, so both streams matter.
     fn capture_tail(capture_path: &Path) -> String {
-        let captured = std::fs::read_to_string(capture_path).unwrap_or_default();
+        let captured = std::fs::read(capture_path).unwrap_or_default();
         let tail_start = captured.len().saturating_sub(2000);
-        captured[tail_start..].to_string()
+        String::from_utf8_lossy(&captured[tail_start..]).into_owned()
     }
 
     fn diagnostic_tails(&self) -> String {
@@ -135,11 +135,6 @@ fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<Owne
         "recvmsg on the handoff socket failed: {}",
         std::io::Error::last_os_error()
     );
-    assert_eq!(
-        message.msg_flags & libc::MSG_CTRUNC,
-        0,
-        "the ancillary buffer truncated; a dropped fd would fail later as a wrong import"
-    );
     let mut received_fds = Vec::new();
     let mut control = unsafe { libc::CMSG_FIRSTHDR(&message) };
     while !control.is_null() {
@@ -158,6 +153,13 @@ fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<Owne
         }
         control = unsafe { libc::CMSG_NXTHDR(&message, control) };
     }
+    // Checked after the fds are owned, so a truncated message closes what
+    // did arrive instead of leaking it.
+    assert_eq!(
+        message.msg_flags & libc::MSG_CTRUNC,
+        0,
+        "the ancillary buffer truncated; a dropped fd would fail later as a wrong import"
+    );
 
     let mut bytes = payload[..received as usize].to_vec();
     let mut stream_reader = stream;
@@ -223,6 +225,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     let stdout_capture_path = handoff_dir.path().join("app-stdout.log");
     let stderr_capture_path = handoff_dir.path().join("app-stderr.log");
     let app_process = Command::new(&venv_python)
+        .arg("-u")
         .arg("device_exchange_app.py")
         .arg("OpaqueFdExportHandoffProbe")
         .current_dir(wheel_dir.join("tests"))
@@ -308,6 +311,14 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     );
     let allocation_byte_size = metadata_u64_field("allocation_byte_size");
     assert!(allocation_byte_size >= IMAGE_BYTES);
+    // The recipe constants `new_opaque_fd_export` hardcodes, read back off
+    // the wire the probe crossed.
+    assert_eq!(metadata_u64_field("vk_image_tiling"), 0); // OPTIMAL
+    assert_eq!(metadata_u64_field("vk_image_usage_flags"), 0x0F);
+    assert_eq!(metadata_u64_field("vk_image_mip_levels"), 1);
+    assert_eq!(metadata_u64_field("vk_image_array_layers"), 1);
+    assert_eq!(metadata_u64_field("vk_image_samples"), 1);
+    assert!(metadata_u64_field("vk_memory_type_index") < 32); // VK_MAX_MEMORY_TYPES
     let exporting_device_uuid_hex = metadata
         .get("exporting_device_uuid_hex")
         .and_then(|value| value.as_str())
@@ -355,7 +366,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             Arc::new(texture)
         }
         Err(import_failure) => {
-            panic!("the wheel-exported fd would not import: {import_failure}");
+            panic!(
+                "the wheel-exported fd would not import: {import_failure}\n{}",
+                app.diagnostic_tails()
+            );
         }
     };
     let imported_staging = match ConsumerVulkanBuffer::from_opaque_fd(
@@ -368,7 +382,10 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             Arc::new(buffer)
         }
         Err(import_failure) => {
-            panic!("the local staging fd would not import: {import_failure}");
+            panic!(
+                "the local staging fd would not import: {import_failure}\n{}",
+                app.diagnostic_tails()
+            );
         }
     };
 

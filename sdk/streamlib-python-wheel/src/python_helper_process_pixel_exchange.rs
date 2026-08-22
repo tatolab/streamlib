@@ -2522,7 +2522,7 @@ mod texture_check_out_registration_metadata_tests {
             "handle_type": "opaque_fd",
             "vk_image_allocation_size": 8192u64,
             "vk_image_tiling": 1_000_158_000i64, // DRM_FORMAT_MODIFIER_EXT
-            "vk_image_usage": 0x4Fu32,           // default set | COLOR_ATTACHMENT
+            "vk_image_usage": 0x4Fu32,           // default set | TRANSIENT_ATTACHMENT (1 << 6)
             "vk_image_mip_levels": 9u32,
             "vk_image_array_layers": 6u32,
             "vk_image_samples": 4i64,
