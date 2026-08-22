@@ -12,7 +12,17 @@ SPIR-V, or when someone asks why the four GPU bridge traits were deleted.
 
 ## Decision
 
-1. **Parity is the bar.** Python reaches every GPU capability Rust authoring reaches —
+1. **Parity is the bar.**
+   > ~~Parity is the bar. Python reaches every GPU capability Rust authoring reaches~~
+   > — Superseded 2026-08-17 by owner ruling. The bar is every kernel *kind*, which is
+   > what the enumeration in this same sentence already names. Pipeline state and buffer
+   > resources inside a kind are a narrower claim, and the ones Python cannot reach are
+   > named in the plan rather than promised here. The rest of (1) stands unnarrowed:
+   > Python still names and drives every kind, and being "a proxy to Rust-powered GPU
+   > work — not a lesser scripting surface beside it" claims a relationship, not a
+   > surface area.
+
+   Python reaches every kernel kind Rust authoring reaches —
    compute, graphics and ray-tracing kernels, acceleration structures, CPU readback. Python
    names and drives; the engine allocates, compiles, binds, and dispatches. Being a proxy to
    Rust-powered GPU work — not a lesser scripting surface beside it — is the differentiator
