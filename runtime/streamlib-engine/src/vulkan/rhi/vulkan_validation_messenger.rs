@@ -9,6 +9,13 @@
 //! both the test harness's output capture and the engine's own logging —
 //! findings scroll past and nothing notices. The counter is what lets a
 //! rig test hold a GPU path at zero findings.
+//!
+//! Registering a messenger also silences the layer's own stdout reporting,
+//! so findings travel through `tracing` and the counter and nowhere else.
+//! A run with no subscriber — every `cargo test` binary — therefore sees a
+//! finding only where a test reads the count, or via
+//! `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1`, which is what turns a
+//! whole hardware-tier sweep into a gate.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
@@ -223,10 +230,12 @@ unsafe extern "system" fn forward_validation_message_to_tracing(
         tally.error_count.fetch_add(1, Ordering::Relaxed);
         tracing::error!(vuid = %vuid, message_type = ?message_types, "Vulkan validation: {message}");
         if tally.abort_process_on_validation_error {
-            tracing::error!(
-                "{ABORT_ON_ERROR_ENV_VAR} is set — aborting on the validation error above"
-            );
-            std::process::abort();
+            // Panic rather than `process::abort` so the reason reaches
+            // stderr through the panic hook: a run with no `tracing`
+            // subscriber — every `cargo test` binary — would otherwise
+            // take a bare SIGABRT with nothing said. Unwinding out of an
+            // `extern "system"` fn is a defined abort, not UB.
+            panic!("{ABORT_ON_ERROR_ENV_VAR} is set — Vulkan validation error {vuid}: {message}");
         }
     } else {
         tally.warning_count.fetch_add(1, Ordering::Relaxed);
