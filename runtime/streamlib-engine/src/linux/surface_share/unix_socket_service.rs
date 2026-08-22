@@ -852,29 +852,29 @@ fn handle_lookup(
         None => (0, 0, "unknown", "pixel_buffer"),
     };
     let mut response = serde_json::json!({
-            "surface_id": surface_id,
-            "width": width,
-            "height": height,
-            "format": format,
-            "resource_type": resource_type,
-            "handle_type": checkout.handle_type,
-            "plane_sizes": checkout.plane_sizes,
-            "plane_offsets": checkout.plane_offsets,
-            "plane_strides": checkout.plane_strides,
-            "drm_format_modifier": checkout.drm_format_modifier,
-            "has_produce_done_fd": has_produce_done_fd,
-            "has_consume_done_fd": has_consume_done_fd,
-            "current_image_layout": checkout.current_image_layout,
-            // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
-            // consumers. Always echoed; absent producers see the
-            // documented defaults from `super::state`.
-            "vk_image_type": checkout.vk_image_type,
-            "vk_image_mip_levels": checkout.vk_image_mip_levels,
-            "vk_image_array_layers": checkout.vk_image_array_layers,
-            "vk_image_samples": checkout.vk_image_samples,
-            "vk_image_tiling": checkout.vk_image_tiling,
-            "vk_image_usage": checkout.vk_image_usage,
-            "vk_image_allocation_size": checkout.vk_image_allocation_size,
+        "surface_id": surface_id,
+        "width": width,
+        "height": height,
+        "format": format,
+        "resource_type": resource_type,
+        "handle_type": checkout.handle_type,
+        "plane_sizes": checkout.plane_sizes,
+        "plane_offsets": checkout.plane_offsets,
+        "plane_strides": checkout.plane_strides,
+        "drm_format_modifier": checkout.drm_format_modifier,
+        "has_produce_done_fd": has_produce_done_fd,
+        "has_consume_done_fd": has_consume_done_fd,
+        "current_image_layout": checkout.current_image_layout,
+        // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
+        // consumers. Always echoed; absent producers see the
+        // documented defaults from `super::state`.
+        "vk_image_type": checkout.vk_image_type,
+        "vk_image_mip_levels": checkout.vk_image_mip_levels,
+        "vk_image_array_layers": checkout.vk_image_array_layers,
+        "vk_image_samples": checkout.vk_image_samples,
+        "vk_image_tiling": checkout.vk_image_tiling,
+        "vk_image_usage": checkout.vk_image_usage,
+        "vk_image_allocation_size": checkout.vk_image_allocation_size,
     });
     // Echoed only when registered: absence is meaningful (see
     // `SurfaceMetadata::vk_memory_type_index`), so no default may appear

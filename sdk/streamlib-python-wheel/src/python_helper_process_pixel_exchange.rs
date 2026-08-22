@@ -2511,6 +2511,9 @@ mod foreign_dma_buf_adoption_tests {
 mod texture_check_out_registration_metadata_tests {
     use super::*;
 
+    /// Every recipe value deliberately non-default, so a parse that stops
+    /// reading the wire and serves its absent-defaults fails on the first
+    /// field rather than passing on a coincidence.
     fn opaque_fd_check_out_response() -> serde_json::Value {
         serde_json::json!({
             "width": 64,
@@ -2518,6 +2521,11 @@ mod texture_check_out_registration_metadata_tests {
             "format": "rgba8_unorm",
             "handle_type": "opaque_fd",
             "vk_image_allocation_size": 8192u64,
+            "vk_image_tiling": 1_000_158_000i64, // DRM_FORMAT_MODIFIER_EXT
+            "vk_image_usage": 0x4Fu32,           // default set | COLOR_ATTACHMENT
+            "vk_image_mip_levels": 9u32,
+            "vk_image_array_layers": 6u32,
+            "vk_image_samples": 4i64,
             "vk_memory_type_index": 7u32,
             "exporting_device_uuid": "00112233445566778899aabbccddeeff",
         })
@@ -2543,13 +2551,53 @@ mod texture_check_out_registration_metadata_tests {
         );
     }
 
+    /// The recipe travels the wire, never the defaults: each assertion
+    /// fails if its field falls back to the documented absent-default.
     #[test]
-    fn an_opaque_fd_checkout_without_a_memory_type_index_is_refused_naming_it() {
+    fn the_image_creation_recipe_parses_off_the_wire_not_the_defaults() {
+        let metadata = TextureCheckOutRegistrationMetadata::from_check_out_response(
+            "surface#1",
+            &opaque_fd_check_out_response(),
+        )
+        .expect("a complete OPAQUE_FD registration parses");
+        let recipe = metadata.vk_image_creation_recipe;
+        assert_eq!(recipe.vk_image_tiling, 1_000_158_000);
+        assert_eq!(recipe.vk_image_usage_flags, 0x4F);
+        assert_eq!(recipe.vk_image_mip_levels, 9);
+        assert_eq!(recipe.vk_image_array_layers, 6);
+        assert_eq!(recipe.vk_image_samples, 4);
+    }
+
+    /// The absent-defaults themselves, pinned to the service's documented
+    /// values (`new_opaque_fd_export`'s hardcoded shape).
+    #[test]
+    fn absent_recipe_fields_fall_back_to_the_documented_defaults() {
+        let response = serde_json::json!({
+            "width": 64,
+            "height": 32,
+            "format": "rgba8_unorm",
+            "handle_type": "opaque_fd",
+            "vk_image_allocation_size": 8192u64,
+            "vk_memory_type_index": 7u32,
+            "exporting_device_uuid": "00112233445566778899aabbccddeeff",
+        });
+        let metadata =
+            TextureCheckOutRegistrationMetadata::from_check_out_response("surface#1", &response)
+                .expect("recipe-less registrations parse with defaults");
+        let recipe = metadata.vk_image_creation_recipe;
+        assert_eq!(recipe.vk_image_tiling, VK_IMAGE_TILING_DEFAULT);
+        assert_eq!(recipe.vk_image_usage_flags, VK_IMAGE_USAGE_DEFAULT);
+        assert_eq!(recipe.vk_image_mip_levels, VK_IMAGE_MIP_LEVELS_DEFAULT);
+        assert_eq!(recipe.vk_image_array_layers, VK_IMAGE_ARRAY_LAYERS_DEFAULT);
+        assert_eq!(recipe.vk_image_samples, VK_IMAGE_SAMPLES_DEFAULT);
+    }
+
+    /// The refusal an OPAQUE_FD checkout earns when `absent_field` is
+    /// missing, rendered — shared by the two named tests below, which
+    /// differ only in the field and the phrase that must name it.
+    fn refusal_for_an_opaque_fd_check_out_missing(absent_field: &str) -> String {
         let mut response = opaque_fd_check_out_response();
-        response
-            .as_object_mut()
-            .unwrap()
-            .remove("vk_memory_type_index");
+        response.as_object_mut().unwrap().remove(absent_field);
         Python::initialize();
         let refusal =
             TextureCheckOutRegistrationMetadata::from_check_out_response("surface#1", &response)
@@ -2557,35 +2605,27 @@ mod texture_check_out_registration_metadata_tests {
                 .expect("a missing contract field refuses the checkout")
                 .to_string();
         assert!(
-            refusal.contains("memory type index"),
-            "the refusal must name the missing field: {refusal:?}"
-        );
-        assert!(
             !refusal.contains("  "),
             "the rendered refusal must be one clean sentence: {refusal:?}"
+        );
+        refusal
+    }
+
+    #[test]
+    fn an_opaque_fd_checkout_without_a_memory_type_index_is_refused_naming_it() {
+        let refusal = refusal_for_an_opaque_fd_check_out_missing("vk_memory_type_index");
+        assert!(
+            refusal.contains("memory type index"),
+            "the refusal must name the missing field: {refusal:?}"
         );
     }
 
     #[test]
     fn an_opaque_fd_checkout_without_a_device_uuid_is_refused_naming_it() {
-        let mut response = opaque_fd_check_out_response();
-        response
-            .as_object_mut()
-            .unwrap()
-            .remove("exporting_device_uuid");
-        Python::initialize();
-        let refusal =
-            TextureCheckOutRegistrationMetadata::from_check_out_response("surface#1", &response)
-                .err()
-                .expect("a missing contract field refuses the checkout")
-                .to_string();
+        let refusal = refusal_for_an_opaque_fd_check_out_missing("exporting_device_uuid");
         assert!(
             refusal.contains("exporting device UUID"),
             "the refusal must name the missing field: {refusal:?}"
-        );
-        assert!(
-            !refusal.contains("  "),
-            "the rendered refusal must be one clean sentence: {refusal:?}"
         );
     }
 

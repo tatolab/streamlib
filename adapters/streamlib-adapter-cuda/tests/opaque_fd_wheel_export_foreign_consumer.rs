@@ -1,18 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The raw-handle export contract consumed end-to-end (#1900): a Python
-//! processor's `export_opaque_fd` bundle — the fd over SCM_RIGHTS plus the
-//! typed metadata as JSON — is the *only* input this foreign process uses
-//! to import the texture on its own `VkDevice` and byte-compare the
-//! kernel's pixels.
+//! The raw-handle export consumed by a foreign process (#1900): a Python
+//! processor's `export_opaque_fd` hands its fd over SCM_RIGHTS plus the
+//! typed metadata as JSON, and this test — a separate process from both
+//! the exporting engine and the helper that answered the export — imports
+//! that fd on its own `VkDevice` and byte-compares the kernel's pixels.
 //!
-//! What makes this the contract's proof and not another carve-out
-//! round-trip: the exporting engine, the helper process that answers the
-//! export, and this test are three separate processes, and the import here
-//! is driven entirely by what crossed the socket. A wrong fd, a wrong
-//! `allocation_byte_size`, or a recipe an importer rejects fails here —
-//! nothing on the exporting side can keep this green.
+//! What this locks: the exported fd names the kernel-written allocation
+//! (a wrong fd reads wrong pixels or refuses to import), and the wire
+//! metadata arrives shaped as the contract states (asserted field by
+//! field against the known probe). What it deliberately does not lock:
+//! the in-tree consumer importer hardcodes its own image recipe and
+//! clamps an undersized `allocation_byte_size` up to the driver's
+//! requirement, so those fields are shape-asserted here rather than
+//! driven through the import — the importer's recipe/memoryTypeIndex
+//! conformance is the separate work noted on the change.
 //!
 //! Test gating: Linux-only by construction; skips when the wheel's venv or
 //! its built module is absent, and when Vulkan (or the OPAQUE_FD pools the
@@ -21,10 +24,15 @@
 
 #![cfg(target_os = "linux")]
 
+#[path = "common.rs"]
+mod common;
+
+use std::fs::File;
 use std::io::Read;
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,24 +43,79 @@ use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
     TextureFormat as ConsumerTextureFormat,
 };
-use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 /// Mirrors the probe's `SURFACE_WIDTH` × `SURFACE_HEIGHT` and
 /// `FILL_CONSTANT_RGBA` in `device_exchange_probes.py` — the wire
 /// metadata is asserted against these, so a drift fails loudly.
-const W: u32 = 64;
-const H: u32 = 32;
+const SURFACE_WIDTH_PIXELS: u32 = 64;
+const SURFACE_HEIGHT_PIXELS: u32 = 32;
 const FILL_CONSTANT_RGBA: [u8; 4] = [64, 128, 192, 255];
-const IMAGE_BYTES: u64 = (W as u64) * (H as u64) * 4;
+const IMAGE_BYTES: u64 = (SURFACE_WIDTH_PIXELS as u64) * (SURFACE_HEIGHT_PIXELS as u64) * 4;
 
 fn wheel_directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../sdk/streamlib-python-wheel")
 }
 
-/// One `recvmsg` that takes the SCM_RIGHTS fds, then a read loop until the
-/// length-prefixed JSON payload is complete.
-fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<RawFd>) {
+/// The spawned wheel app plus the files its stdout/stderr drain into.
+/// `runtime.run()` blocks until SIGINT, so `Drop` — not the app — is what
+/// ends it: SIGINT, a grace window, then SIGKILL. RAII so every panic
+/// path in the test reaps the GPU-holding child instead of orphaning it
+/// for the rest of a `#[serial]` rig session.
+struct ChildAppUnderTest {
+    app_process: Child,
+    stdout_capture_path: PathBuf,
+    stderr_capture_path: PathBuf,
+}
+
+impl ChildAppUnderTest {
+    fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.app_process.try_wait().ok().flatten()
+    }
+
+    /// The last stretch of a captured output file, for skip diagnostics.
+    /// The app's own log lines land on stdout, so both streams matter.
+    fn capture_tail(capture_path: &Path) -> String {
+        let captured = std::fs::read_to_string(capture_path).unwrap_or_default();
+        let tail_start = captured.len().saturating_sub(2000);
+        captured[tail_start..].to_string()
+    }
+
+    fn diagnostic_tails(&self) -> String {
+        format!(
+            "stdout tail:\n{}\nstderr tail:\n{}",
+            Self::capture_tail(&self.stdout_capture_path),
+            Self::capture_tail(&self.stderr_capture_path),
+        )
+    }
+}
+
+impl Drop for ChildAppUnderTest {
+    fn drop(&mut self) {
+        unsafe { libc::kill(self.app_process.id() as libc::pid_t, libc::SIGINT) };
+        let grace_deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match self.app_process.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < grace_deadline => {
+                    std::thread::sleep(Duration::from_millis(100))
+                }
+                _ => {
+                    let _ = self.app_process.kill();
+                    let _ = self.app_process.wait();
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Receive the probe's single `socket.send_fds` message: SCM_RIGHTS fds
+/// plus a length-prefixed JSON payload. Bespoke rather than
+/// `streamlib_surface_client::recv_message_with_fds` because the framing
+/// differs — the probe sends prefix, payload and fds in one `sendmsg`,
+/// while the surface-share wire splits its envelope across two.
+fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<OwnedFd>) {
     let mut payload = vec![0u8; 64 * 1024];
     let mut cmsg_space = [0u8; 256];
     let mut io_vector = libc::iovec {
@@ -72,28 +135,41 @@ fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<RawF
         "recvmsg on the handoff socket failed: {}",
         std::io::Error::last_os_error()
     );
+    assert_eq!(
+        message.msg_flags & libc::MSG_CTRUNC,
+        0,
+        "the ancillary buffer truncated; a dropped fd would fail later as a wrong import"
+    );
     let mut received_fds = Vec::new();
     let mut control = unsafe { libc::CMSG_FIRSTHDR(&message) };
     while !control.is_null() {
         let header = unsafe { &*control };
         if header.cmsg_level == libc::SOL_SOCKET && header.cmsg_type == libc::SCM_RIGHTS {
-            let fd_bytes = header.cmsg_len as usize - unsafe { libc::CMSG_LEN(0) } as usize;
+            let fd_bytes =
+                (header.cmsg_len as usize).saturating_sub(unsafe { libc::CMSG_LEN(0) } as usize);
             let fd_count = fd_bytes / std::mem::size_of::<RawFd>();
             let fds = unsafe { libc::CMSG_DATA(control) } as *const RawFd;
             for index in 0..fd_count {
-                received_fds.push(unsafe { *fds.add(index) });
+                // SAFETY: SCM_RIGHTS delivered a fresh descriptor this
+                // process now owns; wrapping it makes every later panic
+                // path close it.
+                received_fds.push(unsafe { OwnedFd::from_raw_fd(*fds.add(index)) });
             }
         }
         control = unsafe { libc::CMSG_NXTHDR(&message, control) };
     }
 
     let mut bytes = payload[..received as usize].to_vec();
-    assert!(
-        bytes.len() >= 4,
-        "the handoff payload lost its length prefix"
-    );
-    let declared = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
     let mut stream_reader = stream;
+    while bytes.len() < 4 {
+        let mut more = [0u8; 4096];
+        let extra = stream_reader
+            .read(&mut more)
+            .expect("reading the handoff length prefix");
+        assert!(extra > 0, "the handoff socket closed before its prefix");
+        bytes.extend_from_slice(&more[..extra]);
+    }
+    let declared = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
     while bytes.len() < declared + 4 {
         let mut more = [0u8; 4096];
         let extra = stream_reader
@@ -105,24 +181,6 @@ fn receive_metadata_and_fds(stream: &UnixStream) -> (serde_json::Value, Vec<RawF
     let metadata: serde_json::Value =
         serde_json::from_slice(&bytes[4..4 + declared]).expect("handoff metadata parses as JSON");
     (metadata, received_fds)
-}
-
-/// SIGINT then, if the app outlives the grace window, SIGKILL — the wheel
-/// handles Ctrl-C cleanly and this is its shutdown path.
-fn stop_app(mut child: Child) {
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGINT) };
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return;
-            }
-        }
-    }
 }
 
 #[test]
@@ -153,46 +211,56 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         return;
     }
 
-    let socket_dir = tempfile::TempDir::new().expect("temp dir for the handoff socket");
-    let socket_path = socket_dir.path().join("opaque-fd-handoff.sock");
+    let handoff_dir = tempfile::TempDir::new().expect("temp dir for the handoff socket");
+    let socket_path = handoff_dir.path().join("opaque-fd-handoff.sock");
     let listener = UnixListener::bind(&socket_path).expect("bind the handoff socket");
     listener
         .set_nonblocking(true)
         .expect("nonblocking accept so a dead app cannot wedge the test");
 
-    let mut app = Command::new(&venv_python)
+    // Both output streams drain into files — the app's own log lines go
+    // to stdout, and a pipe left undrained would block the app instead.
+    let stdout_capture_path = handoff_dir.path().join("app-stdout.log");
+    let stderr_capture_path = handoff_dir.path().join("app-stderr.log");
+    let app_process = Command::new(&venv_python)
         .arg("device_exchange_app.py")
         .arg("OpaqueFdExportHandoffProbe")
         .current_dir(wheel_dir.join("tests"))
         .env("STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET", &socket_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(
+            File::create(&stdout_capture_path).expect("create the stdout capture"),
+        ))
+        .stderr(Stdio::from(
+            File::create(&stderr_capture_path).expect("create the stderr capture"),
+        ))
         .spawn()
         .expect("spawn the wheel app under test");
+    let mut app = ChildAppUnderTest {
+        app_process,
+        stdout_capture_path,
+        stderr_capture_path,
+    };
 
     let accept_deadline = Instant::now() + Duration::from_secs(120);
     let stream = loop {
         match listener.accept() {
             Ok((stream, _)) => break stream,
             Err(would_block) if would_block.kind() == std::io::ErrorKind::WouldBlock => {
-                if let Ok(Some(exit)) = app.try_wait() {
-                    // The app died before exporting — a GPU-less box, not a
-                    // contract failure. Mirror the driver-absence skips.
-                    let mut stderr_tail = String::new();
-                    if let Some(mut stderr) = app.stderr.take() {
-                        let _ = stderr.read_to_string(&mut stderr_tail);
-                    }
-                    let tail_start = stderr_tail.len().saturating_sub(2000);
+                if let Some(exit) = app.exited() {
+                    // The app died before exporting — a GPU-less box, not
+                    // a contract failure. Mirror the driver-absence skips,
+                    // with both output tails so a real failure is legible.
                     println!(
                         "wheel export handoff: app exited {exit} before connecting — \
-                         skipping. stderr tail:\n{}",
-                        &stderr_tail[tail_start..]
+                         skipping.\n{}",
+                        app.diagnostic_tails()
                     );
                     return;
                 }
                 assert!(
                     Instant::now() < accept_deadline,
-                    "the app never connected to the handoff socket"
+                    "the app never connected to the handoff socket.\n{}",
+                    app.diagnostic_tails()
                 );
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -206,23 +274,28 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
         .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("bounded reads on the handoff socket");
 
-    let (metadata, received_fds) = receive_metadata_and_fds(&stream);
+    let (metadata, mut received_fds) = receive_metadata_and_fds(&stream);
     assert_eq!(
         received_fds.len(),
         1,
         "the export travels as exactly one memory fd"
     );
-    let texture_fd = received_fds[0];
+    let exported_texture_fd = received_fds.remove(0);
 
-    // The bundle is the whole import input — assert the wire shape first.
-    let field_u64 = |name: &str| -> u64 {
+    // The wire shape, field by field against the known probe. Shape
+    // assertions only — see the module doc for why the recipe fields are
+    // not driven through this importer.
+    let metadata_u64_field = |name: &str| -> u64 {
         metadata
             .get(name)
             .and_then(|value| value.as_u64())
             .unwrap_or_else(|| panic!("handoff metadata field {name:?} missing: {metadata}"))
     };
-    assert_eq!(field_u64("width"), u64::from(W));
-    assert_eq!(field_u64("height"), u64::from(H));
+    assert_eq!(metadata_u64_field("width"), u64::from(SURFACE_WIDTH_PIXELS));
+    assert_eq!(
+        metadata_u64_field("height"),
+        u64::from(SURFACE_HEIGHT_PIXELS)
+    );
     assert_eq!(
         metadata.get("format").and_then(|value| value.as_str()),
         Some("rgba8_unorm")
@@ -233,7 +306,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
             .and_then(|value| value.as_bool()),
         Some(true)
     );
-    let allocation_byte_size = field_u64("allocation_byte_size");
+    let allocation_byte_size = metadata_u64_field("allocation_byte_size");
     assert!(allocation_byte_size >= IMAGE_BYTES);
     let exporting_device_uuid_hex = metadata
         .get("exporting_device_uuid_hex")
@@ -244,168 +317,89 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
 
     // This process's own readback staging: allocated host-side, imported
     // consumer-side — the sibling carve-outs' proven shape.
-    let staging_buf = Arc::new(
+    let local_staging_buffer = Arc::new(
         HostVulkanBuffer::new_opaque_fd_export(&host_device, IMAGE_BYTES)
             .expect("local staging new_opaque_fd_export"),
     );
-    let staging_fd = staging_buf
-        .export_opaque_fd_memory()
-        .expect("export local staging OPAQUE_FD");
+    let local_staging_fd = unsafe {
+        // SAFETY: `export_opaque_fd_memory` mints a fresh caller-owned fd.
+        OwnedFd::from_raw_fd(
+            local_staging_buffer
+                .export_opaque_fd_memory()
+                .expect("export local staging OPAQUE_FD"),
+        )
+    };
 
-    let consumer_device = match ConsumerVulkanDevice::new() {
+    let consumer_vulkan_device = match ConsumerVulkanDevice::new() {
         Ok(device) => Arc::new(device),
         Err(unavailable) => {
-            unsafe {
-                libc::close(texture_fd);
-                libc::close(staging_fd);
-            }
             println!(
-                "wheel export handoff: ConsumerVulkanDevice::new failed: {unavailable:?} — skipping"
+                "wheel export handoff: ConsumerVulkanDevice::new failed: {unavailable:?} — \
+                 skipping (likely a UUID mismatch on a multi-GPU rig)"
             );
-            stop_app(app);
             return;
         }
     };
+    // Both imports adopt their fd on success and leave it owned here on
+    // failure, so each is released only at its call.
     let imported_texture = match ConsumerVulkanTexture::from_opaque_fd(
-        &consumer_device,
-        texture_fd,
-        W,
-        H,
+        &consumer_vulkan_device,
+        exported_texture_fd.as_raw_fd(),
+        SURFACE_WIDTH_PIXELS,
+        SURFACE_HEIGHT_PIXELS,
         ConsumerTextureFormat::Rgba8Unorm,
         allocation_byte_size,
     ) {
-        Ok(texture) => Arc::new(texture),
+        Ok(texture) => {
+            let _adopted_by_vulkan = exported_texture_fd.into_raw_fd();
+            Arc::new(texture)
+        }
         Err(import_failure) => {
-            unsafe {
-                libc::close(texture_fd);
-                libc::close(staging_fd);
-            }
-            stop_app(app);
             panic!("the wheel-exported fd would not import: {import_failure}");
         }
     };
     let imported_staging = match ConsumerVulkanBuffer::from_opaque_fd(
-        &consumer_device,
-        staging_fd,
+        &consumer_vulkan_device,
+        local_staging_fd.as_raw_fd(),
         IMAGE_BYTES as vk::DeviceSize,
     ) {
-        Ok(buffer) => Arc::new(buffer),
+        Ok(buffer) => {
+            let _adopted_by_vulkan = local_staging_fd.into_raw_fd();
+            Arc::new(buffer)
+        }
         Err(import_failure) => {
-            unsafe { libc::close(staging_fd) };
-            stop_app(app);
             panic!("the local staging fd would not import: {import_failure}");
         }
     };
 
-    // Readback on the foreign device: bridge UNDEFINED → TRANSFER_SRC,
-    // copy image → staging (the bridge's spec status is documented on the
-    // sibling file's `record_image_readback_to_buffer`).
-    let consumer_dev = consumer_device.device();
-    let consumer_queue = consumer_device.queue();
-    let consumer_qfi = consumer_device.queue_family_index();
-    let consumer_vk_image = imported_texture.image();
-    let consumer_vk_buffer = imported_staging.buffer();
+    let consumer_device_handle = consumer_vulkan_device.device();
+    let imported_vk_image = imported_texture.image();
+    let imported_vk_buffer = imported_staging.buffer();
     unsafe {
-        let pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(consumer_qfi)
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-            .build();
-        let pool = consumer_dev
-            .create_command_pool(&pool_info, None)
-            .expect("create_command_pool");
-        let alloc_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1)
-            .build();
-        let cmd = consumer_dev
-            .allocate_command_buffers(&alloc_info)
-            .expect("allocate_command_buffers")[0];
-        let begin = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
-        consumer_dev
-            .begin_command_buffer(cmd, &begin)
-            .expect("begin_command_buffer");
-
-        let acquire_barrier = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::NONE)
-            .src_access_mask(vk::AccessFlags2::empty())
-            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(consumer_vk_image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .build();
-        let acquire_barriers = [acquire_barrier];
-        let acquire_dep = vk::DependencyInfo::builder()
-            .image_memory_barriers(&acquire_barriers)
-            .build();
-        consumer_dev.cmd_pipeline_barrier2(cmd, &acquire_dep);
-
-        let region = vk::BufferImageCopy2::builder()
-            .buffer_offset(0)
-            .buffer_row_length(0)
-            .buffer_image_height(0)
-            .image_subresource(vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-            .image_extent(vk::Extent3D {
-                width: W,
-                height: H,
-                depth: 1,
-            })
-            .build();
-        let regions = [region];
-        let copy_info = vk::CopyImageToBufferInfo2::builder()
-            .src_image(consumer_vk_image)
-            .src_image_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-            .dst_buffer(consumer_vk_buffer)
-            .regions(&regions)
-            .build();
-        consumer_dev.cmd_copy_image_to_buffer2(cmd, &copy_info);
-
-        consumer_dev
-            .end_command_buffer(cmd)
-            .expect("end_command_buffer");
-        let fence = consumer_dev
-            .create_fence(&vk::FenceCreateInfo::default(), None)
-            .expect("create_fence");
-        let cmd_info = vk::CommandBufferSubmitInfo::builder()
-            .command_buffer(cmd)
-            .build();
-        let cmd_infos = [cmd_info];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cmd_infos)
-            .build();
-        let submits = [submit];
-        consumer_dev
-            .queue_submit2(consumer_queue, &submits, fence)
-            .expect("queue_submit2");
-        consumer_dev
-            .wait_for_fences(&[fence], true, u64::MAX)
-            .expect("wait_for_fences");
-        consumer_dev.destroy_fence(fence, None);
-        consumer_dev.destroy_command_pool(pool, None);
+        common::submit_one_shot(
+            consumer_device_handle,
+            consumer_vulkan_device.queue(),
+            consumer_vulkan_device.queue_family_index(),
+            |command_buffer| {
+                common::record_image_readback_to_buffer(
+                    consumer_device_handle,
+                    command_buffer,
+                    imported_vk_image,
+                    imported_vk_buffer,
+                    SURFACE_WIDTH_PIXELS,
+                    SURFACE_HEIGHT_PIXELS,
+                );
+            },
+        );
     }
 
     // SAFETY: HOST_VISIBLE | HOST_COHERENT via the host-side allocation;
-    // the mapped pointer is valid for the buffer's lifetime.
-    let readback =
-        unsafe { std::slice::from_raw_parts(staging_buf.mapped_ptr(), IMAGE_BYTES as usize) };
+    // the mapped pointer is valid for the buffer's lifetime, and the
+    // fence inside `submit_one_shot` already retired the device writes
+    // into this shared memory.
+    let readback = unsafe {
+        std::slice::from_raw_parts(local_staging_buffer.mapped_ptr(), IMAGE_BYTES as usize)
+    };
     let pixels_match = readback
         .chunks_exact(4)
         .all(|pixel| pixel == FILL_CONSTANT_RGBA);
@@ -417,7 +411,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
     use std::io::Write;
     let _ = (&stream).write_all(verdict);
     drop(stream);
-    stop_app(app);
+    drop(app);
 
     assert!(
         pixels_match,

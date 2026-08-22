@@ -1556,7 +1556,7 @@ impl PythonGpuContextFullAccess {
     /// that runs its own Vulkan or CUDA external-memory import against
     /// the allocation.
     ///
-    /// Returns an [`PythonOpaqueFdTextureExport`]. **The caller owns the
+    /// Returns a [`PythonOpaqueFdTextureExport`]. **The caller owns the
     /// fd** — a successful foreign import adopts it; close it after a
     /// failed one. Consume it as an image: a linear mapping over
     /// OPTIMAL-tiled memory yields block-linear bytes, never pixels.
