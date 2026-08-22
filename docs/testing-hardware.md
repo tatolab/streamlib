@@ -16,23 +16,14 @@ the offending test is mis-classified.
 The **CI** tier-1 gate is the minimal per-crate `--lib` run defined by
 `.github/workflows/test.yml` (the CI config is the source of truth for
 what CI enforces). The broader **local** tier-1 baseline is the whole
-workspace with the example-only crates excluded so it builds on a box
-without OpenSSL dev headers (each excluded crate is an example binary
-with zero tests):
+workspace:
 
 ```bash
-cargo test --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream
+cargo test --workspace
 ```
 
 Every binary and every `Doc-tests` block should print `test result: ok.`
 with zero failures — that, not any particular total, is the pass bar.
-Review the exclusion list when a new workspace member lands (a new
-example that drags `openssl-sys` breaks this command on fresh machines).
 
 Tier 2 is the gate that runs when a change is hardware-relevant — Vulkan
 RHI work, encoder/decoder, display, anything in `vulkan/rhi/`. The
@@ -40,11 +31,6 @@ canonical command:
 
 ```bash
 cargo test --features streamlib/hardware-tests --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream \
     --no-fail-fast \
     -- --test-threads=1
 ```
@@ -77,11 +63,6 @@ therefore the whole-sweep gate:
 ```bash
 STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1 cargo test \
     --features streamlib/hardware-tests --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream \
     --no-fail-fast \
     -- --test-threads=1
 ```
