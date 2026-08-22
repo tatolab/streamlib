@@ -273,6 +273,39 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
         f"the export refusal should name the handle flavour: "
         f"{observation['opaque_export_refusal']!r}"
     )
+    assert "export_opaque_fd" in observation["opaque_export_refusal"], (
+        f"the refusal must point at the door that answers: "
+        f"{observation['opaque_export_refusal']!r}"
+    )
+    assert observation["opaque_export_fd_is_real"]
+    export_metadata = observation["opaque_export_metadata"]
+    assert export_metadata["width"] == SURFACE_WIDTH
+    assert export_metadata["height"] == SURFACE_HEIGHT
+    assert export_metadata["format"] == "rgba8_unorm"
+    assert export_metadata["allocation_byte_size"] >= SURFACE_WIDTH * SURFACE_HEIGHT * 4, (
+        "the whole-VkDeviceMemory size can pad past the tight size but never "
+        "under it"
+    )
+    # The recipe constants a conforming foreign re-import must reproduce —
+    # `new_opaque_fd_export`'s hardcoded shape, read back off the wire.
+    assert export_metadata["vk_image_tiling"] == 0  # VK_IMAGE_TILING_OPTIMAL
+    assert export_metadata["vk_image_usage_flags"] == 0x0F, (
+        "TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE"
+    )
+    assert export_metadata["vk_image_mip_levels"] == 1
+    assert export_metadata["vk_image_array_layers"] == 1
+    assert export_metadata["vk_image_samples"] == 1
+    assert export_metadata["dedicated_allocation"] is True
+    assert export_metadata["vk_memory_type_index"] >= 0
+    assert len(export_metadata["exporting_device_uuid_hex"]) == 32
+    assert export_metadata["exporting_device_uuid_hex"] != "00" * 16, (
+        "an all-zero device UUID binds no device"
+    )
+    assert observation["opaque_export_fd_closes_cleanly"]
+    assert "Resolve its surface id" in observation["unresolved_export_refusal"], (
+        f"an acquired-by-name texture holds no fd child-side: "
+        f"{observation['unresolved_export_refusal']!r}"
+    )
     assert observation["opaque_second_resolve_extent"] == [
         SURFACE_WIDTH,
         SURFACE_HEIGHT,
@@ -280,6 +313,14 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     assert observation["rt_export_fd_is_real"]
     assert observation["rt_export_byte_size"] > 0
     assert observation["rt_fd_closes_cleanly"]
+    assert "export_dma_buf" in observation["dma_buf_flavour_export_refusal"], (
+        f"the DMA-BUF flavour's refusal must mirror the redirect: "
+        f"{observation['dma_buf_flavour_export_refusal']!r}"
+    )
+    assert "export_dma_buf" in observation["pixel_buffer_export_refusal"], (
+        f"a pixel buffer's memory fd has a door, and the refusal names it: "
+        f"{observation['pixel_buffer_export_refusal']!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

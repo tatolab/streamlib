@@ -124,6 +124,162 @@ unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
     }
 }
 
+/// Record the host-side upload: UNDEFINED → TRANSFER_DST_OPTIMAL, copy
+/// `source_buffer` into `image`, then TRANSFER_DST_OPTIMAL →
+/// SHADER_READ_ONLY_OPTIMAL — locking the post-upload layout so a future
+/// producer wanting to hand off the image with a non-UNDEFINED layout has
+/// a reference shape, even though this file's consumers bridge UNDEFINED →
+/// TRANSFER_SRC (see `record_image_readback_to_buffer`).
+unsafe fn record_pattern_upload_to_image(
+    device: &vulkanalia::Device,
+    cmd: vk::CommandBuffer,
+    source_buffer: vk::Buffer,
+    image: vk::Image,
+) {
+    let pre_barrier = vk::ImageMemoryBarrier2::builder()
+        .src_stage_mask(vk::PipelineStageFlags2::NONE)
+        .src_access_mask(vk::AccessFlags2::empty())
+        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+        .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .build();
+    let pre_barriers = [pre_barrier];
+    let pre_dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&pre_barriers)
+        .build();
+    unsafe { device.cmd_pipeline_barrier2(cmd, &pre_dep) };
+
+    let region = vk::BufferImageCopy2::builder()
+        .buffer_offset(0)
+        .buffer_row_length(0)
+        .buffer_image_height(0)
+        .image_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+        .image_extent(vk::Extent3D {
+            width: W,
+            height: H,
+            depth: 1,
+        })
+        .build();
+    let regions = [region];
+    let copy_info = vk::CopyBufferToImageInfo2::builder()
+        .src_buffer(source_buffer)
+        .dst_image(image)
+        .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .regions(&regions)
+        .build();
+    unsafe { device.cmd_copy_buffer_to_image2(cmd, &copy_info) };
+
+    let post_barrier = vk::ImageMemoryBarrier2::builder()
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+        .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
+        .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .build();
+    let post_barriers = [post_barrier];
+    let post_dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&post_barriers)
+        .build();
+    unsafe { device.cmd_pipeline_barrier2(cmd, &post_dep) };
+}
+
+/// Record the consumer-side readback: bridge UNDEFINED →
+/// TRANSFER_SRC_OPTIMAL, then copy `image` into `buffer`.
+///
+/// The consumer's `VkImage` tracker starts at UNDEFINED by Vulkan spec
+/// regardless of the host's post-upload layout (see
+/// `docs/learnings/cross-process-vkimage-layout.md`). The bridging
+/// transition permits content discard by spec but DMA-BUF / OPAQUE_FD
+/// kernel-cache contents are preserved in practice on NVIDIA Linux. The
+/// full QFOT acquire path (with `VkExternalMemoryAcquireUnmodifiedEXT`)
+/// is the spec-correct content-preserving form when the extension is
+/// present; NVIDIA does not ship it as of 2026-05, so the bridge is the
+/// structurally permanent path on NVIDIA.
+unsafe fn record_image_readback_to_buffer(
+    device: &vulkanalia::Device,
+    cmd: vk::CommandBuffer,
+    image: vk::Image,
+    buffer: vk::Buffer,
+) {
+    let acquire_barrier = vk::ImageMemoryBarrier2::builder()
+        .src_stage_mask(vk::PipelineStageFlags2::NONE)
+        .src_access_mask(vk::AccessFlags2::empty())
+        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+        .old_layout(vk::ImageLayout::UNDEFINED)
+        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+        .image(image)
+        .subresource_range(vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .build();
+    let acquire_barriers = [acquire_barrier];
+    let acquire_dep = vk::DependencyInfo::builder()
+        .image_memory_barriers(&acquire_barriers)
+        .build();
+    unsafe { device.cmd_pipeline_barrier2(cmd, &acquire_dep) };
+
+    let region = vk::BufferImageCopy2::builder()
+        .buffer_offset(0)
+        .buffer_row_length(0)
+        .buffer_image_height(0)
+        .image_subresource(vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        })
+        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+        .image_extent(vk::Extent3D {
+            width: W,
+            height: H,
+            depth: 1,
+        })
+        .build();
+    let regions = [region];
+    let copy_info = vk::CopyImageToBufferInfo2::builder()
+        .src_image(image)
+        .src_image_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .dst_buffer(buffer)
+        .regions(&regions)
+        .build();
+    unsafe { device.cmd_copy_image_to_buffer2(cmd, &copy_info) };
+}
+
 #[test]
 #[serial]
 fn opaque_fd_image_carve_out_round_trip() {
@@ -196,86 +352,7 @@ fn opaque_fd_image_carve_out_round_trip() {
 
     unsafe {
         submit_one_shot(host_dev, host_queue, host_qfi, |cmd| {
-            // UNDEFINED → TRANSFER_DST_OPTIMAL
-            let pre_barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                .src_access_mask(vk::AccessFlags2::empty())
-                .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(host_vk_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .build();
-            let pre_barriers = [pre_barrier];
-            let pre_dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&pre_barriers)
-                .build();
-            host_dev.cmd_pipeline_barrier2(cmd, &pre_dep);
-
-            // Copy source buffer → image
-            let region = vk::BufferImageCopy2::builder()
-                .buffer_offset(0)
-                .buffer_row_length(0)
-                .buffer_image_height(0)
-                .image_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D {
-                    width: W,
-                    height: H,
-                    depth: 1,
-                })
-                .build();
-            let regions = [region];
-            let copy_info = vk::CopyBufferToImageInfo2::builder()
-                .src_buffer(source_buf.buffer())
-                .dst_image(host_vk_image)
-                .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .regions(&regions)
-                .build();
-            host_dev.cmd_copy_buffer_to_image2(cmd, &copy_info);
-
-            // TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL. Locking
-            // the post-upload layout so a future producer wanting to
-            // hand off the image with a non-UNDEFINED layout has a
-            // reference shape, even though this test's consumer
-            // bridges UNDEFINED → TRANSFER_SRC (see Phase 6 comment).
-            let post_barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::COPY)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(host_vk_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .build();
-            let post_barriers = [post_barrier];
-            let post_dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&post_barriers)
-                .build();
-            host_dev.cmd_pipeline_barrier2(cmd, &post_dep);
+            record_pattern_upload_to_image(host_dev, cmd, source_buf.buffer(), host_vk_image);
         });
     }
 
@@ -348,18 +425,8 @@ fn opaque_fd_image_carve_out_round_trip() {
     assert_eq!(consumer_image.chosen_drm_format_modifier(), 0);
 
     // Phase 6: consumer-side cmd buffer — bridge UNDEFINED →
-    // TRANSFER_SRC_OPTIMAL, copy image to staging buffer.
-    //
-    // The consumer's `VkImage` tracker starts at UNDEFINED by Vulkan
-    // spec regardless of the host's post-upload layout (see
-    // `docs/learnings/cross-process-vkimage-layout.md`). The bridging
-    // transition permits content discard by spec but DMA-BUF /
-    // OPAQUE_FD kernel-cache contents are preserved in practice on
-    // NVIDIA Linux. The full QFOT acquire path (with
-    // `VkExternalMemoryAcquireUnmodifiedEXT`) is the spec-correct
-    // content-preserving form when the extension is present;
-    // NVIDIA does not ship it as of 2026-05, so the bridge is the
-    // structurally permanent path on NVIDIA.
+    // TRANSFER_SRC_OPTIMAL, copy image to staging buffer (the bridge's
+    // spec status lives on `record_image_readback_to_buffer`).
     let consumer_vk_image = consumer_image.image();
     let consumer_vk_buffer = consumer_dest_buf.buffer();
     let consumer_dev = consumer_device.device();
@@ -368,55 +435,7 @@ fn opaque_fd_image_carve_out_round_trip() {
 
     unsafe {
         submit_one_shot(consumer_dev, consumer_queue, consumer_qfi, |cmd| {
-            let acquire_barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                .src_access_mask(vk::AccessFlags2::empty())
-                .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(consumer_vk_image)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .build();
-            let acquire_barriers = [acquire_barrier];
-            let acquire_dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&acquire_barriers)
-                .build();
-            consumer_dev.cmd_pipeline_barrier2(cmd, &acquire_dep);
-
-            let region = vk::BufferImageCopy2::builder()
-                .buffer_offset(0)
-                .buffer_row_length(0)
-                .buffer_image_height(0)
-                .image_subresource(vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
-                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D {
-                    width: W,
-                    height: H,
-                    depth: 1,
-                })
-                .build();
-            let regions = [region];
-            let copy_info = vk::CopyImageToBufferInfo2::builder()
-                .src_image(consumer_vk_image)
-                .src_image_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .dst_buffer(consumer_vk_buffer)
-                .regions(&regions)
-                .build();
-            consumer_dev.cmd_copy_image_to_buffer2(cmd, &copy_info);
+            record_image_readback_to_buffer(consumer_dev, cmd, consumer_vk_image, consumer_vk_buffer);
         });
     }
 
@@ -436,5 +455,189 @@ fn opaque_fd_image_carve_out_round_trip() {
          - the host's TRANSFER_DST barrier dropped the upload, or\n\
          - the consumer's bind / FD-import wired memory at the wrong offset \
            or size."
+    );
+}
+
+/// The raw-handle export contract's fd-pins-the-payload probe (#1900): an
+/// exported OPAQUE_FD imported by an independent `VkDevice` still reads
+/// the exporter's pixels after the exporting side destroys its source
+/// texture. Each exported fd holds a spec-mandated reference to the
+/// payload (`VK_KHR_external_memory_fd`), so the engine freeing the
+/// allocation must not free the memory under a foreign holder — the
+/// nearest prior test proved only descriptor survival, never content.
+///
+/// Also pins the allocation-stable metadata `export_opaque_fd` carries at
+/// its RHI source: the memory type index reads off the live allocation
+/// and the exporting device UUID matches the device's own.
+#[test]
+#[serial]
+fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_env_filter("streamlib=warn,streamlib_consumer_rhi=debug")
+        .try_init();
+
+    let host_device = match HostVulkanDevice::new() {
+        Ok(d) => d,
+        Err(e) => {
+            println!("opaque_fd teardown probe: no Vulkan host device — skipping ({e})");
+            return;
+        }
+    };
+    if host_device.opaque_fd_image_pool().is_none() || host_device.opaque_fd_buffer_pool().is_none()
+    {
+        println!(
+            "opaque_fd teardown probe: OPAQUE_FD image or HOST_VISIBLE buffer pool \
+             unavailable — skipping"
+        );
+        return;
+    }
+
+    let source_buf = Arc::new(
+        HostVulkanBuffer::new_opaque_fd_export(&host_device, IMAGE_BYTES)
+            .expect("host source buf new_opaque_fd_export"),
+    );
+    let dest_buf = Arc::new(
+        HostVulkanBuffer::new_opaque_fd_export(&host_device, IMAGE_BYTES)
+            .expect("host dest buf new_opaque_fd_export"),
+    );
+    let desc = TextureDescriptor::new(W, H, streamlib::sdk::rhi::TextureFormat::Rgba8Unorm);
+    let host_image = Arc::new(
+        HostVulkanTexture::new_opaque_fd_export(&host_device, &desc)
+            .expect("host image new_opaque_fd_export"),
+    );
+
+    let pattern: Vec<u8> = (0..IMAGE_BYTES as usize)
+        .map(|i| ((i * 53) & 0xFF) as u8)
+        .collect();
+    // SAFETY: HOST_VISIBLE | HOST_COHERENT — the mapped pointer is valid
+    // for the buffer's lifetime; we hold the Arc.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            pattern.as_ptr(),
+            source_buf.mapped_ptr(),
+            IMAGE_BYTES as usize,
+        );
+    }
+
+    let host_vk_image = host_image.image().expect("host image vk handle");
+    let host_dev = host_device.device();
+    unsafe {
+        submit_one_shot(
+            host_dev,
+            host_device.queue(),
+            host_device.queue_family_index(),
+            |cmd| {
+                record_pattern_upload_to_image(host_dev, cmd, source_buf.buffer(), host_vk_image);
+            },
+        );
+    }
+
+    // The metadata half of the export contract, read at its RHI source
+    // while the allocation is live.
+    let memory_type_index = host_image
+        .vma_allocation_memory_type_index()
+        .expect("a live OPAQUE_FD allocation must state its memory type index");
+    let memory_type_count = 32;
+    assert!(
+        memory_type_index < memory_type_count,
+        "memory type index {memory_type_index} is outside VK_MAX_MEMORY_TYPES"
+    );
+    let exporting_uuid = host_image
+        .exporting_physical_device_uuid()
+        .expect("a texture with a stored device must state its exporting UUID");
+    assert_eq!(
+        exporting_uuid,
+        host_device.physical_device_uuid(),
+        "the exporting UUID must be the texture's own device's"
+    );
+    assert_ne!(exporting_uuid, [0u8; 16], "an all-zero UUID binds no device");
+
+    let image_fd = host_image
+        .export_opaque_fd_memory()
+        .expect("export image OPAQUE_FD");
+    let dest_fd = dest_buf
+        .export_opaque_fd_memory()
+        .expect("export dest buf OPAQUE_FD");
+    let host_image_alloc_size = host_image.vma_allocation_size();
+    let host_dest_size = dest_buf.size() as vk::DeviceSize;
+
+    let consumer_device = match ConsumerVulkanDevice::new() {
+        Ok(d) => Arc::new(d),
+        Err(e) => {
+            unsafe {
+                libc::close(image_fd);
+                libc::close(dest_fd);
+            }
+            println!(
+                "opaque_fd teardown probe: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                 (likely a UUID mismatch on a multi-GPU rig)"
+            );
+            return;
+        }
+    };
+    let consumer_image = match streamlib_consumer_rhi::ConsumerVulkanTexture::from_opaque_fd(
+        &consumer_device,
+        image_fd,
+        W,
+        H,
+        ConsumerTextureFormat::Rgba8Unorm,
+        host_image_alloc_size,
+    ) {
+        Ok(t) => Arc::new(t),
+        Err(e) => {
+            unsafe {
+                libc::close(image_fd);
+                libc::close(dest_fd);
+            }
+            panic!("ConsumerVulkanTexture::from_opaque_fd failed: {e}");
+        }
+    };
+    let consumer_dest_buf =
+        match ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, dest_fd, host_dest_size) {
+            Ok(b) => Arc::new(b),
+            Err(e) => {
+                unsafe { libc::close(dest_fd) };
+                panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e}");
+            }
+        };
+
+    // The teardown under probe: the exporting side destroys its source
+    // texture — vmaDestroyImage plus the allocation free — while the
+    // foreign import holds the payload. The upload's fence already waited,
+    // so no host GPU work is in flight on the image.
+    drop(host_image);
+    drop(source_buf);
+
+    let consumer_dev = consumer_device.device();
+    let consumer_vk_image = consumer_image.image();
+    let consumer_vk_buffer = consumer_dest_buf.buffer();
+    unsafe {
+        submit_one_shot(
+            consumer_dev,
+            consumer_device.queue(),
+            consumer_device.queue_family_index(),
+            |cmd| {
+                record_image_readback_to_buffer(
+                    consumer_dev,
+                    cmd,
+                    consumer_vk_image,
+                    consumer_vk_buffer,
+                );
+            },
+        );
+    }
+
+    // SAFETY: HOST_VISIBLE | HOST_COHERENT — the consumer's mapped
+    // pointer is valid for the buffer's lifetime; we hold the Arc.
+    let consumer_view =
+        unsafe { std::slice::from_raw_parts(consumer_dest_buf.mapped_ptr(), IMAGE_BYTES as usize) };
+    assert_eq!(
+        consumer_view,
+        &pattern[..],
+        "an exported OPAQUE_FD must pin its payload: after the exporter \
+         destroyed the source texture, the foreign import read different \
+         bytes than the exporter uploaded — the payload reference the fd \
+         holds by spec did not hold in practice"
     );
 }

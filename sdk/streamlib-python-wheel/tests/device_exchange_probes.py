@@ -458,6 +458,19 @@ class TextureHandleRoundTripProbe:
             )
             observation["kernel_dispatched"] = True
 
+            # An acquired-by-name texture holds no fd child-side; the raw
+            # export refuses until the surface id is resolved.
+            try:
+                unresolved_export = ctx.gpu_full_access.export_opaque_fd(
+                    kernel_output
+                )
+                observation["unresolved_export_refusal"] = (
+                    f"no refusal: export answered {unresolved_export!r}"
+                )
+                os.close(unresolved_export.fd)
+            except RuntimeError as refusal:
+                observation["unresolved_export_refusal"] = str(refusal)
+
             with ctx.gpu_limited_access.resolve_surface(
                 kernel_output.surface_id
             ) as resolved_texture:
@@ -498,6 +511,28 @@ class TextureHandleRoundTripProbe:
                 except RuntimeError as refusal:
                     observation["opaque_export_refusal"] = str(refusal)
 
+                # The raw-handle door for the flavour: the fd plus the
+                # allocation-stable shape a foreign import reproduces.
+                export = ctx.gpu_full_access.export_opaque_fd(resolved_texture)
+                observation["opaque_export_fd_is_real"] = export.fd >= 0
+                observation["opaque_export_metadata"] = {
+                    "allocation_byte_size": export.allocation_byte_size,
+                    "width": export.width,
+                    "height": export.height,
+                    "format": export.format,
+                    "vk_image_tiling": export.vk_image_tiling,
+                    "vk_image_usage_flags": export.vk_image_usage_flags,
+                    "vk_image_mip_levels": export.vk_image_mip_levels,
+                    "vk_image_array_layers": export.vk_image_array_layers,
+                    "vk_image_samples": export.vk_image_samples,
+                    "dedicated_allocation": export.dedicated_allocation,
+                    "vk_memory_type_index": export.vk_memory_type_index,
+                    "exporting_device_uuid_hex": export.exporting_device_uuid.hex(),
+                }
+                observation["opaque_export_fd_closes_cleanly"] = (
+                    os.close(export.fd) is None
+                )
+
             # The frame is still usable after a consumer's release: the
             # release republished the layout and signalled its edge.
             with ctx.gpu_limited_access.resolve_surface(
@@ -527,6 +562,31 @@ class TextureHandleRoundTripProbe:
                 observation["rt_export_fd_is_real"] = fd >= 0
                 observation["rt_export_byte_size"] = byte_size
                 observation["rt_fd_closes_cleanly"] = os.close(fd) is None
+
+                # The mirror of the redirect: a DMA-BUF-flavoured texture
+                # refuses the OPAQUE_FD spelling, pointing back.
+                try:
+                    flavour_export = ctx.gpu_full_access.export_opaque_fd(
+                        resolved_render_target
+                    )
+                    observation["dma_buf_flavour_export_refusal"] = (
+                        f"no refusal: export answered {flavour_export!r}"
+                    )
+                    os.close(flavour_export.fd)
+                except RuntimeError as refusal:
+                    observation["dma_buf_flavour_export_refusal"] = str(refusal)
+
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as pixel_buffer:
+            try:
+                pixel_export = ctx.gpu_full_access.export_opaque_fd(pixel_buffer)
+                observation["pixel_buffer_export_refusal"] = (
+                    f"no refusal: export answered {pixel_export!r}"
+                )
+                os.close(pixel_export.fd)
+            except RuntimeError as refusal:
+                observation["pixel_buffer_export_refusal"] = str(refusal)
         return observation
 
 
