@@ -246,7 +246,9 @@ unsafe fn owned_string_from_layer_cstr(ptr: *const c_char) -> String {
     if ptr.is_null() {
         return String::new();
     }
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+    unsafe { CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(test)]
@@ -332,5 +334,214 @@ mod tests {
             }
         );
         assert_eq!(tally.counts().total(), 5);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod hardware_tests {
+    use std::sync::Arc;
+
+    use vulkanalia::prelude::v1_4::*;
+    use vulkanalia::vk;
+
+    use super::VulkanValidationMessageCounts;
+    use crate::core::rhi::{
+        Texture, TextureDescriptor, TextureFormat, TextureUsages, VulkanLayout,
+    };
+    use crate::host_rhi::HostTextureExt;
+    use crate::vulkan::rhi::{
+        HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture, ImageCopyRegion, RhiCommandRecorder,
+        VulkanAccess, VulkanStage,
+    };
+
+    /// A device whose validation findings can actually be counted, plus the
+    /// count at the moment it was handed over. `None` when this run cannot
+    /// measure — no GPU, or no messenger because validation is off.
+    fn device_counting_validation_messages()
+    -> Option<(Arc<HostVulkanDevice>, VulkanValidationMessageCounts)> {
+        let device = match HostVulkanDevice::new() {
+            Ok(device) => device,
+            Err(e) => {
+                println!("Skipping — Vulkan not available: {e}");
+                return None;
+            }
+        };
+        match device.validation_layer_message_counts() {
+            Some(counts) => Some((device, counts)),
+            None => {
+                println!(
+                    "Skipping — no validation messenger installed. Re-run with \
+                     STREAMLIB_VULKAN_VALIDATION=1 and VK_LAYER_KHRONOS_validation present."
+                );
+                None
+            }
+        }
+    }
+
+    /// Without this, the zero-findings gate the other test asserts could
+    /// hold at zero because the layer is silent rather than because the
+    /// engine is clean.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_deliberately_invalid_vulkan_call_moves_the_validation_error_count() {
+        let Some((device, before)) = device_counting_validation_messages() else {
+            return;
+        };
+
+        let raw_device = device.device();
+        let command_pool = unsafe {
+            raw_device.create_command_pool(
+                &vk::CommandPoolCreateInfo::builder()
+                    .queue_family_index(device.queue_family_index())
+                    .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+                    .build(),
+                None,
+            )
+        }
+        .expect("command pool");
+        let command_buffer = unsafe {
+            raw_device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(command_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1)
+                    .build(),
+            )
+        }
+        .expect("command buffer")[0];
+
+        // VUID-vkEndCommandBuffer-commandBuffer-00059: the buffer is in the
+        // initial state, never begun. The layer reports it and skips the
+        // down-call, so nothing reaches the driver.
+        let _ = unsafe { raw_device.end_command_buffer(command_buffer) };
+
+        let after = device
+            .validation_layer_message_counts()
+            .expect("messenger still installed");
+        unsafe { raw_device.destroy_command_pool(command_pool, None) };
+
+        assert!(
+            after.error_count > before.error_count,
+            "the validation layer reported nothing for a known-bad vkEndCommandBuffer, so a \
+             zero-findings assertion would pass vacuously (before {before:?}, after {after:?})"
+        );
+    }
+
+    /// The gate itself: a real upload → image → readback round trip through
+    /// the engine's own recorder raises nothing.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_clean_gpu_round_trip_leaves_the_validation_message_counts_unmoved() {
+        let Some((device, before)) = device_counting_validation_messages() else {
+            return;
+        };
+
+        const WIDTH: u32 = 32;
+        const HEIGHT: u32 = 32;
+        let byte_size = u64::from(WIDTH) * u64::from(HEIGHT) * 4;
+
+        let upload_buffer = HostVulkanBuffer::new(&device, byte_size).expect("upload buffer");
+        let readback_buffer = HostVulkanBuffer::new(&device, byte_size).expect("readback buffer");
+        let uploaded_bytes: Vec<u8> = (0..byte_size).map(|i| (i % 251) as u8).collect();
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                uploaded_bytes.as_ptr(),
+                upload_buffer.mapped_ptr(),
+                uploaded_bytes.len(),
+            );
+        }
+
+        let texture = <Texture as HostTextureExt>::from_vulkan(
+            HostVulkanTexture::new(
+                &device,
+                &TextureDescriptor {
+                    width: WIDTH,
+                    height: HEIGHT,
+                    format: TextureFormat::Bgra8Unorm,
+                    usage: TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+                    label: Some("validation-clean-round-trip"),
+                },
+            )
+            .expect("texture"),
+        );
+
+        let mut recorder = RhiCommandRecorder::new(&device, "validation-clean-round-trip")
+            .expect("command recorder");
+        recorder.begin().expect("begin");
+        recorder
+            .record_image_barrier(
+                &texture,
+                VulkanLayout::UNDEFINED,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanStage::TOP_OF_PIPE,
+                VulkanStage::COPY,
+                VulkanAccess::NONE,
+                VulkanAccess::TRANSFER_WRITE,
+            )
+            .expect("barrier into TRANSFER_DST_OPTIMAL");
+        recorder
+            .record_copy_buffer_to_image(
+                &upload_buffer,
+                &texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                ImageCopyRegion::tightly_packed(WIDTH, HEIGHT),
+            )
+            .expect("upload copy");
+        recorder
+            .record_image_barrier(
+                &texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                VulkanStage::COPY,
+                VulkanStage::COPY,
+                VulkanAccess::TRANSFER_WRITE,
+                VulkanAccess::TRANSFER_READ,
+            )
+            .expect("barrier into TRANSFER_SRC_OPTIMAL");
+        recorder
+            .record_copy_image_to_buffer(
+                &texture,
+                VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                &readback_buffer,
+                ImageCopyRegion::tightly_packed(WIDTH, HEIGHT),
+            )
+            .expect("readback copy");
+        recorder
+            .record_buffer_barrier(
+                &readback_buffer,
+                VulkanStage::COPY,
+                VulkanStage::HOST,
+                VulkanAccess::TRANSFER_WRITE,
+                VulkanAccess::HOST_READ,
+            )
+            .expect("barrier for the host read");
+        recorder.submit_and_wait().expect("submit and wait");
+
+        let mut landed_bytes = vec![0u8; uploaded_bytes.len()];
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                readback_buffer.mapped_ptr(),
+                landed_bytes.as_mut_ptr(),
+                landed_bytes.len(),
+            );
+        }
+        assert_eq!(
+            landed_bytes, uploaded_bytes,
+            "the round trip did not move the pixels, so a zero-findings result proves nothing"
+        );
+
+        let after = device
+            .validation_layer_message_counts()
+            .expect("messenger still installed");
+        assert_eq!(
+            after, before,
+            "a clean upload → image → readback round trip raised validation findings"
+        );
     }
 }
