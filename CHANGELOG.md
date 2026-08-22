@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.18.0](https://github.com/tatolab/streamlib/compare/v0.17.1...v0.18.0) (2026-08-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** cross-process texture import for Python processors ([#1899](https://github.com/tatolab/streamlib/issues/1899))
+* **engine:** graphics and ray-tracing kernels at Python parity ([#1896](https://github.com/tatolab/streamlib/issues/1896))
+* **python:** batched kernel dispatch — one submission, one fence ([#1889](https://github.com/tatolab/streamlib/issues/1889))
+* **engine:** GLSL is the kernel source contract — vendored compiler, keyed cache ([#1885](https://github.com/tatolab/streamlib/issues/1885))
+* **engine:** CpuReadbackBridge, set_cpu_readback_bridge and its FullAccess mirror are deleted; open_cpu_readback_staging is added to the escalate wire.
+* **plan:** run_cpu_readback_copy(buffer_to_image) now refuses a staging that has never been filled from its surface.
+* **engine:** run_compute_kernel and register_compute_kernel change shape.
+* **engine:** `Texture::native_handle()` returns a DMA-BUF fd whose ownership transfers to the caller; previously the texture closed it at drop. No in-tree caller exists.
+* **engine:** a pool surface id names the frame — recycled ids fail loudly, never serve another frame's pixels ([#1877](https://github.com/tatolab/streamlib/issues/1877))
+* **engine:** subscribe() returns Result and registers its subscriber before returning, so no event is lost to the establishment window ([#1875](https://github.com/tatolab/streamlib/issues/1875))
+* **python:** delete the wheel duplicate media_clock_now_ns export ([#1860](https://github.com/tatolab/streamlib/issues/1860))
+* **engine:** audio tick timestamps carry the machine epoch ([#1859](https://github.com/tatolab/streamlib/issues/1859))
+* **engine:** MediaClock carries the machine monotonic epoch ([#1858](https://github.com/tatolab/streamlib/issues/1858))
+* retire the manifest, schema and codegen layer from the consumer trees ([#1854](https://github.com/tatolab/streamlib/issues/1854))
+* **sdk:** delete the @org/package/Type identity grammar and streamlib-idents ([#1851](https://github.com/tatolab/streamlib/issues/1851))
+* **engine:** the registry, graph and control plane key on the import path ([#1850](https://github.com/tatolab/streamlib/issues/1850))
+* **idents:** delete the orphaned package layer — resolver, manifest, lockfile, package source, archive ([#1843](https://github.com/tatolab/streamlib/issues/1843))
+* **sdk:** strip the type from port declarations and control-plane rendering ([#1831](https://github.com/tatolab/streamlib/issues/1831))
+* **engine:** `streamlib::schemas::current_schema_idents` and `current_schema_definition` are removed, along with the `GET /api/schemas` and `GET /api/schemas/{name}` control-plane endpoints.
+
+### Features
+
+* **ci:** check-clock-usage — enforce the wall-clock allowlist ([#1861](https://github.com/tatolab/streamlib/issues/1861)) ([1494b08](https://github.com/tatolab/streamlib/commit/1494b0814a1374c2f05abd36784bb89a5ce8169c)), closes [#1728](https://github.com/tatolab/streamlib/issues/1728)
+* **engine:** CPU readback becomes an always-present GpuContext capability ([#1883](https://github.com/tatolab/streamlib/issues/1883)) ([d99755b](https://github.com/tatolab/streamlib/commit/d99755b771198663c61b8684af5bacfd10f94927))
+* **engine:** cross-process texture import for Python processors ([#1899](https://github.com/tatolab/streamlib/issues/1899)) ([a28c3ce](https://github.com/tatolab/streamlib/commit/a28c3ce0aabd4280c59994d892c05959a8d6d33d))
+* **engine:** delete the embedded schema registry ([#1827](https://github.com/tatolab/streamlib/issues/1827)) ([fc6be3f](https://github.com/tatolab/streamlib/commit/fc6be3fe0ef0ae9d0c807d5ea4d2902afe304d6d))
+* **engine:** GLSL is the kernel source contract — vendored compiler, keyed cache ([#1885](https://github.com/tatolab/streamlib/issues/1885)) ([83d81d4](https://github.com/tatolab/streamlib/commit/83d81d4e7371f882385fa409b85b3857af6c6002))
+* **engine:** graphics and ray-tracing kernels at Python parity ([#1896](https://github.com/tatolab/streamlib/issues/1896)) ([2179da4](https://github.com/tatolab/streamlib/commit/2179da42a6b8f14f08c78005fd4e4f56623e08bc))
+* **engine:** named N-binding compute dispatch from Python, end to end ([#1882](https://github.com/tatolab/streamlib/issues/1882)) ([106570d](https://github.com/tatolab/streamlib/commit/106570d6e152ba44445b992117f99e4043582345))
+* **engine:** surface checkout leases — a held frame's pool slot is never rehanded ([#1869](https://github.com/tatolab/streamlib/issues/1869)) ([7e90288](https://github.com/tatolab/streamlib/commit/7e902882c718249bca830304ba66f20ad5d39f99))
+* **engine:** the display name disambiguates duplicates within one graph ([#1845](https://github.com/tatolab/streamlib/issues/1845)) ([c9e5fa0](https://github.com/tatolab/streamlib/commit/c9e5fa06326ca56a0d1dc3e84c2d599e073a466f))
+* **python:** batched kernel dispatch — one submission, one fence ([#1889](https://github.com/tatolab/streamlib/issues/1889)) ([19eafe6](https://github.com/tatolab/streamlib/commit/19eafe6366a9c16209067425f8d0bcc8a85d01c8))
+* **python:** export_opaque_fd hands the OPAQUE_FD texture allocation to native code ([#1905](https://github.com/tatolab/streamlib/issues/1905)) ([00abef7](https://github.com/tatolab/streamlib/commit/00abef7045f3ced117021ed9b08f517dbe1b9e0b))
+* **python:** the scoped device-tensor view over a kernel output ([#1902](https://github.com/tatolab/streamlib/issues/1902)) ([7d9a615](https://github.com/tatolab/streamlib/commit/7d9a615a2807b4c91f40d1d87267af02a9ab44d9))
+* **python:** the typed cast claims its frame — read(into=VideoFrame) pins the surface, drop releases it ([#1871](https://github.com/tatolab/streamlib/issues/1871)) ([ed098d4](https://github.com/tatolab/streamlib/commit/ed098d4906790a1ca00e07539c231b3cccd97d94))
+* **sdk:** every processor descriptor carries its class's import path ([#1848](https://github.com/tatolab/streamlib/issues/1848)) ([afae87c](https://github.com/tatolab/streamlib/commit/afae87c4eeabfeeb29af6549d861eb19c881fa7b))
+* **sdk:** strip the type from port declarations and control-plane rendering ([#1831](https://github.com/tatolab/streamlib/issues/1831)) ([45cff3a](https://github.com/tatolab/streamlib/commit/45cff3a428ad1a18fa92bbf173ec774fc2f266ba)), closes [#1816](https://github.com/tatolab/streamlib/issues/1816)
+
+
+### Bug Fixes
+
+* **engine:** a pool surface id names the frame — recycled ids fail loudly, never serve another frame's pixels ([#1877](https://github.com/tatolab/streamlib/issues/1877)) ([5a7b8dd](https://github.com/tatolab/streamlib/commit/5a7b8dd5e2c98969da090c0550728a547cefa6db))
+* **engine:** a surface-share export has exactly one fd owner — the texture DMA-BUF export mints per call instead of memoizing ([#1881](https://github.com/tatolab/streamlib/issues/1881)) ([78c5bc8](https://github.com/tatolab/streamlib/commit/78c5bc835eb88a7c577325616f59852747ed7f97))
+* **engine:** audio tick timestamps carry the machine epoch ([#1859](https://github.com/tatolab/streamlib/issues/1859)) ([a3cc658](https://github.com/tatolab/streamlib/commit/a3cc6587aff6aa4bdca771c70a611e85a7215ab9))
+* **engine:** bound every wire-derived length the frame-header read path trusts ([#1832](https://github.com/tatolab/streamlib/issues/1832)) ([cbd6b9e](https://github.com/tatolab/streamlib/commit/cbd6b9e86381058feecc1e6ec205590ce6efe1ef))
+* **engine:** bridge teardown releases a crashed helper's surface-share registrations ([#1906](https://github.com/tatolab/streamlib/issues/1906)) ([1640bdc](https://github.com/tatolab/streamlib/commit/1640bdc78ba75372f9575eed15d960a5a7556240))
+* **engine:** cross-process device export reads the pooled backing, never the producer's ring ([#1868](https://github.com/tatolab/streamlib/issues/1868)) ([53d5410](https://github.com/tatolab/streamlib/commit/53d5410f3ebc9ef6f7185049736478d4d444b6a6))
+* **engine:** MediaClock carries the machine monotonic epoch ([#1858](https://github.com/tatolab/streamlib/issues/1858)) ([614bfa7](https://github.com/tatolab/streamlib/commit/614bfa7d95020ae28f93c53e2fb6cb21e658a246)), closes [#1725](https://github.com/tatolab/streamlib/issues/1725)
+* **engine:** per-link iceoryx2 port reclaim for helper-process endpoints on disconnect ([#1862](https://github.com/tatolab/streamlib/issues/1862)) ([e76762e](https://github.com/tatolab/streamlib/commit/e76762eacd2105d5d1fd2b3953ae2b3f05d50342))
+* **engine:** RHI test fixtures build the video profiles and export memory production builds ([#1895](https://github.com/tatolab/streamlib/issues/1895)) ([db09366](https://github.com/tatolab/streamlib/commit/db09366f93e18419d113a7f161a64066aeafe314))
+* **engine:** subscribe() returns Result and registers its subscriber before returning, so no event is lost to the establishment window ([#1875](https://github.com/tatolab/streamlib/issues/1875)) ([655e74d](https://github.com/tatolab/streamlib/commit/655e74dc6325e0cbfe9a58ee24f8418f24288272))
+* **engine:** the tone mapper leaves each image in a layout its usage allows ([#1894](https://github.com/tatolab/streamlib/issues/1894)) ([110876b](https://github.com/tatolab/streamlib/commit/110876bc8e4c89179f5aa9fcf851c2cfc9134817))
+* **rhi:** the extension-properties buffer outlives the names it lends ([#1847](https://github.com/tatolab/streamlib/issues/1847)) ([11f5671](https://github.com/tatolab/streamlib/commit/11f5671472abd2184c49030df9906a091f8f8996)), closes [#1846](https://github.com/tatolab/streamlib/issues/1846)
+
+
+### Performance
+
+* **engine:** the staging cache stops allocating on every lookup ([d99755b](https://github.com/tatolab/streamlib/commit/d99755b771198663c61b8684af5bacfd10f94927))
+* **xtask:** optimize the lint gates so the test suite stops paying for them ([#1849](https://github.com/tatolab/streamlib/issues/1849)) ([1385bd4](https://github.com/tatolab/streamlib/commit/1385bd42bf89216918d5180a94bf48f4eb6710da))
+
+
+### Code Refactoring
+
+* **engine:** the registry, graph and control plane key on the import path ([#1850](https://github.com/tatolab/streamlib/issues/1850)) ([4e2ac4b](https://github.com/tatolab/streamlib/commit/4e2ac4bb7a5d006367c7c9b7146021d1121623f9))
+* **python:** delete the wheel duplicate media_clock_now_ns export ([#1860](https://github.com/tatolab/streamlib/issues/1860)) ([fd44620](https://github.com/tatolab/streamlib/commit/fd4462060ea3de0541d37d253be18bfc5c02b971))
+* **sdk:** delete the @org/package/Type identity grammar and streamlib-idents ([#1851](https://github.com/tatolab/streamlib/issues/1851)) ([d0dcea3](https://github.com/tatolab/streamlib/commit/d0dcea3ed8a5aa6e598e4f4a59b3c452a25e3384))
+
+
+### Documentation
+
+* **plan:** re-cut the REMOVED bullet this change would have falsely retired ([d99755b](https://github.com/tatolab/streamlib/commit/d99755b771198663c61b8684af5bacfd10f94927))
+
+
+### Miscellaneous
+
+* **idents:** delete the orphaned package layer — resolver, manifest, lockfile, package source, archive ([#1843](https://github.com/tatolab/streamlib/issues/1843)) ([96717c8](https://github.com/tatolab/streamlib/commit/96717c8f7308e10f0c152ab74b21b1e2154d70c6))
+* retire the manifest, schema and codegen layer from the consumer trees ([#1854](https://github.com/tatolab/streamlib/issues/1854)) ([d69e753](https://github.com/tatolab/streamlib/commit/d69e753856e5a857e3d564a2cd6b47a4bd98b317))
+
 ## [0.17.1](https://github.com/tatolab/streamlib/compare/v0.17.0...v0.17.1) (2026-08-11)
 
 
