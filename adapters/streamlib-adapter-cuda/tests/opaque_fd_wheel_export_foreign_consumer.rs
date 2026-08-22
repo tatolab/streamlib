@@ -92,6 +92,14 @@ impl ChildAppUnderTest {
 
 impl Drop for ChildAppUnderTest {
     fn drop(&mut self) {
+        // A child that already exited was (or is here) reaped by this
+        // `try_wait`; signalling afterwards could hit an unrelated process
+        // on a recycled pid. A child that exits between this check and the
+        // kill is an unreaped zombie, whose pid cannot be recycled — so
+        // check-then-signal stays race-free.
+        if matches!(self.app_process.try_wait(), Ok(Some(_))) {
+            return;
+        }
         unsafe { libc::kill(self.app_process.id() as libc::pid_t, libc::SIGINT) };
         let grace_deadline = Instant::now() + Duration::from_secs(30);
         loop {
