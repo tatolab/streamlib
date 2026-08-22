@@ -545,7 +545,9 @@ impl HelperCheckedOutPixelSurface {
     ///
     /// The fd is a `dup` of the one this process was handed at check-out,
     /// so the caller owns it and closing it does not disturb this
-    /// surface's own mapping.
+    /// surface's own mapping. Always a genuine DMA-BUF: the pixel
+    /// checkout refuses every other flavour before this surface can
+    /// exist, so this name never mislabels an fd.
     pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
         let exported = duplicate_first_plane_fd_for_export(&self.exported_plane_fds, "surface")?;
         Ok((
@@ -2499,6 +2501,44 @@ mod foreign_dma_buf_adoption_tests {
         assert!(
             second_release.is_err(),
             "a second release must report nothing left to remove"
+        );
+    }
+
+    /// The construction-side guard `export_dma_buf` relies on: an
+    /// OPAQUE_FD pixel registration never becomes a checked-out pixel
+    /// surface, so the DMA-BUF export name can never hand out an
+    /// OPAQUE_FD-flavoured fd. Lives here because it drives the same
+    /// register-then-checkout wire this module owns; no Vulkan runs — the
+    /// refusal fires before the import.
+    #[test]
+    fn an_opaque_fd_pixel_registration_refuses_checkout_before_any_export_exists() {
+        let share = SurfaceShareUnderTest::start("opaque-pixel-guard");
+        let exchange_client = exchange_client_on(&share);
+        let backing_fd = a_foreign_memory_fd();
+
+        let mut opaque_check_in = check_in_request();
+        opaque_check_in["handle_type"] = "opaque_fd".into();
+        let (check_in_response, _no_fds) = exchange_client
+            .surface_share_request_with_fds(&opaque_check_in, &[backing_fd.as_raw_fd()])
+            .expect("the check_in round trip completes");
+        let opaque_surface_id = check_in_response
+            .get("surface_id")
+            .and_then(|value| value.as_str())
+            .expect("check_in answers with a surface_id")
+            .to_string();
+
+        let refusal = exchange_client
+            .check_out_and_import(&opaque_surface_id)
+            .err()
+            .expect("an opaque_fd pixel registration must refuse the pixel checkout")
+            .to_string();
+        assert!(
+            refusal.contains("opaque_fd"),
+            "the refusal must name the flavour: {refusal:?}"
+        );
+        assert!(
+            refusal.contains("device-export"),
+            "the refusal must point at the path that serves this flavour: {refusal:?}"
         );
     }
 }
