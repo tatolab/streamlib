@@ -779,19 +779,11 @@ pub(crate) fn handle_escalate_op(
             let removed_handle = registry.remove_handle(&handle_id);
             let removed = removed_handle.is_some();
             if let Some(removed_handle) = removed_handle {
-                // Pixel-buffer / texture / image acquires were
-                // checked into the surface-share service under the
-                // returned handle_id; pair the registry eviction
-                // with the matching service release.
-                release_surface_share_surface(sandbox, &handle_id);
-                // Texture and image acquires also entered the parent's
-                // same-process texture cache; `unregister_texture` removes
-                // that entry and tears down the surface's export stagings
-                // with it. Scoped to texture-backed handles so a buffer
-                // release keeps its staging lifetime unchanged.
-                if removed_handle.is_texture_backed() {
-                    sandbox.unregister_texture(&handle_id);
-                }
+                release_surface_share_and_texture_cache_for_handle(
+                    sandbox,
+                    &handle_id,
+                    &removed_handle,
+                );
             }
             // An acceleration structure is registered against `GpuContext`
             // rather than against the per-subprocess handle registry, so its id
@@ -3910,6 +3902,28 @@ fn release_acceleration_structure(sandbox: &GpuContextLimitedAccess, handle_id: 
     {
         let _ = (sandbox, handle_id);
         false
+    }
+}
+
+/// The cleanup a registry eviction owes outside the registry, shared by the
+/// explicit `release_handle` op and bridge teardown so a crashed helper's
+/// acquires release exactly what an explicit release would (#1901).
+pub(crate) fn release_surface_share_and_texture_cache_for_handle(
+    sandbox: &GpuContextLimitedAccess,
+    handle_id: &str,
+    removed_handle: &RegisteredHandle,
+) {
+    // Pixel-buffer / texture / image acquires were checked into the
+    // surface-share service under the returned handle_id; pair the
+    // registry eviction with the matching service release.
+    release_surface_share_surface(sandbox, handle_id);
+    // Texture and image acquires also entered the parent's same-process
+    // texture cache; `unregister_texture` removes that entry and tears
+    // down the surface's export stagings with it. Scoped to
+    // texture-backed handles so a buffer release keeps its staging
+    // lifetime unchanged.
+    if removed_handle.is_texture_backed() {
+        sandbox.unregister_texture(handle_id);
     }
 }
 
