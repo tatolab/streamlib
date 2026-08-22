@@ -28,7 +28,9 @@ flowchart LR
   engine -->|"bags carry per-frame surface ids (slot#generation);
 claim at typed cast, lease until drop;
 a stale id errors, never another frame"| helper
-  helper -->|kernels + texture handles| engine
+  helper -->|"kernels constructed in setup(), dispatched by name and
+synchronously — one submission per batch; a kernel output leaves
+as a DLPack tensor scope whose write blits back, engine-ordered"| engine
   ctl --> registry
   rustapp --> crate
   crate --> engine
