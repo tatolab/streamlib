@@ -212,7 +212,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ python-kernel-surface, kernel-kind-parity-bar)
+## Graphics (RHI / GPU) — IN-FLIGHT (→ kernel-kind-parity-bar)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
@@ -223,35 +223,81 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Python reaches every GPU capability Rust authoring reaches: compute,
   graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
   names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
-  capability is Rust-only. [python-kernel-api]
+  capability is Rust-only. [python-kernel-api; python-kernel-surface — SHIPPED #1773,
+  #1774, #1777]
+  <!-- verify: cargo test -p streamlib-engine compute_kernel_dispatch -->
+  <!-- verify: cargo test -p streamlib-engine graphics_kernel_dispatch -->
+  <!-- verify: cargo test -p streamlib-engine ray_tracing_kernel_dispatch -->
+  <!-- verify: cargo test -p streamlib-engine cpu_readback_answers_from_gpu_context -->
 - **DECIDED** — A kernel's output is an engine-owned texture that Python names by
   surface id and passes downstream in a bag, and that a third-party GPU library in its
   own Python package reaches through a scope: entering blits the texture to a linear
   view (DLPack over DMA-BUF / OPAQUE_FD), leaving blits any write back and orders it on
   the surface's timeline ahead of the engine's next read. The engine owns that
-  ordering — no fence or timeline vocabulary reaches Python. Cross-process texture
-  import is part of the capability. [python-kernel-api]
+  ordering — no fence or timeline vocabulary reaches Python. Leaving the scope by a
+  propagating exception discards the write instead: a half-written view blitted back
+  publishes a torn frame that surfaces as corrupt pixels somewhere downstream rather
+  than at the `raise`, so the engine keeps the complete frame it already holds and lets
+  the exception propagate — one rule for both device-write scopes, the CPU pixel-buffer
+  scope included, and discarding never suppresses the exception. A write-back is always
+  an edit of a frame the processor read, never a fresh-frame write: the engine refuses
+  one into a staging no read of that frame landed in, because it cannot tell a
+  consumer's write from uninitialised memory and one staging spans every frame its pool
+  slot publishes. Cross-process texture import is part of the capability, and
+  importability is an allocation flavour the engine derives per acquisition, never a
+  Python dial: render-attachment usage with a probed DRM modifier takes
+  explicit-modifier DMA-BUF, a CUDA-mappable format within the OPAQUE_FD usage set
+  takes OPAQUE_FD, and everything else keeps a non-importable allocation whose later
+  cross-process import refuses by name.
+  [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779]
+  <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_discards_the_write -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
 - **DECIDED** — Python spells a kernel as an object: constructed in `setup()` where the
   capability typestate is Full, dispatched per frame in `process()`. Construction is
   registration and dispatch is a method call; no kernel handle string reaches Python.
   Compute takes a general N-binding array like graphics and ray tracing — a Python
-  compute kernel reads one surface and writes another, at parity with Rust.
-  [python-kernel-api]
+  compute kernel reads one surface and writes another, at parity with Rust. A binding
+  mismatch raises before any GPU work is submitted, and the message names the shader's
+  declared bindings: an undeclared name, an unsupplied one, a name supplied twice and a
+  kind mismatch are refused at dispatch — the kernel holds no binding state, so there is
+  no implicit default and no carried-over value — while a stage mismatch and
+  name-stripped SPIR-V on the escape hatch are refused at construction. Every refusal is
+  checked engine-side, so the wheel is never the only guard.
+  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1777]
+  <!-- verify: cargo test -p streamlib-engine a_dispatch_reads_one_surface_and_writes_another -->
+  <!-- verify: cargo test -p streamlib-engine a_name_supplied_twice_is_refused -->
 - **DECIDED** — Compute, graphics, ray tracing, and CPU readback are always-present
   capabilities of `GpuContext`, reached the same way by every caller. The four bridge
   traits and their installation step are deleted: no kernel capability can be absent at
-  runtime, and no application glue supplies one. [python-kernel-api]
+  runtime, and no application glue supplies one.
+  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-22-python-kernel-surface.md -->
 - **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
   engine compiles it at kernel construction, and re-creating an identical kernel is free —
   compilation is cached under a key covering everything that changes the output (source,
   stage, entry point, target environment, compiler version), never source alone.
   Pre-compiled SPIR-V stays accepted as an escape hatch. Authoring a kernel requires no
   toolchain beyond the installed wheel, for every kernel kind. The wheel carries a C++
-  GLSL compiler (shaderc / glslang). [python-kernel-api]
+  GLSL compiler (shaderc / glslang). [python-kernel-api; python-kernel-surface —
+  SHIPPED #1775]
+  <!-- verify: cargo test -p streamlib-engine glsl_shader_source_compiler -->
+  <!-- verify: cargo test -p streamlib-engine re_registering_an_identical_kernel_is_a_cache_hit -->
 - **DECIDED** — Dispatch is synchronous: it returns when the GPU work has retired and
   the writes are visible, and no fence or timeline vocabulary reaches Python. Several
   dispatches batch into one submission with barriers between them and a single fence at
-  the end — the Python equivalent of the command-recorder flow. [python-kernel-api]
+  the end — the Python equivalent of the command-recorder flow. The batch accumulates its
+  dispatches and sends them as one op on leaving the scope, never holding the privileged
+  gate open across user Python; a raise inside the scope sends nothing. Two constraints
+  ride it while bindings still stash on the kernel, both refused by name and both
+  retiring with the Rust convergence below: one kernel may appear only once per batch,
+  because a kernel owns a single descriptor set and a second bind would silently hand the
+  earlier dispatch the later one's bindings; and one surface may not be bound at two
+  kinds in a single dispatch, because no image layout satisfies both a sampled and a
+  storage descriptor. [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1776]
+  <!-- verify: cargo test -p streamlib-engine a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n -->
+  <!-- verify: cargo test -p streamlib-engine a_batch_naming_one_kernel_twice_is_refused_saying_why -->
+  <!-- verify: cargo test -p streamlib-engine one_surface_bound_as_two_kinds_in_one_dispatch_is_refused -->
 - **DECIDED** — One kernel spelling in both languages: bindings are passed at dispatch,
   by name, and never persist on the kernel object. Rust's stateful numeric-slot setters
   go; the command-recorder flow keeps its seam by carrying bindings to the recorder
