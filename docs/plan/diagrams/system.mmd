@@ -23,6 +23,8 @@ flowchart LR
   app -->|imports classes for rt.add| pkgs
   procs --> helper
   pkgs --> helper
+  helper -->|"raw memory fd, Full-gated — names the allocation, never the
+frame; the importer adopts it and consumes it as an image"| pkgs
   app --> wheel
   wheel --> engine
   engine -->|"bags carry per-frame surface ids (slot#generation);

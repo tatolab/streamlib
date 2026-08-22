@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library, raw-handle-export-contract)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -98,7 +98,17 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   counts), dedicated-allocation status, the exporter's memory type index, and the
   exporting device UUID — and no per-frame state (no image layout, no timeline
   edges); `export_dma_buf` keeps `(fd, byte_size)` and refuses the OPAQUE_FD
-  flavour by name, pointing at `export_opaque_fd`. [raw-handle-export-contract]
+  flavour by name, pointing at `export_opaque_fd`. An export is taken from a
+  resolved surface, never from a name: the fd reaches a helper at checkout, so a
+  texture acquired but not yet resolved is refused telling the caller to resolve
+  its surface id first, and every other refusal likewise names the flavour's own
+  door. The recipe travels because a raw allocation is consumed as an image — a
+  linear buffer mapping over tiled memory yields block-linear bytes, never pixels —
+  and a successful import pins the payload past the exporter destroying the texture
+  it came from. [raw-handle-export-contract — SHIPPED #1900]
+  <!-- verify: cargo test -p streamlib-adapter-cuda --test opaque_fd_wheel_export_foreign_consumer a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels -->
+  <!-- verify: cargo test -p streamlib-adapter-cuda --test opaque_fd_image_consumer_rhi_round_trip an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
 - **OPEN** — Zero-copy per-frame consumption by a foreign GPU stack: intended, do
   not build until designed. Direction: export a surface's slot set once at setup,
   name the current frame per-frame by surface id, signal the hand-off with an
