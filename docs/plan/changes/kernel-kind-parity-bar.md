@@ -20,20 +20,20 @@ supersede-in-place form, and a companion ADR would restate decision 1 in a secon
 clause of it.
 
 Recon verified at HEAD `648478f7` on 2026-08-17. Precondition satisfied, per entry: the parity
-entry (ARCHITECTURE.md:195-198) carries `**DECIDED**`, as does the always-present-capabilities
-entry (ARCHITECTURE.md:212-215), named only so the fold does not touch it. §Graphics' trailing
-`- **OPEN** — Everything else.` (ARCHITECTURE.md:232) is a catch-all predating the align that did
+entry (ARCHITECTURE.md:223-231) carries `**DECIDED**`, as does the always-present-capabilities
+entry (ARCHITECTURE.md:270-275), named only so the fold does not touch it. §Graphics' trailing
+`- **OPEN** — Everything else.` (ARCHITECTURE.md:306) is a catch-all predating the align that did
 not stop `python-kernel-surface` being proposed against this section; this change enumerates
 inside it and builds nothing against it.
 
 ## Behavior after this change
 
-The parity bar is **every kernel kind** — already §Graphics' vocabulary (ARCHITECTURE.md:190,
-:221) and GLOSSARY's kind-shaped **Kernel** (GLOSSARY.md:89-91). The plan stops promising Python
+The parity bar is **every kernel kind** — already §Graphics' vocabulary (ARCHITECTURE.md:218,
+:281) and GLOSSARY's kind-shaped **Kernel** (GLOSSARY.md:89-91). The plan stops promising Python
 can express every pipeline Rust can, and the four capabilities it cannot are spelled into the
 plan below. Two sentences must not move with it, because "no kernel capability" appears twice in
-§Graphics with two meanings: ARCHITECTURE.md:214-215 is about the deleted bridge traits and
-*runtime* absence, not language parity, and ARCHITECTURE.md:209-210 — "a Python compute kernel
+§Graphics with two meanings: ARCHITECTURE.md:272-273 is about the deleted bridge traits and
+*runtime* absence, not language parity, and ARCHITECTURE.md:260 — "a Python compute kernel
 reads one surface and writes another, at parity with Rust" — is a shipped claim that stays true.
 A find-and-replace narrowing would gut the first; neither is amended.
 
@@ -110,18 +110,27 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
 ## MODIFIED
 
 - MODIFIED: §Graphics, the Python-parity DECIDED entry
-  ARCHITECTURE.md:195-198. Today, verbatim:
+  ARCHITECTURE.md:223-231. Today, verbatim:
 
   ```markdown
   - **DECIDED** — Python reaches every GPU capability Rust authoring reaches: compute,
     graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
     names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
-    capability is Rust-only. [python-kernel-api]
+    capability is Rust-only. [python-kernel-api; python-kernel-surface — SHIPPED #1773,
+    #1774, #1777]
+    <!-- verify: cargo test -p streamlib-engine compute_kernel_dispatch -->
+    <!-- verify: cargo test -p streamlib-engine graphics_kernel_dispatch -->
+    <!-- verify: cargo test -p streamlib-engine ray_tracing_kernel_dispatch -->
+    <!-- verify: cargo test -p streamlib-engine cpu_readback_answers_from_gpu_context -->
   ```
+
+  The SHIPPED clause and its four markers arrived with `python-kernel-surface`'s fold on
+  2026-08-22 and are carried into the replacement below — this change narrows the claim, it
+  does not unship it.
 
   The exact replacement, paste-ready. The enumeration survives verbatim because it is what the
   ruling narrows *to*, and so does "Python names and drives". Gaps 1 and 3 are named as a clause
-  inside the entry — the shape of the Apple-capture gap at ARCHITECTURE.md:246-248, putting the
+  inside the entry — the shape of the Apple-capture gap at ARCHITECTURE.md:320-322, putting the
   absence where the claim is read:
 
   ```markdown
@@ -135,14 +144,19 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
     Rust consumers in the engine tree hold them, and the only by-surface-id resolution the
     escalate path has is texture-shaped, so a Python processor is refused by name. Both
     are undesigned.
-    [python-kernel-api; kernel-kind-parity-bar — the parity claim narrowed to kernel kinds]
+    [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777;
+    kernel-kind-parity-bar — the parity claim narrowed to kernel kinds]
+    <!-- verify: cargo test -p streamlib-engine compute_kernel_dispatch -->
+    <!-- verify: cargo test -p streamlib-engine graphics_kernel_dispatch -->
+    <!-- verify: cargo test -p streamlib-engine ray_tracing_kernel_dispatch -->
+    <!-- verify: cargo test -p streamlib-engine cpu_readback_answers_from_gpu_context -->
     <!-- verify: sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
     <!-- verify: sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
   ```
 
   Plan prose is rewritten, never struck — ARCHITECTURE.md holds no strikethrough anywhere — and
   the bracket's semicolon clause is the document's idiom for a partial later amendment
-  (ARCHITECTURE.md:77-78, :296-297), applied with the markers at the ship fold.
+  (ARCHITECTURE.md:77-78, :370-371), applied with the markers at the ship fold.
 
   **RESOLVED (owner, 2026-08-17)** — the gap does not block MVP on its own terms, and the one case
   it would block is reopened through a texture rather than a buffer. Of the four, only gap 3
@@ -167,8 +181,8 @@ path for any current consumer; the v1 surface deliberately rejects sample count 
   plus a buffer arm on binding resolution, the largest of the three engine changes.
 
 - MODIFIED: §Graphics, the trailing OPEN entry
-  ARCHITECTURE.md:232, today the whole line `- **OPEN** — Everything else.` — expanded to name
-  gaps 2 and 4, the shape §Networking's OPEN entry uses at ARCHITECTURE.md:286. They land here
+  ARCHITECTURE.md:306, today the whole line `- **OPEN** — Everything else.` — expanded to name
+  gaps 2 and 4, the shape §Networking's OPEN entry uses at ARCHITECTURE.md:360. They land here
   rather than inside the DECIDED entry because neither is a Python-reach gap:
 
   ```markdown
@@ -245,21 +259,26 @@ acquired texture, and one post-MVP ticket for gap 1 on `Graphics Kernel Buildout
 
 ## Notes (not tickets)
 
-- **The section flip is done; the fold is per-entry.** §Graphics' header now reads
-  `IN-FLIGHT (→ python-kernel-surface, kernel-kind-parity-bar)` (ARCHITECTURE.md:187), the
-  comma-list form §Media I/O uses at ARCHITECTURE.md:234. It cannot flip to SHIPPED while
-  `python-kernel-surface` is live, so this fold marks only the two entries it names — as
-  ARCHITECTURE.md:77-78 carries a per-clause SHIPPED note under an IN-FLIGHT §Packages header.
+- **The section flip is done; the fold is per-entry.** §Graphics' header reads
+  `IN-FLIGHT (→ kernel-kind-parity-bar)` (ARCHITECTURE.md:215) — `python-kernel-surface`
+  archived 2026-08-22 and left the comma-list form §Media I/O still uses at
+  ARCHITECTURE.md:308. It cannot flip to SHIPPED even so: §Graphics' last
+  `[python-kernel-api]` entry, the Rust bindings-at-dispatch convergence
+  (ARCHITECTURE.md:301-305), is unbuilt and has no change file. This fold therefore marks only
+  the two entries it names — as ARCHITECTURE.md:77-78 carries a per-clause SHIPPED note under
+  an IN-FLIGHT §Packages header.
 
-- **A fifth refusal exists and is not a fifth disposition.** "importing a foreign DMA-BUF is not
-  reachable from a Python processor yet" is still live at `python_processor_context.rs:1200`,
-  against a plan sentence promising "Cross-process texture import is part of the capability"
-  (ARCHITECTURE.md:204-205). It is an open removal bullet of the in-flight
-  `python-kernel-surface` change (`python-kernel-surface.md:170`) — unfinished work with an
-  owner, not a permanent gap.
+- **The fifth refusal was never a fifth disposition, and is now gone.** "importing a foreign
+  DMA-BUF is not reachable from a Python processor yet" was live at
+  `python_processor_context.rs:1200` when this change was written, against a plan sentence
+  promising "Cross-process texture import is part of the capability" (ARCHITECTURE.md:246-247).
+  It was a removal bullet of `python-kernel-surface`, discharged by #1778 and proved absent by
+  that change's ship gate on 2026-08-22
+  (`archive/2026-08-22-python-kernel-surface.md`) — unfinished work with an owner, exactly as
+  recorded, never a permanent gap.
 
 - **§Language SDKs & parity is untouched and owes this change nothing.** Its entries
-  (ARCHITECTURE.md:290-315) state no capability-parity claim. The sentence this change narrows
+  (ARCHITECTURE.md:364-389) state no capability-parity claim. The sentence this change narrows
   does not carry the word `parity` at all — it had to be found by reading §Graphics — and the one
-  place ARCHITECTURE.md uses the word for a claim, :210, is the shipped compute claim that stays
+  place ARCHITECTURE.md uses the word for a claim, :260, is the shipped compute claim that stays
   true. GLOSSARY.md defines neither `parity` nor `capability`.
