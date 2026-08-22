@@ -386,3 +386,25 @@ def test_a_pooled_texture_exports_a_device_tensor(start_app_under_test):
         pytest.skip(f"no usable CUDA runtime: {observation['texture_device']}")
     assert observation["texture_tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["texture_tensor_device"].startswith("cuda")
+
+
+def test_a_texture_whose_usage_forbids_the_copy_refuses_at_scope_entry(
+    start_app_under_test,
+):
+    """The engine refuses a copy the Vulkan spec forbids instead of recording
+    it and letting the driver silently tolerate UB: a sampled-only texture
+    cannot blit out, a copy_dst-less one cannot take the blit back, and both
+    refuse at `__enter__` naming the usage to add.
+    """
+    observation = run_probe(
+        start_app_under_test, "DeviceTensorScopeRefusesAnUnexportableUsageProbe"
+    )
+    skip_without_cuda(observation)
+    assert "copy_src" in observation["copy_src_refusal"], (
+        f"the blit-out refusal must name the missing usage: "
+        f"{observation['copy_src_refusal']!r}"
+    )
+    assert "copy_dst" in observation["copy_dst_refusal"], (
+        f"the blit-back refusal must name the missing usage: "
+        f"{observation['copy_dst_refusal']!r}"
+    )

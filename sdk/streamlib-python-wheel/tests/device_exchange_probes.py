@@ -115,8 +115,9 @@ class DeviceEditProbe(_FrameProbeBase):
             tensor[9, 11] = torch.tensor(
                 [17, 34, 51, 68], dtype=torch.uint8, device=tensor.device
             )
-            torch.cuda.synchronize()
-            # unlock is the publication point for a device-side write.
+            # No torch.cuda.synchronize(): the publish itself orders the
+            # consumer's stream before the engine's copy, and this probe
+            # is part of what proves it. unlock is the publication point.
             surface.unlock()
 
         with gpu.resolve_surface(frame.surface_id) as reread:
@@ -146,7 +147,7 @@ class WithBlockEditProbe(_FrameProbeBase):
             tensor[5, 5] = torch.tensor(
                 [99, 88, 77, 66], dtype=torch.uint8, device=tensor.device
             )
-            torch.cuda.synchronize()
+            # No sync: close() publishes with engine-side stream ordering.
 
         with gpu.resolve_surface(frame.surface_id) as reread:
             reread.lock()
@@ -415,14 +416,6 @@ void main() {
 FILL_FLOAT_RGBA = [0.25, 0.5, 1.5, 2.0]
 DOUBLED_FLOAT_RGBA = [0.5, 1.0, 3.0, 4.0]
 
-
-def _cuda_unavailable_or_reraise(failure: Exception) -> dict:
-    """Report a missing CUDA runtime as the skip the tests understand, and
-    re-raise anything else — a real defect must fail the test, not skip it."""
-    if "cuda" in str(failure).lower():
-        return {"cuda_unavailable": str(failure)}
-    raise failure
-
 # The usage sets that pick each cross-process-importable allocation flavour:
 # the OPAQUE_FD constructor's fixed set, and a render-attachment set that
 # takes the explicit-DRM-modifier DMA-BUF arm (storage included so the same
@@ -610,20 +603,21 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
                 bindings={"output_image": kernel_output},
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
+            if kernel_output.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                return {"cuda_unavailable": "device side not reachable"}
             observation: dict = {"surface_id": kernel_output.surface_id}
-            try:
-                with kernel_output.as_device_tensor() as tensor:
-                    torch_view = torch.from_dlpack(tensor)
-                    observation["tensor_dtype"] = str(torch_view.dtype)
-                    observation["tensor_shape"] = list(torch_view.shape)
-                    observation["tensor_device"] = str(torch_view.device)
-                    observation["filled_pixel"] = (
-                        torch_view[3, 5].to(torch.float32).cpu().tolist()
-                    )
-                    torch_view.mul_(2.0)
-                    torch.cuda.synchronize()
-            except Exception as failure:  # noqa: BLE001 — narrowed inside
-                return _cuda_unavailable_or_reraise(failure)
+            # Deliberately no torch.cuda.synchronize(): the scope's exit
+            # runs a device-wide synchronize before the engine's copy
+            # reads the staging, and this probe is what proves it.
+            with kernel_output.as_device_tensor() as tensor:
+                torch_view = torch.from_dlpack(tensor)
+                observation["tensor_dtype"] = str(torch_view.dtype)
+                observation["tensor_shape"] = list(torch_view.shape)
+                observation["tensor_device"] = str(torch_view.device)
+                observation["filled_pixel"] = (
+                    torch_view[3, 5].to(torch.float32).cpu().tolist()
+                )
+                torch_view.mul_(2.0)
 
             with kernel_output.as_device_tensor() as reread:
                 observation["doubled_pixel"] = (
@@ -658,18 +652,21 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
                 bindings={"output_image": kernel_output},
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
+            if kernel_output.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                return {"cuda_unavailable": "device side not reachable"}
             observation = {}
             exception_seen = None
             try:
                 with kernel_output.as_device_tensor() as tensor:
                     torch_view = torch.from_dlpack(tensor)
                     torch_view[:, :, :] = 0
+                    # Not publish ordering — the discard needs the garbage
+                    # write to have LANDED in the staging, or leaving it
+                    # unpublished would prove nothing.
                     torch.cuda.synchronize()
                     raise ValueError("deliberate mid-scope failure")
             except ValueError as propagated:
                 exception_seen = str(propagated)
-            except Exception as failure:  # noqa: BLE001 — narrowed inside
-                return _cuda_unavailable_or_reraise(failure)
             observation["exception_propagated"] = exception_seen
 
             with kernel_output.as_device_tensor() as reread:
@@ -716,6 +713,8 @@ class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
                     return {"cuda_unavailable": "device side not reachable"}
                 tensor = torch.from_dlpack(surface)
                 tensor[:, :, :] = 0
+                # Not publish ordering — the discard needs the garbage
+                # write to have LANDED in the staging.
                 torch.cuda.synchronize()
                 raise ValueError("deliberate mid-scope failure")
         except ValueError as propagated:
@@ -756,10 +755,7 @@ class PooledTextureExportProbe:
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
         ) as texture_handle:
             outcomes["texture_surface_id"] = texture_handle.surface_id
-            try:
-                device = texture_handle.__dlpack_device__()
-            except Exception as failure:  # noqa: BLE001 — narrowed inside
-                return _cuda_unavailable_or_reraise(failure)
+            device = texture_handle.__dlpack_device__()
             outcomes["texture_device"] = list(device)
             if device[0] == DLPACK_DEVICE_CUDA:
                 texture_handle.lock()
@@ -769,3 +765,49 @@ class PooledTextureExportProbe:
                 del tensor
                 texture_handle.unlock()
         return outcomes
+
+
+@processor(execution="manual")
+class DeviceTensorScopeRefusesAnUnexportableUsageProbe:
+    """A texture whose usage forbids a copy refuses at scope entry, by name.
+
+    Recording the copy anyway would be a Vulkan spec violation the driver
+    silently tolerates — the engine refuses instead: a sampled-only texture
+    cannot blit out (copy_src), and a readable-but-not-writable one cannot
+    take the blit back (copy_dst), so the write-in-place scope refuses both
+    at `__enter__` rather than discarding edits or corrupting memory.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        observation = {}
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
+        ) as cuda_gate:
+            if cuda_gate.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                return {"cuda_unavailable": "device side not reachable"}
+
+        # bgra8 is not CUDA-mappable, so these acquires land on the
+        # NotImportable allocation flavour, whose image carries exactly
+        # the requested usage — the rgba8 spelling would take the
+        # OPAQUE_FD constructor's fixed usage set and be legal to copy.
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "bgra8_unorm", ["texture_binding"]
+        ) as sampled_only:
+            try:
+                with sampled_only.as_device_tensor():
+                    observation["copy_src_refusal"] = "no refusal: the scope entered"
+            except RuntimeError as refusal:
+                observation["copy_src_refusal"] = str(refusal)
+
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "bgra8_unorm", ["texture_binding", "copy_src"]
+        ) as readable_only:
+            try:
+                with readable_only.as_device_tensor():
+                    observation["copy_dst_refusal"] = "no refusal: the scope entered"
+            except RuntimeError as refusal:
+                observation["copy_dst_refusal"] = str(refusal)
+        return observation

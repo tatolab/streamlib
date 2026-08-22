@@ -918,6 +918,26 @@ impl HostVulkanTexture {
         self.format
     }
 
+    /// Whether the image was created with TRANSFER_SRC usage — the
+    /// capability a copy that reads it (`vkCmdCopyImageToBuffer`)
+    /// requires; recording one without it is a Vulkan spec violation
+    /// (VUID-vkCmdCopyImageToBuffer-srcImage-01998), not an error the
+    /// driver reports.
+    pub fn supports_transfer_read(&self) -> bool {
+        self.vk_image_meta
+            .vk_image_usage_flags
+            .contains(vk::ImageUsageFlags::TRANSFER_SRC)
+    }
+
+    /// Whether the image was created with TRANSFER_DST usage — the
+    /// capability a copy that writes it (`vkCmdCopyBufferToImage`)
+    /// requires (VUID-vkCmdCopyBufferToImage-dstImage-01997).
+    pub fn supports_transfer_write(&self) -> bool {
+        self.vk_image_meta
+            .vk_image_usage_flags
+            .contains(vk::ImageUsageFlags::TRANSFER_DST)
+    }
+
     /// Lazy-cached image view for this texture.
     ///
     /// Creates the image view on first call, returns the cached handle on

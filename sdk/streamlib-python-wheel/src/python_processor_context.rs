@@ -31,8 +31,8 @@ use crate::python_gpu_surface_pixel_exchange::{
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
-    PreparedDeviceExport, device_dlpack_capsule, imported_device_for, prepare_device_export,
-    publish_device_write_back_to_surface,
+    PendingDeviceWriteBack, PreparedDeviceExport, device_dlpack_capsule, imported_device_for,
+    prepare_device_export,
 };
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
@@ -66,6 +66,15 @@ fn escalate_scope_cannot_cross_the_process_boundary_error(
     ))
 }
 
+/// Whether a context manager's `__exit__` was reached by a propagating
+/// exception. pyo3 maps Python's `None` to the `None` variant for an
+/// `Option` parameter, so `is_some()` is the whole test — spelled once,
+/// because a reader should not have to learn pyo3's argument mapping at
+/// three call sites.
+fn left_by_a_propagating_exception(exception_type: Option<&Bound<'_, PyAny>>) -> bool {
+    exception_type.is_some()
+}
+
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
         "the GPU is not reachable from this Python processor: its helper process was started \
@@ -96,9 +105,9 @@ pub(crate) struct PythonGpuSurfaceHandle {
     cpu_access: CpuAccessGate,
     /// A writable device tensor was exported under the current write
     /// lock; `unlock()` / `close()` publishes the staging back into the
-    /// surface.
+    /// surface, and an exception-path exit discards it.
     #[cfg(target_os = "linux")]
-    device_write_pending: std::sync::atomic::AtomicBool,
+    pending_device_write_back: PendingDeviceWriteBack,
     /// Which DLPack side this handle serves when the consumer expresses
     /// no preference — decided once, so `__dlpack_device__` and
     /// `__dlpack__` cannot disagree across calls.
@@ -122,7 +131,7 @@ impl PythonGpuSurfaceHandle {
             owned_memory: Mutex::new(Some(owned_memory)),
             cpu_access: CpuAccessGate::new_unlocked(),
             #[cfg(target_os = "linux")]
-            device_write_pending: std::sync::atomic::AtomicBool::new(false),
+            pending_device_write_back: PendingDeviceWriteBack::new_unarmed(),
             #[cfg(target_os = "linux")]
             natural_dlpack_side_is_device: std::sync::OnceLock::new(),
         }
@@ -210,37 +219,25 @@ impl PythonGpuSurfaceHandle {
         })
     }
 
-    /// Discard a pending device-side write instead of publishing it —
-    /// the exception path's arm. A raise means the third-party write did
-    /// not finish, and blitting a half-written view back publishes a
-    /// torn frame that surfaces as corruption far from the raise; the
-    /// surface keeps the frame it already held.
-    #[cfg(target_os = "linux")]
-    fn discard_pending_device_write(&self) {
-        self.device_write_pending
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-
     /// Publish a pending device-side write, once. Shared by `unlock` and
     /// `close` so the context-manager spelling cannot silently drop an
-    /// edit.
+    /// edit; a handle already closed has nothing to publish into and
+    /// discards instead.
     #[cfg(target_os = "linux")]
     fn publish_pending_device_write(&self, python: Python<'_>) -> PyResult<()> {
-        if !self
-            .device_write_pending
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return Ok(());
-        }
-        // Bound before the `if let`, so the guard drops here: inside a
-        // condition chain the guard temporary lives to the end of the whole
-        // statement, and the publish crosses to the parent — the same
-        // mutex-across-the-GIL hazard `release_owned_engine_value` documents.
+        // Bound before the match, so the guard drops here: the publish
+        // crosses to the parent — the same mutex-across-the-GIL hazard
+        // `release_owned_engine_value` documents.
         let owned_memory = self.owned_memory.lock().clone();
-        if let Some(owned_memory) = owned_memory {
-            publish_device_write_back_to_surface(python, &owned_memory)?;
+        match owned_memory {
+            Some(owned_memory) => self
+                .pending_device_write_back
+                .publish_if_armed(python, &owned_memory),
+            None => {
+                self.pending_device_write_back.discard();
+                Ok(())
+            }
         }
-        Ok(())
     }
 }
 
@@ -346,8 +343,8 @@ impl PythonGpuSurfaceHandle {
     ) -> PyResult<bool> {
         let _ = (exception, traceback);
         #[cfg(target_os = "linux")]
-        if exception_type.is_some() {
-            self.discard_pending_device_write();
+        if left_by_a_propagating_exception(exception_type) {
+            self.pending_device_write_back.discard();
         }
         #[cfg(not(target_os = "linux"))]
         let _ = exception_type;
@@ -488,8 +485,7 @@ impl PythonGpuSurfaceHandle {
             let capsule =
                 device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
             if writable_export {
-                self.device_write_pending
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                self.pending_device_write_back.arm();
             }
             Ok(capsule)
         }
@@ -508,6 +504,13 @@ impl PythonGpuSurfaceHandle {
     /// propagating exception discards it, and the surface keeps the
     /// frame it already held. Construction does no GPU work — the blit
     /// runs at `__enter__`.
+    ///
+    /// Independent of `lock()` by design: entering the scope *is* the
+    /// write declaration, structurally, so it neither requires nor
+    /// consults the CPU access gate — that gate belongs to the
+    /// handle-level `lock()` + `__dlpack__` spelling. A surface whose
+    /// export cannot take a write-back refuses at `__enter__` rather
+    /// than discarding edits silently.
     fn as_device_tensor(&self) -> PyResult<PythonGpuSurfaceDeviceTensorScope> {
         Ok(PythonGpuSurfaceDeviceTensorScope::over(
             self.owned_memory()?,
@@ -580,7 +583,7 @@ pub(crate) struct PythonGpuSurfaceDeviceTensorScope {
     /// A writable capsule was minted inside this scope; leaving normally
     /// publishes the staging back, a propagating exception discards it.
     #[cfg(target_os = "linux")]
-    device_write_pending: AtomicBool,
+    pending_device_write_back: PendingDeviceWriteBack,
 }
 
 impl PythonGpuSurfaceDeviceTensorScope {
@@ -590,7 +593,7 @@ impl PythonGpuSurfaceDeviceTensorScope {
             #[cfg(target_os = "linux")]
             prepared_device_export: Mutex::new(None),
             #[cfg(target_os = "linux")]
-            device_write_pending: AtomicBool::new(false),
+            pending_device_write_back: PendingDeviceWriteBack::new_unarmed(),
         }
     }
 
@@ -598,14 +601,21 @@ impl PythonGpuSurfaceDeviceTensorScope {
     /// scope is not entered — the structural guard on every capsule.
     #[cfg(target_os = "linux")]
     fn entered_device_export(&self) -> PyResult<PreparedDeviceExport> {
-        self.prepared_device_export.lock().clone().ok_or_else(|| {
-            PyRuntimeError::new_err(
-                "this device-tensor scope is not entered: use it as a context manager \
-                 (`with surface.as_device_tensor() as tensor:`) — entering is what runs the \
-                 blit the tensor reads",
-            )
-        })
+        self.prepared_device_export
+            .lock()
+            .clone()
+            .ok_or_else(device_tensor_scope_not_entered_error)
     }
+}
+
+/// The refusal every accessor of an unentered scope answers with.
+#[cfg(target_os = "linux")]
+fn device_tensor_scope_not_entered_error() -> PyErr {
+    PyRuntimeError::new_err(
+        "this device-tensor scope is not entered: use it as a context manager \
+         (`with surface.as_device_tensor() as tensor:`) — entering is what runs the \
+         blit the tensor reads",
+    )
 }
 
 #[pymethods]
@@ -613,7 +623,21 @@ impl PythonGpuSurfaceDeviceTensorScope {
     fn __enter__(python_self: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
         #[cfg(target_os = "linux")]
         {
+            if python_self.prepared_device_export.lock().is_some() {
+                return Err(PyRuntimeError::new_err(
+                    "this device-tensor scope is already entered; a scope serves one blit — \
+                     open a new scope with as_device_tensor() for the next one",
+                ));
+            }
             let prepared = prepare_device_export(python_self.py(), &python_self.owned_memory)?;
+            if !prepared.writable {
+                return Err(PyRuntimeError::new_err(
+                    "this surface's export cannot take a write-back — it is a pool member its \
+                     producer still owns, or a texture allocated without \"copy_dst\" usage — \
+                     so the write-in-place scope refuses rather than discarding your edits \
+                     silently. For reading, use lock() and __dlpack__ on the surface handle",
+                ));
+            }
             *python_self.prepared_device_export.lock() = Some(prepared);
             Ok(python_self)
         }
@@ -640,11 +664,11 @@ impl PythonGpuSurfaceDeviceTensorScope {
         #[cfg(target_os = "linux")]
         {
             let _prepared_released = self.prepared_device_export.lock().take();
-            let write_was_pending = self
-                .device_write_pending
-                .swap(false, std::sync::atomic::Ordering::SeqCst);
-            if exception_type.is_none() && write_was_pending {
-                publish_device_write_back_to_surface(python, &self.owned_memory)?;
+            if left_by_a_propagating_exception(exception_type) {
+                self.pending_device_write_back.discard();
+            } else {
+                self.pending_device_write_back
+                    .publish_if_armed(python, &self.owned_memory)?;
             }
             Ok(false)
         }
@@ -659,8 +683,12 @@ impl PythonGpuSurfaceDeviceTensorScope {
     fn __dlpack_device__(&self) -> PyResult<(i32, i32)> {
         #[cfg(target_os = "linux")]
         {
-            let prepared = self.entered_device_export()?;
-            let device = prepared.export.imported_dlpack_device();
+            let device = self
+                .prepared_device_export
+                .lock()
+                .as_ref()
+                .map(|prepared| prepared.export.imported_dlpack_device())
+                .ok_or_else(device_tensor_scope_not_entered_error)?;
             Ok((device.device_type as i32, device.device_id))
         }
         #[cfg(not(target_os = "linux"))]
@@ -681,8 +709,10 @@ impl PythonGpuSurfaceDeviceTensorScope {
         dl_device: Option<(i32, i32)>,
         copy: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // No stream to order against: the blit retired before `__enter__`
-        // returned, and the blit-back orders engine-side at `__exit__`.
+        // No stream to order against here: the blit-out retired before
+        // `__enter__` returned, and the blit-back at `__exit__` runs a
+        // device-wide CUDA synchronize before the engine's copy reads
+        // the staging.
         let _ = stream;
         if copy == Some(true) {
             return Err(PyBufferError::new_err(
@@ -700,18 +730,18 @@ impl PythonGpuSurfaceDeviceTensorScope {
                 ));
             }
             let prepared = self.entered_device_export()?;
-            let writable_export = prepared.writable;
+            // Always writable inside a scope: `__enter__` refused a
+            // read-only export, so every capsule minted here arms the
+            // blit-back.
+            let no_read_only_lock_applies = false;
             let capsule = device_dlpack_capsule(
                 python,
                 &self.owned_memory,
                 prepared,
                 exchange_shape_for_max_version(max_version),
-                false,
+                no_read_only_lock_applies,
             )?;
-            if writable_export {
-                self.device_write_pending
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-            }
+            self.pending_device_write_back.arm();
             Ok(capsule)
         }
         #[cfg(not(target_os = "linux"))]
@@ -2821,7 +2851,7 @@ impl PythonKernelDispatchBatch {
         traceback: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
         let _ = (exception, traceback);
-        let left_by_a_raise = exception_type.is_some_and(|raised| !raised.is_none());
+        let left_by_a_raise = left_by_a_propagating_exception(exception_type);
         let recorded = {
             let mut recording = self.recording.lock();
             recording.closed = true;
@@ -3795,6 +3825,8 @@ mod tests {
             PixelFormat::Rgba32,
             PixelFormat::Argb32,
             PixelFormat::Rgba64,
+            PixelFormat::Rgba16Float,
+            PixelFormat::Rgba32Float,
             PixelFormat::Nv12VideoRange,
             PixelFormat::Nv12FullRange,
             PixelFormat::Uyvy422,

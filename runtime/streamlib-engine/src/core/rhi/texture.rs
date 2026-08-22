@@ -141,6 +141,30 @@ impl TextureInner {
         }
         self.inner.format()
     }
+
+    /// Whether a recorded copy may read this texture (Vulkan:
+    /// TRANSFER_SRC usage). Metal blits are not usage-gated.
+    pub(crate) fn supports_transfer_read(&self) -> bool {
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        return self.inner.supports_transfer_read();
+        #[allow(unreachable_code)]
+        true
+    }
+
+    /// Whether a recorded copy may write this texture (Vulkan:
+    /// TRANSFER_DST usage). Metal blits are not usage-gated.
+    pub(crate) fn supports_transfer_write(&self) -> bool {
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        return self.inner.supports_transfer_write();
+        #[allow(unreachable_code)]
+        true
+    }
 }
 
 /// Platform-agnostic texture wrapper.
@@ -241,6 +265,18 @@ impl Texture {
             // `format_raw` is always sourced from a valid value).
             _ => TextureFormat::Rgba8Unorm,
         }
+    }
+
+    /// Whether a recorded copy may read this texture (Vulkan:
+    /// TRANSFER_SRC usage; not usage-gated elsewhere).
+    pub fn supports_transfer_read(&self) -> bool {
+        self.host_inner().supports_transfer_read()
+    }
+
+    /// Whether a recorded copy may write this texture (Vulkan:
+    /// TRANSFER_DST usage; not usage-gated elsewhere).
+    pub fn supports_transfer_write(&self) -> bool {
+        self.host_inner().supports_transfer_write()
     }
 
     /// Get the IOSurface ID for cross-framework sharing.

@@ -683,7 +683,14 @@ class GpuSurfaceDeviceTensorScope:
     blits any write back, ordered ahead of the engine's next read; leaving
     by a propagating exception discards the write and the surface keeps
     the frame it already held. The engine owns the ordering — no fence or
-    timeline vocabulary appears here.
+    timeline vocabulary appears here, and no `torch.cuda.synchronize()` is
+    owed before leaving.
+
+    Independent of `lock()` by design: entering the scope is the write
+    declaration. A surface whose export cannot take a write-back — a pool
+    member its producer still owns, or a texture acquired without
+    `copy_dst` usage — refuses at `__enter__` rather than discarding edits
+    silently.
     """
 
     def __enter__(self) -> GpuSurfaceDeviceTensorScope: ...
@@ -702,8 +709,9 @@ class GpuSurfaceDeviceTensorScope:
         copy: bool | None = ...,
     ) -> Any:
         """A DLPack capsule over the blitted view — what `torch.from_dlpack`
-        consumes. Writable when the surface's export is; a writable capsule
-        is what arms the blit-back on leaving the scope.
+        consumes. Always writable — a read-only export was refused at
+        `__enter__` — and minting one arms the blit-back on leaving the
+        scope normally.
         """
 
 @final

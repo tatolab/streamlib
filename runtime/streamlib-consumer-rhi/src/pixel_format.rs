@@ -3,13 +3,17 @@
 
 //! Pixel format for video buffers.
 //!
-//! On macOS/iOS, enum values ARE CVPixelFormatType constants directly.
-//! This ensures zero-cost conversion to platform APIs.
+//! On macOS/iOS, enum values are CVPixelFormatType constants wherever
+//! CoreVideo has one free — [`PixelFormat::Rgba16Float`] is the one
+//! StreamLib-local code, so conversion goes through
+//! `as_cv_pixel_format_type`, never a bare cast.
 
-/// Pixel format backed directly by CVPixelFormatType constants.
+/// Pixel format backed by CVPixelFormatType constants.
 ///
-/// Values are the exact CVPixelFormatType FourCC codes from CoreVideo.
-/// No conversion needed - cast directly to u32 for CoreVideo APIs.
+/// Values are the exact CVPixelFormatType FourCC codes from CoreVideo,
+/// except [`Self::Rgba16Float`] — CoreVideo's half-float code is
+/// occupied by [`Self::Rgba64`] — so CoreVideo APIs take
+/// `as_cv_pixel_format_type()`, which maps that one variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u32)]
 pub enum PixelFormat {
@@ -63,11 +67,20 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    /// Get the raw CVPixelFormatType value.
+    /// The CVPixelFormatType value CoreVideo knows this format by.
+    ///
+    /// Identity for every variant except [`Self::Rgba16Float`], whose
+    /// discriminant is StreamLib-local — CoreVideo spells half-float
+    /// RGBA 'RGhA' (kCVPixelFormatType_64RGBAHalf), a code
+    /// [`Self::Rgba64`]'s discriminant already occupies, so a bare cast
+    /// would hand CoreVideo an OSType it does not know.
     #[cfg(target_os = "macos")]
     #[inline]
     pub const fn as_cv_pixel_format_type(&self) -> u32 {
-        *self as u32
+        match self {
+            Self::Rgba16Float => 0x52476841,
+            _ => *self as u32,
+        }
     }
 
     /// Create from CVPixelFormatType value.
@@ -215,8 +228,8 @@ mod layout_tests {
     //! `streamlib-adapter-cpu-readback` (and elsewhere) carry
     //! `format_raw: u32` arguments that round-trip through
     //! [`PixelFormat`] via an `as` cast. Discriminant values are
-    //! CVPixelFormatType FourCC constants — pinning them locks
-    //! against silent re-numbering.
+    //! CVPixelFormatType FourCC constants (bar the StreamLib-local
+    //! `Rgba16Float`) — pinning them locks against silent re-numbering.
     use super::*;
     use core::mem::{align_of, size_of};
 

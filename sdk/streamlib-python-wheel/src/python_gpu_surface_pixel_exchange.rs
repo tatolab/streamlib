@@ -572,7 +572,7 @@ pub(crate) fn prepare_device_export(
     // Geometry comes from the staging alone — the object the byte span was
     // sized for — never mixed with the handle's own pixel view. The engine
     // records the pixel shape for both source kinds (a texture source maps
-    // to its 4-byte color shape — BGRA stays BGRA).
+    // to its own color shape, float widths included — BGRA stays BGRA).
     let layout = PixelExchangeTensorLayout::for_pixel_format(
         export.helper_device_export.format,
         export.helper_device_export.width,
@@ -615,14 +615,29 @@ pub(crate) fn device_dlpack_capsule<'py>(
 }
 
 /// Publish a device-side write back into the surface, so every other
-/// holder observes the edit. Runs at unlock/close when a writable device
-/// tensor was taken under the write lock.
+/// holder observes the edit. Runs when a scope holding a writable
+/// device tensor is left normally — the handle's unlock/close, or the
+/// device-tensor scope's exit.
+///
+/// The consumer's writes ride its own CUDA stream and the publish is a
+/// Vulkan copy that reads the staging; the device-wide synchronize is
+/// the only thing ordering the two APIs, so the copy reads finished
+/// pixels rather than a torn frame. Detached — it can block for a full
+/// frame's GPU work.
 #[cfg(target_os = "linux")]
 pub(crate) fn publish_device_write_back_to_surface(
     python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<()> {
     let export = surface_device_export_for(python, owned_memory)?;
+    let cuda_import = Arc::clone(&export.helper_device_export.cuda_import);
+    python
+        .detach(|| {
+            crate::python_cuda_pixel_exchange::synchronize_every_stream_on_the_import_device(
+                &cuda_import,
+            )
+        })
+        .map_err(crate::python_processor_context::gpu_operation_error)?;
     export.exchange_client.run_device_export_copy(
         python,
         "copy_device_export_staging_back_to_surface",
@@ -657,6 +672,57 @@ pub(crate) fn device_export_available(owned_memory: &Arc<GpuSurfaceOwnedMemory>)
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn device_export_available(_owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
     false
+}
+
+// =============================================================================
+// Pending device write-back
+// =============================================================================
+
+/// The armed-until-settled state a writable device export leaves behind:
+/// a consumer took a writable capsule, and the edit it may have made is
+/// published at the scope's normal exit — or discarded on its exception
+/// path. One protocol for every scope that hands out device tensors, so
+/// the swap-once semantics (the first settler wins; unlock-then-close
+/// publishes once) live in one place.
+#[cfg(target_os = "linux")]
+pub(crate) struct PendingDeviceWriteBack {
+    armed: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(target_os = "linux")]
+impl PendingDeviceWriteBack {
+    pub(crate) fn new_unarmed() -> Self {
+        Self {
+            armed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// A writable capsule went out; the next normal scope exit publishes.
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Drop the pending write instead of publishing it — the exception
+    /// path's arm. A raise means the write did not finish, and
+    /// publishing a half-written view hands downstream a torn frame that
+    /// surfaces as corruption far from the raise.
+    pub(crate) fn discard(&self) {
+        self.armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Publish the staged edit back into the surface if one is armed.
+    /// Swap-once: the first caller wins, so a scope that settles twice
+    /// (unlock, then close) publishes once.
+    pub(crate) fn publish_if_armed(
+        &self,
+        python: Python<'_>,
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> PyResult<()> {
+        if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        publish_device_write_back_to_surface(python, owned_memory)
+    }
 }
 
 // =============================================================================
