@@ -299,7 +299,7 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     assert export_metadata["vk_image_array_layers"] == 1
     assert export_metadata["vk_image_samples"] == 1
     assert export_metadata["dedicated_allocation"] is True
-    assert export_metadata["vk_memory_type_index"] >= 0
+    assert export_metadata["vk_memory_type_index"] < 32, "VK_MAX_MEMORY_TYPES"
     assert len(export_metadata["exporting_device_uuid_hex"]) == 32
     assert export_metadata["exporting_device_uuid_hex"] != "00" * 16, (
         "an all-zero device UUID binds no device"

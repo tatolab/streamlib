@@ -540,12 +540,12 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
 
     // The metadata half of the export contract, read at its RHI source
     // while the allocation is live.
+    const VK_MAX_MEMORY_TYPES: u32 = 32;
     let memory_type_index = host_image
         .vma_allocation_memory_type_index()
         .expect("a live OPAQUE_FD allocation must state its memory type index");
-    let memory_type_count = 32;
     assert!(
-        memory_type_index < memory_type_count,
+        memory_type_index < VK_MAX_MEMORY_TYPES,
         "memory type index {memory_type_index} is outside VK_MAX_MEMORY_TYPES"
     );
     let exporting_uuid = host_image
@@ -614,6 +614,11 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
     // texture — vmaDestroyImage plus the allocation free — while the
     // foreign import holds the payload. The upload's fence already waited,
     // so no host GPU work is in flight on the image.
+    assert_eq!(
+        Arc::strong_count(&host_image),
+        1,
+        "a second holder would make this drop a no-op and the probe vacuous"
+    );
     drop(host_image);
     drop(source_buf);
 

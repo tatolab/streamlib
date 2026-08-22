@@ -211,6 +211,18 @@ struct SurfaceCache {
     surfaces: HashMap<String, CachedSurface>,
 }
 
+/// The wire spelling of a device UUID: 32 lowercase hex characters.
+#[cfg(target_os = "linux")]
+fn lowercase_hex_of_device_uuid(device_uuid: [u8; 16]) -> String {
+    use std::fmt::Write;
+    device_uuid
+        .iter()
+        .fold(String::with_capacity(32), |mut lowercase_hex, byte| {
+            let _ = write!(lowercase_hex, "{byte:02x}");
+            lowercase_hex
+        })
+}
+
 impl SurfaceCache {
     fn new() -> Self {
         Self {
@@ -1422,20 +1434,23 @@ impl SurfaceStoreInner {
                 .vma_allocation_memory_type_index()
                 .ok_or_else(|| {
                     Error::GpuError(format!(
-                        "OPAQUE_FD texture registration for {surface_id:?} has no VMA                          allocation to read a memory type index from; a consumer import                          without one binds the wrong memory type instead of failing"
+                        "OPAQUE_FD texture registration for {surface_id:?} has no VMA \
+                         allocation to read a memory type index from; a consumer import \
+                         without one binds the wrong memory type instead of failing"
                     ))
                 })?;
-            let exporting_device_uuid = texture
-                .vulkan_inner()
-                .exporting_physical_device_uuid()
-                .ok_or_else(|| {
-                    Error::GpuError(format!(
-                        "OPAQUE_FD texture registration for {surface_id:?} has no stored                          device to read the exporting device UUID from; an import on the                          wrong GPU corrupts silently instead of failing"
-                    ))
-                })?
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
+            let exporting_device_uuid = lowercase_hex_of_device_uuid(
+                texture
+                    .vulkan_inner()
+                    .exporting_physical_device_uuid()
+                    .ok_or_else(|| {
+                        Error::GpuError(format!(
+                            "OPAQUE_FD texture registration for {surface_id:?} has no stored \
+                             device to read the exporting device UUID from; an import on the \
+                             wrong GPU corrupts silently instead of failing"
+                        ))
+                    })?,
+            );
             const VK_IMAGE_TYPE_2D: i32 = 1;
             const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
             const VK_SAMPLE_COUNT_1: i32 = 1;

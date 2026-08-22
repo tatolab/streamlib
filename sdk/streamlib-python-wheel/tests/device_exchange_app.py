@@ -60,6 +60,7 @@ if __name__ == "__main__":
         "DmaBufExportProbe",
         "PrivilegedCapabilityProbe",
         "TextureHandleRoundTripProbe",
+        "OpaqueFdExportHandoffProbe",
         "DeviceTensorScopeDoublesAKernelOutputProbe",
         "DeviceTensorScopeDiscardsOnRaiseProbe",
         "PooledTextureExportProbe",

@@ -800,14 +800,53 @@ pub(crate) struct PythonOpaqueFdTextureExport {
     width: u32,
     height: u32,
     format_wire_name: &'static str,
-    vk_image_tiling: i32,
-    vk_image_usage_flags: u32,
-    vk_image_mip_levels: u32,
-    vk_image_array_layers: u32,
-    vk_image_samples: i32,
+    vk_image_creation_recipe: ExportedVkImageCreationRecipe,
     dedicated_allocation: bool,
-    vk_memory_type_index: u32,
-    exporting_device_uuid: [u8; 16],
+    export_contract: OpaqueFdExportContract,
+}
+
+/// The `VkImageCreateInfo` recipe an OPAQUE_FD export carries — the shape
+/// a conforming foreign re-import must reproduce byte-for-byte. Declared
+/// once and held by value by every owner between the wire parse and the
+/// Python object, so a field added here reaches all of them.
+#[derive(Clone, Copy)]
+pub(crate) struct ExportedVkImageCreationRecipe {
+    pub(crate) vk_image_tiling: i32,
+    pub(crate) vk_image_usage_flags: u32,
+    pub(crate) vk_image_mip_levels: u32,
+    pub(crate) vk_image_array_layers: u32,
+    pub(crate) vk_image_samples: i32,
+}
+
+/// The allocation-binding half of the raw-handle export contract: the
+/// exporter's memory type index and device UUID travel together — an
+/// OPAQUE_FD registration carries both or its checkout is refused, so
+/// one-without-the-other is unrepresentable.
+#[derive(Clone, Copy)]
+pub(crate) struct OpaqueFdExportContract {
+    pub(crate) vk_memory_type_index: u32,
+    pub(crate) exporting_device_uuid: [u8; 16],
+}
+
+#[cfg(target_os = "linux")]
+impl From<crate::python_helper_process_pixel_exchange::OpaqueFdTextureExportDescription>
+    for PythonOpaqueFdTextureExport
+{
+    fn from(
+        description: crate::python_helper_process_pixel_exchange::OpaqueFdTextureExportDescription,
+    ) -> Self {
+        use std::os::unix::io::IntoRawFd;
+        Self {
+            exported_memory_fd: description.exported_memory_fd.into_raw_fd(),
+            allocation_byte_size: description.allocation_byte_size,
+            width: description.width,
+            height: description.height,
+            format_wire_name: description.format_wire_name,
+            vk_image_creation_recipe: description.vk_image_creation_recipe,
+            dedicated_allocation: description.dedicated_allocation,
+            export_contract: description.export_contract,
+        }
+    }
 }
 
 #[pymethods]
@@ -848,31 +887,31 @@ impl PythonOpaqueFdTextureExport {
     /// Raw `VkImageTiling` the exporter created the image with.
     #[getter]
     fn vk_image_tiling(&self) -> i32 {
-        self.vk_image_tiling
+        self.vk_image_creation_recipe.vk_image_tiling
     }
 
     /// Raw `VkImageUsageFlags` bitfield the exporter created the image with.
     #[getter]
     fn vk_image_usage_flags(&self) -> u32 {
-        self.vk_image_usage_flags
+        self.vk_image_creation_recipe.vk_image_usage_flags
     }
 
     /// `VkImageCreateInfo::mipLevels` of the exporter's image.
     #[getter]
     fn vk_image_mip_levels(&self) -> u32 {
-        self.vk_image_mip_levels
+        self.vk_image_creation_recipe.vk_image_mip_levels
     }
 
     /// `VkImageCreateInfo::arrayLayers` of the exporter's image.
     #[getter]
     fn vk_image_array_layers(&self) -> u32 {
-        self.vk_image_array_layers
+        self.vk_image_creation_recipe.vk_image_array_layers
     }
 
     /// Raw `VkSampleCountFlagBits` of the exporter's image.
     #[getter]
     fn vk_image_samples(&self) -> i32 {
-        self.vk_image_samples
+        self.vk_image_creation_recipe.vk_image_samples
     }
 
     /// Whether the allocation is dedicated — always true for this flavour;
@@ -887,14 +926,14 @@ impl PythonOpaqueFdTextureExport {
     /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)`.
     #[getter]
     fn vk_memory_type_index(&self) -> u32 {
-        self.vk_memory_type_index
+        self.export_contract.vk_memory_type_index
     }
 
     /// The exporting device's `VkPhysicalDeviceIDProperties::deviceUUID`,
     /// 16 bytes — an OPAQUE_FD is device-bound.
     #[getter]
     fn exporting_device_uuid<'py>(&self, python: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(python, &self.exporting_device_uuid)
+        PyBytes::new(python, &self.export_contract.exporting_device_uuid)
     }
 }
 
@@ -1534,24 +1573,8 @@ impl PythonGpuContextFullAccess {
         python: Python<'_>,
         surface: &PythonGpuSurfaceHandle,
     ) -> PyResult<PythonOpaqueFdTextureExport> {
-        use std::os::unix::io::IntoRawFd;
         let owned_memory = surface.owned_memory()?;
-        let description = python.detach(|| owned_memory.export_opaque_fd())?;
-        Ok(PythonOpaqueFdTextureExport {
-            exported_memory_fd: description.exported_memory_fd.into_raw_fd(),
-            allocation_byte_size: description.allocation_byte_size,
-            width: description.width,
-            height: description.height,
-            format_wire_name: description.format_wire_name,
-            vk_image_tiling: description.vk_image_tiling,
-            vk_image_usage_flags: description.vk_image_usage_flags,
-            vk_image_mip_levels: description.vk_image_mip_levels,
-            vk_image_array_layers: description.vk_image_array_layers,
-            vk_image_samples: description.vk_image_samples,
-            dedicated_allocation: description.dedicated_allocation,
-            vk_memory_type_index: description.vk_memory_type_index,
-            exporting_device_uuid: description.exporting_device_uuid,
-        })
+        Ok(python.detach(|| owned_memory.export_opaque_fd())?.into())
     }
 
     /// Import a foreign DMA-BUF file descriptor as a surface this graph can

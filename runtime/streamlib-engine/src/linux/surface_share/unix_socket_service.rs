@@ -542,7 +542,7 @@ fn handle_register(
     let vk_memory_type_index = request
         .get("vk_memory_type_index")
         .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
+        .and_then(|v| u32::try_from(v).ok());
     let exporting_device_uuid = request
         .get("exporting_device_uuid")
         .and_then(|v| v.as_str())
@@ -851,8 +851,7 @@ fn handle_lookup(
         ),
         None => (0, 0, "unknown", "pixel_buffer"),
     };
-    let (mut response, dup_fds) = (
-        serde_json::json!({
+    let mut response = serde_json::json!({
             "surface_id": surface_id,
             "width": width,
             "height": height,
@@ -876,17 +875,15 @@ fn handle_lookup(
             "vk_image_tiling": checkout.vk_image_tiling,
             "vk_image_usage": checkout.vk_image_usage,
             "vk_image_allocation_size": checkout.vk_image_allocation_size,
-        }),
-        dup_fds,
-    );
+    });
     // Echoed only when registered: absence is meaningful (see
     // `SurfaceMetadata::vk_memory_type_index`), so no default may appear
     // on the wire.
     if let Some(vk_memory_type_index) = checkout.vk_memory_type_index {
         response["vk_memory_type_index"] = vk_memory_type_index.into();
     }
-    if let Some(exporting_device_uuid) = &checkout.exporting_device_uuid {
-        response["exporting_device_uuid"] = exporting_device_uuid.clone().into();
+    if let Some(exporting_device_uuid) = checkout.exporting_device_uuid {
+        response["exporting_device_uuid"] = exporting_device_uuid.into();
     }
     (response, dup_fds)
 }

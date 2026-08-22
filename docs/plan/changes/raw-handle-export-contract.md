@@ -98,7 +98,10 @@ registration lacks a new field → refused naming the field (the
     (`device_exchange_probes.py:433-529`);
   - rig round trip (#1900's validation shape): the exported fd + metadata imported
     by independent external-memory code (the in-tree CUDA import path driven as a
-    foreign consumer) reads the kernel's pixels;
+    foreign consumer) reads the kernel's pixels — delivered (recorded from the
+    implementation, #1900) as the ticket's other named option, a second `VkDevice`
+    in a genuinely foreign process driven only by the exported bundle
+    (`opaque_fd_wheel_export_foreign_consumer.rs` + `OpaqueFdExportHandoffProbe`);
   - the fd-outlives-teardown probe (audit addendum on #1900): an imported export
     survives engine destruction of the source allocation;
   - refusals: DMA-BUF-flavoured texture, unresolved acquired texture, pixel
@@ -115,6 +118,14 @@ registration lacks a new field → refused naming the field (the
   refusal now names `export_opaque_fd` (`test_device_exchange.py:272-275`).
 - `README.md:247-249` — doc rot: `export_dma_buf` reads as a surface method; it is
   a `GpuContextFullAccess` method, and the OPAQUE_FD door is unmentioned.
+- (recorded from the implementation, #1900) `duplicate_first_plane_fd_for_export`'s
+  failure message says "memory fd" rather than "DMA-BUF fd" — the helper now serves
+  both flavours.
+- (recorded from the implementation, #1900)
+  `adapters/streamlib-adapter-cuda/tests/opaque_fd_image_consumer_rhi_round_trip.rs`
+  — the fd-outlives-teardown probe lands here beside its sibling, with the existing
+  test's inline command recording extracted into two shared helpers
+  (behaviour-preserving; the barriers, copies and layouts are unchanged).
 
 ## REMOVED
 
