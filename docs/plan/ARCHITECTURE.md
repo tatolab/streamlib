@@ -222,7 +222,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ kernel-kind-parity-bar)
+## Graphics (RHI / GPU) — IN-FLIGHT
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
@@ -230,15 +230,24 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   blocks: shader/compute source and binding config passed from Python, compiled and
   executed by the engine on its device — no user-side Vulkan, ever.
   [importable-python-library]
-- **DECIDED** — Python reaches every GPU capability Rust authoring reaches: compute,
+- **DECIDED** — Python reaches every kernel kind Rust authoring reaches: compute,
   graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
   names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
-  capability is Rust-only. [python-kernel-api; python-kernel-surface — SHIPPED #1773,
-  #1774, #1777]
+  kind is Rust-only. Pipeline state and buffer resources inside a kind are a narrower
+  claim, and the two a Python processor cannot reach are named rather than left silent:
+  vertex and index buffers with indexed draws — no escalate op mints either buffer, and
+  no consumer in either language binds one; and storage- and uniform-buffer bindings —
+  Rust consumers in the engine tree hold them, and the only by-surface-id resolution the
+  escalate path has is texture-shaped, so a Python processor is refused by name. Both
+  are undesigned.
+  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777;
+  kernel-kind-parity-bar — the parity claim narrowed to kernel kinds]
   <!-- verify: cargo test -p streamlib-engine compute_kernel_dispatch -->
   <!-- verify: cargo test -p streamlib-engine graphics_kernel_dispatch -->
   <!-- verify: cargo test -p streamlib-engine ray_tracing_kernel_dispatch -->
   <!-- verify: cargo test -p streamlib-engine cpu_readback_answers_from_gpu_context -->
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
 - **DECIDED** — A kernel's output is an engine-owned texture that Python names by
   surface id and passes downstream in a bag, and that a third-party GPU library in its
   own Python package reaches through a scope: entering blits the texture to a linear
@@ -315,7 +324,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   go; the command-recorder flow keeps its seam by carrying bindings to the recorder
   rather than stashing them on the kernel. The Rust convergence is its own change,
   sequenced after the Python surface. [python-kernel-api]
-- **OPEN** — Everything else.
+- **OPEN** — Everything else, including the two graphics capabilities no language can
+  render: depth attachments — Rust constructs a depth-testing pipeline that Python cannot
+  name, and no pass in either language renders against one — and MSAA, refused for every
+  caller in every language with the pipeline hardcoded to a single sample. Both are
+  unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
+  surface with no pass to render against would buy nothing.
 
 ## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library, one-monotonic-clock)
 
