@@ -46,8 +46,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [importable-python-library; importable-python-library-ripout — SHIPPED #1715 for the
   verbs, `BuildOrchestrator` and every runtime build path; `streamlib-jtd-codegen` is
   gone with schema-free-ports #1813, and the remaining `.slpkg`, lockfile and
-  package-source residue rides `streamlib-idents` into processor-class-identity, which
-  deletes it whole]
+  package-source residue rode `streamlib-idents` into processor-class-identity —
+  SHIPPED #1837, #1841, which deleted the crate whole]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The plugin ABI is deleted: no dlopen'd processor cdylibs, no `repr(C)`
   vtable surface, no load handshake, no build fingerprints. The extension paths are
@@ -144,7 +144,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-python-wheel claiming_a_recycled_frame_is_refused_naming_the_recycling -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-16-surface-id-lifetime-contract.md -->
 
-## Processor model & scheduling — IN-FLIGHT (→ processor-class-identity, importable-python-library)
+## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -172,7 +172,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — There is no schema layer: no JTD, no schema registry, no embedded
   schemas, no codegen and no generated type classes, and no schema identity grammar
   anywhere in the engine or the authoring surfaces. [schema-free-ports — SHIPPED
-  #1813, #1815; the `SchemaIdent` grammar itself rides processor-class-identity]
+  #1813, #1815; the `SchemaIdent` grammar itself — processor-class-identity, SHIPPED
+  #1841]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
   profile, and direction; no port carries a type in `graph`, `tap`, or any snapshot.
@@ -212,12 +213,30 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `__main__`; only processor classes may not live there.
   The `@org/package/Type` identity grammar is deleted along with
   the `@app/local` synthesis; `@processor` declares execution, interval, scheduling
-  priority, and description only. [processor-class-identity; `__main__` clause reversed
-  by helper-process-placement-only]
+  priority, and description only. Mechanically means at the authoring seam, never from a
+  runtime reflection API: Rust captures the type path where the macro expands, because
+  `std::any::type_name`'s output format is unspecified across compiler versions and must
+  never key a registry; Python joins `__module__` and `__qualname__` with a colon. The
+  per-processor isolation tier goes with the grammar — it was derived from the org, so
+  with no org it has one reachable answer, and the operator knob that only ever asked
+  "is this module `@session`?" collapses with it. The `FullAccessGrant` moat survives
+  untouched: it is a compile-time guarantee about who may mint an in-process
+  `RuntimeContextFullAccess`, never a placement question.
+  [processor-class-identity — SHIPPED #1837, #1839, #1840, #1841; `__main__` clause
+  reversed by helper-process-placement-only]
+  <!-- verify: cargo test -p streamlib-engine --test processor_class_import_path_test -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_identity.py::test_the_launch_arrangement_never_changes_the_identity -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_identity.py::test_a_processor_declared_in_the_entry_file_is_refused -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-12-processor-class-identity.md -->
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph.
-  Identity is never derived from it. [processor-class-identity]
+  Identity is never derived from it — and neither is the default: a descriptor carries
+  the class's short name as its own validated field rather than the engine splitting one
+  out of the import path, because splitting re-invents the grammar this change deleted.
+  [processor-class-identity — SHIPPED #1838, #1841]
+  <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
