@@ -353,7 +353,7 @@ mod hardware_tests {
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 
-    use super::VulkanValidationMessageCounts;
+    use super::{VulkanValidationConfiguration, VulkanValidationMessageCounts};
     use crate::core::rhi::{
         Texture, TextureDescriptor, TextureFormat, TextureUsages, VulkanLayout,
     };
@@ -396,6 +396,16 @@ mod hardware_tests {
     )]
     #[test]
     fn a_deliberately_invalid_vulkan_call_moves_the_validation_error_count() {
+        // Abort-on-error is the whole-sweep gate; this test is the one
+        // place that raises a finding on purpose, so under that mode it
+        // would kill the sweep it is meant to keep honest.
+        if VulkanValidationConfiguration::from_environment().abort_process_on_validation_error {
+            println!(
+                "Skipping — STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR is set, and this test \
+                 provokes a validation error on purpose."
+            );
+            return;
+        }
         let Some((device, before)) = device_counting_validation_messages() else {
             return;
         };

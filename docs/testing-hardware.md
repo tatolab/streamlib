@@ -54,6 +54,57 @@ device. Running them in parallel deadlocks (most often inside the
 NVIDIA Vulkan driver's per-process kernel state, see
 [`docs/learnings/nvidia-dma-buf-after-swapchain.md`](learnings/nvidia-dma-buf-after-swapchain.md)).
 
+## Vulkan validation over a tier-2 run
+
+Tier 2 is the only tier that constructs a real Vulkan device, so it is the
+only place the Khronos validation layer has anything to say. Three env vars
+drive it; any one of them loads `VK_LAYER_KHRONOS_validation`, and each is a
+no-op where the layer is not installed (a warning, never a failure — which is
+why CI, which has no layer, is unaffected):
+
+| Env var | Effect |
+|---|---|
+| `STREAMLIB_VULKAN_VALIDATION=1` | Load the layer, forward findings into `tracing`, count them per device. |
+| `STREAMLIB_VULKAN_SYNC_VALIDATION=1` | The above, plus synchronization validation. |
+| `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1` | The above, and the first error kills the process, naming its VUID. |
+
+Registering a messenger silences the layer's own stdout printing, so with a
+plain `STREAMLIB_VULKAN_VALIDATION=1` run a finding reaches a `cargo test`
+binary — which installs no `tracing` subscriber — only where a test reads
+`HostVulkanDevice::validation_layer_message_counts()`. Abort-on-error is
+therefore the whole-sweep gate:
+
+```bash
+STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1 cargo test \
+    --features streamlib/hardware-tests --workspace \
+    --exclude api-server-demo \
+    --exclude camera-deno-subprocess \
+    --exclude camera-python-subprocess \
+    --exclude camera-rust-plugin \
+    --exclude webrtc-cloudflare-stream \
+    --no-fail-fast \
+    -- --test-threads=1
+```
+
+A binary that dies with `SIGABRT` raised a validation error; the panic
+message immediately above it names the VUID and quotes the spec. The sweep
+does not yet run clean — see the baseline in #1893.
+
+A test that wants to hold one GPU path at zero reads the counter around it
+rather than relying on the sweep:
+
+```rust
+let before = device.validation_layer_message_counts();
+// ... the path under test ...
+assert_eq!(device.validation_layer_message_counts(), before);
+```
+
+`None` means no messenger is installed — validation off, or layer absent. It
+is never the same as zero, and a test must skip rather than pass on it.
+
+Leave validation off when reproducing a driver-race symptom: it shifts
+timing.
+
 ## Why Cargo features instead of `#[ignore]`
 
 The structural defense is `#[cfg_attr(not(feature = "hardware-tests"),
