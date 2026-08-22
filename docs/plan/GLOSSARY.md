@@ -85,15 +85,15 @@ address-space-local pointer is not a handle. Pixels never cross as Python object
 
 **Handle flavour**: which external-memory handle type a texture's allocation exports
 as — DMA-BUF (explicit-DRM-modifier images, importable by EGL / V4L2 consumers) or
-OPAQUE_FD (formats with no DRM FOURCC; imports only through Vulkan / CUDA external
-memory). Fixed when the allocation is created, never convertible. _Avoid_: "format"
-for the handle type (a format implies a flavour; they are not the same axis).
+OPAQUE_FD (imports only through Vulkan / CUDA external memory). Chosen when the
+allocation is created, never convertible; a format with no DRM FOURCC can only ever
+be OPAQUE_FD. _Avoid_: "format" for the handle type (format constrains the flavour;
+it does not name it).
 
 **Raw export**: handing a surface allocation's memory fd itself to native code, as
 opposed to an engine-ordered view. A raw handle names the allocation, never the
-frame — the surface-id lifetime guarantees end at export — and is minted only by
-the Full capability surface. _Avoid_: "export" unqualified where the
-allocation-vs-frame distinction matters.
+frame — the surface-id lifetime guarantees end at export. _Avoid_: "export"
+unqualified where the allocation-vs-frame distinction matters.
 
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.
