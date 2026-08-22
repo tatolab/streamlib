@@ -186,7 +186,7 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
     // Wrapped halves: the phrase splits across the line break, so the line the
     // violation reports on carries only the tail of a prohibition.
     (
-        "docs/plan/changes/processor-class-identity.md",
+        "docs/plan/changes/archive/2026-08-12-processor-class-identity.md",
         "hosting of a Python processor is banned, so a `__main__`-defined class has no legal",
     ),
     (
