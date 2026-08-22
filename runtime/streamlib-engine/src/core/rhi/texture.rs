@@ -143,26 +143,44 @@ impl TextureInner {
     }
 
     /// Whether a recorded copy may read this texture (Vulkan:
-    /// TRANSFER_SRC usage). Metal blits are not usage-gated.
+    /// TRANSFER_SRC usage; the non-Vulkan backends do not usage-gate
+    /// copies). An IOSurface-backed texture answers from its Metal
+    /// side, like every accessor above.
     pub(crate) fn supports_transfer_read(&self) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if self.metal_texture.is_some() {
+            return true;
+        }
         #[cfg(any(
             feature = "backend-vulkan",
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         return self.inner.supports_transfer_read();
-        #[allow(unreachable_code)]
+        #[cfg(not(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        )))]
         true
     }
 
     /// Whether a recorded copy may write this texture (Vulkan:
-    /// TRANSFER_DST usage). Metal blits are not usage-gated.
+    /// TRANSFER_DST usage; the non-Vulkan backends do not usage-gate
+    /// copies). An IOSurface-backed texture answers from its Metal
+    /// side, like every accessor above.
     pub(crate) fn supports_transfer_write(&self) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if self.metal_texture.is_some() {
+            return true;
+        }
         #[cfg(any(
             feature = "backend-vulkan",
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         return self.inner.supports_transfer_write();
-        #[allow(unreachable_code)]
+        #[cfg(not(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        )))]
         true
     }
 }
@@ -268,13 +286,15 @@ impl Texture {
     }
 
     /// Whether a recorded copy may read this texture (Vulkan:
-    /// TRANSFER_SRC usage; not usage-gated elsewhere).
+    /// TRANSFER_SRC usage; the non-Vulkan backends do not usage-gate
+    /// copies).
     pub fn supports_transfer_read(&self) -> bool {
         self.host_inner().supports_transfer_read()
     }
 
     /// Whether a recorded copy may write this texture (Vulkan:
-    /// TRANSFER_DST usage; not usage-gated elsewhere).
+    /// TRANSFER_DST usage; the non-Vulkan backends do not usage-gate
+    /// copies).
     pub fn supports_transfer_write(&self) -> bool {
         self.host_inner().supports_transfer_write()
     }

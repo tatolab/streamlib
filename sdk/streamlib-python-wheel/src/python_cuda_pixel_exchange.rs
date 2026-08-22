@@ -101,8 +101,6 @@ impl Drop for CudaImportedSurface {
     }
 }
 
-/// Why a device export was not possible. Rendered straight into the
-/// Python exception, so each variant says what to do about it.
 /// Wait until every stream on the import's device has retired its work.
 ///
 /// The write-back publish reads the staging with a Vulkan copy, while a
@@ -111,22 +109,38 @@ impl Drop for CudaImportedSurface {
 /// this first, so the copy reads finished pixels rather than a torn
 /// frame; without it every consumer would owe a `torch.cuda.synchronize()`
 /// the API never asked for. Both calls target the primary context the
-/// import (and torch) live in.
+/// import (and torch) live in, and the thread's prior current device is
+/// restored — this runs on the thread user Python executes on, and
+/// leaving it repointed would surprise a multi-GPU consumer.
 pub(crate) fn synchronize_every_stream_on_the_import_device(
     import: &CudaImportedSurface,
 ) -> Result<(), String> {
     let device_ordinal = import.dlpack_device.device_id;
     unsafe {
+        let mut device_before_the_sync: i32 = 0;
+        sys::cudaGetDevice(&mut device_before_the_sync)
+            .result()
+            .map_err(|failure| format!("cudaGetDevice: {failure:?}"))?;
         sys::cudaSetDevice(device_ordinal)
             .result()
             .map_err(|failure| format!("cudaSetDevice({device_ordinal}): {failure:?}"))?;
-        sys::cudaDeviceSynchronize()
+        let synchronized = sys::cudaDeviceSynchronize()
             .result()
-            .map_err(|failure| format!("cudaDeviceSynchronize: {failure:?}"))?;
+            .map_err(|failure| format!("cudaDeviceSynchronize: {failure:?}"));
+        if device_before_the_sync != device_ordinal {
+            sys::cudaSetDevice(device_before_the_sync)
+                .result()
+                .map_err(|failure| {
+                    format!("cudaSetDevice({device_before_the_sync}) to restore: {failure:?}")
+                })?;
+        }
+        synchronized?;
     }
     Ok(())
 }
 
+/// Why a device export was not possible. Rendered straight into the
+/// Python exception, so each variant says what to do about it.
 pub(crate) fn cuda_unavailable_reason() -> Option<String> {
     // SAFETY: the probe only attempts the dlopen; it touches no CUDA state.
     if !unsafe { sys::is_culib_present() } {
