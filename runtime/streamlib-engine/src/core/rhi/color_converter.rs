@@ -188,6 +188,8 @@ pub fn pixel_format_color_kind(format: PixelFormat) -> ColorSpaceKind {
         | PixelFormat::Bgra32
         | PixelFormat::Argb32
         | PixelFormat::Rgba64
+        | PixelFormat::Rgba16Float
+        | PixelFormat::Rgba32Float
         | PixelFormat::Gray8
         | PixelFormat::Unknown => ColorSpaceKind::Rgb,
         PixelFormat::Nv12VideoRange
@@ -483,6 +485,8 @@ fn pixel_format_from_raw(raw: u32) -> PixelFormat {
         x if x == PixelFormat::Rgba32 as u32 => PixelFormat::Rgba32,
         x if x == PixelFormat::Argb32 as u32 => PixelFormat::Argb32,
         x if x == PixelFormat::Rgba64 as u32 => PixelFormat::Rgba64,
+        x if x == PixelFormat::Rgba16Float as u32 => PixelFormat::Rgba16Float,
+        x if x == PixelFormat::Rgba32Float as u32 => PixelFormat::Rgba32Float,
         x if x == PixelFormat::Nv12VideoRange as u32 => PixelFormat::Nv12VideoRange,
         x if x == PixelFormat::Nv12FullRange as u32 => PixelFormat::Nv12FullRange,
         x if x == PixelFormat::Uyvy422 as u32 => PixelFormat::Uyvy422,

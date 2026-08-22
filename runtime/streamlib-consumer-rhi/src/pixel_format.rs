@@ -3,13 +3,17 @@
 
 //! Pixel format for video buffers.
 //!
-//! On macOS/iOS, enum values ARE CVPixelFormatType constants directly.
-//! This ensures zero-cost conversion to platform APIs.
+//! On macOS/iOS, enum values are CVPixelFormatType constants wherever
+//! CoreVideo has one free — [`PixelFormat::Rgba16Float`] is the one
+//! StreamLib-local code, so conversion goes through
+//! `as_cv_pixel_format_type`, never a bare cast.
 
-/// Pixel format backed directly by CVPixelFormatType constants.
+/// Pixel format backed by CVPixelFormatType constants.
 ///
-/// Values are the exact CVPixelFormatType FourCC codes from CoreVideo.
-/// No conversion needed - cast directly to u32 for CoreVideo APIs.
+/// Values are the exact CVPixelFormatType FourCC codes from CoreVideo,
+/// except [`Self::Rgba16Float`] — CoreVideo's half-float code is
+/// occupied by [`Self::Rgba64`] — so CoreVideo APIs take
+/// `as_cv_pixel_format_type()`, which maps that one variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u32)]
 pub enum PixelFormat {
@@ -29,6 +33,16 @@ pub enum PixelFormat {
     // ===========================================
     /// 64-bit RGBA little-endian (16 bits/channel). kCVPixelFormatType_64RGBALE = 'RGhA'
     Rgba64 = 0x52476841,
+
+    // ===========================================
+    // Float RGB formats (texture-backed exports)
+    // ===========================================
+    /// 64-bit RGBA half-float (16 bits/channel). StreamLib-local code
+    /// 'RGhF': CoreVideo's half-float code 'RGhA' is already taken by
+    /// [`Self::Rgba64`] above, whose consumers treat it as uint16.
+    Rgba16Float = 0x52476846,
+    /// 128-bit RGBA float (32 bits/channel). kCVPixelFormatType_128RGBAFloat = 'RGfA'
+    Rgba32Float = 0x52476641,
 
     // ===========================================
     // YUV formats
@@ -53,14 +67,29 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    /// Get the raw CVPixelFormatType value.
+    /// The CVPixelFormatType value CoreVideo knows this format by.
+    ///
+    /// Identity for every variant except [`Self::Rgba16Float`], whose
+    /// discriminant is StreamLib-local — CoreVideo spells half-float
+    /// RGBA 'RGhA' (kCVPixelFormatType_64RGBAHalf), a code
+    /// [`Self::Rgba64`]'s discriminant already occupies, so a bare cast
+    /// would hand CoreVideo an OSType it does not know.
     #[cfg(target_os = "macos")]
     #[inline]
     pub const fn as_cv_pixel_format_type(&self) -> u32 {
-        *self as u32
+        match self {
+            Self::Rgba16Float => 0x52476841,
+            _ => *self as u32,
+        }
     }
 
     /// Create from CVPixelFormatType value.
+    ///
+    /// Not the inverse of [`Self::as_cv_pixel_format_type`] for
+    /// [`Self::Rgba16Float`]: both it and [`Self::Rgba64`] map onto
+    /// CoreVideo's 'RGhA', and this direction resolves that code to
+    /// `Rgba64` — a caller that must preserve float identity across
+    /// CoreVideo carries the `PixelFormat` itself, not the OSType.
     #[cfg(target_os = "macos")]
     pub fn from_cv_pixel_format_type(cv_format: u32) -> Self {
         match cv_format {
@@ -68,6 +97,8 @@ impl PixelFormat {
             0x52474241 => Self::Rgba32,
             0x00000020 => Self::Argb32,
             0x52476841 => Self::Rgba64,
+            0x52476846 => Self::Rgba16Float,
+            0x52476641 => Self::Rgba32Float,
             0x34323076 => Self::Nv12VideoRange,
             0x34323066 => Self::Nv12FullRange,
             0x32767579 => Self::Uyvy422,
@@ -89,7 +120,12 @@ impl PixelFormat {
     pub const fn is_rgb(&self) -> bool {
         matches!(
             self,
-            Self::Bgra32 | Self::Rgba32 | Self::Argb32 | Self::Rgba64
+            Self::Bgra32
+                | Self::Rgba32
+                | Self::Argb32
+                | Self::Rgba64
+                | Self::Rgba16Float
+                | Self::Rgba32Float
         )
     }
 
@@ -97,7 +133,8 @@ impl PixelFormat {
     pub const fn bits_per_pixel(&self) -> u32 {
         match self {
             Self::Bgra32 | Self::Rgba32 | Self::Argb32 => 32,
-            Self::Rgba64 => 64,
+            Self::Rgba64 | Self::Rgba16Float => 64,
+            Self::Rgba32Float => 128,
             Self::Nv12VideoRange | Self::Nv12FullRange => 12, // Average for 4:2:0
             Self::Uyvy422 | Self::Yuyv422 => 16,
             Self::Gray8 => 8,
@@ -109,7 +146,8 @@ impl PixelFormat {
     pub const fn bits_per_component(&self) -> u32 {
         match self {
             Self::Bgra32 | Self::Rgba32 | Self::Argb32 => 8,
-            Self::Rgba64 => 16,
+            Self::Rgba64 | Self::Rgba16Float => 16,
+            Self::Rgba32Float => 32,
             Self::Nv12VideoRange | Self::Nv12FullRange => 8,
             Self::Uyvy422 | Self::Yuyv422 => 8,
             Self::Gray8 => 8,
@@ -121,6 +159,7 @@ impl PixelFormat {
     pub const fn plane_count(&self) -> u32 {
         match self {
             Self::Bgra32 | Self::Rgba32 | Self::Argb32 | Self::Rgba64 => 1,
+            Self::Rgba16Float | Self::Rgba32Float => 1,
             Self::Uyvy422 | Self::Yuyv422 => 1,
             Self::Nv12VideoRange | Self::Nv12FullRange => 2,
             Self::Gray8 => 1,
@@ -139,6 +178,8 @@ impl PixelFormat {
             Self::Rgba32 => "rgba32",
             Self::Argb32 => "argb32",
             Self::Rgba64 => "rgba64",
+            Self::Rgba16Float => "rgba16_float",
+            Self::Rgba32Float => "rgba32_float",
             Self::Nv12VideoRange => "nv12_video_range",
             Self::Nv12FullRange => "nv12_full_range",
             Self::Uyvy422 => "uyvy422",
@@ -157,6 +198,8 @@ impl PixelFormat {
             "rgba" | "rgba32" => Ok(Self::Rgba32),
             "argb" | "argb32" => Ok(Self::Argb32),
             "rgba64" => Ok(Self::Rgba64),
+            "rgba16_float" => Ok(Self::Rgba16Float),
+            "rgba32_float" => Ok(Self::Rgba32Float),
             "nv12" | "nv12_video_range" => Ok(Self::Nv12VideoRange),
             "nv12_full_range" => Ok(Self::Nv12FullRange),
             "uyvy" | "uyvy422" => Ok(Self::Uyvy422),
@@ -191,8 +234,8 @@ mod layout_tests {
     //! `streamlib-adapter-cpu-readback` (and elsewhere) carry
     //! `format_raw: u32` arguments that round-trip through
     //! [`PixelFormat`] via an `as` cast. Discriminant values are
-    //! CVPixelFormatType FourCC constants — pinning them locks
-    //! against silent re-numbering.
+    //! CVPixelFormatType FourCC constants (bar the StreamLib-local
+    //! `Rgba16Float`) — pinning them locks against silent re-numbering.
     use super::*;
     use core::mem::{align_of, size_of};
 
@@ -211,6 +254,8 @@ mod layout_tests {
         assert_eq!(PixelFormat::Rgba32 as u32, 0x52474241);
         assert_eq!(PixelFormat::Argb32 as u32, 0x00000020);
         assert_eq!(PixelFormat::Rgba64 as u32, 0x52476841);
+        assert_eq!(PixelFormat::Rgba16Float as u32, 0x52476846);
+        assert_eq!(PixelFormat::Rgba32Float as u32, 0x52476641);
         assert_eq!(PixelFormat::Nv12VideoRange as u32, 0x34323076);
         assert_eq!(PixelFormat::Nv12FullRange as u32, 0x34323066);
         assert_eq!(PixelFormat::Uyvy422 as u32, 0x32767579);
@@ -236,6 +281,8 @@ mod layout_tests {
             PixelFormat::Rgba32,
             PixelFormat::Argb32,
             PixelFormat::Rgba64,
+            PixelFormat::Rgba16Float,
+            PixelFormat::Rgba32Float,
             PixelFormat::Nv12VideoRange,
             PixelFormat::Nv12FullRange,
             PixelFormat::Uyvy422,

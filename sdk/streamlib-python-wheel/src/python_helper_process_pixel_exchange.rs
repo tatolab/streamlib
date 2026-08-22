@@ -365,15 +365,23 @@ fn refuse_check_out_the_service_declined(
 ///
 /// Deliberately not a [`HelperCheckedOutPixelSurface`]: no fds were checked
 /// out and no memory is mapped here. What this carries is the name a dispatch
-/// binds and a downstream processor resolves, and the debt that hands the
-/// pool slot back.
+/// binds and a downstream processor resolves, the debt that hands the pool
+/// slot back, and the client its device-tensor scope reaches the parent's
+/// export staging through.
 #[cfg(target_os = "linux")]
 pub(crate) struct HelperAcquiredTexture {
     pub(crate) surface_id: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
-    pub(crate) format_name: String,
+    pub(crate) format: TextureFormat,
+    /// Settled by its own Drop, via the owned memory that carries this
+    /// value — so a tensor outliving its handle keeps the pool slot too.
+    #[expect(
+        dead_code,
+        reason = "the field is the release; its Drop pays the parent"
+    )]
     pub(crate) release_to_parent: HelperSurfaceReleaseDebt,
+    pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
 /// What a checkout turned into once the fds were imported: mapped memory
@@ -554,12 +562,14 @@ impl Drop for HelperCheckedOutTextureSurface {
     }
 }
 
-/// The two backings one surface id can resolve to, behind one checkout and
-/// one lifetime story.
+/// The backings one surface id can stand for, behind one lifetime story:
+/// the two a checkout imports, and the acquired device texture that was
+/// never checked out at all — a name whose memory stays engine-side.
 #[cfg(target_os = "linux")]
 pub(crate) enum HelperCheckedOutSurface {
     PixelBuffer(HelperCheckedOutPixelSurface),
     Texture(HelperCheckedOutTextureSurface),
+    AcquiredDeviceTexture(HelperAcquiredTexture),
 }
 
 #[cfg(target_os = "linux")]
@@ -568,6 +578,7 @@ impl HelperCheckedOutSurface {
         match self {
             Self::PixelBuffer(pixel_surface) => &pixel_surface.surface_id,
             Self::Texture(texture_surface) => &texture_surface.surface_id,
+            Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.surface_id,
         }
     }
 
@@ -575,6 +586,7 @@ impl HelperCheckedOutSurface {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.width,
             Self::Texture(texture_surface) => texture_surface.width,
+            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.width,
         }
     }
 
@@ -582,6 +594,7 @@ impl HelperCheckedOutSurface {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.height,
             Self::Texture(texture_surface) => texture_surface.height,
+            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.height,
         }
     }
 
@@ -590,6 +603,7 @@ impl HelperCheckedOutSurface {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.format.wire_name(),
             Self::Texture(texture_surface) => texture_surface.format.wire_name(),
+            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.format.wire_name(),
         }
     }
 
@@ -597,6 +611,7 @@ impl HelperCheckedOutSurface {
         match self {
             Self::PixelBuffer(pixel_surface) => &pixel_surface.exchange_client,
             Self::Texture(texture_surface) => &texture_surface.exchange_client,
+            Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.exchange_client,
         }
     }
 
@@ -606,6 +621,11 @@ impl HelperCheckedOutSurface {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.export_dma_buf(),
             Self::Texture(texture_surface) => texture_surface.export_dma_buf(),
+            Self::AcquiredDeviceTexture(_) => Err(PyRuntimeError::new_err(
+                "this surface is a device texture acquired by name: no memory was checked out \
+                 into this process, so there is no fd to export. Resolve its surface id to \
+                 check the texture handle out",
+            )),
         }
     }
 }
@@ -1022,7 +1042,7 @@ impl HelperProcessGpuExchangeClient {
     /// process is a separate capability.
     #[cfg(target_os = "linux")]
     pub(crate) fn acquire_texture(
-        &self,
+        self: &Arc<Self>,
         python: Python<'_>,
         width: u32,
         height: u32,
@@ -1046,11 +1066,19 @@ impl HelperProcessGpuExchangeClient {
             escalate_request_to_parent: self.escalate_request_to_parent.clone_ref(python),
             handle_id: surface_id.clone(),
         };
+        let format_wire_name: String = response_field(&response, "format")?.extract()?;
+        let format = TextureFormat::from_wire_name(&format_wire_name).ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "the parent's acquire_texture response named an unknown format \
+                 {format_wire_name:?}"
+            ))
+        })?;
         Ok(HelperAcquiredTexture {
             width: response_field(&response, "width")?.extract()?,
             height: response_field(&response, "height")?.extract()?,
-            format_name: response_field(&response, "format")?.extract()?,
+            format,
             release_to_parent,
+            exchange_client: Arc::clone(self),
             surface_id,
         })
     }

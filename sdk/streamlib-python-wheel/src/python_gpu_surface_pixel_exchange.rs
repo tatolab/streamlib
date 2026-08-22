@@ -121,6 +121,14 @@ impl GpuSurfaceOwnedMemory {
                      `export_dma_buf` hands the texture handle itself to native code",
                 ));
             }
+            HelperCheckedOutSurface::AcquiredDeviceTexture(_) => {
+                return Err(PyRuntimeError::new_err(
+                    "this surface is a device texture whose memory is not mapped into this \
+                     process: its pixels are reachable to a kernel dispatch, which binds it by \
+                     surface id, and to a device tensor through `as_device_tensor()`, not to \
+                     the CPU directly",
+                ));
+            }
         };
         Ok(HostVisiblePixelPlaneView {
             base_address: checked_out.consumer_buffer.mapped_ptr(),
@@ -146,7 +154,7 @@ impl GpuSurfaceOwnedMemory {
 // =============================================================================
 
 /// The DLPack shape a pixel format maps to.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct PixelExchangeTensorLayout {
     pub(crate) shape: Vec<i64>,
     /// Strides in **elements**, per the DLPack spec — not numpy's bytes.
@@ -172,6 +180,24 @@ fn single_plane_shape(format: PixelFormat) -> Option<(u32, DataType, Option<i64>
             DataType {
                 code: DataTypeCode::UInt,
                 bits: 16,
+                lanes: 1,
+            },
+            Some(4),
+        ),
+        // The float formats a kernel output carries: the element is the
+        // channel, so torch sees float16 / float32 directly.
+        PixelFormat::Rgba16Float => (
+            DataType {
+                code: DataTypeCode::Float,
+                bits: 16,
+                lanes: 1,
+            },
+            Some(4),
+        ),
+        PixelFormat::Rgba32Float => (
+            DataType {
+                code: DataTypeCode::Float,
+                bits: 32,
                 lanes: 1,
             },
             Some(4),
@@ -485,6 +511,14 @@ pub(crate) struct SurfaceDeviceExport {
     exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
+#[cfg(target_os = "linux")]
+impl SurfaceDeviceExport {
+    /// The DLPack device CUDA's import of the staging lives on.
+    pub(crate) fn imported_dlpack_device(&self) -> Device {
+        self.helper_device_export.cuda_import.dlpack_device()
+    }
+}
+
 /// This surface's device export, opening it on first ask.
 ///
 /// The escalate round trip needs the GIL attached to make the call at all;
@@ -514,6 +548,7 @@ pub(crate) fn surface_device_export_for(
 /// crosses to the parent, which needs the GIL attached to make the call
 /// and releases it inside its own wait.
 #[cfg(target_os = "linux")]
+#[derive(Clone)]
 pub(crate) struct PreparedDeviceExport {
     pub(crate) export: SurfaceDeviceExport,
     pub(crate) layout: PixelExchangeTensorLayout,
@@ -537,7 +572,7 @@ pub(crate) fn prepare_device_export(
     // Geometry comes from the staging alone — the object the byte span was
     // sized for — never mixed with the handle's own pixel view. The engine
     // records the pixel shape for both source kinds (a texture source maps
-    // to its 4-byte color shape — BGRA stays BGRA).
+    // to its own color shape, float widths included — BGRA stays BGRA).
     let layout = PixelExchangeTensorLayout::for_pixel_format(
         export.helper_device_export.format,
         export.helper_device_export.width,
@@ -580,14 +615,29 @@ pub(crate) fn device_dlpack_capsule<'py>(
 }
 
 /// Publish a device-side write back into the surface, so every other
-/// holder observes the edit. Runs at unlock/close when a writable device
-/// tensor was taken under the write lock.
+/// holder observes the edit. Runs when a scope holding a writable
+/// device tensor is left normally — the handle's unlock/close, or the
+/// device-tensor scope's exit.
+///
+/// The consumer's writes ride its own CUDA stream and the publish is a
+/// Vulkan copy that reads the staging; the device-wide synchronize is
+/// the only thing ordering the two APIs, so the copy reads finished
+/// pixels rather than a torn frame. Detached — it can block for a full
+/// frame's GPU work.
 #[cfg(target_os = "linux")]
 pub(crate) fn publish_device_write_back_to_surface(
     python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<()> {
     let export = surface_device_export_for(python, owned_memory)?;
+    let cuda_import = Arc::clone(&export.helper_device_export.cuda_import);
+    python
+        .detach(|| {
+            crate::python_cuda_pixel_exchange::synchronize_every_stream_on_the_import_device(
+                &cuda_import,
+            )
+        })
+        .map_err(crate::python_processor_context::gpu_operation_error)?;
     export.exchange_client.run_device_export_copy(
         python,
         "copy_device_export_staging_back_to_surface",
@@ -622,6 +672,57 @@ pub(crate) fn device_export_available(owned_memory: &Arc<GpuSurfaceOwnedMemory>)
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn device_export_available(_owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
     false
+}
+
+// =============================================================================
+// Pending device write-back
+// =============================================================================
+
+/// The armed-until-settled state a writable device export leaves behind:
+/// a consumer took a writable capsule, and the edit it may have made is
+/// published at the scope's normal exit — or discarded on its exception
+/// path. One protocol for every scope that hands out device tensors, so
+/// the swap-once semantics (the first settler wins; unlock-then-close
+/// publishes once) live in one place.
+#[cfg(target_os = "linux")]
+pub(crate) struct PendingDeviceWriteBack {
+    armed: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(target_os = "linux")]
+impl PendingDeviceWriteBack {
+    pub(crate) fn new_unarmed() -> Self {
+        Self {
+            armed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// A writable capsule went out; the next normal scope exit publishes.
+    pub(crate) fn arm(&self) {
+        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Drop the pending write instead of publishing it — the exception
+    /// path's arm. A raise means the write did not finish, and
+    /// publishing a half-written view hands downstream a torn frame that
+    /// surfaces as corruption far from the raise.
+    pub(crate) fn discard(&self) {
+        self.armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Publish the staged edit back into the surface if one is armed.
+    /// Swap-once: the first caller wins, so a scope that settles twice
+    /// (unlock, then close) publishes once.
+    pub(crate) fn publish_if_armed(
+        &self,
+        python: Python<'_>,
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> PyResult<()> {
+        if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        publish_device_write_back_to_surface(python, owned_memory)
+    }
 }
 
 // =============================================================================

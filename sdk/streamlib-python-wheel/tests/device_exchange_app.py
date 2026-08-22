@@ -60,6 +60,10 @@ if __name__ == "__main__":
         "DmaBufExportProbe",
         "PrivilegedCapabilityProbe",
         "TextureHandleRoundTripProbe",
+        "DeviceTensorScopeDoublesAKernelOutputProbe",
+        "DeviceTensorScopeDiscardsOnRaiseProbe",
+        "PooledTextureExportProbe",
+        "DeviceTensorScopeRefusesAnUnexportableUsageProbe",
     ):
         scenario_standalone_probe(scenario)
     else:

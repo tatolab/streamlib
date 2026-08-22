@@ -141,6 +141,48 @@ impl TextureInner {
         }
         self.inner.format()
     }
+
+    /// Whether a recorded copy may read this texture (Vulkan:
+    /// TRANSFER_SRC usage; the non-Vulkan backends do not usage-gate
+    /// copies). An IOSurface-backed texture answers from its Metal
+    /// side, like every accessor above.
+    pub(crate) fn supports_transfer_read(&self) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if self.metal_texture.is_some() {
+            return true;
+        }
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        return self.inner.supports_transfer_read();
+        #[cfg(not(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        )))]
+        true
+    }
+
+    /// Whether a recorded copy may write this texture (Vulkan:
+    /// TRANSFER_DST usage; the non-Vulkan backends do not usage-gate
+    /// copies). An IOSurface-backed texture answers from its Metal
+    /// side, like every accessor above.
+    pub(crate) fn supports_transfer_write(&self) -> bool {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if self.metal_texture.is_some() {
+            return true;
+        }
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        return self.inner.supports_transfer_write();
+        #[cfg(not(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        )))]
+        true
+    }
 }
 
 /// Platform-agnostic texture wrapper.
@@ -241,6 +283,22 @@ impl Texture {
             // `format_raw` is always sourced from a valid value).
             _ => TextureFormat::Rgba8Unorm,
         }
+    }
+
+    /// Whether a recorded copy may read this texture (Vulkan:
+    /// TRANSFER_SRC usage; the non-Vulkan backends do not usage-gate
+    /// copies). Engine-internal: reads the host's `TextureInner`
+    /// directly, which panics for a cdylib caller.
+    pub fn supports_transfer_read(&self) -> bool {
+        self.host_inner().supports_transfer_read()
+    }
+
+    /// Whether a recorded copy may write this texture (Vulkan:
+    /// TRANSFER_DST usage; the non-Vulkan backends do not usage-gate
+    /// copies). Engine-internal: reads the host's `TextureInner`
+    /// directly, which panics for a cdylib caller.
+    pub fn supports_transfer_write(&self) -> bool {
+        self.host_inner().supports_transfer_write()
     }
 
     /// Get the IOSurface ID for cross-framework sharing.
