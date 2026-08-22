@@ -1414,6 +1414,28 @@ impl SurfaceStoreInner {
         // tiling=OPTIMAL, usage=TRANSFER_SRC|TRANSFER_DST|SAMPLED|STORAGE).
         let request = if is_opaque_fd {
             let allocation_size = texture.vulkan_inner().vma_allocation_size() as u64;
+            // Raw-handle export contract fields. Both exist by
+            // construction here: the OPAQUE_FD memory export above
+            // already proved the allocation and its owning device.
+            let memory_type_index = texture
+                .vulkan_inner()
+                .vma_allocation_memory_type_index()
+                .ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "OPAQUE_FD texture registration for {surface_id:?} has no VMA                          allocation to read a memory type index from; a consumer import                          without one binds the wrong memory type instead of failing"
+                    ))
+                })?;
+            let exporting_device_uuid = texture
+                .vulkan_inner()
+                .exporting_physical_device_uuid()
+                .ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "OPAQUE_FD texture registration for {surface_id:?} has no stored                          device to read the exporting device UUID from; an import on the                          wrong GPU corrupts silently instead of failing"
+                    ))
+                })?
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
             const VK_IMAGE_TYPE_2D: i32 = 1;
             const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
             const VK_SAMPLE_COUNT_1: i32 = 1;
@@ -1449,6 +1471,8 @@ impl SurfaceStoreInner {
                 "vk_image_tiling": VK_IMAGE_TILING_OPTIMAL,
                 "vk_image_usage": vk_image_usage,
                 "vk_image_allocation_size": allocation_size,
+                "vk_memory_type_index": memory_type_index,
+                "exporting_device_uuid": exporting_device_uuid,
             })
         } else {
             // Carry the DRM format modifier and per-plane row pitch so
