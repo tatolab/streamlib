@@ -29,7 +29,8 @@ frame; the importer adopts it and consumes it as an image"| pkgs
   wheel --> engine
   engine -->|"bags carry per-frame surface ids (slot#generation);
 claim at typed cast, lease until drop;
-a stale id errors, never another frame"| helper
+a stale id errors, never another frame;
+every stamp reads the one machine-monotonic clock"| helper
   helper -->|"kernels constructed in setup(), dispatched by name and
 synchronously — one submission per batch; an output is named by surface id,
 and a DLPack scope over it is the optional third-party read / write-back"| engine

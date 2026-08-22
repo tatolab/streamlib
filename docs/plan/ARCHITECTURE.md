@@ -350,7 +350,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library, one-monotonic-clock)
+## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -389,8 +389,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   record `host_ts` and `source_ts`, log file naming, and the control-plane pubsub event
   timestamp — their job is correlating with the outside world, which monotonic time
   cannot do. A wall-clock value never enters the data plane and is never compared against
-  a media timestamp; a fifth surface is a plan change, not a judgement call.
-  [one-monotonic-clock]
+  a media timestamp; a fifth surface is a plan change, not a judgement call. The list is
+  mechanically enforced, with no per-line pragma and no opt-out attribute: the permitted
+  surfaces are a closed set in the gate, so a fifth is a source change that surfaces in
+  review rather than a line quietly appended, and an entry whose file stops reading a
+  wall clock is a licence the gate makes you hand back. The allowlist is per-file, which
+  is why a data-plane file never joins it — a machine-global unique name comes from the
+  engine's unique-name primitive, never from reading a clock.
+  [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728]
+  <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_kernel_monotonic_clock -->
+  <!-- verify: cargo run -p xtask -- check-clock-usage -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-13-one-monotonic-clock.md -->
 - **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
   CPAL → ALSA path is interim); do not build until a research memo settles it. A/V
   sync model likewise OPEN. The engine's decided audio surface is the clock
