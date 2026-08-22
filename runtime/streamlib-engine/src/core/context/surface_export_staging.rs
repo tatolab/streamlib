@@ -162,6 +162,18 @@ enum FrameThisStagingHoldsAfterTheCopy<'a> {
     WhateverItAlreadyHeld,
 }
 
+/// A registration-layout update the copy being submitted makes true.
+///
+/// Returned by the record step and applied only after the submission
+/// succeeds: the barriers that settle the layout execute only then, so
+/// recording it earlier would let a failed submit leave the cell naming
+/// a layout the image never reached — and the next copy's barrier would
+/// name a wrong source.
+struct TextureLayoutSettledByThisCopy {
+    registration: crate::core::context::TextureRegistration,
+    settled_layout: VulkanLayout,
+}
+
 /// The recorder plus the next timeline value, under one lock: the
 /// correctness of the strictly-increasing signal values depends on the
 /// value being drawn and submitted while this lock is held, so the
@@ -667,13 +679,18 @@ impl GpuContext {
         staging: &SurfaceExportStaging,
         mut submission: parking_lot::MutexGuard<'_, RefillSubmission>,
         holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
-        record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
+        record_copy: impl FnOnce(
+            &mut RhiCommandRecorder,
+        ) -> Result<Option<TextureLayoutSettledByThisCopy>>,
     ) -> Result<u64> {
         submission.recorder.begin()?;
-        if let Err(record_failure) = record_copy(&mut submission.recorder) {
-            submission.recorder.abort_recording();
-            return Err(record_failure);
-        }
+        let texture_layout_settled_by_this_copy = match record_copy(&mut submission.recorder) {
+            Ok(settled) => settled,
+            Err(record_failure) => {
+                submission.recorder.abort_recording();
+                return Err(record_failure);
+            }
+        };
         let signal_value = submission.next_signal_value;
         submission.next_signal_value += 1;
         if let Err(submit_failure) = submission
@@ -695,6 +712,9 @@ impl GpuContext {
         {
             *staging.frame_last_read_into_this_staging.lock() = Some(surface_id.to_string());
         }
+        if let Some(settled) = texture_layout_settled_by_this_copy {
+            settled.registration.update_layout(settled.settled_layout);
+        }
         drop(submission);
         staging
             .refill_done_timeline
@@ -708,7 +728,9 @@ impl GpuContext {
     fn try_submit_staging_copy_and_wait(
         staging: &SurfaceExportStaging,
         holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
-        record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
+        record_copy: impl FnOnce(
+            &mut RhiCommandRecorder,
+        ) -> Result<Option<TextureLayoutSettledByThisCopy>>,
     ) -> Result<Option<u64>> {
         let Some(submission) = staging.refill_submission.try_lock() else {
             return Ok(None);
@@ -873,14 +895,15 @@ impl GpuContext {
         self.resolve_device_export_source(surface_id)
     }
 
-    /// Record one surface→staging copy. Geometry is re-checked here
-    /// rather than at resolve: a re-registration between the two would
-    /// otherwise size the copy from a shape the staging no longer has.
+    /// Record one surface→staging copy, answering the layout update the
+    /// submission settles. Geometry is re-checked here rather than at
+    /// resolve: a re-registration between the two would otherwise size
+    /// the copy from a shape the staging no longer has.
     fn record_refill(
         staging: &SurfaceExportStaging,
         source: &ResolvedBlitSource,
         recorder: &mut RhiCommandRecorder,
-    ) -> Result<()> {
+    ) -> Result<Option<TextureLayoutSettledByThisCopy>> {
         match source {
             ResolvedBlitSource::RegisteredTexture(registration) => {
                 let texture = registration.texture();
@@ -916,8 +939,10 @@ impl GpuContext {
                     VulkanAccess::TRANSFER_READ,
                     VulkanAccess::MEMORY_READ,
                 )?;
-                registration.update_layout(restore_layout);
-                Ok(())
+                Ok(Some(TextureLayoutSettledByThisCopy {
+                    registration: registration.clone(),
+                    settled_layout: restore_layout,
+                }))
             }
             ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
                 if pixel_buffer.plane_size(0) != staging.staging_byte_size {
@@ -943,7 +968,8 @@ impl GpuContext {
                     pixel_buffer,
                     staging.staging_buffer.as_ref(),
                     staging.staging_byte_size,
-                )
+                )?;
+                Ok(None)
             }
         }
     }
@@ -1113,12 +1139,13 @@ impl GpuContext {
     }
 
     /// Record one staging→surface copy, into whichever backing kind the
-    /// staging was minted over.
+    /// staging was minted over, answering the layout update the
+    /// submission settles.
     fn record_write_back(
         staging: &SurfaceExportStaging,
         destination: &ResolvedWriteBackDestination,
         recorder: &mut RhiCommandRecorder,
-    ) -> Result<()> {
+    ) -> Result<Option<TextureLayoutSettledByThisCopy>> {
         match destination {
             ResolvedWriteBackDestination::PixelBuffer(pixel_buffer) => {
                 recorder.record_copy_buffer_to_buffer(
@@ -1135,7 +1162,8 @@ impl GpuContext {
                     VulkanStage::ALL_COMMANDS,
                     VulkanAccess::TRANSFER_WRITE,
                     VulkanAccess::MEMORY_READ,
-                )
+                )?;
+                Ok(None)
             }
             ResolvedWriteBackDestination::RegisteredTexture(registration) => {
                 let texture = registration.texture();
@@ -1167,8 +1195,10 @@ impl GpuContext {
                     VulkanAccess::TRANSFER_WRITE,
                     VulkanAccess::MEMORY_READ,
                 )?;
-                registration.update_layout(restore_layout);
-                Ok(())
+                Ok(Some(TextureLayoutSettledByThisCopy {
+                    registration: registration.clone(),
+                    settled_layout: restore_layout,
+                }))
             }
         }
     }
@@ -1746,6 +1776,110 @@ mod tests {
         assert!(
             refusal.to_string().contains("never been read into"),
             "the refusal must name the missing read, got: {refusal}"
+        );
+    }
+
+    /// The float path's write direction: an rgba16_float edit staged at
+    /// 8 bytes per pixel publishes into the texture and survives a fresh
+    /// refill — a stride or region error in the wider-than-4-byte
+    /// arithmetic would corrupt this round trip, not the mint the sizing
+    /// test covers. GPU-gated: skips when no device is present.
+    #[test]
+    fn a_float_format_edit_round_trips_through_the_texture() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        let descriptor =
+            TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Rgba16Float)
+                .with_usage(
+                    TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::STORAGE_BINDING,
+                );
+        let float_texture = gpu
+            .device()
+            .create_texture(&descriptor)
+            .expect("rgba16_float kernel output texture");
+        gpu.register_texture_with_layout(&surface_id, float_texture, VulkanLayout::UNDEFINED);
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("a float texture's export staging");
+
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("read the (undefined) float texture in");
+        stamp_every_byte_of_device_export_staging(&gpu, &staging, CONSUMER_EDIT_STAMP);
+        gpu.copy_surface_export_staging_back_to_surface(&staging, &surface_id)
+            .expect("publish the float edit into the texture");
+        gpu.refill_surface_export_staging(&staging, &surface_id)
+            .expect("re-read the texture after the write-back");
+        assert_every_byte_is(
+            &read_device_export_staging_into_host_bytes(&gpu, &staging),
+            CONSUMER_EDIT_STAMP,
+            "an rgba16_float texture's pixels after a staged edit published back",
+        );
+    }
+
+    /// A rotating producer re-registering the slot with a different
+    /// format or geometry is judged at the copy, not trusted from mint:
+    /// a same-size format swap would relabel channels, and a new extent
+    /// would mis-size the copy region. GPU-gated: skips when no device
+    /// is present.
+    #[test]
+    fn a_re_registration_with_a_different_shape_is_refused_at_the_copy() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        gpu.register_texture_with_layout(
+            &surface_id,
+            create_producer_owned_texture(&gpu),
+            VulkanLayout::UNDEFINED,
+        );
+        let staging = gpu
+            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::DeviceLocal)
+            .expect("device-export staging for the rgba8 registration");
+
+        // Same byte size, different channel order — the case a
+        // size-only guard would silently relabel.
+        let bgra_descriptor =
+            TextureDescriptor::new(SURFACE_WIDTH, SURFACE_HEIGHT, TextureFormat::Bgra8Unorm)
+                .with_usage(TextureUsages::COPY_SRC | TextureUsages::COPY_DST);
+        gpu.register_texture_with_layout(
+            &surface_id,
+            gpu.device()
+                .create_texture(&bgra_descriptor)
+                .expect("the re-registered bgra texture"),
+            VulkanLayout::UNDEFINED,
+        );
+        let format_refusal = gpu
+            .refill_surface_export_staging(&staging, &surface_id)
+            .expect_err("a same-size format swap must refuse");
+        assert!(
+            format_refusal.to_string().contains("re-registered as"),
+            "the refusal must name the format change, got: {format_refusal}"
+        );
+
+        // Same format, different extent — the copy region would misfit.
+        let smaller_descriptor = TextureDescriptor::new(
+            SURFACE_WIDTH / 2,
+            SURFACE_HEIGHT / 2,
+            TextureFormat::Rgba8Unorm,
+        )
+        .with_usage(TextureUsages::COPY_SRC | TextureUsages::COPY_DST);
+        gpu.register_texture_with_layout(
+            &surface_id,
+            gpu.device()
+                .create_texture(&smaller_descriptor)
+                .expect("the re-registered smaller texture"),
+            VulkanLayout::UNDEFINED,
+        );
+        let geometry_refusal = gpu
+            .refill_surface_export_staging(&staging, &surface_id)
+            .expect_err("a geometry change must refuse");
+        assert!(
+            geometry_refusal.to_string().contains("different geometry"),
+            "the refusal must name the geometry change, got: {geometry_refusal}"
         );
     }
 

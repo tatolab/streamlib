@@ -287,14 +287,16 @@ impl Texture {
 
     /// Whether a recorded copy may read this texture (Vulkan:
     /// TRANSFER_SRC usage; the non-Vulkan backends do not usage-gate
-    /// copies).
+    /// copies). Engine-internal: reads the host's `TextureInner`
+    /// directly, which panics for a cdylib caller.
     pub fn supports_transfer_read(&self) -> bool {
         self.host_inner().supports_transfer_read()
     }
 
     /// Whether a recorded copy may write this texture (Vulkan:
     /// TRANSFER_DST usage; the non-Vulkan backends do not usage-gate
-    /// copies).
+    /// copies). Engine-internal: reads the host's `TextureInner`
+    /// directly, which panics for a cdylib caller.
     pub fn supports_transfer_write(&self) -> bool {
         self.host_inner().supports_transfer_write()
     }

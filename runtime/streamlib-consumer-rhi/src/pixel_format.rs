@@ -84,6 +84,12 @@ impl PixelFormat {
     }
 
     /// Create from CVPixelFormatType value.
+    ///
+    /// Not the inverse of [`Self::as_cv_pixel_format_type`] for
+    /// [`Self::Rgba16Float`]: both it and [`Self::Rgba64`] map onto
+    /// CoreVideo's 'RGhA', and this direction resolves that code to
+    /// `Rgba64` — a caller that must preserve float identity across
+    /// CoreVideo carries the `PixelFormat` itself, not the OSType.
     #[cfg(target_os = "macos")]
     pub fn from_cv_pixel_format_type(cv_format: u32) -> Self {
         match cv_format {
