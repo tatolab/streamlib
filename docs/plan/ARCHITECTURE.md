@@ -76,6 +76,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
   `-abi` halves die with the plugin ABI. [importable-python-library;
   surface-id-lifetime-contract — SHIPPED #1868 for the source clause]
+- **DECIDED** — Raw-handle export is public contract for both flavours, gated by
+  capability typestate: a raw memory fd is minted only where the typestate is Full
+  (setup/teardown) — `export_dma_buf` for the DMA-BUF flavour, `export_opaque_fd`
+  for OPAQUE_FD — never per-frame from `process()`, whose door is the engine-ordered
+  device-tensor scope. A raw handle names the allocation, never the frame: the
+  caller owns each freshly-dup'd fd, the surface-id lifetime guarantees end at
+  export, and pixels under a held fd after checkout release are whatever the pool
+  writes next. `export_opaque_fd` returns a typed export object carrying the
+  allocation-stable shape — byte size, extent, format — and no per-frame state (no
+  image layout, no plane layout, no timeline edges); `export_dma_buf` keeps
+  `(fd, byte_size)` and refuses the OPAQUE_FD flavour by name, pointing at
+  `export_opaque_fd`. [raw-handle-export-contract]
 - **DECIDED** — A published surface id names an immutable frame: from publish until
   every holder releases it, the pixels under that id change only through the
   surface's own write-back protocol (an explicit, engine-ordered edit other holders
