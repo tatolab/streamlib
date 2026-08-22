@@ -2219,8 +2219,9 @@ fn resolve_planned_surface_bound_kernel_bindings<'a>(
 /// publish the layout each one landed in.
 ///
 /// Neither `VulkanGraphicsKernel::offscreen_render` nor
-/// `VulkanRayTracingKernel::trace_rays` barriers a bound input — the draw path transitions its colour targets and nothing
-/// else — so a surface arriving in the wrong layout would be read or written
+/// `VulkanRayTracingKernel::trace_rays` barriers a bound input — the draw
+/// path transitions its colour targets and nothing else — so a surface
+/// arriving in the wrong layout would be read or written
 /// through a descriptor its layout does not satisfy, and its registration
 /// would keep claiming a layout the run has left behind. A run whose inputs
 /// already sit in the right layout records nothing and mints no command
