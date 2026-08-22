@@ -1,12 +1,16 @@
 # Raw handles export the allocation, gated at Full
 
-Rationale for the `[raw-handle-export-contract]` entry in `docs/plan/ARCHITECTURE.md`
-§Packages, decided by the owner 2026-08-21 — resolving the recorded reservation on the
-handle-export contract's reach by reaffirmation with a stated gate, not narrowing —
-and refined the same day by a six-lens expert audit (Vulkan external-memory spec, CUDA
-interop, engine-architecture practice, robotics-platform practice, Python API shape,
-adversarial lifetime) whose findings tightened the statements without moving any of
-the five decisions.
+Rationale for the `[raw-handle-export-contract]` entries — one DECIDED, one OPEN — in
+`docs/plan/ARCHITECTURE.md` §Packages, decided by the owner 2026-08-21 and refined the
+same day by a six-lens expert audit (Vulkan external-memory spec, CUDA interop,
+engine-architecture practice, robotics-platform practice, Python API shape, adversarial
+lifetime) whose findings tightened the statements without moving any of the five
+decisions. The owner's constraints anchoring the contract: zero-copy handoff of engine
+surfaces to third-party GPU stacks is a design goal — copy-forced handoff paths are the
+hazard — and unsynchronized same-device access to shared allocations is the crash
+scenario the sync duties exist to prevent. (An earlier record framed the owner as
+reserved on the reach itself; the owner corrected that same day — the reach was never
+in question.)
 
 ## Trigger
 
@@ -20,15 +24,24 @@ is no per-frame raw export.
 
 1. The reach stands: a third-party native package — its own Vulkan or CUDA stack, or
    a whole other rendering engine — may take a raw memory fd for an engine surface
-   and run against it. The recorded reservation resolves as reaffirmation with a
-   gate.
+   and run against it. Zero-copy cross-process handoff of engine surfaces is a
+   design goal, not a tolerated risk; the contract guards against copy-forced paths
+   and unsynchronized same-device racing, never against the handoff itself.
 2. The gate is the Full capability surface: raw handles mint only through
    `GpuContextFullAccess`, on every minting path — escalate ops included. Per-frame
    reach from `process()` is the engine-ordered device-tensor scope, never a raw fd —
    and the gate bounds use as well as minting: per-frame data-plane reach, read or
    write, through a held raw fd is out of contract. A foreign engine runs against an
    exported allocation as its sole producer or sole consumer, or accepts
-   pool-recycling semantics. Stated honestly: the typestate gates which object, not
+   pool-recycling semantics. The use bound is grounded in fact and is interim, not a
+   judgement on foreign engines: today an fd holder has no way to learn which frame
+   a slot carries or when it is stable, so per-frame fd reads are torn-frame
+   roulette — and the bound doubles as the same-device crash guard, keeping foreign
+   GPU work and engine writes from racing unsynchronized on shared memory. The
+   zero-copy per-frame hand-off (export the slot set once, name the current frame
+   per-frame by surface id, signal with an exported timeline edge) is intended work,
+   held OPEN in the plan; until it lands, the engine-ordered device-tensor scope —
+   one GPU blit per frame — is the per-frame price. Stated honestly: the typestate gates which object, not
    when — a Full reference stashed past `setup()` still mints; the phase bound is
    contract, not a runtime check.
 3. A raw handle names the allocation, never the frame. The surface-id lifetime
@@ -70,8 +83,9 @@ is no per-frame raw export.
   walks back a shipped public surface and deletes the native-import capability the
   "texture reach, not names-only" rejection in `python-kernel-api.md` deliberately
   bought.
-- **Reaffirming without the gate** — leaves the reservation a concession note; a
-  raw export on the Limited surface could later land without tripping any plan text.
+- **Reaffirming without the gate** — a raw export on the Limited surface could
+  later land without tripping any plan text, and per-frame minting would drift into
+  the norm the import-once pattern exists to prevent.
 - **A lifetime-scoped export** (a `with` block revoking the handle at exit) — an
   exported fd is a dup and cannot be revoked; the scope would be theater. Any real
   tightening is about who may mint and how a holder may use, never how long they
@@ -117,7 +131,9 @@ is no per-frame raw export.
   edge lives in the checkout protocol, which is exactly why frame semantics live
   there; a raw-fd Vulkan consumer's content-definedness rests on NVIDIA's
   empirical preservation across the UNDEFINED-layout bridge, and a CUDA consumer's
-  on NVIDIA's Vulkan↔CUDA coherence model.
+  on NVIDIA's Vulkan↔CUDA coherence model. These duties are the same-device crash
+  guard: unsynchronized foreign access to a shared allocation — never the handoff
+  itself — is the crash scenario the contract prevents.
 - A raw fd bypasses the surface-id lifetime contract deliberately; the contract's
   guarantees are stated as ending at export rather than pretended to extend past
   it, and the fd-pins-the-payload claim is proven on the rig alongside the

@@ -92,8 +92,8 @@ for the handle type (a format implies a flavour; they are not the same axis).
 **Raw export**: handing a surface allocation's memory fd itself to native code, as
 opposed to an engine-ordered view. A raw handle names the allocation, never the
 frame — the surface-id lifetime guarantees end at export — and is minted only by
-the Full capability surface, never a per-frame data path in either direction.
-_Avoid_: "export" unqualified where the allocation-vs-frame distinction matters.
+the Full capability surface. _Avoid_: "export" unqualified where the
+allocation-vs-frame distinction matters.
 
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.

@@ -81,8 +81,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `GpuContextFullAccess` — `export_dma_buf` for the DMA-BUF flavour,
   `export_opaque_fd` for OPAQUE_FD — on every minting path, escalate ops included,
   and the gate bounds use as well as minting: per-frame data-plane reach, read or
-  write, through a held raw fd is out of contract; the per-frame doors are surface
-  ids and the engine-ordered device-tensor scope. A raw handle names the
+  write, through a held raw fd is out of contract — an interim bound; the zero-copy
+  per-frame hand-off is OPEN below — and the per-frame doors are surface ids and
+  the engine-ordered device-tensor scope. A raw handle names the
   allocation, never the frame: the caller owns each freshly-dup'd fd (adopted by a
   successful foreign import, closed by the caller otherwise), the surface-id
   lifetime guarantees end at export, pixels under a held fd after checkout release
@@ -98,6 +99,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   exporting device UUID — and no per-frame state (no image layout, no timeline
   edges); `export_dma_buf` keeps `(fd, byte_size)` and refuses the OPAQUE_FD
   flavour by name, pointing at `export_opaque_fd`. [raw-handle-export-contract]
+- **OPEN** — Zero-copy per-frame consumption by a foreign GPU stack: intended, do
+  not build until designed. Direction: export a surface's slot set once at setup,
+  name the current frame per-frame by surface id, signal the hand-off with an
+  exported timeline edge under the same Full gate; retires the per-frame blit for
+  raw-fd consumers. [raw-handle-export-contract]
 - **DECIDED** — A published surface id names an immutable frame: from publish until
   every holder releases it, the pixels under that id change only through the
   surface's own write-back protocol (an explicit, engine-ordered edit other holders
