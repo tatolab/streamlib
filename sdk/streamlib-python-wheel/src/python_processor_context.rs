@@ -20,7 +20,7 @@ use pyo3::exceptions::{
     PyBufferError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
@@ -786,6 +786,118 @@ impl PythonGpuSurfaceCheckOutLease {
     }
 }
 
+/// A raw OPAQUE_FD texture handle: the allocation's memory fd plus the
+/// allocation-stable shape a foreign Vulkan or CUDA external-memory import
+/// must reproduce.
+///
+/// Deliberately outside the `GpuSurface*` family prefix: the object names
+/// an allocation, never a frame-bearing surface — the surface-id lifetime
+/// guarantees end at export.
+#[pyclass(name = "OpaqueFdTextureExport", module = "streamlib", frozen)]
+pub(crate) struct PythonOpaqueFdTextureExport {
+    exported_memory_fd: i32,
+    allocation_byte_size: u64,
+    width: u32,
+    height: u32,
+    format_wire_name: &'static str,
+    vk_image_tiling: i32,
+    vk_image_usage_flags: u32,
+    vk_image_mip_levels: u32,
+    vk_image_array_layers: u32,
+    vk_image_samples: i32,
+    dedicated_allocation: bool,
+    vk_memory_type_index: u32,
+    exporting_device_uuid: [u8; 16],
+}
+
+#[pymethods]
+impl PythonOpaqueFdTextureExport {
+    /// The exported memory fd. The caller owns it: a successful foreign
+    /// import adopts it — never close it after one; always close it after
+    /// a failed one.
+    #[getter]
+    fn fd(&self) -> i32 {
+        self.exported_memory_fd
+    }
+
+    /// Byte size of the whole `VkDeviceMemory` at offset zero — what the
+    /// foreign import states, never a tight width x height x bpp figure.
+    #[getter]
+    fn allocation_byte_size(&self) -> u64 {
+        self.allocation_byte_size
+    }
+
+    /// Texture width in pixels.
+    #[getter]
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Texture height in pixels.
+    #[getter]
+    fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The engine's format name for the texture, e.g. `"rgba16_float"`.
+    #[getter]
+    fn format(&self) -> &'static str {
+        self.format_wire_name
+    }
+
+    /// Raw `VkImageTiling` the exporter created the image with.
+    #[getter]
+    fn vk_image_tiling(&self) -> i32 {
+        self.vk_image_tiling
+    }
+
+    /// Raw `VkImageUsageFlags` bitfield the exporter created the image with.
+    #[getter]
+    fn vk_image_usage_flags(&self) -> u32 {
+        self.vk_image_usage_flags
+    }
+
+    /// `VkImageCreateInfo::mipLevels` of the exporter's image.
+    #[getter]
+    fn vk_image_mip_levels(&self) -> u32 {
+        self.vk_image_mip_levels
+    }
+
+    /// `VkImageCreateInfo::arrayLayers` of the exporter's image.
+    #[getter]
+    fn vk_image_array_layers(&self) -> u32 {
+        self.vk_image_array_layers
+    }
+
+    /// Raw `VkSampleCountFlagBits` of the exporter's image.
+    #[getter]
+    fn vk_image_samples(&self) -> i32 {
+        self.vk_image_samples
+    }
+
+    /// Whether the allocation is dedicated — always true for this flavour;
+    /// omitting the importer-side dedicated chain is undefined behaviour,
+    /// not leniency.
+    #[getter]
+    fn dedicated_allocation(&self) -> bool {
+        self.dedicated_allocation
+    }
+
+    /// The exporter's Vulkan memory type index, for the importer-side
+    /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)`.
+    #[getter]
+    fn vk_memory_type_index(&self) -> u32 {
+        self.vk_memory_type_index
+    }
+
+    /// The exporting device's `VkPhysicalDeviceIDProperties::deviceUUID`,
+    /// 16 bytes — an OPAQUE_FD is device-bound.
+    #[getter]
+    fn exporting_device_uuid<'py>(&self, python: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(python, &self.exporting_device_uuid)
+    }
+}
+
 // =============================================================================
 // GPU capability views
 // =============================================================================
@@ -1399,6 +1511,47 @@ impl PythonGpuContextFullAccess {
     ) -> PyResult<(i32, u64)> {
         let owned_memory = surface.owned_memory()?;
         python.detach(|| owned_memory.export_dma_buf())
+    }
+
+    /// Export the OPAQUE_FD texture handle for `surface`, for native code
+    /// that runs its own Vulkan or CUDA external-memory import against
+    /// the allocation.
+    ///
+    /// Returns an [`PythonOpaqueFdTextureExport`]. **The caller owns the
+    /// fd** — a successful foreign import adopts it; close it after a
+    /// failed one. Consume it as an image: a linear mapping over
+    /// OPTIMAL-tiled memory yields block-linear bytes, never pixels.
+    ///
+    /// Answered without leaving this process: the fd arrived here over
+    /// SCM_RIGHTS when the surface was checked out.
+    #[cfg(target_os = "linux")]
+    #[expect(
+        clippy::unused_self,
+        reason = "the surface carries the fds; the capability is the door"
+    )]
+    fn export_opaque_fd(
+        &self,
+        python: Python<'_>,
+        surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<PythonOpaqueFdTextureExport> {
+        use std::os::unix::io::IntoRawFd;
+        let owned_memory = surface.owned_memory()?;
+        let description = python.detach(|| owned_memory.export_opaque_fd())?;
+        Ok(PythonOpaqueFdTextureExport {
+            exported_memory_fd: description.exported_memory_fd.into_raw_fd(),
+            allocation_byte_size: description.allocation_byte_size,
+            width: description.width,
+            height: description.height,
+            format_wire_name: description.format_wire_name,
+            vk_image_tiling: description.vk_image_tiling,
+            vk_image_usage_flags: description.vk_image_usage_flags,
+            vk_image_mip_levels: description.vk_image_mip_levels,
+            vk_image_array_layers: description.vk_image_array_layers,
+            vk_image_samples: description.vk_image_samples,
+            dedicated_allocation: description.dedicated_allocation,
+            vk_memory_type_index: description.vk_memory_type_index,
+            exporting_device_uuid: description.exporting_device_uuid,
+        })
     }
 
     /// Import a foreign DMA-BUF file descriptor as a surface this graph can

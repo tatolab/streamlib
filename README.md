@@ -244,10 +244,12 @@ with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
     surface.unlock()                             # publishes the device-side write
 ```
 
-Other doors on the same handle: `surface.as_numpy()` for a mapped host view,
-`numpy.from_dlpack(surface, device="cpu")` for that memory as a capsule, `export_dma_buf` for a
-file descriptor to hand to something else. CUDA Array Interface is available through the cuda
-adapter, and lifetimes are engine-owned — a tensor pins its frame.
+Other doors on the same handle: `surface.as_numpy()` for a mapped host view, and
+`numpy.from_dlpack(surface, device="cpu")` for that memory as a capsule. For the handle itself,
+`ctx.gpu_full_access.export_dma_buf(surface)` hands native code a DMA-BUF fd, and
+`ctx.gpu_full_access.export_opaque_fd(surface)` the OPAQUE_FD flavour (HDR kernel outputs) with
+the metadata a foreign Vulkan/CUDA import needs. CUDA Array Interface is available through the
+cuda adapter, and lifetimes are engine-owned — a tensor pins its frame.
 
 Stated honestly, this is zero-**CPU**-copy, not copy-free: a tiled engine texture reaches a linear
 tensor through one GPU blit into an exportable staging buffer, because DLPack expresses strided
