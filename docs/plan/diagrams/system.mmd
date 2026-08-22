@@ -29,8 +29,8 @@ flowchart LR
 claim at typed cast, lease until drop;
 a stale id errors, never another frame"| helper
   helper -->|"kernels constructed in setup(), dispatched by name and
-synchronously — one submission per batch; a kernel output leaves
-as a DLPack tensor scope whose write blits back, engine-ordered"| engine
+synchronously — one submission per batch; an output is named by surface id,
+and a DLPack scope over it is the optional third-party read / write-back"| engine
   ctl --> registry
   rustapp --> crate
   crate --> engine

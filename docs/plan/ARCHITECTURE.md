@@ -241,14 +241,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the exception propagate — one rule for both device-write scopes, the CPU pixel-buffer
   scope included, and discarding never suppresses the exception. A write-back is always
   an edit of a frame the processor read, never a fresh-frame write: the engine refuses
-  one into a staging no read of that frame landed in, because it cannot tell a
-  consumer's write from uninitialised memory and one staging spans every frame its pool
-  slot publishes. Cross-process texture import is part of the capability, and
+  a write-back into a staging that has not first read that same frame, because it cannot
+  tell a consumer's write from uninitialised memory and one staging spans every frame its
+  pool slot publishes. Cross-process texture import is part of the capability, and
   importability is an allocation flavour the engine derives per acquisition, never a
-  Python dial: render-attachment usage with a probed DRM modifier takes
-  explicit-modifier DMA-BUF, a CUDA-mappable format within the OPAQUE_FD usage set
-  takes OPAQUE_FD, and everything else keeps a non-importable allocation whose later
-  cross-process import refuses by name.
+  Python dial: single-plane render-attachment usage takes explicit-modifier DMA-BUF
+  where the render-target modifier probes available; a CUDA-mappable format whose usage
+  sits inside the OPAQUE_FD set takes OPAQUE_FD where that image pool exists; everything
+  else keeps a non-importable allocation. A flavour the device or format cannot take
+  falls back rather than failing the acquire, and the later cross-process import refuses
+  by naming the flavour.
   [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779]
   <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_discards_the_write -->
