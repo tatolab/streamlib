@@ -784,10 +784,22 @@ struct ImageLayoutDuringBatchRecording<'a> {
     layout_so_far: VulkanLayout,
 }
 
-/// Where a batched dispatch's binding sits, for a refusal to name.
+/// Where a dispatch's binding sits, for a refusal to name.
+///
+/// A recording of one dispatch is the single-dispatch escalate op riding the
+/// batch machinery; its caller wrote no batch, so the location names the
+/// binding alone rather than a "dispatch 0" that exists only host-side.
 #[cfg(target_os = "linux")]
-fn batched_binding_location(dispatch_index: usize, binding: u32) -> String {
-    format!("dispatch {dispatch_index} of this batch, binding {binding}")
+fn batched_binding_location(
+    dispatch_index: usize,
+    binding: u32,
+    dispatches_in_recording: usize,
+) -> String {
+    if dispatches_in_recording == 1 {
+        format!("binding {binding}")
+    } else {
+        format!("dispatch {dispatch_index} of this batch, binding {binding}")
+    }
 }
 
 #[derive(Clone)]
@@ -3215,7 +3227,7 @@ impl GpuContext {
                         Error::GpuError(format!(
                             "{} names a texture with no image, which a descriptor cannot be \
                              written from",
-                            batched_binding_location(dispatch_index, binding.binding)
+                            batched_binding_location(dispatch_index, binding.binding, batch.len())
                         ))
                     })?;
                 let first_touch_in_this_recording = !layout_during_recording.contains_key(&image);

@@ -1331,9 +1331,9 @@ impl HelperProcessGpuExchangeClient {
             group_count,
         )?;
         op.set_item("op", "run_compute_kernel")?;
-        // Sent as its own op rather than a batch of one: this path dispatches
-        // through the kernel's own fence, which is what `run_compute_kernel`
-        // has always meant, and a batch would change where it synchronizes.
+        // Sent as its own op rather than a batch of one: a single dispatch's
+        // refusal names the binding, never "dispatch 0 of this batch". The
+        // host runs both ops on the same recording machinery.
         escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         Ok(())
     }
@@ -1462,8 +1462,8 @@ impl HelperProcessGpuExchangeClient {
 
     /// Trace one grid with a registered ray-tracing kernel.
     ///
-    /// Returns when the parent's trace has retired, for the same reason a
-    /// compute dispatch does: the host submits and waits on its own fence.
+    /// Returns when the parent's trace has retired: the host submits and
+    /// waits before answering, so the writes are visible on receipt.
     #[cfg(target_os = "linux")]
     pub(crate) fn run_ray_tracing_kernel(
         &self,

@@ -1528,8 +1528,9 @@ fn handle_register_compute_kernel(
 
 /// Dispatch a registered compute kernel with its bindings resolved by name.
 ///
-/// Compute dispatch on the host is synchronous — `VulkanComputeKernel::dispatch`
-/// waits on its own fence — so by the time this emits an `Ok`, the GPU work has
+/// Compute dispatch on the host is synchronous — the dispatch runs as a
+/// recording of one on the batch machinery, which waits out its submission
+/// before returning — so by the time this emits an `Ok`, the GPU work has
 /// retired and the writes are visible to any later submission on the same
 /// device. The subprocess can advance its surface-share timeline on receipt.
 ///
@@ -1558,7 +1559,7 @@ fn handle_run_compute_kernel(
                 req.kernel_id
             ))
         })?;
-        bind_and_dispatch_compute_kernel(full, &kernel, &req, &push_constants)
+        bind_and_dispatch_compute_kernel(full, kernel, &req, &push_constants)
     });
 
     match dispatched {
@@ -1835,71 +1836,54 @@ fn resolve_supplied_compute_bindings(
     Ok(resolved)
 }
 
-/// Resolve every named binding onto the kernel's slots, then dispatch.
+/// Resolve every named binding, then run the dispatch as a recording of one
+/// on the batch machinery — barriers and dispatch in one command buffer, one
+/// submission, one fence wait.
 ///
-/// The plan is total and every surface is resolved before the first `set_*`
-/// call, so a refused dispatch never leaves the kernel holding a mix of this
-/// dispatch's bindings and the last one's. The kernel's staged bindings are
-/// shared across every caller of the cache; interleaving is prevented by the
-/// escalate gate, which serializes the whole surrounding scope runtime-wide.
+/// The plan is total and every surface is resolved before anything records,
+/// so a refused dispatch never leaves the kernel holding a mix of this
+/// dispatch's bindings and the last one's. Riding the batch *method* and not
+/// the batch handler keeps the refusals a single dispatch's own: nothing here
+/// says "dispatch 0 of this batch". `VulkanComputeKernel::dispatch` is not
+/// used because its fence has no in-flight tracking — a failed submit leaves
+/// it unsignaled forever and hangs the next dispatch — and because its pre-
+/// and post-submit waits cost a second stall the shared recorder does not.
 #[cfg(target_os = "linux")]
 fn bind_and_dispatch_compute_kernel(
     full: &crate::core::context::GpuContextFullAccess,
-    kernel: &crate::vulkan::rhi::VulkanComputeKernel,
+    kernel: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
     req: &EscalateRequestRunComputeKernel,
     push_constants: &[u8],
 ) -> crate::core::error::Result<()> {
-    // Held across the dispatch, not consumed by the bind loop: a registration
-    // is a refcount on the texture the descriptor set now points at, and
-    // dropping the last one before the GPU has run frees the image out from
-    // under it.
-    let resolved = resolve_supplied_compute_bindings(full, &req.bindings, kernel)?;
-    // `VulkanComputeKernel::dispatch` records no image barrier of its own,
-    // so without this the bound images run in whatever layout their last
-    // producer left — and their registrations, and everything published from
-    // them, would keep claiming it.
-    let transition_pairs: Vec<(&TextureRegistration, crate::core::rhi::VulkanLayout)> = resolved
+    let resolved = resolve_supplied_compute_bindings(full, &req.bindings, &kernel)?;
+    // Cloned out before the batch consumes the resolution: the post-dispatch
+    // publish needs each registration under the surface id it resolved from,
+    // and a registration is a refcount on the texture the descriptor set
+    // points at.
+    let bound_surfaces: Vec<(String, TextureRegistration)> = resolved
         .iter()
         .map(|binding| {
             (
-                &binding.dispatch_binding.registration,
-                binding.dispatch_binding.kind.required_image_layout(),
+                binding.surface_id.clone(),
+                binding.dispatch_binding.registration.clone(),
             )
         })
         .collect();
-    transition_bound_kernel_inputs_into_descriptor_layouts(
-        full,
-        "escalate_compute_dispatch_input_layouts",
-        crate::vulkan::rhi::VulkanStage::COMPUTE_SHADER,
-        &transition_pairs,
-    )?;
-    drop(transition_pairs);
-    for binding in &resolved {
-        binding.dispatch_binding.write_into_kernel(kernel)?;
-    }
-
-    // A kernel that declares push constants must be given them even when the
-    // payload is empty, so `set_push_constants` produces the size mismatch
-    // rather than the dispatch running against whatever the kernel's staged
-    // buffer last held.
-    if kernel.push_constant_size() > 0 || !push_constants.is_empty() {
-        kernel.set_push_constants(push_constants)?;
-    }
-
-    let dispatched = kernel.dispatch(req.group_count_x, req.group_count_y, req.group_count_z);
+    let dispatch = BatchedComputeKernelDispatch {
+        kernel,
+        bindings: resolved
+            .into_iter()
+            .map(|binding| binding.dispatch_binding)
+            .collect(),
+        push_constants: push_constants.to_vec(),
+        group_count_x: req.group_count_x,
+        group_count_y: req.group_count_y,
+        group_count_z: req.group_count_z,
+    };
+    let dispatched = full.dispatch_compute_kernel_batch(std::slice::from_ref(&dispatch));
     if dispatched.is_ok() {
-        let bound_surfaces: Vec<(String, TextureRegistration)> = resolved
-            .iter()
-            .map(|binding| {
-                (
-                    binding.surface_id.clone(),
-                    binding.dispatch_binding.registration.clone(),
-                )
-            })
-            .collect();
         publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
     }
-    drop(resolved);
     dispatched
 }
 
@@ -2234,9 +2218,8 @@ fn resolve_planned_surface_bound_kernel_bindings<'a>(
 /// Barrier every bound input into the layout its descriptor requires, and
 /// publish the layout each one landed in.
 ///
-/// Neither `VulkanComputeKernel::dispatch`, `VulkanGraphicsKernel::
-/// offscreen_render` nor `VulkanRayTracingKernel::trace_rays` barriers a
-/// bound input — the draw path transitions its colour targets and nothing
+/// Neither `VulkanGraphicsKernel::offscreen_render` nor
+/// `VulkanRayTracingKernel::trace_rays` barriers a bound input — the draw path transitions its colour targets and nothing
 /// else — so a surface arriving in the wrong layout would be read or written
 /// through a descriptor its layout does not satisfy, and its registration
 /// would keep claiming a layout the run has left behind. A run whose inputs
@@ -5967,12 +5950,12 @@ void main() {
             drop(held);
         }
 
-        /// The reason the op exists, counted rather than timed: three passes
-        /// batched cost one submission and one stall, where three separate
-        /// `run_compute_kernel` ops cost three submissions and two stalls each.
+        /// The reason the op exists, counted rather than timed: N passes
+        /// batched cost one submission and one stall, where N separate
+        /// `run_compute_kernel` ops cost one of each per pass.
         ///
-        /// Both arms run the same three dispatches on the same device in the
-        /// same test, so the comparison is against the path this op replaces —
+        /// Both arms run the same dispatches on the same device in the same
+        /// test, so the comparison is against the path this op replaces —
         /// not against a remembered number.
         #[test]
         fn a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n() {
@@ -6064,17 +6047,119 @@ void main() {
                 .recorder_and_compute_kernel_fence_wait_count()
                 - stalls_before;
 
-            assert!(
-                separate_submissions >= dispatches.len(),
-                "the path the batch replaces submits at least once per dispatch, plus an \
-                 input-layout transition when a binding arrives in the wrong layout — if \
-                 this is fewer than the dispatch count the counter is not counting and \
-                 the assertion above proves nothing: {separate_submissions}"
+            assert_eq!(
+                separate_submissions,
+                dispatches.len(),
+                "a single dispatch rides the batch machinery as a recording of one, so N \
+                 separate ops cost exactly N submissions — and if this is zero the counter \
+                 is not counting and the batched assertion above proves nothing"
             );
-            assert!(
-                separate_stalls > batched_stalls,
-                "the path the batch replaces must stall more than the batch does: \
-                 {separate_stalls} vs {batched_stalls}"
+            assert_eq!(
+                separate_stalls,
+                dispatches.len(),
+                "and exactly N fence waits, one per op — paying this once instead of N \
+                 times is the batch's whole advantage: {separate_stalls} vs {batched_stalls}"
+            );
+            drop(held);
+        }
+
+        /// The single op rides the same machinery as a batch of one: barriers
+        /// and dispatch in one recording, one submission, one fence wait —
+        /// where the kernel-fence path it replaced paid up to two submissions
+        /// and three waits — and each binding rests in the layout its
+        /// descriptor requires, which the pixels cannot check on this driver.
+        #[test]
+        fn a_single_dispatch_costs_one_submission_and_one_stall_and_rests_its_layouts() {
+            let Some(sandbox) = make_gpu_sandbox_if_available() else {
+                println!("single dispatch machinery: no GPU — skipping");
+                return;
+            };
+            let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
+            let held = seeded_chain_textures(
+                &sandbox,
+                ["single-seed", "single-brightened", "single-unused"],
+            );
+
+            // Measured on the second run, not the first: a per-frame claim is
+            // about the steady state, and the opening dispatch on a fresh
+            // context also builds the shared recorder.
+            let mut submissions = 0;
+            let mut stalls = 0;
+            for run in 0..2 {
+                let submissions_before = sandbox.host_inner().queue_submission_count();
+                let stalls_before = sandbox
+                    .host_inner()
+                    .recorder_and_compute_kernel_fence_wait_count();
+                let response = handle_run_compute_kernel(
+                    &sandbox,
+                    format!("single-{run}"),
+                    EscalateRequestRunComputeKernel {
+                        bindings: vec![
+                            EscalateRequestRunComputeKernelBinding {
+                                kind: EscalateComputeBindingKind::SampledTexture,
+                                name: "unbrightened_image".to_string(),
+                                target_id: "single-seed".to_string(),
+                            },
+                            EscalateRequestRunComputeKernelBinding {
+                                kind: EscalateComputeBindingKind::StorageImage,
+                                name: "brightened_image".to_string(),
+                                target_id: "single-brightened".to_string(),
+                            },
+                        ],
+                        group_count_x: 8,
+                        group_count_y: 8,
+                        group_count_z: 1,
+                        kernel_id: brighten.clone(),
+                        push_constants_hex: String::new(),
+                        request_id: format!("single-{run}"),
+                    },
+                );
+                assert!(matches!(response, EscalateResponse::Ok(_)), "{response:?}");
+                submissions = sandbox.host_inner().queue_submission_count() - submissions_before;
+                stalls = sandbox
+                    .host_inner()
+                    .recorder_and_compute_kernel_fence_wait_count()
+                    - stalls_before;
+            }
+            assert_eq!(
+                submissions, 1,
+                "the barriers and the dispatch must go out as one command buffer — a \
+                 second submission means a separate transition recording is back"
+            );
+            assert_eq!(
+                stalls, 1,
+                "and cost the caller exactly one fence wait — more means the kernel's \
+                 own fence or a transition recorder's wait is back in the path"
+            );
+
+            let tracked = |surface_id: &str| {
+                sandbox
+                    .escalate(|full| {
+                        Ok(full
+                            .resolve_texture_registration_by_surface_id(surface_id, None, 64, 64)?
+                            .current_layout())
+                    })
+                    .expect("the dispatch's textures still resolve")
+            };
+            assert_eq!(
+                tracked("single-seed"),
+                streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                "the sampled source rests in the layout its descriptor requires"
+            );
+            assert_eq!(
+                tracked("single-brightened"),
+                streamlib_consumer_rhi::VulkanLayout::GENERAL,
+                "the storage output rests in GENERAL"
+            );
+            assert_every_pixel_is(
+                &read_back_rgba8(
+                    &sandbox,
+                    "single-brightened",
+                    held[1].texture(),
+                    "single-readback",
+                ),
+                CHAIN_BRIGHTENED_RGBA,
+                "the single dispatch's output — the machinery change must not move pixels",
             );
             drop(held);
         }
