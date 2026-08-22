@@ -24,6 +24,7 @@ from ._engine import GpuSurfaceHandle as GpuSurfaceHandle
 from ._engine import LinkInputDataReader as LinkInputDataReader
 from ._engine import LinkOutputDataWriter as LinkOutputDataWriter
 from ._engine import MonotonicTimer as MonotonicTimer
+from ._engine import OpaqueFdTextureExport as OpaqueFdTextureExport
 from ._engine import ProcessorInputPortReference as ProcessorInputPortReference
 from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
 from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
@@ -62,6 +63,7 @@ __all__ = [
     "LinkOutputDataWriter",
     "MasteringDisplay",
     "MonotonicTimer",
+    "OpaqueFdTextureExport",
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",

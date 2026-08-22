@@ -445,6 +445,11 @@ class TextureHandleRoundTripProbe:
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
+        # Raw handles mint only via the Full surface, on every path: the
+        # per-frame capability offers neither spelling.
+        observation["limited_surface_mints_no_raw_handle"] = not hasattr(
+            ctx.gpu_limited_access, "export_opaque_fd"
+        ) and not hasattr(ctx.gpu_limited_access, "export_dma_buf")
         fill_kernel = ctx.gpu_full_access.create_compute_kernel(
             source=FILL_CONSTANT_GLSL,
             bindings={"output_image": "storage_image"},
@@ -457,6 +462,19 @@ class TextureHandleRoundTripProbe:
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
             observation["kernel_dispatched"] = True
+
+            # An acquired-by-name texture holds no fd child-side; the raw
+            # export refuses until the surface id is resolved.
+            try:
+                unresolved_export = ctx.gpu_full_access.export_opaque_fd(
+                    kernel_output
+                )
+                observation["unresolved_export_refusal"] = (
+                    f"no refusal: export answered {unresolved_export!r}"
+                )
+                os.close(unresolved_export.fd)
+            except RuntimeError as refusal:
+                observation["unresolved_export_refusal"] = str(refusal)
 
             with ctx.gpu_limited_access.resolve_surface(
                 kernel_output.surface_id
@@ -498,6 +516,28 @@ class TextureHandleRoundTripProbe:
                 except RuntimeError as refusal:
                     observation["opaque_export_refusal"] = str(refusal)
 
+                # The raw-handle door for the flavour: the fd plus the
+                # allocation-stable shape a foreign import reproduces.
+                export = ctx.gpu_full_access.export_opaque_fd(resolved_texture)
+                observation["opaque_export_fd_is_real"] = export.fd >= 0
+                observation["opaque_export_metadata"] = {
+                    "allocation_byte_size": export.allocation_byte_size,
+                    "width": export.width,
+                    "height": export.height,
+                    "format": export.format,
+                    "vk_image_tiling": export.vk_image_tiling,
+                    "vk_image_usage_flags": export.vk_image_usage_flags,
+                    "vk_image_mip_levels": export.vk_image_mip_levels,
+                    "vk_image_array_layers": export.vk_image_array_layers,
+                    "vk_image_samples": export.vk_image_samples,
+                    "dedicated_allocation": export.dedicated_allocation,
+                    "vk_memory_type_index": export.vk_memory_type_index,
+                    "exporting_device_uuid_hex": export.exporting_device_uuid.hex(),
+                }
+                observation["opaque_export_fd_closes_cleanly"] = (
+                    os.close(export.fd) is None
+                )
+
             # The frame is still usable after a consumer's release: the
             # release republished the layout and signalled its edge.
             with ctx.gpu_limited_access.resolve_surface(
@@ -527,6 +567,31 @@ class TextureHandleRoundTripProbe:
                 observation["rt_export_fd_is_real"] = fd >= 0
                 observation["rt_export_byte_size"] = byte_size
                 observation["rt_fd_closes_cleanly"] = os.close(fd) is None
+
+                # The mirror of the redirect: a DMA-BUF-flavoured texture
+                # refuses the OPAQUE_FD spelling, pointing back.
+                try:
+                    flavour_export = ctx.gpu_full_access.export_opaque_fd(
+                        resolved_render_target
+                    )
+                    observation["dma_buf_flavour_export_refusal"] = (
+                        f"no refusal: export answered {flavour_export!r}"
+                    )
+                    os.close(flavour_export.fd)
+                except RuntimeError as refusal:
+                    observation["dma_buf_flavour_export_refusal"] = str(refusal)
+
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as pixel_buffer:
+            try:
+                pixel_export = ctx.gpu_full_access.export_opaque_fd(pixel_buffer)
+                observation["pixel_buffer_export_refusal"] = (
+                    f"no refusal: export answered {pixel_export!r}"
+                )
+                os.close(pixel_export.fd)
+            except RuntimeError as refusal:
+                observation["pixel_buffer_export_refusal"] = str(refusal)
         return observation
 
 
@@ -811,3 +876,76 @@ class DeviceTensorScopeRefusesAnUnexportableUsageProbe:
             except RuntimeError as refusal:
                 observation["copy_dst_refusal"] = str(refusal)
         return observation
+
+@processor(execution="manual")
+class OpaqueFdExportHandoffProbe:
+    """Hands a kernel-written texture's OPAQUE_FD export to a foreign process.
+
+    The receiver — the Rust rig test driving this app — gets the fd over
+    SCM_RIGHTS plus the export's metadata as JSON, imports on its own
+    device with only that bundle, and byte-compares the kernel's pixels.
+    This is the export contract consumed end-to-end: if the fd or any
+    metadata field is wrong in a way an importer rejects, the foreign side
+    fails, not this probe. The socket path arrives in
+    STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import socket
+        import struct
+
+        socket_path = os.environ.get("STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET")
+        if socket_path is None:
+            return {"failure": "STREAMLIB_TEST_OPAQUE_FD_HANDOFF_SOCKET is not set"}
+        observation = {}
+        fill_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=FILL_CONSTANT_GLSL,
+            bindings={"output_image": "storage_image"},
+        )
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
+        ) as kernel_output:
+            fill_kernel.dispatch(
+                bindings={"output_image": kernel_output},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
+            with ctx.gpu_limited_access.resolve_surface(
+                kernel_output.surface_id
+            ) as resolved_texture:
+                export = ctx.gpu_full_access.export_opaque_fd(resolved_texture)
+                metadata_wire = json.dumps(
+                    {
+                        "allocation_byte_size": export.allocation_byte_size,
+                        "width": export.width,
+                        "height": export.height,
+                        "format": export.format,
+                        "vk_image_tiling": export.vk_image_tiling,
+                        "vk_image_usage_flags": export.vk_image_usage_flags,
+                        "vk_image_mip_levels": export.vk_image_mip_levels,
+                        "vk_image_array_layers": export.vk_image_array_layers,
+                        "vk_image_samples": export.vk_image_samples,
+                        "dedicated_allocation": export.dedicated_allocation,
+                        "vk_memory_type_index": export.vk_memory_type_index,
+                        "exporting_device_uuid_hex": export.exporting_device_uuid.hex(),
+                    }
+                ).encode()
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as handoff:
+                    handoff.settimeout(60.0)
+                    handoff.connect(socket_path)
+                    socket.send_fds(
+                        handoff,
+                        [struct.pack("!I", len(metadata_wire)) + metadata_wire],
+                        [export.fd],
+                    )
+                    # The dispatch above already retired, so the memory is
+                    # defined for the foreign read; holding the resolve open
+                    # until the verdict keeps the checkout lease over it.
+                    observation["foreign_verdict"] = handoff.recv(64).decode()
+                # The kernel dup'd the fd on the SCM_RIGHTS crossing; this
+                # side's copy is still the caller's to close.
+                observation["fd_closes_cleanly"] = os.close(export.fd) is None
+        return observation
+

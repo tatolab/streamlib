@@ -536,6 +536,17 @@ fn handle_register(
     // field absent-defaults to the OPAQUE_FD constructor's hardcoded
     // shape so legacy callers see no behavior change.
     let vk_image = parse_vk_image_create_info_fields(request);
+    // Raw-handle export contract fields, OPAQUE_FD producers only. No
+    // default exists: `0` is a valid memory type index, so absence stays
+    // absent through the table and the checkout echo.
+    let vk_memory_type_index = request
+        .get("vk_memory_type_index")
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok());
+    let exporting_device_uuid = request
+        .get("exporting_device_uuid")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
@@ -611,6 +622,8 @@ fn handle_register(
         vk_image_tiling: vk_image.vk_image_tiling,
         vk_image_usage: vk_image.vk_image_usage,
         vk_image_allocation_size: vk_image.vk_image_allocation_size,
+        vk_memory_type_index,
+        exporting_device_uuid,
     }) {
         Ok(()) => {
             tracing::debug!(
@@ -838,34 +851,41 @@ fn handle_lookup(
         ),
         None => (0, 0, "unknown", "pixel_buffer"),
     };
-    (
-        serde_json::json!({
-            "surface_id": surface_id,
-            "width": width,
-            "height": height,
-            "format": format,
-            "resource_type": resource_type,
-            "handle_type": checkout.handle_type,
-            "plane_sizes": checkout.plane_sizes,
-            "plane_offsets": checkout.plane_offsets,
-            "plane_strides": checkout.plane_strides,
-            "drm_format_modifier": checkout.drm_format_modifier,
-            "has_produce_done_fd": has_produce_done_fd,
-            "has_consume_done_fd": has_consume_done_fd,
-            "current_image_layout": checkout.current_image_layout,
-            // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
-            // consumers. Always echoed; absent producers see the
-            // documented defaults from `super::state`.
-            "vk_image_type": checkout.vk_image_type,
-            "vk_image_mip_levels": checkout.vk_image_mip_levels,
-            "vk_image_array_layers": checkout.vk_image_array_layers,
-            "vk_image_samples": checkout.vk_image_samples,
-            "vk_image_tiling": checkout.vk_image_tiling,
-            "vk_image_usage": checkout.vk_image_usage,
-            "vk_image_allocation_size": checkout.vk_image_allocation_size,
-        }),
-        dup_fds,
-    )
+    let mut response = serde_json::json!({
+        "surface_id": surface_id,
+        "width": width,
+        "height": height,
+        "format": format,
+        "resource_type": resource_type,
+        "handle_type": checkout.handle_type,
+        "plane_sizes": checkout.plane_sizes,
+        "plane_offsets": checkout.plane_offsets,
+        "plane_strides": checkout.plane_strides,
+        "drm_format_modifier": checkout.drm_format_modifier,
+        "has_produce_done_fd": has_produce_done_fd,
+        "has_consume_done_fd": has_consume_done_fd,
+        "current_image_layout": checkout.current_image_layout,
+        // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
+        // consumers. Always echoed; absent producers see the
+        // documented defaults from `super::state`.
+        "vk_image_type": checkout.vk_image_type,
+        "vk_image_mip_levels": checkout.vk_image_mip_levels,
+        "vk_image_array_layers": checkout.vk_image_array_layers,
+        "vk_image_samples": checkout.vk_image_samples,
+        "vk_image_tiling": checkout.vk_image_tiling,
+        "vk_image_usage": checkout.vk_image_usage,
+        "vk_image_allocation_size": checkout.vk_image_allocation_size,
+    });
+    // Echoed only when registered: absence is meaningful (see
+    // `SurfaceMetadata::vk_memory_type_index`), so no default may appear
+    // on the wire.
+    if let Some(vk_memory_type_index) = checkout.vk_memory_type_index {
+        response["vk_memory_type_index"] = vk_memory_type_index.into();
+    }
+    if let Some(exporting_device_uuid) = checkout.exporting_device_uuid {
+        response["exporting_device_uuid"] = exporting_device_uuid.into();
+    }
+    (response, dup_fds)
 }
 
 /// Handle the `update_layout` op (#633): a producer that just issued a
@@ -1037,6 +1057,10 @@ fn handle_check_in(
             vk_image_tiling: vk_image.vk_image_tiling,
             vk_image_usage: vk_image.vk_image_usage,
             vk_image_allocation_size: vk_image.vk_image_allocation_size,
+            // check_in surfaces are pixel buffers; the raw-handle export
+            // contract fields ride texture registrations only.
+            vk_memory_type_index: None,
+            exporting_device_uuid: None,
         })
     {
         for fd in &leftover_planes {
@@ -1837,6 +1861,8 @@ mod tests {
                     vk_image_tiling: VK_IMAGE_TILING_DEFAULT,
                     vk_image_usage: VK_IMAGE_USAGE_DEFAULT,
                     vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
+                    vk_memory_type_index: None,
+                    exporting_device_uuid: None,
                 })
                 .expect("register");
         }
@@ -1977,6 +2003,93 @@ mod tests {
             assert!(rc >= 0, "caller fd {} must still be valid", fd);
             unsafe { libc::close(*fd) };
         }
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// The raw-handle export contract fields round-trip through the wire,
+    /// and their absence stays absence: a producer that registers
+    /// `vk_memory_type_index` / `exporting_device_uuid` sees both echoed
+    /// on lookup, and a producer that never states them gets a response
+    /// with neither key — `0` is a valid memory type index, so no default
+    /// may be conjured on the wire.
+    #[test]
+    fn raw_handle_export_fields_round_trip_and_absence_stays_absent() {
+        let state = SurfaceShareState::new();
+        let (_socket_dir, socket_path, mut service) = started_service(state);
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"raw-handle-export-fixture");
+        let register_req = serde_json::json!({
+            "op": "register",
+            "surface_id": "raw-handle-export-rt",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 64,
+            "format": "rgba16_float",
+            "resource_type": "texture",
+            "handle_type": "opaque_fd",
+            "vk_image_allocation_size": 65_536u64,
+            "vk_memory_type_index": 7u32,
+            "exporting_device_uuid": "00112233445566778899aabbccddeeff",
+        });
+        let (register_resp, _) =
+            send_request_with_fds(&stream, &register_req, &[send_fd], 0).expect("register request");
+        assert_eq!(
+            register_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "register must succeed: {register_resp:?}",
+        );
+
+        let (lookup_resp, lookup_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "lookup", "surface_id": "raw-handle-export-rt"}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("lookup request");
+        close_every_fd(&lookup_fds);
+        assert_eq!(
+            lookup_resp
+                .get("vk_memory_type_index")
+                .and_then(|v| v.as_u64()),
+            Some(7),
+        );
+        assert_eq!(
+            lookup_resp
+                .get("exporting_device_uuid")
+                .and_then(|v| v.as_str()),
+            Some("00112233445566778899aabbccddeeff"),
+        );
+
+        let bare_register_req = serde_json::json!({
+            "op": "register",
+            "surface_id": "raw-handle-export-bare",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 64,
+            "format": "bgra32",
+            "resource_type": "pixel_buffer",
+        });
+        let (bare_register_resp, _) =
+            send_request_with_fds(&stream, &bare_register_req, &[send_fd], 0)
+                .expect("bare register request");
+        unsafe { libc::close(send_fd) };
+        assert_eq!(
+            bare_register_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+        );
+        let (bare_lookup_resp, bare_lookup_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "lookup", "surface_id": "raw-handle-export-bare"}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("bare lookup request");
+        close_every_fd(&bare_lookup_fds);
+        assert!(bare_lookup_resp.get("vk_memory_type_index").is_none());
+        assert!(bare_lookup_resp.get("exporting_device_uuid").is_none());
 
         drop(stream);
         service.stop();

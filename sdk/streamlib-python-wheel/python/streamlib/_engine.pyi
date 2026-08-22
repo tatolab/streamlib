@@ -38,6 +38,7 @@ __all__ = [
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MonotonicTimer",
+    "OpaqueFdTextureExport",
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
@@ -566,9 +567,34 @@ class GpuContextFullAccess:
         ones a host-side export would mint.
 
         Refuses by name for an OPAQUE_FD-flavoured texture — that fd imports
-        through Vulkan or CUDA external memory, not as a DMA-BUF — and for a
-        pooled-texture handle whose memory was never checked out into this
-        process (resolve the surface id first).
+        through Vulkan or CUDA external memory, not as a DMA-BUF; export it
+        through `export_opaque_fd` instead — and for a pooled-texture handle
+        whose memory was never checked out into this process (resolve the
+        surface id first).
+        """
+
+    def export_opaque_fd(self, surface: GpuSurfaceHandle) -> OpaqueFdTextureExport:
+        """Export the OPAQUE_FD texture handle for `surface`, for native code
+        that runs its own Vulkan or CUDA external-memory import against the
+        allocation.
+
+        The caller owns the returned object's fd: a successful foreign import
+        adopts it — never close it after one; always close it after a failed
+        one. Consume the texture as an image (CUDA maps the mipmapped array;
+        Vulkan recreates the image from the carried recipe) — a linear buffer
+        mapping over OPTIMAL-tiled memory yields block-linear bytes, never
+        pixels.
+
+        A raw handle names the allocation, never the frame: the surface-id
+        lifetime guarantees end at export, and per-frame reach stays with
+        surface ids and `as_device_tensor()`. Answered without leaving this
+        process: the fd arrived over SCM_RIGHTS when the surface was checked
+        out.
+
+        Refuses by name for a DMA-BUF-flavoured texture (use
+        `export_dma_buf`), for a pixel buffer, and for a pooled-texture
+        handle whose memory was never checked out into this process (resolve
+        the surface id first).
         """
 
     def import_dma_buf(
@@ -727,6 +753,86 @@ class GpuSurfaceCheckOutLease:
     @property
     def surface_id(self) -> str:
         """The surface this claim holds still."""
+
+@final
+class OpaqueFdTextureExport:
+    """A raw OPAQUE_FD texture handle: the allocation's memory fd plus the
+    allocation-stable shape a foreign Vulkan or CUDA external-memory import
+    must reproduce.
+
+    Deliberately outside the `GpuSurface*` family prefix: the object names an
+    allocation, never a frame-bearing surface — the surface-id lifetime
+    guarantees end at export.
+    """
+
+    @property
+    def fd(self) -> int:
+        """The exported memory fd. The caller owns it: a successful foreign
+        import adopts it — never close it after one; always close it after a
+        failed one.
+        """
+
+    @property
+    def allocation_byte_size(self) -> int:
+        """Byte size of the whole `VkDeviceMemory` at offset zero — what the
+        foreign import states, never a tight width x height x bpp figure.
+        """
+
+    @property
+    def width(self) -> int:
+        """Texture width in pixels."""
+
+    @property
+    def height(self) -> int:
+        """Texture height in pixels."""
+
+    @property
+    def format(self) -> str:
+        """The engine's format name for the texture, e.g. `"rgba16_float"`."""
+
+    @property
+    def vk_image_tiling(self) -> int:
+        """Raw `VkImageTiling` the exporter created the image with."""
+
+    @property
+    def vk_image_usage_flags(self) -> int:
+        """Raw `VkImageUsageFlags` bitfield the exporter created the image
+        with.
+        """
+
+    @property
+    def vk_image_mip_levels(self) -> int:
+        """`VkImageCreateInfo.mipLevels` of the exporter's image."""
+
+    @property
+    def vk_image_array_layers(self) -> int:
+        """`VkImageCreateInfo.arrayLayers` of the exporter's image."""
+
+    @property
+    def vk_image_samples(self) -> int:
+        """Raw `VkSampleCountFlagBits` of the exporter's image."""
+
+    @property
+    def dedicated_allocation(self) -> bool:
+        """Whether the allocation is dedicated — always true for this
+        flavour. A Vulkan importer chains `VkMemoryDedicatedAllocateInfo`, a
+        CUDA importer sets `cudaExternalMemoryDedicated`; omitting either is
+        undefined behaviour, not leniency.
+        """
+
+    @property
+    def vk_memory_type_index(self) -> int:
+        """The exporter's Vulkan memory type index, for the importer-side
+        `vkAllocateMemory(VkImportMemoryFdInfoKHR)`.
+        """
+
+    @property
+    def exporting_device_uuid(self) -> bytes:
+        """The exporting device's `VkPhysicalDeviceIDProperties.deviceUUID`,
+        16 bytes. An OPAQUE_FD is device-bound: importing on the wrong GPU of
+        a multi-GPU rig corrupts silently, so match this against the
+        importer's own device UUID first.
+        """
 
 @final
 class ComputeKernel:

@@ -107,6 +107,17 @@ impl GpuSurfaceOwnedMemory {
         self.checked_out_surface.export_dma_buf()
     }
 
+    /// The OPAQUE_FD texture handle plus its allocation-stable shape —
+    /// the raw-handle twin of [`Self::export_dma_buf`], answered from the
+    /// same checked-out fds.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn export_opaque_fd(
+        &self,
+    ) -> PyResult<crate::python_helper_process_pixel_exchange::OpaqueFdTextureExportDescription>
+    {
+        self.checked_out_surface.export_opaque_fd()
+    }
+
     /// The host-mapped pixel view, or a refusal naming why this surface
     /// has none. The single answer to "can the CPU address these bytes?"
     /// — every host-side accessor routes through it.

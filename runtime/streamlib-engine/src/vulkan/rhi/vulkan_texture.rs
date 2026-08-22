@@ -1198,6 +1198,33 @@ impl HostVulkanTexture {
         vk_dev.allocator().get_allocation_info(*allocation).size as vk::DeviceSize
     }
 
+    /// Memory type index (`vmaGetAllocationInfo().memoryType`) of this
+    /// texture's allocation — what a conforming consumer-side
+    /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)` must state. `None` for
+    /// placeholders / imported images (where the allocation lives on the
+    /// foreign side); never defaulted, because every index including `0`
+    /// is a real value.
+    pub fn vma_allocation_memory_type_index(&self) -> Option<u32> {
+        let allocation = self.allocation.as_ref()?;
+        let vk_dev = self.vulkan_device.as_ref()?;
+        Some(
+            vk_dev
+                .allocator()
+                .get_allocation_info(*allocation)
+                .memoryType,
+        )
+    }
+
+    /// The owning device's `VkPhysicalDeviceIDProperties::deviceUUID` —
+    /// the device-binding contract for an OPAQUE_FD export (importing on
+    /// the wrong GPU of a multi-GPU rig corrupts silently). Sourced from
+    /// this texture's own `HostVulkanDevice`, never the current
+    /// `GpuContext`'s, per the buffer-export precedent. `None` for
+    /// placeholders / imported images with no stored device.
+    pub fn exporting_physical_device_uuid(&self) -> Option<[u8; 16]> {
+        Some(self.vulkan_device.as_ref()?.physical_device_uuid())
+    }
+
     /// Export the texture's OPAQUE_FD memory as a file descriptor.
     ///
     /// Only valid for textures created via [`Self::new_opaque_fd_export`];

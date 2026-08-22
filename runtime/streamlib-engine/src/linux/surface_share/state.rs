@@ -131,6 +131,20 @@ pub struct SurfaceMetadata {
     /// / format") when absent — preserves the existing
     /// pixel-buffer / DMA-BUF behavior where size is derived consumer-side.
     pub vk_image_allocation_size: u64,
+    /// `vmaGetAllocationInfo().memoryType` of the exporting allocation —
+    /// what a conforming consumer-side
+    /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)` states. `None` when the
+    /// registration did not carry one (DMA-BUF flavours, whose contract is
+    /// the modifier + plane layout, and pre-contract producers). Optional
+    /// rather than defaulted: every valid index including `0` is a real
+    /// value, so absence must stay representable.
+    pub vk_memory_type_index: Option<u32>,
+    /// The exporting device's `VkPhysicalDeviceIDProperties::deviceUUID`
+    /// as 32 hex characters. An OPAQUE_FD is device-bound — importing on
+    /// the wrong GPU of a multi-GPU rig corrupts silently — so the UUID is
+    /// the entire device-binding contract. `None` when the registration
+    /// did not carry one.
+    pub exporting_device_uuid: Option<String>,
 }
 
 // The atomic field makes `SurfaceMetadata` not `Clone`-by-derive. Hand-roll
@@ -161,6 +175,8 @@ impl Clone for SurfaceMetadata {
             vk_image_tiling: self.vk_image_tiling,
             vk_image_usage: self.vk_image_usage,
             vk_image_allocation_size: self.vk_image_allocation_size,
+            vk_memory_type_index: self.vk_memory_type_index,
+            exporting_device_uuid: self.exporting_device_uuid.clone(),
         }
     }
 }
@@ -239,6 +255,10 @@ pub struct SurfacePlaneCheckout {
     /// Snapshot of [`SurfaceMetadata::vk_image_allocation_size`] at
     /// lookup time.
     pub vk_image_allocation_size: u64,
+    /// Snapshot of [`SurfaceMetadata::vk_memory_type_index`] at lookup time.
+    pub vk_memory_type_index: Option<u32>,
+    /// Snapshot of [`SurfaceMetadata::exporting_device_uuid`] at lookup time.
+    pub exporting_device_uuid: Option<String>,
 }
 
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
@@ -308,6 +328,13 @@ pub struct SurfaceRegistration<'a> {
     /// [`VK_IMAGE_ALLOCATION_SIZE_DEFAULT`] (= 0) when the consumer
     /// derives the size from `width * height * bytes_per_pixel`.
     pub vk_image_allocation_size: u64,
+    /// `vmaGetAllocationInfo().memoryType` of the exporting allocation.
+    /// Pass `None` for flavours that never carry one (DMA-BUF, pixel
+    /// buffers) — see [`SurfaceMetadata::vk_memory_type_index`].
+    pub vk_memory_type_index: Option<u32>,
+    /// The exporting device's UUID as 32 hex characters, or `None` —
+    /// see [`SurfaceMetadata::exporting_device_uuid`].
+    pub exporting_device_uuid: Option<String>,
 }
 
 impl SurfaceShareState {
@@ -361,6 +388,8 @@ impl SurfaceShareState {
                 vk_image_tiling: reg.vk_image_tiling,
                 vk_image_usage: reg.vk_image_usage,
                 vk_image_allocation_size: reg.vk_image_allocation_size,
+                vk_memory_type_index: reg.vk_memory_type_index,
+                exporting_device_uuid: reg.exporting_device_uuid,
             },
         );
         Ok(())
@@ -413,6 +442,8 @@ impl SurfaceShareState {
                     vk_image_tiling: metadata.vk_image_tiling,
                     vk_image_usage: metadata.vk_image_usage,
                     vk_image_allocation_size: metadata.vk_image_allocation_size,
+                    vk_memory_type_index: metadata.vk_memory_type_index,
+                    exporting_device_uuid: metadata.exporting_device_uuid.clone(),
                 }
             })
     }
@@ -498,6 +529,8 @@ mod tests {
             vk_image_tiling: VK_IMAGE_TILING_DEFAULT,
             vk_image_usage: VK_IMAGE_USAGE_DEFAULT,
             vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
+            vk_memory_type_index: None,
+            exporting_device_uuid: None,
         }
     }
 
@@ -661,8 +694,10 @@ mod tests {
                 vk_image_array_layers: 6,
                 vk_image_samples: 4,         // _4
                 vk_image_tiling: 1000158000, // DRM_FORMAT_MODIFIER_EXT
-                vk_image_usage: 0x4F,        // 0x0F | COLOR_ATTACHMENT (0x40)
+                vk_image_usage: 0x4F,        // 0x0F | TRANSIENT_ATTACHMENT (1 << 6)
                 vk_image_allocation_size: 16_777_216,
+                vk_memory_type_index: Some(7),
+                exporting_device_uuid: Some("00112233445566778899aabbccddeeff".to_string()),
             })
             .expect("register vk-image-rt");
 
@@ -676,6 +711,28 @@ mod tests {
         assert_eq!(checkout.vk_image_tiling, 1000158000);
         assert_eq!(checkout.vk_image_usage, 0x4F);
         assert_eq!(checkout.vk_image_allocation_size, 16_777_216);
+        assert_eq!(checkout.vk_memory_type_index, Some(7));
+        assert_eq!(
+            checkout.exporting_device_uuid.as_deref(),
+            Some("00112233445566778899aabbccddeeff")
+        );
+    }
+
+    /// A registration that never states the raw-handle export fields —
+    /// every DMA-BUF producer, every pre-contract producer — checks out
+    /// with them absent, never defaulted: `0` is a valid memory type
+    /// index, so absence has to stay representable end-to-end.
+    #[test]
+    fn raw_handle_export_fields_stay_absent_when_never_registered() {
+        let state = SurfaceShareState::new();
+        state
+            .register_surface(reg("no-export-fields", "rt", "texture"))
+            .expect("register without export fields");
+        let checkout = state
+            .get_surface_planes("no-export-fields")
+            .expect("lookup after register");
+        assert_eq!(checkout.vk_memory_type_index, None);
+        assert_eq!(checkout.exporting_device_uuid, None);
     }
 
     /// Releasing a surface registered with multiple plane fds must close
@@ -726,6 +783,8 @@ mod tests {
                 vk_image_tiling: VK_IMAGE_TILING_DEFAULT,
                 vk_image_usage: VK_IMAGE_USAGE_DEFAULT,
                 vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
+                vk_memory_type_index: None,
+                exporting_device_uuid: None,
             })
             .expect("register multi-plane");
 
