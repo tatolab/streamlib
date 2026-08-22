@@ -5823,7 +5823,7 @@ void main() {
                     )?;
                     Ok(held)
                 })
-                .expect("three pooled textures, the first seeded")
+                .expect("the pooled textures, the first seeded")
         }
 
         /// Read a surface back, sourcing the readback barrier from the layout

@@ -869,14 +869,15 @@ pub struct GpuContext {
     /// compilation, that one spares the pipeline.
     #[cfg(target_os = "linux")]
     glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
-    /// The recorder every batched compute dispatch records into, built on
-    /// first use and kept for this context's lifetime.
+    /// The recorder every compute dispatch — batched or a recording of one —
+    /// records into, built on first use and kept for this context's lifetime.
     ///
-    /// One recorder, not one per batch: its command pool, primary command
-    /// buffer and completion fence are exactly what a batch reuses, and
-    /// allocating them per frame would spend the submission the batch exists
-    /// to save. Serial use is what the recorder requires and what it gets —
-    /// batching runs inside the escalate gate, which serializes runtime-wide.
+    /// One recorder, not one per recording: its command pool, primary command
+    /// buffer and completion fence are exactly what a recording reuses, and
+    /// allocating them per frame would spend the submission the batch op
+    /// exists to save. Serial use is what the recorder requires and what it
+    /// gets — both dispatch ops run inside the escalate gate, which
+    /// serializes runtime-wide.
     #[cfg(target_os = "linux")]
     batched_compute_dispatch_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
