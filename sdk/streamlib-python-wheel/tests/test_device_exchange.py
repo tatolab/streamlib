@@ -258,6 +258,9 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     round trip left the frame usable.
     """
     observation = run_probe(start_app_under_test, "TextureHandleRoundTripProbe")
+    assert observation["limited_surface_mints_no_raw_handle"], (
+        "raw handles mint only via the Full surface, on every path"
+    )
     assert observation["kernel_dispatched"]
     assert observation["opaque_resolved_extent"] == [SURFACE_WIDTH, SURFACE_HEIGHT]
     assert observation["opaque_resolved_format"] == "rgba8_unorm"

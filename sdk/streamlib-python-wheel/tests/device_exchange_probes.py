@@ -445,6 +445,11 @@ class TextureHandleRoundTripProbe:
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
+        # Raw handles mint only via the Full surface, on every path: the
+        # per-frame capability offers neither spelling.
+        observation["limited_surface_mints_no_raw_handle"] = not hasattr(
+            ctx.gpu_limited_access, "export_opaque_fd"
+        ) and not hasattr(ctx.gpu_limited_access, "export_dma_buf")
         fill_kernel = ctx.gpu_full_access.create_compute_kernel(
             source=FILL_CONSTANT_GLSL,
             bindings={"output_image": "storage_image"},

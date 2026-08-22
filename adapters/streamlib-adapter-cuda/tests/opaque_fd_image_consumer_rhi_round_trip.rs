@@ -435,7 +435,12 @@ fn opaque_fd_image_carve_out_round_trip() {
 
     unsafe {
         submit_one_shot(consumer_dev, consumer_queue, consumer_qfi, |cmd| {
-            record_image_readback_to_buffer(consumer_dev, cmd, consumer_vk_image, consumer_vk_buffer);
+            record_image_readback_to_buffer(
+                consumer_dev,
+                cmd,
+                consumer_vk_image,
+                consumer_vk_buffer,
+            );
         });
     }
 
@@ -551,7 +556,10 @@ fn an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown() {
         host_device.physical_device_uuid(),
         "the exporting UUID must be the texture's own device's"
     );
-    assert_ne!(exporting_uuid, [0u8; 16], "an all-zero UUID binds no device");
+    assert_ne!(
+        exporting_uuid, [0u8; 16],
+        "an all-zero UUID binds no device"
+    );
 
     let image_fd = host_image
         .export_opaque_fd_memory()

@@ -1207,7 +1207,12 @@ impl HostVulkanTexture {
     pub fn vma_allocation_memory_type_index(&self) -> Option<u32> {
         let allocation = self.allocation.as_ref()?;
         let vk_dev = self.vulkan_device.as_ref()?;
-        Some(vk_dev.allocator().get_allocation_info(*allocation).memoryType)
+        Some(
+            vk_dev
+                .allocator()
+                .get_allocation_info(*allocation)
+                .memoryType,
+        )
     }
 
     /// The owning device's `VkPhysicalDeviceIDProperties::deviceUUID` —
