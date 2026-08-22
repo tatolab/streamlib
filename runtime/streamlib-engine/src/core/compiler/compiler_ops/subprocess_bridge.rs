@@ -527,14 +527,18 @@ mod tests {
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc::RecvTimeoutError;
 
-    fn gpu_sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {
-            Ok(gpu) => Some(GpuContextLimitedAccess::new(gpu)),
+            Ok(gpu) => Some(gpu),
             Err(e) => {
                 println!("{test_name}: no GPU device ({e}) — skipping");
                 None
             }
         }
+    }
+
+    fn gpu_sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+        gpu_or_skip(test_name).map(GpuContextLimitedAccess::new)
     }
 
     fn log_frame() -> serde_json::Value {
@@ -694,30 +698,27 @@ mod tests {
     /// registered them on the helper's behalf, and the watchdog skips
     /// same-process peers — so bridge teardown is the only reclaimer.
     ///
-    /// Runs two crash-respawn cycles because the leak's bite is
-    /// accumulation across respawns, and asserts the post-teardown table
-    /// equals the post-acquire table minus exactly the helper's handle, so
-    /// teardown is also shown to leave the pool's own long-lived
-    /// registrations alone. Mental-revert: drop the surface-share half
-    /// from the `SubprocessBridge::drop` drain and the post-drop
-    /// assertion goes red on the first cycle.
+    /// Each cycle acquires both kinds the drain distinguishes — a pixel
+    /// buffer and a texture, the latter carrying the produce/consume
+    /// timeline-fd pair the ticket names — and runs two crash-respawn
+    /// cycles because the leak's bite is accumulation across respawns.
+    /// Asserts the post-teardown table equals the post-acquire table minus
+    /// exactly the helper's handles, so teardown is also shown to leave
+    /// the pool's own long-lived registrations alone. Mental-revert: drop
+    /// the surface-share half from the `SubprocessBridge::drop` drain and
+    /// the post-drop assertion goes red on the first cycle.
     /// GPU-gated: skips when no device is present.
     #[test]
     #[cfg(target_os = "linux")]
     fn bridge_drop_releases_a_crashed_helpers_surface_share_registrations() {
         const TEST: &str = "bridge_drop_releases_a_crashed_helpers_surface_share_registrations";
         use std::collections::HashSet;
-        use std::time::Instant;
 
-        use crate::core::context::{GpuContext, SurfaceStore};
+        use crate::core::context::SurfaceStore;
         use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
-        let gpu = match GpuContext::init_for_platform_sync() {
-            Ok(g) => g,
-            Err(e) => {
-                println!("{TEST}: no GPU device ({e}) — skipping");
-                return;
-            }
+        let Some(gpu) = gpu_or_skip(TEST) else {
+            return;
         };
 
         let state = SurfaceShareState::new();
@@ -731,19 +732,17 @@ mod tests {
             socket_path.to_string_lossy().into_owned(),
             runtime_id.to_string(),
         );
-        // The listener thread binds asynchronously; retry until it is up.
-        let connect_deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match store.connect() {
-                Ok(()) => break,
-                Err(_) if Instant::now() < connect_deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(e) => panic!("store never connected to the test service: {e}"),
-            }
-        }
+        store
+            .connect()
+            .expect("connect to the test surface-share service");
         gpu.set_surface_store(store);
         let sandbox = GpuContextLimitedAccess::new(gpu);
+        let registered_surface_ids = || -> HashSet<String> {
+            state
+                .surface_ids_by_runtime(runtime_id)
+                .into_iter()
+                .collect()
+        };
 
         for cycle in 0..2 {
             let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
@@ -753,44 +752,55 @@ mod tests {
 
             let mut child_writer = BufWriter::new(child_end.try_clone().expect("clone child end"));
             let mut child_reader = BufReader::new(child_end);
-            write_frame(
-                &mut child_writer,
-                &serde_json::json!({
-                    "rpc": "escalate_request",
-                    "op": "acquire_pixel_buffer",
-                    "request_id": format!("r-crash-{cycle}"),
-                    "width": 64,
-                    "height": 64,
-                    "format": "bgra",
-                }),
-            )
-            .expect("write acquire frame");
-            let response = read_frame(&mut child_reader).expect("acquire response");
-            assert_eq!(
-                response.get("result").and_then(|v| v.as_str()),
-                Some("ok"),
-                "cycle {cycle}: acquire_pixel_buffer failed: {response}"
-            );
-            let handle_id = response
-                .get("handle_id")
-                .and_then(|v| v.as_str())
-                .expect("ok response carries a handle_id")
-                .to_string();
+            let mut acquire_via_bridge = |request: serde_json::Value| -> String {
+                let op = request["op"]
+                    .as_str()
+                    .expect("request names an op")
+                    .to_string();
+                write_frame(&mut child_writer, &request).expect("write acquire frame");
+                let response = read_frame(&mut child_reader).expect("acquire response");
+                assert_eq!(
+                    response.get("result").and_then(|v| v.as_str()),
+                    Some("ok"),
+                    "cycle {cycle}: {op} failed: {response}"
+                );
+                response
+                    .get("handle_id")
+                    .and_then(|v| v.as_str())
+                    .expect("ok response carries a handle_id")
+                    .to_string()
+            };
+            let pixel_buffer_handle_id = acquire_via_bridge(serde_json::json!({
+                "rpc": "escalate_request",
+                "op": "acquire_pixel_buffer",
+                "request_id": format!("r-crash-buffer-{cycle}"),
+                "width": 64,
+                "height": 64,
+                "format": "bgra",
+            }));
+            let texture_handle_id = acquire_via_bridge(serde_json::json!({
+                "rpc": "escalate_request",
+                "op": "acquire_texture",
+                "request_id": format!("r-crash-texture-{cycle}"),
+                "width": 64,
+                "height": 64,
+                "format": "rgba8_unorm",
+                "usage": ["texture_binding", "copy_src"],
+            }));
 
-            // The acquire registers its check-in id, and (first cycle only)
-            // creates the pixel-buffer pool, whose pre-allocated slots
+            // The acquires register their check-in ids, and (first cycle
+            // only) create the pixel-buffer pool, whose pre-allocated slots
             // register themselves for cross-process lookup. Those pool
             // registrations live as long as the runtime — teardown must
-            // release the helper's acquire and leave them alone.
-            let registered_after_acquire: HashSet<String> = state
-                .surface_ids_by_runtime(runtime_id)
-                .into_iter()
-                .collect();
-            assert!(
-                registered_after_acquire.contains(&handle_id),
-                "cycle {cycle}: the acquire must have registered its handle_id \
-                 with the surface-share service"
-            );
+            // release the helper's acquires and leave them alone.
+            let registered_after_acquire = registered_surface_ids();
+            for helper_handle_id in [&pixel_buffer_handle_id, &texture_handle_id] {
+                assert!(
+                    registered_after_acquire.contains(helper_handle_id),
+                    "cycle {cycle}: the acquire must have registered '{helper_handle_id}' \
+                     with the surface-share service"
+                );
+            }
 
             // The crash: the helper dies without a release_handle; bridge
             // teardown is everything that runs.
@@ -799,15 +809,13 @@ mod tests {
             drop(bridge);
 
             let mut expected_after_teardown = registered_after_acquire.clone();
-            expected_after_teardown.remove(&handle_id);
-            let registered_after_teardown: HashSet<String> = state
-                .surface_ids_by_runtime(runtime_id)
-                .into_iter()
-                .collect();
+            expected_after_teardown.remove(&pixel_buffer_handle_id);
+            expected_after_teardown.remove(&texture_handle_id);
+            let registered_after_teardown = registered_surface_ids();
             assert_eq!(
                 registered_after_teardown, expected_after_teardown,
                 "cycle {cycle}: bridge teardown must release the crashed helper's \
-                 surface-share registration and nothing else"
+                 surface-share registrations and nothing else"
             );
         }
 
