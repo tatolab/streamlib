@@ -404,7 +404,8 @@ class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
         return observation
 
 
-class _ReadsAUserAuthoredCastType:
+@processor
+class AUserAuthoredCastReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
     """The no-privilege half: a type the wheel does not ship gets the protocol
     by composing the shipped piece, and nothing else."""
 
@@ -412,7 +413,8 @@ class _ReadsAUserAuthoredCastType:
         return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
 
 
-class _ReadsTheShippedVideoFrame:
+@processor
+class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
     """The parity half: `VideoFrame` is built from that same piece, so it must
     reach its pixels the same way and reach the same pixels."""
 
@@ -421,24 +423,20 @@ class _ReadsTheShippedVideoFrame:
 
 
 @processor
-class AUserAuthoredCastReachesItsPixelsBareProbe(
-    _ReadsAUserAuthoredCastType, _BareProtocolHostSideProbe
-): ...
-
-
-@processor
-class TheShippedVideoFrameReachesItsPixelsBareProbe(
-    _ReadsTheShippedVideoFrame, _BareProtocolHostSideProbe
-): ...
-
-
-@processor
 class AUserAuthoredCastReachesItsPixelsAsACudaTensorProbe(
-    _ReadsAUserAuthoredCastType, _BareProtocolDeviceSideProbe
-): ...
+    _BareProtocolDeviceSideProbe
+):
+    """The no-privilege half with a real CUDA package taking the capsule."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
 
 
 @processor
 class TheShippedVideoFrameReachesItsPixelsAsACudaTensorProbe(
-    _ReadsTheShippedVideoFrame, _BareProtocolDeviceSideProbe
-): ...
+    _BareProtocolDeviceSideProbe
+):
+    """The parity half on the device side."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)

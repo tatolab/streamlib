@@ -33,6 +33,7 @@ rather than as a failure of the capability.
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -42,6 +43,10 @@ pytestmark = pytest.mark.requires_gpu
 
 APP = Path(__file__).parent / "cast_claim_app.py"
 
+# The same default `cast_claim_app.py` opens, read from the same place: a rig
+# pointing the app at another node must not be gated on /dev/video0.
+CAMERA_DEVICE = os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
+
 PROBE_RESULT = re.compile(r"MARKER:PROBE_RESULT (\{.*\})")
 
 
@@ -50,8 +55,8 @@ def run_claim_probe(
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    if source == "camera" and not Path("/dev/video0").exists():
-        pytest.skip("no camera on this rig")
+    if source == "camera" and not Path(CAMERA_DEVICE).exists():
+        pytest.skip(f"no camera at {CAMERA_DEVICE} on this rig")
     app = start_app_under_test(APP, probe_class_name, source)
     app.await_output_containing("MARKER:PROBE_RESULT", f"{probe_class_name}'s result")
     app.interrupt()
