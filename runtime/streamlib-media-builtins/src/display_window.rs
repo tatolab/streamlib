@@ -3,17 +3,22 @@
 
 #![cfg(target_os = "linux")]
 
-//! Built-in display: window lifecycle + event pump, one present-composition
-//! call per frame.
+//! Built-in display: one window registered with the engine's event pump, one
+//! present-composition call per frame.
 //!
-//! The window and event pump belong to this processor; the engine mints the
-//! present target from the raw window handle and owns every swapchain and
-//! acquire detail. The draw step is
-//! [`VulkanPresentCompositor::compose_to_present_frame`] — the display never
-//! records Vulkan work of its own.
+//! The window is minted by [`process_wide_window_event_pump`] — winit permits
+//! one event loop per process, so N displays share one — but every policy
+//! decision about it is this processor's: title, size, what a resize means,
+//! when to redraw, what closing does. The engine mints the present target from
+//! the raw window handle and owns every swapchain and acquire detail. The draw
+//! step is [`VulkanPresentCompositor::compose_to_present_frame`] — the display
+//! never records Vulkan work of its own.
+//!
+//! Rendering runs on this processor's own thread rather than the pump's, so
+//! each window paces on its own vsync and no display can stall another.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -26,16 +31,22 @@ use streamlib::sdk::engine::host_rhi::{
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::rhi::VulkanLayout;
 use streamlib::sdk::rhi::pool_slot_key_of_surface_id;
-
-use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
-use winit::window::{Window, WindowAttributes};
+use streamlib::sdk::window_event_pump::{
+    WindowEventForOwningProcessor, WindowRegisteredWithEventPump,
+    WindowRegistrationRequestFromOwningProcessor, process_wide_window_event_pump,
+};
 
 use crate::video_frame::{ColorInfo, VideoFrame};
+
+/// How long the render thread parks when the input has no frame to show. The
+/// display is a `latest`-profile sink, so this is the worst-case lateness of a
+/// frame that arrives just after a poll, not a frame budget.
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1);
+
+/// The same park for a display with no window: it still drains, so upstream
+/// sees a live consumer, but nothing is racing a vsync deadline.
+const DEGRADED_DRAIN_INTERVAL: Duration = Duration::from_millis(2);
 
 /// How the frame maps onto the window, as configuration vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -112,7 +123,6 @@ pub struct DisplayWindow {
     running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     render_thread: Option<JoinHandle<()>>,
-    event_loop_proxy: Arc<OnceLock<EventLoopProxy<()>>>,
 }
 
 impl ManualProcessor for DisplayWindow::Processor {
@@ -136,59 +146,14 @@ impl ManualProcessor for DisplayWindow::Processor {
         self.running.store(true, Ordering::Release);
         let running = Arc::clone(&self.running);
         let frame_counter = Arc::clone(&self.frame_counter);
-        let event_loop_proxy = Arc::clone(&self.event_loop_proxy);
         let inputs: InputMailboxes = self.inputs.clone();
-        let window_title = self.config.title.clone();
-        let window_width = self.config.width;
-        let window_height = self.config.height;
-        let scaling = self.config.scaling;
+        let config = self.config.clone();
 
         let handle = std::thread::Builder::new()
             .name("display-window".to_string())
             .spawn(move || {
-                let event_loop = {
-                    // The event loop runs on this render thread, not the
-                    // process main thread; both Linux backends need their
-                    // own any-thread opt-in (each trait method flags only
-                    // its backend).
-                    use winit::platform::wayland::EventLoopBuilderExtWayland;
-                    use winit::platform::x11::EventLoopBuilderExtX11;
-                    let mut builder = EventLoop::builder();
-                    EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
-                    EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
-                    builder.build()
-                };
-                let event_loop = match event_loop {
-                    Ok(el) => el,
-                    Err(e) => {
-                        tracing::error!(error = %e, "DisplayWindow: failed to build event loop");
-                        running.store(false, Ordering::Release);
-                        return;
-                    }
-                };
-                let _ = event_loop_proxy.set(event_loop.create_proxy());
-
-                let mut handler = DisplayWindowEventLoopHandler {
-                    gpu_context,
-                    inputs,
-                    running: Arc::clone(&running),
-                    frame_counter,
-                    window: None,
-                    present_target: None,
-                    compositor: None,
-                    window_title,
-                    width: window_width,
-                    height: window_height,
-                    scaling: scaling.present_scaling_mode(),
-                    current_frame_color_info: None,
-                    inactive: false,
-                    last_unresolved_surface_id: None,
-                    last_failed_recreate_color_info: None,
-                };
-                if let Err(e) = event_loop.run_app(&mut handler) {
-                    tracing::error!(error = %e, "DisplayWindow: event loop exited with error");
-                }
-                running.store(false, Ordering::Release);
+                DisplayWindowRenderLoop::new(gpu_context, inputs, running, frame_counter, &config)
+                    .run();
             })
             .map_err(|e| Error::Configuration(format!("Failed to spawn render thread: {}", e)))?;
 
@@ -210,16 +175,13 @@ impl ManualProcessor for DisplayWindow::Processor {
 impl DisplayWindow::Processor {
     fn stop_render_thread(&mut self) {
         self.running.store(false, Ordering::Release);
-        // Wake the event pump so `about_to_wait` observes `running == false`
-        // without waiting for its next timeout tick.
-        if let Some(proxy) = self.event_loop_proxy.get() {
-            let _ = proxy.send_event(());
-        }
         // Bounded wait: a stalled GPU / driver state can wedge the render
         // thread; detaching after the grace window keeps the runtime's
         // shutdown chain moving. The detached thread is reaped at process
         // exit.
         if let Some(handle) = self.render_thread.take() {
+            // Cut the idle park short so shutdown does not wait out a poll.
+            handle.thread().unpark();
             let deadline = Instant::now() + Duration::from_secs(2);
             while !handle.is_finished() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
@@ -233,23 +195,28 @@ impl DisplayWindow::Processor {
     }
 }
 
-struct DisplayWindowEventLoopHandler {
+/// The display's own render thread: acquire a window, then show frames on it
+/// until the graph stops or the user closes it.
+struct DisplayWindowRenderLoop {
     gpu_context: GpuContextLimitedAccess,
     inputs: InputMailboxes,
     running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
-    window: Option<Window>,
-    present_target: Option<VulkanPresentTarget>,
-    compositor: Option<VulkanPresentCompositor>,
     window_title: String,
+    scaling: PresentScalingMode,
     width: u32,
     height: u32,
-    scaling: PresentScalingMode,
+    // Declared ahead of `registered_window`: the present target's surface was
+    // minted from that window's raw handle, and fields drop in declaration
+    // order, so the surface must go first.
+    present_target: Option<VulkanPresentTarget>,
+    compositor: Option<VulkanPresentCompositor>,
+    registered_window: Option<WindowRegisteredWithEventPump>,
     /// Last-applied per-frame color description; a change triggers a
     /// swapchain recreate with the new colorspace pick.
     current_frame_color_info: Option<ColorInfo>,
-    /// Degraded mode: no surface could be created. The display then behaves
-    /// as a sink — drains and discards — so upstream sees a live consumer.
+    /// Degraded mode: no window could be had. The display then behaves as a
+    /// sink — drains and discards — so upstream sees a live consumer.
     inactive: bool,
     /// The last surface id that failed to resolve, so the failure warns once
     /// per surface instead of once per redraw.
@@ -260,144 +227,177 @@ struct DisplayWindowEventLoopHandler {
     last_failed_recreate_color_info: Option<Option<ColorInfo>>,
 }
 
-impl ApplicationHandler for DisplayWindowEventLoopHandler {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
+impl DisplayWindowRenderLoop {
+    fn new(
+        gpu_context: GpuContextLimitedAccess,
+        inputs: InputMailboxes,
+        running: Arc<AtomicBool>,
+        frame_counter: Arc<AtomicU64>,
+        config: &DisplayWindowConfig,
+    ) -> Self {
+        Self {
+            gpu_context,
+            inputs,
+            running,
+            frame_counter,
+            window_title: config.title.clone(),
+            scaling: config.scaling.present_scaling_mode(),
+            width: config.width,
+            height: config.height,
+            present_target: None,
+            compositor: None,
+            registered_window: None,
+            current_frame_color_info: None,
+            inactive: false,
+            last_unresolved_surface_id: None,
+            last_failed_recreate_color_info: None,
         }
-        let attributes = WindowAttributes::default()
-            .with_title(&self.window_title)
-            .with_inner_size(PhysicalSize::new(self.width, self.height));
-        let window = match event_loop.create_window(attributes) {
-            Ok(w) => w,
-            Err(e) => {
-                tracing::error!(error = %e, "DisplayWindow: window creation failed — running degraded (frames drained, nothing shown)");
-                self.inactive = true;
-                return;
+    }
+
+    fn run(&mut self) {
+        self.acquire_window_and_present_target();
+
+        while self.running.load(Ordering::Acquire) {
+            self.drain_window_events_from_event_pump();
+            if !self.running.load(Ordering::Acquire) {
+                break;
             }
+
+            if self.inactive {
+                self.drain_and_discard_so_upstream_sees_a_live_consumer();
+                std::thread::park_timeout(DEGRADED_DRAIN_INTERVAL);
+                continue;
+            }
+
+            if self.inputs.has_data("video") {
+                self.render_frame();
+            } else {
+                std::thread::park_timeout(IDLE_POLL_INTERVAL);
+            }
+        }
+
+        self.running.store(false, Ordering::Release);
+    }
+
+    fn acquire_window_and_present_target(&mut self) {
+        let event_pump = match process_wide_window_event_pump() {
+            Ok(event_pump) => event_pump,
+            Err(e) => return self.degrade_to_drain_and_discard(&e),
         };
 
-        let inner_size = window.inner_size();
-        self.width = inner_size.width.max(1);
-        self.height = inner_size.height.max(1);
+        let registered_window = match event_pump.request_window_for_owning_processor(
+            WindowRegistrationRequestFromOwningProcessor {
+                window_title: self.window_title.clone(),
+                initial_width_in_physical_pixels: self.width,
+                initial_height_in_physical_pixels: self.height,
+            },
+        ) {
+            Ok(registered_window) => registered_window,
+            Err(e) => return self.degrade_to_drain_and_discard(&e),
+        };
+
+        let (width, height) = registered_window.current_physical_size();
+        self.width = width;
+        self.height = height;
 
         let created = self.gpu_context.escalate(|full| {
-            let present_target =
-                full.create_present_target(&window, self.width, self.height, true, None)?;
+            let present_target = full.create_present_target(
+                registered_window.window_shared_with_event_pump().as_ref(),
+                width,
+                height,
+                true,
+                None,
+            )?;
             let compositor = full.create_present_compositor(present_target.color_format())?;
             Ok((present_target, compositor))
         });
+
         match created {
             Ok((present_target, compositor)) => {
                 self.present_target = Some(present_target);
                 self.compositor = Some(compositor);
-                self.window = Some(window);
+                self.registered_window = Some(registered_window);
                 self.inactive = false;
                 tracing::info!(
-                    width = self.width,
-                    height = self.height,
+                    width,
+                    height,
+                    window_title = %self.window_title,
                     "DisplayWindow: window + present target ready"
                 );
             }
-            Err(e) => {
-                tracing::error!(error = %e, "DisplayWindow: present-target creation failed — running degraded (frames drained, nothing shown)");
-                self.inactive = true;
-            }
+            Err(e) => self.degrade_to_drain_and_discard(&e),
         }
     }
 
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _id: winit::window::WindowId,
-        event: WindowEvent,
-    ) {
-        match event {
-            WindowEvent::CloseRequested => {
-                tracing::info!("DisplayWindow: window close requested");
-                self.running.store(false, Ordering::Release);
-                event_loop.exit();
-            }
-            WindowEvent::Resized(new_size) => {
-                if new_size.width == 0 || new_size.height == 0 {
-                    return;
-                }
-                self.width = new_size.width;
-                self.height = new_size.height;
-                let color_traits = self
-                    .current_frame_color_info
-                    .as_ref()
-                    .map(ColorInfo::engine_color_traits);
-                if let Some(present_target) = self.present_target.as_mut()
-                    && let Err(e) = present_target.recreate(
-                        new_size.width,
-                        new_size.height,
-                        color_traits.as_ref(),
-                    )
-                {
-                    tracing::error!(error = %e, "DisplayWindow: swapchain recreate on resize failed");
-                    event_loop.exit();
+    fn degrade_to_drain_and_discard(&mut self, reason: &Error) {
+        tracing::error!(
+            error = %reason,
+            window_title = %self.window_title,
+            "DisplayWindow: no window — running degraded (frames drained, nothing shown)"
+        );
+        self.inactive = true;
+    }
+
+    fn drain_window_events_from_event_pump(&mut self) {
+        let (resized_to, close_requested) = {
+            let Some(registered_window) = self.registered_window.as_ref() else {
+                return;
+            };
+            let mut resized_to = None;
+            let mut close_requested = false;
+            // A resize drag emits an event per motion step and only the final
+            // extent is worth a swapchain recreate, so the drain coalesces.
+            while let Some(event) = registered_window.try_next_window_event_from_event_pump() {
+                match event {
+                    WindowEventForOwningProcessor::ResizedToPhysicalPixels { width, height } => {
+                        resized_to = Some((width, height));
+                    }
+                    WindowEventForOwningProcessor::CloseRequestedByUser => close_requested = true,
                 }
             }
-            WindowEvent::RedrawRequested => {
-                self.render_frame();
-            }
-            _ => {}
+            (resized_to, close_requested)
+        };
+
+        if let Some((width, height)) = resized_to {
+            self.recreate_swapchain_for_new_extent(width, height);
+        }
+        if close_requested {
+            tracing::info!(window_title = %self.window_title, "DisplayWindow: window close requested");
+            self.running.store(false, Ordering::Release);
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
-        if !self.running.load(Ordering::Acquire) {
-            event_loop.exit();
+    fn recreate_swapchain_for_new_extent(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+        let color_traits = self
+            .current_frame_color_info
+            .as_ref()
+            .map(ColorInfo::engine_color_traits);
+        if let Some(present_target) = self.present_target.as_mut()
+            && let Err(e) = present_target.recreate(width, height, color_traits.as_ref())
+        {
+            tracing::error!(error = %e, "DisplayWindow: swapchain recreate on resize failed");
+            self.running.store(false, Ordering::Release);
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.running.load(Ordering::Acquire) {
-            event_loop.exit();
-            return;
+    fn drain_and_discard_so_upstream_sees_a_live_consumer(&mut self) {
+        let mut drained = 0u64;
+        while let Ok(Some(_)) = self.inputs.read_raw("video") {
+            drained += 1;
         }
-
-        if self.inactive {
-            // Drain and discard so upstream sees a live consumer; the frame
-            // counter still advances per drained frame.
-            let mut drained = 0u64;
-            while let Ok(Some(_)) = self.inputs.read_raw("video") {
-                drained += 1;
-            }
-            if drained > 0 {
-                self.frame_counter.fetch_add(drained, Ordering::Relaxed);
-            }
-            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_millis(2),
-            ));
-            return;
-        }
-
-        if let Some(ref window) = self.window {
-            if self.inputs.has_data("video") {
-                window.request_redraw();
-            } else {
-                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
-                    Instant::now() + Duration::from_millis(1),
-                ));
-            }
+        if drained > 0 {
+            self.frame_counter.fetch_add(drained, Ordering::Relaxed);
         }
     }
-}
 
-impl DisplayWindowEventLoopHandler {
     fn render_frame(&mut self) {
-        if !self.inputs.has_data("video") {
-            return;
-        }
-        // Not a redundant twin of the let-else below: this early-out runs
-        // before the destructive `latest` read, so a frame is not consumed
-        // when there is nothing to render it into.
+        // Runs before the destructive `latest` read below, so a frame is not
+        // consumed when there is nothing to render it into.
         if self.present_target.is_none() || self.compositor.is_none() {
             return;
         }
-
         let frame_bag: VideoFrame = match self.inputs.read("video") {
             Ok(frame) => frame,
             Err(e) => {
