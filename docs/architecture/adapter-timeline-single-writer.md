@@ -95,8 +95,10 @@ produce_done: Arc<P::TimelineSemaphore>,
 consume_done: Arc<P::TimelineSemaphore>,
 
 // Per-process monotonic counter — advanced on every signal
-// regardless of which timeline gets it (see comment above).
-current_signal_value: u64,
+// regardless of which timeline gets it (see comment above), and
+// held by the signalling caller from reserving a value through
+// the submit that signals it (see Thread model below).
+signal_sequence: Arc<SurfaceTimelineSignalSequence>,
 ```
 
 Read-side wait targets are derived from the peer-timeline's
@@ -284,9 +286,31 @@ shape), waits on the local imported timeline, and proceeds.
 
 ## Race model
 
-Each timeline has exactly one writer process; next-value computation
-is a pure function of that process's local state. There is no race
-on monotonicity.
+Each timeline has exactly one writer *process*, so there is no
+cross-process race on monotonicity.
+
+> ~~next-value computation is a pure function of that process's local
+> state. There is no race on monotonicity.~~ — Superseded 2026-08-22 by
+> `cargo test -p streamlib-adapter-cpu-readback --test
+> concurrent_read_timeline_signals` under `STREAMLIB_VULKAN_VALIDATION=1`.
+> One writer process is not one writer thread. Concurrent readers of one
+> surface are a supported shape, and a next-value computed from state
+> that is only committed after the copy completes hands every reader that
+> starts first the same value.
+
+**Thread model within the writer process.** Reserving distinct values
+is not sufficient on its own: two callers that reserve distinct values
+still submit in whichever order they reach the queue, and a submit
+signalling *below* the timeline's current value is as invalid as one
+signalling *at* it. So the reservation is an exclusion, not a number —
+a signalling caller holds the surface's signal sequence from reserving
+its value through the submit that signals it and the wait that observes
+it. Reservation order is therefore submit order, and a caller's wait can
+only be satisfied by its own submit. A caller that waits on a value
+another caller's copy signalled returns while its own copy is still in
+flight: its read view maps a staging buffer the GPU is still writing,
+and teardown destroys the image, buffer and timeline that copy still
+references.
 
 The cross-process IPC payload publishing `produce_done` /
 `consume_done` values can in principle be observed by the consumer
@@ -308,6 +332,14 @@ Per-adapter conformance:
      net").
    - `produce_done.current_value()` and `consume_done.current_value()`
      advance monotonically and independently.
+
+   Concurrent *readers within one process* need their own coverage —
+   the single-writer rule says nothing about them. The cpu-readback
+   adapter's `concurrent_read_timeline_signals` test is the shape:
+   release N reader threads onto one surface at once, assert the value
+   handed to each copy is strictly above the one before it, and read
+   `HostVulkanDevice::validation_layer_message_counts()` around both the
+   burst and the adapter's teardown.
 
 2. **E2E** — `camera-python-display` through the full multi-process
    polyglot pipeline with `VK_LOADER_LAYERS_ENABLE=*validation*`.
