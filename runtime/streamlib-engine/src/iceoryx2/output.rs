@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 use iceoryx2::port::notifier::Notifier;
@@ -46,16 +47,15 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 }
 
 /// View initialized bytes as `MaybeUninit` for writing into a loaned iceoryx2
-/// sample (sound: `MaybeUninit<u8>` is `repr(transparent)` over `u8`, and the
-/// uninit view is write-only). What [`SampleMutUninit::write_from_slice`] does
-/// internally, exposed here so header and payload can fill one loan without a
-/// staging copy.
+/// sample — what [`SampleMutUninit::write_from_slice`] does internally, exposed
+/// here so header and payload can fill one loan without a staging copy.
 ///
 /// [`SampleMutUninit::write_from_slice`]: iceoryx2::sample_mut_uninit::SampleMutUninit::write_from_slice
-fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[core::mem::MaybeUninit<u8>] {
-    // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`; the returned
-    // slice is only ever the source of a copy.
-    unsafe { core::mem::transmute::<&[u8], &[core::mem::MaybeUninit<u8>]>(bytes) }
+fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[MaybeUninit<u8>] {
+    // SAFETY: `MaybeUninit<u8>` is `repr(transparent)` over `u8`, so the
+    // reference transmute is layout-preserving, and wrapping initialized bytes
+    // in `MaybeUninit` asserts nothing — only the reverse direction would.
+    unsafe { std::mem::transmute::<&[u8], &[MaybeUninit<u8>]>(bytes) }
 }
 
 /// One source output port's channel egress: the single channel publisher
@@ -307,19 +307,17 @@ impl OutputWriterInner {
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
             .write_to_slice(&mut header_bytes);
 
-        // Header and payload are written straight into the loan — no staging
-        // buffer, no second payload copy. `copy_from_slice` panics on a length
-        // mismatch, so the two writes cover all `total_len` loaned bytes.
         let mut sample = egress
             .publisher
             .loan_slice_uninit(total_len)
             .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-        let (header_dst, payload_dst) = sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
-        header_dst.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
-        payload_dst.copy_from_slice(as_maybe_uninit_bytes(data));
+        let (loaned_header_bytes, loaned_payload_bytes) =
+            sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
+        loaned_header_bytes.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
+        loaned_payload_bytes.copy_from_slice(as_maybe_uninit_bytes(data));
         // SAFETY: the two `copy_from_slice` calls above initialized
         // `FRAME_HEADER_SIZE + data.len()` bytes — exactly the `total_len` the
-        // loan was taken for.
+        // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
         sample
             .send()

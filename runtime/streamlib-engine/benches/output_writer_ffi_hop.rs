@@ -23,10 +23,13 @@
 //!   indirection + msgpack envelope) or scales with payload size
 //!   (the single payload copy into the loan).
 //! - `channel_round_trip` — `write_raw` through `OutputWriterInner`
-//!   then `read_raw` through `InputMailboxesInner`, at 256 B and
-//!   64 KiB payloads: the engine's full data-plane hop, so the read
-//!   side's per-frame cost (the shm-to-mailbox copy + the in-place
-//!   header strip) is a number, not a claim (#1822).
+//!   then `read_raw` through `InputMailboxesInner` at 256 B and
+//!   64 KiB payloads: the engine's full data-plane hop, write and
+//!   read timed together (#1822). The destination is a self-driven
+//!   sink — no notifier — so the arm is not directly comparable to
+//!   the notify-carrying arms above; throughput counts payload bytes
+//!   per hop, though each hop moves them twice (into the loan, out
+//!   of shared memory).
 //! - `fanout_1_to_n` — one channel publisher feeding N ∈ {1,2,4,8}
 //!   subscribers. `write_raw` issues a SINGLE zero-copy loan + send
 //!   that reaches every subscriber (the transport inversion, #1419);
@@ -63,13 +66,62 @@ fn unique_suffix(tag: &str) -> String {
     )
 }
 
+type BenchChannelPublisher =
+    iceoryx2::port::publisher::Publisher<iceoryx2::service::ipc::Service, [u8], ()>;
+type BenchChannelSubscriber =
+    iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>;
+
+/// The one pubsub shape every bench arm publishes through: 2-publisher cap, a
+/// deep 8192-sample ring so 100k+ bench iterations don't backpressure ahead of
+/// the in-line drainers, and a 128 KiB slice cap covering the 64 KiB sweep arm
+/// plus `FRAME_HEADER_SIZE` with margin.
+fn open_bench_channel_pubsub(
+    node: &Node<ipc::Service>,
+    tag: &str,
+    subscriber_count: usize,
+) -> (BenchChannelPublisher, Vec<BenchChannelSubscriber>) {
+    let pubsub = node
+        .service_builder(&ServiceName::new(&unique_suffix(&format!("{tag}/pubsub"))).unwrap())
+        .publish_subscribe::<[u8]>()
+        .max_publishers(2)
+        .max_subscribers(subscriber_count + 1)
+        .subscriber_max_buffer_size(8192)
+        .open_or_create()
+        .unwrap();
+    let publisher = pubsub
+        .publisher_builder()
+        .initial_max_slice_len(128 * 1024)
+        .create()
+        .unwrap();
+    let subscribers = (0..subscriber_count)
+        .map(|_| pubsub.subscriber_builder().create().unwrap())
+        .collect();
+    (publisher, subscribers)
+}
+
+/// An `OutputWriterInner` primed with the bench's one "out" channel egress.
+fn output_writer_inner_publishing_to(publisher: BenchChannelPublisher) -> OutputWriterInner {
+    let output_writer_inner = OutputWriterInner::new();
+    output_writer_inner.set_channel_publisher(
+        "out",
+        publisher,
+        ChannelEgressConfig {
+            service_name: "bench/out".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 4096,
+            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        },
+    );
+    output_writer_inner
+}
+
 /// Per-bench fixture that owns the iceoryx2 services + the
 /// subscriber/listener so the bench's per-iteration loop can drain
 /// in-line (iceoryx2's `Subscriber` / `Listener` are not `Send`,
 /// hence no background-drainer thread).
 struct BenchFixture {
     inner: Arc<OutputWriterInner>,
-    subscriber: iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>,
+    subscriber: BenchChannelSubscriber,
     listener: iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>,
     // Keep the node + service handles alive for the bench's
     // lifetime so the publisher inside the inner doesn't observe
@@ -83,30 +135,11 @@ struct BenchFixture {
 /// publisher's ring doesn't back-pressure).
 fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
-    let pubsub_name = unique_suffix(&format!("{tag}/pubsub"));
-    let notify_name = unique_suffix(&format!("{tag}/notify"));
-
-    let pubsub = node
-        .service_builder(&ServiceName::new(&pubsub_name).unwrap())
-        .publish_subscribe::<[u8]>()
-        .max_publishers(2)
-        // Deep ring so 100k+ bench iterations don't backpressure
-        // before the in-line drainer catches up.
-        .subscriber_max_buffer_size(8192)
-        .open_or_create()
-        .unwrap();
-    // Publisher slice cap covers payload + FRAME_HEADER_SIZE (76 B
-    // today). 128 KiB headroom covers the bench's 64 KiB sweep
-    // arm with margin.
-    let publisher = pubsub
-        .publisher_builder()
-        .initial_max_slice_len(128 * 1024)
-        .create()
-        .unwrap();
-    let subscriber = pubsub.subscriber_builder().create().unwrap();
+    let (publisher, mut subscribers) = open_bench_channel_pubsub(&node, tag, 1);
+    let subscriber = subscribers.pop().unwrap();
 
     let notify = node
-        .service_builder(&ServiceName::new(&notify_name).unwrap())
+        .service_builder(&ServiceName::new(&unique_suffix(&format!("{tag}/notify"))).unwrap())
         .event()
         .max_notifiers(2)
         .max_listeners(1)
@@ -115,17 +148,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let notifier = notify.notifier_builder().create().unwrap();
     let listener = notify.listener_builder().create().unwrap();
 
-    let inner = Arc::new(OutputWriterInner::new());
-    inner.set_channel_publisher(
-        "out",
-        publisher,
-        ChannelEgressConfig {
-            service_name: "bench/out".to_string(),
-            trust_tier: ChannelTrustTier::Trusted,
-            expected_payload_bytes: 4096,
-            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-        },
-    );
+    let inner = Arc::new(output_writer_inner_publishing_to(publisher));
     inner.add_channel_link("out", "L-bench-ffi-hop", Some(notifier));
 
     BenchFixture {
@@ -208,8 +231,7 @@ fn bench_payload_size_sweep(c: &mut Criterion) {
 /// and listeners in-line so the publisher's ring doesn't back-pressure.
 struct FanoutFixture {
     inner: Arc<OutputWriterInner>,
-    subscribers:
-        Vec<iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>>,
+    subscribers: Vec<BenchChannelSubscriber>,
     listeners: Vec<iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>>,
     _node: Node<iceoryx2::service::ipc::Service>,
 }
@@ -220,36 +242,8 @@ struct FanoutFixture {
 /// pubsub service.
 fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture {
     let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
-    let pubsub_name = unique_suffix(&format!("{tag}/pubsub"));
-
-    let pubsub = node
-        .service_builder(&ServiceName::new(&pubsub_name).unwrap())
-        .publish_subscribe::<[u8]>()
-        .max_publishers(2)
-        .max_subscribers(subscriber_count + 1)
-        .subscriber_max_buffer_size(8192)
-        .open_or_create()
-        .unwrap();
-    let publisher = pubsub
-        .publisher_builder()
-        .initial_max_slice_len(128 * 1024)
-        .create()
-        .unwrap();
-    let subscribers = (0..subscriber_count)
-        .map(|_| pubsub.subscriber_builder().create().unwrap())
-        .collect();
-
-    let inner = Arc::new(OutputWriterInner::new());
-    inner.set_channel_publisher(
-        "out",
-        publisher,
-        ChannelEgressConfig {
-            service_name: "bench/out".to_string(),
-            trust_tier: ChannelTrustTier::Trusted,
-            expected_payload_bytes: 4096,
-            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-        },
-    );
+    let (publisher, subscribers) = open_bench_channel_pubsub(&node, tag, subscriber_count);
+    let inner = Arc::new(output_writer_inner_publishing_to(publisher));
 
     let mut listeners = Vec::with_capacity(subscriber_count);
     for i in 0..subscriber_count {
@@ -317,43 +311,20 @@ fn bench_write_raw_fanout(c: &mut Criterion) {
 /// hop. The destination is wired as a self-driven sink (no notifier) — the
 /// bench loop reads every write, so a wakeup fd would only add noise.
 struct RoundTripFixture {
-    output_writer_inner: Arc<OutputWriterInner>,
-    input_mailboxes_inner: Arc<InputMailboxesInner>,
+    output_writer_inner: OutputWriterInner,
+    input_mailboxes_inner: InputMailboxesInner,
     _node: Node<iceoryx2::service::ipc::Service>,
 }
 
 fn build_round_trip(tag: &str) -> RoundTripFixture {
     let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
-    let pubsub_name = unique_suffix(&format!("{tag}/pubsub"));
+    let (publisher, mut subscribers) = open_bench_channel_pubsub(&node, tag, 1);
+    let subscriber = subscribers.pop().unwrap();
 
-    let pubsub = node
-        .service_builder(&ServiceName::new(&pubsub_name).unwrap())
-        .publish_subscribe::<[u8]>()
-        .max_publishers(2)
-        .subscriber_max_buffer_size(8192)
-        .open_or_create()
-        .unwrap();
-    let publisher = pubsub
-        .publisher_builder()
-        .initial_max_slice_len(128 * 1024)
-        .create()
-        .unwrap();
-    let subscriber = pubsub.subscriber_builder().create().unwrap();
-
-    let output_writer_inner = Arc::new(OutputWriterInner::new());
-    output_writer_inner.set_channel_publisher(
-        "out",
-        publisher,
-        ChannelEgressConfig {
-            service_name: "bench/round_trip/out".to_string(),
-            trust_tier: ChannelTrustTier::Trusted,
-            expected_payload_bytes: 4096,
-            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-        },
-    );
+    let output_writer_inner = output_writer_inner_publishing_to(publisher);
     output_writer_inner.add_channel_link("out", "L-bench-round-trip", None);
 
-    let input_mailboxes_inner = Arc::new(InputMailboxesInner::new());
+    let input_mailboxes_inner = InputMailboxesInner::new();
     input_mailboxes_inner.add_port("in", 8, ReadMode::ReadNextInOrder);
     input_mailboxes_inner.add_channel_subscriber("in", "L-bench-round-trip", subscriber);
 
