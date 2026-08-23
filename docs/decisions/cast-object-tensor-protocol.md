@@ -48,6 +48,15 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
    there is no staging and no block-edge discard, and a raise mid-edit leaves a complete
    edit of fewer pixels, never a torn frame.
 
+> ~~Points 2 and 6 originally stated one unconditional rule for both scopes — "exit
+> publishes … a propagating exception discards", "cpu() yields a writable numpy array …
+> under the same publication-at-exit rule".~~ — Superseded 2026-08-23 by the owner's
+> in-session ruling on #1927, driven by two live findings: the host mapping is coherent
+> (no staging exists between a store and the frame, so a block-edge discard was never
+> deliverable there), and a dual-backed camera frame's CPU edit landed where the app's
+> own window never looked — proven by a 4-way scaffold A/B on the rig. The points now
+> state the write-back answer as the engine's, per door.
+
 ## Rejected alternatives
 
 - **A scope for reads.** Requiring an `as_device_tensor()`-style enter/exit for the dominant
