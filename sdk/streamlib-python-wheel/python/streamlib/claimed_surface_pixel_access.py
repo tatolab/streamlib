@@ -255,11 +255,16 @@ class PixelAccessToOneClaimedSurface:
     def cpu(self) -> Iterator[Any]:
         """The CPU write door: a writable numpy array over these pixels.
 
-        `with frame.cpu() as img:` — the slow path, named so. The block edge is
-        the publication point and a propagating exception discards, both by
-        leaving through the surface's own scope. Texture-backed pixels (a
-        kernel's output) have no host mapping at all and are refused here by
-        the surface itself; `writable()` is their door.
+        `with frame.cpu() as img:` — the slow path, named so. Leaving the block
+        is what settles the surface's scope, publishing a pending device write
+        and ending the write intent; a propagating exception is never
+        suppressed. What this door cannot promise is the device scope's
+        discard: the array *is* the surface's own host mapping, so bytes
+        already written are already in the frame, and claiming otherwise would
+        be claiming an enforcement the mapping cannot deliver.
+
+        Texture-backed pixels (a kernel's output) have no host mapping at all
+        and are refused here by the surface itself; `writable()` is their door.
 
         It resolves a surface of its own rather than sharing the bare view's:
         a shared handle would spend the block locked for *writing*, so a bare
