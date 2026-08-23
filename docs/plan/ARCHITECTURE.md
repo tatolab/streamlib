@@ -154,10 +154,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `with frame.cpu() as img:` for CPU reach, the slow path saying so in its name.
   Whether a frame takes an edit at all is the engine's one answer for both doors —
   a write-back belongs to a pooled frame whose allocation is its only backing, or
-  to a registered texture that takes a recorded copy in (a kernel output) — so a
-  frame its producer still owns (a dual-backed camera frame) refuses `writable()`
-  by name and reaches `cpu()` as a read-only array, numpy-enforced: never a write
-  that lands where other holders cannot see it.
+  to a registered texture that takes a recorded copy in — and a frame that cannot
+  take one refuses `writable()` by name and reaches `cpu()` as a read-only array,
+  numpy-enforced, rather than accepting a write that lands where other holders
+  cannot see it. A producer never creates that shape by publishing its own
+  internals: a published id names one picture to every consumer, in-process or
+  not, so a producer's private scratch (a capture ring) is never registered under
+  it.
   `writable()` keeps the one write-scope rule already decided for the device-tensor
   scope, rebased onto the cast object: it edits a staging, the block edge is the
   publication point, the engine orders the write-back ahead of its own next read,

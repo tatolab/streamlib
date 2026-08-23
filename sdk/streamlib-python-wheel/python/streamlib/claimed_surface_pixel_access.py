@@ -287,9 +287,9 @@ class PixelAccessToOneClaimedSurface:
 
         `with frame.cpu() as img:` — the slow path, named so. The array is
         writable exactly when the engine says the frame can take a write-back;
-        a frame its producer still owns (a dual-backed camera frame) arrives
-        read-only, enforced by numpy, under the same rule that makes
-        `writable()` refuse it — no door writes where other holders never see.
+        a frame that cannot arrives read-only, enforced by numpy, under the
+        same rule that makes `writable()` refuse it — no door writes where
+        other holders never see.
 
         Where the array is writable it *is* the surface's own coherent host
         mapping, so publication is per store, not at the block edge: a raise

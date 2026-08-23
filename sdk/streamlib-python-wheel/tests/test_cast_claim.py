@@ -29,11 +29,16 @@ published means every *other* holder observes it.
 
 Every test here is `requires_gpu`, so CI runs none of them, but they do not all
 need the same hardware. The lifetime pair, the device-side tensor pair and the
-GPU write door are camera-gated; the host-side tensor pair and the CPU write
-door drive the engine's native test pattern and consume with plain numpy, so
-they need a GPU and nothing else. Each gate skips by name, so a missing camera
-or a CPU-only torch reads as what it is rather than as a failure of the
-capability.
+camera write-door pair are camera-gated; the rest drive the engine's native
+test pattern, and the host-side ones consume with plain numpy, so they need a
+GPU and nothing else. Each gate skips by name, so a missing camera or a
+CPU-only torch reads as what it is rather than as a failure of the capability.
+
+The write doors are proven against both sources deliberately. A producer that
+published an internal transient under the frame's id would leave the
+test-pattern cases passing while every camera edit went somewhere no in-process
+consumer looks — which is exactly the defect #1932 fixed, and exactly what the
+camera pair now guards.
 """
 
 import json
@@ -356,50 +361,34 @@ def test_a_raise_inside_the_cpu_write_door_propagates_and_closes_the_scope(
     assert observation["the_door_opens_again_after_a_raise"]
 
 
-def test_the_gpu_write_door_refuses_a_frame_its_producer_still_owns(
+def test_a_gpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     start_app_under_test,
 ):
-    """A camera frame publishes a registered texture beside its pooled
-    allocation, and a pooled frame takes a write-back only when that
-    allocation is its only backing — such a frame is one its producer still
-    owns. (The rule's other arm, a registered texture with recorded-copy-in
-    usage, is a kernel output's and stays writable.) It refuses, and the
-    door's whole job here is to let that refusal through by name instead of
-    swallowing it; the frame the producer sent is still the frame afterwards.
+    """The same GPU door against a live camera frame.
 
-    This is an engine rule the wheel rides, not one this door invents: it is
-    also why the edit tests above drive the native test pattern.
+    A camera publishes one picture under one id — its capture ring is its own
+    scratch space and answers to nothing outside it — so a camera frame takes
+    an edit exactly like any other single-backed frame, and a fresh resolve
+    shows it. Locked separately from the test-pattern case because the camera
+    is the source the product's first-run app actually uses, and because a
+    producer that leaked an internal texture under the published id would
+    make this refuse while the test-pattern case kept passing.
     """
+    _require_a_cuda_consumer()
     observation = run_claim_probe(
-        start_app_under_test, "TheGpuWriteDoorRefusesAFrameItsProducerStillOwnsProbe"
+        start_app_under_test, "TheGpuWriteDoorEditsTheFrameProbe"
     )
 
-    assert observation["claim_taken"] is True
-    assert "pool member its producer still owns" in observation["the_refusal"], (
-        f"the door did not surface the engine's refusal: {observation['the_refusal']!r}"
-    )
-    assert observation["the_surface_still_holds_the_frame_the_producer_sent"]
+    _assert_the_edit_reached_the_surface(observation)
 
 
-def test_the_cpu_door_hands_a_camera_frame_out_read_only(start_app_under_test):
-    """The one rule on the CPU door, against the frame that made it matter: a
-    camera frame is a pool member its producer still owns, so the engine
-    answers no write-back — `writable()` refuses on that answer, and `cpu()`
-    hands its array out read-only with numpy enforcing the flag at the write
-    line itself. A silent write here is the one this door used to allow, and
-    it landed where the app's own window never saw it.
-    """
+def test_a_cpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
+    start_app_under_test,
+):
+    """The CPU door's half of the same claim, with plain numpy as the
+    consumer and no CUDA anywhere in it."""
     observation = run_claim_probe(
-        start_app_under_test, "TheCpuDoorHandsACameraFrameOutReadOnlyProbe"
+        start_app_under_test, "TheCpuWriteDoorEditsTheFrameProbe"
     )
 
-    assert observation["claim_taken"] is True
-    assert observation["the_engine_says_the_frame_takes_a_write_back"] is False, (
-        "a camera frame is dual-backed; the engine answering True here means "
-        "the producer stopped registering its ring texture and this test's "
-        "premise needs re-deriving"
-    )
-    assert observation["the_array_reports_itself_writable"] is False
-    assert observation["the_write_raised"], (
-        "numpy did not refuse the write — the read-only flag never reached it"
-    )
+    _assert_the_edit_reached_the_surface(observation)

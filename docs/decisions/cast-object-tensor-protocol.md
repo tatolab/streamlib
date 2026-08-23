@@ -24,8 +24,8 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
    img:` — the slow path says so in its name. Whether a frame takes an edit at all is the
    engine's one answer for both doors: a write-back belongs to a pooled frame whose
    allocation is its only backing, or to a registered texture that takes a recorded copy in
-   (a kernel output), so a frame its producer still owns refuses `writable()` by name and
-   reaches `cpu()` read-only. `writable()` keeps the write-scope rule the plan
+   (a kernel output), so a frame that cannot take one refuses `writable()` by name and
+   reaches `cpu()` read-only rather than accepting a write no other holder would see. `writable()` keeps the write-scope rule the plan
    states for the device-tensor scope: exit publishes, ordered ahead of the engine's next
    read; a propagating exception discards the write and never suppresses the exception.
    `cpu()`'s publication semantics are the host mapping's own — see point 6.
@@ -43,7 +43,7 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
    would be the silent-wrongness posture the lifetime contract exists to kill.
 6. **`cpu()` yields a numpy array writable exactly when the frame can take a write-back**
    — the engine's answer, asked over the shipped escalate surface and memoised per pool
-   slot; a frame its producer still owns arrives read-only, and numpy enforces the flag at
+   slot; a frame that cannot take a write-back arrives read-only, and numpy enforces it at
    the write line itself. The array is the existing host-mapping path — skia and PIL wrap
    numpy trivially — and it is coherent, so where writable, stores publish as they land:
    there is no staging and no block-edge discard, and a raise mid-edit leaves a complete
@@ -52,11 +52,15 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
 > ~~Points 2 and 6 originally stated one unconditional rule for both scopes — "exit
 > publishes … a propagating exception discards", "cpu() yields a writable numpy array …
 > under the same publication-at-exit rule".~~ — Superseded 2026-08-23 by the owner's
-> in-session ruling on #1927, driven by two live findings: the host mapping is coherent
-> (no staging exists between a store and the frame, so a block-edge discard was never
-> deliverable there), and a dual-backed camera frame's CPU edit landed where the app's
-> own window never looked — proven by a 4-way scaffold A/B on the rig. The points now
-> state the write-back answer as the engine's, per door.
+> in-session ruling on #1927. The host mapping is coherent: no staging exists between a
+> store and the frame, so a block-edge discard was never deliverable there. The points
+> now state the write-back answer as the engine's, per door.
+>
+> The same session's other finding — a camera frame's CPU edit invisible to the app's own
+> window — is **not** a property of frames and is not recorded as one. It was the camera
+> publishing its private capture ring under the frame's id (#1932, fixed in this change):
+> the ring won the in-process resolve, so one id named two pictures. A published id names
+> one picture to every consumer.
 
 ## Rejected alternatives
 

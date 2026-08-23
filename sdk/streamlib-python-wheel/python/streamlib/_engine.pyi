@@ -399,8 +399,8 @@ class GpuContextLimitedAccess:
 
         The engine's one answer for every write door: a write-back belongs to
         a pooled frame whose allocation is its only backing, or to a
-        registered texture that takes a recorded copy in, so a frame its
-        producer still owns (a dual-backed camera frame) answers False.
+        registered texture that takes a recorded copy in; a frame backed by
+        neither answers False.
         `writable()` refuses on this answer; `cpu()` hands its array out
         read-only on it.
         """
