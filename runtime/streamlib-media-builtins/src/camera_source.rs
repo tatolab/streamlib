@@ -985,14 +985,15 @@ fn capture_thread_loop(
                 .map_err(|e| Error::GpuError(format!("acquire pixel buffer: {e}")))?;
             let surface_id = pool_id.to_string();
 
-            // Register the ring texture under the pixel buffer's pool_id so
-            // a same-process display resolves the texture via the same
-            // surface_id used for pixel-buffer IPC.
-            gpu_context.register_texture_with_layout(
-                &surface_id,
-                ring_textures[ring_index].clone(),
-                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            );
+            // The ring is this camera's own scratch space and answers to
+            // nothing outside it. Publishing it under the frame's id used to
+            // put it in the same-process texture cache, where it won Path 1
+            // of every resolve — so an in-process display sampled the live
+            // ring while every other consumer read the pooled copy, and a
+            // processor's edit of the frame it was handed was invisible to
+            // the window. A published id names one picture: the blitted
+            // pooled copy, whoever is asking. In-process consumers resolve
+            // it through the pool's own per-slot canvas.
 
             let input_buffer = if use_dmabuf {
                 &dmabuf_imported_buffers[input_ssbo_index]

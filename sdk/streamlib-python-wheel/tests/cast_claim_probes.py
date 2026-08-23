@@ -55,10 +55,18 @@ from streamlib import (
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
-# The field the composable keeps its claim in. Read here — rather than
-# inferred from behaviour — so the report says whether a claim was taken at
-# all, separately from whether it worked.
-CLAIM_FIELD = "_check_out_lease_on_the_claimed_surface"
+
+def _the_claim_the_read_took(read: object) -> object:
+    """The lease the composable took on the surface a cast object names.
+
+    Read here — rather than inferred from behaviour — so the report says
+    whether a claim was taken at all, separately from whether it worked. An
+    untyped read hands back a plain bag, which took none by construction.
+    """
+    reach_the_surface = getattr(read, "pixel_access_to_the_surface_declared_in", None)
+    if reach_the_surface is None:
+        return None
+    return reach_the_surface("surface_id")._check_out_lease_on_the_claimed_surface
 
 # Comfortably past the camera pool's depth, so the producer has cycled its
 # slots several times over while the first frame is still held.
@@ -162,7 +170,7 @@ class _LaggedHolderProbe:
         if self.held_frame is None:
             self.held_frame = read
             self.held_surface_id = arrived_surface_id
-            self.claim_taken = getattr(read, CLAIM_FIELD, None) is not None
+            self.claim_taken = _the_claim_the_read_took(read) is not None
             self.pixels_as_delivered = self._sample_pixels(ctx, arrived_surface_id)
             self.pixels_of_the_previous_arrival = self.pixels_as_delivered
             return
@@ -329,7 +337,7 @@ class _BareProtocolProbe:
     def _observe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         return {
             "read_as": type(self).__name__,
-            "claim_taken": getattr(frame, CLAIM_FIELD, None) is not None,
+            "claim_taken": _the_claim_the_read_took(frame) is not None,
             "surface_id": frame.surface_id,
             # The engine's own answer for which side the bare path serves,
             # readable without any GPU consumer installed.
@@ -440,3 +448,145 @@ class TheShippedVideoFrameReachesItsPixelsAsACudaTensorProbe(
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+
+# ---- the write doors: an edit through the object, seen on the surface -------
+
+
+class _TheEditWentWrong(Exception):
+    """Raised inside a write scope on purpose, to leave it the failing way."""
+
+
+class _WriteDoorProbe(_BareProtocolProbe):
+    """Edit a delivered frame through one of its write doors, then look at the
+    surface itself again.
+
+    Published means every other holder observes the edit, so the check is a
+    *fresh* resolve of the same surface id — the surface's own memory, not the
+    view the scope handed out. Editing a few rows rather than the whole frame
+    is what separates a published edit from a wholesale overwrite: the rest of
+    the frame has to still be the picture the producer sent.
+    """
+
+    ROWS_TO_EDIT = 8
+    EDIT_VALUE = 7
+
+    def _surface_pixels_now(self, ctx: RuntimeContextLimitedAccess, surface_id: str):
+        with ctx.gpu_limited_access.resolve_surface(surface_id) as surface:
+            surface.lock()
+            pixels = numpy.from_dlpack(surface, device="cpu").copy()
+            surface.unlock()
+        return pixels
+
+    def _edit_the_top_rows(self, frame) -> None:
+        raise NotImplementedError
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        before = self._surface_pixels_now(ctx, frame.surface_id)
+        self._edit_the_top_rows(frame)
+        after = self._surface_pixels_now(ctx, frame.surface_id)
+        edited_rows = slice(0, self.ROWS_TO_EDIT)
+        the_rest = slice(self.ROWS_TO_EDIT, None)
+        return {
+            "the_frame_did_not_already_carry_the_edit": bool(
+                (before[edited_rows] != self.EDIT_VALUE).any()
+            ),
+            "the_edited_rows_carry_the_edit": bool(
+                (after[edited_rows] == self.EDIT_VALUE).all()
+            ),
+            "the_rest_of_the_frame_is_untouched": bool(
+                (after[the_rest] == before[the_rest]).all()
+            ),
+        }
+
+
+@processor
+class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
+    """`with frame.writable() as t:` — a CUDA package editing a live frame in
+    place, with the edit on the surface once the block ends."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+    def _edit_the_top_rows(self, frame) -> None:
+        import torch
+
+        with frame.writable() as device_tensor:
+            torch.from_dlpack(device_tensor)[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
+
+
+@processor
+class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
+    """The other half of the one write rule: the edit did not finish, so the
+    engine keeps the complete frame it already held — and the raise is never
+    suppressed on the way out."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        import torch
+
+        before = self._surface_pixels_now(ctx, frame.surface_id)
+        the_exception_propagated = False
+        try:
+            with frame.writable() as device_tensor:
+                torch.from_dlpack(device_tensor)[: self.ROWS_TO_EDIT, :, :] = (
+                    self.EDIT_VALUE
+                )
+                raise _TheEditWentWrong
+        except _TheEditWentWrong:
+            the_exception_propagated = True
+        after = self._surface_pixels_now(ctx, frame.surface_id)
+        return {
+            "the_exception_propagated": the_exception_propagated,
+            "the_surface_still_holds_the_frame_the_producer_sent": bool(
+                (after == before).all()
+            ),
+        }
+
+
+@processor
+class TheCpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
+    """`with frame.cpu() as img:` — the named slow path, editing a live frame
+    through plain numpy with no CUDA consumer anywhere in it."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+    def _edit_the_top_rows(self, frame) -> None:
+        with frame.cpu() as host_pixels:
+            host_pixels[: self.ROWS_TO_EDIT, :, :] = self.EDIT_VALUE
+
+
+@processor
+class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
+    """The CPU door's exception path, reported as what it is.
+
+    The host view *is* the surface's own mapping, so bytes already written are
+    already in the frame — there is no staging to drop. What the door owes is
+    that the raise reaches the caller and the scope still closes, which is what
+    this measures; a discard claim here would be a claim the mapping cannot
+    keep.
+    """
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        the_exception_propagated = False
+        try:
+            with frame.cpu():
+                raise _TheEditWentWrong
+        except _TheEditWentWrong:
+            the_exception_propagated = True
+        # The door itself, opened again — not merely another resolve of the
+        # surface. A scope that failed to release its lock or its handle on
+        # the way out leaves the second open to fail, and only reopening it
+        # can see that.
+        with frame.cpu() as host_pixels_again:
+            the_door_reopened = bool(host_pixels_again.any())
+        return {
+            "the_exception_propagated": the_exception_propagated,
+            "the_door_opens_again_after_a_raise": the_door_reopened,
+        }

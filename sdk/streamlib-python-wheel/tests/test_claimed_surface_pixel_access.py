@@ -41,9 +41,22 @@ FRAME_BAG = {
     "height_in_pixels": 720,
 }
 
-CLAIM_FIELD = "_check_out_lease_on_the_claimed_surface"
+PER_SURFACE_ACCESS_FIELD = "_pixel_access_by_declared_surface_field"
 OUTPUT_PORT = "frames_to_downstream"
 INPUT_PORT = "frames_from_upstream"
+
+
+def claim_taken_on(
+    cast_object: ClaimedSurfacePixelAccess, surface_id_field: str = "surface_id"
+) -> Any:
+    """The lease a cast object took for one of its declared surfaces.
+
+    Read here rather than inferred from behaviour, so a test can say whether a
+    claim was taken at all separately from whether reaching the pixels worked.
+    """
+    return cast_object.pixel_access_to_the_surface_declared_in(
+        surface_id_field
+    )._check_out_lease_on_the_claimed_surface
 
 
 # ---- the types a user would write ------------------------------------------
@@ -93,6 +106,18 @@ class ACastTypeThatSettlesItsSurfaceItself(ClaimedSurfacePixelAccess):
         super().__init__(**bag_entries)
 
 
+@dataclass(frozen=True, init=False)
+class ColourAndDepthFrame(
+    ClaimedSurfacePixelAccess,
+    surface_id_fields=("colour_surface_id", "depth_surface_id"),
+):
+    """A cast type over two surfaces at once — an RGB-D camera's pair, the
+    shape the bare protocol has no unambiguous answer for."""
+
+    colour_surface_id: str
+    depth_surface_id: str
+
+
 @dataclass(frozen=True)
 class DetectionOverlay(ClaimedSurfacePixelAccess):
     """The other spelling: an ordinary frozen dataclass whose `__init__` the
@@ -110,6 +135,31 @@ class ClaimStandingInForALease:
         self.surface_id = surface_id
 
 
+class HostArrayStandIn:
+    """What `as_numpy()` hands back — the CPU door only forwards it."""
+
+    def __init__(self, surface_id: str) -> None:
+        self.surface_id = surface_id
+
+
+class DeviceTensorScopeStandIn:
+    """What `as_device_tensor()` hands back: the scope whose own enter/exit is
+    the whole write rule, which is why the GPU door adds nothing to it."""
+
+    def __init__(self, surface_id: str) -> None:
+        self.surface_id = surface_id
+        self.entered = False
+        self.exit_arguments: "tuple[object, object, object] | None" = None
+
+    def __enter__(self) -> "DeviceTensorScopeStandIn":
+        self.entered = True
+        return self
+
+    def __exit__(self, exception_type, exception, traceback) -> bool:
+        self.exit_arguments = (exception_type, exception, traceback)
+        return False
+
+
 class SurfaceHandleStandIn:
     """What `resolve_surface` hands back — the composable only locks it and
     forwards the protocol to it."""
@@ -119,12 +169,35 @@ class SurfaceHandleStandIn:
         self.locked_read_only: bool | None = None
         self.closed = False
         self.dlpack_calls: list[dict[str, object]] = []
+        self.device_tensor_scopes: list[DeviceTensorScopeStandIn] = []
+        self.lock_state_when_the_host_array_was_taken: "bool | None" = None
+        self.exit_arguments: "tuple[object, object, object] | None" = None
 
     def lock(self, read_only: bool = True) -> None:
         self.locked_read_only = read_only
 
+    def unlock(self) -> None:
+        self.locked_read_only = None
+
     def close(self) -> None:
         self.closed = True
+
+    def __enter__(self) -> "SurfaceHandleStandIn":
+        return self
+
+    def __exit__(self, exception_type, exception, traceback) -> bool:
+        self.exit_arguments = (exception_type, exception, traceback)
+        self.close()
+        return False
+
+    def as_device_tensor(self) -> DeviceTensorScopeStandIn:
+        scope = DeviceTensorScopeStandIn(self.surface_id)
+        self.device_tensor_scopes.append(scope)
+        return scope
+
+    def as_numpy(self) -> HostArrayStandIn:
+        self.lock_state_when_the_host_array_was_taken = self.locked_read_only
+        return HostArrayStandIn(self.surface_id)
 
     def __dlpack_device__(self) -> tuple[int, int]:
         return (2, 0)
@@ -150,10 +223,16 @@ class SurfaceHandleStandIn:
 class GpuLimitedAccessStandIn:
     """The shape a typed read offers, recording what it was asked for."""
 
-    def __init__(self) -> None:
+    def __init__(self, surfaces_take_write_backs: bool = True) -> None:
         self.claimed_surface_ids: list[str] = []
         self.resolved_surface_ids: list[str] = []
         self.handed_out_handles: list[SurfaceHandleStandIn] = []
+        self.surfaces_take_write_backs = surfaces_take_write_backs
+        self.write_back_questions_asked: list[str] = []
+
+    def surface_can_take_write_back(self, surface_id: str) -> bool:
+        self.write_back_questions_asked.append(surface_id)
+        return self.surfaces_take_write_backs
 
     def claim_surface_against_producer_reuse(
         self, surface_id: str
@@ -209,7 +288,7 @@ def test_a_user_authored_cast_type_claims_the_field_it_declares(offered):
     frame = DepthFrame(**FRAME_BAG)
 
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
-    assert getattr(frame, CLAIM_FIELD).surface_id == "surface-7"
+    assert claim_taken_on(frame).surface_id == "surface-7"
 
 
 def test_a_type_that_declares_another_field_claims_that_one(offered):
@@ -246,7 +325,7 @@ def test_a_generated_dataclass_constructor_claims_too(offered):
     overlay = DetectionOverlay(surface_id="surface-7", labels=["cat"])
 
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
-    assert getattr(overlay, CLAIM_FIELD).surface_id == "surface-7"
+    assert claim_taken_on(overlay).surface_id == "surface-7"
 
 
 def test_constructed_outside_a_typed_read_it_claims_nothing():
@@ -255,14 +334,14 @@ def test_constructed_outside_a_typed_read_it_claims_nothing():
     surface at all."""
     frame = DepthFrame(**FRAME_BAG)
 
-    assert getattr(frame, CLAIM_FIELD) is None
+    assert claim_taken_on(frame) is None
 
 
 def test_the_claim_goes_away_with_the_object_and_nothing_is_called(offered):
     offered(GpuLimitedAccessStandIn())
 
     frame = DepthFrame(**FRAME_BAG)
-    claim_still_alive = weakref.ref(getattr(frame, CLAIM_FIELD))
+    claim_still_alive = weakref.ref(claim_taken_on(frame))
     assert claim_still_alive() is not None
 
     del frame
@@ -283,7 +362,7 @@ def test_a_surface_that_cannot_be_claimed_still_constructs(offered, monkeypatch)
 
     frame = DepthFrame(**FRAME_BAG)
 
-    assert getattr(frame, CLAIM_FIELD) is None
+    assert claim_taken_on(frame) is None
     assert frame.surface_id == "surface-7"
 
 
@@ -318,7 +397,7 @@ def test_the_claim_is_not_part_of_what_the_object_is(offered):
     _ = frame.__dlpack__()
 
     assert frame == same_bag_again
-    assert CLAIM_FIELD not in repr(frame)
+    assert PER_SURFACE_ACCESS_FIELD not in repr(frame)
     assert "surface-7" in repr(frame), "the declared fields are still the repr"
 
 
@@ -521,6 +600,366 @@ def test_a_refused_claim_leaves_the_protocol_reachable_and_loud(offered):
         frame.__dlpack__()
 
 
+# ---- the GPU write door ----------------------------------------------------
+
+
+def test_the_gpu_write_door_hands_back_the_surfaces_own_device_tensor_scope(offered):
+    """`writable()` is grammar, not machinery: the scope it returns is the one
+    the surface mints, whose own enter/exit already *is* the write rule —
+    publish at the block edge, discard on a propagating exception."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.writable() as device_tensor:
+        pass
+
+    handle = gpu_limited_access.handed_out_handles[0]
+    assert handle.device_tensor_scopes == [device_tensor]
+    assert handle.device_tensor_scopes[0].entered is True
+    assert handle.device_tensor_scopes[0].exit_arguments == (None, None, None)
+
+
+def test_a_raise_inside_the_gpu_write_door_reaches_the_scopes_own_exit(offered):
+    """The discard is the scope's, so what this owes is that the exception
+    reaches it — and that nothing here suppresses the raise."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with pytest.raises(ValueError, match="the edit went wrong"):
+        with frame.writable():
+            raise ValueError("the edit went wrong")
+
+    scope = gpu_limited_access.handed_out_handles[0].device_tensor_scopes[0]
+    assert scope.exit_arguments is not None
+    assert scope.exit_arguments[0] is ValueError
+
+
+def test_the_gpu_write_door_does_not_ride_the_read_paths_lock(offered):
+    """Entering the scope is the write declaration, structurally — so the door
+    takes no CPU lock, and a read-only one taken on the way in would be a
+    declaration of the opposite intent sitting under a write."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    frame.writable()
+
+    assert gpu_limited_access.handed_out_handles[0].locked_read_only is None
+
+
+def test_the_gpu_write_door_shares_the_surface_the_read_path_resolved(offered):
+    """Both doors are onto one claimed surface. Resolving a second time per
+    frame would import the same memory twice on the hot path."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    frame.__dlpack__()
+    frame.writable()
+
+    assert gpu_limited_access.resolved_surface_ids == ["surface-7"]
+
+
+# ---- the CPU write door ----------------------------------------------------
+
+
+def test_the_cpu_door_yields_the_host_array_under_a_write_lock(offered):
+    """`read_only=False` is what marks the array writable, so the lock must be
+    open for writing at the moment the view is taken — not merely at some
+    point inside the block."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.cpu() as host_array:
+        assert host_array.surface_id == "surface-7"
+
+    handle = gpu_limited_access.handed_out_handles[-1]
+    assert handle.lock_state_when_the_host_array_was_taken is False
+
+
+def test_the_cpu_door_leaves_through_the_surfaces_own_scope(offered):
+    """The block edge settles the surface's scope: the write intent ends and
+    the handle closes through its own exit. The stores themselves published as
+    they landed — the array is the surface's coherent mapping."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.cpu():
+        pass
+
+    handle = gpu_limited_access.handed_out_handles[-1]
+    assert handle.exit_arguments == (None, None, None)
+    assert handle.closed is True
+
+
+def test_a_raise_inside_the_cpu_door_reaches_that_scopes_exit_and_propagates(
+    offered,
+):
+    """The raise reaches the surface's own exit unsuppressed and the scope
+    still closes — all a shared host mapping can promise on this path: stores
+    already written are already in the frame, so there is nothing to discard."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with pytest.raises(ValueError, match="the edit went wrong"):
+        with frame.cpu():
+            raise ValueError("the edit went wrong")
+
+    handle = gpu_limited_access.handed_out_handles[-1]
+    assert handle.exit_arguments is not None
+    assert handle.exit_arguments[0] is ValueError
+    assert handle.closed is True
+
+
+def test_the_cpu_door_takes_its_own_surface_and_leaves_the_read_view_alone(
+    offered,
+):
+    """The slow path pays a resolve of its own so that opening it cannot flip
+    the bare view's intent underneath it.
+
+    Sharing one handle would leave the read view locked for *writing* for the
+    length of the block, and a bare `__dlpack__` taken in there would hand back
+    a writable device tensor and arm a write-back nobody asked for.
+    """
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+    frame.__dlpack__()
+    read_view = gpu_limited_access.handed_out_handles[0]
+
+    with frame.cpu():
+        assert read_view.locked_read_only is True
+
+    assert gpu_limited_access.resolved_surface_ids == ["surface-7", "surface-7"]
+    assert read_view.closed is False
+
+
+def test_the_cpu_door_asks_the_engine_before_handing_out_a_writable_array(
+    offered,
+):
+    """The write intent follows the engine's one answer, asked before the
+    lock is taken — not assumed from the door's own name."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.cpu():
+        pass
+
+    assert gpu_limited_access.write_back_questions_asked == ["surface-7"]
+    handle = gpu_limited_access.handed_out_handles[-1]
+    assert handle.lock_state_when_the_host_array_was_taken is False
+
+
+def test_a_frame_that_cannot_take_a_write_back_arrives_read_only(
+    offered, monkeypatch
+):
+    """The one rule, on the CPU door: a frame its producer still owns gets a
+    read-only array — the same engine answer `writable()` refuses on — and
+    the downgrade is reported once, by name, before numpy's bare ValueError
+    is anyone's first contact with the rule."""
+    gpu_limited_access = offered(
+        GpuLimitedAccessStandIn(surfaces_take_write_backs=False)
+    )
+    monkeypatch.setattr(
+        composable_module, "_a_read_only_cpu_door_has_been_reported", False
+    )
+    reported: list[str] = []
+    monkeypatch.setattr(
+        composable_module,
+        "warn",
+        lambda message, **attributes: reported.append(message),
+    )
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.cpu():
+        pass
+    with frame.cpu():
+        pass
+
+    for handle in gpu_limited_access.handed_out_handles:
+        assert handle.lock_state_when_the_host_array_was_taken is True, (
+            "the array must be taken under a read-only lock"
+        )
+    assert len(reported) == 1, "the downgrade is reported once per process"
+    assert "cannot take a write-back" in reported[0]
+
+
+def test_a_failure_learning_the_write_back_answer_propagates(offered):
+    """An error is not a refusal: a capability that cannot answer the
+    question raises rather than guessing either way — a guessed True is the
+    silent-wrongness path, a guessed False silently downgrades a frame that
+    takes edits fine."""
+
+    class GpuLimitedAccessThatCannotAnswer(GpuLimitedAccessStandIn):
+        def surface_can_take_write_back(self, surface_id: str) -> bool:
+            raise RuntimeError(f"the parent went away answering for {surface_id!r}")
+
+    offered(GpuLimitedAccessThatCannotAnswer())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with pytest.raises(RuntimeError, match="went away"):
+        with frame.cpu():
+            pass
+
+
+# ---- a type that claims more than one surface -------------------------------
+
+
+TWO_SURFACE_BAG = {
+    "colour_surface_id": "colour-9",
+    "depth_surface_id": "depth-3",
+}
+
+
+def test_a_type_claiming_two_surfaces_claims_both(offered):
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+
+    frame = ColourAndDepthFrame(**TWO_SURFACE_BAG)
+
+    assert gpu_limited_access.claimed_surface_ids == ["colour-9", "depth-3"]
+    assert claim_taken_on(frame, "colour_surface_id").surface_id == "colour-9"
+    assert claim_taken_on(frame, "depth_surface_id").surface_id == "depth-3"
+
+
+@pytest.mark.parametrize(
+    "reach_for_the_bare_protocol",
+    [
+        lambda frame: frame.__dlpack__(),
+        lambda frame: frame.__dlpack_device__(),
+        lambda frame: frame.writable(),
+        lambda frame: frame.cpu().__enter__(),
+    ],
+    ids=["__dlpack__", "__dlpack_device__", "writable", "cpu"],
+)
+def test_a_two_surface_type_is_refused_every_bare_door_naming_the_surfaces(
+    offered, reach_for_the_bare_protocol
+):
+    """Guessing a primary surface silently is the wrongness the lifetime
+    contract exists to kill, so every door onto "the" surface refuses — and the
+    refusal names both surfaces and the accessor that reaches each one."""
+    offered(GpuLimitedAccessStandIn())
+    frame = ColourAndDepthFrame(**TWO_SURFACE_BAG)
+
+    with pytest.raises(RuntimeError) as refusal:
+        reach_for_the_bare_protocol(frame)
+
+    assert "'colour_surface_id'" in str(refusal.value)
+    assert "'colour-9'" in str(refusal.value)
+    assert "'depth_surface_id'" in str(refusal.value)
+    assert "'depth-3'" in str(refusal.value)
+    assert "pixel_access_to_the_surface_declared_in" in str(refusal.value)
+
+
+def test_each_surface_of_a_two_surface_type_is_reached_through_its_own_object(
+    offered,
+):
+    """What the bare spelling has no unambiguous answer for, the per-surface
+    object answers exactly: one protocol object per claimed surface, each over
+    its own."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = ColourAndDepthFrame(**TWO_SURFACE_BAG)
+
+    colour = frame.pixel_access_to_the_surface_declared_in("colour_surface_id")
+    depth = frame.pixel_access_to_the_surface_declared_in("depth_surface_id")
+
+    assert colour.__dlpack__() == "capsule-over-colour-9"
+    assert depth.__dlpack__() == "capsule-over-depth-3"
+    assert gpu_limited_access.resolved_surface_ids == ["colour-9", "depth-3"]
+
+
+def test_both_write_doors_are_reachable_per_surface(offered):
+    """The gradient is not a privilege of single-surface types: each surface of
+    a multi-surface cast gets all three doors onto it."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = ColourAndDepthFrame(**TWO_SURFACE_BAG)
+    depth = frame.pixel_access_to_the_surface_declared_in("depth_surface_id")
+
+    with depth.writable():
+        pass
+    with depth.cpu() as host_array:
+        assert host_array.surface_id == "depth-3"
+
+    assert gpu_limited_access.resolved_surface_ids == ["depth-3", "depth-3"]
+    resolved_for_the_gpu_door = gpu_limited_access.handed_out_handles[0]
+    assert resolved_for_the_gpu_door.device_tensor_scopes[0].surface_id == "depth-3"
+
+
+def test_the_accessor_refuses_a_field_the_type_never_declared(offered):
+    """Declared, never guessed, in both directions: asking for a surface this
+    type does not name is refused with the names it does."""
+    offered(GpuLimitedAccessStandIn())
+    frame = ColourAndDepthFrame(**TWO_SURFACE_BAG)
+
+    with pytest.raises(RuntimeError) as refusal:
+        frame.pixel_access_to_the_surface_declared_in("infrared_surface_id")
+
+    assert "'infrared_surface_id'" in str(refusal.value)
+    assert "'colour_surface_id'" in str(refusal.value)
+    assert "'depth_surface_id'" in str(refusal.value)
+
+
+def test_a_single_surface_type_reaches_its_one_surface_through_the_accessor_too(
+    offered,
+):
+    """One spelling for every cast type: the bare doors are the unambiguous
+    case's shorthand for this, never a separate mechanism."""
+    offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    through_the_accessor = frame.pixel_access_to_the_surface_declared_in("surface_id")
+
+    assert through_the_accessor.__dlpack__() == "capsule-over-surface-7"
+    assert frame.__dlpack__() == "capsule-over-surface-7"
+
+
+def test_declaring_a_surface_field_both_ways_at_once_is_refused():
+    """One declaration per type. Silently preferring one keyword would make the
+    other read as honoured when it was dropped."""
+    with pytest.raises(TypeError, match="surface_id_field"):
+
+        @dataclass(frozen=True, init=False)
+        class ATypeThatDeclaresItsSurfacesTwice(
+            ClaimedSurfacePixelAccess,
+            surface_id_field="colour_surface_id",
+            surface_id_fields=("colour_surface_id", "depth_surface_id"),
+        ):
+            colour_surface_id: str
+
+
+def test_declaring_the_same_surface_field_twice_is_refused():
+    with pytest.raises(TypeError, match="depth_surface_id"):
+
+        @dataclass(frozen=True, init=False)
+        class ATypeThatRepeatsASurfaceField(
+            ClaimedSurfacePixelAccess,
+            surface_id_fields=("depth_surface_id", "depth_surface_id"),
+        ):
+            depth_surface_id: str
+
+
+def test_declaring_the_plural_keyword_with_one_field_name_is_refused():
+    """A `str` is a `Sequence[str]`, so the plural keyword would otherwise take
+    one field name apart into a surface per character — silently, past every
+    other check, into a type that claims nothing. The singular keyword next
+    door takes a bare string, which is what makes the slip realistic."""
+    with pytest.raises(TypeError, match="one surface per character"):
+
+        @dataclass(frozen=True, init=False)
+        class ATypeThatPassedOneNameToThePluralKeyword(
+            ClaimedSurfacePixelAccess, surface_id_fields="depth_surface_id"
+        ):
+            depth_surface_id: str
+
+
+def test_declaring_no_surface_field_at_all_is_refused():
+    """An empty declaration is a type with no pixels to reach, which is a
+    cast type that had no reason to compose this at all."""
+    with pytest.raises(TypeError, match="at least one"):
+
+        @dataclass(frozen=True, init=False)
+        class ATypeThatDeclaresNoSurface(
+            ClaimedSurfacePixelAccess, surface_id_fields=()
+        ):
+            width_in_pixels: int
+
+
 # ---- the frame the wheel ships is one of these ------------------------------
 
 
@@ -581,7 +1020,7 @@ def test_a_composing_type_read_over_a_link_arrives_built_from_the_bag():
 
     assert frame is not None, "the wired input received nothing"
     assert frame == DepthFrame(**FRAME_BAG)
-    assert getattr(frame, CLAIM_FIELD) is None, (
+    assert claim_taken_on(frame) is None, (
         "a capability that reaches nothing claims nothing"
     )
     with pytest.raises(RuntimeError, match="not reachable"):

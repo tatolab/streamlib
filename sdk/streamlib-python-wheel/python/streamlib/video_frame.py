@@ -11,10 +11,12 @@ by `surface_id`, resolved out-of-band.
 
 Casting also buys the frame's own lifetime and its pixels: read as a
 `VideoFrame`, the frame babysits its buffer and speaks `__dlpack__` itself, so
-`torch.from_dlpack(frame)` works straight off the read. Both come from
-`ClaimedSurfacePixelAccess`, the piece the wheel ships for any cast type to
-compose — this class is built from it like any other, which is why reading the
-bag as a dict stays first-class and unpenalized.
+`torch.from_dlpack(frame)` works straight off the read; `frame.writable()` is
+the GPU write door and `frame.cpu()` the CPU one, whose name is the whole
+warning. All of it comes from `ClaimedSurfacePixelAccess`, the piece the wheel
+ships for any cast type to compose — this class is built from it like any
+other, which is why reading the bag as a dict stays first-class and
+unpenalized.
 """
 
 from __future__ import annotations
@@ -162,7 +164,8 @@ class VideoFrame(ClaimedSurfacePixelAccess):
     own frames — never another processor's cadence.
 
     Such a frame is a DLPack producer in its own right — ``torch.from_dlpack``
-    consumes it directly, GPU-resident — because it composes
+    consumes it directly, GPU-resident — and carries the two write doors,
+    ``writable()`` and ``cpu()``, because it composes
     ``ClaimedSurfacePixelAccess`` like any user-authored cast type can.
     """
 

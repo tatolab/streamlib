@@ -151,19 +151,34 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   claim the typed cast takes: the frame is immutable while the object lives and the
   view ends when it drops. A write through the bare view is out of contract — the
   write doors are the scopes: `with frame.writable() as t:` for GPU edits and
-  `with frame.cpu() as img:` for CPU reach, the slow path saying so in its name. Both
-  scopes keep the one write-scope rule already decided for the device-tensor and CPU
-  pixel-buffer scopes, rebased onto the cast object: the block edge is the publication
-  point, the engine orders the write-back ahead of its own next read, and leaving by a
-  propagating exception discards the write without suppressing the exception.
+  `with frame.cpu() as img:` for CPU reach, the slow path saying so in its name.
+  Whether a frame takes an edit at all is the engine's one answer for both doors —
+  a write-back belongs to a pooled frame whose allocation is its only backing, or
+  to a registered texture that takes a recorded copy in — and a frame that cannot
+  take one refuses `writable()` by name and reaches `cpu()` as a read-only array,
+  numpy-enforced, rather than accepting a write that lands where other holders
+  cannot see it. A producer never creates that shape by publishing its own
+  internals: a published id names one picture to every consumer, in-process or
+  not, so a producer's private scratch (a capture ring) is never registered under
+  it.
+  `writable()` keeps the one write-scope rule already decided for the device-tensor
+  scope, rebased onto the cast object: it edits a staging, the block edge is the
+  publication point, the engine orders the write-back ahead of its own next read,
+  and leaving by a propagating exception discards the write without suppressing the
+  exception. `cpu()`'s array, where writable, is the surface's own coherent host
+  mapping — no staging between a store and the frame — so publication is per store
+  rather than at an edge, and a raise mid-edit leaves a complete edit of fewer
+  pixels, never a torn frame; the block edge still ends the write intent, and the
+  raise is never suppressed.
   The wheel ships the protocol as one public composable piece any cast type composes,
   over the unchanged claim seam — `VideoFrame` is itself built from it, which is the
   proof it holds no privileged position over any library or user cast type. The bare
   protocol binds a type that claims exactly one surface: a type claiming several gets
   no bare `__dlpack__` — the ambiguity is refused by name — and reaches each surface
-  through that surface's own protocol object. `cpu()` yields a writable numpy array.
-  Wheel-layer grammar only over the shipped staging and export primitives — no engine
-  change. [cast-object-tensor-protocol]
+  through that surface's own protocol object. `cpu()` yields a numpy array writable
+  exactly when the frame can take a write-back.
+  Wheel-layer grammar only over the shipped staging, export and escalate
+  primitives — no engine change. [cast-object-tensor-protocol]
 
 ## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
 
@@ -298,7 +313,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   publishes a torn frame that surfaces as corrupt pixels somewhere downstream rather
   than at the `raise`, so the engine keeps the complete frame it already holds and lets
   the exception propagate — one rule for both device-write scopes, the CPU pixel-buffer
-  scope included, and discarding never suppresses the exception. A write-back is always
+  scope included (the surface handle's scope and its pending *device* write —
+  distinct from the cast object's `cpu()`, whose host stores publish per store;
+  see the cast-object entry in §Packages), and discarding never suppresses the
+  exception. A write-back is always
   an edit of a frame the processor read, never a fresh-frame write: the engine refuses
   a write-back into a staging that has not first read that same frame, because it cannot
   tell a consumer's write from uninitialised memory and one staging spans every frame its
