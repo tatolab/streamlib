@@ -30,11 +30,15 @@ let mut export_info = Box::new(
         .build(),
 );
 
-// Discover the right memory_type_index for the resources you'll allocate
+// Discover the right memory_type_index for the resources you'll allocate.
+// The probe must mirror the REAL create info, pNext chain included — see below.
+let mut probe_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+    .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
 let probe_buffer_info = vk::BufferCreateInfo::builder()
     .size(64 * 1024)  // small probe size
     .usage(vk::BufferUsageFlags::TRANSFER_SRC | ...)
-    .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+    .push_next(&mut probe_external_info);
 let probe_alloc_opts = vma::AllocationOptions {
     flags: vma::AllocationCreateFlags::DEDICATED_MEMORY | ...,
     required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE | ...,
@@ -55,6 +59,22 @@ let pool = allocator.create_pool(&pool_options)?;
 // All allocations through this pool are DMA-BUF exportable
 let (buffer, alloc) = unsafe { pool.create_buffer(buf_info, &alloc_opts) }?;
 ```
+
+## The probe must mirror the real create info
+
+A DMA-BUF external buffer or image has a narrower `memoryTypeBits` than an
+otherwise identical plain one, so a probe that omits
+`VkExternalMemoryBufferCreateInfo` / `VkExternalMemoryImageCreateInfo` can pick
+a memory type index the real resource does not accept. The pool is created
+against that index, allocation from it succeeds, and the failure only surfaces
+at bind time as
+`VUID-vkBindBufferMemory-memory-01035: buffer require memoryTypeBits (0x1b) but
+VkDeviceMemory ... was allocated with memoryTypeIndex (5)`. The driver binds it
+anyway, so nothing fails without the validation layer loaded.
+
+Anything the real allocation sets that can narrow `memoryTypeBits` — usage
+flags, the external-memory chain, the DRM format modifier — belongs on the
+probe too.
 
 ## Drop order (critical)
 

@@ -347,6 +347,13 @@ impl SwapchainTestApp {
         let mut outcome = self.outcome.lock().unwrap();
 
         // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
+        // The probe carries the same `ExternalMemoryBufferCreateInfo` chain the
+        // real allocation below does: a DMA-BUF external buffer has a narrower
+        // `memoryTypeBits` than a plain one, and probing without the chain picks
+        // a type the real buffer rejects at bind time
+        // (VUID-vkBindBufferMemory-memory-01035).
+        let mut probe_buffer_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
         let probe_buffer_info = vk::BufferCreateInfo::builder()
             .size(64 * 1024)
             .usage(
@@ -354,7 +361,8 @@ impl SwapchainTestApp {
                     | vk::BufferUsageFlags::TRANSFER_DST
                     | vk::BufferUsageFlags::STORAGE_BUFFER,
             )
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut probe_buffer_external_info);
         let probe_alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
                 | vma::AllocationCreateFlags::MAPPED
@@ -393,6 +401,8 @@ impl SwapchainTestApp {
         };
 
         // ── Find memory type for DEVICE_LOCAL DMA-BUF exportable images ──
+        let mut probe_image_external_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
         let probe_image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk::Format::B8G8R8A8_UNORM)
@@ -407,7 +417,8 @@ impl SwapchainTestApp {
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut probe_image_external_info);
         let probe_image_alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
