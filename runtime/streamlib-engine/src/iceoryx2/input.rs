@@ -343,6 +343,13 @@ impl InputMailboxesInner {
     /// Receive all pending payloads from every channel subscriber and route them
     /// to mailboxes by the subscriber's local-port binding.
     ///
+    /// The `to_vec` here is the read side's one irreducible per-frame copy
+    /// (#1822): eliminating it means parking the iceoryx2 `Sample` in the
+    /// mailbox instead of bytes, which pins shared-memory slots for as long as
+    /// frames sit queued and couples the mailbox's drop-oldest depth to the
+    /// subscriber ring's — a change to who owns a received sample's lifetime,
+    /// not a copy removal.
+    ///
     /// This is called automatically by `read()` and `has_data()`, but can be
     /// called explicitly if needed.
     ///
@@ -409,7 +416,7 @@ impl InputMailboxesInner {
             };
             match raw {
                 None => return Ok(BoundedReadOutcome::Empty),
-                Some(r) => {
+                Some(mut r) => {
                     let header = FrameHeader::read_from_slice(&r);
                     let stamped_payload_bytes = header.len as usize;
                     let available_payload_bytes = r.len() - FRAME_HEADER_SIZE;
@@ -420,9 +427,14 @@ impl InputMailboxesInner {
                             available_payload_bytes,
                         });
                     }
-                    let data =
-                        r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes].to_vec();
-                    (data, header.timestamp_ns)
+                    // Strip the header in place: the frame's own buffer becomes
+                    // the payload buffer (one memmove, no allocation).
+                    r.copy_within(
+                        FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
+                        0,
+                    );
+                    r.truncate(stamped_payload_bytes);
+                    (r, header.timestamp_ns)
                 }
             }
         };
