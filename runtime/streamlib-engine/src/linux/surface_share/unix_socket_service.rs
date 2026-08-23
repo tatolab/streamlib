@@ -1679,6 +1679,11 @@ mod tests {
         service.stop();
     }
 
+    /// `VkImageTiling::DRM_FORMAT_MODIFIER_EXT` as the wire carries it.
+    /// `src/linux/` deliberately takes no vulkanalia dependency, so the raw
+    /// value is spelled here rather than read off `vk::ImageTiling`.
+    const VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT: i64 = 1_000_158_000;
+
     /// `drm_format_modifier` and `plane_strides` ride along through the
     /// register/lookup path. The host adapter writes the modifier into the
     /// `SurfaceTransportHandle` field defined in `streamlib-surface-adapter`; the
@@ -1747,6 +1752,86 @@ mod tests {
                 .map(|a| a.iter().filter_map(|v| v.as_u64()).collect::<Vec<_>>()),
             Some(vec![pitch]),
             "plane_strides round-trip: lookup must echo registered values verbatim",
+        );
+
+        let _ = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "release",
+                "surface_id": surface_id,
+                "runtime_id": "test-runtime",
+            }),
+            &[],
+            0,
+        );
+        drop(stream);
+        service.stop();
+    }
+
+    /// A zero `drm_format_modifier` is `DRM_FORMAT_MOD_LINEAR` when the image
+    /// was created with `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at
+    /// all" otherwise. The consumer can only tell the two apart if the tiling
+    /// crosses the wire beside the modifier, so both must survive the
+    /// round trip (#1915).
+    #[test]
+    fn a_linear_modifier_stays_distinguishable_from_no_modifier_across_the_wire() {
+        let state = SurfaceShareState::new();
+        let (_socket_dir, socket_path) = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"linear-modifier-payload");
+        let pitch: u64 = 64 * 4;
+        let req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 64,
+            "format": "bgra8_unorm",
+            "resource_type": "texture",
+            "plane_sizes": [pitch * 64],
+            "plane_offsets": [0u64],
+            "plane_strides": [pitch],
+            // DRM_FORMAT_MOD_LINEAR — a real modifier the driver chose,
+            // whose numeric value is indistinguishable from "unset".
+            "drm_format_modifier": 0u64,
+            "vk_image_tiling": VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        });
+        let (resp, _) =
+            send_request_with_fds(&stream, &req, &[send_fd], 0).expect("check_in request");
+        unsafe { libc::close(send_fd) };
+        let surface_id = resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id in response")
+            .to_string();
+
+        let (lookup_resp, lookup_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "check_out", "surface_id": surface_id}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("check_out request");
+        for fd in &lookup_fds {
+            unsafe { libc::close(*fd) };
+        }
+
+        assert_eq!(
+            lookup_resp
+                .get("drm_format_modifier")
+                .and_then(|v| v.as_u64()),
+            Some(0),
+            "the LINEAR modifier is zero and must echo back as zero",
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_tiling").and_then(|v| v.as_i64()),
+            Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
+            "without the tiling beside it, a consumer reads the zero modifier \
+             as an image that never went through VK_EXT_image_drm_format_modifier",
         );
 
         let _ = send_request_with_fds(
@@ -2129,7 +2214,7 @@ mod tests {
             "vk_image_mip_levels": 9,
             "vk_image_array_layers": 6,
             "vk_image_samples": 4,            // _4
-            "vk_image_tiling": 1000158000,    // DRM_FORMAT_MODIFIER_EXT
+            "vk_image_tiling": VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
             "vk_image_usage": 0x4Fu32,
             "vk_image_allocation_size": 16_777_216u64,
         });
@@ -2176,7 +2261,7 @@ mod tests {
         );
         assert_eq!(
             lookup_resp.get("vk_image_tiling").and_then(|v| v.as_i64()),
-            Some(1000158000),
+            Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
         );
         assert_eq!(
             lookup_resp.get("vk_image_usage").and_then(|v| v.as_u64()),

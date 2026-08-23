@@ -50,13 +50,15 @@ pub struct SurfaceMetadata {
     /// sets this from the `RhiExternalHandle` variant returned by
     /// [`crate::vulkan::rhi::HostVulkanBuffer::export_external_handle`].
     pub handle_type: String,
-    /// DRM format modifier of the underlying VkImage. Zero means
-    /// `DRM_FORMAT_MOD_LINEAR` (sampler-only on NVIDIA — see
-    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`) or "not set"
-    /// for legacy `VkBuffer`-backed surfaces (CPU-readable pixel buffers).
-    /// Render-target adapters MUST receive a non-zero modifier picked
-    /// from the EGL `external_only=FALSE` set; otherwise consumer-side
-    /// FBO completeness will fail on NVIDIA.
+    /// DRM format modifier of the underlying VkImage, meaningful only when
+    /// [`Self::vk_image_tiling`] is `DRM_FORMAT_MODIFIER_EXT` (1000158000).
+    /// Zero under that tiling is `DRM_FORMAT_MOD_LINEAR` (sampler-only on
+    /// NVIDIA — see `docs/learnings/nvidia-egl-dmabuf-render-target.md`);
+    /// zero under any other tiling is "not set", the legacy
+    /// `VkBuffer`-backed shape (CPU-readable pixel buffers). Render-target
+    /// adapters MUST receive a non-zero modifier picked from the EGL
+    /// `external_only=FALSE` set; otherwise consumer-side FBO completeness
+    /// will fail on NVIDIA.
     pub drm_format_modifier: u64,
     /// Optional OPAQUE_FD timeline-semaphore handle for the `produce_done`
     /// edge — signaled by the producer process when GPU writes complete,
@@ -116,7 +118,8 @@ pub struct SurfaceMetadata {
     /// `VkImageTiling` (raw `i32`): `OPTIMAL = 0`, `LINEAR = 1`,
     /// `DRM_FORMAT_MODIFIER_EXT = 1000158000`. Defaults to `0` (`OPTIMAL`)
     /// when absent — the OPAQUE_FD image flavor the new field set
-    /// primarily serves.
+    /// primarily serves. Also the discriminator that makes
+    /// [`Self::drm_format_modifier`] readable.
     pub vk_image_tiling: i32,
     /// `VkImageUsageFlags` (raw `u32` bitfield). Defaults to
     /// `TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE = 0x0F` when

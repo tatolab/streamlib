@@ -227,12 +227,14 @@ pub struct HostVulkanTexture {
     /// Mirrors `HostVulkanBuffer::is_opaque_fd_export`.
     #[cfg(target_os = "linux")]
     is_opaque_fd_export: bool,
-    /// DRM format modifier the driver picked for this image. Zero means
-    /// `DRM_FORMAT_MOD_LINEAR` or "not applicable" (image was not created
-    /// with [`vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT`]). Render-target
-    /// adapters propagate this through `SurfaceTransportHandle` so the
-    /// consumer's EGL import can pass it via
-    /// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT`.
+    /// DRM format modifier the driver picked for this image. Meaningful
+    /// only when [`HostVkImageMeta::vk_image_tiling`] is
+    /// [`vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT`] — zero is
+    /// `DRM_FORMAT_MOD_LINEAR`, a real modifier, and reads the same as the
+    /// zero left here by every path that never went through
+    /// `VK_EXT_image_drm_format_modifier`. Render-target adapters propagate
+    /// this through `SurfaceTransportHandle` so the consumer's EGL import
+    /// can pass it via `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT`.
     #[cfg(target_os = "linux")]
     chosen_drm_format_modifier: u64,
     width: u32,
@@ -918,6 +920,13 @@ impl HostVulkanTexture {
         self.format
     }
 
+    /// Tiling this image was created with — what `vkGetImageSubresourceLayout`
+    /// binds its aspect mask to, and the signal that says whether a
+    /// driver-chosen DRM format modifier applies to this image at all.
+    pub fn vk_image_tiling(&self) -> vk::ImageTiling {
+        self.vk_image_meta.vk_image_tiling
+    }
+
     /// Whether the image was created with TRANSFER_SRC usage — the
     /// capability a copy that reads it (`vkCmdCopyImageToBuffer`)
     /// requires; recording one without it is a Vulkan spec violation
@@ -1080,6 +1089,54 @@ impl HostVulkanTexture {
     }
 }
 
+/// Aspect mask `vkGetImageSubresourceLayout` requires to report memory
+/// plane `plane_index` of a DMA-BUF-exportable image.
+///
+/// `VUID-vkGetImageSubresourceLayout-tiling-09433` binds the aspect to the
+/// tiling the image was *created* with, never to the modifier the driver
+/// picked: `DRM_FORMAT_MOD_LINEAR` is numerically zero, so a modifier-tiled
+/// image is indistinguishable from an image created without a modifier by
+/// the modifier's value alone.
+#[cfg(target_os = "linux")]
+fn dma_buf_plane_layout_query_aspect_mask(
+    vk_image_tiling: vk::ImageTiling,
+    format: TextureFormat,
+    plane_index: usize,
+) -> Result<vk::ImageAspectFlags> {
+    const MEMORY_PLANE_ASPECTS: [vk::ImageAspectFlags; 4] = [
+        vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
+        vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
+        vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
+        vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
+    ];
+    const FORMAT_PLANE_ASPECTS: [vk::ImageAspectFlags; 2] =
+        [vk::ImageAspectFlags::PLANE_0, vk::ImageAspectFlags::PLANE_1];
+    const COLOR_ASPECTS: [vk::ImageAspectFlags; 1] = [vk::ImageAspectFlags::COLOR];
+
+    let (aspects, image_shape) = if vk_image_tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT {
+        (&MEMORY_PLANE_ASPECTS[..], "modifier-tiled")
+    } else if vk_image_tiling == vk::ImageTiling::LINEAR {
+        if matches!(format, TextureFormat::Nv12) {
+            (&FORMAT_PLANE_ASPECTS[..], "linear-tiled NV12")
+        } else {
+            (&COLOR_ASPECTS[..], "linear-tiled single-plane")
+        }
+    } else {
+        return Err(Error::GpuError(format!(
+            "dma_buf_plane_layout: {vk_image_tiling:?} images have driver-opaque layouts — \
+             only LINEAR and DRM_FORMAT_MODIFIER_EXT expose queryable plane layouts"
+        )));
+    };
+
+    aspects.get(plane_index).copied().ok_or_else(|| {
+        Error::GpuError(format!(
+            "dma_buf_plane_layout: plane index {plane_index} out of range — this RHI names \
+             {} plane aspect(s) for a {image_shape} image",
+            aspects.len()
+        ))
+    })
+}
+
 #[cfg(target_os = "linux")]
 impl HostVulkanTexture {
     /// DRM format modifier the driver picked at allocation time.
@@ -1088,7 +1145,9 @@ impl HostVulkanTexture {
     /// or imported via [`Self::from_dma_buf_fd`] — those paths do not go
     /// through `VK_EXT_image_drm_format_modifier`. Render-target textures
     /// allocated via [`Self::new_render_target_dma_buf`] return the modifier
-    /// the driver chose from the candidate list.
+    /// the driver chose from the candidate list, which is zero when that
+    /// choice was `DRM_FORMAT_MOD_LINEAR`. Read [`Self::vk_image_tiling`] to
+    /// tell those two zeros apart.
     pub fn chosen_drm_format_modifier(&self) -> u64 {
         self.chosen_drm_format_modifier
     }
@@ -1135,33 +1194,11 @@ impl HostVulkanTexture {
 
         let mut planes = Vec::with_capacity(plane_count);
         for plane_idx in 0..plane_count {
-            // For DRM_FORMAT_MODIFIER_EXT images use the MEMORY_PLANE aspect;
-            // for OPTIMAL/LINEAR images use COLOR (or PLANE_0/_1 for NV12).
-            let aspect_mask = if self.chosen_drm_format_modifier != 0 {
-                match plane_idx {
-                    0 => vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
-                    1 => vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
-                    2 => vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
-                    3 => vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
-                    _ => {
-                        return Err(Error::GpuError(format!(
-                            "dma_buf_plane_layout: plane index {plane_idx} out of range"
-                        )));
-                    }
-                }
-            } else if matches!(self.format, TextureFormat::Nv12) {
-                match plane_idx {
-                    0 => vk::ImageAspectFlags::PLANE_0,
-                    1 => vk::ImageAspectFlags::PLANE_1,
-                    _ => {
-                        return Err(Error::GpuError(format!(
-                            "dma_buf_plane_layout: NV12 plane {plane_idx} out of range"
-                        )));
-                    }
-                }
-            } else {
-                vk::ImageAspectFlags::COLOR
-            };
+            let aspect_mask = dma_buf_plane_layout_query_aspect_mask(
+                self.vk_image_meta.vk_image_tiling,
+                self.format,
+                plane_idx,
+            )?;
 
             let subres = vk::ImageSubresource::builder()
                 .aspect_mask(aspect_mask)
@@ -1672,7 +1709,7 @@ impl super::VulkanTextureLike for HostVulkanTexture {
         texture_format_to_vk(self.format)
     }
     fn vk_image_tiling(&self) -> vk::ImageTiling {
-        self.vk_image_meta.vk_image_tiling
+        HostVulkanTexture::vk_image_tiling(self)
     }
     fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags {
         self.vk_image_meta.vk_image_usage_flags
@@ -1696,6 +1733,110 @@ mod tests {
     use crate::vulkan::rhi::video_profile_test_fixture::{
         VideoProfileWithOwnedCodecExtensionChain, device_supports_h264_for_dpb_direction,
     };
+
+    /// `DRM_FORMAT_MOD_LINEAR` is zero, so a modifier-tiled image is not
+    /// recognisable by its modifier's value. Keying the aspect choice on
+    /// that value routes a linear-modifier image down the COLOR branch and
+    /// trips `VUID-vkGetImageSubresourceLayout-tiling-09433` (#1915).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linear_modifier_image_is_queried_through_the_memory_plane_aspect() {
+        assert_eq!(
+            dma_buf_plane_layout_query_aspect_mask(
+                vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                TextureFormat::Bgra8Unorm,
+                0,
+            )
+            .expect("plane 0 of a single-plane modifier-tiled image"),
+            vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_modifier_tiled_nv12_image_uses_the_memory_plane_aspect_not_the_format_plane_aspect() {
+        assert_eq!(
+            dma_buf_plane_layout_query_aspect_mask(
+                vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                TextureFormat::Nv12,
+                1,
+            )
+            .expect("plane 1 of a modifier-tiled NV12 image"),
+            vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
+        );
+    }
+
+    /// The counterpart the modifier's value cannot express: an image
+    /// created without `VK_EXT_image_drm_format_modifier` also reports a
+    /// zero modifier, and must keep the COLOR aspect.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linear_tiled_image_created_without_a_modifier_keeps_the_color_aspect() {
+        assert_eq!(
+            dma_buf_plane_layout_query_aspect_mask(
+                vk::ImageTiling::LINEAR,
+                TextureFormat::Bgra8Unorm,
+                0,
+            )
+            .expect("plane 0 of a linear-tiled single-plane image"),
+            vk::ImageAspectFlags::COLOR,
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_linear_tiled_nv12_image_keeps_the_format_plane_aspects() {
+        let aspects: Vec<vk::ImageAspectFlags> = (0..2)
+            .map(|plane_index| {
+                dma_buf_plane_layout_query_aspect_mask(
+                    vk::ImageTiling::LINEAR,
+                    TextureFormat::Nv12,
+                    plane_index,
+                )
+                .expect("both planes of a linear-tiled NV12 image")
+            })
+            .collect();
+        assert_eq!(
+            aspects,
+            vec![vk::ImageAspectFlags::PLANE_0, vk::ImageAspectFlags::PLANE_1],
+        );
+    }
+
+    /// OPTIMAL layouts are driver-opaque. The caller refuses them before it
+    /// reaches this helper, but the helper is independently reachable, so it
+    /// must not answer COLOR for a tiling it cannot describe.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_optimal_tiled_image_has_no_queryable_plane_aspect() {
+        assert!(
+            dma_buf_plane_layout_query_aspect_mask(
+                vk::ImageTiling::OPTIMAL,
+                TextureFormat::Bgra8Unorm,
+                0,
+            )
+            .is_err(),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_plane_index_past_what_the_image_exposes_is_refused() {
+        for (tiling, format, plane_index) in [
+            (
+                vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                TextureFormat::Bgra8Unorm,
+                4,
+            ),
+            (vk::ImageTiling::LINEAR, TextureFormat::Nv12, 2),
+            (vk::ImageTiling::LINEAR, TextureFormat::Bgra8Unorm, 1),
+        ] {
+            assert!(
+                dma_buf_plane_layout_query_aspect_mask(tiling, format, plane_index).is_err(),
+                "plane {plane_index} of a {tiling:?} {format:?} image must be refused, \
+                 not silently answered with another plane's aspect"
+            );
+        }
+    }
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -2262,6 +2403,87 @@ mod tests {
             .export_dma_buf_fd()
             .expect("DMA-BUF export must succeed");
         assert!(fd >= 0, "DMA-BUF fd must be non-negative");
+    }
+
+    /// The rig half of the aspect-mask contract: allocating against
+    /// `DRM_FORMAT_MOD_LINEAR` yields a modifier-tiled image whose modifier
+    /// reads zero, and querying its plane layout must raise no validation
+    /// finding. Keying the aspect on the modifier's value instead of the
+    /// tiling trips `VUID-vkGetImageSubresourceLayout-tiling-09433` here
+    /// (#1915). NVIDIA advertises LINEAR as its only sampler-only ARGB8888
+    /// modifier, which is the shape real camera DMA-BUFs take on that
+    /// driver.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_linear_modifier_plane_layout_query_raises_no_validation_finding() {
+        const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        let counts_before = device.validation_layer_message_counts();
+        if counts_before.is_none() {
+            println!(
+                "Skipping — no validation messenger installed. Re-run with \
+                 STREAMLIB_VULKAN_VALIDATION=1 and VK_LAYER_KHRONOS_validation present."
+            );
+            return;
+        }
+        if device.dma_buf_image_pool_tiled().is_none() {
+            println!("Skipping — tiled DMA-BUF pool not created");
+            return;
+        }
+
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+        );
+        let texture = match HostVulkanTexture::new_render_target_dma_buf(
+            &device,
+            &desc,
+            &[DRM_FORMAT_MOD_LINEAR],
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                // A driver may advertise LINEAR for EGL import yet refuse it
+                // under `VkImageDrmFormatModifierListCreateInfoEXT` for this
+                // usage set. The aspect-mask contract is what is under test,
+                // not the allocator's modifier acceptance.
+                println!("Skipping — allocation against DRM_FORMAT_MOD_LINEAR refused: {e}");
+                return;
+            }
+        };
+
+        assert_eq!(
+            texture.chosen_drm_format_modifier(),
+            DRM_FORMAT_MOD_LINEAR,
+            "the candidate list held only LINEAR, so the driver must have picked it"
+        );
+        assert_eq!(
+            texture.vk_image_tiling(),
+            vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+            "a LINEAR-modifier image is still modifier-tiled by creation — the \
+             recorded tiling is what says so, because the modifier reads zero"
+        );
+
+        let layout = texture
+            .dma_buf_plane_layout()
+            .expect("plane layout of a linear-modifier image must be queryable");
+        assert_eq!(layout.len(), 1, "BGRA is single-plane");
+
+        assert_eq!(
+            device.validation_layer_message_counts(),
+            counts_before,
+            "querying a linear-modifier image's plane layout must go through the \
+             MEMORY_PLANE aspects, not COLOR"
+        );
     }
 
     /// `new_render_target_dma_buf` with an empty modifier list must fail
