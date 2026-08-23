@@ -1624,15 +1624,17 @@ impl HelperProcessGpuExchangeClient {
 
     /// Whether an edit written back into `surface_id` publishes at all —
     /// the engine's own answer, from the same mint-time derivation the
-    /// export stagings carry: a write-back belongs to a surface whose only
-    /// backing is its own pooled allocation.
+    /// export stagings carry: a write-back belongs to a pooled frame whose
+    /// allocation is its only backing, or to a registered texture that
+    /// takes a recorded copy in; a frame its producer still owns answers
+    /// no.
     ///
-    /// Answered from an already-open device export when there is one, and
-    /// otherwise over the CPU-readback staging op — the residency with no
-    /// CUDA anywhere in it; the staging the parent mints to answer is
-    /// cached engine-side per pool slot, and the answer is memoised here
-    /// on the same key, so this costs at most one round trip per slot
-    /// lifetime.
+    /// Seeded by the device door when it opens first — `open_device_export`
+    /// records the same mint-time answer — and otherwise asked over the
+    /// CPU-readback staging op, the residency with no CUDA anywhere in it;
+    /// the staging the parent mints to answer is cached engine-side per
+    /// pool slot, and the answer is memoised here on the same key, so this
+    /// costs at most one round trip per slot lifetime.
     #[cfg(target_os = "linux")]
     pub(crate) fn surface_can_take_write_back(
         &self,
@@ -1647,28 +1649,17 @@ impl HelperProcessGpuExchangeClient {
         {
             return Ok(*already_answered);
         }
-        let answer_the_device_door_already_holds = self
-            .device_exports_by_surface
-            .lock()
-            .get(source_pool_slot_key)
-            .map(|already_open| already_open.writable);
-        let can_take_write_back = match answer_the_device_door_already_holds {
-            Some(answer) => answer,
-            None => {
-                let op = PyDict::new(python);
-                op.set_item("op", "open_cpu_readback_staging")?;
-                op.set_item("surface_id", surface_id)?;
-                let response =
-                    escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)
-                        .map_err(|failure| {
-                            PyRuntimeError::new_err(format!(
-                                "could not ask the engine whether surface {surface_id:?} takes \
-                                 a write-back: {failure}"
-                            ))
-                        })?;
-                response_field(&response, "writable")?.extract()?
-            }
-        };
+        let op = PyDict::new(python);
+        op.set_item("op", "open_cpu_readback_staging")?;
+        op.set_item("surface_id", surface_id)?;
+        let response = escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)
+            .map_err(|failure| {
+                PyRuntimeError::new_err(format!(
+                    "could not ask the engine whether surface {surface_id:?} takes a \
+                         write-back: {failure}"
+                ))
+            })?;
+        let can_take_write_back: bool = response_field(&response, "writable")?.extract()?;
         self.write_back_answers_by_pool_slot
             .lock()
             .insert(source_pool_slot_key.to_string(), can_take_write_back);

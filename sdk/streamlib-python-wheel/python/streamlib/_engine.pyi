@@ -398,8 +398,9 @@ class GpuContextLimitedAccess:
         """Whether an edit written back into this surface publishes at all.
 
         The engine's one answer for every write door: a write-back belongs to
-        a surface whose only backing is its own pooled allocation, so a frame
-        its producer still owns (a dual-backed camera frame) answers False.
+        a pooled frame whose allocation is its only backing, or to a
+        registered texture that takes a recorded copy in, so a frame its
+        producer still owns (a dual-backed camera frame) answers False.
         `writable()` refuses on this answer; `cpu()` hands its array out
         read-only on it.
         """

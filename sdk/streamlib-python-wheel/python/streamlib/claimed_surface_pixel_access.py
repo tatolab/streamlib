@@ -82,9 +82,10 @@ def _report_the_first_read_only_cpu_door(surface_id: str) -> None:
     _a_read_only_cpu_door_has_been_reported = True
     warn(
         "cpu() is handing out read-only arrays for this surface: its frame cannot take a "
-        "write-back — a pool member its producer still owns takes no in-place edit through "
-        "any door, because an edit there would land where other holders never see it. "
-        "writable() refuses the same frames by name. Not reported again in this process.",
+        "write-back — it is a pool member its producer still owns, or a texture allocated "
+        "without copy-in usage — so no in-place edit publishes through any door; an edit "
+        "would land where other holders never see it. writable() refuses the same frames "
+        "by name. Not reported again in this process.",
         surface_id=surface_id,
     )
 

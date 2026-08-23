@@ -153,10 +153,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   write doors are the scopes: `with frame.writable() as t:` for GPU edits and
   `with frame.cpu() as img:` for CPU reach, the slow path saying so in its name.
   Whether a frame takes an edit at all is the engine's one answer for both doors —
-  a write-back belongs to a surface whose only backing is its own pooled
-  allocation — so a frame its producer still owns (a dual-backed camera frame)
-  refuses `writable()` by name and reaches `cpu()` as a read-only array,
-  numpy-enforced: never a write that lands where other holders cannot see it.
+  a write-back belongs to a pooled frame whose allocation is its only backing, or
+  to a registered texture that takes a recorded copy in (a kernel output) — so a
+  frame its producer still owns (a dual-backed camera frame) refuses `writable()`
+  by name and reaches `cpu()` as a read-only array, numpy-enforced: never a write
+  that lands where other holders cannot see it.
   `writable()` keeps the one write-scope rule already decided for the device-tensor
   scope, rebased onto the cast object: it edits a staging, the block edge is the
   publication point, the engine orders the write-back ahead of its own next read,

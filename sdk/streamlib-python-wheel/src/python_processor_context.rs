@@ -1091,10 +1091,11 @@ impl PythonGpuContextLimitedAccess {
 
     /// Whether an edit written back into this surface publishes at all —
     /// the engine's one answer for every write door: a write-back belongs
-    /// to a surface whose only backing is its own pooled allocation, so a
-    /// frame its producer still owns (a dual-backed camera frame) answers
-    /// `False`. `writable()` refuses on this answer; `cpu()` hands its
-    /// array out read-only on it.
+    /// to a pooled frame whose allocation is its only backing, or to a
+    /// registered texture that takes a recorded copy in, so a frame its
+    /// producer still owns (a dual-backed camera frame) answers `False`.
+    /// `writable()` refuses on this answer; `cpu()` hands its array out
+    /// read-only on it.
     fn surface_can_take_write_back(&self, python: Python<'_>, surface_id: &str) -> PyResult<bool> {
         #[cfg(target_os = "linux")]
         if let Some(exchange_client) = &self.helper_process_exchange_client {

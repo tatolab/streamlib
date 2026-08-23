@@ -76,8 +76,10 @@ with frame.cpu() as img:                   # the slow path says so in its name
 
 A type that claims more than one surface gets no bare `__dlpack__` — the ambiguity is
 refused by name — and reaches each surface through that surface's own protocol object
-(worked spelling: a per-surface accessor on the composable; name lands with the
-ticket).
+(landed spelling: `PixelAccessToOneClaimedSurface`, one per declared surface field,
+reached via `pixel_access_to_the_surface_declared_in`; both exported). The write-back
+answer itself landed as `GpuContextLimitedAccess.surface_can_take_write_back` — a new
+caller of the shipped `open_cpu_readback_staging` escalate op, memoised per pool slot.
 
 ## MODIFIED
 

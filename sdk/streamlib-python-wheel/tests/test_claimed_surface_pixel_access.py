@@ -676,8 +676,9 @@ def test_the_cpu_door_yields_the_host_array_under_a_write_lock(offered):
 
 
 def test_the_cpu_door_leaves_through_the_surfaces_own_scope(offered):
-    """Publication at the block edge is the handle's own exit — the same code
-    that publishes a pending write and then releases."""
+    """The block edge settles the surface's scope: the write intent ends and
+    the handle closes through its own exit. The stores themselves published as
+    they landed — the array is the surface's coherent mapping."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
     frame = DepthFrame(**FRAME_BAG)
 
@@ -692,8 +693,9 @@ def test_the_cpu_door_leaves_through_the_surfaces_own_scope(offered):
 def test_a_raise_inside_the_cpu_door_reaches_that_scopes_exit_and_propagates(
     offered,
 ):
-    """The discard-on-raise is the handle's, keyed on the exception reaching
-    its `__exit__` — and the raise is never suppressed on the way."""
+    """The raise reaches the surface's own exit unsuppressed and the scope
+    still closes — all a shared host mapping can promise on this path: stores
+    already written are already in the frame, so there is nothing to discard."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
     frame = DepthFrame(**FRAME_BAG)
 

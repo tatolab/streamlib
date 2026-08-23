@@ -22,9 +22,10 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
    `torch.from_dlpack(frame)` — shortest, GPU-resident. GPU edit: `with frame.writable() as
    t:` — the block edge is the publication point. CPU / skia / PIL: `with frame.cpu() as
    img:` — the slow path says so in its name. Whether a frame takes an edit at all is the
-   engine's one answer for both doors: a write-back belongs to a surface whose only backing
-   is its own pooled allocation, so a frame its producer still owns refuses `writable()` by
-   name and reaches `cpu()` read-only. `writable()` keeps the write-scope rule the plan
+   engine's one answer for both doors: a write-back belongs to a pooled frame whose
+   allocation is its only backing, or to a registered texture that takes a recorded copy in
+   (a kernel output), so a frame its producer still owns refuses `writable()` by name and
+   reaches `cpu()` read-only. `writable()` keeps the write-scope rule the plan
    states for the device-tensor scope: exit publishes, ordered ahead of the engine's next
    read; a propagating exception discards the write and never suppresses the exception.
    `cpu()`'s publication semantics are the host mapping's own — see point 6.
@@ -96,3 +97,9 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
 - The read-only downgrade is enforced on the CPU door precisely because it is enforceable
   there: numpy honors the DLPack read-only flag, which is the enforcement a CUDA consumer
   of the bare view cannot be given — the same honesty test, answered per consumer.
+- Cost accepted: where no device export is already open, asking the write-back answer
+  mints the engine's cached CPU-readback staging for that pool slot — one full-frame
+  host-visible allocation, an exportable timeline and a surface-share registration, none
+  of which the CPU door itself reads — paid once per slot lifetime, on the read-only
+  camera path included. The retirement is a mint-free writability query, an engine op
+  outside this change's scope.
