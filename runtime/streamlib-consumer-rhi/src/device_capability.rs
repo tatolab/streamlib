@@ -165,6 +165,31 @@ pub trait VulkanRhiBuffer {
 ///   model: DEVICE_LOCAL, single-sample, single-mip, unprotected, no
 ///   YCbCr conversion, bound at offset 0. Constructors that violate
 ///   any default override the corresponding method.
+/// Terminal layout a recorded pass may legally leave an image in for a
+/// downstream shader read, given the usage the image was created with:
+/// `SHADER_READ_ONLY_OPTIMAL` when that usage carries `SAMPLED` or
+/// `INPUT_ATTACHMENT`, `GENERAL` otherwise.
+///
+/// `SHADER_READ_ONLY_OPTIMAL` requires one of those two bits
+/// (VUID-VkImageMemoryBarrier2-oldLayout-01211), so a pass that ends a
+/// storage-only or colour-attachment-only image in it violates the spec
+/// at the barrier — and, if that layout is then published as the image's
+/// tracked state, again at the next consumer's barrier *out of* it.
+/// `GENERAL` is legal for any image, which is why it is the fallback:
+/// images whose construction path records no usage metadata report empty
+/// flags and land there too.
+pub fn terminal_layout_for_shader_read_access_of_image_usage(
+    vk_image_usage_flags: vk::ImageUsageFlags,
+) -> crate::VulkanLayout {
+    if vk_image_usage_flags
+        .intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::INPUT_ATTACHMENT)
+    {
+        crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+    } else {
+        crate::VulkanLayout::GENERAL
+    }
+}
+
 pub trait VulkanTextureLike {
     /// `vk::Image` handle, or `None` for placeholder textures.
     fn image(&self) -> Option<vk::Image>;
@@ -196,21 +221,10 @@ pub trait VulkanTextureLike {
     fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags;
 
     /// Terminal layout a recorded pass may legally leave this image in
-    /// for a downstream shader read: `SHADER_READ_ONLY_OPTIMAL` when
-    /// the create-time usage carries `SAMPLED` or `INPUT_ATTACHMENT`
-    /// (VUID-VkImageMemoryBarrier2-oldLayout-01211), `GENERAL`
-    /// otherwise. Textures whose construction path records no usage
-    /// metadata report empty flags and fall to `GENERAL`, which is
-    /// legal for any image.
+    /// for a downstream shader read — see
+    /// [`terminal_layout_for_shader_read_access_of_image_usage`].
     fn terminal_layout_for_shader_read_access(&self) -> crate::VulkanLayout {
-        if self
-            .vk_image_usage_flags()
-            .intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::INPUT_ATTACHMENT)
-        {
-            crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
-        } else {
-            crate::VulkanLayout::GENERAL
-        }
+        terminal_layout_for_shader_read_access_of_image_usage(self.vk_image_usage_flags())
     }
 
     /// `VkDeviceMemory` handle the image is bound to. Returns
@@ -392,5 +406,81 @@ mod layout_tests {
     fn consumer_marker_is_zst() {
         assert_eq!(size_of::<ConsumerMarker>(), 0);
         assert_eq!(align_of::<ConsumerMarker>(), 1);
+    }
+}
+
+#[cfg(test)]
+mod terminal_layout_for_shader_read_access_tests {
+    //! The usage→terminal-layout rule, locked host-free.
+    //!
+    //! Its callers — the tone mapper (#1894) and the pixel-buffer
+    //! upload (#1916) — can only be exercised on a rig, and the rig
+    //! tier does not run in CI. The rule itself needs no device, so
+    //! the usage shapes that actually reach it are pinned here.
+    use super::*;
+
+    /// The shape the ray-tracing output takes: a storage image seeded
+    /// through a transfer. `SHADER_READ_ONLY_OPTIMAL` is illegal for
+    /// it, so the rule must not choose that layout.
+    #[test]
+    fn a_storage_only_usage_terminates_in_general() {
+        assert_eq!(
+            terminal_layout_for_shader_read_access_of_image_usage(
+                vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+            ),
+            crate::VulkanLayout::GENERAL
+        );
+    }
+
+    /// The shape a scissored-draw target takes.
+    #[test]
+    fn a_colour_attachment_only_usage_terminates_in_general() {
+        assert_eq!(
+            terminal_layout_for_shader_read_access_of_image_usage(
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+            ),
+            crate::VulkanLayout::GENERAL
+        );
+    }
+
+    /// The shape every ring slot and cached upload texture takes —
+    /// the path that must keep its existing terminal layout.
+    #[test]
+    fn a_sampled_capable_usage_terminates_in_shader_read_only_optimal() {
+        assert_eq!(
+            terminal_layout_for_shader_read_access_of_image_usage(
+                vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE
+                    | vk::ImageUsageFlags::TRANSFER_DST
+            ),
+            crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
+    /// `INPUT_ATTACHMENT` holds `SHADER_READ_ONLY_OPTIMAL` on its own,
+    /// without `SAMPLED`.
+    #[test]
+    fn an_input_attachment_usage_terminates_in_shader_read_only_optimal() {
+        assert_eq!(
+            terminal_layout_for_shader_read_access_of_image_usage(
+                vk::ImageUsageFlags::INPUT_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST
+            ),
+            crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
+    /// A texture whose construction path recorded no usage metadata
+    /// must not be assumed sampled-capable: the fallback has to be the
+    /// layout that is legal for every image.
+    #[test]
+    fn an_unrecorded_usage_terminates_in_general() {
+        assert_eq!(
+            terminal_layout_for_shader_read_access_of_image_usage(vk::ImageUsageFlags::empty()),
+            crate::VulkanLayout::GENERAL
+        );
     }
 }
