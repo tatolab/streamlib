@@ -1098,6 +1098,50 @@ mod tests {
         }
     }
 
+    /// A frame may carry more bytes than its header stamps — the wire
+    /// contract trusts the stamped length, so the read delivers exactly that
+    /// many payload bytes and the slack past them never reaches the caller.
+    ///
+    /// Fail-without-fix: hand the caller the frame's whole tail instead of
+    /// slicing (or truncating) to the stamped length and the delivered
+    /// payload grows by the slack bytes — the exact-length assertion fails.
+    #[test]
+    fn read_raw_bounded_delivers_exactly_the_stamped_payload_from_an_over_carrying_frame() {
+        const STAMPED: usize = 200;
+        const CARRIED: usize = 300;
+
+        let inner = InputMailboxesInner::new();
+        inner.add_port("in", 8, ReadMode::ReadNextInOrder);
+
+        let body: Vec<u8> = (0..CARRIED as u32).map(|i| (i % 251) as u8).collect();
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE + CARRIED];
+        FrameHeader::new("in", 77, STAMPED as u32)
+            .expect("port fits PortKey")
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        frame[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        assert!(inner.route(frame), "frame must route to port 'in'");
+
+        match inner
+            .read_raw_bounded("in", usize::MAX)
+            .expect("bounded read")
+        {
+            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+                assert_eq!(data.len(), STAMPED, "payload must stop at the stamped length");
+                assert_eq!(data[..], body[..STAMPED], "payload must be the stamped prefix");
+                assert_eq!(timestamp_ns, 77);
+            }
+            _ => panic!("expected the over-carrying frame to deliver its stamped payload"),
+        }
+
+        // The slack was dropped with the frame, not staged — the port is empty.
+        assert!(matches!(
+            inner
+                .read_raw_bounded("in", usize::MAX)
+                .expect("bounded read"),
+            BoundedReadOutcome::Empty
+        ));
+    }
+
     /// A malformed length prefix must not deliver a frame to a real mailbox.
     ///
     /// The saturating bound is only safe because a clamped name fails to match

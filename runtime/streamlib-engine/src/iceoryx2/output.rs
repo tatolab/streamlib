@@ -1048,4 +1048,66 @@ mod tests {
             ChannelTrustTierLabel::UntrustedSession.to_string()
         );
     }
+
+    /// Full-initialization lock for the loan-direct write path: a frame
+    /// written after a larger one has cycled through the same publisher must
+    /// deliver exactly header + payload — never bytes a previous tenant left
+    /// in the recycled chunk.
+    ///
+    /// Fail-without-fix: skip (or short-write) either region of the loan and
+    /// the received slice reads back the earlier frame's 0xAA filler where
+    /// fresh bytes belong.
+    #[test]
+    fn a_frame_written_after_a_larger_one_carries_no_stale_bytes() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix("stale/pubsub")).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(2)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(16 * 1024)
+            .create()
+            .unwrap();
+        let subscriber = pubsub.subscriber_builder().create().unwrap();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        inner.set_channel_publisher(
+            "out",
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/stale/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        );
+
+        // A large all-0xAA frame primes the publisher's chunk pool with
+        // recognisable filler, then goes back to the pool for reuse.
+        let filler = vec![0xAAu8; 8 * 1024];
+        inner.write_raw("out", &filler, 1).unwrap();
+        drop(subscriber.receive().expect("receive").expect("filler frame"));
+
+        let payload = b"fresh-small-payload";
+        inner.write_raw("out", payload, 4242).unwrap();
+        let got = subscriber
+            .receive()
+            .expect("receive")
+            .expect("fresh frame must deliver");
+        let slice: &[u8] = got.payload();
+        assert_eq!(
+            slice.len(),
+            FRAME_HEADER_SIZE + payload.len(),
+            "the loan must be sized to exactly header + payload"
+        );
+        let header = FrameHeader::read_from_slice(slice);
+        assert_eq!(header.port(), "out");
+        assert_eq!(header.timestamp_ns, 4242);
+        assert_eq!(header.len as usize, payload.len());
+        assert_eq!(&slice[FRAME_HEADER_SIZE..], payload);
+    }
 }
