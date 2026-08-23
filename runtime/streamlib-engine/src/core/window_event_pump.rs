@@ -15,9 +15,14 @@
 //! the registering processor: it supplies the attributes and consumes the
 //! events. The raw-window-handle seam between the window and the present
 //! target is untouched; the pump never mints a surface and never draws.
+//!
+//! Linux-gated but in `core/` rather than `linux/`: this is the seam an Apple
+//! main-thread implementation fills, and Apple's rule — the loop must live on
+//! the process's first thread — changes where the loop is driven, not what a
+//! window owner asks for or what it is handed back.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, sync_channel};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -79,10 +84,24 @@ impl WindowRegisteredWithEventPump {
         &self.window
     }
 
-    /// The next event the pump routed to this window, or `None` when none is
-    /// pending. Never blocks.
-    pub fn try_next_window_event_from_event_pump(&self) -> Option<WindowEventForOwningProcessor> {
-        self.events_from_event_pump.try_recv().ok()
+    /// Every event the pump has routed to this window since the last drain,
+    /// reduced to what an owner acts on. Never blocks.
+    ///
+    /// Resizes coalesce to the last: a drag emits one event per motion step and
+    /// only the final extent is worth a swapchain recreate.
+    pub fn drain_window_events_from_event_pump(&self) -> CoalescedWindowEventsFromEventPump {
+        let mut coalesced = CoalescedWindowEventsFromEventPump::default();
+        for event in self.events_from_event_pump.try_iter() {
+            match event {
+                WindowEventForOwningProcessor::ResizedToPhysicalPixels { width, height } => {
+                    coalesced.resized_to_physical_pixels = Some((width, height));
+                }
+                WindowEventForOwningProcessor::CloseRequestedByUser => {
+                    coalesced.close_requested_by_user = true;
+                }
+            }
+        }
+        coalesced
     }
 
     /// The window's current drawable size in physical pixels, clamped away
@@ -101,6 +120,16 @@ impl Drop for WindowRegisteredWithEventPump {
             },
         );
     }
+}
+
+/// What one drain of a window's event stream amounts to, for the processor
+/// that owns the window.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CoalescedWindowEventsFromEventPump {
+    /// The window's final extent this drain, if it was resized at all.
+    pub resized_to_physical_pixels: Option<(u32, u32)>,
+    /// Whether the user asked to close the window during this drain.
+    pub close_requested_by_user: bool,
 }
 
 /// The process-wide pump. Reached through [`process_wide_window_event_pump`];
@@ -130,21 +159,20 @@ impl ProcessWideWindowEventPump {
                 )
             })?;
 
-        let (window, events_from_event_pump) = reply_from_event_pump
-            .recv_timeout(WINDOW_EVENT_PUMP_REPLY_TIMEOUT)
-            .map_err(|_| {
-                Error::DisplaySurfaceUnavailable(format!(
-                    "window event pump did not answer a window request within {:?}",
-                    WINDOW_EVENT_PUMP_REPLY_TIMEOUT
-                ))
-            })??;
-
-        Ok(WindowRegisteredWithEventPump {
-            window_id: window.id(),
-            events_from_event_pump,
-            control_messages_to_event_pump: self.control_messages_to_event_pump.clone(),
-            window,
-        })
+        // The two failures are told apart: a dead pump is immediate and
+        // permanent, a timeout means the compositor is still thinking. Reporting
+        // the first as the second sends a reader hunting a slow compositor that
+        // was never involved.
+        match reply_from_event_pump.recv_timeout(WINDOW_EVENT_PUMP_REPLY_TIMEOUT) {
+            Ok(registration) => registration,
+            Err(RecvTimeoutError::Disconnected) => Err(Error::DisplaySurfaceUnavailable(
+                "window event pump stopped before it answered a window request".into(),
+            )),
+            Err(RecvTimeoutError::Timeout) => Err(Error::DisplaySurfaceUnavailable(format!(
+                "window event pump did not answer a window request within \
+                 {WINDOW_EVENT_PUMP_REPLY_TIMEOUT:?}"
+            ))),
+        }
     }
 }
 
@@ -170,15 +198,12 @@ pub fn process_wide_window_event_pump() -> Result<&'static ProcessWideWindowEven
 enum WindowEventPumpControlMessage {
     CreateWindowForOwningProcessor {
         request: WindowRegistrationRequestFromOwningProcessor,
-        reply_to_requesting_processor: SyncSender<WindowCreationReplyFromEventPump>,
+        reply_to_requesting_processor: SyncSender<Result<WindowRegisteredWithEventPump>>,
     },
     ForgetWindowOfOwningProcessor {
         window_id: WindowId,
     },
 }
-
-type WindowCreationReplyFromEventPump =
-    Result<(Arc<Window>, Receiver<WindowEventForOwningProcessor>)>;
 
 fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEventPump, String> {
     let (pump_startup_outcome_sender, pump_startup_outcome) = sync_channel(1);
@@ -193,8 +218,15 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
                     return;
                 }
             };
+            // `ActiveEventLoop` has no `create_proxy`, so the handler must
+            // carry its own clone to hand out with each registration.
+            let control_messages_to_event_pump = event_loop.create_proxy();
             let mut handler = WindowEventPumpApplicationHandler {
-                startup_reply: Some((event_loop.create_proxy(), pump_startup_outcome_sender)),
+                startup_reply: Some((
+                    control_messages_to_event_pump.clone(),
+                    pump_startup_outcome_sender,
+                )),
+                control_messages_to_event_pump,
                 registered_windows: RegisteredWindowsByWindowId::default(),
             };
             if let Err(e) = event_loop.run_app(&mut handler) {
@@ -284,6 +316,7 @@ struct WindowEventPumpApplicationHandler {
         EventLoopProxy<WindowEventPumpControlMessage>,
         SyncSender<std::result::Result<EventLoopProxy<WindowEventPumpControlMessage>, String>>,
     )>,
+    control_messages_to_event_pump: EventLoopProxy<WindowEventPumpControlMessage>,
     registered_windows: RegisteredWindowsByWindowId,
 }
 
@@ -304,7 +337,15 @@ impl ApplicationHandler<WindowEventPumpControlMessage> for WindowEventPumpApplic
                 reply_to_requesting_processor,
             } => {
                 let reply = self.create_window_for_owning_processor(event_loop, request);
-                let _ = reply_to_requesting_processor.send(reply);
+                // A requester that timed out and dropped its receiver leaves the
+                // window here; letting the registration drop closes it and
+                // deregisters it, rather than stranding a routing entry no
+                // later event will ever sweep.
+                if let Err(std::sync::mpsc::SendError(unclaimed)) =
+                    reply_to_requesting_processor.send(reply)
+                {
+                    drop(unclaimed);
+                }
             }
             WindowEventPumpControlMessage::ForgetWindowOfOwningProcessor { window_id } => {
                 self.registered_windows.forget(window_id);
@@ -356,7 +397,7 @@ impl WindowEventPumpApplicationHandler {
         &mut self,
         event_loop: &ActiveEventLoop,
         request: WindowRegistrationRequestFromOwningProcessor,
-    ) -> WindowCreationReplyFromEventPump {
+    ) -> Result<WindowRegisteredWithEventPump> {
         let window = event_loop
             .create_window(window_attributes_for_request(&request))
             .map_err(|e| {
@@ -374,7 +415,12 @@ impl WindowEventPumpApplicationHandler {
             registered_window_count = self.registered_windows.registered_window_count(),
             "window event pump: window registered"
         );
-        Ok((window, events_from_event_pump))
+        Ok(WindowRegisteredWithEventPump {
+            window_id: window.id(),
+            events_from_event_pump,
+            control_messages_to_event_pump: self.control_messages_to_event_pump.clone(),
+            window,
+        })
     }
 }
 

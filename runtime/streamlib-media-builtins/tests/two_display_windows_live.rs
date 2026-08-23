@@ -50,7 +50,7 @@ fn windows_on_screen_titled(title: &str) -> usize {
 
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "display tier — needs a display server + GPU. Run with --features hardware-tests. See docs/testing-hardware.md"
+    ignore = "display tier — needs a display server + GPU. Run with --features streamlib-media-builtins/hardware-tests; the workspace sweep in docs/testing-hardware.md names it explicitly, because streamlib/hardware-tests does not reach this crate"
 )]
 #[test]
 fn one_source_feeds_two_display_windows_at_once() {

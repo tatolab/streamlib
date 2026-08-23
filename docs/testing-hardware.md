@@ -30,10 +30,19 @@ RHI work, encoder/decoder, display, anything in `vulkan/rhi/`. The
 canonical command:
 
 ```bash
-cargo test --features streamlib/hardware-tests --workspace \
-    --no-fail-fast \
+cargo test \
+    --features streamlib/hardware-tests,streamlib-media-builtins/hardware-tests \
+    --workspace --no-fail-fast \
     -- --test-threads=1
 ```
+
+Both features are named because a `pkg/feature` flag enables that package's
+feature and nothing else: `streamlib/hardware-tests` forwards to
+`streamlib-engine`, but it does **not** reach
+`streamlib-media-builtins/hardware-tests`. A crate left off this line does not
+fail the sweep — its tier-2 tests report as `ignored`, which reads exactly like
+having none. Any crate that declares its own `hardware-tests` feature belongs
+here on the same day it declares it.
 
 The `--test-threads=1` is mandatory: tier-2 tests serialize on the GPU
 device. Running them in parallel deadlocks (most often inside the

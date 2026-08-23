@@ -33,8 +33,8 @@ use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::pool_slot_key_of_surface_id;
 use streamlib::sdk::window_event_pump::{
-    WindowEventForOwningProcessor, WindowRegisteredWithEventPump,
-    WindowRegistrationRequestFromOwningProcessor, process_wide_window_event_pump,
+    WindowRegisteredWithEventPump, WindowRegistrationRequestFromOwningProcessor,
+    process_wide_window_event_pump,
 };
 
 use crate::video_frame::{ColorInfo, VideoFrame};
@@ -42,11 +42,11 @@ use crate::video_frame::{ColorInfo, VideoFrame};
 /// How long the render thread parks when the input has no frame to show. The
 /// display is a `latest`-profile sink, so this is the worst-case lateness of a
 /// frame that arrives just after a poll, not a frame budget.
-const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const DISPLAY_RENDER_THREAD_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 /// The same park for a display with no window: it still drains, so upstream
 /// sees a live consumer, but nothing is racing a vsync deadline.
-const DEGRADED_DRAIN_INTERVAL: Duration = Duration::from_millis(2);
+const DEGRADED_DISPLAY_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
 /// How the frame maps onto the window, as configuration vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -152,7 +152,7 @@ impl ManualProcessor for DisplayWindow::Processor {
         let handle = std::thread::Builder::new()
             .name("display-window".to_string())
             .spawn(move || {
-                DisplayWindowRenderLoop::new(gpu_context, inputs, running, frame_counter, &config)
+                DisplayWindowRenderLoop::new(gpu_context, inputs, running, frame_counter, config)
                     .run();
             })
             .map_err(|e| Error::Configuration(format!("Failed to spawn render thread: {}", e)))?;
@@ -233,17 +233,17 @@ impl DisplayWindowRenderLoop {
         inputs: InputMailboxes,
         running: Arc<AtomicBool>,
         frame_counter: Arc<AtomicU64>,
-        config: &DisplayWindowConfig,
+        config: DisplayWindowConfig,
     ) -> Self {
         Self {
             gpu_context,
             inputs,
             running,
             frame_counter,
-            window_title: config.title.clone(),
             scaling: config.scaling.present_scaling_mode(),
             width: config.width,
             height: config.height,
+            window_title: config.title,
             present_target: None,
             compositor: None,
             registered_window: None,
@@ -255,52 +255,45 @@ impl DisplayWindowRenderLoop {
     }
 
     fn run(&mut self) {
-        self.acquire_window_and_present_target();
+        if let Err(reason) = self.acquire_window_and_present_target() {
+            self.degrade_to_drain_and_discard(&reason);
+        }
 
         while self.running.load(Ordering::Acquire) {
-            self.drain_window_events_from_event_pump();
+            self.apply_window_events_from_event_pump();
             if !self.running.load(Ordering::Acquire) {
                 break;
             }
 
             if self.inactive {
                 self.drain_and_discard_so_upstream_sees_a_live_consumer();
-                std::thread::park_timeout(DEGRADED_DRAIN_INTERVAL);
+                std::thread::park_timeout(DEGRADED_DISPLAY_DRAIN_POLL_INTERVAL);
                 continue;
             }
 
             if self.inputs.has_data("video") {
                 self.render_frame();
             } else {
-                std::thread::park_timeout(IDLE_POLL_INTERVAL);
+                std::thread::park_timeout(DISPLAY_RENDER_THREAD_IDLE_POLL_INTERVAL);
             }
         }
 
         self.running.store(false, Ordering::Release);
     }
 
-    fn acquire_window_and_present_target(&mut self) {
-        let event_pump = match process_wide_window_event_pump() {
-            Ok(event_pump) => event_pump,
-            Err(e) => return self.degrade_to_drain_and_discard(&e),
-        };
-
-        let registered_window = match event_pump.request_window_for_owning_processor(
-            WindowRegistrationRequestFromOwningProcessor {
+    fn acquire_window_and_present_target(&mut self) -> Result<()> {
+        let registered_window = process_wide_window_event_pump()?
+            .request_window_for_owning_processor(WindowRegistrationRequestFromOwningProcessor {
                 window_title: self.window_title.clone(),
                 initial_width_in_physical_pixels: self.width,
                 initial_height_in_physical_pixels: self.height,
-            },
-        ) {
-            Ok(registered_window) => registered_window,
-            Err(e) => return self.degrade_to_drain_and_discard(&e),
-        };
+            })?;
 
         let (width, height) = registered_window.current_physical_size();
         self.width = width;
         self.height = height;
 
-        let created = self.gpu_context.escalate(|full| {
+        let (present_target, compositor) = self.gpu_context.escalate(|full| {
             let present_target = full.create_present_target(
                 registered_window.window_shared_with_event_pump().as_ref(),
                 width,
@@ -310,23 +303,18 @@ impl DisplayWindowRenderLoop {
             )?;
             let compositor = full.create_present_compositor(present_target.color_format())?;
             Ok((present_target, compositor))
-        });
+        })?;
 
-        match created {
-            Ok((present_target, compositor)) => {
-                self.present_target = Some(present_target);
-                self.compositor = Some(compositor);
-                self.registered_window = Some(registered_window);
-                self.inactive = false;
-                tracing::info!(
-                    width,
-                    height,
-                    window_title = %self.window_title,
-                    "DisplayWindow: window + present target ready"
-                );
-            }
-            Err(e) => self.degrade_to_drain_and_discard(&e),
-        }
+        self.present_target = Some(present_target);
+        self.compositor = Some(compositor);
+        self.registered_window = Some(registered_window);
+        tracing::info!(
+            width,
+            height,
+            window_title = %self.window_title,
+            "DisplayWindow: window + present target ready"
+        );
+        Ok(())
     }
 
     fn degrade_to_drain_and_discard(&mut self, reason: &Error) {
@@ -338,30 +326,19 @@ impl DisplayWindowRenderLoop {
         self.inactive = true;
     }
 
-    fn drain_window_events_from_event_pump(&mut self) {
-        let (resized_to, close_requested) = {
-            let Some(registered_window) = self.registered_window.as_ref() else {
-                return;
-            };
-            let mut resized_to = None;
-            let mut close_requested = false;
-            // A resize drag emits an event per motion step and only the final
-            // extent is worth a swapchain recreate, so the drain coalesces.
-            while let Some(event) = registered_window.try_next_window_event_from_event_pump() {
-                match event {
-                    WindowEventForOwningProcessor::ResizedToPhysicalPixels { width, height } => {
-                        resized_to = Some((width, height));
-                    }
-                    WindowEventForOwningProcessor::CloseRequestedByUser => close_requested = true,
-                }
-            }
-            (resized_to, close_requested)
+    fn apply_window_events_from_event_pump(&mut self) {
+        let Some(events) = self
+            .registered_window
+            .as_ref()
+            .map(|registered_window| registered_window.drain_window_events_from_event_pump())
+        else {
+            return;
         };
 
-        if let Some((width, height)) = resized_to {
+        if let Some((width, height)) = events.resized_to_physical_pixels {
             self.recreate_swapchain_for_new_extent(width, height);
         }
-        if close_requested {
+        if events.close_requested_by_user {
             tracing::info!(window_title = %self.window_title, "DisplayWindow: window close requested");
             self.running.store(false, Ordering::Release);
         }
