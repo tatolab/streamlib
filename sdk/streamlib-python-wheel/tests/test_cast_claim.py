@@ -17,11 +17,23 @@ and assert on the probe's own report. The A/B is the whole design: the two
 probes differ in one line, `into=VideoFrame` versus nothing, and must reach
 opposite outcomes. Either one passing alone proves little.
 
-Camera-gated, and rig-only like every `requires_gpu` test here — CI runs none
-of them.
+`[cast-object-tensor-protocol]` then says that same object *is* the tensor
+protocol: `torch.from_dlpack(frame)` straight off the read, GPU-resident, with
+the resolve and the lock absorbed. That half is proven here for a cast type the
+wheel never heard of as well as for `VideoFrame` — a protocol that only worked
+for the shipped class would be exactly the privilege the plan says it must not
+have.
+
+Every test here is `requires_gpu`, so CI runs none of them, but they do not all
+need the same hardware. The lifetime pair and the device-side tensor pair are
+camera-gated; the host-side tensor pair drives the engine's native test pattern
+and consumes with plain numpy, so it needs a GPU and nothing else. Each gate
+skips by name, so a missing camera or a CPU-only torch reads as what it is
+rather than as a failure of the capability.
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -31,15 +43,21 @@ pytestmark = pytest.mark.requires_gpu
 
 APP = Path(__file__).parent / "cast_claim_app.py"
 
+# The same default `cast_claim_app.py` opens, read from the same place: a rig
+# pointing the app at another node must not be gated on /dev/video0.
+CAMERA_DEVICE = os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
+
 PROBE_RESULT = re.compile(r"MARKER:PROBE_RESULT (\{.*\})")
 
 
-def run_claim_probe(start_app_under_test, probe_class_name: str) -> dict:
+def run_claim_probe(
+    start_app_under_test, probe_class_name: str, source: str = "camera"
+) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    if not Path("/dev/video0").exists():
-        pytest.skip("no camera on this rig")
-    app = start_app_under_test(APP, probe_class_name)
+    if source == "camera" and not Path(CAMERA_DEVICE).exists():
+        pytest.skip(f"no camera at {CAMERA_DEVICE} on this rig")
+    app = start_app_under_test(APP, probe_class_name, source)
     app.await_output_containing("MARKER:PROBE_RESULT", f"{probe_class_name}'s result")
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
@@ -118,3 +136,120 @@ def test_an_untyped_read_claims_nothing_and_is_refused_once_the_slot_cycles(
         "the refusal must name the recycling so a reader learns the rule at "
         f"the point of failure, got: {observation['late_read_refusal']!r}"
     )
+
+
+# ---- the bare tensor protocol, against a real published surface ------------
+
+
+def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
+    """What every host-side bare-protocol probe must show, whichever type read
+    the bag. The seam is entirely real here — a resolved handle, a read-only
+    lock and a capsule the engine minted; only the consumer is plain numpy."""
+    assert observation["claim_taken"] is True, (
+        "the view rides the claim, so a frame that took none has no stable "
+        "pixels to export"
+    )
+    assert observation["device_the_object_advertised"][0] == 2, (
+        "the bare read path is GPU-resident: the object must advertise kDLCUDA "
+        "(2), and a host answer here means the device export silently "
+        "downgraded"
+    )
+    assert observation["pixels_are_not_all_zero"], (
+        "an all-zero surface would make the comparison below vacuous"
+    )
+    assert (
+        observation["host_view_shape"]
+        == observation["host_view_shape_through_the_resolve_and_lock"]
+    )
+    assert observation["the_bare_view_is_the_same_pixels"], (
+        "the bare view must be this frame's pixels, not merely a valid view "
+        "over some surface"
+    )
+
+
+def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
+    start_app_under_test,
+):
+    """The no-privilege claim, against a real surface: a type the wheel never
+    heard of composes the shipped piece and hands its pixels to a DLPack
+    consumer.
+
+    No `resolve_surface`, no `lock`, no context manager anywhere in the
+    probe — the object the read handed back is the tensor-protocol producer.
+    """
+    observation = run_claim_probe(
+        start_app_under_test,
+        "AUserAuthoredCastReachesItsPixelsBareProbe",
+        source="test_pattern",
+    )
+
+    _assert_the_bare_view_is_this_frames_pixels(observation)
+
+
+def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
+    start_app_under_test,
+):
+    """The parity half: `VideoFrame` is built from the same composable, so it
+    must reach its pixels through the same path with the same result. A
+    difference here is a privilege the plan does not grant it."""
+    observation = run_claim_probe(
+        start_app_under_test,
+        "TheShippedVideoFrameReachesItsPixelsBareProbe",
+        source="test_pattern",
+    )
+
+    _assert_the_bare_view_is_this_frames_pixels(observation)
+
+
+# ---- the device half: a CUDA package eating the bare capsule ---------------
+
+
+def _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation: dict) -> None:
+    assert observation["claim_taken"] is True
+    assert observation["tensor_device"].startswith("cuda"), (
+        "`torch.from_dlpack(frame)` must land on the GPU — a host tensor here "
+        "means the device export silently downgraded"
+    )
+    assert (
+        observation["tensor_shape"]
+        == observation["tensor_shape_through_the_resolve_and_lock"]
+    )
+    assert (
+        observation["checksum_through_the_bare_view"]
+        == observation["checksum_through_the_resolve_and_lock"]
+    )
+
+
+def _require_a_cuda_consumer() -> None:
+    """These need a CUDA-built consumer in the venv, which the CPU wheel CI
+    installs and a rig does not necessarily. Skipped rather than failed: what
+    is missing is the consumer, not the capability under test."""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("torch in this venv is not CUDA-built, so it cannot eat a "
+                    "kDLCUDA capsule")
+
+
+def test_a_user_authored_cast_type_reaches_torch_as_a_cuda_tensor(
+    start_app_under_test,
+):
+    """`torch.from_dlpack(frame)` off a live camera frame, in a real helper
+    placement — the shortest spelling is the fast path, and it is GPU-resident.
+    """
+    _require_a_cuda_consumer()
+    observation = run_claim_probe(
+        start_app_under_test, "AUserAuthoredCastReachesItsPixelsAsACudaTensorProbe"
+    )
+
+    _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation)
+
+
+def test_the_shipped_video_frame_reaches_torch_as_a_cuda_tensor(
+    start_app_under_test,
+):
+    _require_a_cuda_consumer()
+    observation = run_claim_probe(
+        start_app_under_test, "TheShippedVideoFrameReachesItsPixelsAsACudaTensorProbe"
+    )
+
+    _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation)
