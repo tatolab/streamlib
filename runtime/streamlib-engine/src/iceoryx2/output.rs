@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 
 use iceoryx2::port::notifier::Notifier;
@@ -43,6 +44,18 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
         ChannelTrustTier::Trusted => ChannelTrustTierLabel::Trusted,
         ChannelTrustTier::UntrustedSession => ChannelTrustTierLabel::UntrustedSession,
     }
+}
+
+/// View initialized bytes as `MaybeUninit` for writing into a loaned iceoryx2
+/// sample — what [`SampleMutUninit::write_from_slice`] does internally, exposed
+/// here so header and payload can fill one loan without a staging copy.
+///
+/// [`SampleMutUninit::write_from_slice`]: iceoryx2::sample_mut_uninit::SampleMutUninit::write_from_slice
+fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[MaybeUninit<u8>] {
+    // SAFETY: `MaybeUninit<u8>` is `repr(transparent)` over `u8`, so the
+    // reference transmute is layout-preserving, and wrapping initialized bytes
+    // in `MaybeUninit` asserts nothing — only the reverse direction would.
+    unsafe { std::mem::transmute::<&[u8], &[MaybeUninit<u8>]>(bytes) }
 }
 
 /// One source output port's channel egress: the single channel publisher
@@ -287,17 +300,25 @@ impl OutputWriterInner {
             });
         }
 
-        let mut frame = vec![0u8; total_len];
+        // Header on the stack before the loan: a port key that overflows the
+        // wire capacity must never cost a loan slot.
+        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
         FrameHeader::new(port, timestamp_ns, data.len() as u32)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
+            .write_to_slice(&mut header_bytes);
 
-        let sample = egress
+        let mut sample = egress
             .publisher
             .loan_slice_uninit(total_len)
             .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-        let sample = sample.write_from_slice(&frame);
+        let (loaned_header_bytes, loaned_payload_bytes) =
+            sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
+        loaned_header_bytes.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
+        loaned_payload_bytes.copy_from_slice(as_maybe_uninit_bytes(data));
+        // SAFETY: the two `copy_from_slice` calls above initialized
+        // `FRAME_HEADER_SIZE + data.len()` bytes — exactly the `total_len` the
+        // loan was taken for — or panicked on a length mismatch.
+        let sample = unsafe { sample.assume_init() };
         sample
             .send()
             .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
@@ -1047,5 +1068,72 @@ mod tests {
             ChannelTrustTier::UntrustedSession.as_str(),
             ChannelTrustTierLabel::UntrustedSession.to_string()
         );
+    }
+
+    /// Full-initialization lock for the loan-direct write path: a frame
+    /// written after a larger one has cycled through the same publisher must
+    /// deliver exactly header + payload — never bytes a previous tenant left
+    /// in the recycled chunk.
+    ///
+    /// Fail-without-fix: skip (or short-write) either region of the loan and
+    /// the received slice reads back the earlier frame's 0xAA filler where
+    /// fresh bytes belong.
+    #[test]
+    fn a_frame_written_after_a_larger_one_carries_no_stale_bytes() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix("stale/pubsub")).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(2)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(16 * 1024)
+            .create()
+            .unwrap();
+        let subscriber = pubsub.subscriber_builder().create().unwrap();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        inner.set_channel_publisher(
+            "out",
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/stale/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        );
+
+        // A large all-0xAA frame primes the publisher's chunk pool with
+        // recognisable filler, then goes back to the pool for reuse.
+        let filler = vec![0xAAu8; 8 * 1024];
+        inner.write_raw("out", &filler, 1).unwrap();
+        drop(
+            subscriber
+                .receive()
+                .expect("receive")
+                .expect("filler frame"),
+        );
+
+        let payload = b"fresh-small-payload";
+        inner.write_raw("out", payload, 4242).unwrap();
+        let got = subscriber
+            .receive()
+            .expect("receive")
+            .expect("fresh frame must deliver");
+        let slice: &[u8] = got.payload();
+        assert_eq!(
+            slice.len(),
+            FRAME_HEADER_SIZE + payload.len(),
+            "the loan must be sized to exactly header + payload"
+        );
+        let header = FrameHeader::read_from_slice(slice);
+        assert_eq!(header.port(), "out");
+        assert_eq!(header.timestamp_ns, 4242);
+        assert_eq!(header.len as usize, payload.len());
+        assert_eq!(&slice[FRAME_HEADER_SIZE..], payload);
     }
 }

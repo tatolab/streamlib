@@ -363,6 +363,19 @@ impl InputMailboxesInner {
                         }
                         let ports = self.ports.lock();
                         if let Some(port_config) = ports.get(&bound.local_port) {
+                            // The read side's per-frame cost after #1822 is this
+                            // `to_vec` plus the header-strip memmove in
+                            // `read_raw_bounded`. The copy is irreducible without
+                            // parking the iceoryx2 `Sample` here instead of bytes —
+                            // pinning shm slots while frames sit queued and coupling
+                            // the mailbox's drop-oldest depth to the subscriber
+                            // ring's. The memmove could fold into this copy by
+                            // parsing the header here and queuing payload +
+                            // timestamp, but that moves the stamped-length refusal
+                            // off the read path (today a typed, port-named error to
+                            // the reading processor, not a receive-time drop) and
+                            // reshapes the mailbox's raw-wire-frame element
+                            // contract (`route`, `drain`, [`PortMailbox`]).
                             port_config.mailbox.push(slice.to_vec());
                         } else {
                             tracing::warn!(
@@ -409,10 +422,10 @@ impl InputMailboxesInner {
             };
             match raw {
                 None => return Ok(BoundedReadOutcome::Empty),
-                Some(r) => {
-                    let header = FrameHeader::read_from_slice(&r);
+                Some(mut frame_bytes_from_wire) => {
+                    let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
                     let stamped_payload_bytes = header.len as usize;
-                    let available_payload_bytes = r.len() - FRAME_HEADER_SIZE;
+                    let available_payload_bytes = frame_bytes_from_wire.len() - FRAME_HEADER_SIZE;
                     if stamped_payload_bytes > available_payload_bytes {
                         return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
                             port: port.to_string(),
@@ -420,9 +433,13 @@ impl InputMailboxesInner {
                             available_payload_bytes,
                         });
                     }
-                    let data =
-                        r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes].to_vec();
-                    (data, header.timestamp_ns)
+                    frame_bytes_from_wire.copy_within(
+                        FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
+                        0,
+                    );
+                    frame_bytes_from_wire.truncate(stamped_payload_bytes);
+                    let payload_bytes = frame_bytes_from_wire;
+                    (payload_bytes, header.timestamp_ns)
                 }
             }
         };
@@ -693,6 +710,23 @@ mod tests {
         )
     }
 
+    /// Build a wire frame for `port`: a header stamping `stamped_payload_bytes`
+    /// over the body `carried_body`. The stamped and carried lengths are
+    /// separate arguments because several tests exercise their divergence.
+    fn wire_frame_stamping(
+        port: &str,
+        timestamp_ns: i64,
+        stamped_payload_bytes: u32,
+        carried_body: &[u8],
+    ) -> Vec<u8> {
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE + carried_body.len()];
+        FrameHeader::new(port, timestamp_ns, stamped_payload_bytes)
+            .expect("port fits PortKey")
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        frame[FRAME_HEADER_SIZE..].copy_from_slice(carried_body);
+        frame
+    }
+
     /// Driving the iceoryx2 Event service end-to-end: notify must transition
     /// the Listener fd to readable within a short bounded window so an epoll
     /// or select wait wakes promptly.
@@ -765,13 +799,7 @@ mod tests {
         // Build a minimal valid frame for `port_a` and route it directly
         // — bypasses the iceoryx2 subscriber, exercising only the
         // mailbox-depth accounting.
-        let make_frame = |port: &str| -> Vec<u8> {
-            let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
-            let header = FrameHeader::new(port, 0, 4).expect("port fits PortKey");
-            header.write_to_slice(&mut buf);
-            buf[FRAME_HEADER_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
-            buf
-        };
+        let make_frame = |port: &str| wire_frame_stamping(port, 0, 4, &[1, 2, 3, 4]);
 
         // Burst: three frames on port_a, two on port_b.
         for _ in 0..3 {
@@ -850,13 +878,8 @@ mod tests {
                 .unwrap();
             let subscriber = pubsub.subscriber_builder().create().unwrap();
 
-            let total = FRAME_HEADER_SIZE + data.len();
-            let mut frame = vec![0u8; total];
-            FrameHeader::new(source_port, 0, data.len() as u32)
-                .expect("source port fits PortKey")
-                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-            frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
-            let sample = publisher.loan_slice_uninit(total).unwrap();
+            let frame = wire_frame_stamping(source_port, 0, data.len() as u32, data);
+            let sample = publisher.loan_slice_uninit(frame.len()).unwrap();
             sample.write_from_slice(&frame).send().unwrap();
 
             (publisher, subscriber)
@@ -979,11 +1002,7 @@ mod tests {
         inner.add_port("in", 8, ReadMode::ReadNextInOrder);
 
         let body: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
-        let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new("in", 42, body.len() as u32)
-            .expect("port fits PortKey")
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        let frame = wire_frame_stamping("in", 42, body.len() as u32, &body);
         assert!(inner.route(frame), "frame must route to port 'in'");
 
         // Buffer too small: the frame is reported (not consumed).
@@ -1031,25 +1050,10 @@ mod tests {
         const STAMPED: u32 = 4096;
         const CARRIED: usize = 8;
 
-        // The stamped and carried payload lengths are separate arguments
-        // because their divergence is the whole subject of this test.
-        fn frame_with_stamped_payload_length(
-            timestamp_ns: i64,
-            stamped_payload_bytes: u32,
-            carried_body: &[u8],
-        ) -> Vec<u8> {
-            let mut frame = vec![0u8; FRAME_HEADER_SIZE + carried_body.len()];
-            FrameHeader::new("in", timestamp_ns, stamped_payload_bytes)
-                .expect("port fits PortKey")
-                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-            frame[FRAME_HEADER_SIZE..].copy_from_slice(carried_body);
-            frame
-        }
-
         let inner = InputMailboxesInner::new();
         inner.add_port("in", 64, ReadMode::ReadNextInOrder);
 
-        let malformed = frame_with_stamped_payload_length(42, STAMPED, &[0u8; CARRIED]);
+        let malformed = wire_frame_stamping("in", 42, STAMPED, &[0u8; CARRIED]);
         assert!(inner.route(malformed), "frame must route to port 'in'");
 
         let err = match inner.read_raw_bounded("in", usize::MAX) {
@@ -1080,7 +1084,7 @@ mod tests {
 
         // The malformed frame is dropped, not staged — the port keeps serving.
         let body = [1u8, 2, 3, 4];
-        let well_formed = frame_with_stamped_payload_length(43, body.len() as u32, &body);
+        let well_formed = wire_frame_stamping("in", 43, body.len() as u32, &body);
         assert!(
             inner.route(well_formed),
             "well-formed frame must route to port 'in'"
@@ -1098,6 +1102,54 @@ mod tests {
         }
     }
 
+    /// A frame may carry more bytes than its header stamps — the wire
+    /// contract trusts the stamped length, so the read delivers exactly that
+    /// many payload bytes and the slack past them never reaches the caller.
+    ///
+    /// Fail-without-fix: hand the caller the frame's whole tail instead of
+    /// slicing (or truncating) to the stamped length and the delivered
+    /// payload grows by the slack bytes — the exact-length assertion fails.
+    #[test]
+    fn read_raw_bounded_delivers_exactly_the_stamped_payload_from_an_over_carrying_frame() {
+        const STAMPED: usize = 200;
+        const CARRIED: usize = 300;
+
+        let inner = InputMailboxesInner::new();
+        inner.add_port("in", 8, ReadMode::ReadNextInOrder);
+
+        let body: Vec<u8> = (0..CARRIED as u32).map(|i| (i % 251) as u8).collect();
+        let frame = wire_frame_stamping("in", 77, STAMPED as u32, &body);
+        assert!(inner.route(frame), "frame must route to port 'in'");
+
+        match inner
+            .read_raw_bounded("in", usize::MAX)
+            .expect("bounded read")
+        {
+            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+                assert_eq!(
+                    data.len(),
+                    STAMPED,
+                    "payload must stop at the stamped length"
+                );
+                assert_eq!(
+                    data[..],
+                    body[..STAMPED],
+                    "payload must be the stamped prefix"
+                );
+                assert_eq!(timestamp_ns, 77);
+            }
+            _ => panic!("expected the over-carrying frame to deliver its stamped payload"),
+        }
+
+        // The slack was dropped with the frame, not staged — the port is empty.
+        assert!(matches!(
+            inner
+                .read_raw_bounded("in", usize::MAX)
+                .expect("bounded read"),
+            BoundedReadOutcome::Empty
+        ));
+    }
+
     /// A malformed length prefix must not deliver a frame to a real mailbox.
     ///
     /// The saturating bound is only safe because a clamped name fails to match
@@ -1111,10 +1163,7 @@ mod tests {
         let inner = InputMailboxesInner::new();
         inner.add_port(&longest_port, 64, ReadMode::ReadNextInOrder);
 
-        let mut frame = vec![0u8; FRAME_HEADER_SIZE + 4];
-        FrameHeader::new(&longest_port, 42, 4)
-            .expect("a max-width port fits PortKey")
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        let mut frame = wire_frame_stamping(&longest_port, 42, 4, &[0u8; 4]);
         frame[0] = 0xFF;
 
         assert!(
