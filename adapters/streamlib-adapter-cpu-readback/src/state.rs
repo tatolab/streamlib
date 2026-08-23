@@ -13,7 +13,7 @@
 //! registration time through `streamlib-consumer-rhi` and registers
 //! the resulting `Consumer*` handles back into this same shape.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 use streamlib_surface_adapter::{SurfaceFormat, SurfaceId, SurfaceRegistration};
@@ -91,6 +91,65 @@ impl<P: DevicePrivilege> PlaneSlot<P> {
     }
 }
 
+/// This process's monotonic signal counter for one surface, plus the
+/// exclusion that makes reserving from it sound.
+///
+/// One counter serves both timelines: `produce_done` and `consume_done`
+/// are signaled from disjoint sites, and each sees a strictly
+/// increasing subsequence, which is all
+/// `VUID-VkSubmitInfo2-semaphore-03882` asks for. Gaps are legal.
+///
+/// Reserving is not enough on its own. Two callers that reserve
+/// distinct values still submit in whichever order they reach the
+/// queue, and a submit signalling below the timeline's current value is
+/// as invalid as one signalling at it — so the reservation holds until
+/// the caller's submit has been issued and awaited. That is why
+/// [`reserve_next_signal_value`](Self::reserve_next_signal_value) hands
+/// back a guard rather than a `u64`.
+#[derive(Default)]
+pub(crate) struct SurfaceTimelineSignalSequence {
+    last_reserved_signal_value: Mutex<u64>,
+}
+
+/// A reserved timeline value and the exclusion it was reserved under.
+/// The sequence stays locked until this drops, so the submit that
+/// signals [`value`](Self::value) — and the wait that observes it —
+/// cannot interleave with another caller's.
+pub(crate) struct ReservedSurfaceTimelineSignalValue<'a> {
+    last_reserved_signal_value: MutexGuard<'a, u64>,
+}
+
+impl SurfaceTimelineSignalSequence {
+    /// Take the next value and hold the sequence until the returned
+    /// guard drops.
+    pub(crate) fn reserve_next_signal_value(&self) -> ReservedSurfaceTimelineSignalValue<'_> {
+        // Poison recovery: the sequence is one monotonic counter, so a
+        // panic mid-submit leaves it consistent — the reserved value is
+        // simply never signaled, and a gap is legal.
+        let mut last_reserved_signal_value = self
+            .last_reserved_signal_value
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *last_reserved_signal_value += 1;
+        ReservedSurfaceTimelineSignalValue {
+            last_reserved_signal_value,
+        }
+    }
+}
+
+impl ReservedSurfaceTimelineSignalValue<'_> {
+    pub(crate) fn value(&self) -> u64 {
+        *self.last_reserved_signal_value
+    }
+
+    /// Fold in the value the signalling site actually used. A trigger
+    /// whose host side picks its own may report one above the
+    /// reservation; the next reservation must clear it.
+    pub(crate) fn observe_signaled_value(&mut self, signaled: u64) {
+        *self.last_reserved_signal_value = (*self.last_reserved_signal_value).max(signaled);
+    }
+}
+
 /// Per-surface state held inside the adapter's
 /// `Mutex<HashMap<SurfaceId, _>>`. Generic over privilege so both
 /// host- and consumer-flavor adapters share the registry shape.
@@ -112,12 +171,11 @@ pub(crate) struct SurfaceState<P: DevicePrivilege> {
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,
-    /// Per-process monotonic signal counter for whichever side this
-    /// adapter instance signals. The producer trigger advances this on
-    /// every `vkCmdCopy*` submit (producer-side); the
-    /// consumer-flavored `end_read_access` advances this on each
-    /// `signal_host(consume_done)` call.
-    pub(crate) current_signal_value: u64,
+    /// This process's signal sequence for the surface's two timelines —
+    /// see [`SurfaceTimelineSignalSequence`]. Held behind an `Arc` so a
+    /// signalling caller can carry it out of the registry lock and keep
+    /// it for the whole reserve-submit-wait sequence.
+    pub(crate) signal_sequence: Arc<SurfaceTimelineSignalSequence>,
     pub(crate) format: SurfaceFormat,
     pub(crate) width: u32,
     pub(crate) height: u32,
