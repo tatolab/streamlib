@@ -5692,4 +5692,186 @@ mod tests {
         )
         .expect("the current frame id keeps resolving");
     }
+    /// The upload's terminal barrier — and the layout it publishes to the
+    /// registration — follow the destination's create-time usage.
+    /// `SHADER_READ_ONLY_OPTIMAL` requires `SAMPLED` or `INPUT_ATTACHMENT`
+    /// (VUID-VkImageMemoryBarrier2-oldLayout-01211), so the storage-only
+    /// output an escalate ray-tracing dispatch is seeded with, and the
+    /// colour-attachment target a scissored draw is seeded with, must end
+    /// in `GENERAL` instead (#1916). Publishing the layout the image is
+    /// actually in is the load-bearing half: the next consumer barriers
+    /// *out of* whatever the record claims, so an untruthful record
+    /// repeats the violation one submit later.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_upload_publishes_the_terminal_layout_its_destinations_usage_allows() {
+        const UPLOAD_EXTENT: u32 = 64;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        for (destination_shape, usage, expected_terminal_layout) in [
+            (
+                "storage-only — an escalate ray-tracing output being seeded",
+                TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+                VulkanLayout::GENERAL,
+            ),
+            (
+                "colour-attachment-only — a scissored-draw target being seeded",
+                TextureUsages::RENDER_ATTACHMENT
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::COPY_SRC,
+                VulkanLayout::GENERAL,
+            ),
+            (
+                "sampled-capable — every ring slot and cached upload texture",
+                TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            ),
+        ] {
+            let desc =
+                TextureDescriptor::new(UPLOAD_EXTENT, UPLOAD_EXTENT, TextureFormat::Rgba8Unorm)
+                    .with_usage(usage);
+            let texture = gpu
+                .device()
+                .create_texture_local(&desc)
+                .unwrap_or_else(|e| panic!("create the {destination_shape} destination: {e}"));
+            let surface_id = uuid::Uuid::new_v4().to_string();
+            gpu.register_texture_with_layout(&surface_id, texture.clone(), VulkanLayout::UNDEFINED);
+
+            let (_pool_id, pixel_buffer) = gpu
+                .acquire_pixel_buffer(UPLOAD_EXTENT, UPLOAD_EXTENT, PixelFormat::Rgba32)
+                .unwrap_or_else(|e| panic!("acquire the upload source: {e}"));
+            gpu.copy_pixel_buffer_to_texture(
+                &pixel_buffer,
+                &texture,
+                &surface_id,
+                UPLOAD_EXTENT,
+                UPLOAD_EXTENT,
+            )
+            .unwrap_or_else(|e| panic!("upload into the {destination_shape} destination: {e}"));
+
+            let registration = gpu
+                .resolve_texture_registration_by_surface_id(
+                    &surface_id,
+                    None,
+                    UPLOAD_EXTENT,
+                    UPLOAD_EXTENT,
+                )
+                .expect("the seeded destination resolves its registration");
+            assert_eq!(
+                registration.current_layout(),
+                expected_terminal_layout,
+                "a {destination_shape} destination must be published in the terminal layout its \
+                 usage can legally hold"
+            );
+        }
+    }
+
+    /// The rig half of the same contract: seeding a destination whose usage
+    /// cannot hold `SHADER_READ_ONLY_OPTIMAL` must raise no validation
+    /// finding at the upload, and none at a consumer's barrier out of the
+    /// layout that upload published. The `GENERAL` transition below is that
+    /// consumer — it is the barrier the escalate ray-tracing dispatch takes
+    /// to bind its output as a storage descriptor, and the one that
+    /// contributed the `oldLayout` arm of the ten hits (#1916).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn seeding_a_non_sampled_destination_and_consuming_it_raises_no_validation_finding() {
+        use crate::host_rhi::{VulkanAccess, VulkanStage};
+
+        const UPLOAD_EXTENT: u32 = 64;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+        let counts_before = gpu.device().inner.validation_layer_message_counts();
+        let Some(counts_before) = counts_before else {
+            println!(
+                "Skipping — no validation messenger installed. Re-run with \
+                 STREAMLIB_VULKAN_VALIDATION=1 and VK_LAYER_KHRONOS_validation present."
+            );
+            return;
+        };
+
+        let desc = TextureDescriptor::new(UPLOAD_EXTENT, UPLOAD_EXTENT, TextureFormat::Rgba8Unorm)
+            .with_usage(
+                TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+            );
+        let texture = gpu
+            .device()
+            .create_texture_local(&desc)
+            .expect("create the storage-only destination");
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        gpu.register_texture_with_layout(&surface_id, texture.clone(), VulkanLayout::UNDEFINED);
+
+        let (_pool_id, pixel_buffer) = gpu
+            .acquire_pixel_buffer(UPLOAD_EXTENT, UPLOAD_EXTENT, PixelFormat::Rgba32)
+            .expect("acquire the upload source");
+        gpu.copy_pixel_buffer_to_texture(
+            &pixel_buffer,
+            &texture,
+            &surface_id,
+            UPLOAD_EXTENT,
+            UPLOAD_EXTENT,
+        )
+        .expect("seed the storage-only destination");
+
+        let registration = gpu
+            .resolve_texture_registration_by_surface_id(
+                &surface_id,
+                None,
+                UPLOAD_EXTENT,
+                UPLOAD_EXTENT,
+            )
+            .expect("the seeded destination resolves its registration");
+        let published_layout = registration.current_layout();
+
+        let mut recorder = gpu
+            .create_command_recorder("seeded_storage_output_into_general")
+            .expect("a recorder for the consuming barrier");
+        recorder.begin().expect("begin the consuming barrier");
+        recorder
+            .record_image_barrier(
+                &texture,
+                published_layout,
+                VulkanLayout::GENERAL,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+            )
+            .expect("barrier the seeded output to its storage-descriptor layout");
+        recorder
+            .submit_and_wait()
+            .expect("submit the consuming barrier");
+
+        let counts_after = gpu
+            .device()
+            .inner
+            .validation_layer_message_counts()
+            .expect("the messenger stays installed for the whole test");
+        assert_eq!(
+            counts_after.error_count, counts_before.error_count,
+            "seeding a storage-only destination and barriering out of the layout that seed \
+             published must raise no validation error"
+        );
+    }
 }
