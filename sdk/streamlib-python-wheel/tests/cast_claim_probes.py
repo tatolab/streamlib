@@ -1,20 +1,28 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probes for the claim a typed cast takes, against a live camera.
+"""Probes for what a typed cast takes and reaches, against a live camera.
 
 The wheel's Rust tests prove the lease arithmetic against a real surface-share
-service with a stand-in surface. What they cannot reach is a real producer
-recycling a real pool slot underneath a real DMA-BUF surface — so these run on
-the rig, against the camera, whose pool recycles a slot every few frames.
+service with a stand-in surface, and the GPU-free pytest suites prove the
+composable's own half against a stand-in capability. What neither can reach is
+a real producer recycling a real pool slot underneath a real DMA-BUF surface,
+or a real CUDA import of one — so these run on the rig, against the camera,
+whose pool recycles a slot every few frames.
 
-Each probe holds one delivered frame while the camera runs ahead of it, then
-reads that frame's pixels again. The pair is the point: the frame read *as a
-`VideoFrame`* must come back unchanged, and the same probe reading the bag as
-a plain dict must be refused loudly — the camera recycled the slot, the
+Two families live here. The lagged holders hold one delivered frame while the
+camera runs ahead of it, then read that frame's pixels again: the frame read
+*as a `VideoFrame`* must come back unchanged, and the same probe reading the
+bag as a plain dict must be refused loudly — the camera recycled the slot, the
 published frame id retired with it (#1872), and a resolve of the retired id
 raises instead of serving somebody else's pixels. A scene that never moves
 would make the typed half vacuous, so scene motion is measured separately.
+
+The bare-protocol probes reach a delivered frame's pixels through the object
+itself — `torch.from_dlpack(frame)`, no resolve and no lock — and do it for a
+cast type the wheel never heard of as well as for `VideoFrame`, because a
+protocol that only worked for the shipped class would be the privilege the
+plan says it must not have.
 """
 
 import json
@@ -22,10 +30,12 @@ import os
 import struct
 import traceback
 import zlib
+from dataclasses import dataclass
 
 import numpy
 
 from streamlib import (
+    ClaimedSurfacePixelAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
     input,
@@ -35,10 +45,10 @@ from streamlib import (
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
-# The field the shipped frame keeps its claim in. Read here — rather than
+# The field the composable keeps its claim in. Read here — rather than
 # inferred from behaviour — so the report says whether a claim was taken at
 # all, separately from whether it worked.
-CLAIM_FIELD = "_check_out_lease_on_this_frames_surface"
+CLAIM_FIELD = "_check_out_lease_on_the_claimed_surface"
 
 # Comfortably past the camera pool's depth, so the producer has cycled its
 # slots several times over while the first frame is still held.
@@ -249,3 +259,111 @@ class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream")
+
+
+@dataclass(frozen=True, init=False)
+class UserAuthoredCameraFrame(ClaimedSurfacePixelAccess):
+    """A cast type the wheel never heard of, declared the way the change file
+    spells it: name the fields, inherit the constructor, get the protocol.
+
+    The camera's bag carries keys this type does not declare; they are dropped,
+    which is the open-map rule every cast type rides.
+    """
+
+    surface_id: str
+    width: int
+    height: int
+    timestamp_ns: int
+
+
+class _BareTensorProtocolProbe:
+    """Reach a delivered frame's pixels through the object itself.
+
+    No resolve, no lock, no context manager — `torch.from_dlpack(frame)` on the
+    thing the read handed back. That the same pixels are also reachable the long
+    way round is what proves the bare view is *this frame* rather than merely a
+    valid tensor.
+    """
+
+    # `latest`: an unclaimed bag's id is only good for pool-depth frames after
+    # publish, and this probe reads exactly one frame at whatever moment it
+    # starts — a queue of stale bags would refuse on arrival for reasons that
+    # have nothing to do with the protocol under test.
+    @input(delivery_profile="latest")
+    def video_from_upstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.reported = False
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        raise NotImplementedError
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        if self.reported:
+            return
+        try:
+            frame = self._read(ctx)
+        except BaseException:  # noqa: BLE001 — surfaced through the marker line
+            self.reported = True
+            _report(lambda: {"failure": traceback.format_exc()})
+            return
+        if frame is None:
+            return
+        self.reported = True
+        _report(lambda: self._observe(ctx, frame))
+
+    def _observe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        import torch
+
+        bare_view = torch.from_dlpack(frame)
+        observation = {
+            "read_as": type(self).__name__,
+            "claim_taken": getattr(frame, CLAIM_FIELD, None) is not None,
+            "surface_id": frame.surface_id,
+            "device_the_object_advertised": list(frame.__dlpack_device__()),
+            "tensor_device": str(bare_view.device),
+            "tensor_dtype": str(bare_view.dtype),
+            "tensor_shape": list(bare_view.shape),
+            "checksum_through_the_bare_view": int(
+                bare_view.to(torch.int64).sum().item()
+            ),
+        }
+
+        # The same surface reached the long way round, through the same export
+        # machinery, so the two checksums are comparable pixel for pixel.
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            through_the_ceremony = torch.from_dlpack(surface)
+            observation["checksum_through_the_resolve_and_lock"] = int(
+                through_the_ceremony.to(torch.int64).sum().item()
+            )
+            observation["tensor_shape_through_the_resolve_and_lock"] = list(
+                through_the_ceremony.shape
+            )
+            surface.unlock()
+
+        sample_dir = os.environ.get("STREAMLIB_CAST_CLAIM_SAMPLE_DIR")
+        if sample_dir:
+            os.makedirs(sample_dir, exist_ok=True)
+            path = os.path.join(sample_dir, f"{type(self).__name__}_bare_dlpack.png")
+            _write_png(path, bare_view.cpu().numpy())
+            observation["png_samples"] = [path]
+        return observation
+
+
+@processor
+class AUserAuthoredCastReachesItsPixelsBareProbe(_BareTensorProtocolProbe):
+    """The no-privilege half: a type the wheel does not ship gets the protocol
+    by composing the shipped piece, and nothing else."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=UserAuthoredCameraFrame)
+
+
+@processor
+class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareTensorProtocolProbe):
+    """The parity half: `VideoFrame` is built from that same piece, so it must
+    reach its pixels the same way and reach the same pixels."""
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)

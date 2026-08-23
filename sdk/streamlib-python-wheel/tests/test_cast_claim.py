@@ -17,6 +17,13 @@ and assert on the probe's own report. The A/B is the whole design: the two
 probes differ in one line, `into=VideoFrame` versus nothing, and must reach
 opposite outcomes. Either one passing alone proves little.
 
+`[cast-object-tensor-protocol]` then says that same object *is* the tensor
+protocol: `torch.from_dlpack(frame)` straight off the read, GPU-resident, with
+the resolve and the lock absorbed. That half needs the same real parts plus a
+real CUDA import, and it is proven here for a cast type the wheel never heard
+of as well as for `VideoFrame` — a protocol that only worked for the shipped
+class would be exactly the privilege the plan says it must not have.
+
 Camera-gated, and rig-only like every `requires_gpu` test here — CI runs none
 of them.
 """
@@ -118,3 +125,62 @@ def test_an_untyped_read_claims_nothing_and_is_refused_once_the_slot_cycles(
         "the refusal must name the recycling so a reader learns the rule at "
         f"the point of failure, got: {observation['late_read_refusal']!r}"
     )
+
+
+# ---- the bare tensor protocol, over a live camera --------------------------
+
+
+def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
+    """What every bare-protocol probe must show, whichever type read the bag."""
+    assert observation["claim_taken"] is True, (
+        "the view rides the claim, so a frame that took none has no stable "
+        "pixels to export"
+    )
+    assert observation["tensor_device"].startswith("cuda"), (
+        "the bare read path is GPU-resident: a host tensor here means the "
+        "device export silently downgraded"
+    )
+    assert observation["device_the_object_advertised"][0] == 2, (
+        "the object must advertise the same side its capsule hands back — "
+        "kDLCUDA is 2"
+    )
+    assert (
+        observation["tensor_shape"]
+        == observation["tensor_shape_through_the_resolve_and_lock"]
+    )
+    assert (
+        observation["checksum_through_the_bare_view"]
+        == observation["checksum_through_the_resolve_and_lock"]
+    ), (
+        "the bare view must be this frame's pixels, not merely a valid tensor "
+        "over some surface"
+    )
+
+
+def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
+    start_app_under_test,
+):
+    """The no-privilege claim, on the rig: a type the wheel never heard of
+    composes the shipped piece and `torch.from_dlpack(frame)` works.
+
+    No `resolve_surface`, no `lock`, no context manager anywhere in the
+    probe — the object the read handed back is the tensor-protocol producer.
+    """
+    observation = run_claim_probe(
+        start_app_under_test, "AUserAuthoredCastReachesItsPixelsBareProbe"
+    )
+
+    _assert_the_bare_view_is_this_frames_pixels(observation)
+
+
+def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
+    start_app_under_test,
+):
+    """The parity half: `VideoFrame` is built from the same composable, so it
+    must reach its pixels through the same path with the same result. A
+    difference here is a privilege the plan does not grant it."""
+    observation = run_claim_probe(
+        start_app_under_test, "TheShippedVideoFrameReachesItsPixelsBareProbe"
+    )
+
+    _assert_the_bare_view_is_this_frames_pixels(observation)
