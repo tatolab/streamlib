@@ -281,12 +281,18 @@ def _assert_the_edit_reached_the_surface(observation: dict) -> None:
 def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
     start_app_under_test,
 ):
-    """`with frame.writable() as t:` over a live camera frame, in a real helper
-    placement: a CUDA package edits in place and the surface carries the edit
-    once the block ends, which is what every other holder observes."""
+    """`with frame.writable() as t:` over a live frame, in a real helper placement:
+    a CUDA package edits in place and the surface carries the edit once the
+    block ends, which is what every other holder observes.
+
+    Sourced from the native test pattern rather than the camera deliberately —
+    see the refusal test below, which is why a camera frame cannot take this
+    door at all."""
     _require_a_cuda_consumer()
     observation = run_claim_probe(
-        start_app_under_test, "TheGpuWriteDoorEditsTheFrameProbe"
+        start_app_under_test,
+        "TheGpuWriteDoorEditsTheFrameProbe",
+        source="test_pattern",
     )
 
     _assert_the_edit_reached_the_surface(observation)
@@ -301,7 +307,9 @@ def test_a_raise_inside_the_gpu_write_door_leaves_the_frame_the_engine_held(
     still reaches the caller."""
     _require_a_cuda_consumer()
     observation = run_claim_probe(
-        start_app_under_test, "ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe"
+        start_app_under_test,
+        "ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe",
+        source="test_pattern",
     )
 
     assert observation["claim_taken"] is True
@@ -346,3 +354,26 @@ def test_a_raise_inside_the_cpu_write_door_propagates_and_closes_the_scope(
     assert observation["claim_taken"] is True
     assert observation["the_exception_propagated"]
     assert observation["the_door_opens_again_after_a_raise"]
+
+
+def test_the_gpu_write_door_refuses_a_frame_its_producer_still_owns(
+    start_app_under_test,
+):
+    """A camera frame publishes a registered texture beside its pooled
+    allocation, so an in-place edit would land in one backing and not the
+    other. The engine refuses the write-back for that shape, and the door's
+    whole job here is to let the refusal through by name instead of swallowing
+    it — the frame the producer sent is still the frame afterwards.
+
+    This is an engine rule the wheel rides, not one this door invents: it is
+    also why the edit tests above drive the native test pattern.
+    """
+    observation = run_claim_probe(
+        start_app_under_test, "TheGpuWriteDoorRefusesAFrameItsProducerStillOwnsProbe"
+    )
+
+    assert observation["claim_taken"] is True
+    assert "pool member its producer still owns" in observation["the_refusal"], (
+        f"the door did not surface the engine's refusal: {observation['the_refusal']!r}"
+    )
+    assert observation["the_surface_still_holds_the_frame_the_producer_sent"]

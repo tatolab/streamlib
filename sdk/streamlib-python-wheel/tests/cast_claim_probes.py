@@ -586,3 +586,34 @@ class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
                 self._surface_pixels_now(ctx, frame.surface_id).any()
             ),
         }
+
+
+@processor
+class TheGpuWriteDoorRefusesAFrameItsProducerStillOwnsProbe(_WriteDoorProbe):
+    """A camera frame is refused the GPU write door, by name.
+
+    Its surface carries a registered texture beside its pooled allocation, so
+    an in-place edit would land in one backing and not the other and publish
+    half an edit. The engine refuses the write-back for exactly that shape
+    (`surface_export_staging.rs`, `pooled_allocation_is_the_only_backing`), and
+    what the door owes is to surface that refusal rather than swallow it.
+    """
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        before = self._surface_pixels_now(ctx, frame.surface_id)
+        try:
+            with frame.writable():
+                pass
+        except RuntimeError as refusal:
+            the_refusal = str(refusal)
+        else:
+            the_refusal = ""
+        return {
+            "the_refusal": the_refusal,
+            "the_surface_still_holds_the_frame_the_producer_sent": bool(
+                (self._surface_pixels_now(ctx, frame.surface_id) == before).all()
+            ),
+        }
