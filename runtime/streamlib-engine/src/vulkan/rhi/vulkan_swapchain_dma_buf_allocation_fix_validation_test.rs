@@ -28,6 +28,9 @@ use winit::window::{Window, WindowAttributes, WindowId};
 
 use super::HostVulkanDevice;
 
+const DMA_BUF_EXPORT_HANDLE_TYPES: vk::ExternalMemoryHandleTypeFlags =
+    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Custom VMA allocator builders for testing different configurations
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,11 +72,6 @@ fn build_vma_without_global_export(device: &HostVulkanDevice) -> vma::Allocator 
 // Allocation helpers — simulate camera-display pipeline allocations
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The DMA-BUF export chain every exportable resource here is created with.
-fn dma_buf_external_memory_handle_types() -> vk::ExternalMemoryHandleTypeFlags {
-    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT
-}
-
 /// The one exportable-buffer shape this fixture allocates. A pool probe and
 /// the real allocation must be built from it alike: a DMA-BUF external buffer
 /// has a narrower `memoryTypeBits` than a plain one, so a probe that differs
@@ -112,7 +110,7 @@ fn alloc_dma_buf_buffer_via_vma(
     size: vk::DeviceSize,
 ) -> Result<(vk::Buffer, vma::Allocation), vk::ErrorCode> {
     let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-        .handle_types(dma_buf_external_memory_handle_types())
+        .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
         .build();
     let buffer_info = dma_buf_buffer_create_info(size, &mut external_buffer_info);
     unsafe { allocator.create_buffer(buffer_info, &dma_buf_buffer_allocation_options()) }
@@ -120,7 +118,9 @@ fn alloc_dma_buf_buffer_via_vma(
 
 /// The one exportable-image shape this fixture allocates — same probe/real
 /// contract as [`dma_buf_buffer_create_info`], via
-/// `VUID-vkBindImageMemory-memory-01047`.
+/// `VUID-vkBindImageMemory-memory-01047`. The usage set is this fixture's own
+/// and is narrower than the one `HostVulkanDevice::create_dma_buf_pools`
+/// probes with, which carries `TRANSFER_SRC` as well.
 fn dma_buf_image_create_info<'a>(
     width: u32,
     height: u32,
@@ -159,7 +159,7 @@ fn alloc_dma_buf_image_via_vma(
     height: u32,
 ) -> Result<(vk::Image, vma::Allocation), vk::ErrorCode> {
     let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
-        .handle_types(dma_buf_external_memory_handle_types())
+        .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
         .build();
     let image_info = dma_buf_image_create_info(width, height, &mut external_image_info);
     unsafe { allocator.create_image(image_info, &dma_buf_image_allocation_options()) }
@@ -379,7 +379,7 @@ impl SwapchainTestApp {
 
         // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
         let mut probe_buffer_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
-            .handle_types(dma_buf_external_memory_handle_types())
+            .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
             .build();
         let probe_buffer_info =
             dma_buf_buffer_create_info(64 * 1024, &mut probe_buffer_external_info);
@@ -415,7 +415,7 @@ impl SwapchainTestApp {
 
         // ── Find memory type for DEVICE_LOCAL DMA-BUF exportable images ──
         let mut probe_image_external_info = vk::ExternalMemoryImageCreateInfo::builder()
-            .handle_types(dma_buf_external_memory_handle_types())
+            .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
             .build();
         let probe_image_info = dma_buf_image_create_info(64, 64, &mut probe_image_external_info);
         let probe_image_alloc_opts = dma_buf_image_allocation_options();
@@ -455,7 +455,7 @@ impl SwapchainTestApp {
         for i in 0..4 {
             outcome.buffers_attempted += 1;
             let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-                .handle_types(dma_buf_external_memory_handle_types())
+                .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
                 .build();
             let buf_info = dma_buf_buffer_create_info(
                 (self.width as u64) * (self.height as u64) * 4,
@@ -478,7 +478,7 @@ impl SwapchainTestApp {
         for i in 0..4 {
             outcome.images_attempted += 1;
             let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
-                .handle_types(dma_buf_external_memory_handle_types())
+                .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
                 .build();
             let img_info =
                 dma_buf_image_create_info(self.width, self.height, &mut external_image_info);
