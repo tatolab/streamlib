@@ -2383,6 +2383,87 @@ mod tests {
         assert!(fd >= 0, "DMA-BUF fd must be non-negative");
     }
 
+    /// The rig half of the aspect-mask contract: allocating against
+    /// `DRM_FORMAT_MOD_LINEAR` yields a modifier-tiled image whose modifier
+    /// reads zero, and querying its plane layout must raise no validation
+    /// finding. Keying the aspect on the modifier's value instead of the
+    /// tiling trips `VUID-vkGetImageSubresourceLayout-tiling-09433` here
+    /// (#1915). NVIDIA advertises LINEAR as its only sampler-only ARGB8888
+    /// modifier, which is the shape real camera DMA-BUFs take on that
+    /// driver.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_linear_modifier_plane_layout_query_raises_no_validation_finding() {
+        const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        let counts_before = device.validation_layer_message_counts();
+        if counts_before.is_none() {
+            println!(
+                "Skipping — no validation messenger installed. Re-run with \
+                 STREAMLIB_VULKAN_VALIDATION=1 and VK_LAYER_KHRONOS_validation present."
+            );
+            return;
+        }
+        if device.dma_buf_image_pool_tiled().is_none() {
+            println!("Skipping — tiled DMA-BUF pool not created");
+            return;
+        }
+
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+        );
+        let texture = match HostVulkanTexture::new_render_target_dma_buf(
+            &device,
+            &desc,
+            &[DRM_FORMAT_MOD_LINEAR],
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                // A driver may advertise LINEAR for EGL import yet refuse it
+                // under `VkImageDrmFormatModifierListCreateInfoEXT` for this
+                // usage set. The aspect-mask contract is what is under test,
+                // not the allocator's modifier acceptance.
+                println!("Skipping — allocation against DRM_FORMAT_MOD_LINEAR refused: {e}");
+                return;
+            }
+        };
+
+        assert_eq!(
+            texture.chosen_drm_format_modifier(),
+            DRM_FORMAT_MOD_LINEAR,
+            "the candidate list held only LINEAR, so the driver must have picked it"
+        );
+        assert_eq!(
+            texture.vk_image_tiling(),
+            vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+            "a LINEAR-modifier image is still modifier-tiled by creation — the \
+             recorded tiling is what says so, because the modifier reads zero"
+        );
+
+        let layout = texture
+            .dma_buf_plane_layout()
+            .expect("plane layout of a linear-modifier image must be queryable");
+        assert_eq!(layout.len(), 1, "BGRA is single-plane");
+
+        assert_eq!(
+            device.validation_layer_message_counts(),
+            counts_before,
+            "querying a linear-modifier image's plane layout must go through the \
+             MEMORY_PLANE aspects, not COLOR"
+        );
+    }
+
     /// `new_render_target_dma_buf` with an empty modifier list must fail
     /// loudly rather than silently fall back to LINEAR (which is sampler-
     /// only on NVIDIA — see docs/learnings/nvidia-egl-dmabuf-render-target.md).
