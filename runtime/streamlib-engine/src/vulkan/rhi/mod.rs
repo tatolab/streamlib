@@ -164,4 +164,4 @@ pub mod drm_modifier_probe;
 mod video_profile_test_fixture;
 
 #[cfg(all(test, target_os = "linux"))]
-mod vulkan_swapchain_alloc_repro_test;
+mod vulkan_swapchain_dma_buf_allocation_fix_validation_test;
