@@ -619,3 +619,36 @@ class TheGpuWriteDoorRefusesAFrameItsProducerStillOwnsProbe(_WriteDoorProbe):
                 (self._surface_pixels_now(ctx, frame.surface_id) == before).all()
             ),
         }
+
+
+@processor
+class TheCpuDoorHandsACameraFrameOutReadOnlyProbe(_WriteDoorProbe):
+    """A camera frame arrives through `cpu()` read-only, enforced by numpy.
+
+    The same engine answer that refuses `writable()` — a pool member its
+    producer still owns takes no in-place edit — reaches this door as a
+    read-only array rather than a write that lands where other holders never
+    see it. numpy is the consumer, and numpy honors the flag: the write line
+    itself raises.
+    """
+
+    def _read(self, ctx: RuntimeContextLimitedAccess):
+        return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        engine_answer = ctx.gpu_limited_access.surface_can_take_write_back(
+            frame.surface_id
+        )
+        with frame.cpu() as host_pixels:
+            the_write_raised = ""
+            try:
+                host_pixels[0, 0, 0] = 7
+            except (ValueError, TypeError) as refusal:
+                the_write_raised = str(refusal)
+            return {
+                "the_engine_says_the_frame_takes_a_write_back": engine_answer,
+                "the_array_reports_itself_writable": bool(
+                    host_pixels.flags.writeable
+                ),
+                "the_write_raised": the_write_raised,
+            }

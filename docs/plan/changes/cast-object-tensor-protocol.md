@@ -27,7 +27,7 @@ type composes.
   (`sdk/streamlib-python-wheel/src/python_processor_context.rs:436-489`, natural device
   side chosen once per handle at `:112-115`), the always-writable device-tensor scope
   with blit-back-on-exit / discard-on-raise (`:575-740`), and the CPU host mapping
-  whose unlock publishes (`:361-388`).
+  (`:361-388`; coherent, so stores publish as they land).
 
 ## ADDED: the shipped composable
 
@@ -60,8 +60,10 @@ What composing it provides:
 - `writable()` — the GPU write scope, riding the device-tensor scope mechanics: enter
   blits out, exit publishes ordered ahead of the engine's next read, a propagating
   exception discards and never suppresses.
-- `cpu()` — the CPU write scope, riding the host-mapping path: yields a writable numpy
-  array; same block-edge publication rule, same discard-on-raise.
+- `cpu()` — the CPU write scope, riding the host-mapping path: yields a numpy array
+  writable exactly when the frame can take a write-back (a producer-owned frame arrives
+  read-only, numpy-enforced); where writable, the coherent mapping publishes stores as
+  they land — no staging, no block-edge discard — and a raise is never suppressed.
 
 ```python
 frame = ctx.inputs.read("depth_from_upstream", into=DepthFrame)
@@ -96,7 +98,9 @@ MODIFIED, verified by the implementing diff and its tests rather than a grep pat
 ## Behavior after this change
 
 The frame a processor reads is directly consumable by any DLPack consumer with zero
-ceremony; edits are scoped and publish at the block edge; the CPU path is named. The
+ceremony; edits are scoped — GPU edits publish at the block edge, CPU stores land in
+the coherent mapping as written — and a frame that takes no write-back says so through
+every door; the CPU path is named. The
 resolve/lock spelling remains for surface handles reached outside a typed read — the
 cast object is grammar over it, not a replacement.
 

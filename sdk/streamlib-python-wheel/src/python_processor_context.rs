@@ -632,10 +632,12 @@ impl PythonGpuSurfaceDeviceTensorScope {
             let prepared = prepare_device_export(python_self.py(), &python_self.owned_memory)?;
             if !prepared.writable {
                 return Err(PyRuntimeError::new_err(
-                    "this surface's export cannot take a write-back — it is a pool member its \
+                    "this surface cannot take a write-back — it is a pool member its \
                      producer still owns, or a texture allocated without \"copy_dst\" usage — \
-                     so the write-in-place scope refuses rather than discarding your edits \
-                     silently. For reading, use lock() and __dlpack__ on the surface handle",
+                     so no write door edits it: this write-in-place scope refuses rather than \
+                     discarding your edits silently, and the CPU mapping is handed out \
+                     read-only under the same rule. Reading needs no write door: __dlpack__ \
+                     under lock(), or as_numpy",
                 ));
             }
             *python_self.prepared_device_export.lock() = Some(prepared);
@@ -1082,6 +1084,21 @@ impl PythonGpuContextLimitedAccess {
                 claimed_surface_id: surface_id.to_string(),
                 release_check_out_to_surface_share: claimed,
             });
+        }
+        let _ = (python, surface_id);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Whether an edit written back into this surface publishes at all —
+    /// the engine's one answer for every write door: a write-back belongs
+    /// to a surface whose only backing is its own pooled allocation, so a
+    /// frame its producer still owns (a dual-backed camera frame) answers
+    /// `False`. `writable()` refuses on this answer; `cpu()` hands its
+    /// array out read-only on it.
+    fn surface_can_take_write_back(&self, python: Python<'_>, surface_id: &str) -> PyResult<bool> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.surface_can_take_write_back(python, surface_id);
         }
         let _ = (python, surface_id);
         Err(gpu_unreachable_from_a_helper_process_error())

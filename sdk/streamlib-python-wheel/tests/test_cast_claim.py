@@ -378,3 +378,27 @@ def test_the_gpu_write_door_refuses_a_frame_its_producer_still_owns(
         f"the door did not surface the engine's refusal: {observation['the_refusal']!r}"
     )
     assert observation["the_surface_still_holds_the_frame_the_producer_sent"]
+
+
+def test_the_cpu_door_hands_a_camera_frame_out_read_only(start_app_under_test):
+    """The one rule on the CPU door, against the frame that made it matter: a
+    camera frame is a pool member its producer still owns, so the engine
+    answers no write-back — `writable()` refuses on that answer, and `cpu()`
+    hands its array out read-only with numpy enforcing the flag at the write
+    line itself. A silent write here is the one this door used to allow, and
+    it landed where the app's own window never saw it.
+    """
+    observation = run_claim_probe(
+        start_app_under_test, "TheCpuDoorHandsACameraFrameOutReadOnlyProbe"
+    )
+
+    assert observation["claim_taken"] is True
+    assert observation["the_engine_says_the_frame_takes_a_write_back"] is False, (
+        "a camera frame is dual-backed; the engine answering True here means "
+        "the producer stopped registering its ring texture and this test's "
+        "premise needs re-deriving"
+    )
+    assert observation["the_array_reports_itself_writable"] is False
+    assert observation["the_write_raised"], (
+        "numpy did not refuse the write — the read-only flag never reached it"
+    )

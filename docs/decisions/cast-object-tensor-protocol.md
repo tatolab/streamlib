@@ -21,10 +21,13 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
 2. **The performance gradient is spelled, not policed.** Read/inference:
    `torch.from_dlpack(frame)` — shortest, GPU-resident. GPU edit: `with frame.writable() as
    t:` — the block edge is the publication point. CPU / skia / PIL: `with frame.cpu() as
-   img:` — the slow path says so in its name. Both scopes keep the one write-scope rule the
-   plan already states for the device-tensor and CPU pixel-buffer scopes: exit publishes,
-   ordered ahead of the engine's next read; a propagating exception discards the write and
-   never suppresses the exception.
+   img:` — the slow path says so in its name. Whether a frame takes an edit at all is the
+   engine's one answer for both doors: a write-back belongs to a surface whose only backing
+   is its own pooled allocation, so a frame its producer still owns refuses `writable()` by
+   name and reaches `cpu()` read-only. `writable()` keeps the write-scope rule the plan
+   states for the device-tensor scope: exit publishes, ordered ahead of the engine's next
+   read; a propagating exception discards the write and never suppresses the exception.
+   `cpu()`'s publication semantics are the host mapping's own — see point 6.
 3. **Wheel-layer grammar only.** The protocol is spelled over the shipped primitives —
    per-surface staging, the DLPack export machinery, the typed-cast claim
    (`surface-id-lifetime-contract`) — with no engine change. `VideoFrame` holds no
@@ -37,8 +40,13 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
    no bare `__dlpack__` — the ambiguity is refused by name — and reaches each surface
    through that surface's own protocol object. Guessing a "primary" surface silently
    would be the silent-wrongness posture the lifetime contract exists to kill.
-6. **`cpu()` yields a writable numpy array** — the existing host-mapping path; skia and
-   PIL wrap numpy trivially — under the same publication-at-exit rule.
+6. **`cpu()` yields a numpy array writable exactly when the frame can take a write-back**
+   — the engine's answer, asked over the shipped escalate surface and memoised per pool
+   slot; a frame its producer still owns arrives read-only, and numpy enforces the flag at
+   the write line itself. The array is the existing host-mapping path — skia and PIL wrap
+   numpy trivially — and it is coherent, so where writable, stores publish as they land:
+   there is no staging and no block-edge discard, and a raise mid-edit leaves a complete
+   edit of fewer pixels, never a torn frame.
 
 ## Rejected alternatives
 
@@ -73,3 +81,9 @@ or when someone asks why `torch.from_dlpack(frame)` works on the thing `read()` 
   contract — the same honesty posture as the raw-fd use bound.
 - Cost accepted: a multi-surface cast type carries per-surface protocol objects instead
   of one flat surface; the bare spelling stays reserved for the unambiguous case.
+- Cost accepted: the CPU door has no block-edge atomicity — the array is the surface's
+  own mapping, so publication is per store. Stated as where the guarantee ends, never as
+  a caller bound: nobody misbehaves by raising inside the block.
+- The read-only downgrade is enforced on the CPU door precisely because it is enforceable
+  there: numpy honors the DLPack read-only flag, which is the enforcement a CUDA consumer
+  of the bare view cannot be given — the same honesty test, answered per consumer.

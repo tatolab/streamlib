@@ -64,6 +64,31 @@ def _report_the_first_refused_claim(surface_id: str, refusal: BaseException) -> 
     )
 
 
+_a_read_only_cpu_door_has_been_reported = False
+
+
+def _report_the_first_read_only_cpu_door(surface_id: str) -> None:
+    """Say once, per process, that `cpu()` is handing out read-only arrays.
+
+    Once and not per frame, for the same reason as the refused-claim report:
+    this is the per-frame path. numpy's own ValueError at the write is the
+    per-use signal; what it does not name is the rule, so this does, before
+    a bare "assignment destination is read-only" is anyone's first contact
+    with it.
+    """
+    global _a_read_only_cpu_door_has_been_reported
+    if _a_read_only_cpu_door_has_been_reported:
+        return
+    _a_read_only_cpu_door_has_been_reported = True
+    warn(
+        "cpu() is handing out read-only arrays for this surface: its frame cannot take a "
+        "write-back — a pool member its producer still owns takes no in-place edit through "
+        "any door, because an edit there would land where other holders never see it. "
+        "writable() refuses the same frames by name. Not reported again in this process.",
+        surface_id=surface_id,
+    )
+
+
 def _claim_taken_on(
     gpu_limited_access: GpuContextLimitedAccess, surface_id: str
 ) -> "GpuSurfaceCheckOutLease | None":
@@ -259,13 +284,18 @@ class PixelAccessToOneClaimedSurface:
     def cpu(self) -> Iterator[Any]:
         """The CPU write door: a writable numpy array over these pixels.
 
-        `with frame.cpu() as img:` — the slow path, named so. Leaving the block
-        is what settles the surface's scope, publishing a pending device write
-        and ending the write intent; a propagating exception is never
-        suppressed. What this door cannot promise is the device scope's
-        discard: the array *is* the surface's own host mapping, so bytes
-        already written are already in the frame, and claiming otherwise would
-        be claiming an enforcement the mapping cannot deliver.
+        `with frame.cpu() as img:` — the slow path, named so. The array is
+        writable exactly when the engine says the frame can take a write-back;
+        a frame its producer still owns (a dual-backed camera frame) arrives
+        read-only, enforced by numpy, under the same rule that makes
+        `writable()` refuse it — no door writes where other holders never see.
+
+        Where the array is writable it *is* the surface's own coherent host
+        mapping, so publication is per store, not at the block edge: a raise
+        mid-edit leaves a complete edit of fewer pixels, never a torn frame,
+        and there is no staging whose discard this could promise. What the
+        block edge does settle: the write intent ends, the scope closes, and
+        a propagating exception is never suppressed.
 
         Texture-backed pixels (a kernel's output) have no host mapping at all
         and are refused here by the surface itself; `writable()` is their door.
@@ -279,7 +309,12 @@ class PixelAccessToOneClaimedSurface:
             self._the_capability_and_the_claimed_surface_id()
         )
         with gpu_limited_access.resolve_surface(surface_id) as surface:
-            surface.lock(read_only=False)
+            frame_takes_the_edit = gpu_limited_access.surface_can_take_write_back(
+                surface_id
+            )
+            surface.lock(read_only=not frame_takes_the_edit)
+            if not frame_takes_the_edit:
+                _report_the_first_read_only_cpu_door(surface_id)
             yield surface.as_numpy()
 
 

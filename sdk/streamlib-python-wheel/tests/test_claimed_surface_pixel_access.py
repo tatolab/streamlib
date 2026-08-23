@@ -223,10 +223,16 @@ class SurfaceHandleStandIn:
 class GpuLimitedAccessStandIn:
     """The shape a typed read offers, recording what it was asked for."""
 
-    def __init__(self) -> None:
+    def __init__(self, surfaces_take_write_backs: bool = True) -> None:
         self.claimed_surface_ids: list[str] = []
         self.resolved_surface_ids: list[str] = []
         self.handed_out_handles: list[SurfaceHandleStandIn] = []
+        self.surfaces_take_write_backs = surfaces_take_write_backs
+        self.write_back_questions_asked: list[str] = []
+
+    def surface_can_take_write_back(self, surface_id: str) -> bool:
+        self.write_back_questions_asked.append(surface_id)
+        return self.surfaces_take_write_backs
 
     def claim_surface_against_producer_reuse(
         self, surface_id: str
@@ -721,6 +727,74 @@ def test_the_cpu_door_takes_its_own_surface_and_leaves_the_read_view_alone(
 
     assert gpu_limited_access.resolved_surface_ids == ["surface-7", "surface-7"]
     assert read_view.closed is False
+
+
+def test_the_cpu_door_asks_the_engine_before_handing_out_a_writable_array(
+    offered,
+):
+    """The write intent follows the engine's one answer, asked before the
+    lock is taken — not assumed from the door's own name."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.cpu():
+        pass
+
+    assert gpu_limited_access.write_back_questions_asked == ["surface-7"]
+    handle = gpu_limited_access.handed_out_handles[-1]
+    assert handle.lock_state_when_the_host_array_was_taken is False
+
+
+def test_a_frame_that_cannot_take_a_write_back_arrives_read_only(
+    offered, monkeypatch
+):
+    """The one rule, on the CPU door: a frame its producer still owns gets a
+    read-only array — the same engine answer `writable()` refuses on — and
+    the downgrade is reported once, by name, before numpy's bare ValueError
+    is anyone's first contact with the rule."""
+    gpu_limited_access = offered(
+        GpuLimitedAccessStandIn(surfaces_take_write_backs=False)
+    )
+    monkeypatch.setattr(
+        composable_module, "_a_read_only_cpu_door_has_been_reported", False
+    )
+    reported: list[str] = []
+    monkeypatch.setattr(
+        composable_module,
+        "warn",
+        lambda message, **attributes: reported.append(message),
+    )
+    frame = DepthFrame(**FRAME_BAG)
+
+    with frame.cpu():
+        pass
+    with frame.cpu():
+        pass
+
+    for handle in gpu_limited_access.handed_out_handles:
+        assert handle.lock_state_when_the_host_array_was_taken is True, (
+            "the array must be taken under a read-only lock"
+        )
+    assert len(reported) == 1, "the downgrade is reported once per process"
+    assert "cannot take a write-back" in reported[0]
+
+
+def test_a_failure_learning_the_write_back_answer_propagates(offered):
+    """An error is not a refusal: a capability that cannot answer the
+    question raises rather than guessing either way — a guessed True is the
+    silent-wrongness path, a guessed False silently downgrades a frame that
+    takes edits fine."""
+
+    class GpuLimitedAccessThatCannotAnswer(GpuLimitedAccessStandIn):
+        def surface_can_take_write_back(self, surface_id: str) -> bool:
+            raise RuntimeError(f"the parent went away answering for {surface_id!r}")
+
+    offered(GpuLimitedAccessThatCannotAnswer())
+    frame = DepthFrame(**FRAME_BAG)
+
+    with pytest.raises(RuntimeError, match="went away"):
+        with frame.cpu():
+            pass
 
 
 # ---- a type that claims more than one surface -------------------------------

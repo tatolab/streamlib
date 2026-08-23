@@ -394,6 +394,16 @@ class GpuContextLimitedAccess:
         lifetime do the releasing.
         """
 
+    def surface_can_take_write_back(self, surface_id: str) -> bool:
+        """Whether an edit written back into this surface publishes at all.
+
+        The engine's one answer for every write door: a write-back belongs to
+        a surface whose only backing is its own pooled allocation, so a frame
+        its producer still owns (a dual-backed camera frame) answers False.
+        `writable()` refuses on this answer; `cpu()` hands its array out
+        read-only on it.
+        """
+
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
         """Refuses: the callback's one atomic privileged scope cannot span a
         process boundary. The operations it wrapped are methods on this
