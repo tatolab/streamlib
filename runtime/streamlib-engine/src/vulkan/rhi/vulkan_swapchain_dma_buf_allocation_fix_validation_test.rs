@@ -35,26 +35,6 @@ const DMA_BUF_EXPORT_HANDLE_TYPES: vk::ExternalMemoryHandleTypeFlags =
 // Custom VMA allocator builders for testing different configurations
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Build a VMA allocator with the BROKEN config — pTypeExternalMemoryHandleTypes
-/// set globally for all memory types.
-fn build_vma_with_global_export(device: &HostVulkanDevice) -> vma::Allocator {
-    let instance = device.instance();
-    let vk_device = device.device();
-    let physical_device = device.physical_device();
-
-    let mem_props = unsafe { instance.get_physical_device_memory_properties(physical_device) };
-    let count = mem_props.memory_type_count as usize;
-    let dma_buf_handle_types: Vec<vk::ExternalMemoryHandleTypeFlags> =
-        vec![vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT; count];
-
-    let mut alloc_options = vma::AllocatorOptions::new(instance, vk_device, physical_device);
-    alloc_options.version = vulkanalia::Version::new(1, 4, 0);
-    alloc_options.external_memory_handle_types = &dma_buf_handle_types;
-
-    unsafe { vma::Allocator::new(&alloc_options) }
-        .expect("VMA allocator (broken config) creation failed")
-}
-
 /// Build a VMA allocator with NO global export config. Pools handle export.
 fn build_vma_without_global_export(device: &HostVulkanDevice) -> vma::Allocator {
     let instance = device.instance();
@@ -105,17 +85,6 @@ fn dma_buf_buffer_allocation_options() -> vma::AllocationOptions {
     }
 }
 
-fn alloc_dma_buf_buffer_via_vma(
-    allocator: &vma::Allocator,
-    size: vk::DeviceSize,
-) -> Result<(vk::Buffer, vma::Allocation), vk::ErrorCode> {
-    let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-        .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
-        .build();
-    let buffer_info = dma_buf_buffer_create_info(size, &mut external_buffer_info);
-    unsafe { allocator.create_buffer(buffer_info, &dma_buf_buffer_allocation_options()) }
-}
-
 /// The one exportable-image shape this fixture allocates — same probe/real
 /// contract as [`dma_buf_buffer_create_info`], via
 /// `VUID-vkBindImageMemory-memory-01047`. The usage set is this fixture's own
@@ -151,18 +120,6 @@ fn dma_buf_image_allocation_options() -> vma::AllocationOptions {
         required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
         ..Default::default()
     }
-}
-
-fn alloc_dma_buf_image_via_vma(
-    allocator: &vma::Allocator,
-    width: u32,
-    height: u32,
-) -> Result<(vk::Image, vma::Allocation), vk::ErrorCode> {
-    let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
-        .handle_types(DMA_BUF_EXPORT_HANDLE_TYPES)
-        .build();
-    let image_info = dma_buf_image_create_info(width, height, &mut external_image_info);
-    unsafe { allocator.create_image(image_info, &dma_buf_image_allocation_options()) }
 }
 
 fn alloc_internal_image_via_vma(
@@ -627,55 +584,6 @@ fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Without a swapchain, the global-export VMA config the engine abandoned
-/// allocates four exportable pixel buffers and four exportable camera
-/// textures without failing.
-#[cfg_attr(
-    not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-)]
-#[test]
-fn test_baseline_no_swapchain_broken_config_works() {
-    let device = match try_create_device() {
-        Some(d) => d,
-        None => return,
-    };
-    if !device.supports_external_memory() {
-        println!("Skipping — external memory unsupported");
-        return;
-    }
-
-    let allocator = build_vma_with_global_export(&device);
-    let width = 1920u32;
-    let height = 1080u32;
-
-    let mut buffers = Vec::new();
-    for i in 0..4 {
-        let buf = alloc_dma_buf_buffer_via_vma(&allocator, (width as u64) * (height as u64) * 4)
-            .unwrap_or_else(|e| panic!("pixel buffer [{i}] failed (no swapchain): {e}"));
-        buffers.push(buf);
-    }
-    println!("  [baseline] 4 pixel buffers allocated");
-
-    let mut images = Vec::new();
-    for i in 0..4 {
-        let img = alloc_dma_buf_image_via_vma(&allocator, width, height)
-            .unwrap_or_else(|e| panic!("camera texture [{i}] failed (no swapchain): {e}"));
-        images.push(img);
-    }
-    println!("  [baseline] 4 camera textures allocated");
-
-    unsafe {
-        for (img, alloc) in images {
-            allocator.destroy_image(img, alloc);
-        }
-        for (buf, alloc) in buffers {
-            allocator.destroy_buffer(buf, alloc);
-        }
-    }
-    println!("  [baseline] PASS — no swapchain, all allocations succeeded");
-}
 
 /// Runs all swapchain-dependent scenarios in a single test because winit's
 /// EventLoop is per-process on Linux X11 — only one EventLoop can be created
