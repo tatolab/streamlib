@@ -70,23 +70,45 @@ pub struct HostFixture {
 
 impl HostFixture {
     pub fn try_new() -> Option<Self> {
+        Self::try_new_wrapping_copy_trigger(|in_process| {
+            (
+                in_process as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>,
+                (),
+            )
+        })
+        .map(|(fixture, ())| fixture)
+    }
+
+    /// Fixture whose adapter drives whatever `wrap` returns around the
+    /// in-process trigger — a test that needs to observe every trigger
+    /// call passes a decorator, and gets its own handle on it back
+    /// alongside the fixture. `self.trigger` stays the inner in-process
+    /// trigger either way.
+    pub fn try_new_wrapping_copy_trigger<T>(
+        wrap: impl FnOnce(
+            Arc<InProcessCpuReadbackCopyTrigger<HostVulkanDevice>>,
+        ) -> (Arc<dyn CpuReadbackCopyTrigger<HostMarker>>, T),
+    ) -> Option<(Self, T)> {
         let gpu = try_init_gpu()?;
         let host_device = Arc::clone(gpu.device().vulkan_device());
         let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(Arc::clone(
             &host_device,
         )));
-        let trigger_dyn = Arc::clone(&trigger) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
+        let (copy_trigger, wrapper_handle) = wrap(Arc::clone(&trigger));
         let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(
             Arc::clone(&host_device),
-            trigger_dyn,
+            copy_trigger,
         ));
         let ctx = CpuReadbackContext::new(Arc::clone(&adapter));
-        Some(Self {
-            gpu,
-            adapter,
-            ctx,
-            trigger,
-        })
+        Some((
+            Self {
+                gpu,
+                adapter,
+                ctx,
+                trigger,
+            },
+            wrapper_handle,
+        ))
     }
 
     /// Allocate a host BGRA8 `VkImage` + per-plane staging buffer +

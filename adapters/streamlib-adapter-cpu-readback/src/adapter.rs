@@ -42,13 +42,18 @@ use vulkanalia::vk;
 
 use streamlib_consumer_rhi::VulkanLayout;
 
-use crate::state::{HostSurfaceRegistration, PlaneSlot, SurfaceState};
+use crate::state::{
+    HostSurfaceRegistration, PlaneSlot, SurfaceState, SurfaceTimelineSignalSequence,
+};
 use crate::view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };
 
-/// Default per-acquire wait timeout. Bounds the prior-work timeline
-/// wait, the trigger call, and the post-copy timeline wait.
+/// Default per-acquire wait timeout. Bounds each timeline wait
+/// individually, and nothing else: not the trigger call — the in-process
+/// trigger blocks untimed on the prior submit's fence — and not the
+/// acquire as a whole, which first blocks untimed on the surface's
+/// signal sequence while another caller runs its copy.
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Per-acquire trigger context — everything the trigger needs to
@@ -122,6 +127,14 @@ pub struct TriggerPlane {
 /// in its submit and returns it; the subprocess trigger forwards
 /// the surface id over IPC, parses the host's response, and
 /// returns whatever value the host reports.
+///
+/// Two contracts the code's shape cannot show. The returned value MUST
+/// be at least `ctx.suggested_signal_value`: a timeline wait is
+/// satisfied by any value at or above its target, so a lower one may
+/// already be signaled and would let the adapter's wait return while
+/// this copy is still running. And a trigger MUST NOT re-enter the
+/// adapter for the same surface — it is called under that surface's
+/// signal sequence, which is not reentrant.
 pub trait CpuReadbackCopyTrigger<P: DevicePrivilege>: Send + Sync {
     fn run_copy_image_to_buffer(
         &self,
@@ -244,7 +257,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             current_layout: registration.initial_image_layout,
             read_holders: 0,
             write_held: false,
-            current_signal_value: 0,
+            signal_sequence: Arc::new(SurfaceTimelineSignalSequence::default()),
             format,
             width,
             height,
@@ -265,21 +278,21 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         self.surfaces.len()
     }
 
-    fn snapshot_for_acquire(
+    fn snapshot_surface_for_copy_submit(
         state: &mut SurfaceState<D::Privilege>,
-    ) -> AcquireSnapshot<D::Privilege> {
+    ) -> SurfaceCopySnapshot<D::Privilege> {
         let produce_done = Arc::clone(&state.produce_done);
         let consume_done = Arc::clone(&state.consume_done);
-        let wait_value = state.current_signal_value;
+        let signal_sequence = Arc::clone(&state.signal_sequence);
         let image = state.texture.as_ref().and_then(|t| t.image());
         let from = state.current_layout;
         let format = state.format;
         let width = state.width;
         let height = state.height;
-        let plane_snaps: Vec<PlaneAcquireSlot> = state
+        let plane_snaps: Vec<SurfaceCopyPlaneSlot> = state
             .planes
             .iter()
-            .map(|p| PlaneAcquireSlot {
+            .map(|p| SurfaceCopyPlaneSlot {
                 buffer: p.staging.buffer(),
                 mapped_ptr: p.staging.mapped_ptr(),
                 width: p.width,
@@ -288,10 +301,10 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
                 byte_size: p.byte_size(),
             })
             .collect();
-        AcquireSnapshot {
+        SurfaceCopySnapshot {
             produce_done,
             consume_done,
-            wait_value,
+            signal_sequence,
             image,
             from,
             format,
@@ -305,17 +318,19 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     fn try_begin_read_inner(
         &self,
         surface_id: SurfaceId,
-    ) -> Result<Option<AcquireSnapshot<D::Privilege>>, AdapterError> {
-        self.surfaces
-            .try_begin_read(surface_id, |state| Ok(Self::snapshot_for_acquire(state)))
+    ) -> Result<Option<SurfaceCopySnapshot<D::Privilege>>, AdapterError> {
+        self.surfaces.try_begin_read(surface_id, |state| {
+            Ok(Self::snapshot_surface_for_copy_submit(state))
+        })
     }
 
     fn try_begin_write_inner(
         &self,
         surface_id: SurfaceId,
-    ) -> Result<Option<AcquireSnapshot<D::Privilege>>, AdapterError> {
-        self.surfaces
-            .try_begin_write(surface_id, |state| Ok(Self::snapshot_for_acquire(state)))
+    ) -> Result<Option<SurfaceCopySnapshot<D::Privilege>>, AdapterError> {
+        self.surfaces.try_begin_write(surface_id, |state| {
+            Ok(Self::snapshot_surface_for_copy_submit(state))
+        })
     }
 
     fn rollback_acquire(&self, surface_id: SurfaceId, write: bool) {
@@ -330,7 +345,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     fn make_trigger_context<'a>(
         &self,
         surface_id: SurfaceId,
-        snap: &'a AcquireSnapshot<D::Privilege>,
+        snap: &'a SurfaceCopySnapshot<D::Privilege>,
         suggested_signal_value: u64,
         trigger_planes: &'a [TriggerPlane],
     ) -> CpuReadbackTriggerContext<'a, D::Privilege> {
@@ -349,7 +364,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     fn log_acquire(
         &self,
         surface_id: SurfaceId,
-        snap: &AcquireSnapshot<D::Privilege>,
+        snap: &SurfaceCopySnapshot<D::Privilege>,
         write: bool,
     ) {
         let total_bytes: u64 = snap.planes.iter().map(|p| p.byte_size).sum();
@@ -368,6 +383,63 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             total_bytes,
             snap.planes.len(),
         );
+    }
+
+    /// Reserve the surface's next `produce_done` value, run the copy
+    /// that signals it, and wait for the value the trigger reports.
+    ///
+    /// The reservation is held across all three. Because a timeline wait
+    /// is satisfied by any value at or above its target, releasing it
+    /// after the submit would let a second caller's copy signal a higher
+    /// value and satisfy the first caller's wait while the first copy is
+    /// still running — the defect this serialization exists to remove.
+    /// Holding it means at most one copy signals `produce_done` for a
+    /// surface at a time, which the adapter guarantees rather than
+    /// delegating to whichever trigger is installed — on the success
+    /// path. Both error paths below return after the trigger has already
+    /// submitted, dropping the reservation with that copy outstanding;
+    /// the acquire has failed by then, and what keeps the next one
+    /// ordered behind it is the trigger's own serialization. See
+    /// `docs/architecture/adapter-timeline-single-writer.md` §Thread
+    /// model within the writer process.
+    fn submit_copy_and_await_produce_done(
+        &self,
+        surface_id: SurfaceId,
+        snap: &SurfaceCopySnapshot<D::Privilege>,
+        direction: CopyDirection,
+    ) -> Result<(), AdapterError> {
+        let trigger_planes: Vec<TriggerPlane> = snap
+            .planes
+            .iter()
+            .map(|p| TriggerPlane {
+                buffer: p.buffer,
+                width: p.width,
+                height: p.height,
+                bytes_per_pixel: p.bytes_per_pixel,
+            })
+            .collect();
+        let mut reserved = snap.signal_sequence.reserve_next_signal_value();
+        let ctx = self.make_trigger_context(surface_id, snap, reserved.value(), &trigger_planes);
+        let signaled = match direction {
+            CopyDirection::ImageToBuffer => self.trigger.run_copy_image_to_buffer(&ctx)?,
+            CopyDirection::BufferToImage => self.trigger.run_copy_buffer_to_image(&ctx)?,
+        };
+        reserved.observe_signaled_value(signaled).map_err(|below| {
+            AdapterError::BackendRejected {
+                reason: format!(
+                    "trigger reported produce_done value {signaled} for surface_id={surface_id}, \
+                     below the reserved {}; a value this surface may already carry cannot prove \
+                     the copy completed",
+                    below.reserved
+                ),
+            }
+        })?;
+        snap.produce_done
+            .wait(signaled, self.acquire_timeout.as_nanos() as u64)
+            .map_err(|_| AdapterError::SyncTimeout {
+                duration: self.acquire_timeout,
+            })?;
+        Ok(())
     }
 
     fn acquire_inner(
@@ -422,41 +494,14 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             });
         }
 
-        let next_value = snap.wait_value + 1;
-        let trigger_planes: Vec<TriggerPlane> = snap
-            .planes
-            .iter()
-            .map(|p| TriggerPlane {
-                buffer: p.buffer,
-                width: p.width,
-                height: p.height,
-                bytes_per_pixel: p.bytes_per_pixel,
-            })
-            .collect();
-        let ctx = self.make_trigger_context(surface_id, &snap, next_value, &trigger_planes);
-
-        let signaled = match self.trigger.run_copy_image_to_buffer(&ctx) {
-            Ok(v) => v,
-            Err(e) => {
-                self.rollback_acquire(surface_id, write);
-                return Err(e);
-            }
-        };
-
-        // Wait for the trigger's signaled `produce_done` value.
-        if snap
-            .produce_done
-            .wait(signaled, self.acquire_timeout.as_nanos() as u64)
-            .is_err()
+        if let Err(e) =
+            self.submit_copy_and_await_produce_done(surface_id, &snap, CopyDirection::ImageToBuffer)
         {
             self.rollback_acquire(surface_id, write);
-            return Err(AdapterError::SyncTimeout {
-                duration: self.acquire_timeout,
-            });
+            return Err(e);
         }
         self.surfaces.with_mut(surface_id, |state| {
             state.current_layout = VulkanLayout::GENERAL;
-            state.current_signal_value = signaled;
         });
 
         Ok(Some(AcquireOutcome { snap }))
@@ -535,31 +580,36 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         // shared-timeline race that no longer exists under
         // dual-timeline).
         //
-        // Inner Option: `None` means "not the last reader, skip signal".
-        // Outer Option: `None` means "surface raced an unregister".
-        let signal: Option<
-            Option<(
-                Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>,
-                u64,
-            )>,
-        > = self.surfaces.with_mut(surface_id, |state| {
-            debug_assert!(state.read_holders > 0, "read release without acquire");
-            state.dec_read_holders();
-            if state.read_holders > 0 {
-                return None;
-            }
-            let next = state.current_signal_value + 1;
-            state.current_signal_value = next;
-            Some((Arc::clone(&state.consume_done), next))
-        });
-        let signal = match signal {
+        // `None` means the surface raced an unregister.
+        let consume_done_signal: Option<ConsumeDoneSignalOnReadRelease<D::Privilege>> =
+            self.surfaces.with_mut(surface_id, |state| {
+                debug_assert!(state.read_holders > 0, "read release without acquire");
+                state.dec_read_holders();
+                if state.read_holders > 0 {
+                    return ConsumeDoneSignalOnReadRelease::NotTheLastReader;
+                }
+                ConsumeDoneSignalOnReadRelease::LastReaderMustSignal {
+                    consume_done: Arc::clone(&state.consume_done),
+                    signal_sequence: Arc::clone(&state.signal_sequence),
+                }
+            });
+        let consume_done_signal = match consume_done_signal {
             Some(s) => s,
             None => {
                 tracing::warn!(?surface_id, "end_read_access on unknown surface");
                 return;
             }
         };
-        if let Some((consume_done, value)) = signal {
+        if let ConsumeDoneSignalOnReadRelease::LastReaderMustSignal {
+            consume_done,
+            signal_sequence,
+        } = consume_done_signal
+        {
+            // Bind the reservation rather than inlining it: the
+            // sequence must stay locked across the signal, or a copy
+            // submit racing this release can take the same value.
+            let reserved = signal_sequence.reserve_next_signal_value();
+            let value = reserved.value();
             if let Err(e) = consume_done.signal_host(value) {
                 tracing::error!(?surface_id, %value, %e, "consume_done signal failed on read release");
             }
@@ -571,36 +621,7 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         // trigger unlocked.
         let snap = self.surfaces.with_mut(surface_id, |state| {
             debug_assert!(state.write_held, "write release without acquire");
-            let produce_done = Arc::clone(&state.produce_done);
-            let consume_done = Arc::clone(&state.consume_done);
-            let wait_value = state.current_signal_value;
-            let image = state.texture.as_ref().and_then(|t| t.image());
-            let from = state.current_layout;
-            let format = state.format;
-            let plane_snaps: Vec<PlaneAcquireSlot> = state
-                .planes
-                .iter()
-                .map(|p| PlaneAcquireSlot {
-                    buffer: p.staging.buffer(),
-                    mapped_ptr: p.staging.mapped_ptr(),
-                    width: p.width,
-                    height: p.height,
-                    bytes_per_pixel: p.bytes_per_pixel,
-                    byte_size: p.byte_size(),
-                })
-                .collect();
-            AcquireSnapshot {
-                produce_done,
-                consume_done,
-                wait_value,
-                image,
-                from,
-                format,
-                width: state.width,
-                height: state.height,
-                planes: plane_snaps,
-                _marker: PhantomData,
-            }
+            Self::snapshot_surface_for_copy_submit(state)
         });
         let snap = match snap {
             Some(s) => s,
@@ -610,33 +631,10 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
             }
         };
 
-        let next_value = snap.wait_value + 1;
-        let trigger_planes: Vec<TriggerPlane> = snap
-            .planes
-            .iter()
-            .map(|p| TriggerPlane {
-                buffer: p.buffer,
-                width: p.width,
-                height: p.height,
-                bytes_per_pixel: p.bytes_per_pixel,
-            })
-            .collect();
-        let ctx = self.make_trigger_context(surface_id, &snap, next_value, &trigger_planes);
-
-        let signaled = match self.trigger.run_copy_buffer_to_image(&ctx) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(?surface_id, error = %e, "cpu-readback flush trigger failed");
-                self.surfaces.rollback_write(surface_id);
-                return;
-            }
-        };
-        if snap
-            .produce_done
-            .wait(signaled, self.acquire_timeout.as_nanos() as u64)
-            .is_err()
+        if let Err(e) =
+            self.submit_copy_and_await_produce_done(surface_id, &snap, CopyDirection::BufferToImage)
         {
-            tracing::error!(?surface_id, "produce_done wait timed out on write flush");
+            tracing::error!(?surface_id, error = %e, "cpu-readback write flush failed");
             self.surfaces.rollback_write(surface_id);
             return;
         }
@@ -644,7 +642,6 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         self.surfaces.with_mut(surface_id, |state| {
             state.set_write_held(false);
             state.current_layout = VulkanLayout::GENERAL;
-            state.current_signal_value = signaled;
         });
     }
 }
@@ -1021,8 +1018,18 @@ impl AdapterPersistentSubmitContext {
 // Internal data structures and helpers.
 // =====================================================================
 
+/// What `end_read_access` still owes the surface once it has dropped the
+/// registry lock. Only the last reader out signals `consume_done`.
+enum ConsumeDoneSignalOnReadRelease<P: DevicePrivilege> {
+    NotTheLastReader,
+    LastReaderMustSignal {
+        consume_done: Arc<P::TimelineSemaphore>,
+        signal_sequence: Arc<SurfaceTimelineSignalSequence>,
+    },
+}
+
 #[derive(Clone, Copy)]
-struct PlaneAcquireSlot {
+struct SurfaceCopyPlaneSlot {
     buffer: vk::Buffer,
     mapped_ptr: *mut u8,
     width: u32,
@@ -1031,7 +1038,7 @@ struct PlaneAcquireSlot {
     byte_size: u64,
 }
 
-struct AcquireSnapshot<P: DevicePrivilege> {
+struct SurfaceCopySnapshot<P: DevicePrivilege> {
     /// Producer's `produce_done` timeline — the trigger signals it
     /// and the consumer waits on it. Single-writer-per-edge per
     /// `docs/architecture/adapter-timeline-single-writer.md`.
@@ -1040,23 +1047,24 @@ struct AcquireSnapshot<P: DevicePrivilege> {
     /// `end_read_access`. Snapshotted into the acquire path so the
     /// producer's write-side waits can reach it.
     consume_done: Arc<P::TimelineSemaphore>,
-    /// Snapshot of this process's monotonic counter; the trigger
-    /// derives `suggested_signal_value` as `wait_value + 1`.
-    wait_value: u64,
+    /// This process's signal sequence for the surface — every copy
+    /// submitted off this snapshot reserves its `produce_done` value
+    /// from it and holds the reservation until its own wait returns.
+    signal_sequence: Arc<SurfaceTimelineSignalSequence>,
     image: Option<vk::Image>,
     from: VulkanLayout,
     format: SurfaceFormat,
     width: u32,
     height: u32,
-    planes: Vec<PlaneAcquireSlot>,
+    planes: Vec<SurfaceCopyPlaneSlot>,
     _marker: PhantomData<P>,
 }
 
-unsafe impl<P: DevicePrivilege> Send for AcquireSnapshot<P> {}
-unsafe impl<P: DevicePrivilege> Sync for AcquireSnapshot<P> {}
+unsafe impl<P: DevicePrivilege> Send for SurfaceCopySnapshot<P> {}
+unsafe impl<P: DevicePrivilege> Sync for SurfaceCopySnapshot<P> {}
 
 struct AcquireOutcome<P: DevicePrivilege> {
-    snap: AcquireSnapshot<P>,
+    snap: SurfaceCopySnapshot<P>,
 }
 
 fn build_image_barrier(
@@ -1104,7 +1112,9 @@ fn combined_aspect_mask(format: SurfaceFormat) -> vk::ImageAspectFlags {
     }
 }
 
-fn build_read_view<'g, P: DevicePrivilege>(snap: &AcquireSnapshot<P>) -> CpuReadbackReadView<'g> {
+fn build_read_view<'g, P: DevicePrivilege>(
+    snap: &SurfaceCopySnapshot<P>,
+) -> CpuReadbackReadView<'g> {
     let planes = snap
         .planes
         .iter()
@@ -1124,7 +1134,9 @@ fn build_read_view<'g, P: DevicePrivilege>(snap: &AcquireSnapshot<P>) -> CpuRead
     }
 }
 
-fn build_write_view<'g, P: DevicePrivilege>(snap: &AcquireSnapshot<P>) -> CpuReadbackWriteView<'g> {
+fn build_write_view<'g, P: DevicePrivilege>(
+    snap: &SurfaceCopySnapshot<P>,
+) -> CpuReadbackWriteView<'g> {
     let planes = snap
         .planes
         .iter()

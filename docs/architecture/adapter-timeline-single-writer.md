@@ -84,19 +84,34 @@ two-timelines-one-writer-each is the conventional answer.
 
 **Per-process `SurfaceState<P>` fields** (the per-adapter state
 record). The v1 implementation chooses a single per-process signal
-counter — within ONE adapter instance, signals to `produce_done` and
-`consume_done` come from disjoint code paths (write-release vs.
-read-release) so a unified monotonic counter is sufficient. Each
-timeline still sees strictly monotonic values from its own writer
-site, which is all VUID-03258 requires:
+counter — each timeline sees strictly monotonic values from its own
+writer site, which is all VUID-03258 requires:
 
 ```rust
 produce_done: Arc<P::TimelineSemaphore>,
 consume_done: Arc<P::TimelineSemaphore>,
 
 // Per-process monotonic counter — advanced on every signal
-// regardless of which timeline gets it (see comment above).
+// regardless of which timeline gets it.
 current_signal_value: u64,
+```
+
+The vulkan and cuda adapters hold exactly that. Both signal only from
+sites that are already exclusive — a write release under `write_held`,
+a read release from the last reader out — and both claim their value
+inside the registry lock. The `signal_host` that follows runs outside
+it, so two back-to-back release episodes can still reach
+`vkSignalSemaphore` out of reservation order; the window is narrow,
+since it must contain another thread's whole acquire and release.
+
+cpu-readback needs more, because it is the one adapter whose *read
+acquire* signals `produce_done`: its trigger submits a
+`vkCmdCopyImageToBuffer` per acquire, and concurrent readers of one
+surface are a supported shape, so its counter lives behind a held
+exclusion instead (see [Thread model](#thread-model-within-the-writer-process)):
+
+```rust
+signal_sequence: Arc<SurfaceTimelineSignalSequence>,
 ```
 
 Read-side wait targets are derived from the peer-timeline's
@@ -284,9 +299,47 @@ shape), waits on the local imported timeline, and proceeds.
 
 ## Race model
 
-Each timeline has exactly one writer process; next-value computation
-is a pure function of that process's local state. There is no race
-on monotonicity.
+Each timeline has exactly one writer *process*, so there is no
+cross-process race on monotonicity.
+
+> ~~next-value computation is a pure function of that process's local
+> state. There is no race on monotonicity.~~ — Superseded 2026-08-22 by
+> `cargo test -p streamlib-adapter-cpu-readback --test
+> concurrent_read_timeline_signals` under `STREAMLIB_VULKAN_VALIDATION=1`.
+> One writer process is not one writer thread. Concurrent readers of one
+> surface are a supported shape, and a next-value computed from state
+> that is only committed after the copy completes hands every reader that
+> starts first the same value.
+
+### Thread model within the writer process
+
+Wherever two threads of the writer process can reach one timeline's
+next-value computation, reserving a distinct value is not sufficient on
+its own: two callers holding distinct values still submit in whichever
+order they reach the queue, and a submit signalling *below* the
+timeline's current value is as invalid as one signalling *at* it. So the
+reservation is an exclusion, not a number — and it spans the wait as
+well as the submit. A timeline wait is satisfied by any value at or
+above its target, so releasing after the submit would let the next
+caller's copy signal a higher value and satisfy this caller's wait while
+this caller's own copy is still running. Holding it means at most one
+signalling submit is outstanding per surface, which is the adapter's own
+guarantee rather than an obligation on whatever submits for it — for
+every acquire that succeeds. An acquire that fails after its copy was
+submitted releases the reservation with that copy outstanding, and the
+next caller's ordering behind it falls back to whatever serialization
+the submitting side has.
+
+For the same reason a trigger's reported value must be no lower than the
+reservation. A caller that waits on a value some other copy signalled
+returns while its own copy is still in flight: its read view maps a
+staging buffer the GPU is still writing, and teardown destroys the
+image, buffer and timeline that copy still references.
+
+Only cpu-readback reaches this today — the other two adapters signal
+from sites that are already exclusive, so the registry lock is their
+exclusion. An adapter that adds a signalling site reachable from two
+threads at once inherits the requirement.
 
 The cross-process IPC payload publishing `produce_done` /
 `consume_done` values can in principle be observed by the consumer
@@ -309,13 +362,25 @@ Per-adapter conformance:
    - `produce_done.current_value()` and `consume_done.current_value()`
      advance monotonically and independently.
 
+   Concurrent *readers within one process* need their own coverage —
+   the single-writer rule says nothing about them. The cpu-readback
+   adapter's `concurrent_read_timeline_signals` test is the shape:
+   release N reader threads onto one surface at once, assert the value
+   handed to each copy is strictly above the one before it, and read
+   `HostVulkanDevice::validation_layer_message_counts()` around both the
+   burst and the adapter's teardown.
+
 2. **E2E** — `camera-python-display` through the full multi-process
    polyglot pipeline with `VK_LOADER_LAYERS_ENABLE=*validation*`.
    Zero timeline-monotonicity validation errors.
 
 When a new adapter lands, add the same dual-timeline conformance
-coverage to its tests; the contract is uniform across all three
-subprocess-wired adapters and any future siblings.
+coverage to its tests; the single-writer-per-timeline contract is
+uniform across all three subprocess-wired adapters and any future
+siblings. What is not uniform is the exclusion each one needs for its
+own next-value computation — that follows from which of its sites can
+run on two threads at once, per [Thread
+model](#thread-model-within-the-writer-process).
 
 ## Reference
 
