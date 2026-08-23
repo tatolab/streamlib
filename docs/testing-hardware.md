@@ -69,7 +69,21 @@ STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1 cargo test \
 
 A binary that dies with `SIGABRT` raised a validation error; the panic
 message immediately above it names the VUID and quotes the spec. The sweep
-does not yet run clean — see the baseline in #1893.
+does not yet run clean — the current baseline is recorded on #1893.
+
+Abort-on-error is also the one mode in which
+`a_deliberately_invalid_vulkan_call_moves_the_validation_error_count` skips,
+since it raises a finding on purpose. That test is the only thing standing
+between a green sweep and a sweep that is green because the layer went
+silent, so run it alongside:
+
+```bash
+STREAMLIB_VULKAN_VALIDATION=1 cargo test \
+    --features streamlib/hardware-tests -p streamlib-engine --lib \
+    vulkan_validation_messenger -- --test-threads=1
+```
+
+Both hardware tests must report `ok`, not `Skipping`.
 
 A test that wants to hold one GPU path at zero reads the counter around it
 rather than relying on the sweep:

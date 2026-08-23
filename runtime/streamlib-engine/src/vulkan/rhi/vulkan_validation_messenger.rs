@@ -89,7 +89,9 @@ fn is_truthy(value: Option<&str>) -> bool {
 /// Validation findings a device's messenger has seen, by severity.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub struct VulkanValidationMessageCounts {
+    /// Findings at `ERROR` severity — the gate's subject.
     pub error_count: usize,
+    /// Findings at `WARNING` severity.
     pub warning_count: usize,
 }
 
@@ -274,7 +276,7 @@ fn messenger_create_info(
                 | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
                 | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
         )
-        .user_callback(Some(forward_validation_message_to_tracing))
+        .user_callback(Some(count_log_and_maybe_abort_on_validation_message))
         .build();
     create_info.user_data = Arc::as_ptr(callback_state) as *mut c_void;
     create_info
@@ -317,7 +319,7 @@ impl VulkanValidationMessenger {
 /// `PFN_vkDebugUtilsMessengerCallbackEXT`. Always returns `VK_FALSE`: per
 /// the spec `VK_TRUE` is reserved for layer-development use and aborts the
 /// call the message came from.
-unsafe extern "system" fn forward_validation_message_to_tracing(
+unsafe extern "system" fn count_log_and_maybe_abort_on_validation_message(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     message_types: vk::DebugUtilsMessageTypeFlagsEXT,
     callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
@@ -340,7 +342,8 @@ unsafe extern "system" fn forward_validation_message_to_tracing(
         tracing::error!(vuid = %vuid, message_type = ?message_types, "Vulkan validation: {message}");
         if callback_state.abort_process_on_validation_error {
             // Panic rather than `process::abort` so the reason reaches
-            // stderr through the panic hook: a run with no `tracing`
+            // the console through the panic hook, surviving the test
+            // harness's output capture: a run with no `tracing`
             // subscriber — every `cargo test` binary — would otherwise
             // take a bare SIGABRT with nothing said. Unwinding out of an
             // `extern "system"` fn is a defined abort, not UB.
