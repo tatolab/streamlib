@@ -22,6 +22,7 @@
 //! window owner asks for or what it is handed back.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, sync_channel};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -136,9 +137,19 @@ pub struct CoalescedWindowEventsFromEventPump {
 /// never constructed by callers.
 pub struct ProcessWideWindowEventPump {
     control_messages_to_event_pump: EventLoopProxy<WindowEventPumpControlMessage>,
+    registered_window_count: Arc<AtomicUsize>,
 }
 
 impl ProcessWideWindowEventPump {
+    /// How many windows the pump is currently routing events to.
+    ///
+    /// Lags a registration's drop by the round trip its deregistration takes
+    /// through the event loop, so a caller watching for a drop polls rather
+    /// than reads once.
+    pub fn registered_window_count(&self) -> usize {
+        self.registered_window_count.load(Ordering::Acquire)
+    }
+
     /// Ask the pump for a window. The window is created on the pump's thread
     /// and handed back; every policy decision about it stays with the caller.
     pub fn request_window_for_owning_processor(
@@ -207,6 +218,8 @@ enum WindowEventPumpControlMessage {
 
 fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEventPump, String> {
     let (pump_startup_outcome_sender, pump_startup_outcome) = sync_channel(1);
+    let registered_window_count = Arc::new(AtomicUsize::new(0));
+    let registered_window_count_for_pump_thread = Arc::clone(&registered_window_count);
 
     std::thread::Builder::new()
         .name("streamlib-window-event-pump".to_string())
@@ -227,7 +240,9 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
                     pump_startup_outcome_sender,
                 )),
                 control_messages_to_event_pump,
-                registered_windows: RegisteredWindowsByWindowId::default(),
+                registered_windows: RegisteredWindowsByWindowId::new(
+                    registered_window_count_for_pump_thread,
+                ),
             };
             if let Err(e) = event_loop.run_app(&mut handler) {
                 tracing::error!(error = %e, "window event pump: event loop exited with an error");
@@ -245,6 +260,7 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
     match pump_startup_outcome.recv_timeout(WINDOW_EVENT_PUMP_REPLY_TIMEOUT) {
         Ok(Ok(control_messages_to_event_pump)) => Ok(ProcessWideWindowEventPump {
             control_messages_to_event_pump,
+            registered_window_count,
         }),
         Ok(Err(reason)) => Err(reason),
         Err(_) => Err(format!(
@@ -272,12 +288,26 @@ fn build_the_processes_one_event_loop()
 /// The pump thread's book of live windows. Holds the delivery end only — the
 /// window itself belongs to the processor that asked for it, so a registration
 /// dropped by its owner closes the window without the pump's involvement.
-#[derive(Default)]
 struct RegisteredWindowsByWindowId {
     events_to_owning_processors: HashMap<WindowId, Sender<WindowEventForOwningProcessor>>,
+    /// Published for [`ProcessWideWindowEventPump::registered_window_count`],
+    /// which is read from other threads and so cannot reach the map itself.
+    published_registered_window_count: Arc<AtomicUsize>,
 }
 
 impl RegisteredWindowsByWindowId {
+    fn new(published_registered_window_count: Arc<AtomicUsize>) -> Self {
+        Self {
+            events_to_owning_processors: HashMap::new(),
+            published_registered_window_count,
+        }
+    }
+
+    fn publish_registered_window_count(&self) {
+        self.published_registered_window_count
+            .store(self.events_to_owning_processors.len(), Ordering::Release);
+    }
+
     fn register(
         &mut self,
         window_id: WindowId,
@@ -285,10 +315,12 @@ impl RegisteredWindowsByWindowId {
     ) {
         self.events_to_owning_processors
             .insert(window_id, events_to_owning_processor);
+        self.publish_registered_window_count();
     }
 
     fn forget(&mut self, window_id: WindowId) {
         self.events_to_owning_processors.remove(&window_id);
+        self.publish_registered_window_count();
     }
 
     /// Route one event to the window's own owner. An event for a window that
@@ -453,7 +485,8 @@ mod tests {
 
     #[test]
     fn an_event_reaches_only_the_owner_of_its_own_window() {
-        let mut registered_windows = RegisteredWindowsByWindowId::default();
+        let mut registered_windows =
+            RegisteredWindowsByWindowId::new(Arc::new(AtomicUsize::new(0)));
         let (first_sender, first_owner) = std::sync::mpsc::channel();
         let (second_sender, second_owner) = std::sync::mpsc::channel();
         registered_windows.register(WindowId::from(1_u64), first_sender);
@@ -477,7 +510,8 @@ mod tests {
 
     #[test]
     fn an_event_for_an_unregistered_window_is_dropped() {
-        let mut registered_windows = RegisteredWindowsByWindowId::default();
+        let mut registered_windows =
+            RegisteredWindowsByWindowId::new(Arc::new(AtomicUsize::new(0)));
         let (sender, owner) = std::sync::mpsc::channel();
         registered_windows.register(WindowId::from(1_u64), sender);
 
@@ -492,7 +526,8 @@ mod tests {
 
     #[test]
     fn a_window_whose_owner_went_away_is_forgotten_on_the_next_event() {
-        let mut registered_windows = RegisteredWindowsByWindowId::default();
+        let mut registered_windows =
+            RegisteredWindowsByWindowId::new(Arc::new(AtomicUsize::new(0)));
         let (sender, owner) = std::sync::mpsc::channel();
         registered_windows.register(WindowId::from(1_u64), sender);
         drop(owner);
@@ -511,7 +546,8 @@ mod tests {
 
     #[test]
     fn deregistering_one_window_leaves_the_others_registered() {
-        let mut registered_windows = RegisteredWindowsByWindowId::default();
+        let mut registered_windows =
+            RegisteredWindowsByWindowId::new(Arc::new(AtomicUsize::new(0)));
         let (first_sender, _first_owner) = std::sync::mpsc::channel();
         let (second_sender, second_owner) = std::sync::mpsc::channel();
         registered_windows.register(WindowId::from(1_u64), first_sender);

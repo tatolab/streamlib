@@ -42,11 +42,11 @@ use crate::video_frame::{ColorInfo, VideoFrame};
 /// How long the render thread parks when the input has no frame to show. The
 /// display is a `latest`-profile sink, so this is the worst-case lateness of a
 /// frame that arrives just after a poll, not a frame budget.
-const DISPLAY_RENDER_THREAD_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const DISPLAY_RENDER_THREAD_IDLE_PARK_INTERVAL: Duration = Duration::from_millis(1);
 
 /// The same park for a display with no window: it still drains, so upstream
 /// sees a live consumer, but nothing is racing a vsync deadline.
-const DEGRADED_DISPLAY_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+const DEGRADED_DISPLAY_DRAIN_PARK_INTERVAL: Duration = Duration::from_millis(2);
 
 /// How the frame maps onto the window, as configuration vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -267,14 +267,14 @@ impl DisplayWindowRenderLoop {
 
             if self.inactive {
                 self.drain_and_discard_so_upstream_sees_a_live_consumer();
-                std::thread::park_timeout(DEGRADED_DISPLAY_DRAIN_POLL_INTERVAL);
+                std::thread::park_timeout(DEGRADED_DISPLAY_DRAIN_PARK_INTERVAL);
                 continue;
             }
 
             if self.inputs.has_data("video") {
                 self.render_frame();
             } else {
-                std::thread::park_timeout(DISPLAY_RENDER_THREAD_IDLE_POLL_INTERVAL);
+                std::thread::park_timeout(DISPLAY_RENDER_THREAD_IDLE_PARK_INTERVAL);
             }
         }
 

@@ -37,13 +37,15 @@ has no window and constructs a consumer-only `VkDevice`, so it never owns
 a swapchain — the "Subprocess has no swapchain" rows in the per-pattern
 table are unchanged.
 
-**Window + event-loop ownership is host-portable.** On Linux the display
-package that creates the winit window / event loop is a platform detail
-(winit carries no engine dep, and X11 permits an off-main-thread loop).
-On macOS the event loop is main-thread-bound (`NSApplication`), so window
-ownership belongs to the host / application layer — a display processor
-receives the window handle as an input rather than assuming it owns the
-loop. `vkQueuePresentKHR` itself is not main-thread-bound, so
+**Window + event-loop ownership is host-portable.** No processor owns an
+event loop. The engine owns the process's single winit event loop and
+mints windows on request; a window-owning processor registers with it,
+receives its window and that window's events, and keeps every window
+policy decision. On Linux the loop runs on its own thread (X11 and
+Wayland both permit an off-main-thread loop, each behind its own
+any-thread opt-in). On macOS the event loop is main-thread-bound
+(`NSApplication`), which changes where the loop is driven, not what a
+window owner asks for or is handed back. `vkQueuePresentKHR` itself is not main-thread-bound, so
 host-owns-window + processor-presents-on-its-thread works on every
 platform. `raw_window_handle` carries the Win32 / AppKit window flavors
 already, so Windows / macOS activation lands a new host dispatch arm.

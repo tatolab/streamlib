@@ -10,6 +10,8 @@
 
 #![cfg(target_os = "linux")]
 
+use std::time::{Duration, Instant};
+
 use streamlib_engine::core::window_event_pump::{
     WindowRegistrationRequestFromOwningProcessor, process_wide_window_event_pump,
 };
@@ -91,9 +93,26 @@ fn two_windows_register_at_once_and_each_is_addressed_alone() {
         );
     }
 
-    // Dropping one window leaves the other registered and serviceable — the
-    // failure mode where deregistering tears down the shared loop.
+    assert_eq!(
+        event_pump.registered_window_count(),
+        2,
+        "the pump routes to both windows at once"
+    );
+
+    // Dropping one window deregisters it and leaves the other serviceable. The
+    // count is what locks the registration's `Drop`: without it the pump keeps
+    // routing to a window that no longer exists, for the life of the process.
     drop(first_window);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while event_pump.registered_window_count() > 1 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        event_pump.registered_window_count(),
+        1,
+        "a dropped registration deregisters itself from the pump"
+    );
+
     let (width, height) = second_window.current_physical_size();
     assert!(
         width > 0 && height > 0,
@@ -102,5 +121,17 @@ fn two_windows_register_at_once_and_each_is_addressed_alone() {
     assert!(
         process_wide_window_event_pump().is_ok(),
         "the pump outlives any one window's registration"
+    );
+
+    drop(second_window);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while event_pump.registered_window_count() > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        event_pump.registered_window_count(),
+        0,
+        "the pump's routing book empties as its windows go, rather than growing \
+         for the life of the process"
     );
 }

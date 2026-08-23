@@ -371,7 +371,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   closing does. winit permits one event loop per process, so the loop is owned once,
   above every processor that wants a window, and N window-owning processors coexist
   in one process. Each window's owner renders on its own thread, never the pump's, so
-  windows pace independently and no window's present stalls another's. The
+  windows are not serialised behind one render loop. The
   raw-window-handle seam remains the internal boundary — the engine mints
   the present target from the raw handle and owns every swapchain and acquire detail,
   plus the platform main-thread event loop where the OS demands it (in the importable

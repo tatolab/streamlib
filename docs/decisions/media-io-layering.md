@@ -73,12 +73,15 @@ surface is the clock primitive.
   makes per-processor ownership work only for a graph with exactly one window, and a
   pump below the SDK is unreachable from third-party processors, from the escalate path
   that would serve a Python window request, and from `rt.run()` where an Apple
-  main-thread pump must live. What this alternative actually rejects is unmoved: winit
-  event handling, input, and window *policy* in the engine core. The pump owns the
-  scarce process-global resource and the routing of a window's events to its owner, and
-  nothing else — title, extent, resize meaning, redraw cadence and close behaviour all
-  stay with the registering processor, and rendering stays on that processor's own
-  thread. The engine already linked winit and already exposed `winit::window::Window` in
+  main-thread pump must live. Be exact about the price, because part of
+  this alternative's objection is now conceded: winit event *reception* and *routing*
+  do move into the engine core — the `ApplicationHandler` and the `WindowEvent` match
+  live there, and every window's events arrive at the engine first. What stays out is
+  what the rejection was really protecting: window *policy* and input *semantics*. The
+  pump forwards resize and close to the window's owner and discards the rest without
+  interpreting any of it; title, extent, resize meaning, redraw cadence and close
+  behaviour are all decided by the registering processor, and rendering stays on that
+  processor's own thread. The engine reads no input and draws nothing. The engine already linked winit and already exposed `winit::window::Window` in
   a public signature (`core/display_info.rs`) before this change.
 - **Zero-copy required (no CPU fallback)** — kills virtual and test devices (vivid,
   v4l2loopback) and any driver without DMA-BUF export; a user-visible transport dial

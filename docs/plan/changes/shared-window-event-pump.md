@@ -36,13 +36,19 @@ raw-window-handle seam is untouched — the present target is still minted from 
 `GpuContextFullAccess::create_present_target`, which is generic over `HasWindowHandle +
 HasDisplayHandle` and never sees winit.
 
-This is why `media-io-layering.md`'s rejection of **Engine-owned windows** survives rather than
-reverses: what it bars is "winit event handling, input, and window policy in the engine *core*",
-and none of those move. The engine already linked winit and already exposed `winit::window::Window`
-in a public signature (`core/display_info.rs`, re-exported by the SDK) before this change.
+`media-io-layering.md`'s rejection of **Engine-owned windows** is narrowed rather than reversed,
+and the narrowing concedes a real part of it: winit event *reception* and *routing* do move into
+the engine core. What stays out is window *policy* and input *semantics* — the pump forwards
+resize and close and discards the rest uninterpreted, and the engine reads no input and draws
+nothing. The engine already linked winit and already exposed `winit::window::Window` in a public
+signature (`core/display_info.rs`, re-exported by the SDK) before this change.
 
 Rendering does not move to the pump thread. Each window's owner renders on its own thread, so
-two displays pace independently on their own vsync and no window's present can stall another's.
+two displays are not serialised behind one render loop. Note the limit of that claim: the
+displays still share one `VkDevice` and its queues, so whether a vsync-blocked acquire on one
+swapchain can hold a lock the other needs is an RHI question this change does not answer. What
+is measured is that two windows fed by one source each presented within one frame of the other
+over a 30 s run.
 
 ## Plan delta
 
