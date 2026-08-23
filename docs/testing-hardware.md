@@ -44,15 +44,20 @@ NVIDIA Vulkan driver's per-process kernel state, see
 
 Tier 2 is the only tier that constructs a real Vulkan device, so it is the
 only place the Khronos validation layer has anything to say. Three env vars
-drive it; any one of them loads `VK_LAYER_KHRONOS_validation`, and each is a
-no-op where the layer is not installed (a warning, never a failure — which is
-why CI, which has no layer, is unaffected):
+drive it. Each is independent — setting one never turns on another's
+behaviour; all it implies is the layer they have in common. Every one of them
+is a no-op where that layer is not installed (a warning, never a failure,
+which is why CI is unaffected):
 
 | Env var | Effect |
 |---|---|
-| `STREAMLIB_VULKAN_VALIDATION=1` | Load the layer, forward findings into `tracing`, count them per device. |
-| `STREAMLIB_VULKAN_SYNC_VALIDATION=1` | The above, plus synchronization validation. |
-| `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1` | The above, and the first error kills the process, naming its VUID. |
+| `STREAMLIB_VULKAN_VALIDATION=1` | Load the layer, forward `ERROR` and `WARNING` findings into `tracing`, count them per device. |
+| `STREAMLIB_VULKAN_SYNC_VALIDATION=1` | Load the layer and add synchronization validation. |
+| `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1` | Load the layer, and let the first error kill the process, naming its VUID. |
+
+In particular the whole-sweep gate below sets only the third, so it runs
+*without* synchronization validation; combine the second and third to gate on
+both.
 
 Registering a messenger silences the layer's own stdout printing, so with a
 plain `STREAMLIB_VULKAN_VALIDATION=1` run a finding reaches a `cargo test`
@@ -80,10 +85,13 @@ silent, so run it alongside:
 ```bash
 STREAMLIB_VULKAN_VALIDATION=1 cargo test \
     --features streamlib/hardware-tests -p streamlib-engine --lib \
-    vulkan_validation_messenger -- --test-threads=1
+    vulkan_validation_messenger -- --test-threads=1 --nocapture
 ```
 
-Both hardware tests must report `ok`, not `Skipping`.
+`--nocapture` is what makes that check meaningful: both hardware tests skip
+by returning early, and libtest swallows a passing test's output, so without
+it a skipped run and a real one print the same `ok`. With it, a run that
+proves nothing says `Skipping` and why.
 
 A test that wants to hold one GPU path at zero reads the counter around it
 rather than relying on the sweep:
