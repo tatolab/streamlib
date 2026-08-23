@@ -73,8 +73,16 @@ STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1 cargo test \
 ```
 
 A binary that dies with `SIGABRT` raised a validation error; the panic
-message immediately above it names the VUID and quotes the spec. The sweep
-does not yet run clean — the current baseline is recorded on #1893.
+message immediately above it names the VUID and quotes the spec. That sweep
+runs clean, and is the standing rig gate for hardware-relevant work: a change
+that reddens it is a regression to fix, not a new baseline to record.
+
+Warning-severity findings never trip abort mode. One is known and accepted:
+`vulkan_graphics_kernel::tests::constructs_kernel_with_vertex_input_buffers`
+declares vertex input attributes at locations 1 and 2 that the blit shader
+never reads, which the layer reports as `WARNING-Shader-OutputNotConsumed`.
+Unused vertex input declarations are spec-legal, and that a pipeline can be
+created with them is exactly what the test locks.
 
 Abort-on-error is also the one mode in which
 `a_deliberately_invalid_vulkan_call_moves_the_validation_error_count` skips,
