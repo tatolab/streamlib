@@ -128,6 +128,13 @@ class ClaimedSurfacePixelAccess:
     #: the means to take one.
     _check_out_lease_on_the_claimed_surface: "GpuSurfaceCheckOutLease | None" = None
 
+    #: Read once at construction and never again, so the view is over the
+    #: surface the claim protects. Re-reading the declared field at reach time
+    #: would let a composer that is not frozen point the two at different
+    #: surfaces, which is the silent wrongness the lifetime contract exists to
+    #: kill.
+    _the_surface_id_the_claim_was_taken_on: "str | None" = None
+
     #: Kept so the pixels stay reachable after the read that offered it
     #: returns — the offer is withdrawn the moment construction ends, and the
     #: protocol methods run long after.
@@ -173,17 +180,20 @@ class ClaimedSurfacePixelAccess:
 
     def _take_the_claim_on(self, surface_id: Any) -> None:
         gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
+        claimed_surface_id = surface_id if isinstance(surface_id, str) else None
         assign = object.__setattr__
-        # Kept even when the claim below is refused: an unclaimed object is one
-        # riding pool depth, not one with no pixels, so reaching for its view
-        # must still reach the surface and be refused *there*, by name.
+        # The capability is kept even when the claim below is refused: an
+        # unclaimed object is one riding pool depth, not one with no pixels, so
+        # reaching for its view must still reach the surface and be refused
+        # *there*, by name.
         assign(self, "_gpu_limited_access_that_offered_the_claim", gpu_limited_access)
+        assign(self, "_the_surface_id_the_claim_was_taken_on", claimed_surface_id)
         assign(self, "_read_only_locked_handle_on_the_claimed_surface", None)
         assign(
             self,
             "_check_out_lease_on_the_claimed_surface",
-            _claim_taken_on(gpu_limited_access, surface_id)
-            if gpu_limited_access is not None and isinstance(surface_id, str)
+            _claim_taken_on(gpu_limited_access, claimed_surface_id)
+            if gpu_limited_access is not None and claimed_surface_id is not None
             else None,
         )
 
@@ -205,9 +215,15 @@ class ClaimedSurfacePixelAccess:
                 f"`ctx.inputs.read(port, into={type(self).__name__})` — the view rides the "
                 f"claim that read takes."
             )
-        surface_id = getattr(
-            self, self._the_field_this_cast_type_names_its_surface_with
-        )
+        surface_id = self._the_surface_id_the_claim_was_taken_on
+        if surface_id is None:
+            raise RuntimeError(
+                f"this {type(self).__name__} names no surface in "
+                f"{self._the_field_this_cast_type_names_its_surface_with!r}, so there are "
+                f"no pixels to export. A cast type declares the field its surface id "
+                f"arrives in — `class {type(self).__name__}(ClaimedSurfacePixelAccess, "
+                f'surface_id_field="…")` when it is not `surface_id`.'
+            )
         handle = gpu_limited_access.resolve_surface(surface_id)
         # Read intent, declared: it is what keeps the export from arming a
         # write-back, and the write doors are the scopes, never this view.

@@ -66,6 +66,13 @@ class DepthFrameNamingItsOwnField(
     depth_surface_id: str
 
 
+@dataclass(frozen=True, init=False)
+class DepthFrameWhoseSurfaceMayBeAbsent(
+    ClaimedSurfacePixelAccess, surface_id_field="depth_surface_id"
+):
+    depth_surface_id: "str | None" = None
+
+
 @dataclass(frozen=True)
 class DetectionOverlay(ClaimedSurfacePixelAccess):
     """The other spelling: an ordinary frozen dataclass whose `__init__` the
@@ -414,6 +421,18 @@ def test_the_protocol_outside_a_typed_read_refuses_naming_the_read():
         frame.__dlpack__()
     with pytest.raises(RuntimeError, match="into="):
         frame.__dlpack_device__()
+
+
+def test_an_object_naming_no_surface_is_refused_pointing_at_the_declaration(offered):
+    """A bag that carried no surface id claimed nothing and has nothing to
+    export — and the refusal names the field the type declared rather than
+    guessing at some other key that might look surface-shaped."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+    frame = DepthFrameWhoseSurfaceMayBeAbsent()
+
+    assert gpu_limited_access.claimed_surface_ids == []
+    with pytest.raises(RuntimeError, match="names no surface in 'depth_surface_id'"):
+        frame.__dlpack__()
 
 
 def test_a_refused_claim_leaves_the_protocol_reachable_and_loud(offered):
