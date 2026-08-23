@@ -42,9 +42,16 @@ FRAME_BAG = {
     "timestamp_ns": 123_456_789,
 }
 
-CLAIM_FIELD = "_check_out_lease_on_the_claimed_surface"
+PER_SURFACE_ACCESS_FIELD = "_pixel_access_by_declared_surface_field"
 OUTPUT_PORT = "frames_to_downstream"
 INPUT_PORT = "frames_from_upstream"
+
+
+def claim_taken_on(frame: object) -> object:
+    """The lease a frame took on the surface it names."""
+    return frame.pixel_access_to_the_surface_declared_in(
+        "surface_id"
+    )._check_out_lease_on_the_claimed_surface
 
 
 class ClaimStandingInForALease:
@@ -101,7 +108,7 @@ def test_a_frame_built_under_an_offer_claims_the_surface_it_names(offered):
     frame = VideoFrame(**FRAME_BAG)
 
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
-    assert getattr(frame, CLAIM_FIELD).surface_id == "surface-7"
+    assert claim_taken_on(frame).surface_id == "surface-7"
 
 
 def test_from_bag_claims_when_a_typed_read_is_the_one_constructing(offered):
@@ -123,7 +130,7 @@ def test_from_bag_claims_when_a_typed_read_is_the_one_constructing(offered):
     holder = FrameHolderBuiltByTheRead(**FRAME_BAG)
 
     assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
-    assert getattr(holder.frame, CLAIM_FIELD).surface_id == "surface-7"
+    assert claim_taken_on(holder.frame).surface_id == "surface-7"
 
 
 def test_from_bag_outside_any_read_claims_nothing():
@@ -131,14 +138,14 @@ def test_from_bag_outside_any_read_claims_nothing():
     which is what an author building a bag by hand gets."""
     frame = VideoFrame.from_bag(FRAME_BAG)
 
-    assert getattr(frame, CLAIM_FIELD) is None
+    assert claim_taken_on(frame) is None
 
 
 def test_the_claim_goes_away_with_the_frame_and_nothing_is_called(offered):
     offered(GpuLimitedAccessStandIn())
 
     frame = VideoFrame(**FRAME_BAG)
-    claim_still_alive = weakref.ref(getattr(frame, CLAIM_FIELD))
+    claim_still_alive = weakref.ref(claim_taken_on(frame))
     assert claim_still_alive() is not None
 
     del frame
@@ -152,7 +159,7 @@ def test_a_frame_built_from_a_bag_you_are_holding_claims_nothing():
     """`from_bag` on a dict claims nothing: there is no read in progress, and a
     hand-rolled bag may name no live surface at all."""
     frame = VideoFrame.from_bag(FRAME_BAG)
-    assert getattr(frame, CLAIM_FIELD) is None
+    assert claim_taken_on(frame) is None
 
 
 def test_a_surface_that_cannot_be_claimed_still_reads(offered):
@@ -163,7 +170,7 @@ def test_a_surface_that_cannot_be_claimed_still_reads(offered):
 
     frame = VideoFrame(**FRAME_BAG)
 
-    assert getattr(frame, CLAIM_FIELD) is None
+    assert claim_taken_on(frame) is None
     assert frame.surface_id == "surface-7"
 
 
@@ -176,7 +183,7 @@ def test_the_claim_is_not_part_of_what_a_frame_is(offered):
     same_bag_again = VideoFrame(**FRAME_BAG)
 
     assert frame == same_bag_again
-    assert CLAIM_FIELD not in repr(frame)
+    assert PER_SURFACE_ACCESS_FIELD not in repr(frame)
 
 
 # ---- one frame, whichever spelling built it --------------------------------
@@ -289,7 +296,7 @@ def test_a_frame_read_over_a_link_arrives_cast_and_survives_an_unreachable_gpu()
     assert frame is not None, "the wired input received nothing"
     assert frame.surface_id == "surface-7"
     assert frame.color_info == ColorInfo(primaries="bt709")
-    assert getattr(frame, CLAIM_FIELD) is None, (
+    assert claim_taken_on(frame) is None, (
         "a capability that reaches nothing claims nothing"
     )
 

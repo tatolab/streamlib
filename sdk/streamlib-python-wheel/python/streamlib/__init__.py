@@ -44,6 +44,9 @@ from ._processor_declaration import processor as processor
 from .claimed_surface_pixel_access import (
     ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
 )
+from .claimed_surface_pixel_access import (
+    PixelAccessToOneClaimedSurface as PixelAccessToOneClaimedSurface,
+)
 from .video_frame import ColorInfo as ColorInfo
 from .video_frame import ContentLight as ContentLight
 from .video_frame import MasteringDisplay as MasteringDisplay
@@ -68,6 +71,7 @@ __all__ = [
     "MasteringDisplay",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
+    "PixelAccessToOneClaimedSurface",
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",

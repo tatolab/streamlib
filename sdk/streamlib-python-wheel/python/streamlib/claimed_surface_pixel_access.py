@@ -6,6 +6,8 @@
 The object `ctx.inputs.read(port, into=T)` hands back is the tensor-protocol
 producer: compose `ClaimedSurfacePixelAccess` and `torch.from_dlpack(frame)`
 works straight off the read, with no resolve and no lock in the caller's hands.
+The gradient reads bare first, then the two write doors — `writable()` for a
+GPU edit, `cpu()` for the CPU reach, whose name is the whole warning.
 
 Nothing here is privileged. The claim rides the same public offer any
 constructing class may already take, and `VideoFrame` is built from this piece
@@ -21,17 +23,20 @@ posture as the raw-handle use bound.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
 from ._engine import (
     GpuContextLimitedAccess,
     GpuSurfaceCheckOutLease,
+    GpuSurfaceDeviceTensorScope,
     GpuSurfaceHandle,
     gpu_limited_access_of_the_typed_read_in_progress,
 )
 from .log import warn
 
-__all__ = ["ClaimedSurfacePixelAccess"]
+__all__ = ["ClaimedSurfacePixelAccess", "PixelAccessToOneClaimedSurface"]
 
 _THE_FIELD_A_CAST_TYPE_NAMES_ITS_SURFACE_WITH_BY_DEFAULT = "surface_id"
 
@@ -76,6 +81,15 @@ def _claim_taken_on(
         return None
 
 
+def _no_typed_read_offered_the_means_error(cast_type_name: str) -> RuntimeError:
+    return RuntimeError(
+        f"this {cast_type_name} was not built by a typed read, so nothing offered it the "
+        f"means to reach its surface's pixels. Read the bag with "
+        f"`ctx.inputs.read(port, into={cast_type_name})` — the view rides the claim that "
+        f"read takes."
+    )
+
+
 def _build_the_fields_the_cast_type_declared(
     cast_object: "ClaimedSurfacePixelAccess", bag_entries: "dict[str, Any]"
 ) -> None:
@@ -105,12 +119,169 @@ def _build_the_fields_the_cast_type_declared(
             )
 
 
+class PixelAccessToOneClaimedSurface:
+    """One claimed surface's pixels, and the three doors onto them.
+
+    A cast type that names a single surface reaches these through the cast
+    object itself; one that names several reaches each surface's own through
+    `pixel_access_to_the_surface_declared_in`, because a bare view over a type
+    holding two surfaces would have to guess which.
+
+    Built by the composable and never by hand: the claim it carries was taken
+    during a typed read, on the id read out of the field the type declared.
+    """
+
+    def __init__(
+        self,
+        gpu_limited_access_that_offered_the_claim: "GpuContextLimitedAccess | None",
+        surface_id: "str | None",
+        the_field_the_surface_id_was_declared_in: str,
+        the_cast_type_that_declared_it: str,
+    ) -> None:
+        # Kept even when the claim below is refused: an unclaimed surface is
+        # one riding pool depth, not one with no pixels, so reaching for its
+        # view must still reach the surface and be refused *there*, by name.
+        self._gpu_limited_access_that_offered_the_claim = (
+            gpu_limited_access_that_offered_the_claim
+        )
+        # Read once at construction and never again, so the view is over the
+        # surface the claim protects. Re-reading the declared field at reach
+        # time would let a composer that is not frozen point the two at
+        # different surfaces, which is the silent wrongness the lifetime
+        # contract exists to kill.
+        self._the_surface_id_the_claim_was_taken_on = surface_id
+        self._the_field_the_surface_id_was_declared_in = (
+            the_field_the_surface_id_was_declared_in
+        )
+        self._the_cast_type_that_declared_it = the_cast_type_that_declared_it
+        #: This surface's claim, and its whole lifetime protocol: this object
+        #: going away is what releases it.
+        self._check_out_lease_on_the_claimed_surface: (
+            "GpuSurfaceCheckOutLease | None"
+        ) = (
+            _claim_taken_on(gpu_limited_access_that_offered_the_claim, surface_id)
+            if gpu_limited_access_that_offered_the_claim is not None
+            and surface_id is not None
+            else None
+        )
+        #: Resolved on first reach and released with this object.
+        self._resolved_handle_on_the_claimed_surface: "GpuSurfaceHandle | None" = None
+        self._the_read_only_lock_has_been_taken = False
+
+    def _the_capability_and_the_claimed_surface_id(
+        self,
+    ) -> "tuple[GpuContextLimitedAccess, str]":
+        gpu_limited_access = self._gpu_limited_access_that_offered_the_claim
+        if gpu_limited_access is None:
+            raise _no_typed_read_offered_the_means_error(self._the_cast_type_that_declared_it)
+        surface_id = self._the_surface_id_the_claim_was_taken_on
+        if surface_id is None:
+            raise RuntimeError(
+                f"this {self._the_cast_type_that_declared_it} names no surface in "
+                f"{self._the_field_the_surface_id_was_declared_in!r}, so there are no "
+                f"pixels to export. A cast type declares the field its surface id arrives "
+                f"in — `class {self._the_cast_type_that_declared_it}"
+                f'(ClaimedSurfacePixelAccess, surface_id_field="…")` when it is not '
+                f"`surface_id`."
+            )
+        return gpu_limited_access, surface_id
+
+    def _resolved_surface(self) -> GpuSurfaceHandle:
+        """The imported surface behind every door, resolved on first reach.
+
+        Not at construction: importing a surface's memory is real per-frame
+        work, and most reads want the bag's metadata and never a pixel.
+        """
+        already_resolved = self._resolved_handle_on_the_claimed_surface
+        if already_resolved is not None:
+            return already_resolved
+        gpu_limited_access, surface_id = self._the_capability_and_the_claimed_surface_id()
+        handle = gpu_limited_access.resolve_surface(surface_id)
+        self._resolved_handle_on_the_claimed_surface = handle
+        return handle
+
+    def _read_only_locked_view(self) -> GpuSurfaceHandle:
+        """The resolved surface under a read-only lock — the bare path's view.
+
+        Read intent, declared: it is what keeps the export from arming a
+        write-back. A write through the bare view stays out of contract —
+        never enforced, and never claimed to be.
+        """
+        handle = self._resolved_surface()
+        if not self._the_read_only_lock_has_been_taken:
+            handle.lock(read_only=True)
+            self._the_read_only_lock_has_been_taken = True
+        return handle
+
+    def __dlpack_device__(self) -> "tuple[int, int]":
+        """The DLPack device this surface's pixels live on."""
+        return self._read_only_locked_view().__dlpack_device__()
+
+    def __dlpack__(
+        self,
+        stream: "Any | None" = None,
+        max_version: "tuple[int, int] | None" = None,
+        dl_device: "tuple[int, int] | None" = None,
+        copy: "bool | None" = None,
+    ) -> Any:
+        """A DLPack capsule over this surface's pixels, GPU-resident.
+
+        Valid while the cast object lives — the claim is what holds the frame
+        still — and ended when it drops. What a consumer negotiates reaches the
+        surface unchanged: this is grammar over the handle, never a filter.
+        """
+        return self._read_only_locked_view().__dlpack__(
+            stream=stream,
+            max_version=max_version,
+            dl_device=dl_device,
+            copy=copy,
+        )
+
+    def writable(self) -> GpuSurfaceDeviceTensorScope:
+        """The GPU write door: a scope over a device tensor of these pixels.
+
+        `with frame.writable() as t:` — entering blits the surface out to a
+        linear device view, leaving normally blits the edit back ordered ahead
+        of the engine's next read, and leaving by a propagating exception
+        discards it without suppressing the raise. `torch.from_dlpack(t)`
+        inside the block is what a third-party GPU package edits in place.
+
+        It takes no CPU lock: entering the scope *is* the write declaration,
+        and a read-only lock underneath a write would declare the opposite.
+        """
+        return self._resolved_surface().as_device_tensor()
+
+    @contextmanager
+    def cpu(self) -> Iterator[Any]:
+        """The CPU write door: a writable numpy array over these pixels.
+
+        `with frame.cpu() as img:` — the slow path, named so. The block edge is
+        the publication point and a propagating exception discards, both by
+        leaving through the surface's own scope. Texture-backed pixels (a
+        kernel's output) have no host mapping at all and are refused here by
+        the surface itself; `writable()` is their door.
+
+        It resolves a surface of its own rather than sharing the bare view's:
+        a shared handle would spend the block locked for *writing*, so a bare
+        `__dlpack__` taken inside would hand back a writable device tensor and
+        arm a write-back nobody asked for.
+        """
+        gpu_limited_access, surface_id = self._the_capability_and_the_claimed_surface_id()
+        with gpu_limited_access.resolve_surface(surface_id) as surface:
+            surface.lock(read_only=False)
+            yield surface.as_numpy()
+
+
 class ClaimedSurfacePixelAccess:
-    """Composed by a cast type to claim its surface and speak DLPack over it.
+    """Composed by a cast type to claim its surfaces and speak DLPack over them.
 
     The surface-naming field is declared, never guessed — it defaults to
     `surface_id` and a type that names its own passes it at class creation:
     `class DepthFrame(ClaimedSurfacePixelAccess, surface_id_field="depth_id")`.
+    A type over more than one surface declares them together instead, with
+    `surface_id_fields=("colour_id", "depth_id")`, and reaches each through
+    `pixel_access_to_the_surface_declared_in` — the bare doors below refuse a
+    type holding several rather than guess which surface was meant.
 
     `@dataclass(frozen=True, init=False)` is the spelling to write. Inheriting
     this class's constructor is what makes a cast type survive an open map: the
@@ -124,44 +295,50 @@ class ClaimedSurfacePixelAccess:
 
     #: Declared by the type that composed this, inherited by anything
     #: extending it.
-    _the_field_this_cast_type_names_its_surface_with: str = (
-        _THE_FIELD_A_CAST_TYPE_NAMES_ITS_SURFACE_WITH_BY_DEFAULT
+    _the_fields_this_cast_type_names_its_surfaces_with: "tuple[str, ...]" = (
+        _THE_FIELD_A_CAST_TYPE_NAMES_ITS_SURFACE_WITH_BY_DEFAULT,
     )
 
-    # Each below carries a class-level `None` rather than a bare annotation,
-    # so a composer that bypassed both construction hooks reaches the refusal
-    # that names the read instead of an AttributeError.
-
-    #: The claim on this object's own pixels, and its whole lifetime protocol:
-    #: this object going away is what releases it. `None` when nothing offered
-    #: the means to take one.
-    _check_out_lease_on_the_claimed_surface: "GpuSurfaceCheckOutLease | None" = None
-
-    #: Read once at construction and never again, so the view is over the
-    #: surface the claim protects. Re-reading the declared field at reach time
-    #: would let a composer that is not frozen point the two at different
-    #: surfaces, which is the silent wrongness the lifetime contract exists to
-    #: kill.
-    _the_surface_id_the_claim_was_taken_on: "str | None" = None
-
-    #: Kept so the pixels stay reachable after the read that offered it
-    #: returns — the offer is withdrawn the moment construction ends, and the
-    #: protocol methods run long after.
-    _gpu_limited_access_that_offered_the_claim: "GpuContextLimitedAccess | None" = None
-
-    #: The resolved surface behind the bare view, imported on first reach and
-    #: released with this object. `None` until something asks for pixels.
-    _read_only_locked_handle_on_the_claimed_surface: "GpuSurfaceHandle | None" = None
+    #: One protocol object per declared surface, each holding that surface's
+    #: claim. A class-level `None` rather than a bare annotation, so a composer
+    #: that bypassed both construction hooks reaches the refusal that names the
+    #: read instead of an AttributeError.
+    _pixel_access_by_declared_surface_field: (
+        "dict[str, PixelAccessToOneClaimedSurface] | None"
+    ) = None
 
     def __init_subclass__(
-        cls, surface_id_field: "str | None" = None, **class_creation_keywords: Any
+        cls,
+        surface_id_field: "str | None" = None,
+        surface_id_fields: "tuple[str, ...] | None" = None,
+        **class_creation_keywords: Any,
     ) -> None:
         super().__init_subclass__(**class_creation_keywords)
+        if surface_id_field is not None and surface_id_fields is not None:
+            raise TypeError(
+                f"{cls.__name__} declares its surfaces both ways at once: pass "
+                f"surface_id_field for a type over one surface or surface_id_fields for "
+                f"a type over several, never both"
+            )
+        if surface_id_field is not None:
+            cls._the_fields_this_cast_type_names_its_surfaces_with = (surface_id_field,)
+        elif surface_id_fields is not None:
+            declared = tuple(surface_id_fields)
+            if not declared:
+                raise TypeError(
+                    f"{cls.__name__} declares no surface at all: surface_id_fields names "
+                    f"at least one field a surface id arrives in, and a cast type with no "
+                    f"pixels to reach has no reason to compose ClaimedSurfacePixelAccess"
+                )
+            if len(set(declared)) != len(declared):
+                raise TypeError(
+                    f"{cls.__name__} declares the same surface field twice in "
+                    f"{declared!r}: one claim per surface, so each field is named once"
+                )
+            cls._the_fields_this_cast_type_names_its_surfaces_with = declared
         # Absent means "keep what the type being extended declared". A default
         # reapplied per class would silently re-point a subclass of a type that
-        # named its own field back at `surface_id`.
-        if surface_id_field is not None:
-            cls._the_field_this_cast_type_names_its_surface_with = surface_id_field
+        # named its own fields back at `surface_id`.
 
     def __init__(self, **bag_entries: Any) -> None:
         """Build the declared fields from the bag's entries, then claim.
@@ -172,16 +349,20 @@ class ClaimedSurfacePixelAccess:
         built.
         """
         _build_the_fields_the_cast_type_declared(self, bag_entries)
-        # The settled attribute, so both construction hooks claim on the same
-        # value; the bag entry is the fallback for a composer that declared no
+        # The settled attributes, so both construction hooks claim on the same
+        # values; the bag entry is the fallback for a composer that declared no
         # dataclass fields for this to have assigned.
-        declared_field = self._the_field_this_cast_type_names_its_surface_with
-        self._take_the_claim_on(
-            getattr(self, declared_field, bag_entries.get(declared_field))
+        self._take_the_claims_on(
+            {
+                declared_field: getattr(
+                    self, declared_field, bag_entries.get(declared_field)
+                )
+                for declared_field in self._the_fields_this_cast_type_names_its_surfaces_with
+            }
         )
 
     def __post_init__(self) -> None:
-        """The claim for a type whose `__init__` the dataclass decorator
+        """The claims for a type whose `__init__` the dataclass decorator
         generated, which never routes through this class's own.
 
         That constructor enforces its own signature, so this spelling refuses
@@ -189,69 +370,71 @@ class ClaimedSurfacePixelAccess:
         overriding this owes it a `super().__post_init__()`; without one the
         type silently claims nothing.
         """
-        self._take_the_claim_on(
-            getattr(self, self._the_field_this_cast_type_names_its_surface_with, None)
+        self._take_the_claims_on(
+            {
+                declared_field: getattr(self, declared_field, None)
+                for declared_field in self._the_fields_this_cast_type_names_its_surfaces_with
+            }
         )
 
-    def _take_the_claim_on(self, surface_id: Any) -> None:
+    def _take_the_claims_on(self, surface_id_by_declared_field: "dict[str, Any]") -> None:
         gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
-        claimed_surface_id = surface_id if isinstance(surface_id, str) else None
-        assign = object.__setattr__
-        # The capability is kept even when the claim below is refused: an
-        # unclaimed object is one riding pool depth, not one with no pixels, so
-        # reaching for its view must still reach the surface and be refused
-        # *there*, by name.
-        assign(self, "_gpu_limited_access_that_offered_the_claim", gpu_limited_access)
-        assign(self, "_the_surface_id_the_claim_was_taken_on", claimed_surface_id)
-        assign(self, "_read_only_locked_handle_on_the_claimed_surface", None)
-        assign(
-            self,
-            "_check_out_lease_on_the_claimed_surface",
-            _claim_taken_on(gpu_limited_access, claimed_surface_id)
-            if gpu_limited_access is not None and claimed_surface_id is not None
-            else None,
-        )
-
-    def _view_of_the_claimed_surface(self) -> GpuSurfaceHandle:
-        """The resolved, read-only-locked surface the protocol methods export.
-
-        Resolved on first reach rather than at construction: importing a
-        surface's memory is real per-frame work, and most reads want the bag's
-        metadata and never a pixel.
-        """
-        already_resolved = self._read_only_locked_handle_on_the_claimed_surface
-        if already_resolved is not None:
-            return already_resolved
-        gpu_limited_access = self._gpu_limited_access_that_offered_the_claim
-        if gpu_limited_access is None:
-            raise RuntimeError(
-                f"this {type(self).__name__} was not built by a typed read, so nothing "
-                f"offered it the means to reach its surface's pixels. Read the bag with "
-                f"`ctx.inputs.read(port, into={type(self).__name__})` — the view rides the "
-                f"claim that read takes."
-            )
-        surface_id = self._the_surface_id_the_claim_was_taken_on
-        if surface_id is None:
-            raise RuntimeError(
-                f"this {type(self).__name__} names no surface in "
-                f"{self._the_field_this_cast_type_names_its_surface_with!r}, so there are "
-                f"no pixels to export. A cast type declares the field its surface id "
-                f"arrives in — `class {type(self).__name__}(ClaimedSurfacePixelAccess, "
-                f'surface_id_field="…")` when it is not `surface_id`.'
-            )
-        handle = gpu_limited_access.resolve_surface(surface_id)
-        # Read intent, declared: it is what keeps the export from arming a
-        # write-back. A write through the bare view stays out of contract —
-        # never enforced, and never claimed to be.
-        handle.lock(read_only=True)
+        cast_type_name = type(self).__name__
         object.__setattr__(
-            self, "_read_only_locked_handle_on_the_claimed_surface", handle
+            self,
+            "_pixel_access_by_declared_surface_field",
+            {
+                declared_field: PixelAccessToOneClaimedSurface(
+                    gpu_limited_access,
+                    surface_id if isinstance(surface_id, str) else None,
+                    declared_field,
+                    cast_type_name,
+                )
+                for declared_field, surface_id in surface_id_by_declared_field.items()
+            },
         )
-        return handle
+
+    def pixel_access_to_the_surface_declared_in(
+        self, surface_id_field: str
+    ) -> PixelAccessToOneClaimedSurface:
+        """The protocol object for one of this type's declared surfaces.
+
+        The only spelling a multi-surface cast type has, and the one a
+        single-surface type's bare doors are shorthand for.
+        """
+        by_declared_field = self._pixel_access_by_declared_surface_field
+        if by_declared_field is None:
+            raise _no_typed_read_offered_the_means_error(type(self).__name__)
+        if surface_id_field not in by_declared_field:
+            raise RuntimeError(
+                f"a {type(self).__name__} declares no surface in {surface_id_field!r}; it "
+                f"names its surfaces in "
+                f"{', '.join(repr(field) for field in by_declared_field)}"
+            )
+        return by_declared_field[surface_id_field]
+
+    def _the_one_claimed_surfaces_pixel_access(self) -> PixelAccessToOneClaimedSurface:
+        by_declared_field = self._pixel_access_by_declared_surface_field
+        if by_declared_field is None:
+            raise _no_typed_read_offered_the_means_error(type(self).__name__)
+        if len(by_declared_field) != 1:
+            claimed = ", ".join(
+                f"{declared_field!r} "
+                f"({pixel_access._the_surface_id_the_claim_was_taken_on!r})"
+                for declared_field, pixel_access in by_declared_field.items()
+            )
+            raise RuntimeError(
+                f"a {type(self).__name__} claims {len(by_declared_field)} surfaces — "
+                f"{claimed} — so a bare view over it would have to guess which one you "
+                f"meant. Reach each surface through its own protocol object: "
+                f"`frame.pixel_access_to_the_surface_declared_in("
+                f"{next(iter(by_declared_field))!r})`."
+            )
+        return next(iter(by_declared_field.values()))
 
     def __dlpack_device__(self) -> "tuple[int, int]":
         """The DLPack device this object's pixels live on."""
-        return self._view_of_the_claimed_surface().__dlpack_device__()
+        return self._the_one_claimed_surfaces_pixel_access().__dlpack_device__()
 
     def __dlpack__(
         self,
@@ -260,15 +443,18 @@ class ClaimedSurfacePixelAccess:
         dl_device: "tuple[int, int] | None" = None,
         copy: "bool | None" = None,
     ) -> Any:
-        """A DLPack capsule over this object's pixels, GPU-resident.
-
-        Valid while this object lives — the claim is what holds the frame still
-        — and ended when it drops. What a consumer negotiates reaches the
-        surface unchanged: this is grammar over the handle, never a filter.
-        """
-        return self._view_of_the_claimed_surface().__dlpack__(
+        """A DLPack capsule over this object's pixels, GPU-resident."""
+        return self._the_one_claimed_surfaces_pixel_access().__dlpack__(
             stream=stream,
             max_version=max_version,
             dl_device=dl_device,
             copy=copy,
         )
+
+    def writable(self) -> GpuSurfaceDeviceTensorScope:
+        """The GPU write door onto this object's pixels."""
+        return self._the_one_claimed_surfaces_pixel_access().writable()
+
+    def cpu(self) -> "AbstractContextManager[Any]":
+        """The CPU write door onto this object's pixels — the slow path."""
+        return self._the_one_claimed_surfaces_pixel_access().cpu()
