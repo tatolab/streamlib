@@ -103,4 +103,4 @@ impl Drop for MyDevice {
 
 ## Reference
 - Implementation: `runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs::create_dma_buf_pools`
-- Used by: `VulkanPixelBuffer::new()`, `VulkanTexture::new()`
+- Used by: `HostVulkanBuffer::new()`, `HostVulkanTexture::new()`
