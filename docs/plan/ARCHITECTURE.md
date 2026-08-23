@@ -310,7 +310,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   publishes a torn frame that surfaces as corrupt pixels somewhere downstream rather
   than at the `raise`, so the engine keeps the complete frame it already holds and lets
   the exception propagate — one rule for both device-write scopes, the CPU pixel-buffer
-  scope included, and discarding never suppresses the exception. A write-back is always
+  scope included (the surface handle's scope and its pending *device* write —
+  distinct from the cast object's `cpu()`, whose host stores publish per store;
+  see the cast-object entry in §Packages), and discarding never suppresses the
+  exception. A write-back is always
   an edit of a frame the processor read, never a fresh-frame write: the engine refuses
   a write-back into a staging that has not first read that same frame, because it cannot
   tell a consumer's write from uninitialised memory and one staging spans every frame its
