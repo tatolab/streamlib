@@ -580,9 +580,13 @@ class ARaiseInsideTheCpuWriteDoorPropagatesProbe(_WriteDoorProbe):
                 raise _TheEditWentWrong
         except _TheEditWentWrong:
             the_exception_propagated = True
+        # The door itself, opened again — not merely another resolve of the
+        # surface. A scope that failed to release its lock or its handle on
+        # the way out leaves the second open to fail, and only reopening it
+        # can see that.
+        with frame.cpu() as host_pixels_again:
+            the_door_reopened = bool(host_pixels_again.any())
         return {
             "the_exception_propagated": the_exception_propagated,
-            "the_door_opens_again_after_a_raise": bool(
-                self._surface_pixels_now(ctx, frame.surface_id).any()
-            ),
+            "the_door_opens_again_after_a_raise": the_door_reopened,
         }

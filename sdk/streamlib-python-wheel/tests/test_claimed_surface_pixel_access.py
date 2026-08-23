@@ -934,6 +934,20 @@ def test_declaring_the_same_surface_field_twice_is_refused():
             depth_surface_id: str
 
 
+def test_declaring_the_plural_keyword_with_one_field_name_is_refused():
+    """A `str` is a `Sequence[str]`, so the plural keyword would otherwise take
+    one field name apart into a surface per character — silently, past every
+    other check, into a type that claims nothing. The singular keyword next
+    door takes a bare string, which is what makes the slip realistic."""
+    with pytest.raises(TypeError, match="one surface per character"):
+
+        @dataclass(frozen=True, init=False)
+        class ATypeThatPassedOneNameToThePluralKeyword(
+            ClaimedSurfacePixelAccess, surface_id_fields="depth_surface_id"
+        ):
+            depth_surface_id: str
+
+
 def test_declaring_no_surface_field_at_all_is_refused():
     """An empty declaration is a type with no pixels to reach, which is a
     cast type that had no reason to compose this at all."""

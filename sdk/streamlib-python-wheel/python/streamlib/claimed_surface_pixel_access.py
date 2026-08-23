@@ -370,6 +370,20 @@ class ClaimedSurfacePixelAccess:
         if surface_id_field is not None:
             cls._the_fields_this_cast_type_names_its_surfaces_with = (surface_id_field,)
         elif surface_id_fields is not None:
+            # A `str` is itself a `Sequence[str]`, so the plural keyword would
+            # otherwise take one field name apart into a surface per character
+            # — past the empty and duplicate checks, into a type that claims
+            # nothing and refuses every door naming single letters. The
+            # singular keyword next door takes a bare string, which is what
+            # makes the slip worth naming.
+            if isinstance(surface_id_fields, str):
+                raise TypeError(
+                    f"{cls.__name__} passed one field name, {surface_id_fields!r}, to "
+                    f"surface_id_fields, which reads it as one surface per character. "
+                    f"For a type over one surface pass "
+                    f"surface_id_field={surface_id_fields!r}; for several, a tuple of "
+                    f"field names"
+                )
             declared = tuple(surface_id_fields)
             if not declared:
                 raise TypeError(

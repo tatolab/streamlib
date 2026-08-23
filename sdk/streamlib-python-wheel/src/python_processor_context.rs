@@ -636,8 +636,8 @@ impl PythonGpuSurfaceDeviceTensorScope {
                      producer still owns, or a texture allocated without \"copy_dst\" usage — \
                      so no write door edits it: this write-in-place scope refuses rather than \
                      discarding your edits silently, and the cast object's cpu() hands \
-                     its array out read-only under the same rule. Reading needs no write door: __dlpack__ \
-                     under lock(), or as_numpy",
+                     its array out read-only under the same rule. Reading needs no write door: lock(), \
+                     then as_numpy or __dlpack__",
                 ));
             }
             *python_self.prepared_device_export.lock() = Some(prepared);
