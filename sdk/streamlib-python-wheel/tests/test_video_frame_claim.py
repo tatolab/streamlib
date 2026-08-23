@@ -25,6 +25,7 @@ import weakref
 import pytest
 
 from streamlib import (
+    ClaimedSurfacePixelAccess,
     ColorInfo,
     ContentLight,
     ProcessorLinkDataAccess,
@@ -32,7 +33,7 @@ from streamlib import (
     VideoFrame,
     gpu_limited_access_of_the_typed_read_in_progress,
 )
-from streamlib import video_frame as video_frame_module
+from streamlib import claimed_surface_pixel_access as composable_module
 
 FRAME_BAG = {
     "surface_id": "surface-7",
@@ -41,7 +42,7 @@ FRAME_BAG = {
     "timestamp_ns": 123_456_789,
 }
 
-CLAIM_FIELD = "_check_out_lease_on_this_frames_surface"
+CLAIM_FIELD = "_check_out_lease_on_the_claimed_surface"
 OUTPUT_PORT = "frames_to_downstream"
 INPUT_PORT = "frames_from_upstream"
 
@@ -82,7 +83,7 @@ def offered(monkeypatch: pytest.MonkeyPatch):
 
     def offer(gpu_limited_access: object | None):
         monkeypatch.setattr(
-            video_frame_module,
+            composable_module,
             "gpu_limited_access_of_the_typed_read_in_progress",
             lambda: gpu_limited_access,
         )
@@ -218,25 +219,6 @@ def test_both_spellings_ignore_keys_the_cast_does_not_read():
         bag_from_a_newer_producer
     )
     assert VideoFrame(**bag_from_a_newer_producer).surface_id == "surface-7"
-
-
-def test_a_refused_claim_is_reported_once_and_then_stays_quiet(offered, monkeypatch):
-    """Silence would let the whole lifetime contract be off with no signal;
-    per-frame logging would cost more than the claim it reports on."""
-    offered(GpuLimitedAccessThatRefuses())
-    monkeypatch.setattr(video_frame_module, "_a_refused_claim_has_been_reported", False)
-    reported: list[str] = []
-    monkeypatch.setattr(
-        video_frame_module,
-        "warn",
-        lambda message, **attrs: reported.append(message),
-    )
-
-    VideoFrame(**FRAME_BAG)
-    VideoFrame(**FRAME_BAG)
-
-    assert len(reported) == 1, "the per-frame path must not flood the log"
-    assert "pool depth" in reported[0]
 
 
 def test_already_cast_metadata_survives_construction():

@@ -9,12 +9,12 @@ consumers that want construction-time validation and attribute access instead
 of key lookups. Pixels never ride the bag — the frame references a GPU surface
 by `surface_id`, resolved out-of-band.
 
-Casting also buys the frame's own lifetime: read as a `VideoFrame`, the frame
-babysits its buffer, and the producer cannot recycle the pixels under a frame
-you are still holding. Nothing here is privileged — the class asks the read in
-progress for the capability and keeps what it gets in a field, which any class
-can do, and which is why reading the bag as a dict stays first-class and
-unpenalized.
+Casting also buys the frame's own lifetime and its pixels: read as a
+`VideoFrame`, the frame babysits its buffer and speaks `__dlpack__` itself, so
+`torch.from_dlpack(frame)` works straight off the read. Both come from
+`ClaimedSurfacePixelAccess`, the piece the wheel ships for any cast type to
+compose — this class is built from it like any other, which is why reading the
+bag as a dict stays first-class and unpenalized.
 """
 
 from __future__ import annotations
@@ -24,11 +24,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-from ._engine import (
-    GpuSurfaceCheckOutLease,
-    gpu_limited_access_of_the_typed_read_in_progress,
-)
-from .log import warn
+from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
 __all__ = [
     "ColorInfo",
@@ -113,54 +109,6 @@ def _color_info_or_none(value: Any) -> "ColorInfo | None":
     )
 
 
-_a_refused_claim_has_been_reported = False
-
-
-def _report_the_first_refused_claim(surface_id: str, refusal: BaseException) -> None:
-    """Say once, per process, that frames are arriving unprotected.
-
-    Once and not per frame: this is the per-frame path, and a helper's records
-    cross to the parent, so a refusal that persists would cost more in logging
-    than the claim it is reporting on. Silence would be worse than either — the
-    whole lifetime contract can be off with no other signal.
-    """
-    global _a_refused_claim_has_been_reported
-    if _a_refused_claim_has_been_reported:
-        return
-    _a_refused_claim_has_been_reported = True
-    warn(
-        "a frame could not claim its surface, so the producer may recycle it while this "
-        "processor is still holding the frame; frames are protected by pool depth alone "
-        "until this clears. Not reported again in this process.",
-        surface_id=surface_id,
-        refusal=str(refusal),
-    )
-
-
-def _claim_on_the_surface_a_frame_names(surface_id: str) -> "GpuSurfaceCheckOutLease | None":
-    """The claim a frame holds on its own pixels, or `None` when nothing
-    offered the means to take one.
-
-    Only a `read(port, into=…)` offers it, so a frame built from a dict you are
-    holding claims nothing — a hand-rolled bag may name no live surface at all.
-    """
-    gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
-    if gpu_limited_access is None:
-        return None
-    try:
-        return gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
-    except Exception as refusal:  # noqa: BLE001 — see below
-        # Deliberately every failure, not just the refusals this path is known
-        # to raise today: the claim crosses a socket, and whatever comes back
-        # from below it, none of it makes the delivered bag unreadable. An
-        # unclaimed frame falls back to the protection pool depth gives it,
-        # which is what an untyped read gets; raising here would turn a
-        # delivered frame into an exception at the read. Nothing is hidden by
-        # the breadth — the first one is reported.
-        _report_the_first_refused_claim(surface_id, refusal)
-        return None
-
-
 @dataclass(frozen=True)
 class ColorInfo:
     """H.273 / ITU-T VUI four-tuple. ``None`` means unspecified."""
@@ -200,7 +148,7 @@ class MasteringDisplay:
 
 
 @dataclass(frozen=True, init=False)
-class VideoFrame:
+class VideoFrame(ClaimedSurfacePixelAccess):
     """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
 
     ``surface_id`` is the handoff contract; ``timestamp_ns`` (the machine's
@@ -212,6 +160,10 @@ class VideoFrame:
     this object lives, and letting it go releases them. There is nothing to
     call, and holding a frame for longer costs the producer memory and then its
     own frames — never another processor's cadence.
+
+    Such a frame is a DLPack producer in its own right — ``torch.from_dlpack``
+    consumes it directly, GPU-resident — because it composes
+    ``ClaimedSurfacePixelAccess`` like any user-authored cast type can.
     """
 
     surface_id: str
@@ -237,8 +189,8 @@ class VideoFrame:
         texture_layout: "int | None" = None,
         **keys_this_cast_does_not_read: Any,
     ) -> None:
-        """Validate, cast the nested metadata, and claim the surface when a
-        read is offering the claim.
+        """Validate and cast the nested metadata, then hand the settled values
+        to the composable, which assigns them and claims the surface.
 
         Written out rather than generated because the bag is an open map: a
         producer may carry keys this cast does not read, and the day one adds
@@ -258,33 +210,18 @@ class VideoFrame:
                 "bag is not a video frame: surface_id must be str and "
                 "width/height/timestamp_ns must be int"
             )
-        # `object.__setattr__` throughout because the frame is frozen: the
-        # generated `__setattr__` refuses, and freezing is what makes a
-        # delivered frame safe to hand around.
-        assign = object.__setattr__
-        assign(self, "surface_id", surface_id)
-        assign(self, "width", width)
-        assign(self, "height", height)
-        assign(self, "timestamp_ns", timestamp_ns)
-        assign(self, "fps", _require_int_or_none("fps", fps))
-        assign(self, "texture_layout", _require_int_or_none("texture_layout", texture_layout))
-        assign(self, "color_info", _color_info_or_none(color_info))
-        assign(
-            self,
-            "content_light",
-            _nested_or_none("content_light", ContentLight, content_light),
-        )
-        assign(
-            self,
-            "mastering_display",
-            _nested_or_none("mastering_display", MasteringDisplay, mastering_display),
-        )
-        # The frame's own field, and its whole lifetime protocol: this object
-        # going away is what releases the claim.
-        assign(
-            self,
-            "_check_out_lease_on_this_frames_surface",
-            _claim_on_the_surface_a_frame_names(surface_id),
+        super().__init__(
+            surface_id=surface_id,
+            width=width,
+            height=height,
+            timestamp_ns=timestamp_ns,
+            fps=_require_int_or_none("fps", fps),
+            texture_layout=_require_int_or_none("texture_layout", texture_layout),
+            color_info=_color_info_or_none(color_info),
+            content_light=_nested_or_none("content_light", ContentLight, content_light),
+            mastering_display=_nested_or_none(
+                "mastering_display", MasteringDisplay, mastering_display
+            ),
         )
 
     @classmethod
@@ -310,9 +247,8 @@ class VideoFrame:
 
         The unclaimed case is a choice, not a lapse — a hand-rolled bag may
         name no live surface at all. To hold a frame past the producer's ring,
-        read it with `into=VideoFrame`, or take the claim yourself through
-        `gpu_limited_access_of_the_typed_read_in_progress()` in your own type's
-        constructor.
+        read it with `into=VideoFrame`, or compose `ClaimedSurfacePixelAccess`
+        in your own type, which takes the claim on the same terms.
         """
         missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
         if missing:

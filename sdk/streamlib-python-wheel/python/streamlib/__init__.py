@@ -41,6 +41,9 @@ from ._engine import monotonic_now_ns as monotonic_now_ns
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
 from ._processor_declaration import processor as processor
+from .claimed_surface_pixel_access import (
+    ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
+)
 from .video_frame import ColorInfo as ColorInfo
 from .video_frame import ContentLight as ContentLight
 from .video_frame import MasteringDisplay as MasteringDisplay
@@ -51,6 +54,7 @@ from .video_frame import VideoFrame as VideoFrame
 __all__ = [
     "AddedProcessor",
     "CameraSource",
+    "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ContentLight",
     "DisplayWindow",
