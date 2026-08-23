@@ -78,6 +78,9 @@ pub use vulkan_buffer_binding::VulkanBufferLike;
 mod vulkan_pipeline_flags;
 pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 
+mod vulkan_validation_messenger;
+pub use vulkan_validation_messenger::VulkanValidationMessageCounts;
+
 #[cfg(target_os = "linux")]
 mod vulkan_command_recorder;
 #[cfg(target_os = "linux")]

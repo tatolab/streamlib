@@ -16,23 +16,14 @@ the offending test is mis-classified.
 The **CI** tier-1 gate is the minimal per-crate `--lib` run defined by
 `.github/workflows/test.yml` (the CI config is the source of truth for
 what CI enforces). The broader **local** tier-1 baseline is the whole
-workspace with the example-only crates excluded so it builds on a box
-without OpenSSL dev headers (each excluded crate is an example binary
-with zero tests):
+workspace:
 
 ```bash
-cargo test --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream
+cargo test --workspace
 ```
 
 Every binary and every `Doc-tests` block should print `test result: ok.`
 with zero failures — that, not any particular total, is the pass bar.
-Review the exclusion list when a new workspace member lands (a new
-example that drags `openssl-sys` breaks this command on fresh machines).
 
 Tier 2 is the gate that runs when a change is hardware-relevant — Vulkan
 RHI work, encoder/decoder, display, anything in `vulkan/rhi/`. The
@@ -40,11 +31,6 @@ canonical command:
 
 ```bash
 cargo test --features streamlib/hardware-tests --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream \
     --no-fail-fast \
     -- --test-threads=1
 ```
@@ -53,6 +39,74 @@ The `--test-threads=1` is mandatory: tier-2 tests serialize on the GPU
 device. Running them in parallel deadlocks (most often inside the
 NVIDIA Vulkan driver's per-process kernel state, see
 [`docs/learnings/nvidia-dma-buf-after-swapchain.md`](learnings/nvidia-dma-buf-after-swapchain.md)).
+
+## Vulkan validation over a tier-2 run
+
+Tier 2 is the only tier that constructs a real Vulkan device, so it is the
+only place the Khronos validation layer has anything to say. Three env vars
+drive it. Each is independent — setting one never turns on another's
+behaviour; all it implies is the layer they have in common. Every one of them
+is a no-op where that layer is not installed (a warning, never a failure,
+which is why CI is unaffected):
+
+| Env var | Effect |
+|---|---|
+| `STREAMLIB_VULKAN_VALIDATION=1` | Load the layer, forward `ERROR` and `WARNING` findings into `tracing`, count them per device. |
+| `STREAMLIB_VULKAN_SYNC_VALIDATION=1` | Load the layer and add synchronization validation. |
+| `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1` | Load the layer, and let the first error kill the process, naming its VUID. |
+
+In particular the whole-sweep gate below sets only the third, so it runs
+*without* synchronization validation; combine the second and third to gate on
+both.
+
+Registering a messenger silences the layer's own stdout printing, so with a
+plain `STREAMLIB_VULKAN_VALIDATION=1` run a finding reaches a `cargo test`
+binary — which installs no `tracing` subscriber — only where a test reads
+`HostVulkanDevice::validation_layer_message_counts()`. Abort-on-error is
+therefore the whole-sweep gate:
+
+```bash
+STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1 cargo test \
+    --features streamlib/hardware-tests --workspace \
+    --no-fail-fast \
+    -- --test-threads=1
+```
+
+A binary that dies with `SIGABRT` raised a validation error; the panic
+message immediately above it names the VUID and quotes the spec. The sweep
+does not yet run clean — the current baseline is recorded on #1893.
+
+Abort-on-error is also the one mode in which
+`a_deliberately_invalid_vulkan_call_moves_the_validation_error_count` skips,
+since it raises a finding on purpose. That test is the only thing standing
+between a green sweep and a sweep that is green because the layer went
+silent, so run it alongside:
+
+```bash
+STREAMLIB_VULKAN_VALIDATION=1 cargo test \
+    --features streamlib/hardware-tests -p streamlib-engine --lib \
+    vulkan_validation_messenger -- --test-threads=1 --nocapture
+```
+
+`--nocapture` is what makes that check meaningful: both hardware tests skip
+by returning early, and libtest swallows a passing test's output, so without
+it a skipped run and a real one print the same `ok`. With it, a run that
+proves nothing says `Skipping` and why.
+
+A test that wants to hold one GPU path at zero reads the counter around it
+rather than relying on the sweep:
+
+```rust
+let before = device.validation_layer_message_counts();
+// ... the path under test ...
+assert_eq!(device.validation_layer_message_counts(), before);
+```
+
+`None` means no messenger is installed — validation off, or layer absent. It
+is never the same as zero, and a test must skip rather than pass on it.
+
+Leave validation off when reproducing a driver-race symptom: it shifts
+timing.
 
 ## Why Cargo features instead of `#[ignore]`
 

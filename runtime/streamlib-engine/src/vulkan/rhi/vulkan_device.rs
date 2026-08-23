@@ -21,7 +21,13 @@ use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
-use super::{HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice};
+use super::vulkan_validation_messenger::{
+    VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
+};
+use super::{
+    HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice,
+    VulkanValidationMessageCounts,
+};
 
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
@@ -265,6 +271,12 @@ pub struct HostVulkanDevice {
     /// [`HostVulkanTexture::new_render_target_dma_buf`].
     #[cfg(target_os = "linux")]
     drm_modifier_table: Arc<DrmModifierTable>,
+    /// Khronos-validation-layer messenger, present only when the layer
+    /// loaded and `VK_EXT_debug_utils` was available. Holds the tally the
+    /// layer writes findings into; must outlive `destroy_instance`, whose
+    /// own findings reach the pNext-chained messenger using the same
+    /// user-data pointer.
+    validation_messenger: Option<VulkanValidationMessenger>,
     /// Tracks DMA-BUF import-path allocations (raw vkAllocateMemory for import only).
     live_allocation_count: AtomicUsize,
     /// Every `vkQueueSubmit2` this device has made, across every queue.
@@ -524,33 +536,31 @@ impl HostVulkanDevice {
         // to `VK_LOADER_LAYERS_ENABLE` for cases where the loader-side
         // hook is shadowed (notably some Bazel / Docker / cargo-test
         // configurations).
-        let validation_layer_name = std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap();
-        let mut enabled_layer_names: Vec<*const c_char> = Vec::new();
-        let want_validation = std::env::var("STREAMLIB_VULKAN_VALIDATION")
-            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-            .unwrap_or(false);
-        if want_validation {
-            let layers = unsafe { entry.enumerate_instance_layer_properties() }.unwrap_or_default();
-            let layer_present = layers.iter().any(|l| {
-                let name = l.layer_name.as_cstr();
-                name == validation_layer_name.as_c_str()
-            });
-            if layer_present {
-                enabled_layer_names.push(validation_layer_name.as_ptr());
-                tracing::info!("VK_LAYER_KHRONOS_validation enabled (STREAMLIB_VULKAN_VALIDATION)");
-            } else {
-                tracing::warn!(
-                    "STREAMLIB_VULKAN_VALIDATION=1 set but VK_LAYER_KHRONOS_validation not installed"
-                );
-            }
-        }
+        let validation_setup = VulkanValidationInstanceSetup::resolve(
+            &entry,
+            VulkanValidationConfiguration::from_environment(),
+            &available_ext_names,
+        );
+        instance_extensions.extend_from_slice(&validation_setup.enabled_extension_names);
 
-        let instance_info = vk::InstanceCreateInfo::builder()
+        let mut instance_creation_messenger_info =
+            validation_setup.instance_creation_messenger_info();
+        let mut validation_features = vk::ValidationFeaturesEXT::builder()
+            .enabled_validation_features(&validation_setup.enabled_validation_features)
+            .build();
+
+        let mut instance_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&instance_extensions)
-            .enabled_layer_names(&enabled_layer_names)
-            .flags(instance_create_flags)
-            .build();
+            .enabled_layer_names(&validation_setup.enabled_layer_names)
+            .flags(instance_create_flags);
+        if !validation_setup.enabled_validation_features.is_empty() {
+            instance_info = instance_info.push_next(&mut validation_features);
+        }
+        if let Some(messenger_info) = instance_creation_messenger_info.as_mut() {
+            instance_info = instance_info.push_next(messenger_info);
+        }
+        let instance_info = instance_info.build();
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| {
             Error::GpuError(if e == vk::ErrorCode::INCOMPATIBLE_DRIVER {
@@ -562,6 +572,8 @@ impl HostVulkanDevice {
                 format!("Failed to create Vulkan instance: {e}")
             })
         })?;
+
+        let validation_messenger = validation_setup.into_installed_messenger(&instance);
 
         // 5. Select physical device
         let physical_devices = unsafe { instance.enumerate_physical_devices() }
@@ -1436,6 +1448,7 @@ impl HostVulkanDevice {
             physical_device_uuid,
             #[cfg(target_os = "linux")]
             drm_modifier_table,
+            validation_messenger,
             live_allocation_count: AtomicUsize::new(0),
             queue_submission_count: AtomicUsize::new(0),
             recorder_and_compute_kernel_fence_wait_count: AtomicUsize::new(0),
@@ -2763,6 +2776,16 @@ impl HostVulkanDevice {
             .load(Ordering::Relaxed)
     }
 
+    /// Khronos-validation-layer findings this device has seen, or `None`
+    /// when no messenger is installed — validation off, layer absent, or
+    /// `VK_EXT_debug_utils` unavailable. A test asserting zero findings
+    /// must treat `None` as "not measured", never as zero.
+    pub fn validation_layer_message_counts(&self) -> Option<VulkanValidationMessageCounts> {
+        self.validation_messenger
+            .as_ref()
+            .and_then(VulkanValidationMessenger::counts)
+    }
+
     /// Present to a queue with per-queue mutex synchronization.
     pub unsafe fn present_to_queue(
         &self,
@@ -3537,6 +3560,12 @@ impl Drop for HostVulkanDevice {
 
         unsafe {
             self.device.destroy_device(None);
+            // The messenger handle goes before the instance it belongs to;
+            // its tally stays alive in `self` so the pNext-chained
+            // messenger still has valid user data at destroy_instance.
+            if let Some(messenger) = self.validation_messenger.as_mut() {
+                messenger.destroy_handle(&self.instance);
+            }
             self.instance.destroy_instance(None);
         }
     }
