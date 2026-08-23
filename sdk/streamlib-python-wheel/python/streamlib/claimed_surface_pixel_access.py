@@ -76,7 +76,7 @@ def _claim_taken_on(
         return None
 
 
-def _fields_the_cast_type_declared_built_from(
+def _build_the_fields_the_cast_type_declared(
     cast_object: "ClaimedSurfacePixelAccess", bag_entries: "dict[str, Any]"
 ) -> None:
     """Assign the concrete type's declared dataclass fields from the bag.
@@ -119,9 +119,9 @@ class ClaimedSurfacePixelAccess:
         _THE_FIELD_A_CAST_TYPE_NAMES_ITS_SURFACE_WITH_BY_DEFAULT
     )
 
-    # The three below carry a class-level `None` rather than a bare
-    # annotation, so a composer that bypassed both construction hooks reaches
-    # the refusal that names the read instead of an AttributeError.
+    # Each below carries a class-level `None` rather than a bare annotation,
+    # so a composer that bypassed both construction hooks reaches the refusal
+    # that names the read instead of an AttributeError.
 
     #: The claim on this object's own pixels, and its whole lifetime protocol:
     #: this object going away is what releases it. `None` when nothing offered
@@ -162,7 +162,7 @@ class ClaimedSurfacePixelAccess:
         calls this with the values it settled on, which is how `VideoFrame` is
         built.
         """
-        _fields_the_cast_type_declared_built_from(self, bag_entries)
+        _build_the_fields_the_cast_type_declared(self, bag_entries)
         self._take_the_claim_on(
             bag_entries.get(self._the_field_this_cast_type_names_its_surface_with)
         )
@@ -226,7 +226,8 @@ class ClaimedSurfacePixelAccess:
             )
         handle = gpu_limited_access.resolve_surface(surface_id)
         # Read intent, declared: it is what keeps the export from arming a
-        # write-back, and the write doors are the scopes, never this view.
+        # write-back. A write through the bare view stays out of contract —
+        # never enforced, and never claimed to be.
         handle.lock(read_only=True)
         object.__setattr__(
             self, "_read_only_locked_handle_on_the_claimed_surface", handle
