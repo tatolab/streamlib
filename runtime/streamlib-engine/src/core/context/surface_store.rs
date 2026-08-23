@@ -1494,12 +1494,15 @@ impl SurfaceStoreInner {
             // the consumer-side EGL or Vulkan import can pass them via
             // EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT and
             // EGL_DMA_BUF_PLANE{N}_PITCH_EXT (or
-            // VkImageDrmFormatModifierExplicitCreateInfoEXT). Zero
-            // modifier means LINEAR / not applicable; render-target
-            // consumers must refuse such surfaces because LINEAR
+            // VkImageDrmFormatModifierExplicitCreateInfoEXT). The tiling
+            // rides along because a zero modifier is `DRM_FORMAT_MOD_LINEAR`
+            // under DRM_FORMAT_MODIFIER_EXT tiling and "no modifier at all"
+            // otherwise — the value alone cannot say which. Render-target
+            // consumers must refuse a LINEAR surface because LINEAR
             // DMA-BUFs are sampler-only on NVIDIA (see
             // docs/learnings/nvidia-egl-dmabuf-render-target.md).
             let drm_format_modifier = texture.vulkan_inner().chosen_drm_format_modifier();
+            let vk_image_tiling = texture.vulkan_inner().vk_image_tiling().as_raw();
             let plane_layout = texture
                 .vulkan_inner()
                 .dma_buf_plane_layout()
@@ -1518,6 +1521,7 @@ impl SurfaceStoreInner {
                 "plane_offsets": plane_offsets,
                 "plane_strides": plane_strides,
                 "drm_format_modifier": drm_format_modifier,
+                "vk_image_tiling": vk_image_tiling,
                 // The host allocation's byte size, which a consumer-side
                 // `import_render_target_dma_buf` must pass to
                 // `vkAllocateMemory` — deriving it from extent × stride
