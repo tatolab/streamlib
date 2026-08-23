@@ -98,9 +98,11 @@ current_signal_value: u64,
 
 The vulkan and cuda adapters hold exactly that. Both signal only from
 sites that are already exclusive — a write release under `write_held`,
-a read release from the last reader out — so reading and advancing the
-counter inside the registry lock is the whole of the exclusion they
-need.
+a read release from the last reader out — and both claim their value
+inside the registry lock. The `signal_host` that follows runs outside
+it, so two back-to-back release episodes can still reach
+`vkSignalSemaphore` out of reservation order; the window is narrow,
+since it must contain another thread's whole acquire and release.
 
 cpu-readback needs more, because it is the one adapter whose *read
 acquire* signals `produce_done`: its trigger submits a
@@ -316,12 +318,15 @@ next-value computation, reserving a distinct value is not sufficient on
 its own: two callers holding distinct values still submit in whichever
 order they reach the queue, and a submit signalling *below* the
 timeline's current value is as invalid as one signalling *at* it. So the
-reservation is an exclusion, not a number — the caller holds it until
-its submit has been issued, which makes reservation order submission
-order. The wait that observes the signal runs outside the exclusion: the
-value is the caller's own, so nothing else can satisfy it.
+reservation is an exclusion, not a number — and it spans the wait as
+well as the submit. A timeline wait is satisfied by any value at or
+above its target, so releasing after the submit would let the next
+caller's copy signal a higher value and satisfy this caller's wait while
+this caller's own copy is still running. Holding it means at most one
+signalling submit is outstanding per surface, which is the adapter's own
+guarantee rather than an obligation on whatever submits for it.
 
-That is why a trigger's reported value must be no lower than the
+For the same reason a trigger's reported value must be no lower than the
 reservation. A caller that waits on a value some other copy signalled
 returns while its own copy is still in flight: its read view maps a
 staging buffer the GPU is still writing, and teardown destroys the

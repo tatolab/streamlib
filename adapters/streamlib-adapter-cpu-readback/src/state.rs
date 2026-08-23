@@ -98,29 +98,27 @@ impl<P: DevicePrivilege> PlaneSlot<P> {
 /// `consume_done` sees a strictly increasing subsequence, which is all
 /// `VUID-VkSubmitInfo2-semaphore-03882` asks for. Gaps are legal.
 ///
-/// The exclusion exists because reserving a distinct value is not on its
-/// own enough. Two callers holding distinct values still submit in
-/// whichever order they reach the queue, and a submit signalling *below*
-/// the timeline's current value is as invalid as one signalling *at* it.
-/// So [`reserve_next_signal_value`](Self::reserve_next_signal_value)
-/// hands back a guard, and the caller holds it until its submit has been
-/// issued: reservation order is then submission order, and the copies
-/// retire in that order on the one queue. The wait that observes the
-/// signal runs outside the guard — the value is the caller's own, so
-/// nothing else can satisfy it — mirroring the engine's
-/// `SurfaceExportStaging::submit_staging_copy_and_wait`.
+/// [`reserve_next_signal_value`](Self::reserve_next_signal_value) hands
+/// back a guard rather than a `u64` because a distinct value is not on
+/// its own enough — see `docs/architecture/adapter-timeline-single-writer.md`
+/// §Thread model within the writer process.
 #[derive(Default)]
 pub(crate) struct SurfaceTimelineSignalSequence {
     last_reserved_signal_value: Mutex<u64>,
 }
 
 /// A reserved timeline value and the exclusion it was reserved under.
-/// The sequence stays locked until this drops, so the submit that
-/// signals [`value`](Self::value) cannot interleave with another
-/// caller's.
+/// The sequence stays locked until this drops, so neither the submit
+/// that signals [`value`](Self::value) nor the wait that observes it can
+/// interleave with another caller's.
 #[must_use = "the reservation only holds while this guard lives — dropping it releases the sequence"]
 pub(crate) struct ReservedSurfaceTimelineSignalValue<'a> {
     last_reserved_signal_value: MutexGuard<'a, u64>,
+}
+
+/// A signalling site reported a value below the one it reserved.
+pub(crate) struct SignaledValueBelowReservation {
+    pub(crate) reserved: u64,
 }
 
 impl SurfaceTimelineSignalSequence {
@@ -146,11 +144,25 @@ impl ReservedSurfaceTimelineSignalValue<'_> {
         *self.last_reserved_signal_value
     }
 
-    /// Fold in the value the signalling site actually used. A trigger
-    /// whose host side picks its own may report one above the
-    /// reservation; the next reservation must clear it.
-    pub(crate) fn observe_signaled_value(&mut self, signaled: u64) {
-        *self.last_reserved_signal_value = (*self.last_reserved_signal_value).max(signaled);
+    /// Fold in the value the signalling site actually used, which a
+    /// trigger whose host side picks its own may set above the
+    /// reservation.
+    ///
+    /// Below it is refused rather than clamped: a timeline wait is
+    /// satisfied by any value at or above its target, so a value this
+    /// surface may already carry cannot prove the caller's own work
+    /// completed.
+    pub(crate) fn observe_signaled_value(
+        &mut self,
+        signaled: u64,
+    ) -> Result<(), SignaledValueBelowReservation> {
+        if signaled < self.value() {
+            return Err(SignaledValueBelowReservation {
+                reserved: self.value(),
+            });
+        }
+        *self.last_reserved_signal_value = signaled;
+        Ok(())
     }
 }
 

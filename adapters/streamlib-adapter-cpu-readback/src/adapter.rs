@@ -49,10 +49,11 @@ use crate::view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };
 
-/// Default per-acquire wait timeout. Bounds each timeline wait and the
-/// trigger call individually — not the acquire as a whole, which also
-/// blocks untimed on the surface's signal sequence while another caller
-/// submits its copy.
+/// Default per-acquire wait timeout. Bounds each timeline wait
+/// individually, and nothing else: not the trigger call — the in-process
+/// trigger blocks untimed on the prior submit's fence — and not the
+/// acquire as a whole, which first blocks untimed on the surface's
+/// signal sequence while another caller runs its copy.
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Per-acquire trigger context — everything the trigger needs to
@@ -128,11 +129,12 @@ pub struct TriggerPlane {
 /// returns whatever value the host reports.
 ///
 /// Two contracts the code's shape cannot show. The returned value MUST
-/// be at least `ctx.suggested_signal_value` — the adapter waits on it to
-/// observe this copy, and a lower value may already be signaled, which
-/// would satisfy the wait while this copy is still running. And a
-/// trigger MUST NOT re-enter the adapter for the same surface: it is
-/// called under that surface's signal sequence, which is not reentrant.
+/// be at least `ctx.suggested_signal_value`: a timeline wait is
+/// satisfied by any value at or above its target, so a lower one may
+/// already be signaled and would let the adapter's wait return while
+/// this copy is still running. And a trigger MUST NOT re-enter the
+/// adapter for the same surface — it is called under that surface's
+/// signal sequence, which is not reentrant.
 pub trait CpuReadbackCopyTrigger<P: DevicePrivilege>: Send + Sync {
     fn run_copy_image_to_buffer(
         &self,
@@ -386,12 +388,16 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     /// Reserve the surface's next `produce_done` value, run the copy
     /// that signals it, and wait for the value the trigger reports.
     ///
-    /// Two concurrent acquires can never submit copies carrying the same
-    /// value, and no caller's wait can be satisfied by another caller's
-    /// copy — which is what would let an acquire hand out a view over a
-    /// staging buffer the GPU is still writing. The reservation is what
-    /// makes reservation order submission order; the returned value being
-    /// no lower than it is what makes the value this copy's own.
+    /// The reservation is held across all three. Because a timeline wait
+    /// is satisfied by any value at or above its target, releasing it
+    /// after the submit would let a second caller's copy signal a higher
+    /// value and satisfy the first caller's wait while the first copy is
+    /// still running — the defect this serialization exists to remove.
+    /// Holding it means at most one copy signals `produce_done` for a
+    /// surface at a time, which the adapter guarantees rather than
+    /// delegating to whichever trigger is installed. See
+    /// `docs/architecture/adapter-timeline-single-writer.md` §Thread
+    /// model within the writer process.
     fn submit_copy_and_await_produce_done(
         &self,
         surface_id: SurfaceId,
@@ -414,19 +420,16 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             CopyDirection::ImageToBuffer => self.trigger.run_copy_image_to_buffer(&ctx)?,
             CopyDirection::BufferToImage => self.trigger.run_copy_buffer_to_image(&ctx)?,
         };
-        if signaled < reserved.value() {
-            return Err(AdapterError::BackendRejected {
+        reserved.observe_signaled_value(signaled).map_err(|below| {
+            AdapterError::BackendRejected {
                 reason: format!(
                     "trigger reported produce_done value {signaled} for surface_id={surface_id}, \
-                     below the reserved {}; a value the timeline may already carry cannot prove \
-                     this copy completed",
-                    reserved.value()
+                     below the reserved {}; a value this surface may already carry cannot prove \
+                     the copy completed",
+                    below.reserved
                 ),
-            });
-        }
-        reserved.observe_signaled_value(signaled);
-        drop(reserved);
-
+            }
+        })?;
         snap.produce_done
             .wait(signaled, self.acquire_timeout.as_nanos() as u64)
             .map_err(|_| AdapterError::SyncTimeout {

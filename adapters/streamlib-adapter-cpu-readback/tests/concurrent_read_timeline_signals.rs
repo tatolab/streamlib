@@ -100,24 +100,42 @@ impl CpuReadbackCopyTrigger<HostMarker> for SignalValueRecordingCopyTrigger {
 /// timing-dependent: it holds all N guards at once, so `read_holders`
 /// provably reaches N and the release path runs its last-reader-out
 /// branch exactly once.
+///
+/// A failed acquire reaches the second barrier too, and is reported
+/// after the scope joins. Panicking before it would leave the other
+/// readers blocked on a barrier nobody will complete — a hang instead of
+/// a failure, on the exact path whose regressions are timeouts.
 fn acquire_reads_concurrently(fixture: &HostFixture, surface: &StreamlibSurface) {
     let all_threads_ready = Barrier::new(CONCURRENT_READER_THREAD_COUNT);
     let every_guard_held = Barrier::new(CONCURRENT_READER_THREAD_COUNT);
+    let acquire_failures = Mutex::new(Vec::new());
     thread::scope(|scope| {
         for reader_index in 0..CONCURRENT_READER_THREAD_COUNT {
             let all_threads_ready = &all_threads_ready;
             let every_guard_held = &every_guard_held;
+            let acquire_failures = &acquire_failures;
             let adapter = &fixture.adapter;
             scope.spawn(move || {
                 all_threads_ready.wait();
-                let guard = adapter
-                    .acquire_read(surface)
-                    .unwrap_or_else(|e| panic!("reader {reader_index} acquire_read: {e:?}"));
+                let acquired = adapter.acquire_read(surface);
+                if let Err(e) = &acquired {
+                    acquire_failures
+                        .lock()
+                        .expect("acquire-failure mutex poisoned")
+                        .push(format!("reader {reader_index}: {e:?}"));
+                }
                 every_guard_held.wait();
-                drop(guard);
+                drop(acquired);
             });
         }
     });
+    let acquire_failures = acquire_failures
+        .lock()
+        .expect("acquire-failure mutex poisoned");
+    assert!(
+        acquire_failures.is_empty(),
+        "every concurrent read must acquire: {acquire_failures:?}"
+    );
 }
 
 #[test]
