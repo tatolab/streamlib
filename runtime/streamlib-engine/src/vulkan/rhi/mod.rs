@@ -25,11 +25,7 @@ mod vulkan_upload_resources;
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
-// Nothing inside streamlib names this type — the upload's callers bind
-// it by inference — but it is the return type of a public method, so the
-// re-export is what lets downstream code spell it.
 #[cfg(target_os = "linux")]
-#[allow(unused_imports)]
 pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{
     HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
