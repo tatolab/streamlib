@@ -20,6 +20,8 @@ use crate::core::{Error, Result};
 use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 
 #[cfg(target_os = "linux")]
+use super::VulkanTextureLike;
+#[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
 use super::vulkan_validation_messenger::{
     VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
@@ -3054,14 +3056,9 @@ impl HostVulkanDevice {
         let dst_image = dst_texture.image().ok_or_else(|| {
             Error::GpuError("buffer-to-image upload destination has no VkImage".into())
         })?;
-        // The terminal layout is chosen here, at the barrier that
-        // records it, rather than by the caller that publishes it — a
-        // registration can then only ever claim the layout the image
-        // was actually left in.
-        let final_texture_layout =
-            streamlib_consumer_rhi::terminal_layout_for_shader_read_access_of_image_usage(
-                dst_texture.vk_image_usage_flags(),
-            );
+        // Chosen here, at the barrier that records it, rather than by
+        // the caller that publishes it.
+        let final_texture_layout = dst_texture.terminal_layout_for_shader_read_access();
 
         unsafe {
             device.begin_command_buffer(

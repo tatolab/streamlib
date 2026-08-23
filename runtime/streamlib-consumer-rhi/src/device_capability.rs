@@ -143,6 +143,25 @@ pub trait VulkanRhiBuffer {
     fn size(&self) -> vk::DeviceSize;
 }
 
+/// Terminal layout a recorded pass may legally leave an image in for a
+/// downstream shader read, given the usage it was created with.
+///
+/// `SHADER_READ_ONLY_OPTIMAL` requires `SAMPLED` or `INPUT_ATTACHMENT`
+/// (VUID-VkImageMemoryBarrier2-oldLayout-01211); `GENERAL` is legal for
+/// any image, so images without either bit — including those whose
+/// construction path records no usage metadata — land there.
+pub fn terminal_layout_for_shader_read_access_of_image_usage(
+    vk_image_usage_flags: vk::ImageUsageFlags,
+) -> crate::VulkanLayout {
+    if vk_image_usage_flags
+        .intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::INPUT_ATTACHMENT)
+    {
+        crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+    } else {
+        crate::VulkanLayout::GENERAL
+    }
+}
+
 /// Operations the surface adapter needs from a Vulkan-flavored
 /// texture. Both [`crate::ConsumerVulkanTexture`] and
 /// `streamlib::vulkan::rhi::HostVulkanTexture` implement this — the
@@ -165,31 +184,6 @@ pub trait VulkanRhiBuffer {
 ///   model: DEVICE_LOCAL, single-sample, single-mip, unprotected, no
 ///   YCbCr conversion, bound at offset 0. Constructors that violate
 ///   any default override the corresponding method.
-/// Terminal layout a recorded pass may legally leave an image in for a
-/// downstream shader read, given the usage the image was created with:
-/// `SHADER_READ_ONLY_OPTIMAL` when that usage carries `SAMPLED` or
-/// `INPUT_ATTACHMENT`, `GENERAL` otherwise.
-///
-/// `SHADER_READ_ONLY_OPTIMAL` requires one of those two bits
-/// (VUID-VkImageMemoryBarrier2-oldLayout-01211), so a pass that ends a
-/// storage-only or colour-attachment-only image in it violates the spec
-/// at the barrier — and, if that layout is then published as the image's
-/// tracked state, again at the next consumer's barrier *out of* it.
-/// `GENERAL` is legal for any image, which is why it is the fallback:
-/// images whose construction path records no usage metadata report empty
-/// flags and land there too.
-pub fn terminal_layout_for_shader_read_access_of_image_usage(
-    vk_image_usage_flags: vk::ImageUsageFlags,
-) -> crate::VulkanLayout {
-    if vk_image_usage_flags
-        .intersects(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::INPUT_ATTACHMENT)
-    {
-        crate::VulkanLayout::SHADER_READ_ONLY_OPTIMAL
-    } else {
-        crate::VulkanLayout::GENERAL
-    }
-}
-
 pub trait VulkanTextureLike {
     /// `vk::Image` handle, or `None` for placeholder textures.
     fn image(&self) -> Option<vk::Image>;

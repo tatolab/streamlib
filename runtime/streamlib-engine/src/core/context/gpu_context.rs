@@ -1381,9 +1381,7 @@ impl GpuContext {
                         .and_then(|store| store.lookup_buffer(surface_id).ok())
                 });
             if let Some(buffer) = buffer {
-                let (texture, final_texture_layout) =
-                    self.refresh_pixel_buffer_texture(surface_id, &buffer, width, height)?;
-                return Ok(TextureRegistration::new(texture, final_texture_layout));
+                return self.refresh_pixel_buffer_texture(surface_id, &buffer, width, height);
             }
         }
 
@@ -1435,7 +1433,8 @@ impl GpuContext {
     /// process producers that registered a buffer (not a texture). The texture
     /// is created on first call and reused for subsequent calls under the same
     /// `surface_id`; contents are re-uploaded every time so rotating-pool
-    /// producers see fresh frames.
+    /// producers see fresh frames. The returned registration declares the
+    /// terminal layout the upload reports leaving the texture in.
     #[cfg(target_os = "linux")]
     fn refresh_pixel_buffer_texture(
         &self,
@@ -1443,7 +1442,7 @@ impl GpuContext {
         pixel_buffer: &crate::core::rhi::PixelBuffer,
         width: u32,
         height: u32,
-    ) -> Result<(Texture, VulkanLayout)> {
+    ) -> Result<TextureRegistration> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
         // Refused before touching the cache: a zero extent cannot describe a
@@ -1500,7 +1499,10 @@ impl GpuContext {
                 height,
             )
         }?;
-        Ok((texture, upload.final_texture_layout))
+        Ok(TextureRegistration::new(
+            texture,
+            upload.final_texture_layout,
+        ))
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it in the texture cache.
@@ -5695,13 +5697,8 @@ mod tests {
     /// The upload's terminal barrier — and the layout it publishes to the
     /// registration — follow the destination's create-time usage.
     /// `SHADER_READ_ONLY_OPTIMAL` requires `SAMPLED` or `INPUT_ATTACHMENT`
-    /// (VUID-VkImageMemoryBarrier2-oldLayout-01211), so the storage-only
-    /// output an escalate ray-tracing dispatch is seeded with, and the
-    /// colour-attachment target a scissored draw is seeded with, must end
-    /// in `GENERAL` instead (#1916). Publishing the layout the image is
-    /// actually in is the load-bearing half: the next consumer barriers
-    /// *out of* whatever the record claims, so an untruthful record
-    /// repeats the violation one submit later.
+    /// (VUID-VkImageMemoryBarrier2-oldLayout-01211), so a storage-only or
+    /// colour-attachment-only destination ends in `GENERAL` instead.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
@@ -5777,13 +5774,12 @@ mod tests {
         }
     }
 
-    /// The rig half of the same contract: seeding a destination whose usage
-    /// cannot hold `SHADER_READ_ONLY_OPTIMAL` must raise no validation
-    /// finding at the upload, and none at a consumer's barrier out of the
-    /// layout that upload published. The `GENERAL` transition below is that
-    /// consumer — it is the barrier the escalate ray-tracing dispatch takes
-    /// to bind its output as a storage descriptor, and the one that
-    /// contributed the `oldLayout` arm of the ten hits (#1916).
+    /// Seeding a destination whose usage cannot hold
+    /// `SHADER_READ_ONLY_OPTIMAL` must raise no validation finding at the
+    /// upload, and none at a consumer's barrier out of the layout that
+    /// upload published. The `GENERAL` transition below is that consumer —
+    /// the barrier an escalate ray-tracing dispatch takes to bind its
+    /// output as a storage descriptor.
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),

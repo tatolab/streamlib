@@ -23,7 +23,6 @@ use crate::core::Error;
 use crate::core::Result;
 #[cfg(target_os = "linux")]
 use crate::vulkan::rhi::HostVulkanUploadResources;
-#[cfg(target_os = "linux")]
 
 /// Maximum inline `surface_id` length in bytes — fits any UUID
 /// representation (canonical 36-byte form plus generous headroom for
