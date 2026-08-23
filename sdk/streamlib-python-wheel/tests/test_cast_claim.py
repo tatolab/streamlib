@@ -360,10 +360,11 @@ def test_the_gpu_write_door_refuses_a_frame_its_producer_still_owns(
     start_app_under_test,
 ):
     """A camera frame publishes a registered texture beside its pooled
-    allocation, so an in-place edit would land in one backing and not the
-    other. The engine refuses the write-back for that shape, and the door's
-    whole job here is to let the refusal through by name instead of swallowing
-    it — the frame the producer sent is still the frame afterwards.
+    allocation, and the engine reserves the write-back protocol for a surface
+    whose only backing is its own pooled allocation — such a frame is one its
+    producer still owns. It refuses, and the door's whole job here is to let
+    that refusal through by name instead of swallowing it; the frame the
+    producer sent is still the frame afterwards.
 
     This is an engine rule the wheel rides, not one this door invents: it is
     also why the edit tests above drive the native test pattern.
