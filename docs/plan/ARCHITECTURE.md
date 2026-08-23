@@ -365,12 +365,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — V4L2 is the only capture backend (platform floor: Linux + NVIDIA).
   Apple capture (AVFoundation) is post-MVP and undesigned; only the TCC permission
   shims exist. [media-io-layering]
-- **DECIDED** — Windowing: the built-in display owns window creation and the event
-  pump; the raw-window-handle seam remains the internal boundary — the engine mints
+- **DECIDED** — Windowing: the engine owns the process's one event pump and mints
+  windows on request; a window-owning processor registers with it and keeps every
+  window policy decision — title, extent, what a resize means, when to redraw, what
+  closing does. winit permits one event loop per process, so the loop is owned once,
+  above every processor that wants a window, and N window-owning processors coexist
+  in one process. Each window's owner renders on its own thread, never the pump's, so
+  windows pace independently and no window's present stalls another's. The
+  raw-window-handle seam remains the internal boundary — the engine mints
   the present target from the raw handle and owns every swapchain and acquire detail,
   plus the platform main-thread event loop where the OS demands it (in the importable
   arrangement the process main thread belongs to the user's script; `rt.run()` blocks
-  with the GIL released while the engine pumps). [importable-python-library]
+  with the GIL released while the engine pumps). A processor that cannot get a window
+  drains and discards, so upstream still sees a live consumer.
+  [importable-python-library; shared-window-event-pump]
+  <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
 - **DECIDED** — Camera → GPU transport: zero-copy DMA-BUF import when the device
   exports it, transparent CPU-upload fallback otherwise, selected automatically —
   no configuration dial. [media-io-layering]
