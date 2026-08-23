@@ -1490,52 +1490,14 @@ impl SurfaceStoreInner {
                 "exporting_device_uuid": exporting_device_uuid,
             })
         } else {
-            // Carry the DRM format modifier and per-plane row pitch so
-            // the consumer-side EGL or Vulkan import can pass them via
-            // EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT and
-            // EGL_DMA_BUF_PLANE{N}_PITCH_EXT (or
-            // VkImageDrmFormatModifierExplicitCreateInfoEXT). The tiling
-            // rides along because a zero modifier is `DRM_FORMAT_MOD_LINEAR`
-            // under DRM_FORMAT_MODIFIER_EXT tiling and "no modifier at all"
-            // otherwise — the value alone cannot say which. Render-target
-            // consumers must refuse a LINEAR surface because LINEAR
-            // DMA-BUFs are sampler-only on NVIDIA (see
-            // docs/learnings/nvidia-egl-dmabuf-render-target.md).
-            let drm_format_modifier = texture.vulkan_inner().chosen_drm_format_modifier();
-            let vk_image_tiling = texture.vulkan_inner().vk_image_tiling().as_raw();
-            let plane_layout = texture
-                .vulkan_inner()
-                .dma_buf_plane_layout()
-                .unwrap_or_else(|_| vec![(0, 0)]);
-            let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
-            let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
-
-            serde_json::json!({
-                "op": "register",
-                "surface_id": surface_id,
-                "runtime_id": self.runtime_id,
-                "width": texture.width(),
-                "height": texture.height(),
-                "format": texture.format().wire_name(),
-                "resource_type": "texture",
-                "plane_offsets": plane_offsets,
-                "plane_strides": plane_strides,
-                "drm_format_modifier": drm_format_modifier,
-                "vk_image_tiling": vk_image_tiling,
-                // The host allocation's byte size, which a consumer-side
-                // `import_render_target_dma_buf` must pass to
-                // `vkAllocateMemory` — deriving it from extent × stride
-                // under-sizes tiled allocations and fails the bind.
-                "vk_image_allocation_size": texture.vulkan_inner().vma_allocation_size() as u64,
-                "has_produce_done_fd": produce_done_fd.is_some(),
-                "has_consume_done_fd": consume_done_fd.is_some(),
-                // The producer's declared `VkImageLayout`: the
-                // layout the texture lives in immediately after
-                // registration, fed to host consumers as the source
-                // layout of their first QFOT acquire barrier. Encoded
-                // as i32 per the Vulkan spec.
-                "current_image_layout": current_image_layout.as_vk().as_raw(),
-            })
+            dma_buf_texture_registration_payload(
+                texture.vulkan_inner(),
+                surface_id,
+                &self.runtime_id,
+                produce_done_fd.is_some(),
+                consume_done_fd.is_some(),
+                current_image_layout,
+            )
         };
 
         let mut wire_fds_in_published_order: Vec<OwnedFd> = vec![owned_memory_fd];
@@ -2069,6 +2031,60 @@ pub struct SurfaceStore {
 unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
+/// The register-op payload a DMA-BUF-backed texture publishes.
+///
+/// Carries the DRM format modifier and per-plane row pitch so the
+/// consumer-side EGL or Vulkan import can pass them via
+/// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT` and
+/// `EGL_DMA_BUF_PLANE{N}_PITCH_EXT` (or
+/// `VkImageDrmFormatModifierExplicitCreateInfoEXT`). The tiling rides along
+/// because a zero modifier is `DRM_FORMAT_MOD_LINEAR` under
+/// `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at all" otherwise — the
+/// value alone cannot say which. Render-target consumers must refuse a LINEAR
+/// surface because LINEAR DMA-BUFs are sampler-only on NVIDIA (see
+/// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+#[cfg(target_os = "linux")]
+fn dma_buf_texture_registration_payload(
+    texture: &crate::vulkan::rhi::HostVulkanTexture,
+    surface_id: &str,
+    runtime_id: &str,
+    has_produce_done_fd: bool,
+    has_consume_done_fd: bool,
+    current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+) -> serde_json::Value {
+    let plane_layout = texture
+        .dma_buf_plane_layout()
+        .unwrap_or_else(|_| vec![(0, 0)]);
+    let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
+    let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
+
+    serde_json::json!({
+        "op": "register",
+        "surface_id": surface_id,
+        "runtime_id": runtime_id,
+        "width": texture.width(),
+        "height": texture.height(),
+        "format": texture.format().wire_name(),
+        "resource_type": "texture",
+        "plane_offsets": plane_offsets,
+        "plane_strides": plane_strides,
+        "drm_format_modifier": texture.chosen_drm_format_modifier(),
+        "vk_image_tiling": texture.vk_image_tiling().as_raw(),
+        // The host allocation's byte size, which a consumer-side
+        // `import_render_target_dma_buf` must pass to `vkAllocateMemory` —
+        // deriving it from extent × stride under-sizes tiled allocations and
+        // fails the bind.
+        "vk_image_allocation_size": texture.vma_allocation_size() as u64,
+        "has_produce_done_fd": has_produce_done_fd,
+        "has_consume_done_fd": has_consume_done_fd,
+        // The producer's declared `VkImageLayout`: the layout the texture
+        // lives in immediately after registration, fed to host consumers as
+        // the source layout of their first QFOT acquire barrier. Encoded as
+        // i32 per the Vulkan spec.
+        "current_image_layout": current_image_layout.as_vk().as_raw(),
+    })
+}
+
 impl SurfaceStore {
     /// Create a new SurfaceStore handle (not yet connected). The
     /// underlying [`SurfaceStoreInner`] is allocated as an
@@ -2519,6 +2535,76 @@ mod plane_fd_ownership_tests {
         assert!(
             second_plane.was_closed(),
             "the refusal left plane 1 open — no owner remains to close it"
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod dma_buf_registration_payload_tests {
+    use super::*;
+    use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
+
+    /// The wire half of #1915: a surface whose driver-chosen modifier is
+    /// `DRM_FORMAT_MOD_LINEAR` publishes a zero modifier, which reads exactly
+    /// like the zero published by an image that never went through
+    /// `VK_EXT_image_drm_format_modifier`. Only the tiling beside it tells a
+    /// consumer which one it is holding, so the payload must carry the
+    /// texture's recorded tiling rather than assume one.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_linear_modifier_surface_publishes_the_tiling_that_reads_its_modifier() {
+        const DRM_FORMAT_MOD_LINEAR: u64 = 0;
+        const VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT: i64 = 1_000_158_000;
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        if device.dma_buf_image_pool_tiled().is_none() {
+            println!("Skipping — tiled DMA-BUF pool not created");
+            return;
+        }
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
+        );
+        let texture = match HostVulkanTexture::new_render_target_dma_buf(
+            &device,
+            &desc,
+            &[DRM_FORMAT_MOD_LINEAR],
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("Skipping — allocation against DRM_FORMAT_MOD_LINEAR refused: {e}");
+                return;
+            }
+        };
+
+        let payload = dma_buf_texture_registration_payload(
+            &texture,
+            "surface-under-test",
+            "runtime-under-test",
+            false,
+            false,
+            streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+        );
+
+        assert_eq!(
+            payload.get("drm_format_modifier").and_then(|v| v.as_u64()),
+            Some(DRM_FORMAT_MOD_LINEAR),
+            "the driver chose LINEAR, whose modifier value is zero"
+        );
+        assert_eq!(
+            payload.get("vk_image_tiling").and_then(|v| v.as_i64()),
+            Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
+            "without this, the zero modifier above is indistinguishable on the \
+             wire from an image that never carried a modifier at all"
         );
     }
 }
