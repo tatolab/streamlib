@@ -1288,10 +1288,10 @@ impl GpuContext {
     /// declared layout default to `UNDEFINED` (back-compat —
     /// content-discard permitted on the consumer's first transition).
     ///
-    /// Path 3 (cross-process pixel buffer fallback) leaves the host-
-    /// owned texture in `SHADER_READ_ONLY_OPTIMAL` after the upload
-    /// pipeline runs (`upload_buffer_to_image` ends in that layout —
-    /// see `vulkan_device.rs`); the registration declares it.
+    /// Path 3 (cross-process pixel buffer fallback) declares whatever
+    /// terminal layout the upload reports leaving the host-owned
+    /// texture in — `SHADER_READ_ONLY_OPTIMAL` for the sampled-capable
+    /// texture that path allocates.
     pub fn resolve_texture_registration_by_surface_id(
         &self,
         surface_id: &str,
@@ -1381,14 +1381,9 @@ impl GpuContext {
                         .and_then(|store| store.lookup_buffer(surface_id).ok())
                 });
             if let Some(buffer) = buffer {
-                let texture =
+                let (texture, final_texture_layout) =
                     self.refresh_pixel_buffer_texture(surface_id, &buffer, width, height)?;
-                // upload_buffer_to_image leaves the texture in
-                // SHADER_READ_ONLY_OPTIMAL (see vulkan_device.rs:1851).
-                return Ok(TextureRegistration::new(
-                    texture,
-                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-                ));
+                return Ok(TextureRegistration::new(texture, final_texture_layout));
             }
         }
 
@@ -1448,7 +1443,7 @@ impl GpuContext {
         pixel_buffer: &crate::core::rhi::PixelBuffer,
         width: u32,
         height: u32,
-    ) -> Result<Texture> {
+    ) -> Result<(Texture, VulkanLayout)> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
         // Refused before touching the cache: a zero extent cannot describe a
@@ -1497,19 +1492,15 @@ impl GpuContext {
             }
         };
 
-        unsafe {
-            let image = texture
-                .vulkan_inner()
-                .image()
-                .ok_or_else(|| Error::GpuError("Texture has no VkImage".into()))?;
+        let upload = unsafe {
             self.device.inner.upload_buffer_to_image(
                 pixel_buffer.buffer_ref().inner.buffer(),
-                image,
+                texture.vulkan_inner(),
                 width,
                 height,
-            )?;
-        }
-        Ok(texture)
+            )
+        }?;
+        Ok((texture, upload.final_texture_layout))
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it in the texture cache.
@@ -1568,26 +1559,16 @@ impl GpuContext {
         // (docs/learnings/nvidia-dma-buf-after-swapchain.md).
         let texture = self.device.create_texture_local(&desc)?;
 
-        unsafe {
-            let image = texture
-                .vulkan_inner()
-                .image()
-                .ok_or_else(|| crate::core::Error::GpuError("Texture has no VkImage".into()))?;
+        let upload = unsafe {
             self.device.inner.upload_buffer_to_image(
                 pixel_buffer.buffer_ref().inner.buffer(),
-                image,
+                texture.vulkan_inner(),
                 width,
                 height,
-            )?;
-        }
+            )
+        }?;
 
-        // upload_buffer_to_image leaves the image in SHADER_READ_ONLY_OPTIMAL
-        // (see vulkan_device.rs:1851).
-        self.register_texture_with_layout(
-            surface_id,
-            texture,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+        self.register_texture_with_layout(surface_id, texture, upload.final_texture_layout);
         Ok(())
     }
 
@@ -1600,16 +1581,17 @@ impl GpuContext {
     /// allocation, no descriptor / pipeline construction, just a
     /// `vkCmdCopyBufferToImage` queue submit). The shared command queue
     /// serializes the submit; layout transitions run UNDEFINED →
-    /// TRANSFER_DST → SHADER_READ_ONLY_OPTIMAL via the existing
-    /// `upload_buffer_to_image` path (content discard on the
-    /// UNDEFINED transition is intended — the caller is about to
+    /// TRANSFER_DST → the destination's usage-legal terminal layout via
+    /// the existing `upload_buffer_to_image` path (content discard on
+    /// the UNDEFINED transition is intended — the caller is about to
     /// overwrite the slot's contents anyway).
     ///
     /// When `surface_id` resolves to an entry in the texture cache
     /// (e.g. a ring slot pre-registered via
     /// [`crate::core::context::GpuContextFullAccess::create_texture_ring`])
-    /// the registration's `current_layout` is refreshed to
-    /// `SHADER_READ_ONLY_OPTIMAL` to match the post-upload state.
+    /// the registration's `current_layout` is refreshed to that same
+    /// terminal layout, so a consumer barriers out of the layout the
+    /// image is actually in.
     #[cfg(target_os = "linux")]
     pub fn copy_pixel_buffer_to_texture(
         &self,
@@ -1619,18 +1601,14 @@ impl GpuContext {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        unsafe {
-            let image = texture
-                .vulkan_inner()
-                .image()
-                .ok_or_else(|| Error::GpuError("Texture has no VkImage".into()))?;
+        let upload = unsafe {
             self.device.inner.upload_buffer_to_image(
                 pixel_buffer.buffer_ref().inner.buffer(),
-                image,
+                texture.vulkan_inner(),
                 width,
                 height,
-            )?;
-        }
+            )
+        }?;
         // Refresh the registration's layout (no-op for unregistered surface_ids).
         if let Some(reg) = self
             .texture_cache
@@ -1638,7 +1616,7 @@ impl GpuContext {
             .unwrap()
             .get(pool_slot_key_of_surface_id(surface_id))
         {
-            reg.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+            reg.update_layout(upload.final_texture_layout);
         }
         Ok(())
     }

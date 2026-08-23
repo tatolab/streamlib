@@ -25,6 +25,9 @@ mod vulkan_upload_resources;
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
+#[cfg(target_os = "linux")]
+#[allow(unused_imports)]
+pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{
     HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
 };

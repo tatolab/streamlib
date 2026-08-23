@@ -927,6 +927,12 @@ impl HostVulkanTexture {
         self.vk_image_meta.vk_image_tiling
     }
 
+    /// Usage this image was created with — what decides which layouts it
+    /// can legally hold and which descriptors it can be bound to.
+    pub fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags {
+        self.vk_image_meta.vk_image_usage_flags
+    }
+
     /// Whether the image was created with TRANSFER_SRC usage — the
     /// capability a copy that reads it (`vkCmdCopyImageToBuffer`)
     /// requires; recording one without it is a Vulkan spec violation
@@ -1712,7 +1718,7 @@ impl super::VulkanTextureLike for HostVulkanTexture {
         HostVulkanTexture::vk_image_tiling(self)
     }
     fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags {
-        self.vk_image_meta.vk_image_usage_flags
+        HostVulkanTexture::vk_image_usage_flags(self)
     }
     fn vk_memory(&self) -> vk::DeviceMemory {
         self.vk_memory_binding().0
