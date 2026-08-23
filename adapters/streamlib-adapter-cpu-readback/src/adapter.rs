@@ -395,7 +395,11 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     /// still running — the defect this serialization exists to remove.
     /// Holding it means at most one copy signals `produce_done` for a
     /// surface at a time, which the adapter guarantees rather than
-    /// delegating to whichever trigger is installed. See
+    /// delegating to whichever trigger is installed — on the success
+    /// path. Both error paths below return after the trigger has already
+    /// submitted, dropping the reservation with that copy outstanding;
+    /// the acquire has failed by then, and what keeps the next one
+    /// ordered behind it is the trigger's own serialization. See
     /// `docs/architecture/adapter-timeline-single-writer.md` §Thread
     /// model within the writer process.
     fn submit_copy_and_await_produce_done(

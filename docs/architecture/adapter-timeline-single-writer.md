@@ -324,7 +324,11 @@ above its target, so releasing after the submit would let the next
 caller's copy signal a higher value and satisfy this caller's wait while
 this caller's own copy is still running. Holding it means at most one
 signalling submit is outstanding per surface, which is the adapter's own
-guarantee rather than an obligation on whatever submits for it.
+guarantee rather than an obligation on whatever submits for it — for
+every acquire that succeeds. An acquire that fails after its copy was
+submitted releases the reservation with that copy outstanding, and the
+next caller's ordering behind it falls back to whatever serialization
+the submitting side has.
 
 For the same reason a trigger's reported value must be no lower than the
 reservation. A caller that waits on a value some other copy signalled
