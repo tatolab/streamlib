@@ -22,6 +22,7 @@ import gc
 import os
 import weakref
 from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 
@@ -329,6 +330,29 @@ def test_a_declared_field_built_by_a_factory_gets_its_own_value():
     first.tags.append("cat")
 
     assert second.tags == []
+
+
+def test_the_generated_constructor_spelling_refuses_an_undeclared_bag_key(offered):
+    """Only the inherited constructor is open-map-safe.
+
+    A `@dataclass(frozen=True)` enforces the signature the decorator generated,
+    so a producer adding a key breaks *that* spelling at the read. Locked here
+    because the composable serves both spellings and only one survives an open
+    map — a reader choosing between them has to be able to see the difference.
+    """
+    offered(GpuLimitedAccessStandIn())
+
+    assert DepthFrame(**FRAME_BAG, a_key_a_future_producer_adds="ignored")
+
+    # Splatted rather than written as keywords, because that is what the read
+    # does — `read(port, into=T)` calls `T(**bag)` with whatever the wire
+    # carried, which no type checker gets to see.
+    overlay_bag_from_a_newer_producer: "dict[str, Any]" = {
+        "surface_id": "surface-7",
+        "a_key_a_future_producer_adds": "ignored",
+    }
+    with pytest.raises(TypeError, match="a_key_a_future_producer_adds"):
+        DetectionOverlay(**overlay_bag_from_a_newer_producer)
 
 
 def test_a_missing_declared_field_is_refused_naming_the_key():

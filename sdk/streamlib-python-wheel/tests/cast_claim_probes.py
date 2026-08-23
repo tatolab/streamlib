@@ -262,11 +262,11 @@ class UntypedReadHoldsNothingProbe(_LaggedHolderProbe):
 
 
 @dataclass(frozen=True, init=False)
-class UserAuthoredCameraFrame(ClaimedSurfacePixelAccess):
+class UserAuthoredVideoFrameCast(ClaimedSurfacePixelAccess):
     """A cast type the wheel never heard of, declared the way the change file
     spells it: name the fields, inherit the constructor, get the protocol.
 
-    The camera's bag carries keys this type does not declare; they are dropped,
+    A source's bag carries keys this type does not declare; they are dropped,
     which is the open-map rule every cast type rides.
     """
 
@@ -276,13 +276,14 @@ class UserAuthoredCameraFrame(ClaimedSurfacePixelAccess):
     timestamp_ns: int
 
 
-class _BareTensorProtocolProbe:
+class _BareProtocolProbe:
     """Reach a delivered frame's pixels through the object itself.
 
-    No resolve, no lock, no context manager — `torch.from_dlpack(frame)` on the
-    thing the read handed back. That the same pixels are also reachable the long
-    way round is what proves the bare view is *this frame* rather than merely a
-    valid tensor.
+    No resolve, no lock, no context manager — the protocol methods on the thing
+    the read handed back. That the same pixels are also reachable the long way
+    round is what proves the bare view is *this frame* rather than merely a
+    valid tensor. Subclasses differ in how the bag is read and which consumer
+    takes the capsule.
     """
 
     # `latest`: an unclaimed bag's id is only good for pool-depth frames after
@@ -296,6 +297,9 @@ class _BareTensorProtocolProbe:
         self.reported = False
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
+        raise NotImplementedError
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         raise NotImplementedError
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -313,14 +317,56 @@ class _BareTensorProtocolProbe:
         _report(lambda: self._observe(ctx, frame))
 
     def _observe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        return {
+            "read_as": type(self).__name__,
+            "claim_taken": getattr(frame, CLAIM_FIELD, None) is not None,
+            "surface_id": frame.surface_id,
+            # The engine's own answer for which side the bare path serves,
+            # readable without any GPU consumer installed.
+            "device_the_object_advertised": list(frame.__dlpack_device__()),
+            **self._observe_the_pixels(ctx, frame),
+        }
+
+
+class _BareProtocolHostSideProbe(_BareProtocolProbe):
+    """The protocol against a real surface, with no CUDA consumer needed.
+
+    `numpy.from_dlpack(frame, device="cpu")` asks the object for the host side
+    of the very same surface, so every part of the seam is real — the resolved
+    handle, the read-only lock, the capsule — while the consumer is plain
+    numpy. What that leaves unproven is only whether a CUDA package can eat the
+    device capsule, which is what the torch probes below are for.
+    """
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        through_the_object = numpy.from_dlpack(frame, device="cpu")
+        # The same surface reached the long way round. Same export machinery,
+        # so the two are comparable pixel for pixel.
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            through_the_ceremony = numpy.from_dlpack(surface, device="cpu").copy()
+            surface.unlock()
+        return {
+            "host_view_shape": list(through_the_object.shape),
+            "host_view_dtype": str(through_the_object.dtype),
+            "host_view_shape_through_the_resolve_and_lock": list(
+                through_the_ceremony.shape
+            ),
+            "the_bare_view_is_the_same_pixels": bool(
+                (numpy.asarray(through_the_object) == through_the_ceremony).all()
+            ),
+            "pixels_are_not_all_zero": bool(through_the_ceremony.any()),
+        }
+
+
+class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
+    """The device half: a real CUDA package consuming the bare capsule."""
+
+    def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         import torch
 
         bare_view = torch.from_dlpack(frame)
         observation = {
-            "read_as": type(self).__name__,
-            "claim_taken": getattr(frame, CLAIM_FIELD, None) is not None,
-            "surface_id": frame.surface_id,
-            "device_the_object_advertised": list(frame.__dlpack_device__()),
             "tensor_device": str(bare_view.device),
             "tensor_dtype": str(bare_view.dtype),
             "tensor_shape": list(bare_view.shape),
@@ -328,9 +374,6 @@ class _BareTensorProtocolProbe:
                 bare_view.to(torch.int64).sum().item()
             ),
         }
-
-        # The same surface reached the long way round, through the same export
-        # machinery, so the two checksums are comparable pixel for pixel.
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock()
             through_the_ceremony = torch.from_dlpack(surface)
@@ -351,19 +394,41 @@ class _BareTensorProtocolProbe:
         return observation
 
 
-@processor
-class AUserAuthoredCastReachesItsPixelsBareProbe(_BareTensorProtocolProbe):
+class _ReadsAUserAuthoredCastType:
     """The no-privilege half: a type the wheel does not ship gets the protocol
     by composing the shipped piece, and nothing else."""
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
-        return ctx.inputs.read("video_from_upstream", into=UserAuthoredCameraFrame)
+        return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
 
 
-@processor
-class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareTensorProtocolProbe):
+class _ReadsTheShippedVideoFrame:
     """The parity half: `VideoFrame` is built from that same piece, so it must
     reach its pixels the same way and reach the same pixels."""
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream", into=VideoFrame)
+
+
+@processor
+class AUserAuthoredCastReachesItsPixelsBareProbe(
+    _ReadsAUserAuthoredCastType, _BareProtocolHostSideProbe
+): ...
+
+
+@processor
+class TheShippedVideoFrameReachesItsPixelsBareProbe(
+    _ReadsTheShippedVideoFrame, _BareProtocolHostSideProbe
+): ...
+
+
+@processor
+class AUserAuthoredCastReachesItsPixelsAsACudaTensorProbe(
+    _ReadsAUserAuthoredCastType, _BareProtocolDeviceSideProbe
+): ...
+
+
+@processor
+class TheShippedVideoFrameReachesItsPixelsAsACudaTensorProbe(
+    _ReadsTheShippedVideoFrame, _BareProtocolDeviceSideProbe
+): ...

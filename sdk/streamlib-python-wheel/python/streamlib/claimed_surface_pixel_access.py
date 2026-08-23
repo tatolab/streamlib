@@ -111,6 +111,15 @@ class ClaimedSurfacePixelAccess:
     The surface-naming field is declared, never guessed — it defaults to
     `surface_id` and a type that names its own passes it at class creation:
     `class DepthFrame(ClaimedSurfacePixelAccess, surface_id_field="depth_id")`.
+
+    `@dataclass(frozen=True, init=False)` is the spelling to write. Inheriting
+    this class's constructor is what makes a cast type survive an open map: the
+    wire's bag carries whatever its producer puts there, and a type that
+    refuses an undeclared key turns the day a producer adds one into the day
+    every typed read raises. A `@dataclass(frozen=True)` whose `__init__` the
+    decorator generates does claim — through `__post_init__` — but enforces its
+    own signature, so it is only safe against a bag whose keys it fully
+    controls.
     """
 
     #: Declared by the type that composed this, inherited by anything
@@ -163,16 +172,22 @@ class ClaimedSurfacePixelAccess:
         built.
         """
         _build_the_fields_the_cast_type_declared(self, bag_entries)
+        # The settled attribute, so both construction hooks claim on the same
+        # value; the bag entry is the fallback for a composer that declared no
+        # dataclass fields for this to have assigned.
+        declared_field = self._the_field_this_cast_type_names_its_surface_with
         self._take_the_claim_on(
-            bag_entries.get(self._the_field_this_cast_type_names_its_surface_with)
+            getattr(self, declared_field, bag_entries.get(declared_field))
         )
 
     def __post_init__(self) -> None:
         """The claim for a type whose `__init__` the dataclass decorator
         generated, which never routes through this class's own.
 
-        A composer overriding this owes it a `super().__post_init__()`;
-        without one the type silently claims nothing.
+        That constructor enforces its own signature, so this spelling refuses
+        bag keys the type does not declare — see the class doc. A composer
+        overriding this owes it a `super().__post_init__()`; without one the
+        type silently claims nothing.
         """
         self._take_the_claim_on(
             getattr(self, self._the_field_this_cast_type_names_its_surface_with, None)
