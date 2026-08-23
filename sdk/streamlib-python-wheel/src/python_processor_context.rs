@@ -635,8 +635,8 @@ impl PythonGpuSurfaceDeviceTensorScope {
                     "this surface cannot take a write-back — it is a pool member its \
                      producer still owns, or a texture allocated without \"copy_dst\" usage — \
                      so no write door edits it: this write-in-place scope refuses rather than \
-                     discarding your edits silently, and the CPU mapping is handed out \
-                     read-only under the same rule. Reading needs no write door: __dlpack__ \
+                     discarding your edits silently, and the cast object's cpu() hands \
+                     its array out read-only under the same rule. Reading needs no write door: __dlpack__ \
                      under lock(), or as_numpy",
                 ));
             }

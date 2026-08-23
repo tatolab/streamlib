@@ -1008,9 +1008,9 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// honest answer to a surface that is gone.
     #[cfg(target_os = "linux")]
     device_exports_by_surface: Mutex<std::collections::HashMap<String, Arc<HelperDeviceExport>>>,
-    /// The engine's write-back answer memoised per pool slot — the same
-    /// mint-time semantics the stagings themselves carry, so the two doors
-    /// cannot disagree about one frame.
+    /// The engine's write-back answer memoised per pool slot, seeded by
+    /// whichever door asks first — the device export carries the same
+    /// mint-time answer — so the two doors cannot disagree about one frame.
     #[cfg(target_os = "linux")]
     write_back_answers_by_pool_slot: Mutex<std::collections::HashMap<String, bool>>,
 }
@@ -1606,6 +1606,9 @@ impl HelperProcessGpuExchangeClient {
             writable: response_field(&response, "writable")?.extract()?,
         };
 
+        self.write_back_answers_by_pool_slot
+            .lock()
+            .insert(source_pool_slot_key.to_string(), described.writable);
         let opened = python.detach(|| -> PyResult<Arc<HelperDeviceExport>> {
             Ok(Arc::new(
                 self.check_out_and_import_device_export(&described)?,
@@ -1624,10 +1627,12 @@ impl HelperProcessGpuExchangeClient {
     /// export stagings carry: a write-back belongs to a surface whose only
     /// backing is its own pooled allocation.
     ///
-    /// Asked over the CPU-readback staging op because it is the residency
-    /// with no CUDA anywhere in it; the staging the parent mints to answer
-    /// is cached engine-side per pool slot, and the answer is memoised here
-    /// on the same key, so this costs one round trip per slot lifetime.
+    /// Answered from an already-open device export when there is one, and
+    /// otherwise over the CPU-readback staging op — the residency with no
+    /// CUDA anywhere in it; the staging the parent mints to answer is
+    /// cached engine-side per pool slot, and the answer is memoised here
+    /// on the same key, so this costs at most one round trip per slot
+    /// lifetime.
     #[cfg(target_os = "linux")]
     pub(crate) fn surface_can_take_write_back(
         &self,
@@ -1642,12 +1647,28 @@ impl HelperProcessGpuExchangeClient {
         {
             return Ok(*already_answered);
         }
-        let op = PyDict::new(python);
-        op.set_item("op", "open_cpu_readback_staging")?;
-        op.set_item("surface_id", surface_id)?;
-        let response =
-            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        let can_take_write_back: bool = response_field(&response, "writable")?.extract()?;
+        let answer_the_device_door_already_holds = self
+            .device_exports_by_surface
+            .lock()
+            .get(source_pool_slot_key)
+            .map(|already_open| already_open.writable);
+        let can_take_write_back = match answer_the_device_door_already_holds {
+            Some(answer) => answer,
+            None => {
+                let op = PyDict::new(python);
+                op.set_item("op", "open_cpu_readback_staging")?;
+                op.set_item("surface_id", surface_id)?;
+                let response =
+                    escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)
+                        .map_err(|failure| {
+                            PyRuntimeError::new_err(format!(
+                                "could not ask the engine whether surface {surface_id:?} takes \
+                                 a write-back: {failure}"
+                            ))
+                        })?;
+                response_field(&response, "writable")?.extract()?
+            }
+        };
         self.write_back_answers_by_pool_slot
             .lock()
             .insert(source_pool_slot_key.to_string(), can_take_write_back);
