@@ -52,10 +52,11 @@ Given `(width, height, format, usages, count)`, the ring:
    freshly-allocated `VkImage` per
    [`texture-registration.md`](texture-registration.md)'s Producer
    Rule 2. After the first per-frame `copy_pixel_buffer_to_texture`
-   runs on a slot, the layout updates to
-   `SHADER_READ_ONLY_OPTIMAL` (the layout
-   `upload_buffer_to_image` leaves the image in) and stays there
-   for the steady-state hot path. Downstream consumers that
+   runs on a slot, the layout updates to the terminal layout
+   `upload_buffer_to_image` reports leaving that slot's image in —
+   slot textures carry `TEXTURE_BINDING`, so that is
+   `SHADER_READ_ONLY_OPTIMAL` — and stays there for the
+   steady-state hot path. Downstream consumers that
    resolve a slot's surface_id always do so AFTER the producer
    has published it onto a `VideoFrame`, which by construction
    happens AFTER the per-frame copy — so the registration and
@@ -70,11 +71,16 @@ The per-frame hot path is the ring's `copy_pixel_buffer_to_slot`
 method: write a host-visible pixel buffer's contents into the
 slot's *already-allocated* device-local texture via
 `vkCmdCopyBufferToImage`, transitioning UNDEFINED → TRANSFER_DST →
-SHADER_READ_ONLY_OPTIMAL. The UNDEFINED source layout discards
-prior contents — exactly what a rotating ring wants (the slot's
-previous contents are about to be overwritten anyway). After the
-upload, the registration's `current_layout` is refreshed to
-SHADER_READ_ONLY_OPTIMAL to match reality.
+the destination's usage-legal terminal layout
+(`SHADER_READ_ONLY_OPTIMAL` for a sampled-capable image, `GENERAL`
+otherwise — `SHADER_READ_ONLY_OPTIMAL` requires `SAMPLED` or
+`INPUT_ATTACHMENT`, per
+VUID-VkImageMemoryBarrier2-oldLayout-01211). The UNDEFINED source
+layout discards prior contents — exactly what a rotating ring
+wants (the slot's previous contents are about to be overwritten
+anyway). The upload returns the layout it chose, and the
+registration's `current_layout` is refreshed to that same value,
+so the record can only ever say what the image is actually in.
 
 Critically, the upload command pool + command buffer + fence are
 **pre-allocated per slot** at ring construction
