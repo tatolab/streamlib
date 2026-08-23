@@ -1113,7 +1113,12 @@ mod tests {
         // recognisable filler, then goes back to the pool for reuse.
         let filler = vec![0xAAu8; 8 * 1024];
         inner.write_raw("out", &filler, 1).unwrap();
-        drop(subscriber.receive().expect("receive").expect("filler frame"));
+        drop(
+            subscriber
+                .receive()
+                .expect("receive")
+                .expect("filler frame"),
+        );
 
         let payload = b"fresh-small-payload";
         inner.write_raw("out", payload, 4242).unwrap();

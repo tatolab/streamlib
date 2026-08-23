@@ -1138,8 +1138,16 @@ mod tests {
             .expect("bounded read")
         {
             BoundedReadOutcome::Frame { data, timestamp_ns } => {
-                assert_eq!(data.len(), STAMPED, "payload must stop at the stamped length");
-                assert_eq!(data[..], body[..STAMPED], "payload must be the stamped prefix");
+                assert_eq!(
+                    data.len(),
+                    STAMPED,
+                    "payload must stop at the stamped length"
+                );
+                assert_eq!(
+                    data[..],
+                    body[..STAMPED],
+                    "payload must be the stamped prefix"
+                );
                 assert_eq!(timestamp_ns, 77);
             }
             _ => panic!("expected the over-carrying frame to deliver its stamped payload"),
