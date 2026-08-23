@@ -180,8 +180,7 @@ enum WindowEventPumpControlMessage {
 type WindowCreationReplyFromEventPump =
     Result<(Arc<Window>, Receiver<WindowEventForOwningProcessor>)>;
 
-fn start_window_event_pump_thread()
--> std::result::Result<ProcessWideWindowEventPump, String> {
+fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEventPump, String> {
     let (pump_startup_outcome_sender, pump_startup_outcome) = sync_channel(1);
 
     std::thread::Builder::new()
@@ -298,11 +297,7 @@ impl ApplicationHandler<WindowEventPumpControlMessage> for WindowEventPumpApplic
         }
     }
 
-    fn user_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        message: WindowEventPumpControlMessage,
-    ) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, message: WindowEventPumpControlMessage) {
         match message {
             WindowEventPumpControlMessage::CreateWindowForOwningProcessor {
                 request,
@@ -328,9 +323,10 @@ impl ApplicationHandler<WindowEventPumpControlMessage> for WindowEventPumpApplic
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => self
-                .registered_windows
-                .deliver(window_id, WindowEventForOwningProcessor::CloseRequestedByUser),
+            WindowEvent::CloseRequested => self.registered_windows.deliver(
+                window_id,
+                WindowEventForOwningProcessor::CloseRequestedByUser,
+            ),
             WindowEvent::Resized(size) => {
                 if size.width == 0 || size.height == 0 {
                     return;
@@ -397,7 +393,11 @@ fn window_attributes_for_request(
 mod tests {
     use super::*;
 
-    fn request_for(title: &str, width: u32, height: u32) -> WindowRegistrationRequestFromOwningProcessor {
+    fn request_for(
+        title: &str,
+        width: u32,
+        height: u32,
+    ) -> WindowRegistrationRequestFromOwningProcessor {
         WindowRegistrationRequestFromOwningProcessor {
             window_title: title.to_string(),
             initial_width_in_physical_pixels: width,

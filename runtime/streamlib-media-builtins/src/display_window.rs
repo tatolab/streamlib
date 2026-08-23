@@ -17,8 +17,8 @@
 //! Rendering runs on this processor's own thread rather than the pump's, so
 //! each window paces on its own vsync and no display can stall another.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
