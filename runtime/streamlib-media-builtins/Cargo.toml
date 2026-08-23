@@ -24,6 +24,11 @@ v4l = "0.14"
 uuid = { version = "1.11", features = ["v4"] }
 libc = { workspace = true }
 
+[features]
+# Forwarded so a display-tier test in this crate gates the same way the engine's
+# do: `cargo test -p streamlib-media-builtins --features hardware-tests`.
+hardware-tests = ["streamlib/hardware-tests"]
+
 [dev-dependencies]
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
