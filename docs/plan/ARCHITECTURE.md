@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library, cast-object-tensor-protocol)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -371,7 +371,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library)
+## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library, processor-owned-windows)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
