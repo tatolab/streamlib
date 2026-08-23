@@ -21,7 +21,12 @@
 //!   1 KiB / 8 KiB / 64 KiB payloads. Tells the reader whether the
 //!   hop's per-call cost is dominated by the fixed overhead (call
 //!   indirection + msgpack envelope) or scales with payload size
-//!   (the inner's `Vec::with_capacity` + slice copy).
+//!   (the single payload copy into the loan).
+//! - `channel_round_trip` — `write_raw` through `OutputWriterInner`
+//!   then `read_raw` through `InputMailboxesInner`, at 256 B and
+//!   64 KiB payloads: the engine's full data-plane hop, so the read
+//!   side's per-frame cost (the shm-to-mailbox copy + the in-place
+//!   header strip) is a number, not a claim (#1822).
 //! - `fanout_1_to_n` — one channel publisher feeding N ∈ {1,2,4,8}
 //!   subscribers. `write_raw` issues a SINGLE zero-copy loan + send
 //!   that reaches every subscriber (the transport inversion, #1419);
@@ -45,8 +50,8 @@ use iceoryx2::prelude::*;
 
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, OutputWriter, OutputWriterInner,
-    TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+    ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriter, OutputWriterInner,
+    ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 
 /// Per-bench-run unique service-name suffix so parallel benches
@@ -307,11 +312,95 @@ fn bench_write_raw_fanout(c: &mut Criterion) {
     group.finish();
 }
 
+/// Round-trip fixture: an `OutputWriterInner` publishing into the channel an
+/// `InputMailboxesInner` subscribes, mirroring the engine's full data-plane
+/// hop. The destination is wired as a self-driven sink (no notifier) — the
+/// bench loop reads every write, so a wakeup fd would only add noise.
+struct RoundTripFixture {
+    output_writer_inner: Arc<OutputWriterInner>,
+    input_mailboxes_inner: Arc<InputMailboxesInner>,
+    _node: Node<iceoryx2::service::ipc::Service>,
+}
+
+fn build_round_trip(tag: &str) -> RoundTripFixture {
+    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let pubsub_name = unique_suffix(&format!("{tag}/pubsub"));
+
+    let pubsub = node
+        .service_builder(&ServiceName::new(&pubsub_name).unwrap())
+        .publish_subscribe::<[u8]>()
+        .max_publishers(2)
+        .subscriber_max_buffer_size(8192)
+        .open_or_create()
+        .unwrap();
+    let publisher = pubsub
+        .publisher_builder()
+        .initial_max_slice_len(128 * 1024)
+        .create()
+        .unwrap();
+    let subscriber = pubsub.subscriber_builder().create().unwrap();
+
+    let output_writer_inner = Arc::new(OutputWriterInner::new());
+    output_writer_inner.set_channel_publisher(
+        "out",
+        publisher,
+        ChannelEgressConfig {
+            service_name: "bench/round_trip/out".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 4096,
+            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        },
+    );
+    output_writer_inner.add_channel_link("out", "L-bench-round-trip", None);
+
+    let input_mailboxes_inner = Arc::new(InputMailboxesInner::new());
+    input_mailboxes_inner.add_port("in", 8, ReadMode::ReadNextInOrder);
+    input_mailboxes_inner.add_channel_subscriber("in", "L-bench-round-trip", subscriber);
+
+    RoundTripFixture {
+        output_writer_inner,
+        input_mailboxes_inner,
+        _node: node,
+    }
+}
+
+/// The full data-plane hop: publish through `OutputWriterInner::write_raw`,
+/// receive + read through `InputMailboxesInner::read_raw`. 256 B mirrors a
+/// control message, 64 KiB a camera-class frame — the size where the read
+/// side's per-frame copy cost dominates.
+fn bench_channel_round_trip(c: &mut Criterion) {
+    let mut group = c.benchmark_group("output_writer_write_raw/channel_round_trip");
+    for size in [256usize, 64 * 1024] {
+        let fx = build_round_trip(&format!("round_trip/{size}"));
+        let payload = vec![0u8; size];
+        group.throughput(criterion::Throughput::Bytes(size as u64));
+        group.bench_with_input(
+            criterion::BenchmarkId::from_parameter(size),
+            &payload,
+            |b, p| {
+                b.iter(|| {
+                    fx.output_writer_inner
+                        .write_raw(black_box("out"), black_box(p), black_box(0))
+                        .unwrap();
+                    let (data, _timestamp_ns) = fx
+                        .input_mailboxes_inner
+                        .read_raw(black_box("in"))
+                        .unwrap()
+                        .expect("every write is read back in-line");
+                    black_box(data);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_baseline_direct_inner,
     bench_vtable_dispatch,
     bench_payload_size_sweep,
     bench_write_raw_fanout,
+    bench_channel_round_trip,
 );
 criterion_main!(benches);
