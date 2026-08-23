@@ -4923,7 +4923,6 @@ name = "streamlib-media-builtins"
 version = "0.17.1"
 dependencies = [
  "libc",
- "raw-window-handle",
  "rmp-serde",
  "rmpv",
  "serde",
@@ -4932,7 +4931,6 @@ dependencies = [
  "tracing",
  "uuid",
  "v4l",
- "winit",
 ]
 
 [[package]]

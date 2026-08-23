@@ -79,9 +79,10 @@ class DisplayWindow:
     it is never instantiated and its per-frame path never enters the
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`.
 
-    One window per process today: the display owns the process-wide event
-    loop, so a second DisplayWindow logs an error and drains its input
-    without showing anything.
+    Add as many as the graph needs: each instance registers its own window
+    with the engine's shared event pump and renders on its own thread. An
+    instance that cannot get a window drains its input without showing
+    anything, so upstream still sees a live consumer.
     """
 
 @final

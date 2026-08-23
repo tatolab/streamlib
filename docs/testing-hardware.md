@@ -6,7 +6,7 @@ enforced by a Cargo feature so the split can't drift:
 | Tier | Triggered by | What it covers | Parallel-safe? |
 |---|---|---|---|
 | **1 — Unit** | `cargo test` (default) | Pure logic, parsers, state machines, serialization round-trips, mock-backed integration. | Yes — by construction. |
-| **2 — Hardware integration** | `cargo test --features streamlib/hardware-tests` | Tests that construct a real `HostVulkanDevice`, allocate GPU memory, exercise the swapchain, etc. | No — must run with `--test-threads=1`. |
+| **2 — Hardware integration** | `cargo test --features streamlib/hardware-tests,streamlib-media-builtins/hardware-tests` | Tests that construct a real `HostVulkanDevice`, allocate GPU memory, exercise the swapchain, etc. | No — must run with `--test-threads=1`. |
 
 Tier 1 is parallel-safe by construction — no test inside the tier-1 set
 is allowed to require a GPU device or any other exclusive system
@@ -30,10 +30,19 @@ RHI work, encoder/decoder, display, anything in `vulkan/rhi/`. The
 canonical command:
 
 ```bash
-cargo test --features streamlib/hardware-tests --workspace \
-    --no-fail-fast \
+cargo test \
+    --features streamlib/hardware-tests,streamlib-media-builtins/hardware-tests \
+    --workspace --no-fail-fast \
     -- --test-threads=1
 ```
+
+Both features are named because a `pkg/feature` flag enables that package's
+feature and nothing else: `streamlib/hardware-tests` forwards to
+`streamlib-engine`, but it does **not** reach
+`streamlib-media-builtins/hardware-tests`. A crate left off this line does not
+fail the sweep — its tier-2 tests report as `ignored`, which reads exactly like
+having none. Any crate that declares its own `hardware-tests` feature belongs
+here on the same day it declares it.
 
 The `--test-threads=1` is mandatory: tier-2 tests serialize on the GPU
 device. Running them in parallel deadlocks (most often inside the
@@ -67,8 +76,8 @@ therefore the whole-sweep gate:
 
 ```bash
 STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1 cargo test \
-    --features streamlib/hardware-tests --workspace \
-    --no-fail-fast \
+    --features streamlib/hardware-tests,streamlib-media-builtins/hardware-tests \
+    --workspace --no-fail-fast \
     -- --test-threads=1
 ```
 
@@ -159,7 +168,11 @@ constructing a device) stay in tier 1.
 2. Tag it with `#[cfg_attr(not(feature = "hardware-tests"), ignore =
    "hardware integration — set --features streamlib/hardware-tests +
    run with --test-threads=1. See docs/testing-hardware.md")]`
-   immediately above `#[test]`.
+   immediately above `#[test]`. Name the feature flag that actually reaches
+   the crate the test lives in: `streamlib/hardware-tests` forwards to
+   `streamlib-engine` only, so a test in any other crate names its own
+   (`streamlib-media-builtins/hardware-tests`) — and that crate joins the
+   sweep line above in the same PR.
 3. Use a shared `try_vulkan_device()` helper (or equivalent) that
    gracefully skips when no GPU is available — keeps the test
    well-behaved when the feature is on but the runner has no GPU.

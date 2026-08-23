@@ -30,9 +30,13 @@ work.
 Capture is V4L2-only. Apple capture (AVFoundation) stays undesigned until a milestone
 traces to it; only the TCC permission shims exist.
 
-Windowing splits at the raw window handle: ~~the package~~ the built-in display
+Windowing splits at the raw window handle: ~~the package~~ ~~the built-in display
 processor (since 2026-08-02, per `importable-python-library.md`) creates and owns the
-window; the engine mints the present target from the raw handle and keeps every
+window~~ — Superseded 2026-08-23 by `shared-window-event-pump.md` (#1734): winit permits
+one event loop per process, so a second window-owning processor could never build one.
+The engine owns the process's one event pump and mints windows on request; the
+registering processor keeps every window policy decision. The engine mints the present
+target from the raw handle and keeps every
 swapchain and acquire detail host-side, plus the platform main-thread event loop where
 the OS demands it. Camera-to-GPU transport is zero-copy DMA-BUF import when the device
 exports it, with a transparent CPU-upload fallback chosen automatically — no
@@ -64,7 +68,21 @@ surface is the clock primitive.
   `importable-python-library.md`: the built-in display block (engine tree, wheel) now
   owns window creation and the event pump, but the raw-window-handle seam between
   windowing code and the present target stands; the engine *core* still never owns
-  window policy.
+  window policy. — Narrowed again 2026-08-23 by `shared-window-event-pump.md` (#1734):
+  the *event pump* moves to the engine, because winit's one-loop-per-process guard
+  makes per-processor ownership work only for a graph with exactly one window, and a
+  pump below the SDK is unreachable from third-party processors, from the escalate path
+  that would serve a Python window request, and from `rt.run()` where an Apple
+  main-thread pump must live. Be exact about the price, because part of
+  this alternative's objection is now conceded: winit event *reception* and *routing*
+  do move into the engine core — the `ApplicationHandler` and the `WindowEvent` match
+  live there, and every window's events arrive at the engine first. What stays out is
+  what the rejection was really protecting: window *policy* and input *semantics*. The
+  pump forwards resize and close to the window's owner and discards the rest without
+  interpreting any of it; title, extent, resize meaning, redraw cadence and close
+  behaviour are all decided by the registering processor, and rendering stays on that
+  processor's own thread. The engine reads no input and draws nothing. The engine already linked winit and already exposed `winit::window::Window` in
+  a public signature (`core/display_info.rs`) before this change.
 - **Zero-copy required (no CPU fallback)** — kills virtual and test devices (vivid,
   v4l2loopback) and any driver without DMA-BUF export; a user-visible transport dial
   would break the zero-ceremony bar.
