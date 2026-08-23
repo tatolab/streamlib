@@ -21,6 +21,7 @@ from __future__ import annotations
 import gc
 import os
 import weakref
+from typing import Any
 
 import pytest
 
@@ -47,7 +48,7 @@ OUTPUT_PORT = "frames_to_downstream"
 INPUT_PORT = "frames_from_upstream"
 
 
-def claim_taken_on(frame: object) -> object:
+def claim_taken_on(frame: ClaimedSurfacePixelAccess) -> Any:
     """The lease a frame took on the surface it names."""
     return frame.pixel_access_to_the_surface_declared_in(
         "surface_id"

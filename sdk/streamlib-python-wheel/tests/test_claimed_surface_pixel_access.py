@@ -46,7 +46,9 @@ OUTPUT_PORT = "frames_to_downstream"
 INPUT_PORT = "frames_from_upstream"
 
 
-def claim_taken_on(cast_object: object, surface_id_field: str = "surface_id") -> object:
+def claim_taken_on(
+    cast_object: ClaimedSurfacePixelAccess, surface_id_field: str = "surface_id"
+) -> Any:
     """The lease a cast object took for one of its declared surfaces.
 
     Read here rather than inferred from behaviour, so a test can say whether a
@@ -607,8 +609,8 @@ def test_the_gpu_write_door_hands_back_the_surfaces_own_device_tensor_scope(offe
 
     handle = gpu_limited_access.handed_out_handles[0]
     assert handle.device_tensor_scopes == [device_tensor]
-    assert device_tensor.entered is True
-    assert device_tensor.exit_arguments == (None, None, None)
+    assert handle.device_tensor_scopes[0].entered is True
+    assert handle.device_tensor_scopes[0].exit_arguments == (None, None, None)
 
 
 def test_a_raise_inside_the_gpu_write_door_reaches_the_scopes_own_exit(offered):
@@ -793,12 +795,14 @@ def test_both_write_doors_are_reachable_per_surface(offered):
     frame = ColourAndDepthFrame(**TWO_SURFACE_BAG)
     depth = frame.pixel_access_to_the_surface_declared_in("depth_surface_id")
 
-    with depth.writable() as device_tensor:
-        assert device_tensor.surface_id == "depth-3"
+    with depth.writable():
+        pass
     with depth.cpu() as host_array:
         assert host_array.surface_id == "depth-3"
 
     assert gpu_limited_access.resolved_surface_ids == ["depth-3", "depth-3"]
+    resolved_for_the_gpu_door = gpu_limited_access.handed_out_handles[0]
+    assert resolved_for_the_gpu_door.device_tensor_scopes[0].surface_id == "depth-3"
 
 
 def test_the_accessor_refuses_a_field_the_type_never_declared(offered):
