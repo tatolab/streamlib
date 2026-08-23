@@ -23,8 +23,6 @@ use crate::core::Error;
 use crate::core::Result;
 #[cfg(target_os = "linux")]
 use crate::vulkan::rhi::HostVulkanUploadResources;
-#[cfg(target_os = "linux")]
-use streamlib_consumer_rhi::VulkanLayout;
 
 /// Maximum inline `surface_id` length in bytes — fits any UUID
 /// representation (canonical 36-byte form plus generous headroom for
@@ -163,9 +161,10 @@ impl std::fmt::Debug for TextureRingSlot {
 /// UUID per slot, and registers each slot in [`GpuContext`]'s texture
 /// cache with `current_layout = UNDEFINED` (spec-correct for a
 /// freshly-allocated `VkImage`). After the first per-frame
-/// `copy_pixel_buffer_to_texture` on a slot, the layout updates to
-/// `SHADER_READ_ONLY_OPTIMAL` (the layout `upload_buffer_to_image`
-/// leaves the image in) and stays there for the steady-state hot path.
+/// `copy_pixel_buffer_to_texture` on a slot, the layout updates to the
+/// terminal layout the upload left the slot in — slot textures carry
+/// `TEXTURE_BINDING`, so that is `SHADER_READ_ONLY_OPTIMAL` — and stays
+/// there for the steady-state hot path.
 ///
 /// Steady-state rotation via [`Self::acquire_next`] does no allocation
 /// and does not escalate. Slot reuse semantics are the caller's
@@ -267,9 +266,8 @@ impl TextureRingInner {
     /// [`crate::vulkan::rhi::HostVulkanDevice::upload_buffer_to_image_amortized`]
     /// (caller-provided pre-allocated resources reset between calls).
     ///
-    /// Updates the slot's registration `current_layout` to
-    /// `SHADER_READ_ONLY_OPTIMAL` to match
-    /// `upload_buffer_to_image`'s terminal state.
+    /// Updates the slot's registration `current_layout` to the terminal
+    /// layout the upload reports leaving the slot's image in.
     #[cfg(target_os = "linux")]
     pub fn copy_pixel_buffer_to_slot(
         &self,
@@ -286,27 +284,19 @@ impl TextureRingInner {
             ))
         })?;
         use crate::host_rhi::{HostPixelBufferRefExt, HostTextureExt};
-        let image = slot
-            .texture
-            .vulkan_inner()
-            .image()
-            .ok_or_else(|| Error::GpuError("TextureRing slot texture has no VkImage".into()))?;
         let src_buffer = pixel_buffer.buffer_ref().vulkan_inner().buffer();
-        unsafe {
+        let upload = unsafe {
             self.gpu.device().inner.upload_buffer_to_image_amortized(
                 resources.command_buffer(),
                 resources.fence(),
                 src_buffer,
-                image,
+                slot.texture.vulkan_inner(),
                 width,
                 height,
-            )?;
-        }
-        // upload_buffer_to_image leaves the image in SHADER_READ_ONLY_OPTIMAL.
-        self.gpu.update_texture_registration_layout(
-            slot.surface_id(),
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+            )
+        }?;
+        self.gpu
+            .update_texture_registration_layout(slot.surface_id(), upload.final_texture_layout);
         Ok(())
     }
 
@@ -338,25 +328,19 @@ impl TextureRingInner {
             ))
         })?;
         use crate::host_rhi::{HostPixelBufferRefExt, HostTextureExt};
-        let image = slot
-            .texture
-            .vulkan_inner()
-            .image()
-            .ok_or_else(|| Error::GpuError("TextureRing slot texture has no VkImage".into()))?;
         let src_buffer = pixel_buffer.buffer_ref().vulkan_inner().buffer();
-        unsafe {
+        let upload = unsafe {
             self.gpu.device().inner.upload_buffer_to_image_amortized(
                 resources.command_buffer(),
                 resources.fence(),
                 src_buffer,
-                image,
+                slot.texture.vulkan_inner(),
                 width,
                 height,
-            )?;
-        }
-        // upload_buffer_to_image leaves the image in SHADER_READ_ONLY_OPTIMAL.
+            )
+        }?;
         self.gpu
-            .update_texture_registration_layout(surface_id, VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+            .update_texture_registration_layout(surface_id, upload.final_texture_layout);
         Ok(())
     }
 
@@ -782,7 +766,8 @@ mod tests {
         assert_eq!(
             reg_post.current_layout(),
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            "post-copy layout must match upload_buffer_to_image's terminal SHADER_READ_ONLY_OPTIMAL"
+            "a slot texture carries TEXTURE_BINDING, so the upload's usage-legal terminal layout \
+             is SHADER_READ_ONLY_OPTIMAL and the registration must say so"
         );
 
         // Second copy on the SAME slot must reuse the same cb + fence

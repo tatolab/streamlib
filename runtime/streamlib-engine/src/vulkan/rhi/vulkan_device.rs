@@ -20,6 +20,8 @@ use crate::core::{Error, Result};
 use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 
 #[cfg(target_os = "linux")]
+use super::VulkanTextureLike;
+#[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
 use super::vulkan_validation_messenger::{
     VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
@@ -2906,23 +2908,39 @@ impl VulkanRhiDevice for HostVulkanDevice {
     }
 }
 
+/// Terminal layout a buffer-to-image upload left its destination in —
+/// `SHADER_READ_ONLY_OPTIMAL` for a sampled-capable image, `GENERAL`
+/// otherwise. Callers holding a
+/// [`crate::core::context::TextureRegistration`] write it back via
+/// `update_layout`; callers minting one pass it as the initial layout.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use = "the terminal layout must reach the destination's registration — discarding it leaves a registration claiming a layout the image is not in, and the next consumer barriers out of a layout that was never recorded"]
+pub struct PixelBufferUploadFinalTextureLayout {
+    /// Layout the destination texture was left in.
+    pub final_texture_layout: streamlib_consumer_rhi::VulkanLayout,
+}
+
 impl HostVulkanDevice {
     /// Copy a host-visible VkBuffer to a device-local VkImage (RGBA upload).
     ///
-    /// Transitions the image UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY.
+    /// Transitions the image UNDEFINED → TRANSFER_DST → the destination's
+    /// usage-legal terminal layout, which it returns for the caller to
+    /// publish.
     ///
     /// Creates and destroys a transient command pool + command buffer + fence
     /// per call — fine for one-shot uses (texture init from a fixture), wrong
     /// for the per-frame hot path. Hot-path callers should use
     /// [`HostVulkanUploadResources`] + [`Self::upload_buffer_to_image_amortized`]
     /// instead.
+    #[cfg(target_os = "linux")]
     pub unsafe fn upload_buffer_to_image(
         &self,
         src_buffer: vk::Buffer,
-        dst_image: vk::Image,
+        dst_texture: &HostVulkanTexture,
         width: u32,
         height: u32,
-    ) -> crate::core::Result<()> {
+    ) -> crate::core::Result<PixelBufferUploadFinalTextureLayout> {
         use crate::core::Error;
 
         let device = self.device();
@@ -2951,14 +2969,21 @@ impl HostVulkanDevice {
         let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
             .map_err(|e| Error::GpuError(format!("upload fence: {e}")))?;
 
-        unsafe {
-            self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height)
-        }?;
+        let final_layout = unsafe {
+            self.record_and_submit_buffer_to_image(
+                cb,
+                fence,
+                src_buffer,
+                dst_texture,
+                width,
+                height,
+            )
+        };
 
         unsafe { device.destroy_fence(fence, None) };
         unsafe { device.destroy_command_pool(pool, None) };
 
-        Ok(())
+        final_layout
     }
 
     /// Amortized hot-path variant of [`Self::upload_buffer_to_image`].
@@ -2972,15 +2997,16 @@ impl HostVulkanDevice {
     ///
     /// Used by [`crate::core::context::TextureRing`]'s per-slot upload
     /// path — see `docs/architecture/texture-ring.md`.
+    #[cfg(target_os = "linux")]
     pub unsafe fn upload_buffer_to_image_amortized(
         &self,
         cb: vk::CommandBuffer,
         fence: vk::Fence,
         src_buffer: vk::Buffer,
-        dst_image: vk::Image,
+        dst_texture: &HostVulkanTexture,
         width: u32,
         height: u32,
-    ) -> crate::core::Result<()> {
+    ) -> crate::core::Result<PixelBufferUploadFinalTextureLayout> {
         use crate::core::Error;
 
         let device = self.device();
@@ -2995,28 +3021,44 @@ impl HostVulkanDevice {
             .map_err(|e| Error::GpuError(format!("amortized upload reset cb: {e}")))?;
 
         unsafe {
-            self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height)
+            self.record_and_submit_buffer_to_image(
+                cb,
+                fence,
+                src_buffer,
+                dst_texture,
+                width,
+                height,
+            )
         }
     }
 
     /// Shared by [`Self::upload_buffer_to_image`] and
     /// [`Self::upload_buffer_to_image_amortized`]: records the
-    /// UNDEFINED → TRANSFER_DST → copy → SHADER_READ_ONLY sequence into
-    /// `cb`, submits to the shared queue (mutex-protected), and waits
-    /// on `fence`. Caller owns cb + fence lifecycle.
+    /// UNDEFINED → TRANSFER_DST → copy → usage-legal terminal layout
+    /// sequence into `cb`, submits to the shared queue
+    /// (mutex-protected), and waits on `fence`. Caller owns cb + fence
+    /// lifecycle.
+    #[cfg(target_os = "linux")]
     unsafe fn record_and_submit_buffer_to_image(
         &self,
         cb: vk::CommandBuffer,
         fence: vk::Fence,
         src_buffer: vk::Buffer,
-        dst_image: vk::Image,
+        dst_texture: &HostVulkanTexture,
         width: u32,
         height: u32,
-    ) -> crate::core::Result<()> {
+    ) -> crate::core::Result<PixelBufferUploadFinalTextureLayout> {
         use crate::core::Error;
 
         let device = self.device();
         let queue = self.queue;
+
+        let dst_image = dst_texture.image().ok_or_else(|| {
+            Error::GpuError("buffer-to-image upload destination has no VkImage".into())
+        })?;
+        // Chosen here, at the barrier that records it, rather than by
+        // the caller that publishes it.
+        let final_texture_layout = dst_texture.terminal_layout_for_shader_read_access();
 
         unsafe {
             device.begin_command_buffer(
@@ -3077,14 +3119,18 @@ impl HostVulkanDevice {
             )
         };
 
-        // Barrier: TRANSFER_DST → SHADER_READ_ONLY
+        // Barrier: TRANSFER_DST → the destination's usage-legal terminal
+        // layout. The destination scope covers every command stage
+        // because a GENERAL-terminal image's next consumer is a storage
+        // descriptor, a colour attachment or a transfer read, none of
+        // which a sampled-read scope would cover.
         let barrier_to_read = vk::ImageMemoryBarrier2::builder()
             .src_stage_mask(vk::PipelineStageFlags2::COPY)
             .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE)
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .new_layout(final_texture_layout.as_vk())
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(dst_image)
@@ -3113,7 +3159,9 @@ impl HostVulkanDevice {
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map_err(|e| Error::GpuError(format!("wait: {e}")))?;
 
-        Ok(())
+        Ok(PixelBufferUploadFinalTextureLayout {
+            final_texture_layout,
+        })
     }
 
     /// Whether this device supports content-preserving QFOT for

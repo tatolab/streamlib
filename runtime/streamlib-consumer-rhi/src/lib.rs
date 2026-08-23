@@ -85,7 +85,7 @@ pub use consumer_vulkan_texture::ConsumerVulkanTexture;
 #[cfg(target_os = "linux")]
 pub use device_capability::{
     ConsumerMarker, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
-    VulkanTimelineSemaphoreLike,
+    VulkanTimelineSemaphoreLike, terminal_layout_for_shader_read_access_of_image_usage,
 };
 #[cfg(target_os = "linux")]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
