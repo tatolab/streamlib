@@ -19,13 +19,17 @@ opposite outcomes. Either one passing alone proves little.
 
 `[cast-object-tensor-protocol]` then says that same object *is* the tensor
 protocol: `torch.from_dlpack(frame)` straight off the read, GPU-resident, with
-the resolve and the lock absorbed. That half needs the same real parts plus a
-real CUDA import, and it is proven here for a cast type the wheel never heard
-of as well as for `VideoFrame` — a protocol that only worked for the shipped
-class would be exactly the privilege the plan says it must not have.
+the resolve and the lock absorbed. That half is proven here for a cast type the
+wheel never heard of as well as for `VideoFrame` — a protocol that only worked
+for the shipped class would be exactly the privilege the plan says it must not
+have.
 
-Camera-gated, and rig-only like every `requires_gpu` test here — CI runs none
-of them.
+Every test here is `requires_gpu`, so CI runs none of them, but they do not all
+need the same hardware. The lifetime pair and the device-side tensor pair are
+camera-gated; the host-side tensor pair drives the engine's native test pattern
+and consumes with plain numpy, so it needs a GPU and nothing else. Each gate
+skips by name, so a missing camera or a CPU-only torch reads as what it is
+rather than as a failure of the capability.
 """
 
 import json

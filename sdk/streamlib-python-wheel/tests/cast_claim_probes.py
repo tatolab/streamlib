@@ -1,28 +1,38 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Probes for what a typed cast takes and reaches, against a live camera.
+"""Probes for what a typed cast takes and reaches, against a real producer.
 
 The wheel's Rust tests prove the lease arithmetic against a real surface-share
 service with a stand-in surface, and the GPU-free pytest suites prove the
 composable's own half against a stand-in capability. What neither can reach is
-a real producer recycling a real pool slot underneath a real DMA-BUF surface,
-or a real CUDA import of one — so these run on the rig, against the camera,
-whose pool recycles a slot every few frames.
+a real surface published by a real producer and consumed one process away — so
+these run against the engine's own sources, in the real placement.
 
-Two families live here. The lagged holders hold one delivered frame while the
-camera runs ahead of it, then read that frame's pixels again: the frame read
-*as a `VideoFrame`* must come back unchanged, and the same probe reading the
-bag as a plain dict must be refused loudly — the camera recycled the slot, the
-published frame id retired with it (#1872), and a resolve of the retired id
-raises instead of serving somebody else's pixels. A scene that never moves
-would make the typed half vacuous, so scene motion is measured separately.
+Three families live here, and they need different hardware.
 
-The bare-protocol probes reach a delivered frame's pixels through the object
-itself — `torch.from_dlpack(frame)`, no resolve and no lock — and do it for a
-cast type the wheel never heard of as well as for `VideoFrame`, because a
-protocol that only worked for the shipped class would be the privilege the
-plan says it must not have.
+The lagged holders need a camera: only a real capture pool recycles a slot
+underneath a held frame. Each holds one delivered frame while the camera runs
+ahead of it, then reads that frame's pixels again — the frame read *as a
+`VideoFrame`* must come back unchanged, and the same probe reading the bag as
+a plain dict must be refused loudly, because the camera recycled the slot and
+the published frame id retired with it (#1872). A scene that never moves would
+make the typed half vacuous, so scene motion is measured separately.
+
+The host-side bare-protocol probes need only a GPU. They reach a delivered
+frame's pixels through the object itself and consume the capsule with plain
+numpy, so every part of the seam is real — the resolved handle, the read-only
+lock, the engine-minted capsule — while the consumer needs no CUDA build.
+
+The device-side bare-protocol probes need a camera and a CUDA-built consumer.
+They are the ones that prove `torch.from_dlpack(frame)` lands on the GPU, and
+they keep the camera deliberately: a capture surface is an imported V4L2
+DMA-BUF where a test pattern is engine-allocated, so it is the harder subject
+for a device export.
+
+Both bare-protocol families run for a cast type the wheel never heard of as
+well as for `VideoFrame`, because a protocol that only worked for the shipped
+class would be the privilege the plan says it must not have.
 """
 
 import json

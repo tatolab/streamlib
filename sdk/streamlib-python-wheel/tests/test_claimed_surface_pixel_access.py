@@ -10,10 +10,11 @@ holds no privileged position. So the type under test here is a *user-authored*
 one: if the protocol only worked for the class we ship, these would fail.
 
 The capability is stood in for. The real one needs a running engine and a
-surface-share service, which the wheel's Rust tests and the rig-marked camera
-probes cover; what is left for the GPU-free half is the composable's own half —
-that it claims what its declared field names, absorbs the resolve/lock ceremony
-behind the protocol methods, and lets go of both when the object drops.
+surface-share service, which the wheel's Rust tests and the GPU-marked probes
+in `test_cast_claim.py` cover; what is left for the GPU-free half is the
+composable's own half — that it claims what its declared field names, absorbs
+the resolve/lock ceremony behind the protocol methods, and lets go of both when
+the object drops.
 """
 
 from __future__ import annotations
@@ -72,6 +73,24 @@ class DepthFrameWhoseSurfaceMayBeAbsent(
     ClaimedSurfacePixelAccess, surface_id_field="depth_surface_id"
 ):
     depth_surface_id: "str | None" = None
+
+
+class ACastTypeThatIsNotADataclass(ClaimedSurfacePixelAccess):
+    """Composing does not require being a dataclass: a type with its own
+    constructor keeps its own state and still gets the claim."""
+
+    def __init__(self, **bag_entries: Any) -> None:
+        self.keys_that_arrived = sorted(bag_entries)
+        super().__init__(**bag_entries)
+
+
+class ACastTypeThatSettlesItsSurfaceItself(ClaimedSurfacePixelAccess):
+    """Its own constructor decides which surface it names — here out of a
+    nested map — before handing the rest to the composable."""
+
+    def __init__(self, **bag_entries: Any) -> None:
+        self.surface_id = bag_entries["surfaces"]["colour"]
+        super().__init__(**bag_entries)
 
 
 @dataclass(frozen=True)
@@ -301,6 +320,37 @@ def test_the_claim_is_not_part_of_what_the_object_is(offered):
     assert frame == same_bag_again
     assert CLAIM_FIELD not in repr(frame)
     assert "surface-7" in repr(frame), "the declared fields are still the repr"
+
+
+def test_a_composer_that_is_not_a_dataclass_claims_from_the_bag(offered):
+    """Nothing here declares a dataclass field, so the composable assigns
+    nothing and the bag entry is the only place the surface id can come
+    from — and the protocol still works over it."""
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+
+    composed = ACastTypeThatIsNotADataclass(**FRAME_BAG)
+
+    assert gpu_limited_access.claimed_surface_ids == ["surface-7"]
+    assert composed.keys_that_arrived == sorted(FRAME_BAG)
+    assert composed.__dlpack__() == "capsule-over-surface-7"
+
+
+def test_a_composer_that_settles_its_surface_first_claims_that_one(offered):
+    """The claim and the view follow the attribute the type settled, never a
+    same-named bag entry that disagrees with it.
+
+    A type reading its surface id out of a nested map is the shape that makes
+    the two diverge, and a claim on one surface guarding a view of another is
+    the silent wrongness the lifetime contract exists to kill.
+    """
+    gpu_limited_access = offered(GpuLimitedAccessStandIn())
+
+    composed = ACastTypeThatSettlesItsSurfaceItself(
+        surfaces={"colour": "colour-9"}, surface_id="a-stale-id-the-bag-carried"
+    )
+
+    assert gpu_limited_access.claimed_surface_ids == ["colour-9"]
+    assert composed.__dlpack__() == "capsule-over-colour-9"
 
 
 # ---- construction from the bag's entries -----------------------------------
