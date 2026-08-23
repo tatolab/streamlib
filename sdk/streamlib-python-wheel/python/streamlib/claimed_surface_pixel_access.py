@@ -136,7 +136,7 @@ class PixelAccessToOneClaimedSurface:
         gpu_limited_access_that_offered_the_claim: "GpuContextLimitedAccess | None",
         surface_id: "str | None",
         the_field_the_surface_id_was_declared_in: str,
-        the_cast_type_that_declared_it: str,
+        the_cast_type_that_declared_this_surface: str,
     ) -> None:
         # Kept even when the claim below is refused: an unclaimed surface is
         # one riding pool depth, not one with no pixels, so reaching for its
@@ -153,9 +153,11 @@ class PixelAccessToOneClaimedSurface:
         self._the_field_the_surface_id_was_declared_in = (
             the_field_the_surface_id_was_declared_in
         )
-        self._the_cast_type_that_declared_it = the_cast_type_that_declared_it
-        #: This surface's claim, and its whole lifetime protocol: this object
-        #: going away is what releases it.
+        self._the_cast_type_that_declared_this_surface = (
+            the_cast_type_that_declared_this_surface
+        )
+        # This surface's claim, and its whole lifetime protocol: this object
+        # going away is what releases it.
         self._check_out_lease_on_the_claimed_surface: (
             "GpuSurfaceCheckOutLease | None"
         ) = (
@@ -164,25 +166,25 @@ class PixelAccessToOneClaimedSurface:
             and surface_id is not None
             else None
         )
-        #: Resolved on first reach and released with this object.
+        # Resolved on first reach and released with this object.
         self._resolved_handle_on_the_claimed_surface: "GpuSurfaceHandle | None" = None
         self._the_read_only_lock_has_been_taken = False
 
     def _the_capability_and_the_claimed_surface_id(
         self,
     ) -> "tuple[GpuContextLimitedAccess, str]":
+        cast_type = self._the_cast_type_that_declared_this_surface
         gpu_limited_access = self._gpu_limited_access_that_offered_the_claim
         if gpu_limited_access is None:
-            raise _no_typed_read_offered_the_means_error(self._the_cast_type_that_declared_it)
+            raise _no_typed_read_offered_the_means_error(cast_type)
         surface_id = self._the_surface_id_the_claim_was_taken_on
         if surface_id is None:
             raise RuntimeError(
-                f"this {self._the_cast_type_that_declared_it} names no surface in "
+                f"this {cast_type} names no surface in "
                 f"{self._the_field_the_surface_id_was_declared_in!r}, so there are no "
-                f"pixels to export. A cast type declares the field its surface id arrives "
-                f"in — `class {self._the_cast_type_that_declared_it}"
-                f'(ClaimedSurfacePixelAccess, surface_id_field="…")` when it is not '
-                f"`surface_id`."
+                f"pixels to export. A cast type declares the field its surface id "
+                f'arrives in — `class {cast_type}(ClaimedSurfacePixelAccess, '
+                f'surface_id_field="…")` when it is not `surface_id`.'
             )
         return gpu_limited_access, surface_id
 
@@ -195,7 +197,9 @@ class PixelAccessToOneClaimedSurface:
         already_resolved = self._resolved_handle_on_the_claimed_surface
         if already_resolved is not None:
             return already_resolved
-        gpu_limited_access, surface_id = self._the_capability_and_the_claimed_surface_id()
+        gpu_limited_access, surface_id = (
+            self._the_capability_and_the_claimed_surface_id()
+        )
         handle = gpu_limited_access.resolve_surface(surface_id)
         self._resolved_handle_on_the_claimed_surface = handle
         return handle
@@ -271,7 +275,9 @@ class PixelAccessToOneClaimedSurface:
         `__dlpack__` taken inside would hand back a writable device tensor and
         arm a write-back nobody asked for.
         """
-        gpu_limited_access, surface_id = self._the_capability_and_the_claimed_surface_id()
+        gpu_limited_access, surface_id = (
+            self._the_capability_and_the_claimed_surface_id()
+        )
         with gpu_limited_access.resolve_surface(surface_id) as surface:
             surface.lock(read_only=False)
             yield surface.as_numpy()
@@ -357,12 +363,11 @@ class ClaimedSurfacePixelAccess:
         # The settled attributes, so both construction hooks claim on the same
         # values; the bag entry is the fallback for a composer that declared no
         # dataclass fields for this to have assigned.
+        declared_fields = self._the_fields_this_cast_type_names_its_surfaces_with
         self._take_the_claims_on(
             {
-                declared_field: getattr(
-                    self, declared_field, bag_entries.get(declared_field)
-                )
-                for declared_field in self._the_fields_this_cast_type_names_its_surfaces_with
+                field: getattr(self, field, bag_entries.get(field))
+                for field in declared_fields
             }
         )
 
@@ -375,14 +380,14 @@ class ClaimedSurfacePixelAccess:
         overriding this owes it a `super().__post_init__()`; without one the
         type silently claims nothing.
         """
+        declared_fields = self._the_fields_this_cast_type_names_its_surfaces_with
         self._take_the_claims_on(
-            {
-                declared_field: getattr(self, declared_field, None)
-                for declared_field in self._the_fields_this_cast_type_names_its_surfaces_with
-            }
+            {field: getattr(self, field, None) for field in declared_fields}
         )
 
-    def _take_the_claims_on(self, surface_id_by_declared_field: "dict[str, Any]") -> None:
+    def _take_the_claims_on(
+        self, surface_id_by_declared_field: "dict[str, Any]"
+    ) -> None:
         gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
         cast_type_name = type(self).__name__
         object.__setattr__(
