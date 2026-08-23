@@ -23,7 +23,7 @@ posture as the raw-handle use bound.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
@@ -321,7 +321,7 @@ class ClaimedSurfacePixelAccess:
     def __init_subclass__(
         cls,
         surface_id_field: "str | None" = None,
-        surface_id_fields: "tuple[str, ...] | None" = None,
+        surface_id_fields: "Sequence[str] | None" = None,
         **class_creation_keywords: Any,
     ) -> None:
         super().__init_subclass__(**class_creation_keywords)
