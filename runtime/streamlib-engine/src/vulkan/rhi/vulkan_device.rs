@@ -22,12 +22,11 @@ use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
 use super::vulkan_validation_messenger::{
-    DEBUG_UTILS_EXTENSION_NAME, KHRONOS_VALIDATION_LAYER_NAME, VALIDATION_FEATURES_EXTENSION_NAME,
-    VulkanValidationMessageTally, VulkanValidationMessenger,
+    VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
 };
 use super::{
     HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice,
-    VulkanValidationConfiguration, VulkanValidationMessageCounts,
+    VulkanValidationMessageCounts,
 };
 
 /// Best-effort hint about which third-party GPU compute libraries are
@@ -537,84 +536,25 @@ impl HostVulkanDevice {
         // to `VK_LOADER_LAYERS_ENABLE` for cases where the loader-side
         // hook is shadowed (notably some Bazel / Docker / cargo-test
         // configurations).
-        let validation_configuration = VulkanValidationConfiguration::from_environment();
-        let mut enabled_layer_names: Vec<*const c_char> = Vec::new();
-        let mut validation_message_tally: Option<Arc<VulkanValidationMessageTally>> = None;
-        let mut enabled_validation_features: Vec<vk::ValidationFeatureEnableEXT> = Vec::new();
-        if validation_configuration.enable_validation_layer {
-            let layers = unsafe { entry.enumerate_instance_layer_properties() }.unwrap_or_default();
-            let layer_present = layers
-                .iter()
-                .any(|l| l.layer_name.as_cstr() == KHRONOS_VALIDATION_LAYER_NAME);
-            if layer_present {
-                enabled_layer_names.push(KHRONOS_VALIDATION_LAYER_NAME.as_ptr());
-                tracing::info!("VK_LAYER_KHRONOS_validation enabled (STREAMLIB_VULKAN_VALIDATION)");
+        let validation_setup = VulkanValidationInstanceSetup::resolve(
+            &entry,
+            VulkanValidationConfiguration::from_environment(),
+            &available_ext_names,
+        );
+        instance_extensions.extend_from_slice(&validation_setup.enabled_extension_names);
 
-                if available_ext_names.contains(&DEBUG_UTILS_EXTENSION_NAME) {
-                    instance_extensions.push(DEBUG_UTILS_EXTENSION_NAME.as_ptr());
-                    validation_message_tally = Some(Arc::new(VulkanValidationMessageTally::new(
-                        validation_configuration.abort_process_on_validation_error,
-                    )));
-                } else {
-                    tracing::warn!(
-                        "VK_EXT_debug_utils unavailable — validation findings will print to \
-                         stdout only and will not be counted"
-                    );
-                }
-
-                if validation_configuration.enable_synchronization_validation {
-                    // VK_EXT_validation_features is advertised by the layer
-                    // itself, so it is absent from the loader's unfiltered
-                    // instance-extension enumeration above.
-                    let layer_extensions = unsafe {
-                        entry.enumerate_instance_extension_properties(Some(
-                            KHRONOS_VALIDATION_LAYER_NAME,
-                        ))
-                    }
-                    .unwrap_or_default();
-                    let advertises_validation_features = layer_extensions
-                        .iter()
-                        .any(|e| e.extension_name.as_cstr() == VALIDATION_FEATURES_EXTENSION_NAME);
-                    if advertises_validation_features {
-                        instance_extensions.push(VALIDATION_FEATURES_EXTENSION_NAME.as_ptr());
-                        enabled_validation_features
-                            .push(vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION);
-                        tracing::info!(
-                            "Vulkan synchronization validation enabled \
-                             (STREAMLIB_VULKAN_SYNC_VALIDATION)"
-                        );
-                    } else {
-                        tracing::warn!(
-                            "STREAMLIB_VULKAN_SYNC_VALIDATION set but the installed \
-                             VK_LAYER_KHRONOS_validation does not advertise \
-                             VK_EXT_validation_features"
-                        );
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    "STREAMLIB_VULKAN_VALIDATION=1 set but VK_LAYER_KHRONOS_validation not installed"
-                );
-            }
-        }
-
-        // Chained into the instance's pNext so vkCreateInstance and
-        // vkDestroyInstance are covered too — both sit outside the
-        // persistent messenger's lifetime, and the object-lifetime "was
-        // not destroyed" reports land at vkDestroyInstance.
-        let mut instance_creation_messenger_info = validation_message_tally
-            .as_ref()
-            .map(VulkanValidationMessenger::create_info);
+        let mut instance_creation_messenger_info =
+            validation_setup.instance_creation_messenger_info();
         let mut validation_features = vk::ValidationFeaturesEXT::builder()
-            .enabled_validation_features(&enabled_validation_features)
+            .enabled_validation_features(&validation_setup.enabled_validation_features)
             .build();
 
         let mut instance_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&instance_extensions)
-            .enabled_layer_names(&enabled_layer_names)
+            .enabled_layer_names(&validation_setup.enabled_layer_names)
             .flags(instance_create_flags);
-        if !enabled_validation_features.is_empty() {
+        if !validation_setup.enabled_validation_features.is_empty() {
             instance_info = instance_info.push_next(&mut validation_features);
         }
         if let Some(messenger_info) = instance_creation_messenger_info.as_mut() {
@@ -633,8 +573,7 @@ impl HostVulkanDevice {
             })
         })?;
 
-        let validation_messenger = validation_message_tally
-            .and_then(|tally| VulkanValidationMessenger::install(&instance, tally));
+        let validation_messenger = validation_setup.into_installed_messenger(&instance);
 
         // 5. Select physical device
         let physical_devices = unsafe { instance.enumerate_physical_devices() }
@@ -2842,7 +2781,9 @@ impl HostVulkanDevice {
     /// `VK_EXT_debug_utils` unavailable. A test asserting zero findings
     /// must treat `None` as "not measured", never as zero.
     pub fn validation_layer_message_counts(&self) -> Option<VulkanValidationMessageCounts> {
-        self.validation_messenger.as_ref().map(|m| m.counts())
+        self.validation_messenger
+            .as_ref()
+            .and_then(VulkanValidationMessenger::counts)
     }
 
     /// Present to a queue with per-queue mutex synchronization.

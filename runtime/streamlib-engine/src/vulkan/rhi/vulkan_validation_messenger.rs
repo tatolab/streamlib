@@ -5,36 +5,30 @@
 //! instance asks for, and a debug-utils messenger that forwards every
 //! finding into `tracing` and counts it.
 //!
-//! Without a messenger the layer prints through C stdio, which bypasses
-//! both the test harness's output capture and the engine's own logging —
-//! findings scroll past and nothing notices. The counter is what lets a
-//! rig test hold a GPU path at zero findings.
-//!
-//! Registering a messenger also silences the layer's own stdout reporting,
-//! so findings travel through `tracing` and the counter and nowhere else.
-//! A run with no subscriber — every `cargo test` binary — therefore sees a
-//! finding only where a test reads the count, or via
-//! `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1`, which is what turns a
-//! whole hardware-tier sweep into a gate.
+//! Without a messenger the layer prints through C stdio, which bypasses the
+//! test harness's output capture; registering one silences that stdout path
+//! entirely, so findings travel through `tracing` and the counter and
+//! nowhere else. See `docs/testing-hardware.md` for the env vars and the
+//! whole-sweep gate.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use vulkanalia::vk::{self, ExtDebugUtilsExtensionInstanceCommands, HasBuilder};
+use vulkanalia::vk::{self, EntryV1_0, ExtDebugUtilsExtensionInstanceCommands, HasBuilder};
 
 /// Instance layer name of the Khronos validation layer.
-pub(crate) const KHRONOS_VALIDATION_LAYER_NAME: &CStr = c"VK_LAYER_KHRONOS_validation";
+const KHRONOS_VALIDATION_LAYER_NAME: &CStr = c"VK_LAYER_KHRONOS_validation";
 
 /// Instance extension carrying the debug-utils messenger entry points.
 /// Loader-provided — present in the unfiltered instance-extension
 /// enumeration whether or not any layer is enabled.
-pub(crate) const DEBUG_UTILS_EXTENSION_NAME: &CStr = c"VK_EXT_debug_utils";
+const DEBUG_UTILS_EXTENSION_NAME: &CStr = c"VK_EXT_debug_utils";
 
 /// Instance extension carrying `VkValidationFeaturesEXT`. Provided by the
 /// validation layer itself, so it is absent from the loader's unfiltered
 /// enumeration and must be looked up under the layer's own name.
-pub(crate) const VALIDATION_FEATURES_EXTENSION_NAME: &CStr = c"VK_EXT_validation_features";
+const VALIDATION_FEATURES_EXTENSION_NAME: &CStr = c"VK_EXT_validation_features";
 
 /// Env var that loads the Khronos validation layer.
 const VALIDATION_ENV_VAR: &str = "STREAMLIB_VULKAN_VALIDATION";
@@ -51,19 +45,19 @@ const ABORT_ON_ERROR_ENV_VAR: &str = "STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR
 /// of the layer and abort-on-error is a behaviour of its messenger, so
 /// neither can be meant without it.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub struct VulkanValidationConfiguration {
+pub(crate) struct VulkanValidationConfiguration {
     /// Load `VK_LAYER_KHRONOS_validation` and install a counting messenger.
-    pub enable_validation_layer: bool,
+    pub(crate) enable_validation_layer: bool,
     /// Add `VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT`.
-    pub enable_synchronization_validation: bool,
+    pub(crate) enable_synchronization_validation: bool,
     /// Abort the process on the first validation error rather than only
     /// counting and logging it.
-    pub abort_process_on_validation_error: bool,
+    pub(crate) abort_process_on_validation_error: bool,
 }
 
 impl VulkanValidationConfiguration {
     /// Read the three `STREAMLIB_VULKAN_*` validation env vars.
-    pub fn from_environment() -> Self {
+    pub(crate) fn from_environment() -> Self {
         Self::from_environment_variable_values(
             std::env::var(VALIDATION_ENV_VAR).ok().as_deref(),
             std::env::var(SYNC_VALIDATION_ENV_VAR).ok().as_deref(),
@@ -92,32 +86,30 @@ fn is_truthy(value: Option<&str>) -> bool {
     matches!(value, Some("1" | "true" | "yes"))
 }
 
-/// Validation findings this device's messenger has seen, by severity.
+/// Validation findings a device's messenger has seen, by severity.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub struct VulkanValidationMessageCounts {
     pub error_count: usize,
     pub warning_count: usize,
 }
 
-impl VulkanValidationMessageCounts {
-    /// Total findings across both severities.
-    pub fn total(self) -> usize {
-        self.error_count + self.warning_count
-    }
-}
-
-/// The messenger's `pUserData`. Lives behind an `Arc` held by
-/// [`VulkanValidationMessenger`]; the layer stores the raw pointer, so the
-/// `Arc` must outlive both the messenger and `vkDestroyInstance`.
-#[derive(Debug, Default)]
-pub(crate) struct VulkanValidationMessageTally {
+/// Everything the messenger callback reaches through `pUserData`: the two
+/// counters it bumps and the policy it consults.
+///
+/// Held behind an `Arc` rather than a `Box` because the layer keeps a raw
+/// pointer into the allocation for longer than any borrow can be expressed:
+/// a `Box` is a unique owner, so moving it would retag and invalidate a
+/// pointer derived from it, while an `Arc`'s payload is shared by
+/// construction and only ever handed out as `&self`.
+#[derive(Debug)]
+pub(crate) struct VulkanValidationMessengerCallbackState {
     error_count: AtomicUsize,
     warning_count: AtomicUsize,
     abort_process_on_validation_error: bool,
 }
 
-impl VulkanValidationMessageTally {
-    pub(crate) fn new(abort_process_on_validation_error: bool) -> Self {
+impl VulkanValidationMessengerCallbackState {
+    fn new(abort_process_on_validation_error: bool) -> Self {
         Self {
             error_count: AtomicUsize::new(0),
             warning_count: AtomicUsize::new(0),
@@ -133,68 +125,184 @@ impl VulkanValidationMessageTally {
     }
 }
 
-/// A `VkDebugUtilsMessengerEXT` plus the tally it writes into.
+/// The layers, extensions and layer features an instance should ask for,
+/// resolved against what this host actually has installed. Empty on every
+/// field when validation is off.
+pub(crate) struct VulkanValidationInstanceSetup {
+    pub(crate) enabled_layer_names: Vec<*const c_char>,
+    pub(crate) enabled_extension_names: Vec<*const c_char>,
+    pub(crate) enabled_validation_features: Vec<vk::ValidationFeatureEnableEXT>,
+    messenger_callback_state: Option<Arc<VulkanValidationMessengerCallbackState>>,
+}
+
+impl VulkanValidationInstanceSetup {
+    /// Decide what to ask `vkCreateInstance` for. Every absence is a
+    /// warning and never a failure, so a host without the layer — CI —
+    /// creates exactly the instance it did before.
+    pub(crate) fn resolve(
+        entry: &vulkanalia::Entry,
+        configuration: VulkanValidationConfiguration,
+        available_instance_extension_names: &[&CStr],
+    ) -> Self {
+        let mut setup = Self {
+            enabled_layer_names: Vec::new(),
+            enabled_extension_names: Vec::new(),
+            enabled_validation_features: Vec::new(),
+            messenger_callback_state: None,
+        };
+        if !configuration.enable_validation_layer {
+            return setup;
+        }
+
+        let layer_properties =
+            unsafe { entry.enumerate_instance_layer_properties() }.unwrap_or_default();
+        let layer_is_installed = layer_properties
+            .iter()
+            .any(|properties| properties.layer_name.as_cstr() == KHRONOS_VALIDATION_LAYER_NAME);
+        if !layer_is_installed {
+            tracing::warn!(
+                "{VALIDATION_ENV_VAR} set but VK_LAYER_KHRONOS_validation is not installed"
+            );
+            return setup;
+        }
+        setup
+            .enabled_layer_names
+            .push(KHRONOS_VALIDATION_LAYER_NAME.as_ptr());
+        tracing::info!("VK_LAYER_KHRONOS_validation enabled ({VALIDATION_ENV_VAR})");
+
+        if available_instance_extension_names.contains(&DEBUG_UTILS_EXTENSION_NAME) {
+            setup
+                .enabled_extension_names
+                .push(DEBUG_UTILS_EXTENSION_NAME.as_ptr());
+            setup.messenger_callback_state =
+                Some(Arc::new(VulkanValidationMessengerCallbackState::new(
+                    configuration.abort_process_on_validation_error,
+                )));
+        } else {
+            tracing::warn!(
+                "VK_EXT_debug_utils unavailable — validation findings will not be counted"
+            );
+        }
+
+        if configuration.enable_synchronization_validation {
+            setup.enable_synchronization_validation(entry);
+        }
+        setup
+    }
+
+    fn enable_synchronization_validation(&mut self, entry: &vulkanalia::Entry) {
+        // VK_EXT_validation_features is advertised by the layer itself, so
+        // it is absent from the loader's unfiltered instance-extension
+        // enumeration and has to be looked up under the layer's name.
+        let layer_extension_properties = unsafe {
+            entry.enumerate_instance_extension_properties(Some(KHRONOS_VALIDATION_LAYER_NAME))
+        }
+        .unwrap_or_default();
+        let advertises_validation_features = layer_extension_properties.iter().any(|properties| {
+            properties.extension_name.as_cstr() == VALIDATION_FEATURES_EXTENSION_NAME
+        });
+        if !advertises_validation_features {
+            tracing::warn!(
+                "{SYNC_VALIDATION_ENV_VAR} set but the installed \
+                 VK_LAYER_KHRONOS_validation does not advertise VK_EXT_validation_features"
+            );
+            return;
+        }
+        self.enabled_extension_names
+            .push(VALIDATION_FEATURES_EXTENSION_NAME.as_ptr());
+        self.enabled_validation_features
+            .push(vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION);
+        tracing::info!("Vulkan synchronization validation enabled ({SYNC_VALIDATION_ENV_VAR})");
+    }
+
+    /// Create-info to chain into `VkInstanceCreateInfo::pNext`, covering the
+    /// two calls the persistent messenger cannot: `vkCreateInstance` and
+    /// `vkDestroyInstance`, where the object-lifetime "was not destroyed"
+    /// reports land.
+    ///
+    /// The returned struct holds a raw pointer into the callback state with
+    /// no lifetime tying the two. [`Self::into_installed_messenger`] moves
+    /// that state into the messenger, which the device then holds for as
+    /// long as the instance lives.
+    pub(crate) fn instance_creation_messenger_info(
+        &self,
+    ) -> Option<vk::DebugUtilsMessengerCreateInfoEXT> {
+        self.messenger_callback_state
+            .as_ref()
+            .map(messenger_create_info)
+    }
+
+    /// Register the messenger on the instance this setup was resolved for.
+    pub(crate) fn into_installed_messenger(
+        self,
+        instance: &vulkanalia::Instance,
+    ) -> Option<VulkanValidationMessenger> {
+        let callback_state = self.messenger_callback_state?;
+        let create_info = messenger_create_info(&callback_state);
+        let messenger =
+            match unsafe { instance.create_debug_utils_messenger_ext(&create_info, None) } {
+                Ok(messenger) => Some(messenger),
+                Err(e) => {
+                    tracing::warn!(
+                        "VK_LAYER_KHRONOS_validation loaded but vkCreateDebugUtilsMessengerEXT \
+                     failed ({e}) — findings will not be counted"
+                    );
+                    None
+                }
+            };
+        // Returned even when the handle failed: the pNext-chained messenger
+        // recorded the same `pUserData` pointer at vkCreateInstance and is
+        // re-invoked at vkDestroyInstance, so the callback state has to
+        // outlive the instance either way.
+        Some(VulkanValidationMessenger {
+            messenger,
+            callback_state,
+        })
+    }
+}
+
+fn messenger_create_info(
+    callback_state: &Arc<VulkanValidationMessengerCallbackState>,
+) -> vk::DebugUtilsMessengerCreateInfoEXT {
+    let mut create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+        .message_severity(
+            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
+        )
+        .message_type(
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        )
+        .user_callback(Some(forward_validation_message_to_tracing))
+        .build();
+    create_info.user_data = Arc::as_ptr(callback_state) as *mut c_void;
+    create_info
+}
+
+/// A `VkDebugUtilsMessengerEXT` plus the state it writes into.
 pub(crate) struct VulkanValidationMessenger {
     messenger: Option<vk::DebugUtilsMessengerEXT>,
-    tally: Arc<VulkanValidationMessageTally>,
+    callback_state: Arc<VulkanValidationMessengerCallbackState>,
 }
 
 impl VulkanValidationMessenger {
-    /// Build the create-info shared by the instance-creation `pNext` chain
-    /// and the persistent messenger.
-    ///
-    /// The returned struct holds a raw pointer into `tally`'s allocation
-    /// with no lifetime tying the two: every use must be dominated by a
-    /// live clone of that `Arc`.
-    pub(crate) fn create_info(
-        tally: &Arc<VulkanValidationMessageTally>,
-    ) -> vk::DebugUtilsMessengerCreateInfoEXT {
-        let mut create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-            .message_severity(
-                vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                    | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING,
-            )
-            .message_type(
-                vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                    | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-            )
-            .user_callback(Some(forward_validation_message_to_tracing))
-            .build();
-        create_info.user_data = Arc::as_ptr(tally) as *mut c_void;
-        create_info
+    /// Findings seen so far, or `None` when no messenger handle is live —
+    /// findings are then possible but uncounted, which must never read as
+    /// zero.
+    pub(crate) fn counts(&self) -> Option<VulkanValidationMessageCounts> {
+        self.messenger.map(|_| self.callback_state.counts())
     }
 
-    /// Register the messenger on `instance`. `None` when the layer did not
-    /// supply `vkCreateDebugUtilsMessengerEXT` — findings then reach stdout
-    /// only, as before, and no count is available.
-    pub(crate) fn install(
-        instance: &vulkanalia::Instance,
-        tally: Arc<VulkanValidationMessageTally>,
-    ) -> Option<Self> {
-        let create_info = Self::create_info(&tally);
-        match unsafe { instance.create_debug_utils_messenger_ext(&create_info, None) } {
-            Ok(messenger) => Some(Self {
-                messenger: Some(messenger),
-                tally,
-            }),
-            Err(e) => {
-                tracing::warn!(
-                    "VK_LAYER_KHRONOS_validation loaded but vkCreateDebugUtilsMessengerEXT \
-                     failed ({e}) — findings will not be counted"
-                );
-                None
-            }
-        }
-    }
-
-    pub(crate) fn counts(&self) -> VulkanValidationMessageCounts {
-        self.tally.counts()
-    }
-
-    /// Destroy the messenger handle, keeping the tally alive so the
-    /// `pNext`-chained messenger the loader still holds across
+    /// Destroy the messenger handle, keeping the callback state alive so
+    /// the `pNext`-chained messenger the loader still holds across
     /// `vkDestroyInstance` has valid `pUserData`.
+    ///
+    /// Not a `Drop` impl: the handle must die before the instance while the
+    /// state must outlive it, an ordering no `Drop` can express. A
+    /// `HostVulkanDevice::new` that fails after this messenger is installed
+    /// leaks the handle — as it already leaks the instance itself, which
+    /// `vulkanalia::Instance` never destroys on drop.
     ///
     /// # Safety
     /// `instance` must be the instance the messenger was installed on, and
@@ -215,21 +323,22 @@ unsafe extern "system" fn forward_validation_message_to_tracing(
     callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     user_data: *mut c_void,
 ) -> vk::Bool32 {
-    let Some(tally) = (unsafe { (user_data as *const VulkanValidationMessageTally).as_ref() })
+    let Some(callback_state) =
+        (unsafe { (user_data as *const VulkanValidationMessengerCallbackState).as_ref() })
     else {
         return vk::FALSE;
     };
-    let Some(data) = (unsafe { callback_data.as_ref() }) else {
+    let Some(callback_message_data) = (unsafe { callback_data.as_ref() }) else {
         return vk::FALSE;
     };
 
-    let vuid = unsafe { owned_string_from_layer_cstr(data.message_id_name) };
-    let message = unsafe { owned_string_from_layer_cstr(data.message) };
+    let vuid = unsafe { owned_string_from_layer_cstr(callback_message_data.message_id_name) };
+    let message = unsafe { owned_string_from_layer_cstr(callback_message_data.message) };
 
     if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
-        tally.error_count.fetch_add(1, Ordering::Relaxed);
+        callback_state.error_count.fetch_add(1, Ordering::Relaxed);
         tracing::error!(vuid = %vuid, message_type = ?message_types, "Vulkan validation: {message}");
-        if tally.abort_process_on_validation_error {
+        if callback_state.abort_process_on_validation_error {
             // Panic rather than `process::abort` so the reason reaches
             // stderr through the panic hook: a run with no `tracing`
             // subscriber — every `cargo test` binary — would otherwise
@@ -238,16 +347,16 @@ unsafe extern "system" fn forward_validation_message_to_tracing(
             panic!("{ABORT_ON_ERROR_ENV_VAR} is set — Vulkan validation error {vuid}: {message}");
         }
     } else {
-        tally.warning_count.fetch_add(1, Ordering::Relaxed);
+        callback_state.warning_count.fetch_add(1, Ordering::Relaxed);
         tracing::warn!(vuid = %vuid, message_type = ?message_types, "Vulkan validation: {message}");
     }
 
     vk::FALSE
 }
 
-/// Copy a layer-owned NUL-terminated string out of the callback data. The
-/// layer's storage is valid only for the duration of the callback, so the
-/// text is owned rather than borrowed.
+/// Copy a layer-owned NUL-terminated string out of the callback data.
+/// Owned rather than borrowed because a `&str` built from a raw pointer
+/// carries an unbounded lifetime the compiler cannot check.
 ///
 /// # Safety
 /// `ptr` must be null or point at a valid NUL-terminated string.
@@ -330,19 +439,39 @@ mod tests {
     }
 
     #[test]
-    fn a_tally_starts_at_zero_and_totals_both_severities() {
-        let tally = VulkanValidationMessageTally::new(false);
-        assert_eq!(tally.counts(), VulkanValidationMessageCounts::default());
-        tally.error_count.fetch_add(3, Ordering::Relaxed);
-        tally.warning_count.fetch_add(2, Ordering::Relaxed);
+    fn callback_state_starts_at_zero_and_counts_each_severity_apart() {
+        let callback_state = VulkanValidationMessengerCallbackState::new(false);
         assert_eq!(
-            tally.counts(),
+            callback_state.counts(),
+            VulkanValidationMessageCounts::default()
+        );
+        callback_state.error_count.fetch_add(3, Ordering::Relaxed);
+        callback_state.warning_count.fetch_add(2, Ordering::Relaxed);
+        assert_eq!(
+            callback_state.counts(),
             VulkanValidationMessageCounts {
                 error_count: 3,
                 warning_count: 2,
             }
         );
-        assert_eq!(tally.counts().total(), 5);
+    }
+
+    #[test]
+    fn a_messenger_whose_handle_never_landed_reports_not_measured_rather_than_zero() {
+        let messenger = VulkanValidationMessenger {
+            messenger: None,
+            callback_state: Arc::new(VulkanValidationMessengerCallbackState::new(false)),
+        };
+        assert_eq!(messenger.counts(), None);
+        messenger
+            .callback_state
+            .error_count
+            .fetch_add(1, Ordering::Relaxed);
+        assert_eq!(
+            messenger.counts(),
+            None,
+            "an uncounted finding must never read as zero findings"
+        );
     }
 }
 
