@@ -94,18 +94,21 @@ impl<P: DevicePrivilege> PlaneSlot<P> {
 /// This process's monotonic signal counter for one surface, plus the
 /// exclusion that makes reserving from it sound.
 ///
-/// One counter serves both timelines: `produce_done` and `consume_done`
-/// are signaled from disjoint sites, and each sees a strictly
-/// increasing subsequence, which is all
+/// One counter serves both timelines: each of `produce_done` and
+/// `consume_done` sees a strictly increasing subsequence, which is all
 /// `VUID-VkSubmitInfo2-semaphore-03882` asks for. Gaps are legal.
 ///
-/// Reserving is not enough on its own. Two callers that reserve
-/// distinct values still submit in whichever order they reach the
-/// queue, and a submit signalling below the timeline's current value is
-/// as invalid as one signalling at it — so the reservation holds until
-/// the caller's submit has been issued and awaited. That is why
-/// [`reserve_next_signal_value`](Self::reserve_next_signal_value) hands
-/// back a guard rather than a `u64`.
+/// The exclusion exists because reserving a distinct value is not on its
+/// own enough. Two callers holding distinct values still submit in
+/// whichever order they reach the queue, and a submit signalling *below*
+/// the timeline's current value is as invalid as one signalling *at* it.
+/// So [`reserve_next_signal_value`](Self::reserve_next_signal_value)
+/// hands back a guard, and the caller holds it until its submit has been
+/// issued: reservation order is then submission order, and the copies
+/// retire in that order on the one queue. The wait that observes the
+/// signal runs outside the guard — the value is the caller's own, so
+/// nothing else can satisfy it — mirroring the engine's
+/// `SurfaceExportStaging::submit_staging_copy_and_wait`.
 #[derive(Default)]
 pub(crate) struct SurfaceTimelineSignalSequence {
     last_reserved_signal_value: Mutex<u64>,
@@ -113,8 +116,9 @@ pub(crate) struct SurfaceTimelineSignalSequence {
 
 /// A reserved timeline value and the exclusion it was reserved under.
 /// The sequence stays locked until this drops, so the submit that
-/// signals [`value`](Self::value) — and the wait that observes it —
-/// cannot interleave with another caller's.
+/// signals [`value`](Self::value) cannot interleave with another
+/// caller's.
+#[must_use = "the reservation only holds while this guard lives — dropping it releases the sequence"]
 pub(crate) struct ReservedSurfaceTimelineSignalValue<'a> {
     last_reserved_signal_value: MutexGuard<'a, u64>,
 }

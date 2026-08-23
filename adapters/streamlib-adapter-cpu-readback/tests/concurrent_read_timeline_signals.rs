@@ -14,6 +14,10 @@
 //! its own copy is still in flight, so teardown destroys the source
 //! image, a staging buffer and the timeline out from under a live
 //! submit.
+//!
+//! `#[serial]` because both tests share this binary's one
+//! `HostVulkanDevice`, and the validation counter is per device — a
+//! finding raised by either would otherwise land in the other's delta.
 
 #![cfg(target_os = "linux")]
 
@@ -23,6 +27,7 @@ mod common;
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
+use serial_test::serial;
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanDevice};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackTriggerContext, InProcessCpuReadbackCopyTrigger,
@@ -59,6 +64,13 @@ impl SignalValueRecordingCopyTrigger {
             .expect("recording trigger mutex poisoned")
             .clone()
     }
+
+    fn record(&self, ctx: &CpuReadbackTriggerContext<'_, HostMarker>) {
+        self.suggested_signal_values_in_submit_order
+            .lock()
+            .expect("recording trigger mutex poisoned")
+            .push(ctx.suggested_signal_value);
+    }
 }
 
 impl CpuReadbackCopyTrigger<HostMarker> for SignalValueRecordingCopyTrigger {
@@ -66,10 +78,7 @@ impl CpuReadbackCopyTrigger<HostMarker> for SignalValueRecordingCopyTrigger {
         &self,
         ctx: &CpuReadbackTriggerContext<'_, HostMarker>,
     ) -> Result<u64, AdapterError> {
-        self.suggested_signal_values_in_submit_order
-            .lock()
-            .expect("recording trigger mutex poisoned")
-            .push(ctx.suggested_signal_value);
+        self.record(ctx);
         self.in_process.run_copy_image_to_buffer(ctx)
     }
 
@@ -77,28 +86,34 @@ impl CpuReadbackCopyTrigger<HostMarker> for SignalValueRecordingCopyTrigger {
         &self,
         ctx: &CpuReadbackTriggerContext<'_, HostMarker>,
     ) -> Result<u64, AdapterError> {
-        self.suggested_signal_values_in_submit_order
-            .lock()
-            .expect("recording trigger mutex poisoned")
-            .push(ctx.suggested_signal_value);
+        self.record(ctx);
         self.in_process.run_copy_buffer_to_image(ctx)
     }
 }
 
 /// Release `CONCURRENT_READER_THREAD_COUNT` threads onto one surface at
-/// once and hold every read guard until the last thread has one, so the
-/// acquires genuinely overlap rather than queueing.
+/// once, then hold every read guard until the last thread has one.
+///
+/// The first barrier is what gives the acquires a chance to overlap; how
+/// much they actually do is thread interleaving, which is why the ticket
+/// reports the duplicate-signal count varying with it. The second is not
+/// timing-dependent: it holds all N guards at once, so `read_holders`
+/// provably reaches N and the release path runs its last-reader-out
+/// branch exactly once.
 fn acquire_reads_concurrently(fixture: &HostFixture, surface: &StreamlibSurface) {
     let all_threads_ready = Barrier::new(CONCURRENT_READER_THREAD_COUNT);
+    let every_guard_held = Barrier::new(CONCURRENT_READER_THREAD_COUNT);
     thread::scope(|scope| {
         for reader_index in 0..CONCURRENT_READER_THREAD_COUNT {
             let all_threads_ready = &all_threads_ready;
+            let every_guard_held = &every_guard_held;
             let adapter = &fixture.adapter;
             scope.spawn(move || {
                 all_threads_ready.wait();
                 let guard = adapter
                     .acquire_read(surface)
                     .unwrap_or_else(|e| panic!("reader {reader_index} acquire_read: {e:?}"));
+                every_guard_held.wait();
                 drop(guard);
             });
         }
@@ -106,6 +121,7 @@ fn acquire_reads_concurrently(fixture: &HostFixture, surface: &StreamlibSurface)
 }
 
 #[test]
+#[serial]
 fn concurrent_read_acquires_never_reuse_a_produce_done_signal_value() {
     let fixture = HostFixture::try_new_wrapping_copy_trigger(|in_process| {
         let recording = Arc::new(SignalValueRecordingCopyTrigger::new(in_process));
@@ -140,6 +156,7 @@ fn concurrent_read_acquires_never_reuse_a_produce_done_signal_value() {
 }
 
 #[test]
+#[serial]
 fn a_concurrent_read_burst_and_its_teardown_raise_no_validation_finding() {
     let Some(fixture) = HostFixture::try_new() else {
         println!(

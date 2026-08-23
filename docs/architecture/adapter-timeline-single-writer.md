@@ -84,20 +84,31 @@ two-timelines-one-writer-each is the conventional answer.
 
 **Per-process `SurfaceState<P>` fields** (the per-adapter state
 record). The v1 implementation chooses a single per-process signal
-counter — within ONE adapter instance, signals to `produce_done` and
-`consume_done` come from disjoint code paths (write-release vs.
-read-release) so a unified monotonic counter is sufficient. Each
-timeline still sees strictly monotonic values from its own writer
-site, which is all VUID-03258 requires:
+counter — each timeline sees strictly monotonic values from its own
+writer site, which is all VUID-03258 requires:
 
 ```rust
 produce_done: Arc<P::TimelineSemaphore>,
 consume_done: Arc<P::TimelineSemaphore>,
 
 // Per-process monotonic counter — advanced on every signal
-// regardless of which timeline gets it (see comment above), and
-// held by the signalling caller from reserving a value through
-// the submit that signals it (see Thread model below).
+// regardless of which timeline gets it.
+current_signal_value: u64,
+```
+
+The vulkan and cuda adapters hold exactly that. Both signal only from
+sites that are already exclusive — a write release under `write_held`,
+a read release from the last reader out — so reading and advancing the
+counter inside the registry lock is the whole of the exclusion they
+need.
+
+cpu-readback needs more, because it is the one adapter whose *read
+acquire* signals `produce_done`: its trigger submits a
+`vkCmdCopyImageToBuffer` per acquire, and concurrent readers of one
+surface are a supported shape, so its counter lives behind a held
+exclusion instead (see [Thread model](#thread-model-within-the-writer-process)):
+
+```rust
 signal_sequence: Arc<SurfaceTimelineSignalSequence>,
 ```
 
@@ -298,19 +309,28 @@ cross-process race on monotonicity.
 > that is only committed after the copy completes hands every reader that
 > starts first the same value.
 
-**Thread model within the writer process.** Reserving distinct values
-is not sufficient on its own: two callers that reserve distinct values
-still submit in whichever order they reach the queue, and a submit
-signalling *below* the timeline's current value is as invalid as one
-signalling *at* it. So the reservation is an exclusion, not a number —
-a signalling caller holds the surface's signal sequence from reserving
-its value through the submit that signals it and the wait that observes
-it. Reservation order is therefore submit order, and a caller's wait can
-only be satisfied by its own submit. A caller that waits on a value
-another caller's copy signalled returns while its own copy is still in
-flight: its read view maps a staging buffer the GPU is still writing,
-and teardown destroys the image, buffer and timeline that copy still
-references.
+### Thread model within the writer process
+
+Wherever two threads of the writer process can reach one timeline's
+next-value computation, reserving a distinct value is not sufficient on
+its own: two callers holding distinct values still submit in whichever
+order they reach the queue, and a submit signalling *below* the
+timeline's current value is as invalid as one signalling *at* it. So the
+reservation is an exclusion, not a number — the caller holds it until
+its submit has been issued, which makes reservation order submission
+order. The wait that observes the signal runs outside the exclusion: the
+value is the caller's own, so nothing else can satisfy it.
+
+That is why a trigger's reported value must be no lower than the
+reservation. A caller that waits on a value some other copy signalled
+returns while its own copy is still in flight: its read view maps a
+staging buffer the GPU is still writing, and teardown destroys the
+image, buffer and timeline that copy still references.
+
+Only cpu-readback reaches this today — the other two adapters signal
+from sites that are already exclusive, so the registry lock is their
+exclusion. An adapter that adds a signalling site reachable from two
+threads at once inherits the requirement.
 
 The cross-process IPC payload publishing `produce_done` /
 `consume_done` values can in principle be observed by the consumer
@@ -346,8 +366,12 @@ Per-adapter conformance:
    Zero timeline-monotonicity validation errors.
 
 When a new adapter lands, add the same dual-timeline conformance
-coverage to its tests; the contract is uniform across all three
-subprocess-wired adapters and any future siblings.
+coverage to its tests; the single-writer-per-timeline contract is
+uniform across all three subprocess-wired adapters and any future
+siblings. What is not uniform is the exclusion each one needs for its
+own next-value computation — that follows from which of its sites can
+run on two threads at once, per [Thread
+model](#thread-model-within-the-writer-process).
 
 ## Reference
 
