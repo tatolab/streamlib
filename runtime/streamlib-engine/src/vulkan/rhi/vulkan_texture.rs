@@ -920,6 +920,13 @@ impl HostVulkanTexture {
         self.format
     }
 
+    /// Tiling this image was created with — what `vkGetImageSubresourceLayout`
+    /// binds its aspect mask to, and the signal that says whether a
+    /// driver-chosen DRM format modifier applies to this image at all.
+    pub fn vk_image_tiling(&self) -> vk::ImageTiling {
+        self.vk_image_meta.vk_image_tiling
+    }
+
     /// Whether the image was created with TRANSFER_SRC usage — the
     /// capability a copy that reads it (`vkCmdCopyImageToBuffer`)
     /// requires; recording one without it is a Vulkan spec violation
@@ -1108,16 +1115,23 @@ fn dma_buf_plane_layout_query_aspect_mask(
 
     let (aspects, image_shape) = if vk_image_tiling == vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT {
         (&MEMORY_PLANE_ASPECTS[..], "modifier-tiled")
-    } else if matches!(format, TextureFormat::Nv12) {
-        (&FORMAT_PLANE_ASPECTS[..], "linear-tiled NV12")
+    } else if vk_image_tiling == vk::ImageTiling::LINEAR {
+        if matches!(format, TextureFormat::Nv12) {
+            (&FORMAT_PLANE_ASPECTS[..], "linear-tiled NV12")
+        } else {
+            (&COLOR_ASPECTS[..], "linear-tiled single-plane")
+        }
     } else {
-        (&COLOR_ASPECTS[..], "linear-tiled single-plane")
+        return Err(Error::GpuError(format!(
+            "dma_buf_plane_layout: {vk_image_tiling:?} images have driver-opaque layouts — \
+             only LINEAR and DRM_FORMAT_MODIFIER_EXT expose queryable plane layouts"
+        )));
     };
 
     aspects.get(plane_index).copied().ok_or_else(|| {
         Error::GpuError(format!(
-            "dma_buf_plane_layout: plane index {plane_index} out of range — a {image_shape} \
-             image exposes {} plane aspect(s)",
+            "dma_buf_plane_layout: plane index {plane_index} out of range — this RHI names \
+             {} plane aspect(s) for a {image_shape} image",
             aspects.len()
         ))
     })
@@ -1136,14 +1150,6 @@ impl HostVulkanTexture {
     /// tell those two zeros apart.
     pub fn chosen_drm_format_modifier(&self) -> u64 {
         self.chosen_drm_format_modifier
-    }
-
-    /// Tiling this image was created with — the signal that says whether
-    /// [`Self::chosen_drm_format_modifier`] carries a driver-chosen modifier
-    /// at all, and the one `vkGetImageSubresourceLayout` binds its aspect
-    /// mask to.
-    pub fn vk_image_tiling(&self) -> vk::ImageTiling {
-        self.vk_image_meta.vk_image_tiling
     }
 
     /// Per-plane DMA-BUF layout for this texture, in plane index order.
@@ -1748,7 +1754,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn a_tiled_modifier_image_is_queried_through_the_memory_plane_aspect() {
+    fn a_modifier_tiled_nv12_image_uses_the_memory_plane_aspect_not_the_format_plane_aspect() {
         assert_eq!(
             dma_buf_plane_layout_query_aspect_mask(
                 vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
@@ -1793,6 +1799,22 @@ mod tests {
         assert_eq!(
             aspects,
             vec![vk::ImageAspectFlags::PLANE_0, vk::ImageAspectFlags::PLANE_1],
+        );
+    }
+
+    /// OPTIMAL layouts are driver-opaque. The caller refuses them before it
+    /// reaches this helper, but the helper is independently reachable, so it
+    /// must not answer COLOR for a tiling it cannot describe.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_optimal_tiled_image_has_no_queryable_plane_aspect() {
+        assert!(
+            dma_buf_plane_layout_query_aspect_mask(
+                vk::ImageTiling::OPTIMAL,
+                TextureFormat::Bgra8Unorm,
+                0,
+            )
+            .is_err(),
         );
     }
 

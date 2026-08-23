@@ -1679,6 +1679,11 @@ mod tests {
         service.stop();
     }
 
+    /// `VkImageTiling::DRM_FORMAT_MODIFIER_EXT` as the wire carries it.
+    /// `src/linux/` deliberately takes no vulkanalia dependency, so the raw
+    /// value is spelled here rather than read off `vk::ImageTiling`.
+    const VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT: i64 = 1_000_158_000;
+
     /// `drm_format_modifier` and `plane_strides` ride along through the
     /// register/lookup path. The host adapter writes the modifier into the
     /// `SurfaceTransportHandle` field defined in `streamlib-surface-adapter`; the
@@ -1770,8 +1775,6 @@ mod tests {
     /// round trip (#1915).
     #[test]
     fn a_linear_modifier_stays_distinguishable_from_no_modifier_across_the_wire() {
-        const VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT: i64 = 1_000_158_000;
-
         let state = SurfaceShareState::new();
         let (_socket_dir, socket_path) = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
@@ -2211,7 +2214,7 @@ mod tests {
             "vk_image_mip_levels": 9,
             "vk_image_array_layers": 6,
             "vk_image_samples": 4,            // _4
-            "vk_image_tiling": 1000158000,    // DRM_FORMAT_MODIFIER_EXT
+            "vk_image_tiling": VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
             "vk_image_usage": 0x4Fu32,
             "vk_image_allocation_size": 16_777_216u64,
         });
@@ -2258,7 +2261,7 @@ mod tests {
         );
         assert_eq!(
             lookup_resp.get("vk_image_tiling").and_then(|v| v.as_i64()),
-            Some(1000158000),
+            Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
         );
         assert_eq!(
             lookup_resp.get("vk_image_usage").and_then(|v| v.as_u64()),
