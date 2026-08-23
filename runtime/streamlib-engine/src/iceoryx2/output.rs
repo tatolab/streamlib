@@ -45,6 +45,19 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
     }
 }
 
+/// View initialized bytes as `MaybeUninit` for writing into a loaned iceoryx2
+/// sample (sound: `MaybeUninit<u8>` is `repr(transparent)` over `u8`, and the
+/// uninit view is write-only). What [`SampleMutUninit::write_from_slice`] does
+/// internally, exposed here so header and payload can fill one loan without a
+/// staging copy.
+///
+/// [`SampleMutUninit::write_from_slice`]: iceoryx2::sample_mut_uninit::SampleMutUninit::write_from_slice
+fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[core::mem::MaybeUninit<u8>] {
+    // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`; the returned
+    // slice is only ever the source of a copy.
+    unsafe { core::mem::transmute::<&[u8], &[core::mem::MaybeUninit<u8>]>(bytes) }
+}
+
 /// One source output port's channel egress: the single channel publisher
 /// (a channel carries exactly one publisher — see
 /// [`streamlib_ipc_types::MAX_PUBLISHERS_PER_CHANNEL`]) and one notifier per
@@ -287,17 +300,27 @@ impl OutputWriterInner {
             });
         }
 
-        let mut frame = vec![0u8; total_len];
+        // Header on the stack before the loan: a port key that overflows the
+        // wire capacity must never cost a loan slot.
+        let mut header_bytes = [0u8; FRAME_HEADER_SIZE];
         FrameHeader::new(port, timestamp_ns, data.len() as u32)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
+            .write_to_slice(&mut header_bytes);
 
-        let sample = egress
+        // Header and payload are written straight into the loan — no staging
+        // buffer, no second payload copy. `copy_from_slice` panics on a length
+        // mismatch, so the two writes cover all `total_len` loaned bytes.
+        let mut sample = egress
             .publisher
             .loan_slice_uninit(total_len)
             .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
-        let sample = sample.write_from_slice(&frame);
+        let (header_dst, payload_dst) = sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
+        header_dst.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
+        payload_dst.copy_from_slice(as_maybe_uninit_bytes(data));
+        // SAFETY: the two `copy_from_slice` calls above initialized
+        // `FRAME_HEADER_SIZE + data.len()` bytes — exactly the `total_len` the
+        // loan was taken for.
+        let sample = unsafe { sample.assume_init() };
         sample
             .send()
             .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
