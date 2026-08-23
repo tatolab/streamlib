@@ -37,9 +37,13 @@ fn harness_duration() -> Duration {
 }
 
 /// How many windows the window server currently shows under `title`.
+///
+/// `--onlyvisible` because a bare search also returns unmapped windows, and a
+/// window that exists but was never mapped is exactly the failure this test is
+/// meant to catch.
 fn windows_on_screen_titled(title: &str) -> usize {
     let output = Command::new("xdotool")
-        .args(["search", "--name", title])
+        .args(["search", "--onlyvisible", "--name", title])
         .output()
         .expect("xdotool must be installed to assert against the window server");
     String::from_utf8_lossy(&output.stdout)

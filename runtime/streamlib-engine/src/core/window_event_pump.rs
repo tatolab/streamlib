@@ -263,7 +263,10 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
             registered_window_count,
         }),
         Ok(Err(reason)) => Err(reason),
-        Err(_) => Err(format!(
+        Err(RecvTimeoutError::Disconnected) => Err(
+            "the window event pump thread stopped before it reported that it was ready".to_string(),
+        ),
+        Err(RecvTimeoutError::Timeout) => Err(format!(
             "the window event pump thread did not start within {WINDOW_EVENT_PUMP_REPLY_TIMEOUT:?}"
         )),
     }
