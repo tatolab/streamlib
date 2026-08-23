@@ -34,6 +34,11 @@ legitimate in-that-process senses so "in-process" stops doing double duty.
 **Bag**: the self-describing msgpack named map a link carries — the schema-free view of
 a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
 
+**Cast object**: the typed object `read(port, into=T)` constructs from a bag — the
+consumer's view of a payload. A cast type that claims its surface is also the
+tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a cast
+type need not be a frame).
+
 **Control plane**: the HTTP/WebSocket/MCP surface a runtime hosts for observing and
 inspecting running nodes; the CLI is its client. Embedding happens by importing the
 wheel, never through the control plane. _Avoid_: "API server" as the concept (that is
@@ -97,6 +102,11 @@ unqualified where the allocation-vs-frame distinction matters.
 
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.
+
+**Processor-owned window**: a window a processor requested from the engine and owns the
+policy of — title, extent, which frame it shows, what close means. For an owner outside
+the app process, the engine runs the window's native present loop, fed by surface ids
+the owner names. _Avoid_: "debug window" as the concept (a use, not the capability).
 
 **Kernel**: a GPU program the engine compiles and runs on its device — compute,
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source

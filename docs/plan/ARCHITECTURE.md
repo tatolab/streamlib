@@ -143,6 +143,27 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine a_checkout_of_a_retired_frame_id_is_refused_naming_the_recycling -->
   <!-- verify: cargo test -p streamlib-python-wheel claiming_a_recycled_frame_is_refused_naming_the_recycling -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-16-surface-id-lifetime-contract.md -->
+- **DECIDED** — The cast object is the tensor-protocol producer: a cast type that
+  claims its surface exposes pixel access on the object itself, and the performance
+  gradient is spelled, not policed. The bare object speaks `__dlpack__` /
+  `__dlpack_device__` as the read path — GPU-resident, zero ceremony,
+  `torch.from_dlpack(frame)` is the shortest and fastest spelling. Validity rides the
+  claim the typed cast takes: the frame is immutable while the object lives and the
+  view ends when it drops. A write through the bare view is out of contract — the
+  write doors are the scopes: `with frame.writable() as t:` for GPU edits and
+  `with frame.cpu() as img:` for CPU reach, the slow path saying so in its name. Both
+  scopes keep the one write-scope rule already decided for the device-tensor and CPU
+  pixel-buffer scopes, rebased onto the cast object: the block edge is the publication
+  point, the engine orders the write-back ahead of its own next read, and leaving by a
+  propagating exception discards the write without suppressing the exception.
+  The wheel ships the protocol as one public composable piece any cast type composes,
+  over the unchanged claim seam — `VideoFrame` is itself built from it, which is the
+  proof it holds no privileged position over any library or user cast type. The bare
+  protocol binds a type that claims exactly one surface: a type claiming several gets
+  no bare `__dlpack__` — the ambiguity is refused by name — and reaches each surface
+  through that surface's own protocol object. `cpu()` yields a writable numpy array.
+  Wheel-layer grammar only over the shipped staging and export primitives — no engine
+  change. [cast-object-tensor-protocol]
 
 ## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
 
@@ -380,6 +401,35 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   drains and discards, so upstream still sees a live consumer.
   [importable-python-library; shared-window-event-pump]
   <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
+- **DECIDED** — Window ownership is a processor capability, not a built-in privilege:
+  a processor requests a window from the engine and owns its policy; the engine mints
+  it (pump registration + present target) and, for an owner whose code cannot sit in
+  the app process, runs that window's native present loop itself — the owner feeds
+  the loop by naming published surface ids, latest-wins: naming no frame leaves the
+  last one up, and an owner's slowness never stutters its own window, which paces on
+  vsync in native code always. The request seam is the same for every processor, and
+  the only cross-language delta is where the loop runs: a native owner may instead
+  drive its own render thread against its present target — the deadline constraint
+  does not bind app-process code — while a Python processor reaches the request
+  across the escalate path and feeds the engine-run loop; the per-frame naming is a
+  camera-class-cadence message that fits the helper hop, and no vsync deadline ever
+  crosses it. A window is requested in `setup()`, where the typestate is Full, and
+  released at teardown or with its processor — never minted mid-`process()`. The
+  per-frame verb accepts anything that names a published surface: the cast object
+  (whose claim guarantees the id un-recycled), a kernel-output handle, or a bare
+  surface id. The pump's two events reach the owner as coalesced state polled off
+  the window object, never a callback across the hop; an owner that reads neither
+  gets the defaults — resize just works (the engine owns every swapchain detail),
+  and an unread close-request closes the window, after which the per-frame verb is
+  a no-op and the window reports closed: a user gesture never takes down a pipeline.
+  A refused request — no display server, a dead pump — raises at `setup()`, never
+  degrading silently: the built-in's drain-and-discard exists to keep upstream
+  seeing a live consumer, and a processor-owned window has no port of its own to
+  protect. The window is a processor resource, invisible to `graph` and `tap`
+  topology. The present compositor stays engine-internal — no cross-process spelling
+  and no Python name; at this capability surface, present-class means windows. One
+  present-loop machinery serves the built-in display and every processor-owned
+  window. [processor-owned-windows]
 - **DECIDED** — Camera → GPU transport: zero-copy DMA-BUF import when the device
   exports it, transparent CPU-upload fallback otherwise, selected automatically —
   no configuration dial. [media-io-layering]

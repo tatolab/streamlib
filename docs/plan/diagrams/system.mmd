@@ -30,10 +30,14 @@ frame; the importer adopts it and consumes it as an image"| pkgs
   engine -->|"bags carry per-frame surface ids (slot#generation);
 claim at typed cast, lease until drop;
 a stale id errors, never another frame;
+the cast object is the tensor-protocol producer —
+bare DLPack reads, scoped writes publishing at the block edge;
 every stamp reads the one machine-monotonic clock"| helper
   helper -->|"kernels constructed in setup(), dispatched by name and
 synchronously — one submission per batch; an output is named by surface id,
-and a DLPack scope over it is the optional third-party read / write-back"| engine
+and a DLPack scope over it is the optional third-party read / write-back;
+a processor-owned window is requested in setup() and fed by named frames —
+the engine runs its native present loop, latest-wins"| engine
   ctl --> registry
   rustapp --> crate
   crate --> engine
