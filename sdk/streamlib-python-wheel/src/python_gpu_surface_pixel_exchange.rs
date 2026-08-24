@@ -137,6 +137,14 @@ impl GpuSurfaceOwnedMemory {
         }
     }
 
+    /// Off Linux no surface exchange exists, so no staging does either and
+    /// `host_visible_pixel_plane` is the one answer — which refuses,
+    /// naming the platform.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
+        false
+    }
+
     /// The host-mapped pixel view, or a refusal naming why this surface
     /// has none. The single answer to "can the CPU address these bytes?"
     /// — every host-side accessor routes through it.
@@ -727,7 +735,19 @@ pub(crate) fn map_the_cpu_staging_without_reading_a_frame_in(
     python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<()> {
+    if !owned_memory.cpu_reach_goes_through_the_export_staging() {
+        return Ok(());
+    }
     surface_cpu_readback_export_for(python, owned_memory)?;
+    Ok(())
+}
+
+/// Off Linux there is no staging to map; the plane view refuses instead.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn map_the_cpu_staging_without_reading_a_frame_in(
+    _python: Python<'_>,
+    _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
     Ok(())
 }
 

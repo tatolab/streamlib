@@ -4454,10 +4454,9 @@ fn derive_texture_cross_process_importability(
 /// loudly on the wire rather than silently dropping flags.
 ///
 /// `COPY_SRC | COPY_DST` ride every request because the CPU doors copy both
-/// ways over a texture's export staging, and a author who acquired a texture
-/// to fill it should not have to spell a transfer flag to reach its pixels.
-/// This is the sole entry point for the wire token list, so Rust's
-/// `TexturePoolDescriptor` stays explicit with no spill.
+/// ways over a texture's export staging, so an author who acquired a texture
+/// to fill it would otherwise be refused about a transfer flag rather than a
+/// real constraint.
 fn parse_texture_usages(tokens: &[String]) -> std::result::Result<TextureUsages, String> {
     if tokens.is_empty() {
         return Err("texture usage list must not be empty".to_string());

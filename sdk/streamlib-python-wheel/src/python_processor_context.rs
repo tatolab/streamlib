@@ -105,8 +105,9 @@ pub(crate) struct PythonGpuSurfaceHandle {
     surface_format_name: String,
     owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
     cpu_access: CpuAccessGate,
-    /// A writable device tensor was exported under the current write
-    /// lock; `unlock()` / `close()` publishes the staging back into the
+    /// A writable staged view was exported under the current write lock —
+    /// a device tensor or a numpy array over the readback staging;
+    /// `unlock()` / `close()` publishes that staging back into the
     /// surface, and an exception-path exit discards it.
     #[cfg(target_os = "linux")]
     pending_staged_write_back: PendingStagedWriteBackToSurface,
@@ -294,10 +295,10 @@ impl PythonGpuSurfaceHandle {
         })
     }
 
-    /// Publish a pending device-side write, once. Shared by `unlock` and
-    /// `close` so the context-manager spelling cannot silently drop an
-    /// edit; a handle already closed has nothing to publish into and
-    /// discards instead.
+    /// Publish a pending staged write, once, through whichever staging
+    /// holds the edit. Shared by `unlock` and `close` so the
+    /// context-manager spelling cannot silently drop an edit; a handle
+    /// already closed has nothing to publish into and discards instead.
     #[cfg(target_os = "linux")]
     fn publish_pending_staged_write(&self, python: Python<'_>) -> PyResult<()> {
         // Bound before the match, so the guard drops here: the publish
@@ -361,10 +362,7 @@ impl PythonGpuSurfaceHandle {
         let owned_memory = self.owned_memory()?;
         // The staging's shape is the answer, so mapping it is enough; a
         // pitch is not a reason to copy a frame.
-        #[cfg(target_os = "linux")]
-        if owned_memory.cpu_reach_goes_through_the_export_staging() {
-            map_the_cpu_staging_without_reading_a_frame_in(python, &owned_memory)?;
-        }
+        map_the_cpu_staging_without_reading_a_frame_in(python, &owned_memory)?;
         python.detach(|| Ok(owned_memory.host_visible_pixel_plane()?.bytes_per_row))
     }
 
@@ -450,12 +448,9 @@ impl PythonGpuSurfaceHandle {
             // directly reaches its pixels through the engine's staging,
             // which the first host-side accessor opens, and its device
             // export rides this same lock.
-            #[cfg(target_os = "linux")]
             if !owned_memory.cpu_reach_goes_through_the_export_staging() {
                 owned_memory.host_visible_pixel_plane()?;
             }
-            #[cfg(not(target_os = "linux"))]
-            owned_memory.host_visible_pixel_plane()?;
             // A fresh scope: whatever the staging holds is a previous
             // one's read-in, and this scope owes its own.
             #[cfg(target_os = "linux")]
@@ -466,8 +461,9 @@ impl PythonGpuSurfaceHandle {
         })
     }
 
-    /// Close CPU access, publishing any pending device-side write back
-    /// into the surface first. Idempotent.
+    /// Close CPU access, publishing any pending staged write back into the
+    /// surface first — through whichever staging holds the edit.
+    /// Idempotent.
     fn unlock(&self, python: Python<'_>) -> PyResult<()> {
         // The gate opens whether or not the publish succeeded — a
         // surface left locked after a failed publish would refuse

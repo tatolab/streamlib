@@ -938,10 +938,9 @@ pub(crate) struct HelperCpuReadbackExport {
 #[derive(Clone, Copy)]
 pub(crate) enum CpuReadbackCopyDirection {
     /// The frame's current pixels into the staging — what entering the CPU
-    /// door always runs, a pure write included: the engine refuses a
-    /// publish into a staging no frame was read into, because one staging
-    /// spans every frame its pool slot publishes and uninitialised memory
-    /// is indistinguishable from an edit.
+    /// door always runs, a pure write included. Why it is unconditional is
+    /// at
+    /// [`read_the_frame_into_its_cpu_staging`](crate::python_gpu_surface_pixel_exchange::read_the_frame_into_its_cpu_staging).
     SurfaceIntoStaging,
     /// The staged edit back into the surface's own allocation, so every
     /// other holder observes it.
@@ -954,6 +953,39 @@ impl CpuReadbackCopyDirection {
         match self {
             Self::SurfaceIntoStaging => "image_to_buffer",
             Self::StagingBackIntoSurface => "buffer_to_image",
+        }
+    }
+}
+
+/// Which of the engine's two export-staging residencies a helper is
+/// opening — the child-side mirror of the parent's own
+/// `SurfaceExportStagingResidency`.
+///
+/// Carried rather than spelled at each call so the wire op name and the
+/// noun refusals use cannot drift apart between the two arms.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+pub(crate) enum HelperExportStagingResidency {
+    /// Device-local, consumed by an external device API's import.
+    DeviceLocal,
+    /// Host-visible, mapped into this child and read by the CPU doors.
+    HostVisible,
+}
+
+#[cfg(target_os = "linux")]
+impl HelperExportStagingResidency {
+    fn escalate_open_op_name(self) -> &'static str {
+        match self {
+            Self::DeviceLocal => "open_device_export_staging",
+            Self::HostVisible => "open_cpu_readback_staging",
+        }
+    }
+
+    /// How a refusal names the staging it is about.
+    fn named_in_refusals(self) -> &'static str {
+        match self {
+            Self::DeviceLocal => "device-export",
+            Self::HostVisible => "readback",
         }
     }
 }
@@ -1106,7 +1138,7 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// never per-frame ones.
     ///
     /// Its own map rather than a shared one because a surface can be
-    /// reached through both doors in one process, and the two are
+    /// reached through both doors in one helper process, and the two are
     /// different imports of two stagings the engine keeps at two
     /// residencies.
     #[cfg(target_os = "linux")]
@@ -1693,28 +1725,12 @@ impl HelperProcessGpuExchangeClient {
             return Ok(Arc::clone(already_open));
         }
 
-        let op = PyDict::new(python);
-        op.set_item("op", "open_device_export_staging")?;
-        op.set_item("surface_id", surface_id)?;
-        let response =
-            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        let format_name: String = response_field(&response, "format")?.extract()?;
-        let exporting_device_uuid: String =
-            response_field(&response, "exporting_device_uuid")?.extract()?;
-        let described = DeviceExportStagingDescription {
-            staging_share_id: response_field(&response, "handle_id")?.extract()?,
-            staging_byte_size: decimal_string_field(&response, "staging_byte_size")?,
-            exporting_device_uuid: parse_device_uuid(&exporting_device_uuid)?,
-            width: response_field(&response, "width")?.extract()?,
-            height: response_field(&response, "height")?.extract()?,
-            format: crate::python_processor_context::parse_pixel_format_name(&format_name)?,
-            bytes_per_row: decimal_string_field(&response, "bytes_per_row")?,
-            writable: response_field(&response, "writable")?.extract()?,
-        };
-
-        self.write_back_answers_by_pool_slot
-            .lock()
-            .insert(source_pool_slot_key.to_string(), described.writable);
+        let described = self.ask_the_parent_to_publish_the_export_staging(
+            python,
+            HelperExportStagingResidency::DeviceLocal,
+            surface_id,
+            source_pool_slot_key,
+        )?;
         let opened = python.detach(|| -> PyResult<Arc<HelperDeviceExport>> {
             Ok(Arc::new(
                 self.check_out_and_import_device_export(&described)?,
@@ -1752,31 +1768,12 @@ impl HelperProcessGpuExchangeClient {
             return Ok(Arc::clone(already_open));
         }
 
-        let op = PyDict::new(python);
-        op.set_item("op", "open_cpu_readback_staging")?;
-        op.set_item("surface_id", surface_id)?;
-        let response =
-            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        let format_name: String = response_field(&response, "format")?.extract()?;
-        let exporting_device_uuid: String =
-            response_field(&response, "exporting_device_uuid")?.extract()?;
-        let described = DeviceExportStagingDescription {
-            staging_share_id: response_field(&response, "handle_id")?.extract()?,
-            staging_byte_size: decimal_string_field(&response, "staging_byte_size")?,
-            exporting_device_uuid: parse_device_uuid(&exporting_device_uuid)?,
-            width: response_field(&response, "width")?.extract()?,
-            height: response_field(&response, "height")?.extract()?,
-            format: crate::python_processor_context::parse_pixel_format_name(&format_name)?,
-            bytes_per_row: decimal_string_field(&response, "bytes_per_row")?,
-            writable: response_field(&response, "writable")?.extract()?,
-        };
-
-        // Seeds the shared answer so a later `surface_can_take_write_back`
-        // costs no round trip of its own — the same mint-time answer, from
-        // the arm that also maps.
-        self.write_back_answers_by_pool_slot
-            .lock()
-            .insert(source_pool_slot_key.to_string(), described.writable);
+        let described = self.ask_the_parent_to_publish_the_export_staging(
+            python,
+            HelperExportStagingResidency::HostVisible,
+            surface_id,
+            source_pool_slot_key,
+        )?;
         let opened = python.detach(|| -> PyResult<Arc<HelperCpuReadbackExport>> {
             Ok(Arc::new(
                 self.check_out_and_import_cpu_readback_export(&described)?,
@@ -2013,6 +2010,47 @@ impl HelperProcessGpuExchangeClient {
             bytes_per_row: described.bytes_per_row,
             writable: described.writable,
         })
+    }
+
+    /// Ask the parent to allocate and publish this surface's export
+    /// staging at `residency`, and read the contract it answers with.
+    ///
+    /// The wire half both export arms share: one op shape, one set of
+    /// response fields, one write-back seed — so a field that changes
+    /// changes for both, rather than for whichever arm someone remembered.
+    #[cfg(target_os = "linux")]
+    fn ask_the_parent_to_publish_the_export_staging(
+        &self,
+        python: Python<'_>,
+        residency: HelperExportStagingResidency,
+        surface_id: &str,
+        source_pool_slot_key: &str,
+    ) -> PyResult<DeviceExportStagingDescription> {
+        let op = PyDict::new(python);
+        op.set_item("op", residency.escalate_open_op_name())?;
+        op.set_item("surface_id", surface_id)?;
+        let response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let format_name: String = response_field(&response, "format")?.extract()?;
+        let exporting_device_uuid: String =
+            response_field(&response, "exporting_device_uuid")?.extract()?;
+        let described = DeviceExportStagingDescription {
+            staging_share_id: response_field(&response, "handle_id")?.extract()?,
+            staging_byte_size: decimal_string_field(&response, "staging_byte_size")?,
+            exporting_device_uuid: parse_device_uuid(&exporting_device_uuid)?,
+            width: response_field(&response, "width")?.extract()?,
+            height: response_field(&response, "height")?.extract()?,
+            format: crate::python_processor_context::parse_pixel_format_name(&format_name)?,
+            bytes_per_row: decimal_string_field(&response, "bytes_per_row")?,
+            writable: response_field(&response, "writable")?.extract()?,
+        };
+        // Seeds the shared answer so a later `surface_can_take_write_back`
+        // costs no round trip of its own — the same mint-time answer, from
+        // whichever arm opened first.
+        self.write_back_answers_by_pool_slot
+            .lock()
+            .insert(source_pool_slot_key.to_string(), described.writable);
+        Ok(described)
     }
 
     /// The checkout both export arms share: take the published staging,
