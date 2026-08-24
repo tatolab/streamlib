@@ -20,7 +20,6 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::color::HdrStaticMetadata;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::PresentScalingMode;
 use streamlib::sdk::error::{Error, Result};
@@ -362,40 +361,8 @@ fn named_surface_of_video_frame(
             .as_ref()
             .map(ColorInfo::engine_color_traits),
         hdr_static_metadata_of_frame: frame_bag.mastering_display.as_ref().map(|mastering| {
-            hdr_static_metadata_from_bag(mastering, frame_bag.content_light.as_ref())
+            mastering.engine_hdr_static_metadata(frame_bag.content_light.as_ref())
         }),
-    }
-}
-
-/// Translate the bag's HDR sidecar integers to the engine's f32 metadata:
-/// chromaticities are 1/50000 increments → CIE xy, luminances 0.0001 cd/m²
-/// increments → cd/m².
-fn hdr_static_metadata_from_bag(
-    mastering: &crate::video_frame::MasteringDisplay,
-    content_light: Option<&crate::video_frame::ContentLight>,
-) -> HdrStaticMetadata {
-    let chromaticity = |v: u32| v as f32 / 50_000.0;
-    HdrStaticMetadata {
-        display_primary_red: [
-            chromaticity(mastering.display_primaries_r_x),
-            chromaticity(mastering.display_primaries_r_y),
-        ],
-        display_primary_green: [
-            chromaticity(mastering.display_primaries_g_x),
-            chromaticity(mastering.display_primaries_g_y),
-        ],
-        display_primary_blue: [
-            chromaticity(mastering.display_primaries_b_x),
-            chromaticity(mastering.display_primaries_b_y),
-        ],
-        white_point: [
-            chromaticity(mastering.white_point_x),
-            chromaticity(mastering.white_point_y),
-        ],
-        min_luminance_cd_m2: mastering.min_luminance as f32 * 0.0001,
-        max_luminance_cd_m2: mastering.max_luminance as f32 * 0.0001,
-        max_content_light_level: content_light.map(|cl| cl.max_cll as f32).unwrap_or(0.0),
-        max_frame_average_light_level: content_light.map(|cl| cl.max_fall as f32).unwrap_or(0.0),
     }
 }
 
@@ -542,31 +509,5 @@ mod tests {
             .expect("a frame carrying a mastering display names its metadata");
         assert_eq!(named_metadata.max_content_light_level, 1_000.0);
         assert!((named_metadata.max_luminance_cd_m2 - 1_000.0).abs() < 1e-3);
-    }
-
-    #[test]
-    fn hdr_metadata_translation_scales_the_wire_integers() {
-        let mastering = crate::video_frame::MasteringDisplay {
-            display_primaries_r_x: 35_400, // 0.708 in 1/50000
-            display_primaries_r_y: 14_600,
-            display_primaries_g_x: 8_500,
-            display_primaries_g_y: 39_850,
-            display_primaries_b_x: 6_550,
-            display_primaries_b_y: 2_300,
-            white_point_x: 15_635,
-            white_point_y: 16_450,
-            max_luminance: 10_000_000, // 1000 cd/m² in 0.0001 increments
-            min_luminance: 50,         // 0.005 cd/m²
-        };
-        let content_light = crate::video_frame::ContentLight {
-            max_cll: 1_000,
-            max_fall: 400,
-        };
-        let metadata = hdr_static_metadata_from_bag(&mastering, Some(&content_light));
-        assert!((metadata.display_primary_red[0] - 0.708).abs() < 1e-6);
-        assert!((metadata.max_luminance_cd_m2 - 1_000.0).abs() < 1e-3);
-        assert!((metadata.min_luminance_cd_m2 - 0.005).abs() < 1e-6);
-        assert_eq!(metadata.max_content_light_level, 1_000.0);
-        assert_eq!(metadata.max_frame_average_light_level, 400.0);
     }
 }
