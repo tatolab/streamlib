@@ -1342,21 +1342,15 @@ impl SurfaceStoreInner {
             refill_done,
         )?;
 
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": surface_id,
-            "runtime_id": self.runtime_id,
-            "width": width,
-            "height": height,
-            "format": format.wire_name(),
-            "resource_type": "pixel_buffer",
-            "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
-            "plane_sizes": [staging_byte_size],
-            "plane_offsets": [0],
-            "has_produce_done_fd": true,
-            "has_consume_done_fd": false,
-            "vk_memory_type_index": memory_type_index,
-        });
+        let request = surface_export_staging_registration_payload(
+            surface_id,
+            &self.runtime_id,
+            staging_byte_size,
+            width,
+            height,
+            format,
+            memory_type_index,
+        );
 
         self.send_surface_share_registration(
             "register_surface_export_staging",
@@ -2059,6 +2053,41 @@ unsafe impl Sync for SurfaceStore {}
 /// value alone cannot say which. Render-target consumers must refuse a LINEAR
 /// surface because LINEAR DMA-BUFs are sampler-only on NVIDIA (see
 /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+/// The surface-share registration payload for a CPU-readback export
+/// staging.
+///
+/// `vk_memory_type_index` is the exporter's own, and is not optional the
+/// way it is for a DMA-BUF registration: OPAQUE_FD has no
+/// `vkGetMemoryFdPropertiesKHR` query, so an importer that is not told
+/// the index has to guess one, and a guess that happens to work is a
+/// coincidence of the two sides landing on the same memory type.
+#[cfg(target_os = "linux")]
+fn surface_export_staging_registration_payload(
+    surface_id: &str,
+    runtime_id: &str,
+    staging_byte_size: u64,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    memory_type_index: u32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "op": "register",
+        "surface_id": surface_id,
+        "runtime_id": runtime_id,
+        "width": width,
+        "height": height,
+        "format": format.wire_name(),
+        "resource_type": "pixel_buffer",
+        "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
+        "plane_sizes": [staging_byte_size],
+        "plane_offsets": [0],
+        "has_produce_done_fd": true,
+        "has_consume_done_fd": false,
+        "vk_memory_type_index": memory_type_index,
+    })
+}
+
 #[cfg(target_os = "linux")]
 fn dma_buf_texture_registration_payload(
     texture: &crate::vulkan::rhi::HostVulkanTexture,
@@ -2621,6 +2650,62 @@ mod dma_buf_registration_payload_tests {
             Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
             "without this, the zero modifier above is indistinguishable on the \
              wire from an image that never carried a modifier at all"
+        );
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod surface_export_staging_registration_payload_tests {
+    use super::*;
+
+    #[test]
+    fn a_staging_registration_states_the_exporters_memory_type_index() {
+        const EXPORTER_MEMORY_TYPE_INDEX: u32 = 4;
+
+        let payload = surface_export_staging_registration_payload(
+            "surface-under-test-hostvisible",
+            "runtime-under-test",
+            64 * 64 * 4,
+            64,
+            64,
+            PixelFormat::Rgba32,
+            EXPORTER_MEMORY_TYPE_INDEX,
+        );
+
+        assert_eq!(
+            payload
+                .get("vk_memory_type_index")
+                .and_then(|value| value.as_u64()),
+            Some(EXPORTER_MEMORY_TYPE_INDEX as u64),
+            "without this the child picks a memory type by first match, which agrees \
+             with a host-cached exporter only by coincidence"
+        );
+        assert_eq!(
+            payload.get("handle_type").and_then(|value| value.as_str()),
+            Some(SURFACE_HANDLE_TYPE_OPAQUE_FD),
+            "the index is only meaningful because this is an OPAQUE_FD registration"
+        );
+    }
+
+    /// Zero is a real memory type index, so it must survive onto the wire
+    /// rather than reading as "absent" the way a defaulted field would.
+    #[test]
+    fn a_staging_registration_states_memory_type_index_zero_rather_than_omitting_it() {
+        let payload = surface_export_staging_registration_payload(
+            "surface-under-test-hostvisible",
+            "runtime-under-test",
+            4096,
+            32,
+            32,
+            PixelFormat::Rgba32,
+            0,
+        );
+        assert_eq!(
+            payload
+                .get("vk_memory_type_index")
+                .and_then(|value| value.as_u64()),
+            Some(0),
         );
     }
 }

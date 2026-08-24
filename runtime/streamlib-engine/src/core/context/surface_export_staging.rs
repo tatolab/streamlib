@@ -1305,6 +1305,7 @@ impl crate::core::context::GpuContextLimitedAccess {
 mod tests {
     use super::*;
     use crate::core::rhi::{PixelBuffer, Texture, TextureDescriptor, TextureUsages};
+    use vulkanalia::vk;
 
     const SURFACE_WIDTH: u32 = 64;
     const SURFACE_HEIGHT: u32 = 64;
@@ -2132,6 +2133,33 @@ mod tests {
         assert!(
             !host_visible.staging_buffer().mapped_ptr().is_null(),
             "the host-visible residency is mapped"
+        );
+
+        // Every consumer of this residency reads the mapping, so it must
+        // come off the cached pool wherever the device has one. On a
+        // device without, it degrades to the write-combined pool — slower
+        // to read, never refused, and never a third residency.
+        let vulkan_device = gpu.device().vulkan_device();
+        let host_visible_memory_type_index = host_visible
+            .staging_buffer()
+            .vma_allocation_memory_type_index()
+            .expect("the host-visible staging states its memory type index");
+        let memory_properties = vulkan_device.allocator().get_memory_properties();
+        let host_visible_flags =
+            memory_properties.memory_types[host_visible_memory_type_index as usize].property_flags;
+        if vulkan_device.opaque_fd_buffer_pool_host_cached().is_some() {
+            assert!(
+                host_visible_flags.contains(vk::MemoryPropertyFlags::HOST_CACHED),
+                "a device with a cached exportable type must mint the HostVisible \
+                 residency from the cached pool"
+            );
+        }
+        assert!(
+            host_visible_flags.contains(
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+            ),
+            "the child-side OPAQUE_FD import requires HOST_VISIBLE | HOST_COHERENT, and \
+             nothing on this path flushes or invalidates"
         );
 
         let host_visible_again = gpu

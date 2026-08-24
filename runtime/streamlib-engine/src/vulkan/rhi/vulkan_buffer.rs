@@ -1189,6 +1189,178 @@ mod tests {
         unsafe { libc::close(fd) };
     }
 
+    /// A host-cached export lands on a HOST_CACHED memory type, or the
+    /// device has no cached exportable type and the pool is absent —
+    /// there is no third outcome, and in particular no refusal.
+    ///
+    /// Mental-revert: point `new_opaque_fd_export_host_cached` at
+    /// `opaque_fd_buffer_pool()` and the flags assertion fails on a rig
+    /// whose cached type differs from its write-combined one. Verified.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_host_cached_export_is_cached_or_the_device_has_no_cached_exportable_type() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_buffer_pool().is_none() {
+            println!("Skipping - OPAQUE_FD buffer pool unavailable on this driver");
+            return;
+        }
+
+        const SIZE: u64 = 128 * 128 * 4;
+        let buffer = HostVulkanBuffer::new_opaque_fd_export_host_cached(&device, SIZE)
+            .expect("a host-cached export must degrade, never refuse");
+        assert_eq!(buffer.size(), SIZE as vk::DeviceSize);
+        assert!(
+            !buffer.mapped_ptr().is_null(),
+            "a host-visible readback staging must be persistently mapped"
+        );
+
+        let memory_type_index = buffer
+            .vma_allocation_memory_type_index()
+            .expect("a VMA-allocated buffer states its memory type index");
+        let flags = device.allocator().get_memory_properties().memory_types
+            [memory_type_index as usize]
+            .property_flags;
+        assert!(
+            flags.contains(
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+            ),
+            "the child-side OPAQUE_FD import requires HOST_VISIBLE | HOST_COHERENT and \
+             nothing on this path flushes or invalidates"
+        );
+        if device.opaque_fd_buffer_pool_host_cached().is_some() {
+            assert!(
+                flags.contains(vk::MemoryPropertyFlags::HOST_CACHED),
+                "a device with a cached exportable pool must allocate the readback \
+                 staging from it, not from the write-combined pool"
+            );
+        } else {
+            println!(
+                "Device has no cached exportable memory type — the readback staging \
+                 degrades to the write-combined pool, which is the stated fallback"
+            );
+        }
+
+        let fd = buffer
+            .export_opaque_fd_memory()
+            .expect("a host-cached export is still an OPAQUE_FD export");
+        assert!(fd >= 0, "OPAQUE_FD fd must be non-negative");
+        unsafe { libc::close(fd) };
+    }
+
+    /// The consumer binds the memory type index the exporter states,
+    /// which is the whole point of putting it on the surface-share wire:
+    /// OPAQUE_FD has no fd-properties query, so an importer left to
+    /// search agrees with a host-cached exporter only by coincidence.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_consumer_import_binds_the_stated_memory_type_index_of_a_host_cached_export() {
+        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_buffer_pool().is_none() {
+            println!("Skipping - OPAQUE_FD buffer pool unavailable on this driver");
+            return;
+        }
+        let consumer_device = match ConsumerVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping - ConsumerVulkanDevice unavailable: {e}");
+                return;
+            }
+        };
+
+        const SIZE: u64 = 128 * 128 * 4;
+        const HOST_STAMP: u8 = 0xA7;
+        let exported = HostVulkanBuffer::new_opaque_fd_export_host_cached(&device, SIZE)
+            .expect("host-cached export");
+        unsafe { std::ptr::write_bytes(exported.mapped_ptr(), HOST_STAMP, SIZE as usize) };
+        let stated_memory_type_index = exported
+            .vma_allocation_memory_type_index()
+            .expect("the exporter states its memory type index");
+        let fd = exported.export_opaque_fd_memory().expect("export the fd");
+
+        // fd ownership transfers to the driver on success.
+        let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &consumer_device,
+            fd,
+            SIZE as vk::DeviceSize,
+            stated_memory_type_index,
+        );
+        let imported = match imported {
+            Ok(imported) => imported,
+            Err(e) => {
+                unsafe { libc::close(fd) };
+                panic!("a conforming stated-index import must bind: {e}");
+            }
+        };
+
+        let seen = unsafe {
+            std::slice::from_raw_parts(imported.mapped_ptr(), SIZE as usize)
+        };
+        assert!(
+            seen.iter().all(|byte| *byte == HOST_STAMP),
+            "the importer must map the exporter\'s own memory, not a fresh allocation"
+        );
+    }
+
+    /// An index the imported buffer cannot bind is refused by name
+    /// rather than handed to `vkBindBufferMemory`, which would violate
+    /// VUID-vkBindBufferMemory-memory-01035 inside the driver. The fd is
+    /// never touched on this path, so the caller still owns it.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_stated_memory_type_index_the_importer_cannot_bind_is_refused_by_name() {
+        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+
+        let consumer_device = match ConsumerVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping - ConsumerVulkanDevice unavailable: {e}");
+                return;
+            }
+        };
+
+        const NOT_A_MEMORY_TYPE_INDEX: u32 = 99;
+        let refusal = match ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &consumer_device,
+            -1,
+            4096,
+            NOT_A_MEMORY_TYPE_INDEX,
+        ) {
+            Ok(_) => panic!("an index past VK_MAX_MEMORY_TYPES binds nothing"),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            refusal.contains("99") && refusal.contains("memoryTypeBits"),
+            "the refusal must name the stated index and what the buffer can bind, \
+             got: {refusal}"
+        );
+    }
+
     /// `new_opaque_fd_export` allocates from the OPAQUE_FD pool;
     /// `export_opaque_fd_memory` returns a valid kernel fd; cross-flavor
     /// export is rejected (calling `export_opaque_fd_memory` on a DMA-BUF

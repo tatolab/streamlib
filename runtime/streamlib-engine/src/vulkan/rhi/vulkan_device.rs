@@ -3823,6 +3823,79 @@ unsafe impl Sync for HostVulkanDevice {}
 mod tests {
     use super::*;
 
+    /// Build a `VkPhysicalDeviceMemoryProperties` whose first
+    /// `property_flags.len()` types carry the given flags.
+    #[cfg(target_os = "linux")]
+    fn memory_properties_with_types(
+        property_flags: &[vk::MemoryPropertyFlags],
+    ) -> vk::PhysicalDeviceMemoryProperties {
+        let mut memory_properties = vk::PhysicalDeviceMemoryProperties::default();
+        memory_properties.memory_type_count = property_flags.len() as u32;
+        for (memory_type, flags) in memory_properties
+            .memory_types
+            .iter_mut()
+            .zip(property_flags.iter())
+        {
+            memory_type.property_flags = *flags;
+        }
+        memory_properties
+    }
+
+    /// The host-cached pool's presence is decided by reading the probed
+    /// index's flags, never by the probe failing: VMA prefers HOST_CACHED
+    /// under `HOST_ACCESS_RANDOM` but cannot require it, so a cache-less
+    /// device answers a *successful* probe with an uncached index.
+    ///
+    /// Mental-revert: return `true` unconditionally and a cache-less
+    /// device pins its readback pool to write-combined memory while
+    /// reporting it cached. Verified.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_device_whose_probed_type_is_not_host_cached_gets_no_host_cached_pool() {
+        let uncached = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let cached = uncached | vk::MemoryPropertyFlags::HOST_CACHED;
+
+        let cache_less_device = memory_properties_with_types(&[
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            uncached,
+        ]);
+        assert!(
+            !memory_type_index_is_host_cached(&cache_less_device, 1),
+            "a HOST_VISIBLE | HOST_COHERENT type without HOST_CACHED must not pass"
+        );
+
+        let cached_device = memory_properties_with_types(&[
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            uncached,
+            cached,
+        ]);
+        assert!(
+            memory_type_index_is_host_cached(&cached_device, 2),
+            "the cached exportable type must pass"
+        );
+        assert!(
+            !memory_type_index_is_host_cached(&cached_device, 1),
+            "the flags are read at the probed index, not searched for"
+        );
+    }
+
+    /// An index past `memoryTypeCount` names no memory type, so it is
+    /// not cached — the trailing entries of the fixed 32-slot array are
+    /// zeroed padding, never allocatable types.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_memory_type_index_past_the_device_count_is_not_host_cached() {
+        let memory_properties = memory_properties_with_types(&[
+            vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT
+                | vk::MemoryPropertyFlags::HOST_CACHED,
+        ]);
+        assert!(memory_type_index_is_host_cached(&memory_properties, 0));
+        assert!(!memory_type_index_is_host_cached(&memory_properties, 1));
+        assert!(!memory_type_index_is_host_cached(&memory_properties, 31));
+        assert!(!memory_type_index_is_host_cached(&memory_properties, u32::MAX));
+    }
+
     /// Try to create a HostVulkanDevice; return None if GPU/Vulkan is unavailable (CI).
     fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
