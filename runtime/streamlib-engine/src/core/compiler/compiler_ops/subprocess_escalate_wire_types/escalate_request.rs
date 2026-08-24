@@ -166,12 +166,9 @@ pub(crate) struct EscalateRequestCloseProcessorOwnedWindow {
     pub(crate) request_id: String,
 
     /// The window to release, as `create_processor_owned_window` named it.
-    ///
-    /// Closing a window already closed by a user gesture is not an error, and
-    /// the id stays this processor's — closed — until teardown, which
-    /// releases every window the helper still holds either way. So
-    /// `show_surface_on_processor_owned_window` after a close is the same
-    /// no-op reporting closed however the window closed.
+    /// Never an error for a window already closed, and the id stays this
+    /// processor's — closed — until teardown. Answers
+    /// `processor_owned_window_is_closed`.
     pub(crate) window_id: String,
 }
 
@@ -205,13 +202,10 @@ pub(crate) struct EscalateRequestCreateProcessorOwnedWindow {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
-    /// Window title, owned by the requesting processor.
-    ///
-    /// Answers with the window id every other present-class op names. Refused
-    /// when the helper is not inside its `setup` hook — a window is a
-    /// setup-phase resource request, never minted mid-`process()` — and when
-    /// the process can get no window at all (no display server, a dead pump),
-    /// in which case the pump's own error crosses the wire.
+    /// Window title, owned by the requesting processor. Answers with the
+    /// window id every other present-class op names, plus the extent actually
+    /// minted. Refused outside the helper's `setup` hook, and refused with
+    /// the pump's own error when the process can get no window at all.
     pub(crate) window_title: String,
 }
 
@@ -222,10 +216,10 @@ pub(crate) struct EscalateRequestDrainProcessorOwnedWindowEvents {
     pub(crate) request_id: String,
 
     /// The window whose events to drain, as `create_processor_owned_window`
-    /// named it. Answers with the coalesced state — `width` / `height` the
+    /// named it. Answers with the coalesced state: `width` / `height` the
     /// window's current extent, `close_requested_by_user` true once per
-    /// gesture (the drain clears it), `processor_owned_window_is_closed`
-    /// sticky once the engine has closed the window.
+    /// gesture (this drain clears it), `processor_owned_window_is_closed`
+    /// sticky.
     pub(crate) window_id: String,
 }
 
@@ -1831,14 +1825,11 @@ pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
     /// `source_height_in_pixels`.
     pub(crate) source_width_in_pixels: u32,
 
-    /// The published surface id naming the frame to show next.
-    ///
-    /// Hands the id to the window's engine-run present loop and returns
-    /// without waiting for it: latest-wins, so several ids named between two
-    /// vsyncs leave the newest showing and naming none leaves the last frame
-    /// up. A retired id is refused here, by name, as a recycled-frame error.
-    /// Once the window is closed the op is a no-op that answers
-    /// `processor_owned_window_is_closed` rather than an error.
+    /// The published surface id naming the frame to show next. Handed to the
+    /// window's present loop without waiting on it — latest-wins, so naming
+    /// none leaves the last frame up. A retired id is refused as a
+    /// recycled-frame error; a closed window answers
+    /// `processor_owned_window_is_closed` rather than any error.
     pub(crate) surface_id: String,
 
     /// The window to show it on, as `create_processor_owned_window` named it.
