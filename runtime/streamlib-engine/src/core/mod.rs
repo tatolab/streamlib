@@ -47,6 +47,8 @@ pub mod utils;
 // the pump serves has no Apple implementation yet.
 #[cfg(target_os = "linux")]
 pub mod window_event_pump;
+#[cfg(target_os = "linux")]
+pub mod window_present_loop;
 
 // Customer-facing modules (wildcard re-exports stay).
 pub use context::*;

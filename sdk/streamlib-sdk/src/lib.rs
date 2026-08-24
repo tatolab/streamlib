@@ -96,6 +96,8 @@ pub mod sdk {
     pub use streamlib_engine::core::texture;
     #[cfg(target_os = "linux")]
     pub use streamlib_engine::core::window_event_pump;
+    #[cfg(target_os = "linux")]
+    pub use streamlib_engine::core::window_present_loop;
 
     // ---- App authoring sugar ----
 
