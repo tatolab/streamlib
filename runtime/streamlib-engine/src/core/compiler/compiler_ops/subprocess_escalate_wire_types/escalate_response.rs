@@ -73,7 +73,9 @@ pub(crate) struct EscalateResponseOk {
     /// returns the same handle_id and re-uses the cached `VulkanComputeKernel`.
     /// For release_handle this echoes the released id. For run_compute_kernel
     /// this echoes the kernel_id (compute is synchronous host-side; nothing
-    /// extra travels).
+    /// extra travels). For create_processor_owned_window this is the window
+    /// id every other present-class op names; the other three echo the
+    /// window id they were given.
     pub(crate) handle_id: String,
 
     /// Correlates response with request. Matches request_id in EscalateRequest.
@@ -95,6 +97,14 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) bytes_per_row: Option<String>,
 
+    /// Whether the user asked to close this window since the last drain. Set
+    /// on `drain_processor_owned_window_events` responses, and true exactly
+    /// once per gesture — the drain that reports it also clears it. An owner
+    /// reacts to this; it cannot veto it, because the engine has already
+    /// closed the window by the time the answer is written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) close_requested_by_user: Option<bool>,
+
     /// Lowercase hex of the exporting Vulkan device's
     /// `VkPhysicalDeviceIDProperties::deviceUUID` (32 characters, no
     /// separators). Set on `open_device_export_staging` responses. The external
@@ -109,9 +119,20 @@ pub(crate) struct EscalateResponseOk {
     pub(crate) format: Option<String>,
 
     /// Height in pixels (set on acquire_pixel_buffer and acquire_texture
-    /// responses).
+    /// responses, and on `create_processor_owned_window` /
+    /// `drain_processor_owned_window_events` responses, where it is the
+    /// window's current drawable height rather than a surface's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) height: Option<u32>,
+
+    /// Whether the engine has closed this window. Set on
+    /// `show_surface_on_processor_owned_window`,
+    /// `drain_processor_owned_window_events` and
+    /// `close_processor_owned_window` responses. Sticky once true, and the
+    /// reason `show…` answers `ok` rather than an error after a close: a user
+    /// gesture never takes a pipeline down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) processor_owned_window_is_closed: Option<bool>,
 
     /// Decimal-string-encoded u64 byte size of the device-export staging
     /// buffer — the span an imported device pointer covers. Set on
@@ -139,7 +160,9 @@ pub(crate) struct EscalateResponseOk {
     pub(crate) usage: Option<Vec<String>>,
 
     /// Width in pixels (set on acquire_pixel_buffer and acquire_texture
-    /// responses).
+    /// responses, and on `create_processor_owned_window` /
+    /// `drain_processor_owned_window_events` responses, where it is the
+    /// window's current drawable width rather than a surface's).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) width: Option<u32>,
 

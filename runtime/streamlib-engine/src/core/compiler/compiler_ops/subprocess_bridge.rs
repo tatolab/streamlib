@@ -244,6 +244,15 @@ impl SubprocessBridge {
                 self.processor_id
             )));
         }
+        // The lifecycle command is the engine's only reading of which hook the
+        // child is inside, and this is the one seam every command crosses.
+        // Setup-phase-only escalate ops (minting a processor-owned window)
+        // refuse on it, dispatched from the reader thread while the hook that
+        // is allowed to ask is still running.
+        if let Some(lifecycle_command) = msg.get("cmd").and_then(|c| c.as_str()) {
+            self.registry
+                .note_lifecycle_command_sent_to_the_helper_process(lifecycle_command);
+        }
         let mut writer = self
             .writer
             .lock()
@@ -303,6 +312,20 @@ impl Drop for SubprocessBridge {
         // The OS reaps the thread on process exit.
         if let Ok(writer) = self.writer.lock() {
             let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+        }
+        // Windows first: each present thread resolves surface ids against the
+        // same capability the handle release below evicts from, and dropping
+        // one closes its window and joins its thread. A helper that never
+        // called `close_processor_owned_window` — or crashed — releases its
+        // windows here, which is what makes teardown the backstop the plan
+        // says it is.
+        for (window_id, present_loop) in self.registry.drain_processor_owned_windows() {
+            tracing::debug!(
+                "[{}] closing processor-owned window '{}' at teardown",
+                self.processor_id,
+                window_id
+            );
+            drop(present_loop);
         }
         // Run the release path's kind-specific cleanup for everything the
         // helper never released — a crashed child must not strand cache

@@ -15,7 +15,10 @@
 //! drives the loop, because a vsync deadline never crosses a process
 //! boundary. No window's loop runs on the pump's thread.
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use winit::window::Window;
 
@@ -405,4 +408,262 @@ impl ProcessorOwnedWindow {
             }
         }
     }
+}
+
+/// How long the engine's present loop parks when its owner has named no new
+/// surface. Short because the pump's events are drained on the same
+/// iteration, so it also bounds how long a resize waits to be applied; an
+/// owner that names a surface unparks the thread rather than waiting it out.
+const PROCESSOR_OWNED_WINDOW_PRESENT_LOOP_IDLE_PARK_INTERVAL: Duration = Duration::from_millis(1);
+
+/// One named surface handed to the engine's present loop, owning its id
+/// because it outlives the call that named it.
+#[derive(Debug, Clone)]
+pub struct SurfaceNamedForTheEnginesPresentLoop {
+    /// The published surface id naming the frame to show.
+    pub surface_id: String,
+    /// The named frame's width in pixels.
+    pub source_width_in_pixels: u32,
+    /// The named frame's height in pixels.
+    pub source_height_in_pixels: u32,
+    /// The producer's published `VkImageLayout` for this frame as the raw
+    /// int32 enumerant, when it overrides the per-surface default.
+    pub producer_published_texture_layout: Option<i32>,
+}
+
+impl SurfaceNamedForTheEnginesPresentLoop {
+    fn as_named_surface(&self) -> SurfaceNamedForPresentationOnOwnedWindow<'_> {
+        SurfaceNamedForPresentationOnOwnedWindow {
+            surface_id: &self.surface_id,
+            source_width_in_pixels: self.source_width_in_pixels,
+            source_height_in_pixels: self.source_height_in_pixels,
+            producer_published_texture_layout: self.producer_published_texture_layout,
+            // The colour description does not cross the escalate wire yet, so
+            // a cross-process owner's window stays on the legacy SDR pick.
+            color_traits_of_frame: None,
+            hdr_static_metadata_of_frame: None,
+        }
+    }
+}
+
+/// Everything the processor that owns a window learns about it, coalesced,
+/// because polled state is the only thing that crosses a process boundary —
+/// no callback does.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CoalescedProcessorOwnedWindowStateForOwningProcessor {
+    /// The window's current drawable width in physical pixels.
+    pub current_width_in_physical_pixels: u32,
+    /// The window's current drawable height in physical pixels.
+    pub current_height_in_physical_pixels: u32,
+    /// Whether the user asked to close the window since the last drain.
+    pub close_requested_by_user: bool,
+    /// Whether the engine has closed the window. Sticky.
+    pub window_is_closed: bool,
+}
+
+/// The present loop the engine runs for a window whose owner's code cannot
+/// sit in the app process.
+///
+/// The owner names published surface ids and reads coalesced state; this
+/// thread does the acquiring, composing and presenting, paced by vsync.
+/// Latest-wins: several ids named between two vsyncs leave the newest
+/// showing, and naming none leaves the last frame up, so the owner's pace
+/// never stutters the window and no vsync deadline ever crosses the hop.
+///
+/// Dropping it stops the loop, joins the thread and closes the window.
+pub struct WindowPresentLoopForOwningProcessor {
+    latest_surface_named_by_the_owning_processor:
+        Arc<Mutex<Option<SurfaceNamedForTheEnginesPresentLoop>>>,
+    coalesced_state_for_the_owning_processor:
+        Arc<Mutex<CoalescedProcessorOwnedWindowStateForOwningProcessor>>,
+    frames_composed_and_presented: Arc<AtomicU64>,
+    present_loop_keeps_running: Arc<AtomicBool>,
+    present_loop_thread: Option<JoinHandle<()>>,
+}
+
+impl WindowPresentLoopForOwningProcessor {
+    /// Take ownership of an opened window and start driving it.
+    ///
+    /// One thread per window, never the pump's: windows are not serialised
+    /// behind one loop, and a window whose owner has gone quiet must still
+    /// answer its window server.
+    pub fn start_for_processor_owned_window(processor_owned_window: ProcessorOwnedWindow) -> Self {
+        let (initial_width, initial_height) =
+            processor_owned_window.current_extent_in_physical_pixels();
+        let latest_surface_named_by_the_owning_processor = Arc::new(Mutex::new(None));
+        let coalesced_state_for_the_owning_processor = Arc::new(Mutex::new(
+            CoalescedProcessorOwnedWindowStateForOwningProcessor {
+                current_width_in_physical_pixels: initial_width,
+                current_height_in_physical_pixels: initial_height,
+                close_requested_by_user: false,
+                window_is_closed: false,
+            },
+        ));
+        let frames_composed_and_presented = Arc::new(AtomicU64::new(0));
+        let present_loop_keeps_running = Arc::new(AtomicBool::new(true));
+
+        let latest_surface_on_the_loop = Arc::clone(&latest_surface_named_by_the_owning_processor);
+        let coalesced_state_on_the_loop = Arc::clone(&coalesced_state_for_the_owning_processor);
+        let frames_on_the_loop = Arc::clone(&frames_composed_and_presented);
+        let keeps_running_on_the_loop = Arc::clone(&present_loop_keeps_running);
+
+        let present_loop_thread = std::thread::Builder::new()
+            .name("processor-owned-window".to_string())
+            .spawn(move || {
+                drive_the_present_loop_for_one_processor_owned_window(
+                    processor_owned_window,
+                    &latest_surface_on_the_loop,
+                    &coalesced_state_on_the_loop,
+                    &frames_on_the_loop,
+                    &keeps_running_on_the_loop,
+                );
+            })
+            .expect("failed to spawn a processor-owned window's present thread");
+
+        Self {
+            latest_surface_named_by_the_owning_processor,
+            coalesced_state_for_the_owning_processor,
+            frames_composed_and_presented,
+            present_loop_keeps_running,
+            present_loop_thread: Some(present_loop_thread),
+        }
+    }
+
+    /// Name the surface the window shows next, replacing any the loop has not
+    /// picked up yet. Never waits on the loop.
+    pub fn name_surface_for_the_next_present(
+        &self,
+        named_surface: SurfaceNamedForTheEnginesPresentLoop,
+    ) {
+        *self
+            .latest_surface_named_by_the_owning_processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(named_surface);
+        if let Some(present_loop_thread) = self.present_loop_thread.as_ref() {
+            present_loop_thread.thread().unpark();
+        }
+    }
+
+    /// Hand the owner its window's coalesced state and clear what a drain
+    /// consumes: a close gesture is reported exactly once, while the closed
+    /// flag and the extent are the window's current state and stay.
+    pub fn drain_coalesced_state_for_the_owning_processor(
+        &self,
+    ) -> CoalescedProcessorOwnedWindowStateForOwningProcessor {
+        let mut coalesced_state = self
+            .coalesced_state_for_the_owning_processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let drained = *coalesced_state;
+        coalesced_state.close_requested_by_user = false;
+        drained
+    }
+
+    /// Whether the engine has closed this window, without consuming anything.
+    pub fn window_is_closed(&self) -> bool {
+        self.coalesced_state_for_the_owning_processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .window_is_closed
+    }
+
+    /// How many named surfaces this window has composed and presented.
+    pub fn frames_composed_and_presented(&self) -> u64 {
+        self.frames_composed_and_presented.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for WindowPresentLoopForOwningProcessor {
+    fn drop(&mut self) {
+        self.present_loop_keeps_running
+            .store(false, Ordering::Release);
+        let Some(present_loop_thread) = self.present_loop_thread.take() else {
+            return;
+        };
+        present_loop_thread.thread().unpark();
+        if present_loop_thread.join().is_err() {
+            tracing::error!("processor-owned window: the present thread panicked");
+        }
+    }
+}
+
+/// Resolve, compose and present whatever the owner has named, forever, and
+/// close the window when the user asks or the window stops being presentable.
+///
+/// The close is the engine's to make: the loop cannot wait on a helper's
+/// decision, so an owner reacts to a close rather than vetoing one, and a
+/// window it never polls still closes.
+fn drive_the_present_loop_for_one_processor_owned_window(
+    mut processor_owned_window: ProcessorOwnedWindow,
+    latest_surface_named_by_the_owning_processor: &Mutex<
+        Option<SurfaceNamedForTheEnginesPresentLoop>,
+    >,
+    coalesced_state_for_the_owning_processor: &Mutex<
+        CoalescedProcessorOwnedWindowStateForOwningProcessor,
+    >,
+    frames_composed_and_presented: &AtomicU64,
+    present_loop_keeps_running: &AtomicBool,
+) {
+    while present_loop_keeps_running.load(Ordering::Acquire) {
+        let pending_window_events = match processor_owned_window.apply_pending_window_events() {
+            Ok(events) => events,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    window_title = %processor_owned_window.window_title,
+                    "processor-owned window: the resize could not be applied — closing the \
+                     window, which can no longer present"
+                );
+                break;
+            }
+        };
+        {
+            let (width, height) = processor_owned_window.current_extent_in_physical_pixels();
+            let mut coalesced_state = coalesced_state_for_the_owning_processor
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            coalesced_state.current_width_in_physical_pixels = width;
+            coalesced_state.current_height_in_physical_pixels = height;
+            if pending_window_events.close_requested_by_user {
+                coalesced_state.close_requested_by_user = true;
+            }
+        }
+        if pending_window_events.close_requested_by_user {
+            tracing::info!(
+                window_title = %processor_owned_window.window_title,
+                "processor-owned window: close requested — closing the window, the pipeline \
+                 keeps running"
+            );
+            break;
+        }
+
+        let named_surface = latest_surface_named_by_the_owning_processor
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(named_surface) = named_surface else {
+            std::thread::park_timeout(PROCESSOR_OWNED_WINDOW_PRESENT_LOOP_IDLE_PARK_INTERVAL);
+            continue;
+        };
+
+        match processor_owned_window.show_named_surface(named_surface.as_named_surface()) {
+            Ok(NamedSurfacePresentationOutcome::ComposedAndPresented) => {
+                frames_composed_and_presented.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                window_title = %processor_owned_window.window_title,
+                "processor-owned window: present failed"
+            ),
+        }
+    }
+
+    // Dropping the window releases its pump registration, which is what
+    // closes it — so the flag is set after, never as a promise ahead of it.
+    drop(processor_owned_window);
+    coalesced_state_for_the_owning_processor
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .window_is_closed = true;
 }

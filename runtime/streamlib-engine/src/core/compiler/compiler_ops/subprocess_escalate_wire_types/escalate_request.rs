@@ -25,8 +25,17 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "acquire_texture")]
     AcquireTexture(EscalateRequestAcquireTexture),
 
+    #[serde(rename = "close_processor_owned_window")]
+    CloseProcessorOwnedWindow(EscalateRequestCloseProcessorOwnedWindow),
+
     #[serde(rename = "copy_device_export_staging_back_to_surface")]
     CopyDeviceExportStagingBackToSurface(EscalateRequestCopyDeviceExportStagingBackToSurface),
+
+    #[serde(rename = "create_processor_owned_window")]
+    CreateProcessorOwnedWindow(EscalateRequestCreateProcessorOwnedWindow),
+
+    #[serde(rename = "drain_processor_owned_window_events")]
+    DrainProcessorOwnedWindowEvents(EscalateRequestDrainProcessorOwnedWindowEvents),
 
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
@@ -72,6 +81,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "run_ray_tracing_kernel")]
     RunRayTracingKernel(EscalateRequestRunRayTracingKernel),
+
+    #[serde(rename = "show_surface_on_processor_owned_window")]
+    ShowSurfaceOnProcessorOwnedWindow(EscalateRequestShowSurfaceOnProcessorOwnedWindow),
 
     #[serde(rename = "try_run_cpu_readback_copy")]
     TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy),
@@ -149,6 +161,19 @@ pub(crate) struct EscalateRequestAcquireTexture {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestCloseProcessorOwnedWindow {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The window to release, as `create_processor_owned_window` named it.
+    /// Closing a window already closed by a user gesture is not an error —
+    /// the op is the owner's explicit release, and processor teardown
+    /// releases every window this helper still holds either way.
+    pub(crate) window_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestCopyDeviceExportStagingBackToSurface {
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
@@ -161,6 +186,44 @@ pub(crate) struct EscalateRequestCopyDeviceExportStagingBackToSurface {
     /// is their own pooled allocation. Answers with the signalled
     /// `timeline_value`.
     pub(crate) surface_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestCreateProcessorOwnedWindow {
+    /// Requested initial height of the drawable area, in physical pixels.
+    /// The window server is free to hand back another extent; the response
+    /// carries what was actually minted.
+    pub(crate) initial_height_in_physical_pixels: u32,
+
+    /// Requested initial width of the drawable area, in physical pixels.
+    pub(crate) initial_width_in_physical_pixels: u32,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// Window title, owned by the requesting processor.
+    ///
+    /// Answers with the window id every other present-class op names. Refused
+    /// when the helper is not inside its `setup` hook — a window is a
+    /// setup-phase resource request, never minted mid-`process()` — and when
+    /// the process can get no window at all (no display server, a dead pump),
+    /// in which case the pump's own error crosses the wire.
+    pub(crate) window_title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestDrainProcessorOwnedWindowEvents {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The window whose events to drain, as `create_processor_owned_window`
+    /// named it. Answers with the coalesced state — `width` / `height` the
+    /// window's current extent, `close_requested_by_user` true once per
+    /// gesture (the drain clears it), `processor_owned_window_is_closed`
+    /// sticky once the engine has closed the window.
+    pub(crate) window_id: String,
 }
 
 /// Severity level of the record. Maps 1:1 onto tracing::Level.
@@ -1747,6 +1810,42 @@ pub(crate) struct EscalateRequestRunRayTracingKernel {
 
     /// vkCmdTraceRaysKHR width.
     pub(crate) width: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The named frame's height in pixels. Zero says the caller is naming a
+    /// bare surface id it knows nothing else about, which the host reads as
+    /// "a buffer-backed surface is not acceptable to me" — the same refusal
+    /// every other zero-extent resolution takes.
+    pub(crate) source_height_in_pixels: u32,
+
+    /// The named frame's width in pixels. Same zero-extent reading as
+    /// `source_height_in_pixels`.
+    pub(crate) source_width_in_pixels: u32,
+
+    /// The published surface id naming the frame to show next.
+    ///
+    /// Hands the id to the window's engine-run present loop and returns
+    /// without waiting for it: latest-wins, so several ids named between two
+    /// vsyncs leave the newest showing and naming none leaves the last frame
+    /// up. A retired id is refused here, by name, as a recycled-frame error.
+    /// Once the window is closed the op is a no-op that answers
+    /// `processor_owned_window_is_closed` rather than an error.
+    pub(crate) surface_id: String,
+
+    /// The window to show it on, as `create_processor_owned_window` named it.
+    pub(crate) window_id: String,
+
+    /// The producer's published `VkImageLayout` for this frame as the raw
+    /// int32 enumerant, when it overrides the per-surface default. Absent
+    /// when the caller names a bare surface id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) producer_published_texture_layout: Option<i32>,
 }
 
 /// Same shape and same refusals as `run_cpu_readback_copy.direction`; only the

@@ -29,8 +29,10 @@ use crate::host_rhi::HostSurfaceStoreExt;
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateComputeBindingKind, EscalateGraphicsBindingKind, EscalateRayTracingBindingKind,
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
-    EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestLog,
-    EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestOpenCpuReadbackStaging,
+    EscalateRequestCloseProcessorOwnedWindow, EscalateRequestCopyDeviceExportStagingBackToSurface,
+    EscalateRequestCreateProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
+    EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
+    EscalateRequestOpenCpuReadbackStaging,
     EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
     EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
@@ -52,7 +54,8 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRunComputeKernelBinding, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
     EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunRayTracingKernel,
-    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindow, EscalateRequestTryRunCpuReadbackCopy,
+    EscalateRequestTryRunCpuReadbackCopyDirection,
     EscalateRequestWaitDeviceIdle, RAY_TRACING_STAGE_INDEX_NONE,
 };
 // Each names a wire field the handler no longer reads: a depth attachment and
@@ -80,7 +83,13 @@ use crate::core::context::{
     PooledTextureHandle, TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::logging::{LogLevel, LogRecord, Source, push_polyglot_record};
+use crate::core::processor_owned_window::{
+    ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
+    SurfaceNamedForTheEnginesPresentLoop, WindowPresentLoopForOwningProcessor,
+};
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
+use crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
+use crate::host_rhi::PresentScalingMode;
 
 #[cfg(test)]
 use crate::core::error::{Error, Result};
@@ -117,6 +126,10 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RegisterRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
+        EscalateRequest::CreateProcessorOwnedWindow(p) => Some(&p.request_id),
+        EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(p) => Some(&p.request_id),
+        EscalateRequest::DrainProcessorOwnedWindowEvents(p) => Some(&p.request_id),
+        EscalateRequest::CloseProcessorOwnedWindow(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
@@ -182,10 +195,32 @@ impl RegisteredHandle {
 /// resource from being immediately recycled while the subprocess still
 /// references it by ID. Dropping a [`PooledTextureHandle`] releases the pool
 /// slot; dropping an [`PixelBuffer`] releases its refcount.
+///
+/// It is the one per-subprocess state the escalate dispatch has, so the
+/// windows that subprocess owns and the lifecycle hook it is currently inside
+/// live here too — both are per-helper, and both are released or forgotten at
+/// the same teardown.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
     handles: Mutex<HashMap<String, RegisteredHandle>>,
+    /// The windows this subprocess owns, each driving its own present
+    /// thread. Not a [`RegisteredHandle`]: releasing one stops and joins a
+    /// thread rather than evicting a texture-cache entry, and a window id
+    /// must never reach the surface-share release path.
+    processor_owned_windows: Mutex<HashMap<String, WindowPresentLoopForOwningProcessor>>,
+    /// The lifecycle command the parent last sent this helper — the engine's
+    /// only reading of which hook the child is inside.
+    ///
+    /// Setup-phase-only ops refuse on it. The helper's own typestate (which
+    /// Python object carries the method) is the child's guard and never the
+    /// engine's: both Python capability tiers collapse onto this one wire.
+    last_lifecycle_command_sent_to_the_helper_process: Mutex<Option<String>>,
 }
+
+/// The lifecycle command whose hook may mint a window. A window is a
+/// setup-phase resource request; `docs/plan/ARCHITECTURE.md` §Media I/O has
+/// it "requested in `setup()` … never minted mid-`process()`".
+const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
 impl EscalateHandleRegistry {
     pub(crate) fn new() -> Arc<Self> {
@@ -260,6 +295,71 @@ impl EscalateHandleRegistry {
     #[cfg(test)]
     pub(crate) fn handle_count(&self) -> usize {
         self.handles.lock().expect("poisoned").len()
+    }
+
+    /// Record the lifecycle command the parent is about to send the helper,
+    /// so setup-phase-only escalate ops can refuse everything else by name.
+    pub(crate) fn note_lifecycle_command_sent_to_the_helper_process(&self, command: &str) {
+        *self
+            .last_lifecycle_command_sent_to_the_helper_process
+            .lock()
+            .expect("poisoned") = Some(command.to_string());
+    }
+
+    /// Whether the helper is currently inside its `setup` hook.
+    ///
+    /// False before the parent has sent anything: a request arriving ahead of
+    /// the setup command belongs to no hook at all.
+    pub(crate) fn helper_process_is_inside_its_setup_hook(&self) -> bool {
+        self.last_lifecycle_command_sent_to_the_helper_process
+            .lock()
+            .expect("poisoned")
+            .as_deref()
+            == Some(SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS)
+    }
+
+    pub(crate) fn insert_processor_owned_window(
+        &self,
+        window_id: String,
+        present_loop: WindowPresentLoopForOwningProcessor,
+    ) {
+        let mut windows = self.processor_owned_windows.lock().expect("poisoned");
+        windows.insert(window_id, present_loop);
+    }
+
+    /// Run `act_on_the_window` against one held window, or answer `None` when
+    /// the id names no window this subprocess owns.
+    ///
+    /// The map's lock is held for the call, so the closure must only touch the
+    /// window's own state — never drop a window, which would join a thread
+    /// under this lock.
+    pub(crate) fn with_processor_owned_window<T>(
+        &self,
+        window_id: &str,
+        act_on_the_window: impl FnOnce(&WindowPresentLoopForOwningProcessor) -> T,
+    ) -> Option<T> {
+        let windows = self.processor_owned_windows.lock().expect("poisoned");
+        windows.get(window_id).map(act_on_the_window)
+    }
+
+    /// Take one window out, so dropping it closes the window and joins its
+    /// present thread clear of the map's lock.
+    pub(crate) fn remove_processor_owned_window(
+        &self,
+        window_id: &str,
+    ) -> Option<WindowPresentLoopForOwningProcessor> {
+        let mut windows = self.processor_owned_windows.lock().expect("poisoned");
+        windows.remove(window_id)
+    }
+
+    /// Take every window this subprocess still owns, so a teardown path
+    /// closes them all — the release an owner that never called
+    /// `close_processor_owned_window` still gets.
+    pub(crate) fn drain_processor_owned_windows(
+        &self,
+    ) -> Vec<(String, WindowPresentLoopForOwningProcessor)> {
+        let mut windows = self.processor_owned_windows.lock().expect("poisoned");
+        windows.drain().collect()
     }
 }
 
@@ -802,10 +902,239 @@ pub(crate) fn handle_escalate_op(
                 })
             })
         }
+        EscalateRequest::CreateProcessorOwnedWindow(req) => Some(
+            handle_create_processor_owned_window(sandbox, registry, rid, req),
+        ),
+        EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(req) => Some(
+            handle_show_surface_on_processor_owned_window(sandbox, registry, rid, req),
+        ),
+        EscalateRequest::DrainProcessorOwnedWindowEvents(
+            EscalateRequestDrainProcessorOwnedWindowEvents {
+                request_id: _,
+                window_id,
+            },
+        ) => Some(handle_drain_processor_owned_window_events(
+            registry, rid, window_id,
+        )),
+        EscalateRequest::CloseProcessorOwnedWindow(EscalateRequestCloseProcessorOwnedWindow {
+            request_id: _,
+            window_id,
+        }) => Some(handle_close_processor_owned_window(
+            registry, rid, window_id,
+        )),
         EscalateRequest::Log(log_op) => {
             push_polyglot_record(log_record_from_wire(log_op));
             None
         }
+    }
+}
+
+/// Mint a window for a helper process and start the engine's present loop on
+/// it, answering with the id every other present-class op names.
+///
+/// The pump round trip happens outside the escalate gate on purpose: it
+/// touches no GPU and is bounded by the pump's own timeout, so holding the
+/// process-wide gate across it would let a wedged compositor stall every GPU
+/// escalation in the process.
+fn handle_create_processor_owned_window(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    request: EscalateRequestCreateProcessorOwnedWindow,
+) -> EscalateResponse {
+    if !registry.helper_process_is_inside_its_setup_hook() {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id,
+            message: format!(
+                "create_processor_owned_window is a setup-phase request: the window titled                  {:?} was asked for outside this processor's setup() hook, and a window is                  never minted mid-process()",
+                request.window_title
+            ),
+        });
+    }
+
+    let window_title = request.window_title.clone();
+    let registered_window =
+        match ProcessorOwnedWindowAwaitingItsPresentTarget::register_on_the_process_wide_window_event_pump(
+            ProcessorOwnedWindowRequest {
+                window_registration_request: WindowRegistrationRequestFromOwningProcessor {
+                    window_title: request.window_title,
+                    initial_width_in_physical_pixels: request.initial_width_in_physical_pixels,
+                    initial_height_in_physical_pixels: request.initial_height_in_physical_pixels,
+                },
+                // Letterbox, and no dial on the request: the compositor's
+                // default is the decided behaviour, and a scaling mode is
+                // additive surface rather than plan text.
+                scaling_mode_for_frame_in_window: PresentScalingMode::Fit,
+            },
+        ) {
+            Ok(registered_window) => registered_window,
+            Err(e) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id,
+                    message: format!(
+                        "create_processor_owned_window failed for the window titled                          {window_title:?}: {e}"
+                    ),
+                });
+            }
+        };
+
+    let processor_owned_window = sandbox.escalate(|full| {
+        ProcessorOwnedWindow::open_present_target_for_registered_window(full, registered_window)
+    });
+    let processor_owned_window = match processor_owned_window {
+        Ok(processor_owned_window) => processor_owned_window,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id,
+                message: format!(
+                    "create_processor_owned_window failed for the window titled                      {window_title:?}: {e}"
+                ),
+            });
+        }
+    };
+
+    let (width, height) = processor_owned_window.current_extent_in_physical_pixels();
+    let window_id = format!("processor-owned-window-{}", Uuid::new_v4());
+    registry.insert_processor_owned_window(
+        window_id.clone(),
+        WindowPresentLoopForOwningProcessor::start_for_processor_owned_window(
+            processor_owned_window,
+        ),
+    );
+    EscalateResponse::Ok(EscalateResponseOk {
+        request_id,
+        handle_id: window_id,
+        width: Some(width),
+        height: Some(height),
+        processor_owned_window_is_closed: Some(false),
+        ..Default::default()
+    })
+}
+
+/// Name the frame a window shows next, without waiting for it to be shown.
+///
+/// No escalate gate: the gate serialises runtime-wide and waits for device
+/// idle, and this is a per-frame op that starts no GPU work of its own — the
+/// window's own thread does the acquiring and composing. Naming is all that
+/// crosses the hop; the vsync deadline never does.
+fn handle_show_surface_on_processor_owned_window(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    request: EscalateRequestShowSurfaceOnProcessorOwnedWindow,
+) -> EscalateResponse {
+    // Checked here rather than left to the loop: a retired id names a frame
+    // whose slot has been recycled, and the owner is owed that by name at the
+    // call that got it wrong, not a window that quietly keeps its last frame.
+    if let Err(e) = sandbox
+        .host_inner()
+        .refuse_a_retired_frame_id(&request.surface_id)
+    {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id,
+            message: format!("show_surface_on_processor_owned_window refused: {e}"),
+        });
+    }
+
+    let named_and_window_is_closed = registry.with_processor_owned_window(
+        &request.window_id,
+        |present_loop| {
+            if present_loop.window_is_closed() {
+                return true;
+            }
+            present_loop.name_surface_for_the_next_present(SurfaceNamedForTheEnginesPresentLoop {
+                surface_id: request.surface_id,
+                source_width_in_pixels: request.source_width_in_pixels,
+                source_height_in_pixels: request.source_height_in_pixels,
+                producer_published_texture_layout: request.producer_published_texture_layout,
+            });
+            false
+        },
+    );
+
+    match named_and_window_is_closed {
+        Some(window_is_closed) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id,
+            handle_id: request.window_id,
+            processor_owned_window_is_closed: Some(window_is_closed),
+            ..Default::default()
+        }),
+        None => EscalateResponse::Err(unknown_processor_owned_window_error(
+            request_id,
+            "show_surface_on_processor_owned_window",
+            &request.window_id,
+        )),
+    }
+}
+
+/// Hand the owner its window's coalesced state: current extent, whether the
+/// user asked to close it since the last drain, and whether the engine has
+/// closed it.
+fn handle_drain_processor_owned_window_events(
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    window_id: String,
+) -> EscalateResponse {
+    let drained = registry.with_processor_owned_window(&window_id, |present_loop| {
+        present_loop.drain_coalesced_state_for_the_owning_processor()
+    });
+    match drained {
+        Some(drained) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id,
+            handle_id: window_id,
+            width: Some(drained.current_width_in_physical_pixels),
+            height: Some(drained.current_height_in_physical_pixels),
+            close_requested_by_user: Some(drained.close_requested_by_user),
+            processor_owned_window_is_closed: Some(drained.window_is_closed),
+            ..Default::default()
+        }),
+        None => EscalateResponse::Err(unknown_processor_owned_window_error(
+            request_id,
+            "drain_processor_owned_window_events",
+            &window_id,
+        )),
+    }
+}
+
+/// Release a window the owner is done with: the present thread stops and
+/// joins, and dropping the window's pump registration is what closes it.
+fn handle_close_processor_owned_window(
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    window_id: String,
+) -> EscalateResponse {
+    // Dropped outside the registry's lock — joining the present thread under
+    // it would block every other window op on this helper.
+    match registry.remove_processor_owned_window(&window_id) {
+        Some(present_loop) => {
+            drop(present_loop);
+            EscalateResponse::Ok(EscalateResponseOk {
+                request_id,
+                handle_id: window_id,
+                processor_owned_window_is_closed: Some(true),
+                ..Default::default()
+            })
+        }
+        None => EscalateResponse::Err(unknown_processor_owned_window_error(
+            request_id,
+            "close_processor_owned_window",
+            &window_id,
+        )),
+    }
+}
+
+/// The one refusal for an id that names no window this subprocess owns —
+/// never minted, or already released.
+fn unknown_processor_owned_window_error(
+    request_id: String,
+    op_wire_name: &str,
+    window_id: &str,
+) -> EscalateResponseErr {
+    EscalateResponseErr {
+        request_id,
+        message: format!(
+            "{op_wire_name}: window_id '{window_id}' names no window this processor owns"
+        ),
     }
 }
 
