@@ -41,10 +41,10 @@ OUTPUT_BINDING = "output_image"
 # Opaque and asymmetric across channels: a probe that read the wrong
 # channel order, or somebody else's memory, cannot match by accident.
 FILLED_SOURCE_RGBA = (10, 20, 30, 255)
+DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
 
 # One row of RGBA32F entries — the LUT shape the owner ruling named.
 LUT_WIDTH = 256
-DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
 
 READ_ONE_WRITE_ANOTHER_GLSL = """\
 #version 450

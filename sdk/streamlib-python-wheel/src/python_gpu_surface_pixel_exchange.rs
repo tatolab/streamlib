@@ -84,6 +84,17 @@ pub(crate) struct GpuSurfaceOwnedMemory {
     #[cfg(target_os = "linux")]
     checked_out_surface: HelperCheckedOutSurface,
     minted_surface_id: Option<String>,
+    /// The one staged edit outstanding against this surface, whichever
+    /// door staged it.
+    ///
+    /// It lives here, not on the handle or the scope, because the thing it
+    /// is about is the *surface*: the handle's CPU door and every
+    /// device-tensor scope that handle mints all publish over these same
+    /// pixels out of different stagings, and each staging was filled
+    /// before the others' edits existed. One cell they all reach is what
+    /// makes the second door's refusal reach the first door's edit.
+    #[cfg(target_os = "linux")]
+    pending_staged_write_back: PendingStagedWriteBackToSurface,
 }
 
 impl GpuSurfaceOwnedMemory {
@@ -95,6 +106,7 @@ impl GpuSurfaceOwnedMemory {
         Arc::new(Self {
             checked_out_surface,
             minted_surface_id,
+            pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
         })
     }
 
@@ -143,6 +155,22 @@ impl GpuSurfaceOwnedMemory {
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
         false
+    }
+
+    /// How a refusal names this surface — its minted id where it has one,
+    /// and the checkout's own id otherwise, so no refusal says "None".
+    #[cfg(target_os = "linux")]
+    pub(crate) fn surface_id_for_a_refusal(&self) -> &str {
+        self.minted_surface_id
+            .as_deref()
+            .unwrap_or_else(|| self.checked_out_surface.surface_id())
+    }
+
+    /// The staged edit outstanding against this surface, if any door has
+    /// one — the cell every door arms, discards and publishes through.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn pending_staged_write_back(&self) -> &PendingStagedWriteBackToSurface {
+        &self.pending_staged_write_back
     }
 
     /// The host-mapped pixel view, or a refusal naming why this surface
@@ -913,6 +941,7 @@ impl PendingStagedWriteBackToSurface {
         python: Python<'_>,
         owned_memory: &Arc<GpuSurfaceOwnedMemory>,
     ) -> PyResult<()> {
+        debug_assert!(std::ptr::eq(self, &owned_memory.pending_staged_write_back));
         // Taken before the publish, not held across it: the copy crosses
         // to the parent, and a lock held over that hop is the
         // mutex-across-the-GIL hazard.
@@ -1205,6 +1234,40 @@ mod tests {
         pending
             .arm(StagedWriteBackSource::DeviceExportStaging)
             .expect("the first source is still the armed one");
+    }
+
+    /// The cell belongs to the surface, not the handle or the scope.
+    ///
+    /// `as_device_tensor()` mints a scope over the *same*
+    /// `GpuSurfaceOwnedMemory` the handle holds, so a CPU staged edit and
+    /// a device edit are two stagings over one surface — each filled
+    /// before the other's edit existed. While the two doors kept private
+    /// cells, neither refusal could see the other's edit and whichever
+    /// published last silently overwrote the first.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_device_scope_meets_the_cpu_doors_arm_because_the_cell_is_the_surfaces() {
+        Python::initialize();
+        // The cell a `GpuSurfaceOwnedMemory` now holds; a handle and every
+        // device-tensor scope it mints reach this one instance, which is
+        // what lets the second door's refusal see the first door's edit.
+        let surfaces_pending_edit = PendingStagedWriteBackToSurface::new_unarmed();
+
+        // What the handle's CPU door does under a write lock.
+        surfaces_pending_edit
+            .arm(StagedWriteBackSource::CpuReadbackStaging)
+            .expect("the CPU door stages first");
+
+        // What a device-tensor scope minted off that same handle then does.
+        let refusal = surfaces_pending_edit
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .err()
+            .expect("a device scope over a surface holding a CPU staged edit must be refused")
+            .to_string();
+        assert!(
+            refusal.contains("the CPU array") && refusal.contains("the device tensor"),
+            "the refusal must name both doors: {refusal:?}"
+        );
     }
 
     /// Discarding frees the scope to take the other door — the refusal is
