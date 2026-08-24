@@ -53,9 +53,12 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRunComputeKernelBinding, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
     EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunRayTracingKernel,
-    EscalateRequestShowSurfaceOnProcessorOwnedWindow, EscalateRequestTryRunCpuReadbackCopy,
-    EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
-    RAY_TRACING_STAGE_INDEX_NONE,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindow,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata,
+    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestWaitDeviceIdle, RAY_TRACING_STAGE_INDEX_NONE,
 };
 // Each names a wire field the handler no longer reads: a depth attachment and
 // either half of a vertex input are refused, so only the tests that prove the
@@ -74,6 +77,7 @@ use super::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
+use crate::core::color::{ColorTraits, HdrStaticMetadata, PrimariesId, TransferId};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::SurfaceExportStagingResidency;
@@ -1052,45 +1056,31 @@ fn handle_show_surface_on_processor_owned_window(
     request_id: String,
     request: EscalateRequestShowSurfaceOnProcessorOwnedWindow,
 ) -> EscalateResponse {
-    let EscalateRequestShowSurfaceOnProcessorOwnedWindow {
-        request_id: _,
-        window_id,
-        surface_id,
-        source_width_in_pixels,
-        source_height_in_pixels,
-        producer_published_texture_layout,
-    } = request;
-
-    let Some(present_loop) = registry.processor_owned_window(&window_id) else {
+    let Some(present_loop) = registry.processor_owned_window(&request.window_id) else {
         return EscalateResponse::Err(unknown_processor_owned_window_error(
             request_id,
             "show_surface_on_processor_owned_window",
-            &window_id,
+            &request.window_id,
         ));
     };
 
     let outcome = if present_loop.window_is_closed() {
         ShowSurfaceOnProcessorOwnedWindowOutcome::WindowIsClosedSoNothingWasNamed
-    } else if let Err(e) = sandbox.host_inner().refuse_a_retired_frame_id(&surface_id) {
+    } else if let Err(e) = sandbox
+        .host_inner()
+        .refuse_a_retired_frame_id(&request.surface_id)
+    {
         // Refused here rather than left to the loop: the owner is owed the
         // recycling by name at the call that got it wrong, never a window
         // that quietly keeps its last frame. Judged after the closed window,
         // because a stale id must not turn the close's no-op into an error.
         ShowSurfaceOnProcessorOwnedWindowOutcome::SurfaceIdWasRetired(e.to_string())
     } else {
-        present_loop.name_surface_for_the_next_present(SurfaceNamedForTheEnginesPresentLoop {
-            surface_id,
-            source_width_in_pixels,
-            source_height_in_pixels,
-            producer_published_texture_layout,
-            // The wire carries no colour description, so a cross-process
-            // owner's window stays on the legacy SDR pick. Carrying one is
-            // additive wire surface, not a change to this seam.
-            color_traits_of_frame: None,
-            hdr_static_metadata_of_frame: None,
-        });
+        present_loop
+            .name_surface_for_the_next_present(surface_named_for_the_present_loop_of(&request));
         ShowSurfaceOnProcessorOwnedWindowOutcome::NamedForTheNextPresent
     };
+    let window_id = request.window_id;
 
     match outcome {
         ShowSurfaceOnProcessorOwnedWindowOutcome::NamedForTheNextPresent => {
@@ -1181,6 +1171,113 @@ fn handle_close_processor_owned_window(
             "close_processor_owned_window",
             &window_id,
         )),
+    }
+}
+
+/// The frame one request names, projected onto what the engine's present
+/// loop takes — the whole of it, so a field dropped on the way through is a
+/// test failure rather than a window quietly showing an undescribed frame.
+///
+/// Borrows and clones the id rather than consuming the request, because the
+/// response still owes the caller its window id; one short-string clone on a
+/// path that has just decoded this document from JSON.
+fn surface_named_for_the_present_loop_of(
+    request: &EscalateRequestShowSurfaceOnProcessorOwnedWindow,
+) -> SurfaceNamedForTheEnginesPresentLoop {
+    SurfaceNamedForTheEnginesPresentLoop {
+        surface_id: request.surface_id.clone(),
+        source_width_in_pixels: request.source_width_in_pixels,
+        source_height_in_pixels: request.source_height_in_pixels,
+        producer_published_texture_layout: request.producer_published_texture_layout,
+        color_traits_of_frame: color_traits_of_frame_named_over_the_wire(
+            request.color_primaries_of_frame,
+            request.color_transfer_of_frame,
+        ),
+        hdr_static_metadata_of_frame: request
+            .hdr_static_metadata_of_frame
+            .map(hdr_static_metadata_named_over_the_wire),
+    }
+}
+
+/// The frame's colour description, or `None` when the caller named neither
+/// axis.
+///
+/// Naming either axis alone is a description: the seam resolves the absent
+/// one itself, and answering `Some` with both axes empty would renegotiate
+/// the swapchain to the default pick rather than leave the window alone.
+fn color_traits_of_frame_named_over_the_wire(
+    color_primaries_of_frame: Option<
+        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries,
+    >,
+    color_transfer_of_frame: Option<EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer>,
+) -> Option<ColorTraits> {
+    if color_primaries_of_frame.is_none() && color_transfer_of_frame.is_none() {
+        return None;
+    }
+    Some(ColorTraits {
+        primaries: color_primaries_of_frame.map(|primaries| match primaries {
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt709 => {
+                PrimariesId::Bt709
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt470M => {
+                PrimariesId::Bt470M
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt470Bg => {
+                PrimariesId::Bt470Bg
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte170m => {
+                PrimariesId::Smpte170m
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte240m => {
+                PrimariesId::Smpte240m
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Film => {
+                PrimariesId::Film
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt2020 => {
+                PrimariesId::Bt2020
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte428 => {
+                PrimariesId::Smpte428
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte431 => {
+                PrimariesId::Smpte431
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte432 => {
+                PrimariesId::Smpte432
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Ebu3213 => {
+                PrimariesId::Ebu3213
+            }
+        }),
+        transfer: color_transfer_of_frame.map(|transfer| match transfer {
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Linear => {
+                TransferId::Linear
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Srgb => TransferId::Srgb,
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Bt709 => {
+                TransferId::Bt709
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Pq => TransferId::Pq,
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Hlg => TransferId::Hlg,
+        }),
+    })
+}
+
+/// The frame's HDR sidecar, field for field: the wire already carries the f32
+/// units the driver takes, so this converts nothing and only crosses types.
+fn hdr_static_metadata_named_over_the_wire(
+    hdr_static_metadata_of_frame: EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata,
+) -> HdrStaticMetadata {
+    HdrStaticMetadata {
+        display_primary_red: hdr_static_metadata_of_frame.display_primary_red,
+        display_primary_green: hdr_static_metadata_of_frame.display_primary_green,
+        display_primary_blue: hdr_static_metadata_of_frame.display_primary_blue,
+        white_point: hdr_static_metadata_of_frame.white_point,
+        min_luminance_cd_m2: hdr_static_metadata_of_frame.min_luminance_cd_m2,
+        max_luminance_cd_m2: hdr_static_metadata_of_frame.max_luminance_cd_m2,
+        max_content_light_level: hdr_static_metadata_of_frame.max_content_light_level,
+        max_frame_average_light_level: hdr_static_metadata_of_frame.max_frame_average_light_level,
     }
 }
 
@@ -5057,6 +5154,9 @@ mod tests {
                         surface_id: "a-surface-this-process-never-saw".into(),
                         source_width_in_pixels: 64,
                         source_height_in_pixels: 64,
+                        color_primaries_of_frame: None,
+                        color_transfer_of_frame: None,
+                        hdr_static_metadata_of_frame: None,
                         producer_published_texture_layout: None,
                     },
                 ),
@@ -5087,6 +5187,130 @@ mod tests {
                 );
                 assert_no_collapsed_whitespace(&message);
             }
+        }
+
+        /// The whole projection from one wire request onto what the present
+        /// loop takes. Every field asserted concretely, so dropping any one
+        /// on the way through fails here rather than showing an undescribed
+        /// frame on a window nobody is watching in CI.
+        #[test]
+        fn a_wire_request_projects_onto_the_frame_the_present_loop_shows() {
+            let named = surface_named_for_the_present_loop_of(
+                &EscalateRequestShowSurfaceOnProcessorOwnedWindow {
+                    request_id: "req-show".into(),
+                    window_id: A_WINDOW_ID_NOBODY_OWNS.into(),
+                    surface_id: "pool-slot-7#3".into(),
+                    source_width_in_pixels: 1920,
+                    source_height_in_pixels: 1080,
+                    color_primaries_of_frame: Some(
+                        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt2020,
+                    ),
+                    color_transfer_of_frame: Some(
+                        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Pq,
+                    ),
+                    hdr_static_metadata_of_frame: Some(
+                        EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata {
+                            display_primary_red: [0.708, 0.292],
+                            display_primary_green: [0.170, 0.797],
+                            display_primary_blue: [0.131, 0.046],
+                            white_point: [0.3127, 0.3290],
+                            min_luminance_cd_m2: 0.005,
+                            max_luminance_cd_m2: 1000.0,
+                            max_content_light_level: 1000.0,
+                            max_frame_average_light_level: 400.0,
+                        },
+                    ),
+                    producer_published_texture_layout: Some(1000001002),
+                },
+            );
+
+            assert_eq!(named.surface_id, "pool-slot-7#3");
+            assert_eq!(named.source_width_in_pixels, 1920);
+            assert_eq!(named.source_height_in_pixels, 1080);
+            assert_eq!(named.producer_published_texture_layout, Some(1000001002));
+            assert_eq!(
+                named.color_traits_of_frame,
+                Some(ColorTraits {
+                    primaries: Some(PrimariesId::Bt2020),
+                    transfer: Some(TransferId::Pq),
+                }),
+                "the colour a helper named must reach the seam that renegotiates on it"
+            );
+            assert_eq!(
+                named
+                    .hdr_static_metadata_of_frame
+                    .map(|hdr| hdr.white_point),
+                Some([0.3127, 0.3290]),
+                "the HDR sidecar must reach the seam that signals it"
+            );
+        }
+
+        /// A frame's colour description survives the hop: either axis alone
+        /// is a description, and naming neither is silence rather than a
+        /// request for the default pick — which would renegotiate the
+        /// window's swapchain on every undescribed frame.
+        #[test]
+        fn a_frames_colour_description_crosses_the_wire_onto_the_engines_own_ids() {
+            assert_eq!(
+                color_traits_of_frame_named_over_the_wire(None, None),
+                None,
+                "an undescribed frame must leave the window on what it last applied"
+            );
+            assert_eq!(
+                color_traits_of_frame_named_over_the_wire(
+                    Some(EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt2020),
+                    Some(EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Pq),
+                ),
+                Some(ColorTraits {
+                    primaries: Some(PrimariesId::Bt2020),
+                    transfer: Some(TransferId::Pq),
+                }),
+                "HDR10's two axes are exactly what the seam renegotiates on"
+            );
+            assert_eq!(
+                color_traits_of_frame_named_over_the_wire(
+                    None,
+                    Some(EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Hlg),
+                ),
+                Some(ColorTraits {
+                    primaries: None,
+                    transfer: Some(TransferId::Hlg),
+                }),
+                "one axis alone is a description — the seam resolves the other itself"
+            );
+        }
+
+        /// The HDR sidecar crosses field for field, in the f32 units the
+        /// driver takes. A transposition here shows up as a mastering display
+        /// the window believes has the wrong primaries.
+        #[test]
+        fn the_hdr_sidecar_crosses_the_wire_field_for_field() {
+            let crossed = hdr_static_metadata_named_over_the_wire(
+                EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata {
+                    display_primary_red: [0.708, 0.292],
+                    display_primary_green: [0.170, 0.797],
+                    display_primary_blue: [0.131, 0.046],
+                    white_point: [0.3127, 0.3290],
+                    min_luminance_cd_m2: 0.005,
+                    max_luminance_cd_m2: 1000.0,
+                    max_content_light_level: 1000.0,
+                    max_frame_average_light_level: 400.0,
+                },
+            );
+            assert_eq!(
+                crossed,
+                HdrStaticMetadata {
+                    display_primary_red: [0.708, 0.292],
+                    display_primary_green: [0.170, 0.797],
+                    display_primary_blue: [0.131, 0.046],
+                    white_point: [0.3127, 0.3290],
+                    min_luminance_cd_m2: 0.005,
+                    max_luminance_cd_m2: 1000.0,
+                    max_content_light_level: 1000.0,
+                    max_frame_average_light_level: 400.0,
+                },
+                "BT.2020 mastering metadata must reach the driver unpermuted"
+            );
         }
 
         /// Asked for from anywhere but `setup()`, a window is refused with

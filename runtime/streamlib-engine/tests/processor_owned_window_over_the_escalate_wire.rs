@@ -56,6 +56,26 @@ fn show_surface_on_window(surface_id: &str, window_id: &str) -> Value {
     })
 }
 
+/// The same frame, described the way a Python owner reading an HDR10 bag
+/// would describe it: BT.2020 primaries, PQ transfer, and the mastering
+/// display's sidecar in the f32 units the driver takes.
+fn show_hdr_surface_on_window(surface_id: &str, window_id: &str) -> Value {
+    let mut op = show_surface_on_window(surface_id, window_id);
+    op["color_primaries_of_frame"] = json!("bt2020");
+    op["color_transfer_of_frame"] = json!("pq");
+    op["hdr_static_metadata_of_frame"] = json!({
+        "display_primary_red": [0.708, 0.292],
+        "display_primary_green": [0.170, 0.797],
+        "display_primary_blue": [0.131, 0.046],
+        "white_point": [0.3127, 0.3290],
+        "min_luminance_cd_m2": 0.005,
+        "max_luminance_cd_m2": 1000.0,
+        "max_content_light_level": 1000.0,
+        "max_frame_average_light_level": 400.0,
+    });
+    op
+}
+
 fn create_window_titled(window_title: &str) -> Value {
     json!({
         "op": "create_processor_owned_window",
@@ -188,6 +208,24 @@ fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire
         shown["processor_owned_window_is_closed"],
         json!(false),
         "an open window must not report itself closed, got {shown}"
+    );
+
+    // A described frame: the axis a Rust owner has had since the seam landed,
+    // reachable from a helper process too. What the window server does with
+    // BT.2020/PQ is its own call — what is asserted is that describing a
+    // frame crosses the hop and never costs the owner its window.
+    let shown_hdr = helper.escalate_request_to_the_parent(show_hdr_surface_on_window(
+        &published_surface_id.0,
+        &window_id,
+    ));
+    assert_ok(
+        &shown_hdr,
+        "show_surface_on_processor_owned_window carrying a colour description",
+    );
+    assert_eq!(
+        shown_hdr["processor_owned_window_is_closed"],
+        json!(false),
+        "describing a frame must not close the window, got {shown_hdr}"
     );
 
     // The surface-id lifetime contract, over the wire: a retired id is a loud

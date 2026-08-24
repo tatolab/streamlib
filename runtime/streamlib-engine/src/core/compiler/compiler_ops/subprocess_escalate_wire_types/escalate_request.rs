@@ -1809,6 +1809,102 @@ pub(crate) struct EscalateRequestRunRayTracingKernel {
     pub(crate) width: u32,
 }
 
+/// The frame's color primaries, spelled as the engine's own
+/// [`PrimariesId`](crate::core::color::PrimariesId) rather than as any bag's
+/// enum: a bag vocabulary belongs to whoever reads bags, and the engine takes
+/// a resolved description from every language the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries {
+    #[serde(rename = "bt470_bg")]
+    Bt470Bg,
+
+    #[serde(rename = "bt470_m")]
+    Bt470M,
+
+    #[serde(rename = "bt709")]
+    Bt709,
+
+    #[serde(rename = "bt2020")]
+    Bt2020,
+
+    #[serde(rename = "ebu3213")]
+    Ebu3213,
+
+    #[serde(rename = "film")]
+    Film,
+
+    #[serde(rename = "smpte170m")]
+    Smpte170m,
+
+    #[serde(rename = "smpte240m")]
+    Smpte240m,
+
+    #[serde(rename = "smpte428")]
+    Smpte428,
+
+    #[serde(rename = "smpte431")]
+    Smpte431,
+
+    #[serde(rename = "smpte432")]
+    Smpte432,
+}
+
+/// The frame's transfer function, spelled as the engine's own
+/// [`TransferId`](crate::core::color::TransferId). Narrower than a bag's
+/// transfer enum on purpose — several bag spellings resolve to one engine
+/// transfer, and that collapse belongs to the caller that read the bag.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer {
+    #[serde(rename = "bt709")]
+    Bt709,
+
+    #[serde(rename = "hlg")]
+    Hlg,
+
+    #[serde(rename = "linear")]
+    Linear,
+
+    #[serde(rename = "pq")]
+    Pq,
+
+    #[serde(rename = "srgb")]
+    Srgb,
+}
+
+/// The frame's HDR static metadata, already in the f32 units
+/// `vkSetHdrMetadataEXT` takes — CIE xy chromaticities and cd/m² luminances,
+/// not the 1/50000 and 0.0001 wire integers a bag carries. Converting is the
+/// caller's, for the same reason the transfer collapse is.
+///
+/// Only reaches the driver when the window's picked colorspace is PQ or HLG.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata {
+    /// CIE xy of the mastering display's blue primary.
+    pub(crate) display_primary_blue: [f32; 2],
+
+    /// CIE xy of the mastering display's green primary.
+    pub(crate) display_primary_green: [f32; 2],
+
+    /// CIE xy of the mastering display's red primary.
+    pub(crate) display_primary_red: [f32; 2],
+
+    /// MaxFALL, cd/m².
+    pub(crate) max_frame_average_light_level: f32,
+
+    /// MaxCLL, cd/m².
+    pub(crate) max_content_light_level: f32,
+
+    /// The mastering display's peak luminance, cd/m².
+    pub(crate) max_luminance_cd_m2: f32,
+
+    /// The mastering display's black level, cd/m².
+    pub(crate) min_luminance_cd_m2: f32,
+
+    /// CIE xy of the mastering display's white point.
+    pub(crate) white_point: [f32; 2],
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
@@ -1834,6 +1930,25 @@ pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
 
     /// The window to show it on, as `create_processor_owned_window` named it.
     pub(crate) window_id: String,
+
+    /// The frame's color primaries. Present with or without
+    /// `color_transfer_of_frame` — a frame may describe either axis alone,
+    /// and either one present is a description. Both absent leaves the window
+    /// on whatever it last applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) color_primaries_of_frame:
+        Option<EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries>,
+
+    /// The frame's transfer function. A change from the last shown frame
+    /// renegotiates the window's swapchain colorspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) color_transfer_of_frame:
+        Option<EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer>,
+
+    /// The frame's HDR static metadata sidecar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) hdr_static_metadata_of_frame:
+        Option<EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata>,
 
     /// The producer's published `VkImageLayout` for this frame as the raw
     /// int32 enumerant, when it overrides the per-surface default. Absent
