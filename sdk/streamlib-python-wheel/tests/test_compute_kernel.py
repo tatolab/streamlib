@@ -202,6 +202,10 @@ def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
         "a texture this processor acquired can take a recorded copy in, so the "
         "engine's write-back answer must be yes"
     )
+    assert observed["the_curve_published"] is True, (
+        "the whole ramp must survive the staged fill and come back: "
+        f"{observed['first_and_last_entries']!r}"
+    )
 
 
 def test_a_kernel_is_built_with_no_shader_toolchain_on_path(

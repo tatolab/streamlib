@@ -674,7 +674,13 @@ class GpuSurfaceHandle:
     def format(self) -> str: ...
     @property
     def bytes_per_row(self) -> int:
-        """Row pitch in bytes, including any padding the allocation carries."""
+        """Row pitch in bytes, including any padding the allocation carries.
+
+        Over a texture backing it is the staging's pitch, not the tiled
+        texture's — the staging is the allocation the CPU addresses. Asking
+        maps that staging, which needs no lock and costs one checkout the
+        first time this process asks about the surface.
+        """
 
     @property
     def base_address(self) -> int | None:

@@ -252,7 +252,8 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     own device — and the kernel's pixels read back through the device export,
     which only happens when the layout chain (dispatch publish, checkout,
     acquire barrier, staging refill) named the truth at every step. Its CPU
-    accessors and DMA-BUF export refuse by naming the backing. The
+    accessors read the same pixels over the host-visible staging, and its
+    DMA-BUF export refuses by naming the backing. The
     render-target flavour is kernel-written too and exports the fd native
     code imports — the demo shape. A second resolve after release proves the
     round trip left the frame usable.

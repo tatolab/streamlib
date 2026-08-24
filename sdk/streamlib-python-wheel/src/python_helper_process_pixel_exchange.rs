@@ -566,9 +566,11 @@ impl HelperCheckedOutPixelSurface {
 /// reconstructed as a `VkImage` on this process's own device, plus the
 /// timeline edges and the layout cell that keep the crossing coordinated.
 ///
-/// No host mapping exists — the memory is tiled DEVICE_LOCAL. What this arm
+/// The memory is tiled DEVICE_LOCAL, so this arm maps nothing: what it
 /// offers is the image itself for this process's Vulkan work, and the fds it
-/// was checked out with for native code that imports memory.
+/// was checked out with for native code that imports memory. The CPU reaches
+/// these pixels through the surface's host-visible export staging, which is
+/// a different allocation and a different checkout.
 #[cfg(target_os = "linux")]
 pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) surface_id: String,

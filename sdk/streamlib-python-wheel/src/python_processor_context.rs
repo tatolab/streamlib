@@ -178,19 +178,25 @@ impl PythonGpuSurfaceHandle {
             return Ok(());
         }
         let opened = (|| -> PyResult<()> {
-            let scope_declared_a_write = !self.cpu_access.is_read_only();
+            if self.cpu_access.is_read_only() {
+                read_the_frame_into_its_cpu_staging(python, owned_memory)?;
+                return Ok(());
+            }
             // Refused before the copy, not after: a scope that already
             // staged an edit through the other door cannot take this one,
             // and finding that out is not worth a round trip and a frame
-            // copy first.
-            if scope_declared_a_write {
-                self.pending_staged_write_back
-                    .arm(StagedWriteBackSource::CpuReadbackStaging)?;
-            }
-            let staged = read_the_frame_into_its_cpu_staging(python, owned_memory)?;
-            if scope_declared_a_write && !staged.writable {
-                // The frame takes no edit, so nothing publishes and the
-                // arm above was premature — the array goes out read-only.
+            // copy first. Nothing is discarded on this path — the arm that
+            // refused belongs to the other door.
+            self.pending_staged_write_back
+                .arm(StagedWriteBackSource::CpuReadbackStaging)?;
+            // Past the arm it is this scope's to settle, so every way out
+            // from here drops it: a publish over a staging this scope never
+            // filled would copy some earlier frame over the surface.
+            let staged = read_the_frame_into_its_cpu_staging(python, owned_memory)
+                .inspect_err(|_| self.pending_staged_write_back.discard())?;
+            if !staged.writable {
+                // The frame takes no edit, so nothing publishes and the arm
+                // was premature — the array goes out read-only instead.
                 self.pending_staged_write_back.discard();
             }
             Ok(())
@@ -217,9 +223,10 @@ impl PythonGpuSurfaceHandle {
     ///
     /// It carries the name a kernel dispatch binds and a downstream
     /// processor resolves — the texture's memory is not mapped into this
-    /// process, so every CPU accessor refuses by saying so — and the
-    /// owned-memory anchor its device-tensor scope and release debt ride,
-    /// so a tensor outliving the handle keeps the pool slot alive.
+    /// process, so the CPU accessors reach it over the engine's
+    /// host-visible staging instead — and the owned-memory anchor its
+    /// device-tensor scope and release debt ride, so a tensor outliving the
+    /// handle keeps the pool slot alive.
     #[cfg(target_os = "linux")]
     fn from_helper_acquired_texture(acquired: HelperAcquiredTexture) -> Self {
         let surface_id = acquired.surface_id.clone();

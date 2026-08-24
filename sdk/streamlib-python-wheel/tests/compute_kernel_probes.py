@@ -35,13 +35,16 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 
 # The two bindings differ in name and in kind, so a dispatch that resolved
 # them by slot order rather than by name would bind them backwards.
+SOURCE_BINDING = "source_image"
+OUTPUT_BINDING = "output_image"
+
 # Opaque and asymmetric across channels: a probe that read the wrong
 # channel order, or somebody else's memory, cannot match by accident.
 FILLED_SOURCE_RGBA = (10, 20, 30, 255)
-DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
 
-SOURCE_BINDING = "source_image"
-OUTPUT_BINDING = "output_image"
+# One row of RGBA32F entries — the LUT shape the owner ruling named.
+LUT_WIDTH = 256
+DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
 
 READ_ONE_WRITE_ANOTHER_GLSL = """\
 #version 450
@@ -299,20 +302,44 @@ class StagedCpuDoorDiscardsOnRaiseProbe(_ComputeKernelProbeBase):
     description="An acquired texture takes a write-back without spelling copy usage",
 )
 class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
-    """`usage=["texture_binding"]` alone is enough: the engine implies both
-    copy bits, so the write door answers yes rather than refusing about a
-    flag the author never had reason to name."""
+    """The LUT flow the ruling widened #1758 to cover, spelled the way an
+    author would: acquire with one usage token, fill it through the CPU
+    write door, and read it back.
+
+    `usage=["texture_binding"]` alone is enough because the engine implies
+    both copy bits — so the door answers rather than refusing about a flag
+    the author had no reason to name. Filling and re-reading is what makes
+    that end to end: a mask that merely parsed right would still fail here
+    if the copy the door records could not run against the allocation.
+    """
 
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
         lut = self.gpu_full_access.acquire_texture(
-            256, 1, "rgba32_float", ["texture_binding"]
+            LUT_WIDTH, 1, "rgba32_float", ["texture_binding"]
         )
+        takes_a_write_back = self.gpu_limited_access.surface_can_take_write_back(
+            lut.surface_id
+        )
+
+        # A ramp, so a read that answered the wrong row, a stale staging or
+        # somebody else's memory cannot match by accident.
+        curve = [
+            [step / LUT_WIDTH, 1.0 - step / LUT_WIDTH, 0.25, 1.0]
+            for step in range(LUT_WIDTH)
+        ]
+        lut.lock(read_only=False)
+        lut.as_numpy()[0, :, :] = curve
+        lut.unlock()
+
+        lut.lock(read_only=True)
+        published = lut.as_numpy()[0, :, :].tolist()
+        lut.unlock()
         return {
             "surface_id": lut.surface_id,
-            "takes_a_write_back": self.gpu_limited_access.surface_can_take_write_back(
-                lut.surface_id
-            ),
+            "takes_a_write_back": takes_a_write_back,
+            "the_curve_published": published == curve,
+            "first_and_last_entries": [published[0], published[-1]],
         }
 
 

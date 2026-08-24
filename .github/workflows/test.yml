@@ -136,7 +136,9 @@ jobs:
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
-            escalate_wire_encoding_tests
+            escalate_wire_encoding_tests \
+            core::compiler::compiler_ops::subprocess_escalate::tests::parse_texture_usages \
+            core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU
