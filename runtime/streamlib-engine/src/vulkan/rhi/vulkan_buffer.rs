@@ -384,6 +384,23 @@ impl HostVulkanBuffer {
         self.size
     }
 
+    /// Memory type index (`vmaGetAllocationInfo().memoryType`) of this
+    /// buffer's allocation — what a conforming consumer-side
+    /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)` must state, since
+    /// OPAQUE_FD has no fd-properties query to derive it from.
+    /// `None` for imported buffers, whose allocation lives on the
+    /// foreign side; never defaulted, because every index including `0`
+    /// is a real value.
+    pub fn vma_allocation_memory_type_index(&self) -> Option<u32> {
+        let allocation = self.allocation?;
+        Some(
+            self.vulkan_device
+                .allocator()
+                .get_allocation_info(allocation)
+                .memoryType,
+        )
+    }
+
     /// Underlying Vulkan buffer handle.
     pub fn buffer(&self) -> vk::Buffer {
         self.buffer
@@ -430,6 +447,64 @@ impl HostVulkanBuffer {
     /// surface only at `vkGetMemoryFdKHR` time.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new_opaque_fd_export(vulkan_device: &Arc<HostVulkanDevice>, size: u64) -> Result<Self> {
+        let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
+            Error::GpuError(
+                "OPAQUE_FD buffer pool unavailable — external memory unsupported \
+                 or pool construction failed; CUDA / OpenCL interop requires this pool"
+                    .into(),
+            )
+        })?;
+        Self::new_opaque_fd_export_from_pool(
+            vulkan_device,
+            size,
+            pool,
+            vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+        )
+    }
+
+    /// Create a new OPAQUE_FD-exportable HOST_VISIBLE staging buffer on a
+    /// HOST_CACHED memory type, for a consumer that *reads* the mapping.
+    ///
+    /// [`Self::new_opaque_fd_export`]'s pool is probed
+    /// `HOST_ACCESS_SEQUENTIAL_WRITE` and lands on write-combined memory,
+    /// which a CPU reader traverses roughly an order of magnitude slower
+    /// than cached memory. Same OPAQUE_FD export semantics either way, so
+    /// the check-out and import path is identical.
+    ///
+    /// Degrades to [`Self::new_opaque_fd_export`] on a device with no
+    /// cached exportable memory type rather than refusing: the plan's
+    /// contract is slower there, never unavailable.
+    #[cfg(target_os = "linux")]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
+    pub fn new_opaque_fd_export_host_cached(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        size: u64,
+    ) -> Result<Self> {
+        match vulkan_device.opaque_fd_buffer_pool_host_cached() {
+            Some(pool) => Self::new_opaque_fd_export_from_pool(
+                vulkan_device,
+                size,
+                pool,
+                vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            ),
+            None => Self::new_opaque_fd_export(vulkan_device, size),
+        }
+    }
+
+    /// Allocate a mapped OPAQUE_FD-exportable HOST_VISIBLE buffer from
+    /// `pool` under `host_access_pattern`.
+    ///
+    /// `pool` must have been probed with the same `host_access_pattern`
+    /// and the same usage flags: a VMA pool is pinned to one memory type
+    /// index, and a mismatch between the probe's `memoryTypeBits` and
+    /// this buffer's trips VUID-vkBindBufferMemory-memory-01035.
+    #[cfg(target_os = "linux")]
+    fn new_opaque_fd_export_from_pool(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        size: u64,
+        pool: &vma::Pool,
+        host_access_pattern: vma::AllocationCreateFlags,
+    ) -> Result<Self> {
         if size == 0 {
             return Err(Error::Configuration(
                 "HostVulkanBuffer::new_opaque_fd_export: size must be > 0".into(),
@@ -454,19 +529,12 @@ impl HostVulkanBuffer {
         let alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
                 | vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                | host_access_pattern,
             required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
         };
 
-        let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
-            Error::GpuError(
-                "OPAQUE_FD buffer pool unavailable — external memory unsupported \
-                 or pool construction failed; CUDA / OpenCL interop requires this pool"
-                    .into(),
-            )
-        })?;
         let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
             .map_err(|e| {
                 Error::GpuError(format!("Failed to create OPAQUE_FD exportable buffer: {e}"))
