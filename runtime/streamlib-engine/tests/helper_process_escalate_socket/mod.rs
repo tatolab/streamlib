@@ -89,10 +89,20 @@ pub fn refusal_message_of(response: &Value, what_was_asked: &str) -> String {
         json!("err"),
         "{what_was_asked} must be refused, got {response}"
     );
-    response["message"]
+    let message = response["message"]
         .as_str()
         .expect("a refusal carries a message")
-        .to_string()
+        .to_string();
+    // A refusal a person reads, so a hand-wrapped format string that lost its
+    // line continuation is a defect rather than cosmetics — and one no other
+    // gate catches, because `cargo fmt` does not reflow string literals and
+    // clippy does not read them.
+    assert!(
+        !message.contains("  "),
+        "{what_was_asked}: the refusal carries a run of literal spaces, so a line continuation \
+         was lost when it was wrapped: {message:?}"
+    );
+    message
 }
 
 /// Drive one lifecycle command out of the parent and let the helper consume

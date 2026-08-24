@@ -25,8 +25,9 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution};
 use streamlib::sdk::graph::ProcessorNode;
 use streamlib::sdk::helper_process_transport::{
-    EscalateTransport, PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
-    SubprocessBridge, spawn_fd_line_reader, validate_subprocess_protocol,
+    EscalateTransport, PROTOCOL_VERSION_ENV, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
+    STREAMLIB_SUBPROCESS_PROTOCOL_VERSION, SubprocessBridge, spawn_fd_line_reader,
+    validate_subprocess_protocol,
 };
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
@@ -488,7 +489,10 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         )?);
 
         self.send_to_child(&serde_json::json!({
-            "cmd": "setup",
+            // The engine's own constant: the escalate dispatch reads this
+            // exact spelling to decide that a window may be minted, and a
+            // rename on one side alone would refuse every window silently.
+            "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
             "capability": "full",
             "config": self
                 .processor_configuration

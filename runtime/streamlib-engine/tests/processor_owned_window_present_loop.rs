@@ -18,6 +18,7 @@
 
 use std::time::{Duration, Instant};
 
+use streamlib_engine::core::color::{ColorTraits, PrimariesId, TransferId};
 use streamlib_engine::core::context::GpuContext;
 use streamlib_engine::core::processor_owned_window::{
     ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget,
@@ -56,6 +57,24 @@ fn named_surface(surface_id: &str) -> SurfaceNamedForTheEnginesPresentLoop {
         source_width_in_pixels: SOURCE_EXTENT_IN_PIXELS,
         source_height_in_pixels: SOURCE_EXTENT_IN_PIXELS,
         producer_published_texture_layout: None,
+        color_traits_of_frame: None,
+        hdr_static_metadata_of_frame: None,
+    }
+}
+
+/// The same frame, described. The escalate wire carries no colour today, so
+/// this arm is what keeps the loop's colour path honest until it does — the
+/// seam renegotiates the swapchain on a description change, and a window that
+/// could not take one would stop presenting rather than fall back.
+fn named_surface_carrying_a_colour_description(
+    surface_id: &str,
+) -> SurfaceNamedForTheEnginesPresentLoop {
+    SurfaceNamedForTheEnginesPresentLoop {
+        color_traits_of_frame: Some(ColorTraits {
+            primaries: Some(PrimariesId::Bt2020),
+            transfer: Some(TransferId::Pq),
+        }),
+        ..named_surface(surface_id)
     }
 }
 
@@ -218,9 +237,28 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
         "the window presented {presented_once_the_burst_settled} of {IDS_NAMED_IN_ONE_BURST} \
          named ids — latest-wins means most of a burst is dropped, never shown late"
     );
+    // A described frame renegotiates rather than failing, and the window is
+    // presenting again on the frame after it. Whether the swapchain's format
+    // actually flips is the window server's call, so what is asserted is that
+    // naming a colour never wedges the loop.
+    present_loop.name_surface_for_the_next_present(named_surface_carrying_a_colour_description(
+        &published_surface_id,
+    ));
+    std::thread::sleep(HOW_LONG_A_QUIET_OWNER_LEAVES_THE_LOOP_ALONE);
+    let presented_before_the_undescribed_frame = present_loop.frames_composed_and_presented();
+    present_loop.name_surface_for_the_next_present(named_surface(&published_surface_id));
+    wait_until_the_window_has_presented(&present_loop, presented_before_the_undescribed_frame + 1);
+    assert!(
+        !present_loop.window_is_closed(),
+        "a frame carrying a colour description must not cost the owner its window"
+    );
+
     // Closing joins the present thread, and dropping its pump registration is
     // what closes the window — the release a processor's teardown owes.
-    present_loop.close_the_window_and_join_its_present_thread();
+    assert!(
+        present_loop.close_the_window_and_join_its_present_thread(),
+        "the close must answer that the window actually closed"
+    );
     assert!(
         present_loop.window_is_closed(),
         "a closed window must report itself closed"
@@ -228,8 +266,8 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
     wait_until_the_pump_routes_to_exactly(0);
 
     // Idempotent: teardown closes every window the owner still holds, and a
-    // window the owner already closed has no thread left to join.
-    present_loop.close_the_window_and_join_its_present_thread();
+    // window the owner already closed has no thread left to wait for.
+    assert!(present_loop.close_the_window_and_join_its_present_thread());
     assert!(present_loop.window_is_closed());
 
     drop(present_loop);
