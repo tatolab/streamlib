@@ -1936,7 +1936,8 @@ impl HelperProcessGpuExchangeClient {
         &self,
         described: &DeviceExportStagingDescription,
     ) -> PyResult<HelperDeviceExport> {
-        let checked_out = self.check_out_the_published_export_staging(described, "device-export")?;
+        let checked_out =
+            self.check_out_the_published_export_staging(described, "device-export")?;
         let cuda_import = crate::python_cuda_pixel_exchange::import_opaque_fd_into_cuda(
             checked_out.staging_fd,
             described.staging_byte_size,
@@ -1972,8 +1973,10 @@ impl HelperProcessGpuExchangeClient {
     ) -> PyResult<HelperCpuReadbackExport> {
         let staging_share_id = described.staging_share_id.as_str();
         let checked_out = self.check_out_the_published_export_staging(described, "readback")?;
-        let stated_memory_type_index =
-            memory_type_index_stated_by_a_staging_registration(staging_share_id, &checked_out.registration)?;
+        let stated_memory_type_index = memory_type_index_stated_by_a_staging_registration(
+            staging_share_id,
+            &checked_out.registration,
+        )?;
 
         let vulkan_device = self.consumer_vulkan_device()?;
         // The staging fd is handed over here and never closed on the error

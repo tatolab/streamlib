@@ -715,6 +715,22 @@ fn surface_cpu_readback_export_for(
     })
 }
 
+/// Make this surface's readback staging exist and be mapped, without
+/// reading a frame into it.
+///
+/// Enough to answer a geometry question — the staging's own shape is what
+/// the row pitch comes from — and deliberately not enough for pixels:
+/// reading those is the door's job, and the copy belongs where the frame
+/// is actually asked for.
+#[cfg(target_os = "linux")]
+pub(crate) fn map_the_cpu_staging_without_reading_a_frame_in(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
+    surface_cpu_readback_export_for(python, owned_memory)?;
+    Ok(())
+}
+
 /// Open the staged CPU door over this frame: check the readback staging
 /// out, map it, and read the frame's current pixels in.
 ///

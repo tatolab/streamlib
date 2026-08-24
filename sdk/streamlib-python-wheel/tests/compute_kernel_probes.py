@@ -19,6 +19,7 @@ import traceback
 
 from streamlib import (
     GpuContextFullAccess,
+    GpuContextLimitedAccess,
     GpuSurfaceHandle,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -86,16 +87,20 @@ class _ComputeKernelProbeBase:
     names, not something handed to it.
     """
 
-    # Declared, not merely assigned: `setup` assigns it inside a nested
+    # Declared, not merely assigned: `setup` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
     gpu_full_access: GpuContextFullAccess
+    gpu_limited_access: GpuContextLimitedAccess
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             # Held for probes whose observation needs the capability itself
-            # (a refusal at construction is observed by constructing).
+            # (a refusal at construction is observed by constructing), and
+            # the Limited surface beside it for the by-id verbs — resolving
+            # a surface and asking whether it takes a write-back.
             self.gpu_full_access = gpu
+            self.gpu_limited_access = ctx.gpu_limited_access
             kernel = gpu.create_compute_kernel(
                 source=READ_ONE_WRITE_ANOTHER_GLSL,
                 push_constant_size=4,
@@ -269,11 +274,13 @@ class StagedCpuDoorDiscardsOnRaiseProbe(_ComputeKernelProbeBase):
         source.as_numpy()[:] = FILLED_SOURCE_RGBA
         source.unlock()
 
+        # A scope of its own over the same surface: leaving `with` closes
+        # the handle it entered, and the re-read below needs `source` open.
         raised = None
         try:
-            with source:
-                source.lock(read_only=False)
-                source.as_numpy()[:] = DISCARDED_SOURCE_RGBA
+            with self.gpu_limited_access.resolve_surface(source.surface_id) as scoped:
+                scoped.lock(read_only=False)
+                scoped.as_numpy()[:] = DISCARDED_SOURCE_RGBA
                 raise RuntimeError("the edit does not finish")
         except RuntimeError as propagated:
             raised = str(propagated)
@@ -298,11 +305,14 @@ class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
 
     def observe(self, kernel, source, output) -> dict:
         del kernel, source, output
-        gpu = self.gpu_full_access
-        lut = gpu.acquire_texture(256, 1, "rgba32_float", ["texture_binding"])
+        lut = self.gpu_full_access.acquire_texture(
+            256, 1, "rgba32_float", ["texture_binding"]
+        )
         return {
             "surface_id": lut.surface_id,
-            "takes_a_write_back": gpu.surface_can_take_write_back(lut.surface_id),
+            "takes_a_write_back": self.gpu_limited_access.surface_can_take_write_back(
+                lut.surface_id
+            ),
         }
 
 

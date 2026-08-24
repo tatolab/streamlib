@@ -32,8 +32,8 @@ use crate::python_gpu_surface_pixel_exchange::{
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     PendingStagedWriteBackToSurface, PreparedDeviceExport, StagedWriteBackSource,
-    device_dlpack_capsule, imported_device_for, prepare_device_export,
-    read_the_frame_into_its_cpu_staging,
+    device_dlpack_capsule, imported_device_for, map_the_cpu_staging_without_reading_a_frame_in,
+    prepare_device_export, read_the_frame_into_its_cpu_staging,
 };
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
@@ -176,12 +176,13 @@ impl PythonGpuSurfaceHandle {
         {
             return Ok(());
         }
-        let staged = read_the_frame_into_its_cpu_staging(python, owned_memory).inspect_err(|_| {
-            // The read-in is what makes a later publish legal, so a
-            // failed one must not leave the door looking open.
-            self.cpu_staging_holds_this_locks_frame
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-        })?;
+        let staged =
+            read_the_frame_into_its_cpu_staging(python, owned_memory).inspect_err(|_| {
+                // The read-in is what makes a later publish legal, so a
+                // failed one must not leave the door looking open.
+                self.cpu_staging_holds_this_locks_frame
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+            })?;
         if !self.cpu_access.is_read_only() && staged.writable {
             self.pending_staged_write_back
                 .arm(StagedWriteBackSource::CpuReadbackStaging);
@@ -345,8 +346,12 @@ impl PythonGpuSurfaceHandle {
     #[getter]
     fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
         let owned_memory = self.owned_memory()?;
+        // The staging's shape is the answer, so mapping it is enough; a
+        // pitch is not a reason to copy a frame.
         #[cfg(target_os = "linux")]
-        self.open_the_staged_cpu_door_over_this_frame(python, &owned_memory)?;
+        if owned_memory.cpu_reach_goes_through_the_export_staging() {
+            map_the_cpu_staging_without_reading_a_frame_in(python, &owned_memory)?;
+        }
         python.detach(|| Ok(owned_memory.host_visible_pixel_plane()?.bytes_per_row))
     }
 
@@ -433,10 +438,8 @@ impl PythonGpuSurfaceHandle {
             // which the first host-side accessor opens, and its device
             // export rides this same lock.
             #[cfg(target_os = "linux")]
-            if !owned_memory.cpu_reach_goes_through_the_export_staging()
-                && let Err(no_host_side) = owned_memory.host_visible_pixel_plane()
-            {
-                return Err(no_host_side);
+            if !owned_memory.cpu_reach_goes_through_the_export_staging() {
+                owned_memory.host_visible_pixel_plane()?;
             }
             #[cfg(not(target_os = "linux"))]
             owned_memory.host_visible_pixel_plane()?;
@@ -553,7 +556,7 @@ impl PythonGpuSurfaceHandle {
                 device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
             if writable_export {
                 self.pending_staged_write_back
-                .arm(StagedWriteBackSource::DeviceExportStaging);
+                    .arm(StagedWriteBackSource::DeviceExportStaging);
             }
             Ok(capsule)
         }
