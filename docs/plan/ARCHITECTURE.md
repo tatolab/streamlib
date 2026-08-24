@@ -461,16 +461,20 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   window policy decision — title, extent, what a resize means, when to redraw, what
   closing does. winit permits one event loop per process, so the loop is owned once,
   above every processor that wants a window, and N window-owning processors coexist
-  in one process. Each window's owner renders on its own thread, never the pump's, so
-  windows are not serialised behind one render loop. The
-  raw-window-handle seam remains the internal boundary — the engine mints
-  the present target from the raw handle and owns every swapchain and acquire detail,
+  in one process: the built-ins crate depends on winit no longer, so the engine holds
+  the only construction site there is. Each window's owner renders on its own thread,
+  never the pump's, so windows are not serialised behind one render loop — a claim
+  about the render loop, not the device, since two windows still share one `VkDevice`
+  and its queues. The raw-window-handle seam remains the internal boundary — the
+  engine mints the present target from the raw handle and owns every swapchain and
+  acquire detail,
   plus the platform main-thread event loop where the OS demands it (in the importable
   arrangement the process main thread belongs to the user's script; `rt.run()` blocks
   with the GIL released while the engine pumps). A processor that cannot get a window
   drains and discards, so upstream still sees a live consumer.
-  [importable-python-library; shared-window-event-pump]
+  [importable-python-library; shared-window-event-pump — SHIPPED #1734]
   <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-23-shared-window-event-pump.md -->
 - **DECIDED** — Window ownership is a processor capability, not a built-in privilege:
   a processor requests a window from the engine and owns its policy; the engine mints
   it (pump registration + present target) and, for an owner whose code cannot sit in
