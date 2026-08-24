@@ -83,27 +83,101 @@ pub fn read_workspace_package_version(workspace_root: &Path) -> Result<String> {
 /// Whether a manifest's own package version is inherited from the workspace,
 /// in either spelling cargo accepts.
 ///
-/// Whitespace is stripped before comparing so the two accepted forms are two
-/// exact matches rather than a substring search that `version = "0.1.0" # not
-/// workspace = true` could satisfy.
+/// Scoped to the `[package]` table, so an unrelated `version.workspace = true`
+/// under a `[package.metadata.…]` table an external tool owns cannot answer for
+/// the crate. Whitespace is stripped before comparing, so the two accepted
+/// forms are two exact matches rather than a substring search that
+/// `version = "0.1.0" # not workspace = true` could satisfy.
 pub fn manifest_inherits_workspace_package_version(manifest_text: &str) -> bool {
-    manifest_text.lines().any(|line| {
-        let line_without_comment = line.split('#').next().unwrap_or("");
-        let normalized: String = line_without_comment
+    let mut inside_package_table = false;
+    for line in manifest_text.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with('[') {
+            inside_package_table = table_header_text(trimmed_line)
+                .map(split_table_header_into_segments)
+                .is_some_and(|segments| segments == ["package"]);
+            continue;
+        }
+        if !inside_package_table {
+            continue;
+        }
+        let normalized: String = trimmed_line
+            .split('#')
+            .next()
+            .unwrap_or("")
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
-        normalized == "version.workspace=true" || normalized == "version={workspace=true}"
-    })
+        if normalized == "version.workspace=true" || normalized == "version={workspace=true}" {
+            return true;
+        }
+    }
+    false
+}
+
+/// The table names whose entries are dependencies, in every spelling cargo
+/// accepts them under — `[dependencies]`, `[workspace.dependencies]`,
+/// `[target.'cfg(unix)'.dev-dependencies]`.
+const DEPENDENCY_TABLE_NAMES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
+
+/// The text inside a `[…]` or `[[…]]` table header, or `None` for any other
+/// line. A trailing comment is tolerated.
+fn table_header_text(trimmed_line: &str) -> Option<&str> {
+    if let Some(array_of_tables) = trimmed_line.strip_prefix("[[") {
+        return array_of_tables.split("]]").next();
+    }
+    trimmed_line.strip_prefix('[')?.split(']').next()
+}
+
+/// A table header split on its dotted separators, with quoted segments
+/// unwrapped so `target.'cfg(unix)'.dependencies` reads as three segments and
+/// not as five.
+fn split_table_header_into_segments(header_text: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current_segment = String::new();
+    let mut open_quote: Option<char> = None;
+
+    for character in header_text.chars() {
+        match open_quote {
+            Some(quote) if character == quote => open_quote = None,
+            Some(_) => current_segment.push(character),
+            None if character == '\'' || character == '"' => open_quote = Some(character),
+            None if character == '.' => {
+                segments.push(std::mem::take(&mut current_segment).trim().to_owned())
+            }
+            None => current_segment.push(character),
+        }
+    }
+    segments.push(current_segment.trim().to_owned());
+    segments
+}
+
+/// Whether a table holds dependency entries directly, one per line.
+fn table_segments_name_a_dependency_list(table_segments: &[String]) -> bool {
+    table_segments
+        .last()
+        .is_some_and(|last_segment| DEPENDENCY_TABLE_NAMES.contains(&last_segment.as_str()))
+}
+
+/// The entry name of a table stating one dependency on its own
+/// (`[dependencies.streamlib-error]`), whose `path` and `version` arrive on
+/// separate lines rather than inside an inline table.
+fn table_segments_name_one_dependency(table_segments: &[String]) -> Option<&str> {
+    let parent_segment = table_segments.get(table_segments.len().checked_sub(2)?)?;
+    if !DEPENDENCY_TABLE_NAMES.contains(&parent_segment.as_str()) {
+        return None;
+    }
+    table_segments.last().map(String::as_str)
 }
 
 /// The dependency-entry name on a line stating an inline table
 /// (`streamlib-error = { … }`), or `None` for any other line.
 ///
 /// `[lib]`'s bare `path = "src/lib.rs"` and `[[test]]`'s bare `path =
-/// "tests/…"` are not dependency entries and carry no requirement to keep in
-/// step — this is what tells them apart from a dependency that happens to name
-/// a path.
+/// "tests/…"` live outside every dependency table, so the section walk already
+/// excludes them; requiring an inline table as well is what keeps a plain
+/// `streamlib-error = "0.17.0"` — legal, and carrying no path to resolve —
+/// from reading as one.
 fn dependency_entry_name(line: &str) -> Option<&str> {
     let line = line.trim();
     if line.starts_with('#') {
@@ -145,15 +219,9 @@ fn inline_string_value_for_key(line: &str, key: &str) -> Option<(usize, usize, S
             continue;
         }
 
-        let mut remainder = line[key_end..].char_indices().peekable();
         let mut cursor = key_end;
-        while let Some((_, character)) = remainder.peek() {
-            if character.is_whitespace() {
-                cursor += character.len_utf8();
-                remainder.next();
-            } else {
-                break;
-            }
+        while line[cursor..].starts_with(char::is_whitespace) {
+            cursor += line[cursor..].chars().next().map_or(0, char::len_utf8);
         }
         if !line[cursor..].starts_with('=') {
             continue;
@@ -176,8 +244,55 @@ fn inline_string_value_for_key(line: &str, key: &str) -> Option<(usize, usize, S
     None
 }
 
+/// One version requirement found beside a `path`, wherever it was spelled.
+struct DiscoveredVersionPin {
+    line_index: usize,
+    version_value_start: usize,
+    version_value_end: usize,
+    dependency_entry_name: String,
+    pinned_version_requirement: String,
+    dependency_path: String,
+}
+
+/// A `[dependencies.<name>]` table mid-read. Its keys arrive on separate
+/// lines, so the pin is only complete once the table ends.
+struct DependencyTableUnderRead {
+    dependency_entry_name: String,
+    dependency_path: Option<String>,
+    version_site: Option<(usize, usize, usize, String)>,
+}
+
+fn finish_dependency_table(
+    dependency_table: Option<DependencyTableUnderRead>,
+    discovered_pins: &mut Vec<DiscoveredVersionPin>,
+) {
+    let Some(dependency_table) = dependency_table else {
+        return;
+    };
+    let (Some(dependency_path), Some((line_index, version_value_start, version_value_end, pinned))) = (
+        dependency_table.dependency_path,
+        dependency_table.version_site,
+    ) else {
+        return;
+    };
+    discovered_pins.push(DiscoveredVersionPin {
+        line_index,
+        version_value_start,
+        version_value_end,
+        dependency_entry_name: dependency_table.dependency_entry_name,
+        pinned_version_requirement: pinned,
+        dependency_path,
+    });
+}
+
 /// Read one manifest's dependency entries, reporting every drifted pin and
 /// returning the text with each of them moved onto the workspace version.
+///
+/// The walk is section-aware because both spellings must be covered: the inline
+/// `streamlib-error = { path = "…", version = "…" }` this tree uses throughout,
+/// and the `[dependencies.streamlib-error]` table whose keys sit on their own
+/// lines. A gate blind to the second would let a pin reach the release branch
+/// unnoticed, which is the exact failure it exists to prevent.
 ///
 /// `target_inherits_workspace_version` is handed the raw `path = "…"` value so
 /// the scan itself stays free of the filesystem.
@@ -187,33 +302,104 @@ pub fn scan_manifest_version_pins(
     workspace_package_version: &str,
     target_inherits_workspace_version: &mut dyn FnMut(&str) -> Result<bool>,
 ) -> Result<ManifestVersionPinScan> {
-    let mut drifts = Vec::new();
-    let mut manifest_text_with_pins_synced = String::with_capacity(manifest_text.len());
+    let raw_lines: Vec<&str> = manifest_text.split_inclusive('\n').collect();
+    let mut discovered_pins: Vec<DiscoveredVersionPin> = Vec::new();
+    let mut current_table_segments: Vec<String> = Vec::new();
+    let mut dependency_table_under_read: Option<DependencyTableUnderRead> = None;
 
-    for (line_index, raw_line) in manifest_text.split_inclusive('\n').enumerate() {
-        let line_terminator_length = raw_line.len() - raw_line.trim_end_matches(['\n', '\r']).len();
-        let line = &raw_line[..raw_line.len() - line_terminator_length];
-        let mut line_with_pin_synced = line.to_owned();
+    for (line_index, raw_line) in raw_lines.iter().enumerate() {
+        let line = raw_line.trim_end_matches(['\n', '\r']);
+        let trimmed_line = line.trim();
 
-        if let Some(entry_name) = dependency_entry_name(line)
-            && let Some((_, _, dependency_path)) = inline_string_value_for_key(line, "path")
-            && let Some((value_start, value_end, pinned_version_requirement)) =
-                inline_string_value_for_key(line, "version")
-            && pinned_version_requirement != workspace_package_version
-            && target_inherits_workspace_version(&dependency_path)?
+        if trimmed_line.starts_with('[')
+            && let Some(header_text) = table_header_text(trimmed_line)
         {
-            drifts.push(WorkspaceVersionPinDrift {
-                manifest_repo_relative_path: manifest_repo_relative_path.to_owned(),
-                line_number_one_based: line_index + 1,
-                dependency_entry_name: entry_name.to_owned(),
-                pinned_version_requirement,
+            finish_dependency_table(dependency_table_under_read.take(), &mut discovered_pins);
+            current_table_segments = split_table_header_into_segments(header_text);
+            dependency_table_under_read = table_segments_name_one_dependency(
+                &current_table_segments,
+            )
+            .map(|dependency_entry_name| DependencyTableUnderRead {
+                dependency_entry_name: dependency_entry_name.to_owned(),
+                dependency_path: None,
+                version_site: None,
             });
-            line_with_pin_synced.replace_range(value_start..value_end, workspace_package_version);
+            continue;
         }
 
+        if trimmed_line.is_empty() || trimmed_line.starts_with('#') {
+            continue;
+        }
+
+        if let Some(dependency_table) = dependency_table_under_read.as_mut() {
+            if let Some((_, _, dependency_path)) = inline_string_value_for_key(line, "path") {
+                dependency_table.dependency_path = Some(dependency_path);
+            }
+            if let Some((version_value_start, version_value_end, pinned)) =
+                inline_string_value_for_key(line, "version")
+            {
+                dependency_table.version_site =
+                    Some((line_index, version_value_start, version_value_end, pinned));
+            }
+            continue;
+        }
+
+        if table_segments_name_a_dependency_list(&current_table_segments)
+            && let Some(entry_name) = dependency_entry_name(line)
+            && let Some((_, _, dependency_path)) = inline_string_value_for_key(line, "path")
+            && let Some((version_value_start, version_value_end, pinned)) =
+                inline_string_value_for_key(line, "version")
+        {
+            discovered_pins.push(DiscoveredVersionPin {
+                line_index,
+                version_value_start,
+                version_value_end,
+                dependency_entry_name: entry_name.to_owned(),
+                pinned_version_requirement: pinned,
+                dependency_path,
+            });
+        }
+    }
+    finish_dependency_table(dependency_table_under_read.take(), &mut discovered_pins);
+
+    let mut drifts = Vec::new();
+    let mut version_value_range_by_line: HashMap<usize, (usize, usize)> = HashMap::new();
+
+    for discovered_pin in discovered_pins {
+        if discovered_pin.pinned_version_requirement == workspace_package_version
+            || !target_inherits_workspace_version(&discovered_pin.dependency_path)?
+        {
+            continue;
+        }
+        drifts.push(WorkspaceVersionPinDrift {
+            manifest_repo_relative_path: manifest_repo_relative_path.to_owned(),
+            line_number_one_based: discovered_pin.line_index + 1,
+            dependency_entry_name: discovered_pin.dependency_entry_name,
+            pinned_version_requirement: discovered_pin.pinned_version_requirement,
+        });
+        version_value_range_by_line.insert(
+            discovered_pin.line_index,
+            (
+                discovered_pin.version_value_start,
+                discovered_pin.version_value_end,
+            ),
+        );
+    }
+
+    let mut manifest_text_with_pins_synced = String::with_capacity(manifest_text.len());
+    for (line_index, raw_line) in raw_lines.iter().enumerate() {
+        let line = raw_line.trim_end_matches(['\n', '\r']);
+        let mut line_with_pin_synced = line.to_owned();
+        if let Some(&(version_value_start, version_value_end)) =
+            version_value_range_by_line.get(&line_index)
+        {
+            line_with_pin_synced.replace_range(
+                version_value_start..version_value_end,
+                workspace_package_version,
+            );
+        }
         manifest_text_with_pins_synced.push_str(&line_with_pin_synced);
-        manifest_text_with_pins_synced
-            .push_str(&raw_line[raw_line.len() - line_terminator_length..]);
+        manifest_text_with_pins_synced.push_str(&raw_line[line.len()..]);
     }
 
     Ok(ManifestVersionPinScan {
@@ -399,7 +585,36 @@ mod tests {
         Ok(!dependency_path.contains("vendor"))
     }
 
+    /// Under `[dependencies]`, which is where every inline entry these tests
+    /// state would really live — the walk is section-aware, so a bare entry
+    /// with no table above it is correctly invisible to it.
     fn scan(manifest_text: &str) -> ManifestVersionPinScan {
+        let under_dependencies = format!("[dependencies]\n{manifest_text}");
+        let scanned = scan_manifest_version_pins(
+            "sdk/streamlib-error/Cargo.toml",
+            &under_dependencies,
+            "0.18.0",
+            &mut inheritance_by_path_convention,
+        )
+        .expect("the convention lookup never fails");
+        ManifestVersionPinScan {
+            drifts: scanned
+                .drifts
+                .into_iter()
+                .map(|drift| WorkspaceVersionPinDrift {
+                    line_number_one_based: drift.line_number_one_based - 1,
+                    ..drift
+                })
+                .collect(),
+            manifest_text_with_pins_synced: scanned
+                .manifest_text_with_pins_synced
+                .strip_prefix("[dependencies]\n")
+                .expect("the header this helper added")
+                .to_owned(),
+        }
+    }
+
+    fn scan_whole_manifest(manifest_text: &str) -> ManifestVersionPinScan {
         scan_manifest_version_pins(
             "sdk/streamlib-error/Cargo.toml",
             manifest_text,
@@ -412,12 +627,11 @@ mod tests {
     #[test]
     fn a_drifted_pin_is_reported_and_synced() {
         let scanned = scan(
-            "[dependencies]\n\
-             streamlib-processor-schema = { path = \"../streamlib-processor-schema\", version = \"0.17.0\" }\n",
+            "streamlib-processor-schema = { path = \"../streamlib-processor-schema\", version = \"0.17.0\" }\n",
         );
 
         assert_eq!(scanned.drifts.len(), 1);
-        assert_eq!(scanned.drifts[0].line_number_one_based, 2);
+        assert_eq!(scanned.drifts[0].line_number_one_based, 1);
         assert_eq!(
             scanned.drifts[0].dependency_entry_name,
             "streamlib-processor-schema"
@@ -531,6 +745,76 @@ mod tests {
         assert_eq!(
             inline_string_value_for_key(line, "path").map(|(_, _, value)| value),
             Some("../streamlib-sdk".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_dependency_stated_as_its_own_table_is_reported_and_synced() {
+        let scanned = scan_whole_manifest(
+            "[dependencies.streamlib-error]\npath = \"../streamlib-error\"\nversion = \"0.17.0\"\nfeatures = [\"vulkan\"]\n",
+        );
+
+        assert_eq!(scanned.drifts.len(), 1);
+        assert_eq!(scanned.drifts[0].dependency_entry_name, "streamlib-error");
+        assert_eq!(scanned.drifts[0].line_number_one_based, 3);
+        assert_eq!(
+            scanned.manifest_text_with_pins_synced,
+            "[dependencies.streamlib-error]\npath = \"../streamlib-error\"\nversion = \"0.18.0\"\nfeatures = [\"vulkan\"]\n"
+        );
+    }
+
+    #[test]
+    fn a_dependency_table_ends_at_the_next_header() {
+        let scanned = scan_whole_manifest(
+            "[dependencies.streamlib-error]\npath = \"../streamlib-error\"\n\n[package]\nversion = \"0.17.0\"\n",
+        );
+
+        assert!(scanned.drifts.is_empty());
+    }
+
+    #[test]
+    fn target_specific_dependency_tables_are_scanned_in_both_spellings() {
+        let inline = scan_whole_manifest(
+            "[target.'cfg(unix)'.dev-dependencies]\nstreamlib-test-fixtures = { path = \"../../packages/test-fixtures\", version = \"0.17.0\" }\n",
+        );
+        assert_eq!(inline.drifts.len(), 1);
+
+        let table = scan_whole_manifest(
+            "[target.'cfg(unix)'.build-dependencies.streamlib-macros]\npath = \"../streamlib-macros\"\nversion = \"0.17.0\"\n",
+        );
+        assert_eq!(table.drifts.len(), 1);
+        assert_eq!(table.drifts[0].dependency_entry_name, "streamlib-macros");
+    }
+
+    #[test]
+    fn a_version_outside_every_dependency_table_is_not_a_pin() {
+        let manifest_text = "[package]\nname = \"streamlib-error\"\nversion = \"0.17.0\"\n\n[package.metadata.tool]\npath = \"../streamlib-error\"\nversion = \"0.17.0\"\n";
+        let scanned = scan_whole_manifest(manifest_text);
+
+        assert!(scanned.drifts.is_empty());
+        assert_eq!(scanned.manifest_text_with_pins_synced, manifest_text);
+    }
+
+    #[test]
+    fn an_inherited_version_outside_the_package_table_does_not_answer_for_the_crate() {
+        assert!(!manifest_inherits_workspace_package_version(
+            "[package]\nversion = \"0.35.0\"\n\n[package.metadata.tool]\nversion.workspace = true\n"
+        ));
+        assert!(manifest_inherits_workspace_package_version(
+            "[package.metadata.tool]\nname = \"x\"\n\n[package]\nversion.workspace = true\n"
+        ));
+    }
+
+    #[test]
+    fn a_table_header_splits_on_dots_outside_quotes_only() {
+        assert_eq!(
+            split_table_header_into_segments("target.'cfg(unix)'.dependencies"),
+            vec!["target", "cfg(unix)", "dependencies"]
+        );
+        assert_eq!(table_header_text("[[test]]"), Some("test"));
+        assert_eq!(
+            table_header_text("[dependencies] # deps"),
+            Some("dependencies")
         );
     }
 
