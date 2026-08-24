@@ -166,7 +166,10 @@ def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
     # through; unorm round-trip is worth one code point of slack, no more.
     inverted = [255 - channel for channel in FILLED_SOURCE_RGBA[:3]]
     read_back = observed["kernel_output_pixel"]
-    assert all(abs(read - want) <= 1 for read, want in zip(read_back[:3], inverted)), (
+    assert all(
+        abs(read - want) <= 1
+        for read, want in zip(read_back[:3], inverted, strict=True)
+    ), (
         f"the CPU read of the kernel output must show the kernel's own pixels: "
         f"{read_back!r} against {inverted!r}"
     )
