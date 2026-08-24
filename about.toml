@@ -43,7 +43,9 @@ accepted = [
 # No `targets`, so the notices cover every platform's crates rather than the
 # generating host's. Over-attribution costs a longer file; under-attribution is
 # a term unmet, and the wheel is built in a manylinux container that is not the
-# machine this command runs on.
+# machine this command runs on. The generator passes `--all-features` for the
+# same reason `deny.toml` sets it: the gate and the notices have to be reading
+# one graph, or the gate vets crates the notices never reproduce.
 
 # Test-only code is not distributed, so it owes nothing. Build dependencies are
 # kept: `cc`, `cmake` and `bindgen` emit code and headers that end up inside the

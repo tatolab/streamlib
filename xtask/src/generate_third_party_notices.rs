@@ -185,14 +185,26 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 /// where our own terms belong.
 fn run_cargo_about_generate(workspace_root: &Path) -> Result<String> {
     let output = std::process::Command::new("cargo")
-        // `--locked` first of all, and not only for symmetry: this runs before
-        // the `cargo metadata --locked` behind the vendored lookup, so without
-        // it a stale lock is rewritten here and that guard then passes against
-        // the rewrite — notices describing a graph the commit does not contain.
+        // `--locked` not only for symmetry: this runs before the `cargo metadata
+        // --locked` behind the vendored lookup, so without it a stale lock is
+        // rewritten here and that guard then passes against the rewrite —
+        // notices describing a graph the commit does not contain.
+        //
+        // `--all-features` to read the same graph `deny.toml` validates with
+        // `all-features = true`. Without it the gate vets five crates behind
+        // optional features that the notices never reproduce, and two configs
+        // claiming one licence set would be reading two graphs. Safe despite the
+        // repo-wide `--all-features` ban for the same reason it is safe there:
+        // cargo-about compiles nothing, so no build script regenerates the
+        // vendored VMA bindings.
+        //
+        // No `--workspace`: the root manifest is virtual, so every member is
+        // already in scope and the flag leaves the output byte-identical.
         .args([
             "about",
             "generate",
             "--locked",
+            "--all-features",
             CARGO_ABOUT_TEMPLATE_FILE_NAME,
         ])
         .current_dir(workspace_root)
