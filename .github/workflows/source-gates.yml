@@ -14,6 +14,11 @@ name: Source Gates
 # (`ALL_SOURCE_WALKING_GATES`), and each gate's contract is documented on its
 # `Commands` variant there.
 #
+# `cargo deny check licenses` rides along at the end. It is not a source-walking
+# gate — it resolves the dependency graph rather than reading the tree — but it
+# is toolchain-only work that belongs with the other cheap gates rather than in
+# a ninth workflow.
+#
 # Two things worth keeping in view:
 # - lint-logging deliberately does not shell out to `cargo clippy --workspace`.
 #   That would transitively compile `libs/vulkan-video`, whose build.rs needs
@@ -87,3 +92,26 @@ jobs:
 
       - name: cargo test -p xtask (all gate fixture tests)
         run: cargo test --locked -p xtask
+
+      # The licence allowlist. Here rather than in a workflow of its own for
+      # the reason the job header gives, and last because it is the only step
+      # that resolves the whole dependency graph — a failure in it cannot cost
+      # the steps above their report.
+      #
+      # Version-pinned: a cargo-deny release that tightens a default would
+      # otherwise red an unrelated PR, and the licence policy is meant to
+      # change in a PR that says so. `cargo xtask run-local-ci-gates` runs the
+      # identical command against the identical `deny.toml`.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      # `-D license-not-encountered` so an allowance whose last user left the
+      # graph fails rather than warns — deny.toml's claim that the list cannot
+      # keep a permission nobody needs is only true because of this flag.
+      # `--locked` because cargo-deny will otherwise rewrite `Cargo.lock` to
+      # resolve the graph and then report on the rewrite rather than on what the
+      # commit contains.
+      - name: cargo deny check licenses
+        run: cargo deny --locked --workspace check licenses -D license-not-encountered

@@ -16,6 +16,7 @@ pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_vulkanalia;
+pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 
@@ -62,6 +63,31 @@ pub fn list_repository_files_under(
         .filter(|path| !path.is_empty())
         .map(str::to_owned)
         .collect())
+}
+
+/// Run `cargo metadata` for the workspace rooted at `manifest_dir` and return
+/// the parsed resolve document.
+///
+/// `--locked` for the reason every other cargo invocation here carries it: a
+/// gate that rewrites `Cargo.lock` as a side effect of reading the graph
+/// reports on a graph the commit does not contain.
+pub fn run_cargo_metadata_resolve_document(manifest_dir: &Path) -> Result<serde_json::Value> {
+    let manifest_path = manifest_dir.join("Cargo.toml");
+    let output = std::process::Command::new("cargo")
+        .args(["metadata", "--locked", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(&manifest_path)
+        .output()
+        .with_context(|| format!("running cargo metadata at {}", manifest_path.display()))?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "cargo metadata failed at {}: {}",
+        manifest_path.display(),
+        String::from_utf8_lossy(&output.stderr).trim(),
+    );
+
+    serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")
 }
 
 /// Refuse a source-walking gate run that read no source at all.
@@ -264,6 +290,33 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "escalate_wire_encoding_tests",
             ],
         ),
+        // The dependency closure's licences, against `deny.toml`'s allowlist.
+        // Not a source-walking gate: those are in-process tree walkers by
+        // contract, and this shells out to a binary that is not part of the
+        // toolchain — `cargo install cargo-deny@0.20.2 --locked` if the run
+        // reports no such command, matching the version `source-gates.yml`
+        // pins. `--locked` because cargo-deny will otherwise rewrite
+        // `Cargo.lock` to resolve the graph and then report on the rewrite.
+        // `--workspace` so a crate reached only from a workspace member nobody
+        // builds locally is still in scope, and `-D license-not-encountered` so
+        // an allowance whose last user left the graph fails rather than warns.
+        //
+        // Last, like CI runs it: it is the only entry here that resolves the
+        // whole dependency graph, so a failure in it cannot cost the others
+        // their report.
+        (
+            "cargo deny check licenses",
+            "cargo",
+            &[
+                "deny",
+                "--locked",
+                "--workspace",
+                "check",
+                "licenses",
+                "-D",
+                "license-not-encountered",
+            ],
+        ),
     ];
 
     for (gate_name, program, arguments) in shelled_out_gates {
@@ -397,6 +450,15 @@ enum Commands {
     /// Run the gates CI runs, so a green run here predicts a green PR. Builds
     /// the workspace, so it is slower than `check-all-source-gates` alone.
     RunLocalCiGates,
+
+    /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
+    /// via `cargo about generate`, plus the vendored C++ projects that are not
+    /// packages in the Cargo resolve graph and so reach the file only by being
+    /// appended. Needs `cargo-about` installed and the network, which is why it
+    /// is a command and not a gate; `cargo deny check licenses` is the half that
+    /// runs on every PR. See [`generate_third_party_notices`] for the roster and
+    /// why each project is on it.
+    GenerateThirdPartyNotices,
 }
 
 fn main() -> Result<()> {
@@ -430,6 +492,9 @@ fn main() -> Result<()> {
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
+        Commands::GenerateThirdPartyNotices => {
+            generate_third_party_notices::run(&workspace_root()?)?
+        }
     }
 
     Ok(())

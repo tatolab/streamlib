@@ -347,6 +347,11 @@ A commercial license is required to sell, host as a managed service, white-label
 **the runtime itself** — the engine, graph compiler, scheduler, processor execution, GPU context,
 and link infrastructure — as your product.
 
+StreamLib also distributes third-party code. Each dependency's copyright notice and licence
+text, as of that file's last regeneration, is reproduced in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which the wheel ships in its
+`.dist-info/licenses/`.
+
 [Commercial licensing](docs/license/COMMERCIAL-LICENSING.md) ·
 [Partner licensing](docs/license/PARTNER-LICENSING.md) · [CLA](docs/license/CLA.md)
 
