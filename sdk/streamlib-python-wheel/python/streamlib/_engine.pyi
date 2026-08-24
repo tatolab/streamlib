@@ -383,8 +383,9 @@ class GpuContextLimitedAccess:
         """Acquire a pooled device texture, named by the surface id the engine minted.
 
         The id is the whole handle: a kernel dispatch binds it, and a downstream
-        processor resolves it. The texture's memory is not mapped into this
-        process, so its pixels are not addressable here.
+        processor resolves it. `copy_src` and `copy_dst` ride every request, so
+        the CPU doors reach the pixels over the surface's host-visible staging
+        without the caller spelling a transfer usage.
         """
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def claim_surface_against_producer_reuse(
@@ -404,7 +405,9 @@ class GpuContextLimitedAccess:
         The engine's one answer for every write door: a write-back belongs to
         a pooled frame whose allocation is its only backing, or to a
         registered texture that takes a recorded copy in; a frame backed by
-        neither answers False.
+        neither answers False. Every texture this processor acquired answers
+        True — it can take the copy — so False narrows to a pooled frame its
+        producer still owns and a foreign registration without transfer usage.
         `writable()` refuses on this answer; `cpu()` hands its array out
         read-only on it.
         """
@@ -431,8 +434,9 @@ class GpuContextFullAccess:
         """Acquire a pooled device texture through the privileged path.
 
         The id is the whole handle: a kernel dispatch binds it, and a downstream
-        processor resolves it. The texture's memory is not mapped into this
-        process, so its pixels are not addressable here.
+        processor resolves it. `copy_src` and `copy_dst` ride every request, so
+        the CPU doors reach the pixels over the surface's host-visible staging
+        without the caller spelling a transfer usage.
         """
 
     def create_window(
@@ -670,11 +674,22 @@ class GpuSurfaceHandle:
     def format(self) -> str: ...
     @property
     def bytes_per_row(self) -> int:
-        """Row pitch in bytes, including any padding the allocation carries."""
+        """Row pitch in bytes, including any padding the allocation carries.
+
+        Over a texture backing it is the staging's pitch, not the tiled
+        texture's — the staging is the allocation the CPU addresses. Asking
+        maps that staging, which needs no lock and costs one checkout the
+        first time this process asks about the surface.
+        """
 
     @property
     def base_address(self) -> int | None:
-        """Base address of the host mapping, or None when not locked."""
+        """Base address of the host mapping, or None when not locked.
+
+        A surface the CPU cannot address directly opens its staged door here,
+        as `as_numpy` and `__dlpack__` do — so the address is the staging's,
+        and reading it has read this frame in.
+        """
 
     def close(self) -> None:
         """Release the underlying GPU resource. Idempotent."""
@@ -692,15 +707,25 @@ class GpuSurfaceHandle:
         Performs no wait — ordering against the producer comes from
         publication, since a source finishes its GPU work before it sends the
         frame on. `read_only=False` marks an exported tensor writable.
+
+        Never refused for want of a host mapping: a texture-backed surface
+        reaches its pixels through the engine's host-visible staging, which
+        the first host-side accessor inside the lock checks out and reads this
+        frame into.
         """
 
     def unlock(self) -> None:
-        """Close CPU access, publishing any pending device-side write back
-        into the surface first. Idempotent.
+        """Close CPU access, publishing any pending staged write back into the
+        surface first — through whichever staging holds the edit. Idempotent.
         """
 
     def as_numpy(self) -> Any:
-        """A numpy view sharing memory with the surface. Requires a lock."""
+        """A numpy view over the surface's pixels. Requires a lock.
+
+        Shares memory with a surface the CPU can address directly; over a
+        texture backing it is the surface's staging, read in on entry and
+        published at `unlock()` when the lock declared a write.
+        """
 
     def as_device_tensor(self) -> GpuSurfaceDeviceTensorScope:
         """The scoped device-tensor view over this surface's pixels.

@@ -166,15 +166,28 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   `COPY_SRC | COPY_DST`; its two unit tests (`:4892`, `:4901`) assert the implied mask;
   `texture_usages_to_wire` echoes the derived list back to the caller unchanged.
 - MODIFIED: the wheel's CPU accessors route texture-backed surfaces over the mapped
-  readback staging: `lock()` (`python_processor_context.rs:372-393`) checks out the
-  staging on first ask (read intent runs the read-in copy; write intent arms the
-  publish), `host_visible_pixel_plane`'s two texture arms answer the staging's plane
-  view instead of refusing, and `bytes_per_row` / `base_address` / `as_numpy` /
+  readback staging. `host_visible_pixel_plane`'s two texture arms answer the staging's
+  plane view instead of refusing, and `bytes_per_row` / `base_address` / `as_numpy` /
   `__dlpack__`'s CPU arm inherit it with no signature change.
+  > ~~`lock()` checks out the staging on first ask (read intent runs the read-in copy;
+  > write intent arms the publish).~~ — Superseded 2026-08-24 by the shipped code.
+  > `lock()` also gates `__dlpack__`'s *device* arm, which requires the same lock, so a
+  > read-in there would cost every `as_device_tensor` user of a texture-backed surface
+  > one host staging copy per frame — a path this change does not touch. The read-in and
+  > the arming hang off the first host-side accessor instead
+  > (`open_the_staged_cpu_door_over_this_frame`, called from `base_address` and
+  > `__dlpack__`'s host arm), once per lock scope; `bytes_per_row` maps without reading
+  > in, since a pitch yields no pixels and arms nothing. The DECIDED entry's "entering
+  > the staged CPU door always reads the current frame in" holds unchanged — taking the
+  > host side is what enters the door, not taking the lock.
 - MODIFIED: `unlock()` / scope exit publishes a staged CPU write as one
   `run_cpu_readback_copy buffer_to_image`, reusing the `PendingDeviceWriteBack`
   arm/discard/publish protocol (`python_gpu_surface_pixel_exchange.rs:699-751`) — a
-  propagating raise discards by never sending the copy.
+  propagating raise discards by never sending the copy. Shipped as
+  `PendingStagedWriteBackToSurface`: serving two stagings, the armed state carries which
+  one holds the edit, and a second *distinct* source in one lock scope is refused by
+  name rather than replacing the first — neither staging holds both edits, so there is
+  no order in which publishing both does not overwrite one.
 - MODIFIED: `surface_can_take_write_back`'s probe
   (`python_helper_process_pixel_exchange.rs:1644-1671`) merges with the readback
   checkout — same `open_cpu_readback_staging` op, shared per-pool-slot memo; the
@@ -207,6 +220,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   the module doc (`surface_export_staging.rs:47-51`), and
   `docs/architecture/adapter-runtime-integration.md:69`, `:322-328` — the last is
   inside the ship gate's sweep, so it is gate-required, not optional hygiene.
+- MODIFIED: `test_a_texture_whose_usage_forbids_the_copy_refuses_at_scope_entry`
+  (`test_device_exchange.py`) + `DeviceTensorScopeRefusesAnUnexportableUsageProbe` — not
+  anticipated by recon, found by running the GPU tier. The probe reached the engine's
+  copy-usage guard by acquiring a texture *without* the copy bits, which
+  `parse_texture_usages` can no longer produce, so the scope now enters and the old
+  assertion is false. Flipped to positive coverage of the implication
+  (`DeviceTensorScopeTakesEveryAcquiredTextureProbe`). The guard itself is untouched and
+  keeps its coverage engine-side (`surface_export_staging.rs`), over images built without
+  the bits rather than through an acquire that cannot make one.
 - MODIFIED: the wheel tests asserting the old refusals flip to positive coverage:
   `test_an_acquired_texture_is_a_name_not_a_local_mapping`
   (`test_compute_kernel.py:142-159` + `compute_kernel_probes.py:207-229` — the probe
@@ -253,9 +275,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   (`surface_export_staging.rs:2017`, `:2059`, `:2106`) pass unchanged, the last
   additionally asserting the staging's memory type is the cached pool's when the
   device has one.
-- ADDED: wheel tests — a texture-backed `cpu()` read of a kernel output and a LUT
-  fill-and-bind probe, both in the helper-child harness beside the live pixel-buffer
-  probe (`cast_claim_probes.py:551-590`); a staging-backed discard-on-raise twin of
+- ADDED: wheel tests — a texture-backed CPU read of a kernel output and a LUT
+  fill-and-read-back probe. Shipped in the compute-kernel helper-child harness
+  (`compute_kernel_probes.py`) rather than beside the pixel-buffer probe in
+  `cast_claim_probes.py`: the cast-claim app wires a *native* source, so a cast object
+  over a texture backing needs a texture-publishing upstream that harness has no
+  processor for. The cast object's `cpu()` is backing-agnostic Python over
+  `resolve_surface` + `lock` + `as_numpy`, which `device_exchange_probes.py` exercises
+  on a kernel output; a dedicated cast-object probe is left as harness work.
+  Additionally: a staging-backed discard-on-raise twin of
   the existing coherent-arm raise test; an implied-usage assertion that
   `acquire_texture(usage=["texture_binding"])` yields a surface whose
   `surface_can_take_write_back` answers true. GPU-marked tests run on the rig only;

@@ -27,13 +27,14 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 #[cfg(not(target_os = "linux"))]
 use pyo3::exceptions::PyNotImplementedError;
-use pyo3::exceptions::{PyBufferError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::rhi::PixelFormat;
 
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    HelperCheckedOutSurface, HelperDeviceExport, HelperProcessGpuExchangeClient,
+    CpuReadbackCopyDirection, HelperCheckedOutSurface, HelperCpuReadbackExport, HelperDeviceExport,
+    HelperProcessGpuExchangeClient,
 };
 use streamlib_adapter_cuda::dlpack::{
     self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor, ManagedTensorVersioned,
@@ -83,6 +84,17 @@ pub(crate) struct GpuSurfaceOwnedMemory {
     #[cfg(target_os = "linux")]
     checked_out_surface: HelperCheckedOutSurface,
     minted_surface_id: Option<String>,
+    /// The one staged edit outstanding against this surface, whichever
+    /// door staged it.
+    ///
+    /// It lives here, not on the handle or the scope, because the thing it
+    /// is about is the *surface*: the handle's CPU door and every
+    /// device-tensor scope that handle mints all publish over these same
+    /// pixels out of different stagings, and each staging was filled
+    /// before the others' edits existed. One cell they all reach is what
+    /// makes the second door's refusal reach the first door's edit.
+    #[cfg(target_os = "linux")]
+    pending_staged_write_back: PendingStagedWriteBackToSurface,
 }
 
 impl GpuSurfaceOwnedMemory {
@@ -94,6 +106,7 @@ impl GpuSurfaceOwnedMemory {
         Arc::new(Self {
             checked_out_surface,
             minted_surface_id,
+            pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
         })
     }
 
@@ -118,35 +131,88 @@ impl GpuSurfaceOwnedMemory {
         self.checked_out_surface.export_opaque_fd()
     }
 
+    /// Whether the CPU reaches this surface's pixels through the engine's
+    /// host-visible export staging rather than the surface's own
+    /// allocation.
+    ///
+    /// True for both texture backings — tiled device memory has no host
+    /// mapping to address — and for a pixel buffer whose allocation
+    /// imported without one. What routes the CPU doors; no door names it.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
+        match &self.checked_out_surface {
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                pixel_surface.consumer_buffer.mapped_ptr().is_null()
+            }
+            HelperCheckedOutSurface::Texture(_)
+            | HelperCheckedOutSurface::AcquiredDeviceTexture(_) => true,
+        }
+    }
+
+    /// Off Linux no surface exchange exists, so no staging does either and
+    /// `host_visible_pixel_plane` is the one answer — which refuses,
+    /// naming the platform.
+    #[cfg(not(target_os = "linux"))]
+    pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
+        false
+    }
+
+    /// How a refusal names this surface — its minted id where it has one,
+    /// and the checkout's own id otherwise, so no refusal says "None".
+    #[cfg(target_os = "linux")]
+    pub(crate) fn surface_id_for_a_refusal(&self) -> &str {
+        self.minted_surface_id
+            .as_deref()
+            .unwrap_or_else(|| self.checked_out_surface.surface_id())
+    }
+
+    /// The staged edit outstanding against this surface, if any door has
+    /// one — the cell every door arms, discards and publishes through.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn pending_staged_write_back(&self) -> &PendingStagedWriteBackToSurface {
+        &self.pending_staged_write_back
+    }
+
     /// The host-mapped pixel view, or a refusal naming why this surface
     /// has none. The single answer to "can the CPU address these bytes?"
     /// — every host-side accessor routes through it.
+    ///
+    /// A surface the CPU cannot address directly answers from its
+    /// readback staging's mapping, which the CPU door checked out and
+    /// read this frame into on entry. Geometry comes from the staging
+    /// alone — the object the byte span was sized for.
     #[cfg(target_os = "linux")]
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
-        let checked_out = match &self.checked_out_surface {
-            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => pixel_surface,
-            HelperCheckedOutSurface::Texture(_) => {
-                return Err(PyRuntimeError::new_err(
-                    "this surface is texture-backed: its memory is tiled device memory with \
-                     no host mapping. A kernel dispatch reaches it by surface id, and \
-                     `export_dma_buf` hands the texture handle itself to native code",
-                ));
-            }
-            HelperCheckedOutSurface::AcquiredDeviceTexture(_) => {
-                return Err(PyRuntimeError::new_err(
-                    "this surface is a device texture whose memory is not mapped into this \
-                     process: its pixels are reachable to a kernel dispatch, which binds it by \
-                     surface id, and to a device tensor through `as_device_tensor()`, not to \
-                     the CPU directly",
-                ));
-            }
-        };
+        if let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface
+            && !pixel_surface.consumer_buffer.mapped_ptr().is_null()
+        {
+            return Ok(HostVisiblePixelPlaneView {
+                base_address: pixel_surface.consumer_buffer.mapped_ptr(),
+                bytes_per_row: pixel_surface.bytes_per_row,
+                width: pixel_surface.width,
+                height: pixel_surface.height,
+                format: pixel_surface.format,
+            });
+        }
+        let surface_id = self.checked_out_surface.surface_id();
+        let staged = self
+            .checked_out_surface
+            .exchange_client()
+            .cpu_readback_export_already_open(surface_id)
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "no CPU door is open on surface {surface_id:?}: its pixels reach the CPU \
+                     through the engine's host-visible staging, which `lock()` plus a host-side \
+                     accessor (`as_numpy`, `base_address`, `__dlpack__`) checks out and reads \
+                     the frame into"
+                ))
+            })?;
         Ok(HostVisiblePixelPlaneView {
-            base_address: checked_out.consumer_buffer.mapped_ptr(),
-            bytes_per_row: checked_out.bytes_per_row,
-            width: checked_out.width,
-            height: checked_out.height,
-            format: checked_out.format,
+            base_address: staged.consumer_buffer.mapped_ptr(),
+            bytes_per_row: staged.bytes_per_row,
+            width: staged.width,
+            height: staged.height,
+            format: staged.format,
         })
     }
 
@@ -432,14 +498,10 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
     exchange_shape: DlpackExchangeShape,
     read_only: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
+    // Non-null by construction on both arms: the coherent mapping answers
+    // only when it has one, and the staged arm refuses at import without
+    // a mapping to hand out.
     let plane_view = owned_memory.host_visible_pixel_plane()?;
-
-    if plane_view.base_address.is_null() {
-        return Err(PyBufferError::new_err(
-            "surface has no host mapping; a DEVICE_LOCAL allocation reaches the CPU through the \
-             texture export path instead",
-        ));
-    }
 
     let layout = PixelExchangeTensorLayout::for_pixel_format(
         plane_view.format,
@@ -657,6 +719,105 @@ pub(crate) fn publish_device_write_back_to_surface(
     )
 }
 
+/// A surface's CPU-readback export as a helper process holds it: this
+/// child's mapping of the host-visible staging the parent owns, and the
+/// client to ask for the next copy.
+#[cfg(target_os = "linux")]
+pub(crate) struct SurfaceCpuReadbackExport {
+    surface_id: String,
+    cpu_readback_export: Arc<HelperCpuReadbackExport>,
+    exchange_client: Arc<HelperProcessGpuExchangeClient>,
+}
+
+/// This surface's CPU-readback export, opening it on first ask — the
+/// staged twin of [`surface_device_export_for`].
+#[cfg(target_os = "linux")]
+fn surface_cpu_readback_export_for(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<SurfaceCpuReadbackExport> {
+    let surface_id = owned_memory.minted_surface_id.as_deref().ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "this surface carries no id, so there is nothing to key a readback staging on; the \
+             staged CPU door serves graph frames (resolve_surface) and surfaces this processor \
+             acquired",
+        )
+    })?;
+    let exchange_client = owned_memory.checked_out_surface.exchange_client();
+    Ok(SurfaceCpuReadbackExport {
+        surface_id: surface_id.to_string(),
+        cpu_readback_export: exchange_client.open_cpu_readback_export(python, surface_id)?,
+        exchange_client: Arc::clone(exchange_client),
+    })
+}
+
+/// Make this surface's readback staging exist and be mapped, without
+/// reading a frame into it.
+///
+/// Enough to answer a geometry question — the staging's own shape is what
+/// the row pitch comes from — and deliberately not enough for pixels:
+/// reading those is the door's job, and the copy belongs where the frame
+/// is actually asked for.
+#[cfg(target_os = "linux")]
+pub(crate) fn map_the_cpu_staging_without_reading_a_frame_in(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
+    if !owned_memory.cpu_reach_goes_through_the_export_staging() {
+        return Ok(());
+    }
+    surface_cpu_readback_export_for(python, owned_memory)?;
+    Ok(())
+}
+
+/// Off Linux there is no staging to map; the plane view refuses instead.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn map_the_cpu_staging_without_reading_a_frame_in(
+    _python: Python<'_>,
+    _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
+    Ok(())
+}
+
+/// Open the staged CPU door over this frame: check the readback staging
+/// out, map it, and read the frame's current pixels in.
+///
+/// Entering always reads in, a pure write included. The read is what
+/// makes a later write-back legal — the engine refuses a publish into a
+/// staging no frame was read into, because one staging spans every frame
+/// its pool slot publishes and it inspects no bag content, so it cannot
+/// tell a fully-overwritten staging from uninitialised memory.
+#[cfg(target_os = "linux")]
+pub(crate) fn read_the_frame_into_its_cpu_staging(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<Arc<HelperCpuReadbackExport>> {
+    let staged = surface_cpu_readback_export_for(python, owned_memory)?;
+    staged.exchange_client.run_cpu_readback_copy(
+        python,
+        CpuReadbackCopyDirection::SurfaceIntoStaging,
+        &staged.surface_id,
+        &staged.cpu_readback_export,
+    )?;
+    Ok(staged.cpu_readback_export)
+}
+
+/// Publish a staged CPU edit back into the surface's own allocation as
+/// one engine-ordered copy — the block edge's publication point.
+#[cfg(target_os = "linux")]
+pub(crate) fn publish_cpu_staged_write_back_to_surface(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
+    let staged = surface_cpu_readback_export_for(python, owned_memory)?;
+    staged.exchange_client.run_cpu_readback_copy(
+        python,
+        CpuReadbackCopyDirection::StagingBackIntoSurface,
+        &staged.surface_id,
+        &staged.cpu_readback_export,
+    )
+}
+
 /// The DLPack device this surface's tensors would live on, importing on
 /// first ask — the driver's own classification of the mapped pointer is
 /// the only honest answer.
@@ -689,28 +850,79 @@ pub(crate) fn device_export_available(_owned_memory: &Arc<GpuSurfaceOwnedMemory>
 // Pending device write-back
 // =============================================================================
 
-/// The armed-until-settled state a writable device export leaves behind:
-/// a consumer took a writable capsule, and the edit it may have made is
-/// published at the scope's normal exit — or discarded on its exception
-/// path. One protocol for every scope that hands out device tensors, so
-/// the swap-once semantics (the first settler wins; unlock-then-close
-/// publishes once) live in one place.
+/// Which staging holds the edit a pending write-back publishes.
+///
+/// The two doors stage in different memory and publish with different
+/// copies; the armed state carries which, so one protocol settles both.
 #[cfg(target_os = "linux")]
-pub(crate) struct PendingDeviceWriteBack {
-    armed: std::sync::atomic::AtomicBool,
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StagedWriteBackSource {
+    /// A writable device capsule went out over the device-local export
+    /// staging.
+    DeviceExportStaging,
+    /// A writable numpy view went out over the host-visible readback
+    /// staging the CPU door mapped.
+    CpuReadbackStaging,
 }
 
 #[cfg(target_os = "linux")]
-impl PendingDeviceWriteBack {
+impl StagedWriteBackSource {
+    /// How a refusal names this door to the author who opened it.
+    fn door_in_a_refusal(self) -> &'static str {
+        match self {
+            Self::DeviceExportStaging => "the device tensor",
+            Self::CpuReadbackStaging => "the CPU array",
+        }
+    }
+}
+
+/// The armed-until-settled state a writable staged export leaves behind:
+/// a consumer took a writable view, and the edit it may have made is
+/// published at the scope's normal exit — or discarded on its exception
+/// path. One protocol for every scope that hands out a staged view, so
+/// the swap-once semantics (the first settler wins; unlock-then-close
+/// publishes once) live in one place.
+#[cfg(target_os = "linux")]
+pub(crate) struct PendingStagedWriteBackToSurface {
+    armed_over: Mutex<Option<StagedWriteBackSource>>,
+}
+
+#[cfg(target_os = "linux")]
+impl PendingStagedWriteBackToSurface {
     pub(crate) fn new_unarmed() -> Self {
         Self {
-            armed: std::sync::atomic::AtomicBool::new(false),
+            armed_over: Mutex::new(None),
         }
     }
 
-    /// A writable capsule went out; the next normal scope exit publishes.
-    pub(crate) fn arm(&self) {
-        self.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    /// A writable view went out; the next normal scope exit publishes it
+    /// back through `source`'s own copy.
+    ///
+    /// Re-arming the same source is the idempotent case — several capsules
+    /// over one staging are one pending edit. A *second* source is refused
+    /// by name: the two stagings were each filled from the surface before
+    /// the other door's edit existed, so neither holds both edits, and
+    /// there is no order in which publishing both does not overwrite one
+    /// of them with pixels that predate it. Silently settling one is the
+    /// answer this must never give — the lost edit surfaces as corruption
+    /// nowhere near the write.
+    pub(crate) fn arm(&self, source: StagedWriteBackSource) -> PyResult<()> {
+        let mut armed_over = self.armed_over.lock();
+        match *armed_over {
+            Some(already_armed) if already_armed != source => {
+                Err(PyRuntimeError::new_err(format!(
+                    "this lock scope already staged an edit through {}; {} would stage a second \
+                     edit in different memory, and publishing both would overwrite one with \
+                     pixels taken before it. Close this scope and open the other door in its own",
+                    already_armed.door_in_a_refusal(),
+                    source.door_in_a_refusal(),
+                )))
+            }
+            _ => {
+                *armed_over = Some(source);
+                Ok(())
+            }
+        }
     }
 
     /// Drop the pending write instead of publishing it — the exception
@@ -718,21 +930,32 @@ impl PendingDeviceWriteBack {
     /// publishing a half-written view hands downstream a torn frame that
     /// surfaces as corruption far from the raise.
     pub(crate) fn discard(&self) {
-        self.armed.store(false, std::sync::atomic::Ordering::SeqCst);
+        *self.armed_over.lock() = None;
     }
 
     /// Publish the staged edit back into the surface if one is armed.
-    /// Swap-once: the first caller wins, so a scope that settles twice
+    /// Take-once: the first caller wins, so a scope that settles twice
     /// (unlock, then close) publishes once.
     pub(crate) fn publish_if_armed(
         &self,
         python: Python<'_>,
         owned_memory: &Arc<GpuSurfaceOwnedMemory>,
     ) -> PyResult<()> {
-        if !self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        debug_assert!(std::ptr::eq(self, &owned_memory.pending_staged_write_back));
+        // Taken before the publish, not held across it: the copy crosses
+        // to the parent, and a lock held over that hop is the
+        // mutex-across-the-GIL hazard.
+        let Some(armed_over) = self.armed_over.lock().take() else {
             return Ok(());
+        };
+        match armed_over {
+            StagedWriteBackSource::DeviceExportStaging => {
+                publish_device_write_back_to_surface(python, owned_memory)
+            }
+            StagedWriteBackSource::CpuReadbackStaging => {
+                publish_cpu_staged_write_back_to_surface(python, owned_memory)
+            }
         }
-        publish_device_write_back_to_surface(python, owned_memory)
     }
 }
 
@@ -977,5 +1200,90 @@ mod tests {
             deleter(adopted);
         }
         assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    /// Two doors in one lock scope stage into two different buffers, each
+    /// filled from the surface before the other's edit existed. Publishing
+    /// whichever armed last would copy pixels that predate the first edit
+    /// back over the surface — losing it, silently, far from the write.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_staging_source_in_one_scope_is_refused_rather_than_replacing_the_first() {
+        Python::initialize();
+        let pending = PendingStagedWriteBackToSurface::new_unarmed();
+
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("the first source arms");
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("re-arming the same source is one pending edit, not two");
+
+        let refusal = pending
+            .arm(StagedWriteBackSource::CpuReadbackStaging)
+            .err()
+            .expect("a second, different source must be refused")
+            .to_string();
+        assert!(
+            refusal.contains("the device tensor") && refusal.contains("the CPU array"),
+            "the refusal must name both doors so the author knows which two collided: {refusal:?}"
+        );
+
+        // The refusal must not have disturbed what was already armed: the
+        // first door's edit is still the one that publishes.
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("the first source is still the armed one");
+    }
+
+    /// The cell belongs to the surface, not the handle or the scope.
+    ///
+    /// `as_device_tensor()` mints a scope over the *same*
+    /// `GpuSurfaceOwnedMemory` the handle holds, so a CPU staged edit and
+    /// a device edit are two stagings over one surface — each filled
+    /// before the other's edit existed. While the two doors kept private
+    /// cells, neither refusal could see the other's edit and whichever
+    /// published last silently overwrote the first.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_device_scope_meets_the_cpu_doors_arm_because_the_cell_is_the_surfaces() {
+        Python::initialize();
+        // The cell a `GpuSurfaceOwnedMemory` now holds; a handle and every
+        // device-tensor scope it mints reach this one instance, which is
+        // what lets the second door's refusal see the first door's edit.
+        let surfaces_pending_edit = PendingStagedWriteBackToSurface::new_unarmed();
+
+        // What the handle's CPU door does under a write lock.
+        surfaces_pending_edit
+            .arm(StagedWriteBackSource::CpuReadbackStaging)
+            .expect("the CPU door stages first");
+
+        // What a device-tensor scope minted off that same handle then does.
+        let refusal = surfaces_pending_edit
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .err()
+            .expect("a device scope over a surface holding a CPU staged edit must be refused")
+            .to_string();
+        assert!(
+            refusal.contains("the CPU array") && refusal.contains("the device tensor"),
+            "the refusal must name both doors: {refusal:?}"
+        );
+    }
+
+    /// Discarding frees the scope to take the other door — the refusal is
+    /// about two *live* pending edits, not a latch on the handle.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discarding_releases_the_scope_to_stage_through_the_other_door() {
+        Python::initialize();
+        let pending = PendingStagedWriteBackToSurface::new_unarmed();
+
+        pending
+            .arm(StagedWriteBackSource::CpuReadbackStaging)
+            .expect("the first source arms");
+        pending.discard();
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("with nothing pending, the other door is free to stage");
     }
 }

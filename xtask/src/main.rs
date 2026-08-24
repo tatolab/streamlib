@@ -272,11 +272,13 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--lib",
             ],
         ),
-        // Mirrors test.yml's named slice: streamlib-engine's lib tests do not
-        // run wholesale in CI, so the present-class ops' headless arm reaches
-        // it by name or not at all.
+        // Mirrors `test.yml`'s named slice exactly. `streamlib-engine`'s lib
+        // tests are not run wholesale anywhere, so this list *is* the set of
+        // engine-lib tests under CI — a test added to the workflow's slice
+        // and not to this one makes the local runner report a coverage the
+        // branch does not have.
         (
-            "present-class escalate op unit tests",
+            "named engine-lib slice (the only engine-lib tests CI runs)",
             "cargo",
             &[
                 "test",
@@ -288,6 +290,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::processor_owned_window",
                 "processor_owned_window_ops",
                 "escalate_wire_encoding_tests",
+                "core::compiler::compiler_ops::subprocess_escalate::tests::parse_texture_usages",
+                "core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits",
             ],
         ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.

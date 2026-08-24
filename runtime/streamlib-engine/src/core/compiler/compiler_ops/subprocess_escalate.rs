@@ -4446,16 +4446,22 @@ fn derive_texture_cross_process_importability(
     TextureCrossProcessImportability::NotImportable
 }
 
-/// Parse an array of usage tokens into a combined [`TextureUsages`] bitmask.
+/// Parse an array of usage tokens into a combined [`TextureUsages`] bitmask,
+/// with both copy bits implied.
 ///
 /// An empty list is rejected — a texture must have at least one usage or the
 /// RHI can't create it. Unknown tokens surface as an error so typos fail
 /// loudly on the wire rather than silently dropping flags.
+///
+/// `COPY_SRC | COPY_DST` ride every request because the CPU doors copy both
+/// ways over a texture's export staging, so an author who acquired a texture
+/// to fill it would otherwise be refused about a transfer flag rather than a
+/// real constraint.
 fn parse_texture_usages(tokens: &[String]) -> std::result::Result<TextureUsages, String> {
     if tokens.is_empty() {
         return Err("texture usage list must not be empty".to_string());
     }
-    let mut out = TextureUsages::NONE;
+    let mut out = TextureUsages::COPY_SRC | TextureUsages::COPY_DST;
     for token in tokens {
         let normalized = token.trim().to_ascii_lowercase();
         let flag = match normalized.as_str() {
@@ -4818,18 +4824,82 @@ mod tests {
     }
 
     #[test]
-    fn parse_texture_usages_combines_tokens() {
-        let usage = parse_texture_usages(&["texture_binding".to_string(), "copy_src".to_string()])
-            .expect("known tokens");
+    fn parse_texture_usages_combines_tokens_and_implies_both_copy_bits() {
+        let usage = parse_texture_usages(&["texture_binding".to_string()]).expect("known tokens");
         assert!(usage.contains(TextureUsages::TEXTURE_BINDING));
-        assert!(usage.contains(TextureUsages::COPY_SRC));
+        assert!(
+            usage.contains(TextureUsages::COPY_SRC | TextureUsages::COPY_DST),
+            "one spelled token is enough: the CPU doors copy both ways, so a texture an author \
+             acquired can always take them"
+        );
         assert!(!usage.contains(TextureUsages::STORAGE_BINDING));
+
+        let spelled_out = parse_texture_usages(&[
+            "texture_binding".to_string(),
+            "copy_src".to_string(),
+            "copy_dst".to_string(),
+        ])
+        .expect("known tokens");
+        assert_eq!(
+            usage, spelled_out,
+            "spelling the copy tokens must reach the same mask the implication does"
+        );
     }
 
     #[test]
     fn parse_texture_usages_rejects_empty_and_unknown() {
-        assert!(parse_texture_usages(&[]).is_err());
+        assert!(
+            parse_texture_usages(&[]).is_err(),
+            "the implication rides a spelled usage; it never conjures a mask from nothing"
+        );
         assert!(parse_texture_usages(&["bogus".to_string()]).is_err());
+    }
+
+    /// The implication reaches the caller's own echo: an author who asked
+    /// for one usage is told the three the texture actually carries, so the
+    /// door that later refuses on a missing copy bit is refusing about the
+    /// same mask the acquire reported.
+    #[test]
+    fn the_implied_copy_bits_echo_back_on_the_wire() {
+        let usage = parse_texture_usages(&["texture_binding".to_string()]).expect("known tokens");
+        assert_eq!(
+            texture_usages_to_wire(usage),
+            vec![
+                "copy_src".to_string(),
+                "copy_dst".to_string(),
+                "texture_binding".to_string()
+            ]
+        );
+    }
+
+    /// Implying both copy bits must not move any request off the flavour it
+    /// takes today: the OPAQUE_FD fixed usage set already contains them, and
+    /// the render-attachment branch answers before usage is weighed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_implied_copy_bits_leave_every_flavour_derivation_where_it_was() {
+        let implied = parse_texture_usages(&["texture_binding".to_string()]).expect("known tokens");
+        assert_eq!(
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                implied,
+                true,
+                true,
+            ),
+            TextureCrossProcessImportability::OpaqueFd,
+        );
+
+        let implied_render_attachment =
+            parse_texture_usages(&["render_attachment".to_string()]).expect("known tokens");
+        assert_eq!(
+            derive_texture_cross_process_importability(
+                TextureFormat::Rgba8Unorm,
+                implied_render_attachment,
+                true,
+                true,
+            ),
+            TextureCrossProcessImportability::RenderTargetDmaBuf,
+        );
     }
 
     #[cfg(target_os = "linux")]

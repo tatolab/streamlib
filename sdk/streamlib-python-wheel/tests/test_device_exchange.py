@@ -252,7 +252,8 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
     own device — and the kernel's pixels read back through the device export,
     which only happens when the layout chain (dispatch publish, checkout,
     acquire barrier, staging refill) named the truth at every step. Its CPU
-    accessors and DMA-BUF export refuse by naming the backing. The
+    accessors read the same pixels over the host-visible staging, and its
+    DMA-BUF export refuses by naming the backing. The
     render-target flavour is kernel-written too and exports the fd native
     code imports — the demo shape. A second resolve after release proves the
     round trip left the frame usable.
@@ -268,9 +269,13 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
         f"the imported texture must read the kernel's own pixels: "
         f"{observation['opaque_device_pixel']!r}"
     )
-    assert "texture-backed" in observation["opaque_pixel_refusal"], (
-        f"the pixel refusal should name the tiled backing: "
-        f"{observation['opaque_pixel_refusal']!r}"
+    assert observation["opaque_cpu_pixel"] == FILL_CONSTANT_RGBA, (
+        f"the CPU door over the tiled texture must read the same pixels the "
+        f"device tensor did: {observation['opaque_cpu_pixel']!r}"
+    )
+    assert observation["opaque_cpu_bytes_per_row"] >= SURFACE_WIDTH * 4, (
+        f"the staged row pitch must span the row it describes: "
+        f"{observation['opaque_cpu_bytes_per_row']!r}"
     )
     assert "OPAQUE_FD" in observation["opaque_export_refusal"], (
         f"the export refusal should name the handle flavour: "
@@ -432,23 +437,26 @@ def test_a_pooled_texture_exports_a_device_tensor(start_app_under_test):
     assert observation["texture_tensor_device"].startswith("cuda")
 
 
-def test_a_texture_whose_usage_forbids_the_copy_refuses_at_scope_entry(
+def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
     start_app_under_test,
 ):
-    """The engine refuses a copy the Vulkan spec forbids instead of recording
-    it and letting the driver silently tolerate UB: a sampled-only texture
-    cannot blit out, a copy_dst-less one cannot take the blit back, and both
-    refuse at `__enter__` naming the usage to add.
+    """`acquire_texture` implies `copy_src | copy_dst`, so the usage tokens an
+    author spells cannot leave a texture unable to blit out or take the blit
+    back. The spellings that used to refuse now enter.
+
+    The copy guard itself is untouched — it still refuses a registration that
+    genuinely lacks the usage, which Python cannot mint — and keeps its
+    coverage engine-side, over images built without the bits.
     """
     observation = run_probe(
-        start_app_under_test, "DeviceTensorScopeRefusesAnUnexportableUsageProbe"
+        start_app_under_test, "DeviceTensorScopeTakesEveryAcquiredTextureProbe"
     )
     skip_without_cuda(observation)
-    assert "copy_src" in observation["copy_src_refusal"], (
-        f"the blit-out refusal must name the missing usage: "
-        f"{observation['copy_src_refusal']!r}"
+    assert observation["scope_over_one_token"] == "entered", (
+        f"one usage token is enough — the copy bits ride every acquire: "
+        f"{observation['scope_over_one_token']!r}"
     )
-    assert "copy_dst" in observation["copy_dst_refusal"], (
-        f"the blit-back refusal must name the missing usage: "
-        f"{observation['copy_dst_refusal']!r}"
+    assert observation["scope_over_copy_src_only"] == "entered", (
+        f"a copy_dst-less spelling still reaches the implied mask: "
+        f"{observation['scope_over_copy_src_only']!r}"
     )

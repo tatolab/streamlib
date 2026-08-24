@@ -677,8 +677,10 @@ def test_the_cpu_door_yields_the_host_array_under_a_write_lock(offered):
 
 def test_the_cpu_door_leaves_through_the_surfaces_own_scope(offered):
     """The block edge settles the surface's scope: the write intent ends and
-    the handle closes through its own exit. The stores themselves published as
-    they landed — the array is the surface's coherent mapping."""
+    the handle closes through its own exit. Over this stand-in's pixel-buffer
+    backing the stores themselves published as they landed — the array is the
+    surface's coherent mapping; over a texture backing the same block edge is
+    also where the staged edit publishes."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
     frame = DepthFrame(**FRAME_BAG)
 
@@ -694,8 +696,10 @@ def test_a_raise_inside_the_cpu_door_reaches_that_scopes_exit_and_propagates(
     offered,
 ):
     """The raise reaches the surface's own exit unsuppressed and the scope
-    still closes — all a shared host mapping can promise on this path: stores
-    already written are already in the frame, so there is nothing to discard."""
+    still closes. Which no-torn-frame state it leaves is the backing's own: over
+    this stand-in's coherent mapping, stores already written are already in the
+    frame and there is nothing to discard; over a staging the pending publish is
+    discarded instead. Author code must not depend on which."""
     gpu_limited_access = offered(GpuLimitedAccessStandIn())
     frame = DepthFrame(**FRAME_BAG)
 

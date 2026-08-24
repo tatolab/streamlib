@@ -30,7 +30,11 @@ from pathlib import Path
 
 import pytest
 
-from compute_kernel_probes import OUTPUT_BINDING, SOURCE_BINDING
+from compute_kernel_probes import (
+    FILLED_SOURCE_RGBA,
+    OUTPUT_BINDING,
+    SOURCE_BINDING,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -139,10 +143,13 @@ def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     )
 
 
-def test_an_acquired_texture_is_a_name_not_a_local_mapping(start_app_under_test):
-    """`acquire_texture` stops raising, but what it returns is the id a
-    dispatch binds — not addressable pixels. Asking for them says so."""
-    observed = run_probe(start_app_under_test, "TextureIsNotLocallyMappedProbe")
+def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
+    start_app_under_test,
+):
+    """The staged CPU door, both ways, with no GPU package in the process:
+    a write door fills an acquired texture, and a read door answers with a
+    kernel's own output pixels."""
+    observed = run_probe(start_app_under_test, "TextureBackedPixelsReachTheCpuProbe")
 
     assert observed["surface_id"], "an acquired texture carries the id it travels under"
     assert observed["width"] == 64 and observed["height"] == 64
@@ -150,12 +157,58 @@ def test_an_acquired_texture_is_a_name_not_a_local_mapping(start_app_under_test)
         "two acquires are two surfaces"
     )
 
-    refusal = observed["pixels_refusal"]
-    assert refusal is not None, (
-        "a device texture has no mapping in this process, so reading its "
-        "pixels here must refuse rather than answer"
+    assert observed["published_pixel"] == list(FILLED_SOURCE_RGBA), (
+        "the staged edit must publish into the surface's own allocation at the "
+        f"block edge: {observed['published_pixel']!r}"
     )
-    assert "not mapped into this process" in refusal, refusal
+
+    # The shader writes `1.0 - source.rgb` with a zero bias and passes alpha
+    # through; unorm round-trip is worth one code point of slack, no more.
+    inverted = [255 - channel for channel in FILLED_SOURCE_RGBA[:3]]
+    read_back = observed["kernel_output_pixel"]
+    assert all(
+        abs(read - want) <= 1
+        for read, want in zip(read_back[:3], inverted, strict=True)
+    ), (
+        f"the CPU read of the kernel output must show the kernel's own pixels: "
+        f"{read_back!r} against {inverted!r}"
+    )
+    assert read_back[3] == FILLED_SOURCE_RGBA[3], (
+        f"the shader passes alpha through unchanged: {read_back!r}"
+    )
+
+
+def test_a_raise_inside_the_staged_cpu_door_discards_the_edit(start_app_under_test):
+    """Over a texture backing the door publishes at the block edge, so a
+    propagating raise leaves the frame the engine already held."""
+    observed = run_probe(start_app_under_test, "StagedCpuDoorDiscardsOnRaiseProbe")
+
+    assert observed["raised"] == "the edit does not finish", (
+        f"discarding must never suppress the exception: {observed['raised']!r}"
+    )
+    assert observed["pixel_after_the_raise"] == list(FILLED_SOURCE_RGBA), (
+        "the discarded edit must not reach the surface; the frame keeps the "
+        f"pixels it already held: {observed['pixel_after_the_raise']!r}"
+    )
+
+
+def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
+    start_app_under_test,
+):
+    """The zero-ceremony bar for the LUT flow: one usage token is enough,
+    because the engine implies both copy bits rather than refusing about a
+    flag the author had no reason to name."""
+    observed = run_probe(start_app_under_test, "AcquiredTextureImpliesCopyUsageProbe")
+
+    assert observed["surface_id"], "the acquire answers with a surface id"
+    assert observed["takes_a_write_back"] is True, (
+        "a texture this processor acquired can take a recorded copy in, so the "
+        "engine's write-back answer must be yes"
+    )
+    assert observed["the_curve_published"] is True, (
+        "the whole ramp must survive the staged fill and come back: "
+        f"{observed['first_and_last_entries']!r}"
+    )
 
 
 def test_a_kernel_is_built_with_no_shader_toolchain_on_path(

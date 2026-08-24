@@ -19,6 +19,7 @@ import traceback
 
 from streamlib import (
     GpuContextFullAccess,
+    GpuContextLimitedAccess,
     GpuSurfaceHandle,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -36,6 +37,14 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 # them by slot order rather than by name would bind them backwards.
 SOURCE_BINDING = "source_image"
 OUTPUT_BINDING = "output_image"
+
+# Opaque and asymmetric across channels: a probe that read the wrong
+# channel order, or somebody else's memory, cannot match by accident.
+FILLED_SOURCE_RGBA = (10, 20, 30, 255)
+DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
+
+# One row of RGBA32F entries — the LUT shape the owner ruling named.
+LUT_WIDTH = 256
 
 READ_ONE_WRITE_ANOTHER_GLSL = """\
 #version 450
@@ -81,16 +90,20 @@ class _ComputeKernelProbeBase:
     names, not something handed to it.
     """
 
-    # Declared, not merely assigned: `setup` assigns it inside a nested
+    # Declared, not merely assigned: `setup` assigns them inside a nested
     # closure, which a type checker does not walk for attribute inference.
     gpu_full_access: GpuContextFullAccess
+    gpu_limited_access: GpuContextLimitedAccess
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
             gpu = ctx.gpu_full_access
             # Held for probes whose observation needs the capability itself
-            # (a refusal at construction is observed by constructing).
+            # (a refusal at construction is observed by constructing), and
+            # the Limited surface beside it for the by-id verbs — resolving
+            # a surface and asking whether it takes a write-back.
             self.gpu_full_access = gpu
+            self.gpu_limited_access = ctx.gpu_limited_access
             kernel = gpu.create_compute_kernel(
                 source=READ_ONE_WRITE_ANOTHER_GLSL,
                 push_constant_size=4,
@@ -206,26 +219,127 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
 
 @processor(
     execution="manual",
-    description="A device texture's pixels are not addressable in this process",
+    description="A texture's pixels reach the CPU through the staged door",
 )
-class TextureIsNotLocallyMappedProbe(_ComputeKernelProbeBase):
-    """`acquire_texture` mints a name, not a mapping. Asking for the pixels
-    says so, rather than answering with somebody else's memory."""
+class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
+    """The staged CPU door end to end, with numpy as the only consumer.
+
+    Fills an acquired texture through the CPU write door, dispatches a
+    kernel that samples it, and reads the kernel's own output back through
+    the CPU read door. No CUDA runtime and no GPU package take part: if
+    either door were still refusing a texture backing, or the block-edge
+    publish never landed in the surface's own allocation, the kernel would
+    read something other than what was written and this reports it.
+    """
 
     def observe(self, kernel, source, output) -> dict:
-        del kernel
-        try:
-            output.lock(read_only=True)
-            output.as_numpy()
-            pixels_refusal = None
-        except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
-            pixels_refusal = str(refusal)
+        source.lock(read_only=False)
+        source.as_numpy()[:] = FILLED_SOURCE_RGBA
+        source.unlock()
+
+        # Re-read through a fresh scope: the edit was staged, so seeing it
+        # here is the proof the block edge published it into the surface.
+        source.lock(read_only=True)
+        published_pixel = source.as_numpy()[11, 13].tolist()
+        source.unlock()
+
+        kernel.dispatch(
+            bindings={SOURCE_BINDING: source, OUTPUT_BINDING: output},
+            group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            push_constants=b"\x00\x00\x00\x00",
+        )
+
+        output.lock(read_only=True)
+        kernel_output_pixel = output.as_numpy()[11, 13].tolist()
+        output.unlock()
+
         return {
             "surface_id": output.surface_id,
             "width": output.width,
             "height": output.height,
-            "pixels_refusal": pixels_refusal,
             "source_surface_id": source.surface_id,
+            "published_pixel": published_pixel,
+            "kernel_output_pixel": kernel_output_pixel,
+        }
+
+
+@processor(
+    execution="manual",
+    description="A raise inside the staged CPU door discards the edit",
+)
+class StagedCpuDoorDiscardsOnRaiseProbe(_ComputeKernelProbeBase):
+    """Over a staging the door publishes at the block edge, so a raise has
+    something to discard — and the frame keeps the pixels it already held."""
+
+    def observe(self, kernel, source, output) -> dict:
+        del kernel, output
+        source.lock(read_only=False)
+        source.as_numpy()[:] = FILLED_SOURCE_RGBA
+        source.unlock()
+
+        # A scope of its own over the same surface: leaving `with` closes
+        # the handle it entered, and the re-read below needs `source` open.
+        raised = None
+        try:
+            with self.gpu_limited_access.resolve_surface(source.surface_id) as scoped:
+                scoped.lock(read_only=False)
+                scoped.as_numpy()[:] = DISCARDED_SOURCE_RGBA
+                raise RuntimeError("the edit does not finish")
+        except RuntimeError as propagated:
+            raised = str(propagated)
+
+        source.lock(read_only=True)
+        pixel_after_the_raise = source.as_numpy()[11, 13].tolist()
+        source.unlock()
+        return {
+            "raised": raised,
+            "pixel_after_the_raise": pixel_after_the_raise,
+        }
+
+
+@processor(
+    execution="manual",
+    description="An acquired texture takes a write-back without spelling copy usage",
+)
+class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
+    """The LUT flow the ruling widened #1758 to cover, spelled the way an
+    author would: acquire with one usage token, fill it through the CPU
+    write door, and read it back.
+
+    `usage=["texture_binding"]` alone is enough because the engine implies
+    both copy bits — so the door answers rather than refusing about a flag
+    the author had no reason to name. Filling and re-reading is what makes
+    that end to end: a mask that merely parsed right would still fail here
+    if the copy the door records could not run against the allocation.
+    """
+
+    def observe(self, kernel, source, output) -> dict:
+        del kernel, source, output
+        lut = self.gpu_full_access.acquire_texture(
+            LUT_WIDTH, 1, "rgba32_float", ["texture_binding"]
+        )
+        takes_a_write_back = self.gpu_limited_access.surface_can_take_write_back(
+            lut.surface_id
+        )
+
+        # A ramp, so a read that answered the wrong row, a stale staging or
+        # somebody else's memory cannot match by accident.
+        curve = [
+            [step / LUT_WIDTH, 1.0 - step / LUT_WIDTH, 0.25, 1.0]
+            for step in range(LUT_WIDTH)
+        ]
+        lut.lock(read_only=False)
+        lut.as_numpy()[0, :, :] = curve
+        lut.unlock()
+
+        lut.lock(read_only=True)
+        published = lut.as_numpy()[0, :, :].tolist()
+        lut.unlock()
+        return {
+            "surface_id": lut.surface_id,
+            "takes_a_write_back": takes_a_write_back,
+            "the_curve_published": published == curve,
+            "first_and_last_entries": [published[0], published[-1]],
         }
 
 
