@@ -2325,10 +2325,11 @@ impl HelperProcessGpuExchangeClient {
             "source_height_in_pixels",
             named_surface.source_height_in_pixels,
         )?;
-        // Left off the document rather than sent as null: the host reads an
-        // absent colour axis as "this frame describes none, leave the window
-        // on what it last applied", and a described-as-nothing frame would
-        // renegotiate the swapchain back to the default pick every frame.
+        // Every optional below is left off the document rather than sent as
+        // null, because absent and null are not the same answer here: the host
+        // reads an absent colour axis as "this frame describes none, leave the
+        // window on what it last applied", where a described-as-nothing frame
+        // would renegotiate the swapchain back to the default pick every frame.
         if let Some(producer_published_texture_layout) =
             named_surface.producer_published_texture_layout
         {
