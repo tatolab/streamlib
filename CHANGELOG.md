@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.1](https://github.com/tatolab/streamlib/compare/v0.18.0...v0.18.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **build:** rust-version names a toolchain that can actually build the tree ([#1956](https://github.com/tatolab/streamlib/issues/1956)) ([4413afb](https://github.com/tatolab/streamlib/commit/4413afbc4033e4232cf92d7bdcbcee7327fb4914)), closes [#1852](https://github.com/tatolab/streamlib/issues/1852)
+
 ## [0.18.0](https://github.com/tatolab/streamlib/compare/v0.17.1...v0.18.0) (2026-08-24)
 
 
