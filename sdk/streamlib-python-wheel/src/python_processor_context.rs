@@ -31,8 +31,9 @@ use crate::python_gpu_surface_pixel_exchange::{
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
-    PendingDeviceWriteBack, PreparedDeviceExport, device_dlpack_capsule, imported_device_for,
-    prepare_device_export,
+    PendingStagedWriteBackToSurface, PreparedDeviceExport, StagedWriteBackSource,
+    device_dlpack_capsule, imported_device_for, prepare_device_export,
+    read_the_frame_into_its_cpu_staging,
 };
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
@@ -108,7 +109,15 @@ pub(crate) struct PythonGpuSurfaceHandle {
     /// lock; `unlock()` / `close()` publishes the staging back into the
     /// surface, and an exception-path exit discards it.
     #[cfg(target_os = "linux")]
-    pending_device_write_back: PendingDeviceWriteBack,
+    pending_staged_write_back: PendingStagedWriteBackToSurface,
+    /// Whether the readback staging already holds this lock scope's
+    /// frame, so the host-side accessors read it in once between `lock()`
+    /// and `unlock()` rather than per call.
+    ///
+    /// Only ever set for a surface the CPU cannot address directly; a
+    /// coherent mapping has nothing to read in.
+    #[cfg(target_os = "linux")]
+    cpu_staging_holds_this_locks_frame: std::sync::atomic::AtomicBool,
     /// Which DLPack side this handle serves when the consumer expresses
     /// no preference — decided once, so `__dlpack_device__` and
     /// `__dlpack__` cannot disagree across calls.
@@ -132,10 +141,52 @@ impl PythonGpuSurfaceHandle {
             owned_memory: Mutex::new(Some(owned_memory)),
             cpu_access: CpuAccessGate::new_unlocked(),
             #[cfg(target_os = "linux")]
-            pending_device_write_back: PendingDeviceWriteBack::new_unarmed(),
+            pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
+            #[cfg(target_os = "linux")]
+            cpu_staging_holds_this_locks_frame: std::sync::atomic::AtomicBool::new(false),
             #[cfg(target_os = "linux")]
             natural_dlpack_side_is_device: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Open the staged CPU door over this frame, once per lock scope.
+    ///
+    /// A surface the CPU can already address does nothing — its own
+    /// coherent mapping *is* the door. Everything else checks the
+    /// engine's host-visible staging out, maps it, and reads this frame's
+    /// pixels in; a write lock over a frame that takes an edit also arms
+    /// the publish, so the block edge has something to settle.
+    ///
+    /// Called from the host-side accessors rather than from `lock()`
+    /// itself: `lock()` also gates the device side, and reading a frame
+    /// into a host staging nobody asked for would cost the device path a
+    /// copy per frame.
+    #[cfg(target_os = "linux")]
+    fn open_the_staged_cpu_door_over_this_frame(
+        &self,
+        python: Python<'_>,
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> PyResult<()> {
+        if !owned_memory.cpu_reach_goes_through_the_export_staging() {
+            return Ok(());
+        }
+        if self
+            .cpu_staging_holds_this_locks_frame
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let staged = read_the_frame_into_its_cpu_staging(python, owned_memory).inspect_err(|_| {
+            // The read-in is what makes a later publish legal, so a
+            // failed one must not leave the door looking open.
+            self.cpu_staging_holds_this_locks_frame
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        })?;
+        if !self.cpu_access.is_read_only() && staged.writable {
+            self.pending_staged_write_back
+                .arm(StagedWriteBackSource::CpuReadbackStaging);
+        }
+        Ok(())
     }
 
     /// The id and pixel extent a window's `show()` names this surface by.
@@ -234,17 +285,17 @@ impl PythonGpuSurfaceHandle {
     /// edit; a handle already closed has nothing to publish into and
     /// discards instead.
     #[cfg(target_os = "linux")]
-    fn publish_pending_device_write(&self, python: Python<'_>) -> PyResult<()> {
+    fn publish_pending_staged_write(&self, python: Python<'_>) -> PyResult<()> {
         // Bound before the match, so the guard drops here: the publish
         // crosses to the parent — the same mutex-across-the-GIL hazard
         // `release_owned_engine_value` documents.
         let owned_memory = self.owned_memory.lock().clone();
         match owned_memory {
             Some(owned_memory) => self
-                .pending_device_write_back
+                .pending_staged_write_back
                 .publish_if_armed(python, &owned_memory),
             None => {
-                self.pending_device_write_back.discard();
+                self.pending_staged_write_back.discard();
                 Ok(())
             }
         }
@@ -294,6 +345,8 @@ impl PythonGpuSurfaceHandle {
     #[getter]
     fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
         let owned_memory = self.owned_memory()?;
+        #[cfg(target_os = "linux")]
+        self.open_the_staged_cpu_door_over_this_frame(python, &owned_memory)?;
         python.detach(|| Ok(owned_memory.host_visible_pixel_plane()?.bytes_per_row))
     }
 
@@ -306,6 +359,8 @@ impl PythonGpuSurfaceHandle {
             return Ok(None);
         }
         let owned_memory = self.owned_memory()?;
+        #[cfg(target_os = "linux")]
+        self.open_the_staged_cpu_door_over_this_frame(python, &owned_memory)?;
         python.detach(|| {
             Ok(Some(
                 owned_memory.host_visible_pixel_plane()?.base_address as usize,
@@ -325,7 +380,7 @@ impl PythonGpuSurfaceHandle {
         // (`with` → close) users write. Clean up, then surface the
         // failure.
         #[cfg(target_os = "linux")]
-        let publish_outcome = self.publish_pending_device_write(python);
+        let publish_outcome = self.publish_pending_staged_write(python);
         python.detach(|| {
             self.cpu_access.unlock();
             self.release_owned_engine_value();
@@ -354,7 +409,7 @@ impl PythonGpuSurfaceHandle {
         let _ = (exception, traceback);
         #[cfg(target_os = "linux")]
         if left_by_a_propagating_exception(exception_type) {
-            self.pending_device_write_back.discard();
+            self.pending_staged_write_back.discard();
         }
         #[cfg(not(target_os = "linux"))]
         let _ = exception_type;
@@ -372,23 +427,24 @@ impl PythonGpuSurfaceHandle {
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
         let owned_memory = self.owned_memory()?;
         python.detach(|| -> PyResult<()> {
-            // The gate serves both sides: a device-only surface (a pooled
-            // texture) has no host mapping to check, but its device export
-            // still rides the same lock.
-            match owned_memory.host_visible_pixel_plane() {
-                Ok(plane_view) => {
-                    if plane_view.base_address.is_null() {
-                        return Err(PyBufferError::new_err(
-                            "surface has no host mapping; it is a DEVICE_LOCAL allocation",
-                        ));
-                    }
-                }
-                Err(no_host_side) => {
-                    if !device_export_available(&owned_memory) {
-                        return Err(no_host_side);
-                    }
-                }
+            // The gate serves both sides, and neither is refused here for
+            // want of a host mapping: a surface the CPU cannot address
+            // directly reaches its pixels through the engine's staging,
+            // which the first host-side accessor opens, and its device
+            // export rides this same lock.
+            #[cfg(target_os = "linux")]
+            if !owned_memory.cpu_reach_goes_through_the_export_staging()
+                && let Err(no_host_side) = owned_memory.host_visible_pixel_plane()
+            {
+                return Err(no_host_side);
             }
+            #[cfg(not(target_os = "linux"))]
+            owned_memory.host_visible_pixel_plane()?;
+            // A fresh scope: whatever the staging holds is a previous
+            // one's read-in, and this scope owes its own.
+            #[cfg(target_os = "linux")]
+            self.cpu_staging_holds_this_locks_frame
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             self.cpu_access.lock_for(read_only);
             Ok(())
         })
@@ -402,7 +458,7 @@ impl PythonGpuSurfaceHandle {
         // every later access with a message about locking, hiding
         // the real failure this raises.
         #[cfg(target_os = "linux")]
-        let publish_outcome = self.publish_pending_device_write(python);
+        let publish_outcome = self.publish_pending_staged_write(python);
         python.detach(|| self.cpu_access.unlock());
         #[cfg(target_os = "linux")]
         publish_outcome?;
@@ -479,6 +535,7 @@ impl PythonGpuSurfaceHandle {
                 None => !self.natural_side_is_device(python, &owned_memory),
             };
             if wants_host {
+                self.open_the_staged_cpu_door_over_this_frame(python, &owned_memory)?;
                 return host_visible_dlpack_capsule(
                     python,
                     &owned_memory,
@@ -495,7 +552,8 @@ impl PythonGpuSurfaceHandle {
             let capsule =
                 device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
             if writable_export {
-                self.pending_device_write_back.arm();
+                self.pending_staged_write_back
+                .arm(StagedWriteBackSource::DeviceExportStaging);
             }
             Ok(capsule)
         }
@@ -593,7 +651,7 @@ pub(crate) struct PythonGpuSurfaceDeviceTensorScope {
     /// A writable capsule was minted inside this scope; leaving normally
     /// publishes the staging back, a propagating exception discards it.
     #[cfg(target_os = "linux")]
-    pending_device_write_back: PendingDeviceWriteBack,
+    pending_staged_write_back: PendingStagedWriteBackToSurface,
 }
 
 impl PythonGpuSurfaceDeviceTensorScope {
@@ -603,7 +661,7 @@ impl PythonGpuSurfaceDeviceTensorScope {
             #[cfg(target_os = "linux")]
             prepared_device_export: Mutex::new(None),
             #[cfg(target_os = "linux")]
-            pending_device_write_back: PendingDeviceWriteBack::new_unarmed(),
+            pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
         }
     }
 
@@ -677,9 +735,9 @@ impl PythonGpuSurfaceDeviceTensorScope {
         {
             let _prepared_released = self.prepared_device_export.lock().take();
             if left_by_a_propagating_exception(exception_type) {
-                self.pending_device_write_back.discard();
+                self.pending_staged_write_back.discard();
             } else {
-                self.pending_device_write_back
+                self.pending_staged_write_back
                     .publish_if_armed(python, &self.owned_memory)?;
             }
             Ok(false)
@@ -753,7 +811,8 @@ impl PythonGpuSurfaceDeviceTensorScope {
                 exchange_shape_for_max_version(max_version),
                 no_read_only_lock_applies,
             )?;
-            self.pending_device_write_back.arm();
+            self.pending_staged_write_back
+                .arm(StagedWriteBackSource::DeviceExportStaging);
             Ok(capsule)
         }
         #[cfg(not(target_os = "linux"))]
