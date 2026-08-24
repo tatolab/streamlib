@@ -220,6 +220,15 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   the module doc (`surface_export_staging.rs:47-51`), and
   `docs/architecture/adapter-runtime-integration.md:69`, `:322-328` — the last is
   inside the ship gate's sweep, so it is gate-required, not optional hygiene.
+- MODIFIED: `test_a_texture_whose_usage_forbids_the_copy_refuses_at_scope_entry`
+  (`test_device_exchange.py`) + `DeviceTensorScopeRefusesAnUnexportableUsageProbe` — not
+  anticipated by recon, found by running the GPU tier. The probe reached the engine's
+  copy-usage guard by acquiring a texture *without* the copy bits, which
+  `parse_texture_usages` can no longer produce, so the scope now enters and the old
+  assertion is false. Flipped to positive coverage of the implication
+  (`DeviceTensorScopeTakesEveryAcquiredTextureProbe`). The guard itself is untouched and
+  keeps its coverage engine-side (`surface_export_staging.rs`), over images built without
+  the bits rather than through an acquire that cannot make one.
 - MODIFIED: the wheel tests asserting the old refusals flip to positive coverage:
   `test_an_acquired_texture_is_a_name_not_a_local_mapping`
   (`test_compute_kernel.py:142-159` + `compute_kernel_probes.py:207-229` — the probe

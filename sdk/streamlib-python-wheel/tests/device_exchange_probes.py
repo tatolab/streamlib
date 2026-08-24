@@ -836,14 +836,16 @@ class PooledTextureExportProbe:
 
 
 @processor(execution="manual")
-class DeviceTensorScopeRefusesAnUnexportableUsageProbe:
-    """A texture whose usage forbids a copy refuses at scope entry, by name.
+class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
+    """No usage an author spells at `acquire_texture` can close the scope.
 
-    Recording the copy anyway would be a Vulkan spec violation the driver
-    silently tolerates — the engine refuses instead: a sampled-only texture
-    cannot blit out (copy_src), and a readable-but-not-writable one cannot
-    take the blit back (copy_dst), so the write-in-place scope refuses both
-    at `__enter__` rather than discarding edits or corrupting memory.
+    `parse_texture_usages` implies `copy_src | copy_dst` on every request,
+    so a Python author cannot mint the texture the copy guard refuses —
+    spelling one token, or the two that used to be too few, all reach the
+    same mask. The guard itself is untouched and still refuses a
+    registration that genuinely lacks the usage (a foreign one); it is
+    covered engine-side, against images built without the bits rather than
+    through an acquire that can no longer produce them.
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -858,26 +860,21 @@ class DeviceTensorScopeRefusesAnUnexportableUsageProbe:
                 return {"cuda_unavailable": "device side not reachable"}
 
         # bgra8 is not CUDA-mappable, so these acquires land on the
-        # NotImportable allocation flavour, whose image carries exactly
-        # the requested usage — the rgba8 spelling would take the
-        # OPAQUE_FD constructor's fixed usage set and be legal to copy.
-        with ctx.gpu_full_access.acquire_texture(
-            SURFACE_WIDTH, SURFACE_HEIGHT, "bgra8_unorm", ["texture_binding"]
-        ) as sampled_only:
-            try:
-                with sampled_only.as_device_tensor():
-                    observation["copy_src_refusal"] = "no refusal: the scope entered"
-            except RuntimeError as refusal:
-                observation["copy_src_refusal"] = str(refusal)
-
-        with ctx.gpu_full_access.acquire_texture(
-            SURFACE_WIDTH, SURFACE_HEIGHT, "bgra8_unorm", ["texture_binding", "copy_src"]
-        ) as readable_only:
-            try:
-                with readable_only.as_device_tensor():
-                    observation["copy_dst_refusal"] = "no refusal: the scope entered"
-            except RuntimeError as refusal:
-                observation["copy_dst_refusal"] = str(refusal)
+        # NotImportable allocation flavour, whose image carries exactly the
+        # usage the request derived — which is the point: even there the
+        # implied copy bits ride, so neither spelling is short of them.
+        for entry, spelled in (
+            ("scope_over_one_token", ["texture_binding"]),
+            ("scope_over_copy_src_only", ["texture_binding", "copy_src"]),
+        ):
+            with ctx.gpu_full_access.acquire_texture(
+                SURFACE_WIDTH, SURFACE_HEIGHT, "bgra8_unorm", spelled
+            ) as acquired:
+                try:
+                    with acquired.as_device_tensor():
+                        observation[entry] = "entered"
+                except RuntimeError as refusal:
+                    observation[entry] = f"refused: {refusal}"
         return observation
 
 @processor(execution="manual")

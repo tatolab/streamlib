@@ -64,7 +64,7 @@ if __name__ == "__main__":
         "DeviceTensorScopeDoublesAKernelOutputProbe",
         "DeviceTensorScopeDiscardsOnRaiseProbe",
         "PooledTextureExportProbe",
-        "DeviceTensorScopeRefusesAnUnexportableUsageProbe",
+        "DeviceTensorScopeTakesEveryAcquiredTextureProbe",
     ):
         scenario_standalone_probe(scenario)
     else:
