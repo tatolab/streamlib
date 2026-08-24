@@ -230,8 +230,9 @@ impl ProcessorOwnedWindow {
     /// Drain the pump's events for this window, apply the resize, and hand
     /// the coalesced state back so the owner can apply its own close policy.
     ///
-    /// Errors when the resize's swapchain recreate failed — the window can no
-    /// longer present, and what to do about that is the owner's call.
+    /// Errors when the resize left the window unable to present — the recreate
+    /// itself failed, or the compositor could not be rebuilt for the format it
+    /// picked. What to do about that is the owner's call.
     pub fn apply_pending_window_events(&mut self) -> Result<CoalescedWindowEventsFromEventPump> {
         let events = self.registered_window.drain_window_events_from_event_pump();
         if let Some((width, height)) = events.resized_to_physical_pixels {
@@ -239,6 +240,7 @@ impl ProcessorOwnedWindow {
                 .recreate(width, height, self.last_applied_color_traits.as_ref())?;
             self.current_width_in_physical_pixels = width;
             self.current_height_in_physical_pixels = height;
+            self.rebuild_compositor_for_the_present_targets_format()?;
         }
         Ok(events)
     }
@@ -331,21 +333,12 @@ impl ProcessorOwnedWindow {
         self.last_applied_color_traits = color_traits;
         self.last_failed_recreate_color_traits = None;
 
-        let new_format = self.present_target.color_format();
-        match self.compositor.ensure_attachment_format(new_format) {
-            Ok(true) => {
-                tracing::info!(
-                    ?new_format,
-                    window_title = %self.window_title,
-                    "processor-owned window: rebuilt compositor for new attachment format"
-                );
-                ColorspaceRenegotiationOutcome::CompositorRebuiltSoThisFrameIsSkipped
-            }
+        match self.rebuild_compositor_for_the_present_targets_format() {
+            Ok(true) => ColorspaceRenegotiationOutcome::CompositorRebuiltSoThisFrameIsSkipped,
             Ok(false) => ColorspaceRenegotiationOutcome::ThisFrameStillDraws,
             Err(e) => {
                 tracing::error!(
                     error = %e,
-                    ?new_format,
                     window_title = %self.window_title,
                     "processor-owned window: compositor rebuild failed — this window cannot \
                      draw frames carrying this color description"
@@ -353,6 +346,27 @@ impl ProcessorOwnedWindow {
                 ColorspaceRenegotiationOutcome::CompositorCouldNotBeRebuilt
             }
         }
+    }
+
+    /// Bring the compositor's kernel in line with the format the present
+    /// target currently holds, answering whether it had to be rebuilt.
+    ///
+    /// Every recreate goes through here, because `recreate` re-runs the format
+    /// pick against the surface's current capabilities: a window dragged onto
+    /// an HDR monitor can land on a new format from a pure resize, with the
+    /// colour description unchanged. A compositor left behind then rejects
+    /// every later compose by format mismatch.
+    fn rebuild_compositor_for_the_present_targets_format(&mut self) -> Result<bool> {
+        let new_format = self.present_target.color_format();
+        let rebuilt = self.compositor.ensure_attachment_format(new_format)?;
+        if rebuilt {
+            tracing::info!(
+                ?new_format,
+                window_title = %self.window_title,
+                "processor-owned window: rebuilt compositor for new attachment format"
+            );
+        }
+        Ok(rebuilt)
     }
 
     /// Resolve the named id through the engine's blessed order — same-process

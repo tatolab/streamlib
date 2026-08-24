@@ -280,7 +280,7 @@ impl DisplayWindowRenderLoop {
         let events = match processor_owned_window.apply_pending_window_events() {
             Ok(events) => events,
             Err(e) => {
-                tracing::error!(error = %e, "DisplayWindow: swapchain recreate on resize failed");
+                tracing::error!(error = %e, "DisplayWindow: the resize could not be applied");
                 self.running.store(false, Ordering::Release);
                 return;
             }
