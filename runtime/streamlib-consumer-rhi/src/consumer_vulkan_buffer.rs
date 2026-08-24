@@ -72,12 +72,6 @@ impl ConsumerVulkanBuffer {
         fd: std::os::unix::io::RawFd,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
-        if allocation_size == 0 {
-            return Err(ConsumerRhiError::Configuration(
-                "ConsumerVulkanBuffer::from_opaque_fd: allocation_size must be > 0".into(),
-            ));
-        }
-
         Self::from_opaque_fd_with_handle_type(
             vulkan_device,
             fd,
@@ -106,14 +100,6 @@ impl ConsumerVulkanBuffer {
         allocation_size: vk::DeviceSize,
         stated_memory_type_index: u32,
     ) -> Result<Self> {
-        if allocation_size == 0 {
-            return Err(ConsumerRhiError::Configuration(
-                "ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index: \
-                 allocation_size must be > 0"
-                    .into(),
-            ));
-        }
-
         Self::from_opaque_fd_with_handle_type(
             vulkan_device,
             fd,
@@ -128,6 +114,12 @@ impl ConsumerVulkanBuffer {
         allocation_size: vk::DeviceSize,
         handle_type: ImportHandleType,
     ) -> Result<Self> {
+        if allocation_size == 0 {
+            return Err(ConsumerRhiError::Configuration(
+                "ConsumerVulkanBuffer: an OPAQUE_FD import needs allocation_size > 0".into(),
+            ));
+        }
+
         let plane =
             import_single_plane_with_handle_type(vulkan_device, fd, allocation_size, handle_type)?;
         Ok(Self {
