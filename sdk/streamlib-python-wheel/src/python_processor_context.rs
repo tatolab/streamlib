@@ -176,18 +176,31 @@ impl PythonGpuSurfaceHandle {
         {
             return Ok(());
         }
-        let staged =
-            read_the_frame_into_its_cpu_staging(python, owned_memory).inspect_err(|_| {
-                // The read-in is what makes a later publish legal, so a
-                // failed one must not leave the door looking open.
-                self.cpu_staging_holds_this_locks_frame
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-            })?;
-        if !self.cpu_access.is_read_only() && staged.writable {
-            self.pending_staged_write_back
-                .arm(StagedWriteBackSource::CpuReadbackStaging);
+        let opened = (|| -> PyResult<()> {
+            let scope_declared_a_write = !self.cpu_access.is_read_only();
+            // Refused before the copy, not after: a scope that already
+            // staged an edit through the other door cannot take this one,
+            // and finding that out is not worth a round trip and a frame
+            // copy first.
+            if scope_declared_a_write {
+                self.pending_staged_write_back
+                    .arm(StagedWriteBackSource::CpuReadbackStaging)?;
+            }
+            let staged = read_the_frame_into_its_cpu_staging(python, owned_memory)?;
+            if scope_declared_a_write && !staged.writable {
+                // The frame takes no edit, so nothing publishes and the
+                // arm above was premature — the array goes out read-only.
+                self.pending_staged_write_back.discard();
+            }
+            Ok(())
+        })();
+        if opened.is_err() {
+            // The read-in is what makes a later publish legal, so a door
+            // that failed to open must not look open to the next accessor.
+            self.cpu_staging_holds_this_locks_frame
+                .store(false, std::sync::atomic::Ordering::SeqCst);
         }
-        Ok(())
+        opened
     }
 
     /// The id and pixel extent a window's `show()` names this surface by.
@@ -552,12 +565,15 @@ impl PythonGpuSurfaceHandle {
             // has to stay attached to reach the parent at all.
             let prepared = prepare_device_export(python, &owned_memory)?;
             let writable_export = !read_only && prepared.writable;
-            let capsule =
-                device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
+            // Armed before the capsule is minted: a scope that already
+            // staged an edit through the CPU door is refused here rather
+            // than handed a second writable view over other memory.
             if writable_export {
                 self.pending_staged_write_back
-                    .arm(StagedWriteBackSource::DeviceExportStaging);
+                    .arm(StagedWriteBackSource::DeviceExportStaging)?;
             }
+            let capsule =
+                device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
             Ok(capsule)
         }
         #[cfg(not(target_os = "linux"))]
@@ -814,8 +830,10 @@ impl PythonGpuSurfaceDeviceTensorScope {
                 exchange_shape_for_max_version(max_version),
                 no_read_only_lock_applies,
             )?;
+            // This scope's pending state is its own, so the only source
+            // that ever reaches it is this one.
             self.pending_staged_write_back
-                .arm(StagedWriteBackSource::DeviceExportStaging);
+                .arm(StagedWriteBackSource::DeviceExportStaging)?;
             Ok(capsule)
         }
         #[cfg(not(target_os = "linux"))]

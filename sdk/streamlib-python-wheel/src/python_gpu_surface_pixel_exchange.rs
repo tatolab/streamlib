@@ -807,7 +807,7 @@ pub(crate) fn device_export_available(_owned_memory: &Arc<GpuSurfaceOwnedMemory>
 /// The two doors stage in different memory and publish with different
 /// copies; the armed state carries which, so one protocol settles both.
 #[cfg(target_os = "linux")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StagedWriteBackSource {
     /// A writable device capsule went out over the device-local export
     /// staging.
@@ -815,6 +815,17 @@ pub(crate) enum StagedWriteBackSource {
     /// A writable numpy view went out over the host-visible readback
     /// staging the CPU door mapped.
     CpuReadbackStaging,
+}
+
+#[cfg(target_os = "linux")]
+impl StagedWriteBackSource {
+    /// How a refusal names this door to the author who opened it.
+    fn door_in_a_refusal(self) -> &'static str {
+        match self {
+            Self::DeviceExportStaging => "the device tensor",
+            Self::CpuReadbackStaging => "the CPU array",
+        }
+    }
 }
 
 /// The armed-until-settled state a writable staged export leaves behind:
@@ -838,8 +849,32 @@ impl PendingStagedWriteBackToSurface {
 
     /// A writable view went out; the next normal scope exit publishes it
     /// back through `source`'s own copy.
-    pub(crate) fn arm(&self, source: StagedWriteBackSource) {
-        *self.armed_over.lock() = Some(source);
+    ///
+    /// Re-arming the same source is the idempotent case — several capsules
+    /// over one staging are one pending edit. A *second* source is refused
+    /// by name: the two stagings were each filled from the surface before
+    /// the other door's edit existed, so neither holds both edits, and
+    /// there is no order in which publishing both does not overwrite one
+    /// of them with pixels that predate it. Silently settling one is the
+    /// answer this must never give — the lost edit surfaces as corruption
+    /// nowhere near the write.
+    pub(crate) fn arm(&self, source: StagedWriteBackSource) -> PyResult<()> {
+        let mut armed_over = self.armed_over.lock();
+        match *armed_over {
+            Some(already_armed) if already_armed != source => {
+                Err(PyRuntimeError::new_err(format!(
+                    "this lock scope already staged an edit through {}; {} would stage a second \
+                     edit in different memory, and publishing both would overwrite one with \
+                     pixels taken before it. Close this scope and open the other door in its own",
+                    already_armed.door_in_a_refusal(),
+                    source.door_in_a_refusal(),
+                )))
+            }
+            _ => {
+                *armed_over = Some(source);
+                Ok(())
+            }
+        }
     }
 
     /// Drop the pending write instead of publishing it — the exception
@@ -1116,5 +1151,56 @@ mod tests {
             deleter(adopted);
         }
         assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    /// Two doors in one lock scope stage into two different buffers, each
+    /// filled from the surface before the other's edit existed. Publishing
+    /// whichever armed last would copy pixels that predate the first edit
+    /// back over the surface — losing it, silently, far from the write.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_second_staging_source_in_one_scope_is_refused_rather_than_replacing_the_first() {
+        Python::initialize();
+        let pending = PendingStagedWriteBackToSurface::new_unarmed();
+
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("the first source arms");
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("re-arming the same source is one pending edit, not two");
+
+        let refusal = pending
+            .arm(StagedWriteBackSource::CpuReadbackStaging)
+            .err()
+            .expect("a second, different source must be refused")
+            .to_string();
+        assert!(
+            refusal.contains("the device tensor") && refusal.contains("the CPU array"),
+            "the refusal must name both doors so the author knows which two collided: {refusal:?}"
+        );
+
+        // The refusal must not have disturbed what was already armed: the
+        // first door's edit is still the one that publishes.
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("the first source is still the armed one");
+    }
+
+    /// Discarding frees the scope to take the other door — the refusal is
+    /// about two *live* pending edits, not a latch on the handle.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discarding_releases_the_scope_to_stage_through_the_other_door() {
+        Python::initialize();
+        let pending = PendingStagedWriteBackToSurface::new_unarmed();
+
+        pending
+            .arm(StagedWriteBackSource::CpuReadbackStaging)
+            .expect("the first source arms");
+        pending.discard();
+        pending
+            .arm(StagedWriteBackSource::DeviceExportStaging)
+            .expect("with nothing pending, the other door is free to stage");
     }
 }
