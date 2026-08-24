@@ -27,15 +27,41 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+      # `cargo` resolves the whole workspace before it builds any member, so the
+      # pin-sync tool cannot be built once the bump has landed: the resolve it
+      # exists to repair is the one that fails. Build it here, while `main` still
+      # resolves, and run the binary against the release branch below. `target/`
+      # is gitignored, so it survives that checkout.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: xtask
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the version-pin sync tool while main still resolves
+        run: cargo build --locked -q -p xtask
+
       # The `simple` release-type bumps [workspace.package].version in Cargo.toml
       # but ships no cargo dependency-requirement updater. Every in-tree crate
       # pins its workspace-versioned sibling crates with a frozen
       # `version = "X.Y.Z"` requirement (e.g. streamlib-error, vulkan-jpeg). Those
-      # requirements never move on their own: caret-compatible within a 0.7.x line
-      # but silently EXCLUDING the next breaking bump (0.8.0), which would make the
-      # whole tree fail to resolve after the release. Rewrite them to the release
-      # version on the release-PR branch (found by the same `autorelease: pending`
-      - name: Sync Cargo.lock to the release version
+      # requirements never move on their own: caret-compatible within a 0.17.x
+      # line but silently EXCLUDING the next breaking bump (0.18.0), which leaves
+      # the release branch holding a workspace that cannot resolve at all.
+      #
+      # This step used to run `cargo update --workspace` alone, which is the half
+      # that cannot work: the lockfile cannot be resolved while the manifests
+      # exclude their own siblings, so the step exited 101, the auto-merge below
+      # never ran, and no tag was cut. That wedged release 0.18.0 shut from
+      # 2026-08-11 and starved the PEP 503 index of every wheel since. Moving the
+      # pins first is what the comment here always claimed the step did.
+      #
+      # `cargo xtask check-workspace-version-pins` gates the same rule on every
+      # PR, so the pins can only ever drift here, at the bump.
+      - name: Sync the version pins and Cargo.lock to the release version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -48,15 +74,16 @@ jobs:
           fi
           git fetch origin "$BRANCH"
           git checkout "$BRANCH"
+          ./target/debug/xtask check-workspace-version-pins --fix
           cargo update --workspace
-          if git diff --quiet -- Cargo.lock; then
-            echo "Cargo.lock already in sync"
+          if git diff --quiet; then
+            echo "version pins and Cargo.lock already in sync"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock
-          git commit -m "chore: sync Cargo.lock to the release version"
+          git add -u -- Cargo.lock '*Cargo.toml'
+          git commit -m "chore: sync the version pins and Cargo.lock to the release version"
           git push origin "$BRANCH"
 
       # A version cut is pure bookkeeping — version + changelog, no code — so it
