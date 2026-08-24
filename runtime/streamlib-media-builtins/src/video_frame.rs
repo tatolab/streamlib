@@ -292,7 +292,7 @@ impl Range {
 
 impl ColorInfo {
     /// The engine's colorspace-pick input: primaries + transfer only.
-    pub(crate) fn engine_color_traits(&self) -> streamlib::sdk::color::ColorTraits {
+    pub fn engine_color_traits(&self) -> streamlib::sdk::color::ColorTraits {
         streamlib::sdk::color::ColorTraits {
             primaries: self.primaries.as_ref().map(Primaries::engine_id),
             transfer: self.transfer.as_ref().map(Transfer::engine_id),
@@ -300,9 +300,76 @@ impl ColorInfo {
     }
 }
 
+impl MasteringDisplay {
+    /// This sidecar as the engine's f32 metadata: chromaticities are 1/50000
+    /// increments → CIE xy, luminances 0.0001 cd/m² increments → cd/m².
+    ///
+    /// Content light travels with it because the driver takes one struct: a
+    /// bag carrying a mastering display and no content light still describes
+    /// a display, and MaxCLL/MaxFALL of zero is how that is spelled.
+    pub fn engine_hdr_static_metadata(
+        &self,
+        content_light: Option<&ContentLight>,
+    ) -> streamlib::sdk::color::HdrStaticMetadata {
+        let chromaticity = |increments: u32| increments as f32 / 50_000.0;
+        streamlib::sdk::color::HdrStaticMetadata {
+            display_primary_red: [
+                chromaticity(self.display_primaries_r_x),
+                chromaticity(self.display_primaries_r_y),
+            ],
+            display_primary_green: [
+                chromaticity(self.display_primaries_g_x),
+                chromaticity(self.display_primaries_g_y),
+            ],
+            display_primary_blue: [
+                chromaticity(self.display_primaries_b_x),
+                chromaticity(self.display_primaries_b_y),
+            ],
+            white_point: [
+                chromaticity(self.white_point_x),
+                chromaticity(self.white_point_y),
+            ],
+            min_luminance_cd_m2: self.min_luminance as f32 * 0.0001,
+            max_luminance_cd_m2: self.max_luminance as f32 * 0.0001,
+            max_content_light_level: content_light
+                .map(|content_light| content_light.max_cll as f32)
+                .unwrap_or(0.0),
+            max_frame_average_light_level: content_light
+                .map(|content_light| content_light.max_fall as f32)
+                .unwrap_or(0.0),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdr_metadata_translation_scales_the_wire_integers() {
+        let mastering = MasteringDisplay {
+            display_primaries_r_x: 35_400, // 0.708 in 1/50000
+            display_primaries_r_y: 14_600,
+            display_primaries_g_x: 8_500,
+            display_primaries_g_y: 39_850,
+            display_primaries_b_x: 6_550,
+            display_primaries_b_y: 2_300,
+            white_point_x: 15_635,
+            white_point_y: 16_450,
+            max_luminance: 10_000_000, // 1000 cd/m² in 0.0001 increments
+            min_luminance: 50,         // 0.005 cd/m²
+        };
+        let content_light = ContentLight {
+            max_cll: 1_000,
+            max_fall: 400,
+        };
+        let metadata = mastering.engine_hdr_static_metadata(Some(&content_light));
+        assert!((metadata.display_primary_red[0] - 0.708).abs() < 1e-6);
+        assert!((metadata.max_luminance_cd_m2 - 1_000.0).abs() < 1e-3);
+        assert!((metadata.min_luminance_cd_m2 - 0.005).abs() < 1e-6);
+        assert_eq!(metadata.max_content_light_level, 1_000.0);
+        assert_eq!(metadata.max_frame_average_light_level, 400.0);
+    }
 
     /// The bag is a named map: field names are the cross-language contract.
     /// Locks the wire keys against accidental rename.

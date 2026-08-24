@@ -191,7 +191,7 @@ fn read_target_is_a_typed_dict(read_target_type: &Bound<'_, PyAny>) -> PyResult<
 
 /// The type name to name in a refusal, or `unknown_type_placeholder` when even
 /// that cannot be read.
-fn python_type_name_for_error_message(
+pub(crate) fn python_type_name_for_error_message(
     value: &Bound<'_, PyAny>,
     unknown_type_placeholder: &str,
 ) -> String {

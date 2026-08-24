@@ -43,6 +43,7 @@ use crate::python_helper_process_pixel_exchange::{
 };
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
+use crate::python_processor_owned_window::PythonProcessorOwnedWindow;
 
 /// The refusal a GPU call gets when this process has neither an engine view
 /// nor a channel to a parent that has one.
@@ -135,6 +136,15 @@ impl PythonGpuSurfaceHandle {
             #[cfg(target_os = "linux")]
             natural_dlpack_side_is_device: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The id and pixel extent a window's `show()` names this surface by.
+    ///
+    /// Refuses a handle carrying no id for the same reason the getter does:
+    /// nothing outside this process can resolve one, a present loop least of
+    /// all.
+    pub(crate) fn surface_id_and_extent_a_window_can_name(&self) -> PyResult<(String, u32, u32)> {
+        Ok((self.surface_id()?, self.surface_width, self.surface_height))
     }
 
     /// A pooled device texture the parent acquired for this helper.
@@ -1170,6 +1180,39 @@ impl PythonGpuContextFullAccess {
             ));
         }
         let _ = (python, width, height, texture_format, usage);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Request a window this processor owns, presented by the engine.
+    ///
+    /// Constructed once in `setup()`, named frames per frame in `process()`.
+    /// The window lives in the app process on its own present loop, so it
+    /// keeps its frame rate whatever this processor's pace is, and naming no
+    /// frame leaves the last one up.
+    ///
+    /// Raises when the process can get no window at all — no display server,
+    /// or a window event pump that has already failed — rather than handing
+    /// back a window that would show nothing. An author for whom the window is
+    /// optional writes the `try/except`.
+    #[pyo3(signature = (title, width = 1280, height = 720))]
+    fn create_window(
+        &self,
+        python: Python<'_>,
+        title: &str,
+        width: u32,
+        height: u32,
+    ) -> PyResult<PythonProcessorOwnedWindow> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let window_id =
+                exchange_client.create_processor_owned_window(python, title, width, height)?;
+            return Ok(PythonProcessorOwnedWindow::over_the_minted_window(
+                window_id,
+                title.to_string(),
+                Arc::clone(exchange_client),
+            ));
+        }
+        let _ = (python, title, width, height);
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
