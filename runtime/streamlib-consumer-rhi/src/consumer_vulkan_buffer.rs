@@ -78,12 +78,58 @@ impl ConsumerVulkanBuffer {
             ));
         }
 
-        let plane = import_single_plane_with_handle_type(
+        Self::from_opaque_fd_with_handle_type(
             vulkan_device,
             fd,
             allocation_size,
-            ImportHandleType::OpaqueFd,
-        )?;
+            ImportHandleType::OpaqueFdAtFirstMatchingMemoryType,
+        )
+    }
+
+    /// Import an OPAQUE_FD as a HOST_VISIBLE `VkBuffer`, binding the
+    /// memory type index the **exporter** allocated from.
+    ///
+    /// The conforming import for this handle type — see
+    /// [`ConsumerVulkanDevice::import_opaque_fd_memory_at_stated_memory_type_index`].
+    /// `stated_memory_type_index` is the surface-share registration's
+    /// `vk_memory_type_index`; a value the imported buffer cannot bind is
+    /// refused here by name rather than tripping
+    /// VUID-vkBindBufferMemory-memory-01035 inside the driver.
+    ///
+    /// fd ownership transfers to the Vulkan driver on success — caller
+    /// must NOT close `fd` afterwards. On error the caller still owns
+    /// `fd`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
+    pub fn from_opaque_fd_at_stated_memory_type_index(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        fd: std::os::unix::io::RawFd,
+        allocation_size: vk::DeviceSize,
+        stated_memory_type_index: u32,
+    ) -> Result<Self> {
+        if allocation_size == 0 {
+            return Err(ConsumerRhiError::Configuration(
+                "ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index: \
+                 allocation_size must be > 0"
+                    .into(),
+            ));
+        }
+
+        Self::from_opaque_fd_with_handle_type(
+            vulkan_device,
+            fd,
+            allocation_size,
+            ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index),
+        )
+    }
+
+    fn from_opaque_fd_with_handle_type(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        fd: std::os::unix::io::RawFd,
+        allocation_size: vk::DeviceSize,
+        handle_type: ImportHandleType,
+    ) -> Result<Self> {
+        let plane =
+            import_single_plane_with_handle_type(vulkan_device, fd, allocation_size, handle_type)?;
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
             buffer: plane.buffer,
@@ -208,11 +254,17 @@ impl ConsumerVulkanBuffer {
 }
 
 /// Which `vkImportMemoryFdInfoKHR.handleType` to chain through when
-/// importing a plane.
+/// importing a plane, and how the memory type index is arrived at.
 #[derive(Copy, Clone, Debug)]
 enum ImportHandleType {
     DmaBuf,
-    OpaqueFd,
+    /// The importer searches for a memory type itself. Correct for
+    /// DMA-BUF-shaped negotiation, and a guess for OPAQUE_FD — it agrees
+    /// with the exporter only where both land on the same type.
+    OpaqueFdAtFirstMatchingMemoryType,
+    /// The exporter's own memory type index, as published on the
+    /// surface-share wire.
+    OpaqueFdAtStatedMemoryTypeIndex(u32),
 }
 
 fn import_single_plane(
@@ -238,7 +290,10 @@ fn import_single_plane_with_handle_type(
 
     let vk_handle_type = match handle_type {
         ImportHandleType::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-        ImportHandleType::OpaqueFd => vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+        ImportHandleType::OpaqueFdAtFirstMatchingMemoryType
+        | ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(_) => {
+            vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD
+        }
     };
 
     let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
@@ -263,6 +318,24 @@ fn import_single_plane_with_handle_type(
     let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
     let alloc_size = effective_size.max(mem_requirements.size);
 
+    if let ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) = handle_type
+    {
+        // `checked_shl` rather than a bare shift: an index at or past
+        // VK_MAX_MEMORY_TYPES is not a memory type at all, and must be
+        // refused here rather than overflow the bit test.
+        let stated_memory_type_bit = 1u32.checked_shl(stated_memory_type_index).unwrap_or(0);
+        if mem_requirements.memory_type_bits & stated_memory_type_bit == 0 {
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(ConsumerRhiError::Configuration(format!(
+                "ConsumerVulkanBuffer: the exporter states memory type index \
+                 {stated_memory_type_index}, which this buffer cannot bind \
+                 (memoryTypeBits=0x{:x}) — the exporter and importer disagree on the \
+                 buffer's shape, and binding anyway is undefined behaviour",
+                mem_requirements.memory_type_bits
+            )));
+        }
+    }
+
     let memory = match handle_type {
         ImportHandleType::DmaBuf => vulkan_device.import_dma_buf_memory(
             fd,
@@ -270,12 +343,20 @@ fn import_single_plane_with_handle_type(
             mem_requirements.memory_type_bits,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         ),
-        ImportHandleType::OpaqueFd => vulkan_device.import_opaque_fd_memory(
-            fd,
-            alloc_size,
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        ),
+        ImportHandleType::OpaqueFdAtFirstMatchingMemoryType => vulkan_device
+            .import_opaque_fd_memory(
+                fd,
+                alloc_size,
+                mem_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ),
+        ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) => {
+            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
+                fd,
+                alloc_size,
+                stated_memory_type_index,
+            )
+        }
     }
     .map_err(|e| {
         unsafe { device.destroy_buffer(buffer, None) };

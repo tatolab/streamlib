@@ -91,7 +91,10 @@ pub enum SurfaceExportStagingResidency {
     DeviceLocal,
     /// HOST_VISIBLE + HOST_COHERENT — the consumer maps the memory and
     /// reads it with the CPU. The compatibility path, for code that
-    /// speaks host memory only.
+    /// speaks host memory only. Allocated HOST_CACHED where the device
+    /// has a cached exportable type, since every consumer of this
+    /// residency reads the mapping; write-combined memory elsewhere,
+    /// which is slower to read but never unavailable.
     HostVisible,
 }
 
@@ -526,7 +529,10 @@ impl GpuContext {
                 )?
             }
             SurfaceExportStagingResidency::HostVisible => {
-                HostVulkanBuffer::new_opaque_fd_export(vulkan_device, shape.staging_byte_size)?
+                HostVulkanBuffer::new_opaque_fd_export_host_cached(
+                    vulkan_device,
+                    shape.staging_byte_size,
+                )?
             }
         });
         let refill_done_timeline = self.create_exportable_timeline_semaphore(0)?;

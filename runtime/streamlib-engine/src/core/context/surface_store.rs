@@ -1316,6 +1316,21 @@ impl SurfaceStoreInner {
         format: PixelFormat,
         refill_done: &crate::vulkan::rhi::HostVulkanTimelineSemaphore,
     ) -> Result<()> {
+        // Read ahead of the export so a staging with no allocation to
+        // state fails before an fd is minted. A conforming OPAQUE_FD
+        // import binds the exporter's memory type index
+        // (VUID-VkMemoryAllocateInfo-allocationSize-01742) and OPAQUE_FD
+        // has no fd-properties query to derive it from, so the consumer
+        // has nowhere else to get it.
+        let memory_type_index = staging_buffer
+            .vma_allocation_memory_type_index()
+            .ok_or_else(|| {
+                Error::GpuError(format!(
+                    "surface-export staging for {surface_id:?} has no VMA allocation to read \
+                     a memory type index from; a consumer import without one binds the wrong \
+                     memory type instead of failing"
+                ))
+            })?;
         let exported_staging_fd = staging_buffer.export_opaque_fd_memory()?;
         // SAFETY: each export mints a fresh fd this process owns and has
         // handed to no one; adopting it here is what closes it exactly once
@@ -1340,6 +1355,7 @@ impl SurfaceStoreInner {
             "plane_offsets": [0],
             "has_produce_done_fd": true,
             "has_consume_done_fd": false,
+            "vk_memory_type_index": memory_type_index,
         });
 
         self.send_surface_share_registration(
