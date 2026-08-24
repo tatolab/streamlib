@@ -46,6 +46,8 @@ pub mod utils;
 // Linux-only: winit is a Linux-target engine dependency, and the window seam
 // the pump serves has no Apple implementation yet.
 #[cfg(target_os = "linux")]
+pub mod processor_owned_window;
+#[cfg(target_os = "linux")]
 pub mod window_event_pump;
 
 // Customer-facing modules (wildcard re-exports stay).

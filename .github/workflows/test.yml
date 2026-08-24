@@ -120,3 +120,9 @@ jobs:
         run: |
           cargo test --locked -p streamlib -p streamlib-macros --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
+          # The built-ins were reached by no cargo invocation here: the clippy
+          # step above compiles default targets only, so it builds their lib and
+          # never their test target. Their unit tests are the headless arm of
+          # the display's fold onto the engine's present machinery — the rest of
+          # that coverage is rig-gated and never runs in CI at all.
+          cargo test --locked -p streamlib-media-builtins --lib
