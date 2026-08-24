@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library, cast-object-tensor-protocol)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -172,16 +172,26 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   staging, publishing at the block edge and discarding on a propagating raise
   (§Graphics states the staged door). Across both, the block edge ends the write
   intent, a raise never suppresses, and no door publishes a torn frame.
-  The wheel ships the protocol as one public composable piece any cast type composes,
-  over the unchanged claim seam — `VideoFrame` is itself built from it, which is the
-  proof it holds no privileged position over any library or user cast type. The bare
+  The wheel ships the protocol as one public composable piece any cast type composes
+  (`ClaimedSurfacePixelAccess`), over the unchanged claim seam — `VideoFrame` is itself
+  built from it, which is the proof it holds no privileged position over any library or
+  user cast type. The surface a type claims is the field it declares, defaulting to
+  `surface_id` and never guessed: the wheel inspects bag content no more than the engine
+  does. The bare
   protocol binds a type that claims exactly one surface: a type claiming several gets
   no bare `__dlpack__` — the ambiguity is refused by name — and reaches each surface
-  through that surface's own protocol object. `cpu()` yields a numpy array writable
-  exactly when the frame can take a write-back.
+  through that surface's own protocol object (`PixelAccessToOneClaimedSurface`, one per
+  declared field). `cpu()` yields a numpy array writable
+  exactly when the frame can take a write-back — the engine's answer, asked once per
+  pool slot and binding both doors of the cast object.
   Wheel-layer grammar only over the shipped staging, export and escalate
-  primitives — no engine change. [cast-object-tensor-protocol;
+  primitives — no engine change.
+  [cast-object-tensor-protocol — SHIPPED #1926, #1927;
   texture-backed-cpu-reach — SHIPPED #1942 for the staged cpu() arm]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_claimed_surface_pixel_access.py::test_the_bare_object_hands_back_the_surfaces_own_capsule -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_claimed_surface_pixel_access.py::test_a_two_surface_type_is_refused_every_bare_door_naming_the_surfaces -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_claimed_surface_pixel_access.py::test_a_frame_that_cannot_take_a_write_back_arrives_read_only -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
 ## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
