@@ -5601,19 +5601,19 @@ mod tests {
             }
         }
 
-        /// The `try_` publish direction, driven to success through the
-        /// seam: read a frame in, edit the mapping, publish it back.
+        /// The publish direction, driven to success through the seam:
+        /// read a frame in, edit the mapping, publish it back.
         ///
-        /// The only coverage the try_-publish path has. Swap
-        /// `TryRun + BufferToImage` to `SurfaceIntoStaging` and the edit is
-        /// silently discarded and overwritten by the frame — which this
-        /// catches, and nothing else did.
+        /// The only end-to-end coverage the publish path has. Swap the
+        /// second call's `BufferToImage` to `ImageToBuffer` and the edit
+        /// is silently discarded and overwritten by the frame — which
+        /// this catches, and nothing else does.
         /// GPU-gated: skips when no device is present.
         #[test]
-        fn the_seam_publishes_a_staged_edit_through_the_try_direction() {
+        fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
             const EDIT: u8 = 0x6b;
             let Some(gpu) =
-                gpu_or_skip("the_seam_publishes_a_staged_edit_through_the_try_direction")
+                gpu_or_skip("the_seam_publishes_a_staged_edit_back_into_the_pooled_backing")
             else {
                 return;
             };
@@ -5628,16 +5628,16 @@ mod tests {
             let read = handle_escalate_op(
                 &sandbox,
                 &registry,
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-read".into(),
+                EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                    request_id: "req-read".into(),
                     surface_id: surface_id.clone(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                    direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
                 }),
             )
-            .expect("try_run_cpu_readback_copy always produces a response");
+            .expect("run_cpu_readback_copy always produces a response");
             assert!(
                 matches!(read, EscalateResponse::Ok(_)),
-                "an uncontended read must succeed, got {read:?}"
+                "the read-in must succeed, got {read:?}"
             );
 
             let staging = gpu
@@ -5653,13 +5653,13 @@ mod tests {
             let published = handle_escalate_op(
                 &sandbox,
                 &registry,
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-publish".into(),
+                EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                    request_id: "req-publish".into(),
                     surface_id: surface_id.clone(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage,
+                    direction: EscalateRequestRunCpuReadbackCopyDirection::BufferToImage,
                 }),
             )
-            .expect("try_run_cpu_readback_copy always produces a response");
+            .expect("run_cpu_readback_copy always produces a response");
             let EscalateResponse::Ok(ok) = published else {
                 panic!("expected Ok, got {published:?}");
             };

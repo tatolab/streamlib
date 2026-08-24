@@ -2197,11 +2197,15 @@ mod tests {
         );
     }
 
-    /// A guard refusal stays an error in the `try_` spelling — never a
-    /// contention report, which a caller would retry forever.
+    /// A refill naming a surface this staging was not opened for is
+    /// refused, and the refusal names that surface.
+    ///
+    /// The only cover the cross-surface guard has: without it a staging
+    /// would answer with whatever picture its own slot happens to hold,
+    /// which reads as a successful copy of the wrong frame.
     /// GPU-gated: skips when no device is present.
     #[test]
-    fn a_try_copy_reports_a_guard_refusal_as_an_error_and_never_as_contention() {
+    fn a_refill_of_a_surface_this_staging_does_not_export_is_refused_by_name() {
         let Some(gpu) = gpu_context_or_skip() else {
             return;
         };
@@ -2226,13 +2230,12 @@ mod tests {
             )
             .expect("the cpu-readback staging");
 
-        match gpu.try_refill_surface_export_staging(&staging, &other_surface_id) {
+        match gpu.refill_surface_export_staging(&staging, &other_surface_id) {
             Err(refusal) => assert!(
                 refusal.to_string().contains(&other_surface_id),
                 "the refusal must name the surface asked for, got: {refusal}"
             ),
-            Ok(None) => panic!("a staging opened for another surface is an error, not contention"),
-            Ok(Some(_)) => panic!("a staging must never carry another surface's pixels"),
+            Ok(_) => panic!("a staging must never carry another surface's pixels"),
         }
     }
 
