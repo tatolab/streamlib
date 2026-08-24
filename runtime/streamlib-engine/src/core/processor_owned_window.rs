@@ -1,25 +1,23 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The engine's one present-loop machinery: per window, resolve a named
-//! surface id and compose it onto the present target — acquire, blit,
-//! present — paced by vsync, latest-wins.
+//! A window a processor owns, and the engine's one present-loop machinery
+//! behind it: resolve a named surface id, compose it onto the present target,
+//! present — latest-wins, so naming no surface leaves the last one up.
 //!
-//! Naming no surface leaves the last one up. The window comes from
-//! [`process_wide_window_event_pump`], because winit permits one event loop
-//! per process; everything past the raw-window-handle seam — swapchain,
-//! acquire, colorspace pick, HDR signalling — is the engine's, and the
-//! compositor is internal to this loop rather than a surface any caller
-//! names.
+//! The window is minted by [`process_wide_window_event_pump`], because winit
+//! permits one event loop per process. Everything past the raw-window-handle
+//! seam is the engine's, and the compositor is a private field rather than a
+//! surface any caller names.
 //!
-//! One machinery, two drivers. A window owner whose code sits in the app
-//! process drives it from its own thread, fed however it likes — the
-//! built-in display feeds it from an input port. An owner outside the app
-//! process cannot: a vsync deadline never crosses a process boundary, so
-//! the engine drives the loop on a thread of its own and the owner feeds it
-//! by naming published surface ids. Either way the loop is native and never
-//! waits on an interpreter, and a window's loop never runs on the pump's
-//! thread — windows are not serialised behind one another.
+//! Presenting is native always and never waits on an interpreter: an owner
+//! whose code cannot sit in the app process names surface ids and the engine
+//! drives the loop, because a vsync deadline never crosses a process
+//! boundary. No window's loop runs on the pump's thread.
+
+use std::sync::Arc;
+
+use winit::window::Window;
 
 use crate::core::color::{ColorTraits, HdrStaticMetadata};
 use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, TextureRegistration};
@@ -31,15 +29,11 @@ use crate::core::window_event_pump::{
 };
 use crate::vulkan::rhi::{PresentScalingMode, VulkanPresentCompositor, VulkanPresentTarget};
 
-/// What a window-owning processor asks the engine to run a present loop for.
+/// What a processor asks the engine for when it wants a window of its own.
 #[derive(Debug, Clone)]
-pub struct WindowPresentLoopRequestFromOwningProcessor {
-    /// Window title, owned by the requesting processor.
-    pub window_title: String,
-    /// Requested initial width in physical pixels.
-    pub initial_width_in_physical_pixels: u32,
-    /// Requested initial height in physical pixels.
-    pub initial_height_in_physical_pixels: u32,
+pub struct ProcessorOwnedWindowRequest {
+    /// The window itself, in the pump's own vocabulary.
+    pub window_registration_request: WindowRegistrationRequestFromOwningProcessor,
     /// How a named frame maps onto the window.
     pub scaling_mode_for_frame_in_window: PresentScalingMode,
 }
@@ -61,7 +55,7 @@ pub struct SurfaceNamedForPresentationOnOwnedWindow<'a> {
     pub color_traits_of_frame: Option<ColorTraits>,
     /// The frame's HDR static metadata, when it carries the sidecar. Only
     /// reaches the driver when the picked colorspace is PQ or HLG.
-    pub hdr_static_metadata_of_frame: Option<&'a HdrStaticMetadata>,
+    pub hdr_static_metadata_of_frame: Option<HdrStaticMetadata>,
 }
 
 /// What one named surface amounted to on the window.
@@ -74,27 +68,40 @@ pub enum NamedSurfacePresentationOutcome {
     /// whatever it last presented, and the failure is logged once per pool
     /// slot rather than once per attempt.
     SurfaceIdDidNotResolve,
-    /// The loop spent this call bringing the window in line with the frame
-    /// rather than drawing it: a colorspace recreate, a compositor rebuild,
-    /// or a swapchain the window server had already invalidated. Each cause
-    /// is logged where it happens; the next named surface draws.
+    /// The window was brought in line with this frame rather than drawing
+    /// it: its compositor was rebuilt for a renegotiated colorspace, or the
+    /// window server had already invalidated the swapchain. The next named
+    /// surface draws.
     WindowReconciledInsteadOfDrawingThisFrame,
+    /// The compositor could not be rebuilt for the attachment format the
+    /// renegotiated swapchain picked, so this window cannot draw a frame
+    /// carrying this color description — nor any later one, until the
+    /// description changes.
+    WindowCannotDrawThisFramesColorDescription,
 }
 
-/// One window's present loop, driven a named surface at a time.
-///
-/// Dropping it releases the swapchain and then the window: the present
-/// target's surface was minted from the window's raw handle, so the two must
-/// go in that order.
-pub struct WindowPresentLoopForOwningProcessor {
+/// What renegotiating the swapchain for a new color description left the
+/// window able to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ColorspaceRenegotiationOutcome {
+    /// This frame still draws — either the renegotiated swapchain needed no
+    /// compositor rebuild, or the recreate failed and the previous swapchain
+    /// was kept.
+    ThisFrameStillDraws,
+    /// The compositor was rebuilt for a new attachment format; the next named
+    /// surface draws against the rebuilt kernel.
+    CompositorRebuiltSoThisFrameIsSkipped,
+    /// The compositor could not be rebuilt for the new attachment format.
+    CompositorCouldNotBeRebuilt,
+}
+
+/// A window owned by one processor, driven a named surface at a time.
+pub struct ProcessorOwnedWindow {
     gpu_context_for_surface_resolution: GpuContextLimitedAccess,
     window_title: String,
     scaling_mode_for_frame_in_window: PresentScalingMode,
     current_width_in_physical_pixels: u32,
     current_height_in_physical_pixels: u32,
-    // Declared ahead of `registered_window`: the present target's surface was
-    // minted from that window's raw handle, and fields drop in declaration
-    // order, so the surface must go first.
     present_target: VulkanPresentTarget,
     compositor: VulkanPresentCompositor,
     registered_window: WindowRegisteredWithEventPump,
@@ -109,29 +116,46 @@ pub struct WindowPresentLoopForOwningProcessor {
     /// The last color description whose recreate failed, so the failure warns
     /// once per description instead of once per frame (each frame retries).
     last_failed_recreate_color_traits: Option<Option<ColorTraits>>,
+    /// Declared last so it drops last: the present target's `VkSurfaceKHR`
+    /// was minted from this window's raw handle, and the registration above
+    /// is otherwise the window's only owner. Holding a clone keeps the
+    /// platform window alive past the surface whatever order the fields are
+    /// declared in.
+    _window_kept_alive_past_the_present_surface: Arc<Window>,
 }
 
-impl WindowPresentLoopForOwningProcessor {
-    /// Mint the window, its present target and its compositor together.
+impl ProcessorOwnedWindow {
+    /// Ask the pump for the window, before any GPU capability is involved.
+    ///
+    /// Separate from [`Self::open_present_target_for_registered_window`] so a
+    /// caller can leave the escalate gate un-held across this call: the pump
+    /// round trip touches no GPU and is bounded by the pump's own timeout, so
+    /// holding the process-wide gate across it would let a wedged compositor
+    /// stall every GPU escalation in the process — the opposite of the bound
+    /// the pump's timeout exists to give.
+    pub fn register_window_on_the_process_wide_window_event_pump(
+        request: &ProcessorOwnedWindowRequest,
+    ) -> Result<WindowRegisteredWithEventPump> {
+        process_wide_window_event_pump()?
+            .request_window_for_owning_processor(request.window_registration_request.clone())
+    }
+
+    /// Mint the present target and compositor for an already-registered
+    /// window.
     ///
     /// Takes `GpuContextFullAccess` rather than escalating internally: the
     /// escalate gate serialises rather than reenters, so a caller already
     /// inside `escalate(|full| …)` — every minting escalate op is — would
     /// deadlock against a nested one.
-    pub fn open_on_the_process_wide_window_event_pump(
+    pub fn open_present_target_for_registered_window(
         gpu_context_full_access: &GpuContextFullAccess,
-        request: WindowPresentLoopRequestFromOwningProcessor,
+        registered_window: WindowRegisteredWithEventPump,
+        request: ProcessorOwnedWindowRequest,
     ) -> Result<Self> {
-        let registered_window = process_wide_window_event_pump()?
-            .request_window_for_owning_processor(WindowRegistrationRequestFromOwningProcessor {
-                window_title: request.window_title.clone(),
-                initial_width_in_physical_pixels: request.initial_width_in_physical_pixels,
-                initial_height_in_physical_pixels: request.initial_height_in_physical_pixels,
-            })?;
-
+        let window = Arc::clone(registered_window.window_shared_with_event_pump());
         let (width, height) = registered_window.current_physical_size();
         let present_target = gpu_context_full_access.create_present_target(
-            registered_window.window_shared_with_event_pump().as_ref(),
+            window.as_ref(),
             width,
             height,
             true,
@@ -140,17 +164,18 @@ impl WindowPresentLoopForOwningProcessor {
         let compositor =
             gpu_context_full_access.create_present_compositor(present_target.color_format())?;
 
+        let window_title = request.window_registration_request.window_title;
         tracing::info!(
             width,
             height,
-            window_title = %request.window_title,
-            "window present loop: window + present target ready"
+            window_title = %window_title,
+            "processor-owned window: window + present target ready"
         );
         Ok(Self {
             gpu_context_for_surface_resolution: gpu_context_full_access
                 .host_inner()
                 .limited_access(),
-            window_title: request.window_title,
+            window_title,
             scaling_mode_for_frame_in_window: request.scaling_mode_for_frame_in_window,
             current_width_in_physical_pixels: width,
             current_height_in_physical_pixels: height,
@@ -160,6 +185,7 @@ impl WindowPresentLoopForOwningProcessor {
             last_applied_color_traits: None,
             last_unresolved_pool_slot_key: None,
             last_failed_recreate_color_traits: None,
+            _window_kept_alive_past_the_present_surface: window,
         })
     }
 
@@ -179,10 +205,10 @@ impl WindowPresentLoopForOwningProcessor {
     pub fn apply_pending_window_events(&mut self) -> Result<CoalescedWindowEventsFromEventPump> {
         let events = self.registered_window.drain_window_events_from_event_pump();
         if let Some((width, height)) = events.resized_to_physical_pixels {
-            self.current_width_in_physical_pixels = width;
-            self.current_height_in_physical_pixels = height;
             self.present_target
                 .recreate(width, height, self.last_applied_color_traits.as_ref())?;
+            self.current_width_in_physical_pixels = width;
+            self.current_height_in_physical_pixels = height;
         }
         Ok(events)
     }
@@ -196,23 +222,33 @@ impl WindowPresentLoopForOwningProcessor {
     /// means the window simply keeps the frame it already has.
     pub fn show_named_surface(
         &mut self,
-        named_surface: &SurfaceNamedForPresentationOnOwnedWindow<'_>,
+        named_surface: SurfaceNamedForPresentationOnOwnedWindow<'_>,
     ) -> Result<NamedSurfacePresentationOutcome> {
-        if named_surface.color_traits_of_frame != self.last_applied_color_traits
-            && self.renegotiate_colorspace_for(named_surface.color_traits_of_frame)
-        {
-            return Ok(NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame);
+        if named_surface.color_traits_of_frame != self.last_applied_color_traits {
+            match self.renegotiate_colorspace_for(named_surface.color_traits_of_frame) {
+                ColorspaceRenegotiationOutcome::ThisFrameStillDraws => {}
+                ColorspaceRenegotiationOutcome::CompositorRebuiltSoThisFrameIsSkipped => {
+                    return Ok(
+                        NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame,
+                    );
+                }
+                ColorspaceRenegotiationOutcome::CompositorCouldNotBeRebuilt => {
+                    return Ok(
+                        NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription,
+                    );
+                }
+            }
         }
 
-        // Only meaningful when the picked colorspace is PQ/HLG — gated inside
-        // `set_hdr_metadata` — and when the frame carries the sidecar.
+        // Gated inside `set_hdr_metadata` on the picked colorspace being
+        // PQ/HLG, so an SDR window ignores a frame that carries the sidecar.
         if let Some(metadata) = named_surface.hdr_static_metadata_of_frame
-            && let Err(e) = self.present_target.set_hdr_metadata(metadata)
+            && let Err(e) = self.present_target.set_hdr_metadata(&metadata)
         {
             tracing::warn!(
                 error = %e,
                 window_title = %self.window_title,
-                "window present loop: set_hdr_metadata failed"
+                "processor-owned window: set_hdr_metadata failed"
             );
         }
 
@@ -231,45 +267,39 @@ impl WindowPresentLoopForOwningProcessor {
         Ok(if presented {
             NamedSurfacePresentationOutcome::ComposedAndPresented
         } else {
-            tracing::debug!(
-                window_title = %self.window_title,
-                "window present loop: swapchain out of date at acquire; nothing drawn"
-            );
             NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame
         })
     }
 
     /// Bring the swapchain and the compositor in line with a frame whose
-    /// color description differs from the last one applied. Answers whether
-    /// the reconciliation consumed this frame instead of drawing it.
+    /// color description differs from the last one applied.
     ///
-    /// First-frame inspection: the present target was constructed with `None`
-    /// (legacy SDR pick) and upgrades to whatever the priority walk picks. A
-    /// recreate can flip the attachment format (SDR BGRA8 → HDR10
-    /// A2B10G10R10), and the compositor's kernel is rebuilt when it does.
-    fn renegotiate_colorspace_for(&mut self, color_traits: Option<ColorTraits>) -> bool {
-        match self.present_target.recreate(
+    /// The present target is constructed with `None` — the legacy SDR pick —
+    /// so the first described frame upgrades it to whatever the priority walk
+    /// picks. A recreate can flip the attachment format (SDR BGRA8 → HDR10
+    /// A2B10G10R10), which is what forces the compositor's kernel to rebuild.
+    fn renegotiate_colorspace_for(
+        &mut self,
+        color_traits: Option<ColorTraits>,
+    ) -> ColorspaceRenegotiationOutcome {
+        if let Err(e) = self.present_target.recreate(
             self.current_width_in_physical_pixels,
             self.current_height_in_physical_pixels,
             color_traits.as_ref(),
         ) {
-            Ok(()) => {
-                self.last_applied_color_traits = color_traits;
-                self.last_failed_recreate_color_traits = None;
+            if self.last_failed_recreate_color_traits != Some(color_traits) {
+                tracing::warn!(
+                    error = %e,
+                    window_title = %self.window_title,
+                    "processor-owned window: colorspace recreate failed (keeping previous \
+                     swapchain; warning once per color description)"
+                );
+                self.last_failed_recreate_color_traits = Some(color_traits);
             }
-            Err(e) => {
-                if self.last_failed_recreate_color_traits != Some(color_traits) {
-                    tracing::warn!(
-                        error = %e,
-                        window_title = %self.window_title,
-                        "window present loop: colorspace recreate failed (keeping previous \
-                         swapchain; warning once per color description)"
-                    );
-                    self.last_failed_recreate_color_traits = Some(color_traits);
-                }
-                return false;
-            }
+            return ColorspaceRenegotiationOutcome::ThisFrameStillDraws;
         }
+        self.last_applied_color_traits = color_traits;
+        self.last_failed_recreate_color_traits = None;
 
         let new_format = self.present_target.color_format();
         match self.compositor.ensure_attachment_format(new_format) {
@@ -277,18 +307,20 @@ impl WindowPresentLoopForOwningProcessor {
                 tracing::info!(
                     ?new_format,
                     window_title = %self.window_title,
-                    "window present loop: rebuilt compositor for new attachment format"
+                    "processor-owned window: rebuilt compositor for new attachment format"
                 );
-                true
+                ColorspaceRenegotiationOutcome::CompositorRebuiltSoThisFrameIsSkipped
             }
-            Ok(false) => false,
+            Ok(false) => ColorspaceRenegotiationOutcome::ThisFrameStillDraws,
             Err(e) => {
                 tracing::error!(
                     error = %e,
+                    ?new_format,
                     window_title = %self.window_title,
-                    "window present loop: compositor rebuild failed"
+                    "processor-owned window: compositor rebuild failed — this window cannot \
+                     draw frames carrying this color description"
                 );
-                true
+                ColorspaceRenegotiationOutcome::CompositorCouldNotBeRebuilt
             }
         }
     }
@@ -298,7 +330,7 @@ impl WindowPresentLoopForOwningProcessor {
     /// warning at most once per pool slot on failure.
     fn resolve_named_surface(
         &mut self,
-        named_surface: &SurfaceNamedForPresentationOnOwnedWindow<'_>,
+        named_surface: SurfaceNamedForPresentationOnOwnedWindow<'_>,
     ) -> Option<TextureRegistration> {
         match self
             .gpu_context_for_surface_resolution
@@ -314,18 +346,16 @@ impl WindowPresentLoopForOwningProcessor {
             }
             Err(e) => {
                 let unresolved_pool_slot_key =
-                    pool_slot_key_of_surface_id(named_surface.surface_id).to_string();
-                if self.last_unresolved_pool_slot_key.as_deref()
-                    != Some(unresolved_pool_slot_key.as_str())
-                {
+                    pool_slot_key_of_surface_id(named_surface.surface_id);
+                if self.last_unresolved_pool_slot_key.as_deref() != Some(unresolved_pool_slot_key) {
                     tracing::warn!(
                         surface_id = %named_surface.surface_id,
                         error = %e,
                         window_title = %self.window_title,
-                        "window present loop: failed to resolve the named surface \
+                        "processor-owned window: failed to resolve the named surface \
                          (warning once per surface)"
                     );
-                    self.last_unresolved_pool_slot_key = Some(unresolved_pool_slot_key);
+                    self.last_unresolved_pool_slot_key = Some(unresolved_pool_slot_key.to_string());
                 }
                 None
             }

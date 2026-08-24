@@ -3,17 +3,16 @@
 
 #![cfg(target_os = "linux")]
 
-//! Built-in display: one window's present loop, fed from an input port.
+//! Built-in display: a processor-owned window, fed from an input port.
 //!
-//! The loop itself is the engine's — [`WindowPresentLoopForOwningProcessor`]
-//! mints the window and its present target, resolves each named surface and
-//! composes it onto the swapchain. What is this processor's is the policy:
-//! title, size, scaling, which frame to name next, what a close means, and
-//! what to do when no window can be had.
+//! The present machinery is the engine's — [`ProcessorOwnedWindow`] mints the
+//! window and its present target, resolves each named surface and composes it
+//! onto the swapchain. What is this processor's is the policy: title, size,
+//! scaling, which frame to name next, what a close means, and what to do when
+//! no window can be had.
 //!
-//! This display is the app-process driver of that one machinery: it names
-//! frames from its own thread rather than the pump's, so each window paces on
-//! its own vsync and no display can stall another.
+//! It names frames from its own thread rather than the pump's, so each window
+//! paces on its own vsync and no display can stall another.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -26,11 +25,12 @@ use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess}
 use streamlib::sdk::engine::host_rhi::PresentScalingMode;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
-use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::window_present_loop::{
-    NamedSurfacePresentationOutcome, SurfaceNamedForPresentationOnOwnedWindow,
-    WindowPresentLoopForOwningProcessor, WindowPresentLoopRequestFromOwningProcessor,
+use streamlib::sdk::processor_owned_window::{
+    NamedSurfacePresentationOutcome, ProcessorOwnedWindow, ProcessorOwnedWindowRequest,
+    SurfaceNamedForPresentationOnOwnedWindow,
 };
+use streamlib::sdk::processors::ManualProcessor;
+use streamlib::sdk::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
 
 use crate::video_frame::{ColorInfo, VideoFrame};
 
@@ -197,11 +197,11 @@ struct DisplayWindowRenderLoop {
     inputs: InputMailboxes,
     running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
-    window_present_loop_request: WindowPresentLoopRequestFromOwningProcessor,
-    /// The engine's present loop for this display's window. `None` is the
-    /// degraded mode: no window could be had, so the display behaves as a
-    /// sink — drains and discards — and upstream still sees a live consumer.
-    window_present_loop: Option<WindowPresentLoopForOwningProcessor>,
+    processor_owned_window_request: ProcessorOwnedWindowRequest,
+    /// The engine's window for this display. `None` is the degraded mode: no
+    /// window could be had, so the display behaves as a sink — drains and
+    /// discards — and upstream still sees a live consumer.
+    processor_owned_window: Option<ProcessorOwnedWindow>,
 }
 
 impl DisplayWindowRenderLoop {
@@ -217,19 +217,25 @@ impl DisplayWindowRenderLoop {
             inputs,
             running,
             frame_counter,
-            window_present_loop_request: WindowPresentLoopRequestFromOwningProcessor {
-                window_title: config.title,
-                initial_width_in_physical_pixels: config.width,
-                initial_height_in_physical_pixels: config.height,
+            processor_owned_window_request: ProcessorOwnedWindowRequest {
+                window_registration_request: WindowRegistrationRequestFromOwningProcessor {
+                    window_title: config.title,
+                    initial_width_in_physical_pixels: config.width,
+                    initial_height_in_physical_pixels: config.height,
+                },
                 scaling_mode_for_frame_in_window: config.scaling.present_scaling_mode(),
             },
-            window_present_loop: None,
+            processor_owned_window: None,
         }
     }
 
     fn run(&mut self) {
-        if let Err(reason) = self.open_the_engines_present_loop_for_this_window() {
-            self.degrade_to_drain_and_discard(&reason);
+        if let Err(reason) = self.ask_the_engine_for_this_displays_window() {
+            tracing::error!(
+                error = %reason,
+                window_title = %self.processor_owned_window_request.window_registration_request.window_title,
+                "DisplayWindow: no window — running degraded (frames drained, nothing shown)"
+            );
         }
 
         while self.running.load(Ordering::Acquire) {
@@ -238,7 +244,7 @@ impl DisplayWindowRenderLoop {
                 break;
             }
 
-            if self.window_present_loop.is_none() {
+            if self.processor_owned_window.is_none() {
                 self.drain_and_discard_so_upstream_sees_a_live_consumer();
                 std::thread::park_timeout(DEGRADED_DISPLAY_DRAIN_PARK_INTERVAL);
                 continue;
@@ -254,30 +260,31 @@ impl DisplayWindowRenderLoop {
         self.running.store(false, Ordering::Release);
     }
 
-    fn open_the_engines_present_loop_for_this_window(&mut self) -> Result<()> {
-        let request = self.window_present_loop_request.clone();
-        let window_present_loop = self.gpu_context.escalate(|full| {
-            WindowPresentLoopForOwningProcessor::open_on_the_process_wide_window_event_pump(
-                full, request,
+    /// The pump round trip stays outside `escalate`: it touches no GPU, and
+    /// holding the process-wide gate across it would let a wedged compositor
+    /// stall every GPU escalation in the process.
+    fn ask_the_engine_for_this_displays_window(&mut self) -> Result<()> {
+        let registered_window =
+            ProcessorOwnedWindow::register_window_on_the_process_wide_window_event_pump(
+                &self.processor_owned_window_request,
+            )?;
+        let request = self.processor_owned_window_request.clone();
+        let processor_owned_window = self.gpu_context.escalate(|full| {
+            ProcessorOwnedWindow::open_present_target_for_registered_window(
+                full,
+                registered_window,
+                request,
             )
         })?;
-        self.window_present_loop = Some(window_present_loop);
+        self.processor_owned_window = Some(processor_owned_window);
         Ok(())
     }
 
-    fn degrade_to_drain_and_discard(&mut self, reason: &Error) {
-        tracing::error!(
-            error = %reason,
-            window_title = %self.window_present_loop_request.window_title,
-            "DisplayWindow: no window — running degraded (frames drained, nothing shown)"
-        );
-    }
-
     fn apply_window_events_from_event_pump(&mut self) {
-        let Some(window_present_loop) = self.window_present_loop.as_mut() else {
+        let Some(processor_owned_window) = self.processor_owned_window.as_mut() else {
             return;
         };
-        let events = match window_present_loop.apply_pending_window_events() {
+        let events = match processor_owned_window.apply_pending_window_events() {
             Ok(events) => events,
             Err(e) => {
                 tracing::error!(error = %e, "DisplayWindow: swapchain recreate on resize failed");
@@ -287,7 +294,7 @@ impl DisplayWindowRenderLoop {
         };
         if events.close_requested_by_user {
             tracing::info!(
-                window_title = %self.window_present_loop_request.window_title,
+                window_title = %self.processor_owned_window_request.window_registration_request.window_title,
                 "DisplayWindow: window close requested"
             );
             self.running.store(false, Ordering::Release);
@@ -307,7 +314,7 @@ impl DisplayWindowRenderLoop {
     fn show_next_frame_on_the_window(&mut self) {
         // Taken before the destructive `latest` read below, so a frame is not
         // consumed when there is no window to show it on.
-        let Some(window_present_loop) = self.window_present_loop.as_mut() else {
+        let Some(processor_owned_window) = self.processor_owned_window.as_mut() else {
             return;
         };
         let frame_bag: VideoFrame = match self.inputs.read("video") {
@@ -318,31 +325,39 @@ impl DisplayWindowRenderLoop {
             }
         };
 
-        let hdr_static_metadata = frame_bag.mastering_display.as_ref().map(|mastering| {
-            hdr_static_metadata_from_bag(mastering, frame_bag.content_light.as_ref())
-        });
-        let named_surface = named_surface_of_video_frame(&frame_bag, hdr_static_metadata.as_ref());
-
-        match window_present_loop.show_named_surface(&named_surface) {
-            Ok(NamedSurfacePresentationOutcome::SurfaceIdDidNotResolve) => {}
-            Ok(_) => {
-                self.frame_counter.fetch_add(1, Ordering::Relaxed);
-            }
+        let counted = match processor_owned_window
+            .show_named_surface(named_surface_of_video_frame(&frame_bag))
+        {
+            Ok(outcome) => the_display_counts_this_outcome_as_a_frame(outcome),
             Err(e) => {
                 tracing::warn!(error = %e, "DisplayWindow: present failed");
-                self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                true
             }
+        };
+        if counted {
+            self.frame_counter.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
 
-/// Name a bag's frame for the engine's present loop: the bag's color
-/// description projected onto the engine's colorspace-pick input, and its HDR
-/// sidecar pre-translated by the caller (the metadata outlives the borrow).
-fn named_surface_of_video_frame<'a>(
-    frame_bag: &'a VideoFrame,
-    hdr_static_metadata: Option<&'a HdrStaticMetadata>,
-) -> SurfaceNamedForPresentationOnOwnedWindow<'a> {
+/// Whether an outcome spent one of the frames this display reports at stop.
+/// Only an id that never resolved leaves the count untouched — the window
+/// showed nothing and consumed nothing it could have shown later.
+fn the_display_counts_this_outcome_as_a_frame(outcome: NamedSurfacePresentationOutcome) -> bool {
+    match outcome {
+        NamedSurfacePresentationOutcome::ComposedAndPresented
+        | NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame
+        | NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription => true,
+        NamedSurfacePresentationOutcome::SurfaceIdDidNotResolve => false,
+    }
+}
+
+/// Name a bag's frame for the engine's window: the bag's four-tuple projected
+/// onto the two axes the swapchain pick reads, and its HDR sidecar translated
+/// out of the wire integers.
+fn named_surface_of_video_frame(
+    frame_bag: &VideoFrame,
+) -> SurfaceNamedForPresentationOnOwnedWindow<'_> {
     SurfaceNamedForPresentationOnOwnedWindow {
         surface_id: &frame_bag.surface_id,
         source_width_in_pixels: frame_bag.width,
@@ -352,7 +367,9 @@ fn named_surface_of_video_frame<'a>(
             .color_info
             .as_ref()
             .map(ColorInfo::engine_color_traits),
-        hdr_static_metadata_of_frame: hdr_static_metadata,
+        hdr_static_metadata_of_frame: frame_bag.mastering_display.as_ref().map(|mastering| {
+            hdr_static_metadata_from_bag(mastering, frame_bag.content_light.as_ref())
+        }),
     }
 }
 
@@ -390,6 +407,8 @@ fn hdr_static_metadata_from_bag(
 
 #[cfg(test)]
 mod tests {
+    use streamlib::sdk::color::{PrimariesId, TransferId};
+
     use super::*;
 
     #[test]
@@ -430,7 +449,7 @@ mod tests {
             ..VideoFrame::default()
         };
 
-        let named_surface = named_surface_of_video_frame(&frame_bag, None);
+        let named_surface = named_surface_of_video_frame(&frame_bag);
 
         assert_eq!(named_surface.surface_id, "pool-slot-7#12");
         assert_eq!(named_surface.source_width_in_pixels, 1920);
@@ -440,16 +459,41 @@ mod tests {
             Some(1000001002)
         );
         assert!(named_surface.hdr_static_metadata_of_frame.is_none());
+
+        // The concrete pick input, not the projection re-evaluated: matrix and
+        // range are dropped because `recreate` never reads them, and naming
+        // them would recreate the swapchain for a change it cannot act on.
         let color_traits = named_surface
             .color_traits_of_frame
             .expect("a frame carrying color_info names its traits");
+        assert_eq!(color_traits.primaries, Some(PrimariesId::Bt2020));
+        assert_eq!(color_traits.transfer, Some(TransferId::Pq));
         assert_eq!(
-            color_traits,
-            frame_bag
-                .color_info
-                .as_ref()
-                .map(ColorInfo::engine_color_traits)
-                .expect("the same projection the loop compares against"),
+            std::mem::size_of_val(&color_traits),
+            std::mem::size_of::<Option<PrimariesId>>() + std::mem::size_of::<Option<TransferId>>(),
+            "the pick input carries the two axes and nothing else"
+        );
+    }
+
+    /// The outcome the engine reports decides whether this display counted a
+    /// frame. Exhaustive on purpose: a variant added for the cross-process
+    /// driver must be routed here rather than defaulting to "shown".
+    #[test]
+    fn only_an_unresolved_id_leaves_this_displays_frame_count_untouched() {
+        assert!(the_display_counts_this_outcome_as_a_frame(
+            NamedSurfacePresentationOutcome::ComposedAndPresented
+        ));
+        assert!(the_display_counts_this_outcome_as_a_frame(
+            NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame
+        ));
+        assert!(the_display_counts_this_outcome_as_a_frame(
+            NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription
+        ));
+        assert!(
+            !the_display_counts_this_outcome_as_a_frame(
+                NamedSurfacePresentationOutcome::SurfaceIdDidNotResolve
+            ),
+            "a frame the window never showed must not inflate the count it reports at stop"
         );
     }
 
@@ -464,7 +508,7 @@ mod tests {
             height: 480,
             ..VideoFrame::default()
         };
-        let named_surface = named_surface_of_video_frame(&frame_bag, None);
+        let named_surface = named_surface_of_video_frame(&frame_bag);
         assert!(named_surface.color_traits_of_frame.is_none());
         assert!(named_surface.producer_published_texture_layout.is_none());
     }
@@ -494,15 +538,7 @@ mod tests {
             }),
             ..VideoFrame::default()
         };
-        let metadata = hdr_static_metadata_from_bag(
-            frame_bag
-                .mastering_display
-                .as_ref()
-                .expect("the sidecar under test"),
-            frame_bag.content_light.as_ref(),
-        );
-
-        let named_surface = named_surface_of_video_frame(&frame_bag, Some(&metadata));
+        let named_surface = named_surface_of_video_frame(&frame_bag);
 
         let named_metadata = named_surface
             .hdr_static_metadata_of_frame
