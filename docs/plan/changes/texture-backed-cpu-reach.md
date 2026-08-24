@@ -129,7 +129,9 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - REMOVED: try_submit_staging_copy_and_wait
   The two public `GpuContext` methods (`surface_export_staging.rs:865-881`,
   `:1019-1037`), their `GpuContextLimitedAccess` wrappers (`:1258-1266`, `:1278-1286`),
-  the private submit helper (`:728-741`), and their two unit tests (`:2141-2223`).
+  the private submit helper (`:728-741`), and one of their two unit tests
+  (`a_try_copy_answers_contended_only_while_the_recorder_is_held`, `:2141-2188`).
+  The other is rewritten, not deleted — see MODIFIED below.
 - REMOVED: while_holding_the_refill_recorder_for_a_test
   The `#[cfg(test)]` recorder hook (`surface_export_staging.rs:284-297`); its sole
   external user is the contended seam test below.
@@ -191,6 +193,13 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   in the pooled backing; deleting it with the `try_` op would cost the blocking
   publish path its only coverage. `an_unresolvable_surface_is_refused_by_name…`
   (`:5388`) drops its `TryRunCpuReadbackCopy` case.
+- MODIFIED: `a_try_copy_reports_a_guard_refusal_as_an_error_and_never_as_contention`
+  (`surface_export_staging.rs:2190-2223`) is rewritten onto blocking
+  `refill_surface_export_staging` and renamed
+  `a_refill_of_a_surface_this_staging_does_not_export_is_refused_by_name` — it is the
+  only cover for `refuse_a_surface_this_staging_does_not_export`, a guard that
+  outlives the `try_` surface, so deleting it with the methods would drop the guard's
+  only proof. Same reasoning as the seam test above.
 - MODIFIED: prose that names the deleted surface, same PR (factual records): the
   golden-vector macro doc (`escalate_wire_encoding_tests.rs:44-47`),
   `EscalateResponseOk::timeline_value`'s doc (`escalate_response.rs:143-147`),
