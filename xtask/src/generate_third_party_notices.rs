@@ -4,22 +4,21 @@
 //! Regenerates `THIRD-PARTY-NOTICES.md`.
 //!
 //! Two halves that no single tool covers. `cargo about generate` walks the
-//! resolve graph and reproduces each crate's licence text; the six C++ projects
-//! appended here are invisible to it for one shared reason — none of them is a
-//! package in that graph — even though every one ends up inside the wheel.
+//! resolve graph and reproduces each crate's licence text; the vendored C++
+//! projects appended here are invisible to it for one shared reason — none of
+//! them is a package in that graph — even though every one ends up inside the
+//! wheel. [`VENDORED_CPP_PROJECTS`] is the roster; this doc does not repeat it,
+//! because a census in prose goes stale the moment the table grows.
 //!
-//! Four arrive through `shaderc-sys`, which vendors shaderc, glslang,
-//! SPIRV-Tools and SPIRV-Headers as sources and links them into
-//! `libshaderc_combined.a`. Two more are checked into this repo:
-//! `vendor/tatolab-vulkanalia-vma/build.rs` compiles `wrapper.cpp` against
-//! vendored VulkanMemoryAllocator and Vulkan-Headers, and neither of those two
-//! trees carries a licence file at all — their copyright line exists only in
-//! the comment block heading a header, which is why the notice source is a
-//! two-shape enum rather than a path.
+//! The notice source is a two-shape enum because the two trees differ.
+//! `shaderc-sys` extracts its C++ sources into its own build directory, each
+//! with a licence file. The trees `vendor/tatolab-vulkanalia-vma/build.rs`
+//! compiles `wrapper.cpp` against carry no licence file at all — their
+//! copyright line exists only in the comment block heading a header.
 //!
-//! Two of the six do reach the generated half by accident — `cargo about`
-//! scans a crate's own directory for licence files, and `shaderc-sys` extracts
-//! its C++ sources under one. They are appended again regardless: there the
+//! Some of the shaderc-side texts reach the generated half by accident:
+//! `cargo about` scans a crate's own directory for licence files, and finds the
+//! extracted sources under one. They are appended again regardless — there the
 //! text is attributed to the crate `shaderc-sys`, and a reader needs to know
 //! which upstream project each set of terms actually covers.
 //!
@@ -49,7 +48,7 @@ const THIRD_PARTY_NOTICES_FILE_NAME: &str = "THIRD-PARTY-NOTICES.md";
 /// `about.toml`, which is the config it discovers by convention.
 const CARGO_ABOUT_TEMPLATE_FILE_NAME: &str = "about.hbs";
 
-/// The crate whose build directory holds four of the six vendored C++ trees.
+/// The crate whose build directory holds the extracted vendored C++ trees.
 const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
 
 /// Where that crate extracts them, relative to its own manifest directory.
@@ -186,7 +185,16 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 /// where our own terms belong.
 fn run_cargo_about_generate(workspace_root: &Path) -> Result<String> {
     let output = std::process::Command::new("cargo")
-        .args(["about", "generate", CARGO_ABOUT_TEMPLATE_FILE_NAME])
+        // `--locked` first of all, and not only for symmetry: this runs before
+        // the `cargo metadata --locked` behind the vendored lookup, so without
+        // it a stale lock is rewritten here and that guard then passes against
+        // the rewrite — notices describing a graph the commit does not contain.
+        .args([
+            "about",
+            "generate",
+            "--locked",
+            CARGO_ABOUT_TEMPLATE_FILE_NAME,
+        ])
         .current_dir(workspace_root)
         .output()
         .context("spawning `cargo about generate` — `cargo install cargo-about` if missing")?;
@@ -281,11 +289,11 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
          - Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: {}\n\
          - Checked into this repository, compiled by \
          `vendor/tatolab-vulkanalia-vma/build.rs`: {}\n",
-        joined_project_names(|source| matches!(
+        joined_vendored_cpp_project_display_names(|source| matches!(
             source,
             VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
         )),
-        joined_project_names(|source| matches!(
+        joined_vendored_cpp_project_display_names(|source| matches!(
             source,
             VendoredCppNoticeSource::LeadingCommentBlockOf { .. }
         )),
@@ -308,10 +316,12 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
 
 /// The display names of every project whose notice comes from a matching
 /// source, as an English list the surrounding sentence can take.
-fn joined_project_names(matches_source: impl Fn(&VendoredCppNoticeSource) -> bool) -> String {
+fn joined_vendored_cpp_project_display_names(
+    notice_source_matches: impl Fn(&VendoredCppNoticeSource) -> bool,
+) -> String {
     let names: Vec<&str> = VENDORED_CPP_PROJECTS
         .iter()
-        .filter(|project| matches_source(&project.notice_source))
+        .filter(|project| notice_source_matches(&project.notice_source))
         .map(|project| project.display_name)
         .collect();
 
@@ -392,10 +402,10 @@ fn leading_comment_block_notice(source: &str) -> Result<String> {
         .peek()
         .context("the file holds no comment block at all")?;
 
-    let notice_lines: Vec<String> = if first.trim_start().starts_with("//") {
+    let notice_lines: Vec<&str> = if first.trim_start().starts_with("//") {
         lines
             .take_while(|line| line.trim_start().starts_with("//"))
-            .map(|line| line.trim().trim_start_matches("//").trim().to_owned())
+            .map(|line| line.trim().trim_start_matches("//").trim())
             .collect()
     } else if first.trim_start().starts_with("/*") {
         let mut collected = Vec::new();
@@ -407,8 +417,7 @@ fn leading_comment_block_notice(source: &str) -> Result<String> {
                     .trim_start_matches("/*")
                     .trim_end_matches("*/")
                     .trim_start_matches('*')
-                    .trim()
-                    .to_owned(),
+                    .trim(),
             );
             if block_comment_is_closed {
                 break;
@@ -532,13 +541,13 @@ mod tests {
         let appendix = render_vendored_cpp_appendix(&source_trees).expect("render");
 
         let rosters = [
-            joined_project_names(|source| {
+            joined_vendored_cpp_project_display_names(|source| {
                 matches!(
                     source,
                     VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
                 )
             }),
-            joined_project_names(|source| {
+            joined_vendored_cpp_project_display_names(|source| {
                 matches!(
                     source,
                     VendoredCppNoticeSource::LeadingCommentBlockOf { .. }

@@ -452,14 +452,12 @@ enum Commands {
     RunLocalCiGates,
 
     /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
-    /// via `cargo about generate`, plus the six vendored C++ projects that are
-    /// not packages in the Cargo resolve graph and so reach the file only by
-    /// being appended: shaderc, glslang, SPIRV-Tools and SPIRV-Headers through
-    /// the `shaderc-sys` crate, and VulkanMemoryAllocator and Vulkan-Headers
-    /// out of `vendor/tatolab-vulkanalia-vma/`. Needs `cargo-about` installed
-    /// and the network, which is why it is a command and not a gate;
-    /// `cargo deny check licenses` is the half that runs on every PR. See
-    /// [`generate_third_party_notices`].
+    /// via `cargo about generate`, plus the vendored C++ projects that are not
+    /// packages in the Cargo resolve graph and so reach the file only by being
+    /// appended. Needs `cargo-about` installed and the network, which is why it
+    /// is a command and not a gate; `cargo deny check licenses` is the half that
+    /// runs on every PR. See [`generate_third_party_notices`] for the roster and
+    /// why each project is on it.
     GenerateThirdPartyNotices,
 }
 
