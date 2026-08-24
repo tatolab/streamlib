@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library, cast-object-tensor-protocol)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library, cast-object-tensor-protocol, texture-backed-cpu-reach)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -280,7 +280,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT
+## Graphics (RHI / GPU) — IN-FLIGHT (→ texture-backed-cpu-reach)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
