@@ -10,26 +10,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result")]
 pub(crate) enum EscalateResponse {
-    #[serde(rename = "contended")]
-    Contended(EscalateResponseContended),
-
     #[serde(rename = "err")]
     Err(EscalateResponseErr),
 
     #[serde(rename = "ok")]
     Ok(EscalateResponseOk),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EscalateResponseContended {
-    /// Correlates response with request. Returned by
-    /// `try_run_cpu_readback_copy` (and any future `try_*` op that opts
-    /// into the same shape) when another copy already holds the surface's
-    /// staging. The subprocess gets no handle, no planes, and no
-    /// surface-share registrations to release — `contended` is purely
-    /// advisory, the customer skips the frame and re-tries later.
-    pub(crate) request_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -143,8 +128,8 @@ pub(crate) struct EscalateResponseOk {
 
     /// Decimal-string-encoded u64 timeline value the host signaled
     /// on the surface's shared timeline semaphore at end-of-submit.
-    /// Set on `run_cpu_readback_copy` and `try_run_cpu_readback_copy`
-    /// responses, and on `refill_device_export_staging` /
+    /// Set on `run_cpu_readback_copy` responses, and on
+    /// `refill_device_export_staging` /
     /// `copy_device_export_staging_back_to_surface` responses, where the
     /// timeline is the staging's own `refill_done`. The subprocess waits on its
     /// imported `ConsumerVulkanTimelineSemaphore` for this value before reading
