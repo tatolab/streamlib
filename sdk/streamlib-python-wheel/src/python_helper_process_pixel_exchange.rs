@@ -862,6 +862,7 @@ struct DeviceExportStagingDescription {
 /// type rather than failing — silently, until the pixels are wrong.
 #[cfg(target_os = "linux")]
 fn memory_type_index_stated_by_a_staging_registration(
+    staging_kind: &str,
     staging_share_id: &str,
     registration: &serde_json::Value,
 ) -> PyResult<u32> {
@@ -871,7 +872,7 @@ fn memory_type_index_stated_by_a_staging_registration(
         .and_then(|index| u32::try_from(index).ok())
         .ok_or_else(|| {
             crate::python_processor_context::gpu_operation_error(format!(
-                "the readback staging {staging_share_id:?} was registered without a usable \
+                "the {staging_kind} staging {staging_share_id:?} was registered without a usable \
                  vk_memory_type_index; an OPAQUE_FD import must bind the memory type index the \
                  exporter allocated from, and guessing one binds the wrong memory instead of \
                  failing"
@@ -884,9 +885,11 @@ fn memory_type_index_stated_by_a_staging_registration(
 /// they diverge on how the memory itself is imported.
 #[cfg(target_os = "linux")]
 struct CheckedOutExportStaging {
-    /// The service's registration record, still carrying the export
-    /// contract the memory import reads.
-    registration: serde_json::Value,
+    /// The memory type index the exporter allocated from, off the
+    /// registration. Validated here rather than per arm: it is mandatory
+    /// on exactly the OPAQUE_FD flavour this checkout already insisted on,
+    /// so one wire contract is checked in one place.
+    stated_memory_type_index: u32,
     /// Handed to the memory import, which adopts it; never closed here.
     staging_fd: OwnedFd,
     copy_done: ConsumerVulkanTimelineSemaphore,
@@ -1935,8 +1938,10 @@ impl HelperProcessGpuExchangeClient {
         &self,
         described: &DeviceExportStagingDescription,
     ) -> PyResult<HelperDeviceExport> {
-        let checked_out =
-            self.check_out_the_published_export_staging(described, "device-export")?;
+        let checked_out = self.check_out_the_published_export_staging(
+            described,
+            HelperExportStagingResidency::DeviceLocal,
+        )?;
         let cuda_import = crate::python_cuda_pixel_exchange::import_opaque_fd_into_cuda(
             checked_out.staging_fd,
             described.staging_byte_size,
@@ -1971,13 +1976,13 @@ impl HelperProcessGpuExchangeClient {
         described: &DeviceExportStagingDescription,
     ) -> PyResult<HelperCpuReadbackExport> {
         let staging_share_id = described.staging_share_id.as_str();
-        let checked_out = self.check_out_the_published_export_staging(described, "readback")?;
-        let stated_memory_type_index = memory_type_index_stated_by_a_staging_registration(
-            staging_share_id,
-            &checked_out.registration,
+        let checked_out = self.check_out_the_published_export_staging(
+            described,
+            HelperExportStagingResidency::HostVisible,
         )?;
 
         let vulkan_device = self.consumer_vulkan_device()?;
+        let stated_memory_type_index = checked_out.stated_memory_type_index;
         // The staging fd is handed over here and never closed on the error
         // path: ownership passes to the driver inside the call, and the
         // failure arms that keep it are indistinguishable from the ones
@@ -2063,9 +2068,10 @@ impl HelperProcessGpuExchangeClient {
     fn check_out_the_published_export_staging(
         &self,
         described: &DeviceExportStagingDescription,
-        staging_kind: &str,
+        residency: HelperExportStagingResidency,
     ) -> PyResult<CheckedOutExportStaging> {
         let staging_share_id = described.staging_share_id.as_str();
+        let staging_kind = residency.named_in_refusals();
         // The staging's own claim is never released: it is memoised for this
         // child's lifetime and is escalate-allocated rather than pool-backed,
         // so the lease pins no producer's slot. A pool-backed staging would
@@ -2088,6 +2094,11 @@ impl HelperProcessGpuExchangeClient {
                 ),
             ));
         }
+        let stated_memory_type_index = memory_type_index_stated_by_a_staging_registration(
+            staging_kind,
+            staging_share_id,
+            &registration,
+        )?;
         // The staging's memory fd, then the copy timeline's — the order
         // the registration published them in.
         let [staging_fd, copy_done_fd] =
@@ -2120,7 +2131,7 @@ impl HelperProcessGpuExchangeClient {
             }
         };
         Ok(CheckedOutExportStaging {
-            registration,
+            stated_memory_type_index,
             staging_fd,
             copy_done,
         })
@@ -3281,8 +3292,12 @@ mod texture_check_out_registration_metadata_tests {
     fn a_readback_staging_registration_states_the_exporters_memory_type_index() {
         let registration = serde_json::json!({ "vk_memory_type_index": 3u32 });
         assert_eq!(
-            memory_type_index_stated_by_a_staging_registration("staging#1", &registration)
-                .expect("a stated index parses"),
+            memory_type_index_stated_by_a_staging_registration(
+                "readback",
+                "staging#1",
+                &registration
+            )
+            .expect("a stated index parses"),
             3
         );
     }
@@ -3296,11 +3311,14 @@ mod texture_check_out_registration_metadata_tests {
             serde_json::json!({ "vk_memory_type_index": "7" }),
             serde_json::json!({ "vk_memory_type_index": u64::from(u32::MAX) + 1 }),
         ] {
-            let refusal =
-                memory_type_index_stated_by_a_staging_registration("staging#1", &unusable)
-                    .err()
-                    .expect("an unusable index refuses the import")
-                    .to_string();
+            let refusal = memory_type_index_stated_by_a_staging_registration(
+                "readback",
+                "staging#1",
+                &unusable,
+            )
+            .err()
+            .expect("an unusable index refuses the import")
+            .to_string();
             assert!(
                 refusal.contains("vk_memory_type_index"),
                 "the refusal must name the field it could not read: {refusal:?}"
