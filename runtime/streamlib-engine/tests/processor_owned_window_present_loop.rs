@@ -20,8 +20,9 @@ use std::time::{Duration, Instant};
 
 use streamlib_engine::core::context::GpuContext;
 use streamlib_engine::core::processor_owned_window::{
-    ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
-    SurfaceNamedForTheEnginesPresentLoop, WindowPresentLoopForOwningProcessor,
+    ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget,
+    ProcessorOwnedWindowRequest, SurfaceNamedForTheEnginesPresentLoop,
+    WindowPresentLoopForOwningProcessor,
 };
 use streamlib_engine::core::rhi::TextureFormat;
 use streamlib_engine::core::window_event_pump::{
@@ -133,8 +134,10 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
         })
         .expect("the present target and compositor mint under one escalate");
 
-    let present_loop =
-        WindowPresentLoopForOwningProcessor::start_for_processor_owned_window(processor_owned_window);
+    let present_loop = WindowPresentLoopForOwningProcessor::start_for_processor_owned_window(
+        processor_owned_window,
+    )
+    .expect("the present thread spawns");
     wait_until_the_pump_routes_to_exactly(1);
 
     let coalesced_state = present_loop.drain_coalesced_state_for_the_owning_processor();
@@ -151,7 +154,8 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
     );
 
     present_loop.name_surface_for_the_next_present(named_surface(&published_surface_id));
-    let presented_after_the_first_named_surface = wait_until_the_window_has_presented(&present_loop, 1);
+    let presented_after_the_first_named_surface =
+        wait_until_the_window_has_presented(&present_loop, 1);
 
     // Naming nothing leaves the last frame up: the loop has nothing to show,
     // so it shows nothing again rather than re-presenting what it already has.
@@ -194,10 +198,8 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
          being paced by the window, which is the vsync deadline crossing a hop it must never cross"
     );
 
-    let presented_after_the_burst = wait_until_the_window_has_presented(
-        &present_loop,
-        presented_after_the_first_named_surface + 1,
-    );
+    // Panics unless the burst reached the window at all.
+    wait_until_the_window_has_presented(&present_loop, presented_after_the_first_named_surface + 1);
 
     // Latest-wins, from the outside: the loop keeps only the newest id, so a
     // burst leaves no backlog. A loop that queued them would still be
@@ -216,11 +218,6 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
         "the window presented {presented_once_the_burst_settled} of {IDS_NAMED_IN_ONE_BURST} \
          named ids — latest-wins means most of a burst is dropped, never shown late"
     );
-    assert!(
-        presented_after_the_burst >= presented_after_the_first_named_surface + 1,
-        "the burst must have reached the window at all"
-    );
-
     // Closing joins the present thread, and dropping its pump registration is
     // what closes the window — the release a processor's teardown owes.
     present_loop.close_the_window_and_join_its_present_thread();

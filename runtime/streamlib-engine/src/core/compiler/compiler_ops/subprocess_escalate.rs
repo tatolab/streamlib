@@ -32,9 +32,8 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestCloseProcessorOwnedWindow, EscalateRequestCopyDeviceExportStagingBackToSurface,
     EscalateRequestCreateProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestOpenCpuReadbackStaging,
-    EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
-    EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateRequestOpenCpuReadbackStaging, EscalateRequestOpenDeviceExportStaging,
+    EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
     EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelPipelineState,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
@@ -55,8 +54,8 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
     EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunRayTracingKernel,
     EscalateRequestShowSurfaceOnProcessorOwnedWindow, EscalateRequestTryRunCpuReadbackCopy,
-    EscalateRequestTryRunCpuReadbackCopyDirection,
-    EscalateRequestWaitDeviceIdle, RAY_TRACING_STAGE_INDEX_NONE,
+    EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
+    RAY_TRACING_STAGE_INDEX_NONE,
 };
 // Each names a wire field the handler no longer reads: a depth attachment and
 // either half of a vertex input are refused, so only the tests that prove the
@@ -84,8 +83,9 @@ use crate::core::context::{
 };
 use crate::core::logging::{LogLevel, LogRecord, Source, push_polyglot_record};
 use crate::core::processor_owned_window::{
-    ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
-    SurfaceNamedForTheEnginesPresentLoop, WindowPresentLoopForOwningProcessor,
+    ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget,
+    ProcessorOwnedWindowRequest, SurfaceNamedForTheEnginesPresentLoop,
+    WindowPresentLoopForOwningProcessor,
 };
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
 use crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
@@ -986,13 +986,22 @@ fn handle_create_processor_owned_window(
     };
 
     let (width, height) = processor_owned_window.current_extent_in_physical_pixels();
+    let present_loop = match WindowPresentLoopForOwningProcessor::start_for_processor_owned_window(
+        processor_owned_window,
+    ) {
+        Ok(present_loop) => present_loop,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id,
+                message: format!(
+                    "create_processor_owned_window failed for the window titled \
+                     {window_title:?}: {e}"
+                ),
+            });
+        }
+    };
     let window_id = format!("processor-owned-window-{}", Uuid::new_v4());
-    registry.insert_processor_owned_window(
-        window_id.clone(),
-        WindowPresentLoopForOwningProcessor::start_for_processor_owned_window(
-            processor_owned_window,
-        ),
-    );
+    registry.insert_processor_owned_window(window_id.clone(), present_loop);
     EscalateResponse::Ok(EscalateResponseOk {
         request_id,
         handle_id: window_id,
@@ -4922,11 +4931,17 @@ mod tests {
                 "the setup hook is the one place a window may be asked for"
             );
 
-            for command_outside_the_setup_hook in
-                ["run", "stop", "teardown", "on_pause", "on_resume", "update_config"]
-            {
-                registry
-                    .note_lifecycle_command_sent_to_the_helper_process(command_outside_the_setup_hook);
+            for command_outside_the_setup_hook in [
+                "run",
+                "stop",
+                "teardown",
+                "on_pause",
+                "on_resume",
+                "update_config",
+            ] {
+                registry.note_lifecycle_command_sent_to_the_helper_process(
+                    command_outside_the_setup_hook,
+                );
                 assert!(
                     !registry.helper_process_is_inside_its_setup_hook(),
                     "{command_outside_the_setup_hook} is not the setup hook, so a window minted \
@@ -4982,9 +4997,9 @@ mod tests {
         /// the dispatch arm, with the request decoded from its wire variant.
         #[test]
         fn every_present_class_op_refuses_a_window_this_processor_does_not_own() {
-            let Some(sandbox) =
-                sandbox_or_skip("every_present_class_op_refuses_a_window_this_processor_does_not_own")
-            else {
+            let Some(sandbox) = sandbox_or_skip(
+                "every_present_class_op_refuses_a_window_this_processor_does_not_own",
+            ) else {
                 return;
             };
             let registry = EscalateHandleRegistry::new();
@@ -5034,9 +5049,9 @@ mod tests {
         /// tiers land rather than in the object that carried the call.
         #[test]
         fn a_window_asked_for_outside_the_setup_hook_is_refused_and_none_is_minted() {
-            let Some(sandbox) =
-                sandbox_or_skip("a_window_asked_for_outside_the_setup_hook_is_refused_and_none_is_minted")
-            else {
+            let Some(sandbox) = sandbox_or_skip(
+                "a_window_asked_for_outside_the_setup_hook_is_refused_and_none_is_minted",
+            ) else {
                 return;
             };
             let registry = EscalateHandleRegistry::new();

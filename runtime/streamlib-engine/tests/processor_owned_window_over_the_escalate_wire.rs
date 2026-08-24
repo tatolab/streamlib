@@ -159,8 +159,8 @@ fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire
     send_lifecycle_command_and_let_the_helper_read_it(&bridge, &mut helper, "setup");
 
     // Minting.
-    let created =
-        helper.escalate_request_to_the_parent(create_window_titled("streamlib window over the wire"));
+    let created = helper
+        .escalate_request_to_the_parent(create_window_titled("streamlib window over the wire"));
     assert_ok(&created, "create_processor_owned_window");
     let window_id = created["handle_id"]
         .as_str()

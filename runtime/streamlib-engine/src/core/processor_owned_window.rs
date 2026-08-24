@@ -24,7 +24,7 @@ use winit::window::Window;
 
 use crate::core::color::{ColorTraits, HdrStaticMetadata};
 use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, TextureRegistration};
-use crate::core::error::Result;
+use crate::core::error::{Error, Result};
 use crate::core::rhi::pool_slot_key_of_surface_id;
 use crate::core::window_event_pump::{
     CoalescedWindowEventsFromEventPump, WindowRegisteredWithEventPump,
@@ -493,7 +493,13 @@ impl WindowPresentLoopForOwningProcessor {
     /// One thread per window, never the pump's: windows are not serialised
     /// behind one loop, and a window whose owner has gone quiet must still
     /// answer its window server.
-    pub fn start_for_processor_owned_window(processor_owned_window: ProcessorOwnedWindow) -> Self {
+    ///
+    /// Errors rather than panicking when the thread cannot be spawned — the
+    /// escalate dispatch that mints a cross-process owner's window answers
+    /// every failure to its caller, and never with a dead bridge.
+    pub fn start_for_processor_owned_window(
+        processor_owned_window: ProcessorOwnedWindow,
+    ) -> Result<Self> {
         let (initial_width, initial_height) =
             processor_owned_window.current_extent_in_physical_pixels();
         let latest_surface_named_by_the_owning_processor = Arc::new(Mutex::new(None));
@@ -524,16 +530,20 @@ impl WindowPresentLoopForOwningProcessor {
                     &keeps_running_on_the_loop,
                 );
             })
-            .expect("failed to spawn a processor-owned window's present thread");
+            .map_err(|e| {
+                Error::Runtime(format!(
+                    "could not spawn a processor-owned window's present thread: {e}"
+                ))
+            })?;
 
-        Self {
+        Ok(Self {
             latest_surface_named_by_the_owning_processor,
             coalesced_state_for_the_owning_processor,
             frames_composed_and_presented,
             present_loop_keeps_running,
             present_loop_thread_for_unparking: present_loop_thread.thread().clone(),
             present_loop_thread_awaiting_its_join: Mutex::new(Some(present_loop_thread)),
-        }
+        })
     }
 
     /// Name the surface the window shows next, replacing any the loop has not
@@ -638,16 +648,17 @@ fn drive_the_present_loop_for_one_processor_owned_window(
                 break;
             }
         };
-        {
+        if pending_window_events != CoalescedWindowEventsFromEventPump::default() {
             let (width, height) = processor_owned_window.current_extent_in_physical_pixels();
             let mut coalesced_state = coalesced_state_for_the_owning_processor
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             coalesced_state.current_width_in_physical_pixels = width;
             coalesced_state.current_height_in_physical_pixels = height;
-            if pending_window_events.close_requested_by_user {
-                coalesced_state.close_requested_by_user = true;
-            }
+            // Latched, not overwritten: the owner is owed the gesture even
+            // though the window is about to close whether it reads it or not.
+            coalesced_state.close_requested_by_user |=
+                pending_window_events.close_requested_by_user;
         }
         if pending_window_events.close_requested_by_user {
             tracing::info!(
