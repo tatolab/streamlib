@@ -27,3 +27,19 @@ needs more vertical slices splits only when it is genuinely two changes.
 Unresolvable choices are written as `[NEEDS DECISION]` blocks (options + recommendation)
 and only the owner resolves them. Archived changes live in `archive/` as
 `<YYYY-MM-DD>-<name>.md`.
+
+## Retired without shipping
+
+`archive/` holds deltas that shipped and were folded into the plan. A proposal the plan
+overtook before it was built is deleted instead, with its line recorded here — left in
+place it reads as pending work forever, and `/ship-change` has nothing to fold.
+
+- **`mvp-app-experience.md`** — superseded 2026-08-02 by `importable-python-library`,
+  retired 2026-08-24 (owner). Its package-source, discovery-scan, string-id and
+  subprocess-execution sections died with the SDK-shape pivot. The clauses that survived
+  it — the `app.py`/`setup(rt)` convention, `streamlib new`, class-form `rt.add` — are
+  §Product plan text, SHIPPED #1683, #1684, #1711.
+- **`pypi-packaging.md`** — superseded 2026-08-02 by `importable-python-library`,
+  retired 2026-08-24 (owner). It packaged a standalone binary; the shipped artifact is
+  the PyO3 wheel served from a repo-hosted PEP 503 simple index, which is §Distribution
+  plan text, SHIPPED #1691, #1692, #1694, #1711.
