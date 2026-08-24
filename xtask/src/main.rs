@@ -16,6 +16,7 @@ pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_vulkanalia;
+pub mod check_workspace_version_pins;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
@@ -114,7 +115,7 @@ pub fn ensure_source_walking_gate_read_source(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all ten in well under a second, and why CI runs them as
+/// lets one process run all eleven in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -136,6 +137,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ),
     ("check-clock-usage", check_clock_usage::run),
     ("check-bounded-apt-install", check_bounded_apt_install::run),
+    (
+        "check-workspace-version-pins",
+        check_workspace_version_pins::run,
+    ),
 ];
 
 /// Run every source-walking gate, reporting all failures rather than the first.
@@ -446,6 +451,23 @@ enum Commands {
     /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredVulkanalia,
 
+    /// CI gate keeping every in-tree `{ path = "…", version = "…" }` requirement
+    /// equal to `[workspace.package] version`. release-please's `simple` release
+    /// type bumps the workspace version and ships no cargo dependency-requirement
+    /// updater, so the pins sit still while the crates move. Inside one minor line
+    /// that is invisible (`^0.17.0` matches `0.17.1`); the next breaking bump makes
+    /// the workspace unresolvable, because `^0.17.0` excludes `0.18.0` — which is
+    /// what held release 0.18.0 shut from 2026-08-11 and starved the PEP 503 index
+    /// of every wheel since. `cargo metadata --no-deps` parses it clean, so only a
+    /// real resolve catches it, and the first real resolve is on the release
+    /// branch. `--fix` moves every drifted pin onto the workspace version; the
+    /// release workflow calls it right after the bump.
+    CheckWorkspaceVersionPins {
+        /// Rewrite drifted pins instead of reporting them.
+        #[arg(long)]
+        fix: bool,
+    },
+
     /// Run every source-walking gate in one process and report all failures.
     /// This is what CI's `source-gates` job runs; the per-gate subcommands stay
     /// for narrowing down a failure locally.
@@ -494,6 +516,16 @@ fn main() -> Result<()> {
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
         Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
+        Commands::CheckWorkspaceVersionPins { fix } => {
+            let workspace_root = workspace_root()?;
+            if fix {
+                check_workspace_version_pins::rewrite_version_pins_to_workspace_version(
+                    &workspace_root,
+                )?;
+            } else {
+                check_workspace_version_pins::run(&workspace_root)?;
+            }
+        }
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
         Commands::GenerateThirdPartyNotices => {
