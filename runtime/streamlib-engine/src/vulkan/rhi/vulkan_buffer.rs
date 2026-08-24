@@ -1314,12 +1314,10 @@ mod tests {
             }
         };
 
-        let seen = unsafe {
-            std::slice::from_raw_parts(imported.mapped_ptr(), SIZE as usize)
-        };
+        let seen = unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), SIZE as usize) };
         assert!(
             seen.iter().all(|byte| *byte == HOST_STAMP),
-            "the importer must map the exporter\'s own memory, not a fresh allocation"
+            "the importer must map the exporter's own memory, not a fresh allocation"
         );
     }
 

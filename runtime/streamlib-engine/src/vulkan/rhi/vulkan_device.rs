@@ -1974,8 +1974,8 @@ fn make_opaque_fd_buffer_sentinel(
                 | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
         }
         OpaqueFdSentinelHostAccessPattern::MappedRandom => {
-            flags |= vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM;
+            flags |=
+                vma::AllocationCreateFlags::MAPPED | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM;
         }
     }
     let alloc_opts = vma::AllocationOptions {
@@ -2424,17 +2424,16 @@ impl HostVulkanDevice {
             allocator,
             vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
         )?;
-        let pool =
-            Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
-                allocator,
-                memory_type_index,
-            )?;
+        let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+            allocator,
+            memory_type_index,
+        )?;
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool created — mem_type={}",
             memory_type_index
         );
-        Ok(pool)
+        Ok((pool, export_info))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE
@@ -2463,17 +2462,16 @@ impl HostVulkanDevice {
         if !memory_type_index_is_host_cached(allocator.get_memory_properties(), memory_type_index) {
             return Ok(None);
         }
-        let pool =
-            Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
-                allocator,
-                memory_type_index,
-            )?;
+        let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+            allocator,
+            memory_type_index,
+        )?;
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool (HOST_CACHED) created — mem_type={}",
             memory_type_index
         );
-        Ok(Some(pool))
+        Ok(Some((pool, export_info)))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
@@ -3829,8 +3827,10 @@ mod tests {
     fn memory_properties_with_types(
         property_flags: &[vk::MemoryPropertyFlags],
     ) -> vk::PhysicalDeviceMemoryProperties {
-        let mut memory_properties = vk::PhysicalDeviceMemoryProperties::default();
-        memory_properties.memory_type_count = property_flags.len() as u32;
+        let mut memory_properties = vk::PhysicalDeviceMemoryProperties {
+            memory_type_count: property_flags.len() as u32,
+            ..Default::default()
+        };
         for (memory_type, flags) in memory_properties
             .memory_types
             .iter_mut()
@@ -3852,13 +3852,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_device_whose_probed_type_is_not_host_cached_gets_no_host_cached_pool() {
-        let uncached = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let uncached =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let cached = uncached | vk::MemoryPropertyFlags::HOST_CACHED;
 
-        let cache_less_device = memory_properties_with_types(&[
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            uncached,
-        ]);
+        let cache_less_device =
+            memory_properties_with_types(&[vk::MemoryPropertyFlags::DEVICE_LOCAL, uncached]);
         assert!(
             !memory_type_index_is_host_cached(&cache_less_device, 1),
             "a HOST_VISIBLE | HOST_COHERENT type without HOST_CACHED must not pass"
@@ -3885,15 +3884,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn a_memory_type_index_past_the_device_count_is_not_host_cached() {
-        let memory_properties = memory_properties_with_types(&[
-            vk::MemoryPropertyFlags::HOST_VISIBLE
+        let memory_properties =
+            memory_properties_with_types(&[vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT
-                | vk::MemoryPropertyFlags::HOST_CACHED,
-        ]);
+                | vk::MemoryPropertyFlags::HOST_CACHED]);
         assert!(memory_type_index_is_host_cached(&memory_properties, 0));
         assert!(!memory_type_index_is_host_cached(&memory_properties, 1));
         assert!(!memory_type_index_is_host_cached(&memory_properties, 31));
-        assert!(!memory_type_index_is_host_cached(&memory_properties, u32::MAX));
+        assert!(!memory_type_index_is_host_cached(
+            &memory_properties,
+            u32::MAX
+        ));
     }
 
     /// Try to create a HostVulkanDevice; return None if GPU/Vulkan is unavailable (CI).
