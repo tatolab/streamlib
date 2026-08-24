@@ -2041,18 +2041,6 @@ pub struct SurfaceStore {
 unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
-/// The register-op payload a DMA-BUF-backed texture publishes.
-///
-/// Carries the DRM format modifier and per-plane row pitch so the
-/// consumer-side EGL or Vulkan import can pass them via
-/// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT` and
-/// `EGL_DMA_BUF_PLANE{N}_PITCH_EXT` (or
-/// `VkImageDrmFormatModifierExplicitCreateInfoEXT`). The tiling rides along
-/// because a zero modifier is `DRM_FORMAT_MOD_LINEAR` under
-/// `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at all" otherwise — the
-/// value alone cannot say which. Render-target consumers must refuse a LINEAR
-/// surface because LINEAR DMA-BUFs are sampler-only on NVIDIA (see
-/// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
 /// The surface-share registration payload for a CPU-readback export
 /// staging.
 ///
@@ -2088,6 +2076,18 @@ fn surface_export_staging_registration_payload(
     })
 }
 
+/// The register-op payload a DMA-BUF-backed texture publishes.
+///
+/// Carries the DRM format modifier and per-plane row pitch so the
+/// consumer-side EGL or Vulkan import can pass them via
+/// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT` and
+/// `EGL_DMA_BUF_PLANE{N}_PITCH_EXT` (or
+/// `VkImageDrmFormatModifierExplicitCreateInfoEXT`). The tiling rides along
+/// because a zero modifier is `DRM_FORMAT_MOD_LINEAR` under
+/// `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at all" otherwise — the
+/// value alone cannot say which. Render-target consumers must refuse a LINEAR
+/// surface because LINEAR DMA-BUFs are sampler-only on NVIDIA (see
+/// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
 #[cfg(target_os = "linux")]
 fn dma_buf_texture_registration_payload(
     texture: &crate::vulkan::rhi::HostVulkanTexture,
