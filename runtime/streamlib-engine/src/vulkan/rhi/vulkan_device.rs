@@ -219,14 +219,11 @@ pub struct HostVulkanDevice {
     /// can carry only one chained `pNext`.
     #[cfg(target_os = "linux")]
     opaque_fd_buffer_pool: Option<vma::Pool>,
-    /// VMA pool for OPAQUE_FD exportable HOST_VISIBLE buffers allocated
-    /// from a HOST_CACHED memory type — the readback sibling of
-    /// [`Self::opaque_fd_buffer_pool`], whose `HOST_ACCESS_SEQUENTIAL_WRITE`
-    /// probe lands on write-combined memory that the CPU reads roughly an
-    /// order of magnitude slower. `None` on a device with no cached
-    /// exportable type: VMA prefers HOST_CACHED under `HOST_ACCESS_RANDOM`
-    /// but, per `vk_mem_alloc.h`, "cannot require it", so the probe
-    /// succeeds there and returns an uncached index.
+    /// VMA pool for OPAQUE_FD exportable HOST_VISIBLE buffers on a
+    /// HOST_CACHED memory type — the CPU-read sibling of
+    /// [`Self::opaque_fd_buffer_pool`]. `None` on a device with no cached
+    /// exportable type; see
+    /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
     #[cfg(target_os = "linux")]
     opaque_fd_buffer_pool_host_cached: Option<vma::Pool>,
     /// VMA pool for OPAQUE_FD exportable DEVICE_LOCAL buffers — the
@@ -1806,7 +1803,7 @@ impl HostVulkanDevice {
                     * (PROBE_H as vk::DeviceSize)
                     * (PROBE_BPP as vk::DeviceSize),
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                OpaqueFdSentinelHostAccessPattern::MappedSequentialWrite,
+                Some(MappedOpaqueFdBufferHostAccessPattern::SequentialWrite),
             )?;
             sentinels.push(sentinel);
         }
@@ -1824,7 +1821,7 @@ impl HostVulkanDevice {
                     * (PROBE_H as vk::DeviceSize)
                     * (PROBE_BPP as vk::DeviceSize),
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                OpaqueFdSentinelHostAccessPattern::MappedRandom,
+                Some(MappedOpaqueFdBufferHostAccessPattern::Random),
             )?;
             sentinels.push(sentinel);
         }
@@ -1846,7 +1843,7 @@ impl HostVulkanDevice {
                     * (PROBE_H as vk::DeviceSize)
                     * (PROBE_BPP as vk::DeviceSize),
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                OpaqueFdSentinelHostAccessPattern::NotHostMapped,
+                /* not host mapped */ None,
             )?;
             sentinels.push(sentinel);
         }
@@ -1900,11 +1897,9 @@ impl HostVulkanDevice {
 
 /// Whether the memory type at `memory_type_index` carries HOST_CACHED.
 ///
-/// The host-cached OPAQUE_FD pool's presence turns on this alone — VMA
-/// prefers a cached type under `HOST_ACCESS_RANDOM` but cannot require
-/// one, so a cache-less device answers a successful probe with an
-/// uncached index rather than an error. Indices at or past
-/// `memoryTypeCount` are not real memory types and answer `false`.
+/// [`HostVulkanDevice::create_opaque_fd_buffer_pool_host_cached`] turns
+/// on this alone. Indices at or past `memoryTypeCount` are not real
+/// memory types and answer `false`.
 #[cfg(target_os = "linux")]
 fn memory_type_index_is_host_cached(
     memory_properties: &vk::PhysicalDeviceMemoryProperties,
@@ -1918,20 +1913,32 @@ fn memory_type_index_is_host_cached(
         .contains(vk::MemoryPropertyFlags::HOST_CACHED)
 }
 
-/// How an [`ExportPoolSentinel`]'s allocation is reached from the host.
+/// How a mapped OPAQUE_FD buffer allocation is reached from the host.
 ///
 /// One choice rather than two flags: VMA asserts when both HOST_ACCESS
-/// bits are set on one allocation, and an unmapped allocation carries
-/// neither.
+/// bits are set on one allocation. A pool and every allocation it serves
+/// must carry the same one, or the probe's `memoryTypeBits` stop matching
+/// the real buffer's and the bind trips
+/// VUID-vkBindBufferMemory-memory-01035.
 #[cfg(target_os = "linux")]
-#[derive(Copy, Clone, Debug)]
-enum OpaqueFdSentinelHostAccessPattern {
-    /// DEVICE_LOCAL sentinel — no mapping and no HOST_ACCESS bit.
-    NotHostMapped,
-    /// Mirrors [`super::HostVulkanBuffer::new_opaque_fd_export`].
-    MappedSequentialWrite,
-    /// Mirrors [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`].
-    MappedRandom,
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MappedOpaqueFdBufferHostAccessPattern {
+    /// Producer-write memory — the shared OPAQUE_FD pool's hint.
+    SequentialWrite,
+    /// CPU-read memory; steers VMA to prefer a HOST_CACHED type.
+    Random,
+}
+
+#[cfg(target_os = "linux")]
+impl MappedOpaqueFdBufferHostAccessPattern {
+    /// `MAPPED` plus this pattern's single HOST_ACCESS bit.
+    pub(crate) fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {
+        vma::AllocationCreateFlags::MAPPED
+            | match self {
+                Self::SequentialWrite => vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                Self::Random => vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            }
+    }
 }
 
 /// Allocate one OPAQUE_FD-exportable buffer through the given VMA
@@ -1950,7 +1957,7 @@ fn make_opaque_fd_buffer_sentinel(
     label: &'static str,
     size: vk::DeviceSize,
     required_flags: vk::MemoryPropertyFlags,
-    host_access_pattern: OpaqueFdSentinelHostAccessPattern,
+    host_access_pattern: Option<MappedOpaqueFdBufferHostAccessPattern>,
 ) -> Result<ExportPoolSentinel> {
     let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
         .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
@@ -1967,16 +1974,8 @@ fn make_opaque_fd_buffer_sentinel(
         .push_next(&mut external_buffer_info);
 
     let mut flags = vma::AllocationCreateFlags::DEDICATED_MEMORY;
-    match host_access_pattern {
-        OpaqueFdSentinelHostAccessPattern::NotHostMapped => {}
-        OpaqueFdSentinelHostAccessPattern::MappedSequentialWrite => {
-            flags |= vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
-        }
-        OpaqueFdSentinelHostAccessPattern::MappedRandom => {
-            flags |=
-                vma::AllocationCreateFlags::MAPPED | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM;
-        }
+    if let Some(host_access_pattern) = host_access_pattern {
+        flags |= host_access_pattern.vma_allocation_create_flags();
     }
     let alloc_opts = vma::AllocationOptions {
         flags,
@@ -2351,7 +2350,7 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn probe_opaque_fd_host_visible_buffer_memory_type_index(
         allocator: &Arc<vma::Allocator>,
-        host_access_pattern: vma::AllocationCreateFlags,
+        host_access_pattern: MappedOpaqueFdBufferHostAccessPattern,
     ) -> Result<u32> {
         let mut probe_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
@@ -2366,8 +2365,7 @@ impl HostVulkanDevice {
             .push_next(&mut probe_external_info);
         let probe_alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
-                | vma::AllocationCreateFlags::MAPPED
-                | host_access_pattern,
+                | host_access_pattern.vma_allocation_create_flags(),
             required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
@@ -2422,7 +2420,7 @@ impl HostVulkanDevice {
     ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
         let memory_type_index = Self::probe_opaque_fd_host_visible_buffer_memory_type_index(
             allocator,
-            vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            MappedOpaqueFdBufferHostAccessPattern::SequentialWrite,
         )?;
         let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
             allocator,
@@ -2457,7 +2455,7 @@ impl HostVulkanDevice {
     ) -> Result<Option<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)>> {
         let memory_type_index = Self::probe_opaque_fd_host_visible_buffer_memory_type_index(
             allocator,
-            vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            MappedOpaqueFdBufferHostAccessPattern::Random,
         )?;
         if !memory_type_index_is_host_cached(allocator.get_memory_properties(), memory_type_index) {
             return Ok(None);
@@ -3646,13 +3644,12 @@ impl HostVulkanDevice {
 
     /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers on
     /// a HOST_CACHED memory type — the CPU-read sibling of
-    /// [`Self::opaque_fd_buffer_pool`].
+    /// [`Self::opaque_fd_buffer_pool`], built by
+    /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
     ///
-    /// Returns `None` when external memory isn't supported, the probe
-    /// failed, or this device has no cached exportable memory type. See
-    /// [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`],
-    /// which degrades to [`Self::opaque_fd_buffer_pool`] rather than
-    /// refusing.
+    /// `None` is not a refusal:
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`]
+    /// degrades to [`Self::opaque_fd_buffer_pool`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_buffer_pool_host_cached(&self) -> Option<&vma::Pool> {
         self.opaque_fd_buffer_pool_host_cached.as_ref()
@@ -4113,7 +4110,7 @@ mod tests {
     /// live OPAQUE_FD allocation exists to keep the per-handle-type
     /// kernel state alive (unlike DMA-BUF, which the swapchain
     /// imports). This test asserts the sentinels are present and
-    /// cover both OPAQUE_FD pools when the driver supports them. If
+    /// cover every OPAQUE_FD pool the driver supports. If
     /// `prewarm_export_pools` reverts to dropping its OPAQUE_FD
     /// probes, this test fails — locking the regression at the data-
     /// structure level so CI catches it without needing the manual
@@ -4133,7 +4130,7 @@ mod tests {
         // Build the expected set from which OPAQUE_FD pools the device
         // actually constructed; we can't assert a hardcoded count
         // without overfitting to one driver. The empty set is only
-        // legitimate when neither pool was created (no external memory
+        // legitimate when no pool was created (no external memory
         // support); every other shape is a real assertion.
         let mut expected_labels: Vec<&'static str> = Vec::new();
         if device.opaque_fd_buffer_pool().is_some() {

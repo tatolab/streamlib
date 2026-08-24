@@ -11,6 +11,7 @@ use vulkanalia_vma as vma;
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
+use super::vulkan_device::MappedOpaqueFdBufferHostAccessPattern;
 
 /// Process-global HostVulkanDevice reference for DMA-BUF import.
 ///
@@ -384,6 +385,27 @@ impl HostVulkanBuffer {
         self.size
     }
 
+    /// Whether this buffer's allocation sits on a HOST_CACHED memory
+    /// type — what separates a readback staging a CPU can traverse at
+    /// speed from write-combined memory. `None` for imported buffers,
+    /// which have no VMA allocation here to read.
+    ///
+    /// Callers outside the RHI ask through this rather than reading
+    /// `VkMemoryPropertyFlags` themselves; raw `vulkanalia` stays in the
+    /// RHI.
+    pub fn vma_allocation_is_host_cached(&self) -> Option<bool> {
+        let memory_type_index = self.vma_allocation_memory_type_index()?;
+        let memory_properties = self.vulkan_device.allocator().get_memory_properties();
+        if memory_type_index >= memory_properties.memory_type_count {
+            return None;
+        }
+        Some(
+            memory_properties.memory_types[memory_type_index as usize]
+                .property_flags
+                .contains(vk::MemoryPropertyFlags::HOST_CACHED),
+        )
+    }
+
     /// Memory type index (`vmaGetAllocationInfo().memoryType`) of this
     /// buffer's allocation — what a conforming consumer-side
     /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)` must state, since
@@ -458,23 +480,22 @@ impl HostVulkanBuffer {
             vulkan_device,
             size,
             pool,
-            vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            MappedOpaqueFdBufferHostAccessPattern::SequentialWrite,
+            "HostVulkanBuffer::new_opaque_fd_export",
         )
     }
 
     /// Create a new OPAQUE_FD-exportable HOST_VISIBLE staging buffer on a
     /// HOST_CACHED memory type, for a consumer that *reads* the mapping.
     ///
-    /// [`Self::new_opaque_fd_export`]'s pool is probed
-    /// `HOST_ACCESS_SEQUENTIAL_WRITE` and lands on write-combined memory,
-    /// which a CPU reader traverses roughly an order of magnitude slower
-    /// than cached memory. Same OPAQUE_FD export semantics either way, so
-    /// the check-out and import path is identical.
+    /// Same OPAQUE_FD export semantics as [`Self::new_opaque_fd_export`],
+    /// so the check-out and import path is identical; only the memory
+    /// properties differ, and with them how fast a CPU reader traverses
+    /// the mapping.
     ///
     /// Degrades to [`Self::new_opaque_fd_export`] on a device with no
     /// cached exportable memory type rather than refusing: the plan's
     /// contract is slower there, never unavailable.
-    #[cfg(target_os = "linux")]
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new_opaque_fd_export_host_cached(
         vulkan_device: &Arc<HostVulkanDevice>,
@@ -485,7 +506,8 @@ impl HostVulkanBuffer {
                 vulkan_device,
                 size,
                 pool,
-                vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+                MappedOpaqueFdBufferHostAccessPattern::Random,
+                "HostVulkanBuffer::new_opaque_fd_export_host_cached",
             ),
             None => Self::new_opaque_fd_export(vulkan_device, size),
         }
@@ -498,17 +520,17 @@ impl HostVulkanBuffer {
     /// and the same usage flags: a VMA pool is pinned to one memory type
     /// index, and a mismatch between the probe's `memoryTypeBits` and
     /// this buffer's trips VUID-vkBindBufferMemory-memory-01035.
-    #[cfg(target_os = "linux")]
     fn new_opaque_fd_export_from_pool(
         vulkan_device: &Arc<HostVulkanDevice>,
         size: u64,
         pool: &vma::Pool,
-        host_access_pattern: vma::AllocationCreateFlags,
+        host_access_pattern: MappedOpaqueFdBufferHostAccessPattern,
+        constructor_label: &'static str,
     ) -> Result<Self> {
         if size == 0 {
-            return Err(Error::Configuration(
-                "HostVulkanBuffer::new_opaque_fd_export: size must be > 0".into(),
-            ));
+            return Err(Error::Configuration(format!(
+                "{constructor_label}: size must be > 0"
+            )));
         }
         let size = size as vk::DeviceSize;
 
@@ -528,8 +550,7 @@ impl HostVulkanBuffer {
 
         let alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
-                | vma::AllocationCreateFlags::MAPPED
-                | host_access_pattern,
+                | host_access_pattern.vma_allocation_create_flags(),
             required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
@@ -1306,13 +1327,12 @@ mod tests {
             SIZE as vk::DeviceSize,
             stated_memory_type_index,
         );
-        let imported = match imported {
-            Ok(imported) => imported,
-            Err(e) => {
-                unsafe { libc::close(fd) };
-                panic!("a conforming stated-index import must bind: {e}");
-            }
-        };
+        // No close on the error arm: the import consumes the fd at its
+        // successful vkAllocateMemory, and the bind and mapping that can
+        // still fail run after it. Closing here would double-close.
+        let imported = imported.unwrap_or_else(|failure| {
+            panic!("a conforming stated-index import must bind: {failure}")
+        });
 
         let seen = unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), SIZE as usize) };
         assert!(

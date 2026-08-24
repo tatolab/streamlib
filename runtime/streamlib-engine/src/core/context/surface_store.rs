@@ -1322,15 +1322,11 @@ impl SurfaceStoreInner {
         // (VUID-VkMemoryAllocateInfo-allocationSize-01742) and OPAQUE_FD
         // has no fd-properties query to derive it from, so the consumer
         // has nowhere else to get it.
-        let memory_type_index = staging_buffer
-            .vma_allocation_memory_type_index()
-            .ok_or_else(|| {
-                Error::GpuError(format!(
-                    "surface-export staging for {surface_id:?} has no VMA allocation to read \
-                     a memory type index from; a consumer import without one binds the wrong \
-                     memory type instead of failing"
-                ))
-            })?;
+        let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
+            staging_buffer.vma_allocation_memory_type_index(),
+            surface_id,
+            "surface-export staging",
+        )?;
         let exported_staging_fd = staging_buffer.export_opaque_fd_memory()?;
         // SAFETY: each export mints a fresh fd this process owns and has
         // handed to no one; adopting it here is what closes it exactly once
@@ -1439,16 +1435,11 @@ impl SurfaceStoreInner {
             // Raw-handle export contract fields. Both exist by
             // construction here: the OPAQUE_FD memory export above
             // already proved the allocation and its owning device.
-            let memory_type_index = texture
-                .vulkan_inner()
-                .vma_allocation_memory_type_index()
-                .ok_or_else(|| {
-                    Error::GpuError(format!(
-                        "OPAQUE_FD texture registration for {surface_id:?} has no VMA \
-                         allocation to read a memory type index from; a consumer import \
-                         without one binds the wrong memory type instead of failing"
-                    ))
-                })?;
+            let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
+                texture.vulkan_inner().vma_allocation_memory_type_index(),
+                surface_id,
+                "OPAQUE_FD texture registration",
+            )?;
             let exporting_device_uuid = lowercase_hex_of_device_uuid(
                 texture
                     .vulkan_inner()
@@ -2041,14 +2032,34 @@ pub struct SurfaceStore {
 unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
+/// The memory type index an OPAQUE_FD registration must publish, or a
+/// refusal naming what had no allocation to read one from.
+///
+/// One rule for every OPAQUE_FD export: the handle type has no
+/// `vkGetMemoryFdPropertiesKHR` query, so an importer that is not told
+/// the index guesses, and a guess that happens to bind is the two sides
+/// coincidentally landing on the same memory type.
+#[cfg(target_os = "linux")]
+fn memory_type_index_stated_by_an_opaque_fd_export(
+    vma_allocation_memory_type_index: Option<u32>,
+    surface_id: &str,
+    exported_resource_description: &str,
+) -> Result<u32> {
+    vma_allocation_memory_type_index.ok_or_else(|| {
+        Error::GpuError(format!(
+            "{exported_resource_description} for {surface_id:?} has no VMA allocation to \
+             read a memory type index from; a consumer import without one binds the wrong \
+             memory type instead of failing"
+        ))
+    })
+}
+
 /// The surface-share registration payload for a CPU-readback export
 /// staging.
 ///
-/// `vk_memory_type_index` is the exporter's own, and is not optional the
-/// way it is for a DMA-BUF registration: OPAQUE_FD has no
-/// `vkGetMemoryFdPropertiesKHR` query, so an importer that is not told
-/// the index has to guess one, and a guess that happens to work is a
-/// coincidence of the two sides landing on the same memory type.
+/// `memory_type_index` comes from
+/// [`memory_type_index_stated_by_an_opaque_fd_export`], which is where
+/// the reason it is mandatory is written down.
 #[cfg(target_os = "linux")]
 fn surface_export_staging_registration_payload(
     surface_id: &str,

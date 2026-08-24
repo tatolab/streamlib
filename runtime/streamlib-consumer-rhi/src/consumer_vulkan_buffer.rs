@@ -63,9 +63,15 @@ impl ConsumerVulkanBuffer {
     ///
     /// Single-FD only: OPAQUE_FD has no multi-plane semantics (CUDA imports
     /// flat memory; multi-plane DMA-BUFs go through [`Self::from_dma_buf_fds`]).
-    /// fd ownership transfers to the Vulkan driver on success — caller
-    /// must NOT close `fd` afterwards. On error the caller still owns
-    /// `fd`.
+    ///
+    /// fd ownership transfers to the Vulkan driver at the successful
+    /// `vkAllocateMemory` inside this call, not at the call's own
+    /// success: the bind and the mapping run after the import, and this
+    /// frees the imported memory — which closes the fd — before
+    /// returning their failures. Only the refusals raised *before* the
+    /// import leave `fd` with the caller (a zero `allocation_size`, a
+    /// stated index this buffer cannot bind, a failed `create_buffer`).
+    /// A caller that closes `fd` on every error double-closes.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
@@ -90,9 +96,9 @@ impl ConsumerVulkanBuffer {
     /// refused here by name rather than tripping
     /// VUID-vkBindBufferMemory-memory-01035 inside the driver.
     ///
-    /// fd ownership transfers to the Vulkan driver on success — caller
-    /// must NOT close `fd` afterwards. On error the caller still owns
-    /// `fd`.
+    /// Same fd-ownership rule as [`Self::from_opaque_fd`]: the driver
+    /// takes the fd at the import, so only the refusals raised before it
+    /// — this one included — leave `fd` with the caller.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_opaque_fd_at_stated_memory_type_index(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
@@ -311,21 +317,13 @@ fn import_single_plane_with_handle_type(
     let alloc_size = effective_size.max(mem_requirements.size);
 
     if let ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) = handle_type
+        && let Err(refusal) = refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+            mem_requirements.memory_type_bits,
+            stated_memory_type_index,
+        )
     {
-        // `checked_shl` rather than a bare shift: an index at or past
-        // VK_MAX_MEMORY_TYPES is not a memory type at all, and must be
-        // refused here rather than overflow the bit test.
-        let stated_memory_type_bit = 1u32.checked_shl(stated_memory_type_index).unwrap_or(0);
-        if mem_requirements.memory_type_bits & stated_memory_type_bit == 0 {
-            unsafe { device.destroy_buffer(buffer, None) };
-            return Err(ConsumerRhiError::Configuration(format!(
-                "ConsumerVulkanBuffer: the exporter states memory type index \
-                 {stated_memory_type_index}, which this buffer cannot bind \
-                 (memoryTypeBits=0x{:x}) — the exporter and importer disagree on the \
-                 buffer's shape, and binding anyway is undefined behaviour",
-                mem_requirements.memory_type_bits
-            )));
-        }
+        unsafe { device.destroy_buffer(buffer, None) };
+        return Err(refusal);
     }
 
     let memory = match handle_type {
@@ -379,6 +377,28 @@ fn import_single_plane_with_handle_type(
     })
 }
 
+/// Refuse a stated memory type index the buffer's own
+/// `VkMemoryRequirements::memoryTypeBits` cannot take.
+///
+/// `checked_shl` rather than a bare shift: an index at or past
+/// VK_MAX_MEMORY_TYPES names no memory type on any device, and must be
+/// refused rather than overflow the bit test.
+fn refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+    memory_type_bits: u32,
+    stated_memory_type_index: u32,
+) -> Result<()> {
+    let stated_memory_type_bit = 1u32.checked_shl(stated_memory_type_index).unwrap_or(0);
+    if memory_type_bits & stated_memory_type_bit != 0 {
+        return Ok(());
+    }
+    Err(ConsumerRhiError::Configuration(format!(
+        "ConsumerVulkanBuffer: the exporter states memory type index \
+         {stated_memory_type_index}, which this buffer cannot bind \
+         (memoryTypeBits=0x{memory_type_bits:x}) — the exporter and importer disagree \
+         on the buffer's shape, and binding anyway is undefined behaviour"
+    )))
+}
+
 fn teardown_plane(vulkan_device: &Arc<ConsumerVulkanDevice>, plane: ConsumerImportedPlane) {
     unsafe { vulkan_device.device().destroy_buffer(plane.buffer, None) };
     vulkan_device.unmap_imported_memory(plane.memory);
@@ -414,5 +434,83 @@ impl VulkanRhiBuffer for ConsumerVulkanBuffer {
     }
     fn size(&self) -> vk::DeviceSize {
         ConsumerVulkanBuffer::size(self)
+    }
+}
+
+#[cfg(test)]
+mod stated_memory_type_index_tests {
+    use super::*;
+
+    /// The bind check is a pure bit test over the buffer's own
+    /// `memoryTypeBits`, so it locks with no device: OPAQUE_FD carries no
+    /// `vkGetMemoryFdPropertiesKHR`, and binding an index the buffer
+    /// cannot take is undefined behaviour rather than a Vulkan error.
+    #[test]
+    fn an_index_the_buffer_can_bind_is_accepted_and_one_it_cannot_is_refused() {
+        // types 0, 2 and 31 allowed.
+        let memory_type_bits = 0b1000_0000_0000_0000_0000_0000_0000_0101u32;
+
+        for allowed in [0u32, 2, 31] {
+            assert!(
+                refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+                    memory_type_bits,
+                    allowed
+                )
+                .is_ok(),
+                "index {allowed} is set in memoryTypeBits and must bind"
+            );
+        }
+        for refused in [1u32, 3, 30] {
+            assert!(
+                refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+                    memory_type_bits,
+                    refused
+                )
+                .is_err(),
+                "index {refused} is clear in memoryTypeBits and must be refused"
+            );
+        }
+    }
+
+    /// An index at or past VK_MAX_MEMORY_TYPES names no memory type. The
+    /// bit test must answer "refused" rather than shift out of range —
+    /// `1u32 << 32` panics in debug and wraps to bit 0 in release, which
+    /// would let `u32::MAX` bind whatever type 0 happens to be.
+    #[test]
+    fn an_index_past_vk_max_memory_types_is_refused_rather_than_overflowing() {
+        let every_type_allowed = u32::MAX;
+        assert!(
+            refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(every_type_allowed, 31)
+                .is_ok(),
+            "31 is the last real memory type index"
+        );
+        for past_the_end in [32u32, 33, 64, u32::MAX] {
+            assert!(
+                refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+                    every_type_allowed,
+                    past_the_end
+                )
+                .is_err(),
+                "index {past_the_end} names no memory type even when every bit is set"
+            );
+        }
+    }
+
+    /// The refusal has to be actionable: it names the index the exporter
+    /// stated and the mask the importer derived, which is the whole
+    /// diagnosis of an exporter/importer disagreement.
+    #[test]
+    fn the_refusal_names_the_stated_index_and_the_buffers_memory_type_bits() {
+        let refusal = refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(0b1010, 7)
+            .expect_err("index 7 is clear in 0b1010");
+        let refusal = refusal.to_string();
+        assert!(
+            refusal.contains('7'),
+            "must name the stated index: {refusal}"
+        );
+        assert!(
+            refusal.contains("memoryTypeBits=0xa"),
+            "must name what the buffer can bind: {refusal}"
+        );
     }
 }
