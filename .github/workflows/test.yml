@@ -137,3 +137,12 @@ jobs:
             core::processor_owned_window \
             processor_owned_window_ops \
             escalate_wire_encoding_tests
+          # streamlib-consumer-rhi was reached by no cargo invocation here for
+          # the same reason the built-ins were: the clippy step builds default
+          # targets and never its test target. Its unit tests are the no-GPU
+          # arm of the consumer import contract — the stated-memory-type-index
+          # bind among them, whose end-to-end proof is rig-gated and never runs
+          # in CI. Kept a test line, not a clippy line: the crate carries a
+          # pre-existing `println!` in test code that trips
+          # `clippy::disallowed_macros` under `--all-targets`.
+          cargo test --locked -p streamlib-consumer-rhi --lib

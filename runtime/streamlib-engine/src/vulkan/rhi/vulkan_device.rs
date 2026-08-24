@@ -219,6 +219,13 @@ pub struct HostVulkanDevice {
     /// can carry only one chained `pNext`.
     #[cfg(target_os = "linux")]
     opaque_fd_buffer_pool: Option<vma::Pool>,
+    /// VMA pool for OPAQUE_FD exportable HOST_VISIBLE buffers on a
+    /// HOST_CACHED memory type — the CPU-read sibling of
+    /// [`Self::opaque_fd_buffer_pool`]. `None` on a device with no cached
+    /// exportable type; see
+    /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
+    #[cfg(target_os = "linux")]
+    opaque_fd_buffer_pool_host_cached: Option<vma::Pool>,
     /// VMA pool for OPAQUE_FD exportable DEVICE_LOCAL buffers — the
     /// GPU-resident sibling of [`Self::opaque_fd_buffer_pool`]. CUDA imports
     /// the same OPAQUE_FD handle type, but the underlying memory lives in
@@ -254,6 +261,10 @@ pub struct HostVulkanDevice {
     /// Backing storage for the OPAQUE_FD buffer pool's VkExportMemoryAllocateInfo.
     #[cfg(target_os = "linux")]
     _opaque_fd_buffer_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// Backing storage for the host-cached OPAQUE_FD buffer pool's
+    /// VkExportMemoryAllocateInfo.
+    #[cfg(target_os = "linux")]
+    _opaque_fd_buffer_export_info_host_cached: Option<Box<vk::ExportMemoryAllocateInfo>>,
     /// Backing storage for the DEVICE_LOCAL OPAQUE_FD buffer pool's
     /// VkExportMemoryAllocateInfo.
     #[cfg(target_os = "linux")]
@@ -1294,6 +1305,36 @@ impl HostVulkanDevice {
             (None, None)
         };
 
+        // Host-cached OPAQUE_FD buffer pool — the CPU-read sibling of the
+        // pool above, used by the surface-export staging's HostVisible
+        // residency. Absence is a real answer, not a failure: allocation
+        // degrades to the write-combined pool, which the plan requires be
+        // slower but never refused.
+        #[cfg(target_os = "linux")]
+        let (opaque_fd_buffer_pool_host_cached, opaque_fd_buffer_export_info_host_cached) =
+            if supports_external_memory {
+                match Self::create_opaque_fd_buffer_pool_host_cached(&allocator) {
+                    Ok(Some((pool, export_info))) => (Some(pool), Some(export_info)),
+                    Ok(None) => {
+                        tracing::warn!(
+                            "no cached exportable host-visible memory type on this device — \
+                             CPU readback of a texture-backed surface keeps the \
+                             write-combined staging and reads it far more slowly"
+                        );
+                        (None, None)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "host-cached OPAQUE_FD buffer pool creation failed — CPU readback \
+                             staging falls back to the write-combined pool: {e}"
+                        );
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
         // DEVICE_LOCAL OPAQUE_FD pool — the GPU-resident sibling. Pool
         // construction failure is non-fatal in the same way as the
         // HOST_VISIBLE pool: callers refuse the allocation when the pool
@@ -1438,11 +1479,15 @@ impl HostVulkanDevice {
             #[cfg(target_os = "linux")]
             opaque_fd_buffer_pool,
             #[cfg(target_os = "linux")]
+            opaque_fd_buffer_pool_host_cached,
+            #[cfg(target_os = "linux")]
             opaque_fd_buffer_pool_device_local,
             #[cfg(target_os = "linux")]
             opaque_fd_image_pool,
             #[cfg(target_os = "linux")]
             _opaque_fd_buffer_export_info: opaque_fd_buffer_export_info,
+            #[cfg(target_os = "linux")]
+            _opaque_fd_buffer_export_info_host_cached: opaque_fd_buffer_export_info_host_cached,
             #[cfg(target_os = "linux")]
             _opaque_fd_buffer_export_info_device_local: opaque_fd_buffer_export_info_device_local,
             #[cfg(target_os = "linux")]
@@ -1758,12 +1803,30 @@ impl HostVulkanDevice {
                     * (PROBE_H as vk::DeviceSize)
                     * (PROBE_BPP as vk::DeviceSize),
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                /* mapped */ true,
+                Some(MappedOpaqueFdBufferHostAccessPattern::SequentialWrite),
             )?;
             sentinels.push(sentinel);
         }
 
-        // 5. OPAQUE_FD DEVICE_LOCAL buffer pool — retained sentinel.
+        // 5. OPAQUE_FD host-cached buffer pool — retained sentinel, same
+        //    reason and same tiny size as the pool above. Its memory type
+        //    index differs from the write-combined pool's wherever the
+        //    device has a cached exportable type, so it needs its own
+        //    sentinel rather than riding that one's.
+        if let Some(pool) = device.opaque_fd_buffer_pool_host_cached() {
+            let sentinel = make_opaque_fd_buffer_sentinel(
+                pool,
+                "opaque_fd_host_cached",
+                (PROBE_W as vk::DeviceSize)
+                    * (PROBE_H as vk::DeviceSize)
+                    * (PROBE_BPP as vk::DeviceSize),
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+                Some(MappedOpaqueFdBufferHostAccessPattern::Random),
+            )?;
+            sentinels.push(sentinel);
+        }
+
+        // 6. OPAQUE_FD DEVICE_LOCAL buffer pool — retained sentinel.
         //    Small (8×8×4) so it pins the per-handle-type kernel state
         //    without competing with consumer allocations for any
         //    NVIDIA-side total-byte cap on OPAQUE_FD allocations.
@@ -1780,12 +1843,12 @@ impl HostVulkanDevice {
                     * (PROBE_H as vk::DeviceSize)
                     * (PROBE_BPP as vk::DeviceSize),
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                /* mapped */ false,
+                None,
             )?;
             sentinels.push(sentinel);
         }
 
-        // 6. OPAQUE_FD image pool — retained sentinel.
+        // 7. OPAQUE_FD image pool — retained sentinel.
         //
         //    Provisional retention pending consumer. To the best of our
         //    current knowledge the buffer-side evidence (the existing
@@ -1832,6 +1895,51 @@ impl HostVulkanDevice {
     }
 }
 
+/// Whether the memory type at `memory_type_index` carries HOST_CACHED.
+///
+/// [`HostVulkanDevice::create_opaque_fd_buffer_pool_host_cached`] turns
+/// on this alone. Indices at or past `memoryTypeCount` are not real
+/// memory types and answer `false`.
+pub(crate) fn memory_type_index_is_host_cached(
+    memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    memory_type_index: u32,
+) -> bool {
+    if memory_type_index >= memory_properties.memory_type_count {
+        return false;
+    }
+    memory_properties.memory_types[memory_type_index as usize]
+        .property_flags
+        .contains(vk::MemoryPropertyFlags::HOST_CACHED)
+}
+
+/// How a mapped OPAQUE_FD buffer allocation is reached from the host.
+///
+/// One choice rather than two flags: VMA asserts when both HOST_ACCESS
+/// bits are set on one allocation. A pool and every allocation it serves
+/// must carry the same one, or the probe's `memoryTypeBits` stop matching
+/// the real buffer's and the bind trips
+/// VUID-vkBindBufferMemory-memory-01035.
+#[cfg(target_os = "linux")]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum MappedOpaqueFdBufferHostAccessPattern {
+    /// Producer-write memory — the shared OPAQUE_FD pool's hint.
+    SequentialWrite,
+    /// CPU-read memory; steers VMA to prefer a HOST_CACHED type.
+    Random,
+}
+
+#[cfg(target_os = "linux")]
+impl MappedOpaqueFdBufferHostAccessPattern {
+    /// `MAPPED` plus this pattern's single HOST_ACCESS bit.
+    pub(crate) fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {
+        vma::AllocationCreateFlags::MAPPED
+            | match self {
+                Self::SequentialWrite => vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                Self::Random => vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            }
+    }
+}
+
 /// Allocate one OPAQUE_FD-exportable buffer through the given VMA
 /// pool and wrap it in an [`ExportPoolSentinel`]. Used by
 /// [`HostVulkanDevice::prewarm_export_pools`] to pin the kernel-side
@@ -1848,7 +1956,7 @@ fn make_opaque_fd_buffer_sentinel(
     label: &'static str,
     size: vk::DeviceSize,
     required_flags: vk::MemoryPropertyFlags,
-    mapped: bool,
+    host_access_pattern: Option<MappedOpaqueFdBufferHostAccessPattern>,
 ) -> Result<ExportPoolSentinel> {
     let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
         .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
@@ -1865,9 +1973,8 @@ fn make_opaque_fd_buffer_sentinel(
         .push_next(&mut external_buffer_info);
 
     let mut flags = vma::AllocationCreateFlags::DEDICATED_MEMORY;
-    if mapped {
-        flags |= vma::AllocationCreateFlags::MAPPED
-            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
+    if let Some(host_access_pattern) = host_access_pattern {
+        flags |= host_access_pattern.vma_allocation_create_flags();
     }
     let alloc_opts = vma::AllocationOptions {
         flags,
@@ -2231,28 +2338,19 @@ impl HostVulkanDevice {
         ))
     }
 
-    /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
+    /// Probe the memory type index an OPAQUE_FD-exportable HOST_VISIBLE
+    /// buffer pool must pin itself to under `host_access_pattern`.
     ///
-    /// Used by CUDA / OpenCL interop: the host allocates from this pool,
-    /// `vkGetMemoryFdKHR` with `OPAQUE_FD` produces a kernel fd, and the
-    /// remote API (`cudaImportExternalMemory` etc.) imports the same
-    /// underlying memory by fd. Sibling of [`Self::create_dma_buf_pools`];
-    /// kept separate because a VMA pool can chain only one
-    /// `VkExportMemoryAllocateInfo` per pool, and OPAQUE_FD vs DMA_BUF_EXT
-    /// are mutually-exclusive handle types.
-    ///
-    /// The export info `Box` is returned alongside the pool — callers
-    /// must keep it alive for the pool's entire lifetime (VMA stores
-    /// raw pointers via `pMemoryAllocateNext`).
+    /// The probe shape mirrors `HostVulkanBuffer`'s real allocations —
+    /// HOST_VISIBLE | HOST_COHERENT, TRANSFER_SRC | TRANSFER_DST |
+    /// STORAGE_BUFFER, chained `VkExternalMemoryBufferCreateInfo::OPAQUE_FD`.
+    /// The probe's `memoryTypeBits` must match the real buffer's or the
+    /// bind fails with VUID-vkBindBufferMemory-memory-01035.
     #[cfg(target_os = "linux")]
-    fn create_opaque_fd_buffer_pool(
+    fn probe_opaque_fd_host_visible_buffer_memory_type_index(
         allocator: &Arc<vma::Allocator>,
-    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
-        // Probe with the same shape `HostVulkanBuffer::new_opaque_fd_export`
-        // will use: HOST_VISIBLE | HOST_COHERENT, TRANSFER_SRC | TRANSFER_DST,
-        // chained `VkExternalMemoryBufferCreateInfo::OPAQUE_FD`. The probe's
-        // memoryTypeBits must match the real buffer's or the bind fails
-        // with VUID-vkBindBufferMemory-memory-01035.
+        host_access_pattern: MappedOpaqueFdBufferHostAccessPattern,
+    ) -> Result<u32> {
         let mut probe_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
         let probe_buffer_info = vk::BufferCreateInfo::builder()
@@ -2266,17 +2364,28 @@ impl HostVulkanDevice {
             .push_next(&mut probe_external_info);
         let probe_alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
-                | vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                | host_access_pattern.vma_allocation_create_flags(),
             required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
         };
-        let mem_type_idx = unsafe {
+        unsafe {
             allocator.find_memory_type_index_for_buffer_info(probe_buffer_info, &probe_alloc_opts)
         }
-        .map_err(|e| Error::GpuError(format!("find memory type for OPAQUE_FD buffer pool: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("find memory type for OPAQUE_FD buffer pool: {e}")))
+    }
 
+    /// Pin a VMA pool chaining `VkExportMemoryAllocateInfo::OPAQUE_FD` to
+    /// `memory_type_index`.
+    ///
+    /// The export info `Box` is returned alongside the pool — callers
+    /// must keep it alive for the pool's entire lifetime (VMA stores
+    /// raw pointers via `pMemoryAllocateNext`).
+    #[cfg(target_os = "linux")]
+    fn create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+        allocator: &Arc<vma::Allocator>,
+        memory_type_index: u32,
+    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
         let mut export_info = Box::new(
             vk::ExportMemoryAllocateInfo::builder()
                 .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
@@ -2284,16 +2393,82 @@ impl HostVulkanDevice {
         );
         let mut pool_options = vma::PoolOptions::default();
         pool_options = pool_options.push_next(export_info.as_mut());
-        pool_options.memory_type_index = mem_type_idx;
+        pool_options.memory_type_index = memory_type_index;
         let pool = allocator
             .create_pool(&pool_options)
             .map_err(|e| Error::GpuError(format!("create OPAQUE_FD buffer pool: {e}")))?;
+        Ok((pool, export_info))
+    }
+
+    /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
+    ///
+    /// Used by CUDA / OpenCL interop: the host allocates from this pool,
+    /// `vkGetMemoryFdKHR` with `OPAQUE_FD` produces a kernel fd, and the
+    /// remote API (`cudaImportExternalMemory` etc.) imports the same
+    /// underlying memory by fd. Sibling of [`Self::create_dma_buf_pools`];
+    /// kept separate because a VMA pool can chain only one
+    /// `VkExportMemoryAllocateInfo` per pool, and OPAQUE_FD vs DMA_BUF_EXT
+    /// are mutually-exclusive handle types.
+    ///
+    /// `HOST_ACCESS_SEQUENTIAL_WRITE` is the right hint for this pool's
+    /// producer-write consumers; the CPU-read sibling is
+    /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
+    #[cfg(target_os = "linux")]
+    fn create_opaque_fd_buffer_pool(
+        allocator: &Arc<vma::Allocator>,
+    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+        let memory_type_index = Self::probe_opaque_fd_host_visible_buffer_memory_type_index(
+            allocator,
+            MappedOpaqueFdBufferHostAccessPattern::SequentialWrite,
+        )?;
+        let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+            allocator,
+            memory_type_index,
+        )?;
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool created — mem_type={}",
-            mem_type_idx
+            memory_type_index
         );
         Ok((pool, export_info))
+    }
+
+    /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE
+    /// buffers on a HOST_CACHED memory type — the CPU-read sibling of
+    /// [`Self::create_opaque_fd_buffer_pool`], whose write-combined memory
+    /// the CPU reads roughly an order of magnitude slower.
+    ///
+    /// `Ok(None)` is the device having no cached exportable type, not a
+    /// failure: `HOST_ACCESS_RANDOM` makes VMA *prefer* HOST_CACHED and
+    /// `vk_mem_alloc.h` is explicit that it "cannot require it", so the
+    /// probe succeeds on a cache-less device and hands back an uncached
+    /// index. Reading the probed index's flags is therefore the detection,
+    /// not a probe error.
+    ///
+    /// HOST_COHERENT stays required: the child-side OPAQUE_FD import binds
+    /// the memory as HOST_VISIBLE | HOST_COHERENT and no flush or
+    /// invalidate exists anywhere on this path.
+    #[cfg(target_os = "linux")]
+    fn create_opaque_fd_buffer_pool_host_cached(
+        allocator: &Arc<vma::Allocator>,
+    ) -> Result<Option<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)>> {
+        let memory_type_index = Self::probe_opaque_fd_host_visible_buffer_memory_type_index(
+            allocator,
+            MappedOpaqueFdBufferHostAccessPattern::Random,
+        )?;
+        if !memory_type_index_is_host_cached(allocator.get_memory_properties(), memory_type_index) {
+            return Ok(None);
+        }
+        let (pool, export_info) = Self::create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
+            allocator,
+            memory_type_index,
+        )?;
+
+        tracing::info!(
+            "OPAQUE_FD VMA buffer pool (HOST_CACHED) created — mem_type={}",
+            memory_type_index
+        );
+        Ok(Some((pool, export_info)))
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
@@ -3466,6 +3641,22 @@ impl HostVulkanDevice {
         self.opaque_fd_buffer_pool.as_ref()
     }
 
+    /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers on
+    /// a HOST_CACHED memory type — the CPU-read sibling of
+    /// [`Self::opaque_fd_buffer_pool`].
+    ///
+    /// `HOST_CACHED` is a VMA *preference*, never a requirement, so this
+    /// is `None` on a device whose probe came back uncached — as well as
+    /// when external memory is unsupported.
+    ///
+    /// `None` is not a refusal:
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`]
+    /// degrades to [`Self::opaque_fd_buffer_pool`].
+    #[cfg(target_os = "linux")]
+    pub fn opaque_fd_buffer_pool_host_cached(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_buffer_pool_host_cached.as_ref()
+    }
+
     /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL buffers
     /// (GPU-resident sibling of [`Self::opaque_fd_buffer_pool`]).
     ///
@@ -3590,6 +3781,7 @@ impl Drop for HostVulkanDevice {
             drop(self.dma_buf_image_pool.take());
             drop(self.dma_buf_image_pool_tiled.take());
             drop(self.opaque_fd_buffer_pool.take());
+            drop(self.opaque_fd_buffer_pool_host_cached.take());
             drop(self.opaque_fd_buffer_pool_device_local.take());
             drop(self.opaque_fd_image_pool.take());
         }
@@ -3602,6 +3794,7 @@ impl Drop for HostVulkanDevice {
             drop(self._dma_buf_image_export_info.take());
             drop(self._dma_buf_image_tiled_export_info.take());
             drop(self._opaque_fd_buffer_export_info.take());
+            drop(self._opaque_fd_buffer_export_info_host_cached.take());
             drop(self._opaque_fd_buffer_export_info_device_local.take());
             drop(self._opaque_fd_image_export_info.take());
         }
@@ -3626,6 +3819,82 @@ unsafe impl Sync for HostVulkanDevice {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a `VkPhysicalDeviceMemoryProperties` whose first
+    /// `property_flags.len()` types carry the given flags.
+    #[cfg(target_os = "linux")]
+    fn memory_properties_with_types(
+        property_flags: &[vk::MemoryPropertyFlags],
+    ) -> vk::PhysicalDeviceMemoryProperties {
+        let mut memory_properties = vk::PhysicalDeviceMemoryProperties {
+            memory_type_count: property_flags.len() as u32,
+            ..Default::default()
+        };
+        for (memory_type, flags) in memory_properties
+            .memory_types
+            .iter_mut()
+            .zip(property_flags.iter())
+        {
+            memory_type.property_flags = *flags;
+        }
+        memory_properties
+    }
+
+    /// The host-cached pool's presence is decided by reading the probed
+    /// index's flags, never by the probe failing: VMA prefers HOST_CACHED
+    /// under `HOST_ACCESS_RANDOM` but cannot require it, so a cache-less
+    /// device answers a *successful* probe with an uncached index.
+    ///
+    /// Mental-revert: return `true` unconditionally and a cache-less
+    /// device pins its readback pool to write-combined memory while
+    /// reporting it cached. Verified.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_device_whose_probed_type_is_not_host_cached_gets_no_host_cached_pool() {
+        let uncached =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let cached = uncached | vk::MemoryPropertyFlags::HOST_CACHED;
+
+        let cache_less_device =
+            memory_properties_with_types(&[vk::MemoryPropertyFlags::DEVICE_LOCAL, uncached]);
+        assert!(
+            !memory_type_index_is_host_cached(&cache_less_device, 1),
+            "a HOST_VISIBLE | HOST_COHERENT type without HOST_CACHED must not pass"
+        );
+
+        let cached_device = memory_properties_with_types(&[
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            uncached,
+            cached,
+        ]);
+        assert!(
+            memory_type_index_is_host_cached(&cached_device, 2),
+            "the cached exportable type must pass"
+        );
+        assert!(
+            !memory_type_index_is_host_cached(&cached_device, 1),
+            "the flags are read at the probed index, not searched for"
+        );
+    }
+
+    /// An index past `memoryTypeCount` names no memory type, so it is
+    /// not cached — the trailing entries of the fixed 32-slot array are
+    /// zeroed padding, never allocatable types.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_memory_type_index_past_the_device_count_is_not_host_cached() {
+        let memory_properties =
+            memory_properties_with_types(&[vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT
+                | vk::MemoryPropertyFlags::HOST_CACHED]);
+        assert!(memory_type_index_is_host_cached(&memory_properties, 0));
+        assert!(!memory_type_index_is_host_cached(&memory_properties, 1));
+        assert!(!memory_type_index_is_host_cached(&memory_properties, 31));
+        assert!(!memory_type_index_is_host_cached(
+            &memory_properties,
+            u32::MAX
+        ));
+    }
 
     /// Try to create a HostVulkanDevice; return None if GPU/Vulkan is unavailable (CI).
     fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
@@ -3843,7 +4112,7 @@ mod tests {
     /// live OPAQUE_FD allocation exists to keep the per-handle-type
     /// kernel state alive (unlike DMA-BUF, which the swapchain
     /// imports). This test asserts the sentinels are present and
-    /// cover both OPAQUE_FD pools when the driver supports them. If
+    /// cover every OPAQUE_FD pool the driver supports. If
     /// `prewarm_export_pools` reverts to dropping its OPAQUE_FD
     /// probes, this test fails — locking the regression at the data-
     /// structure level so CI catches it without needing the manual
@@ -3863,11 +4132,14 @@ mod tests {
         // Build the expected set from which OPAQUE_FD pools the device
         // actually constructed; we can't assert a hardcoded count
         // without overfitting to one driver. The empty set is only
-        // legitimate when neither pool was created (no external memory
+        // legitimate when no pool was created (no external memory
         // support); every other shape is a real assertion.
         let mut expected_labels: Vec<&'static str> = Vec::new();
         if device.opaque_fd_buffer_pool().is_some() {
             expected_labels.push("opaque_fd_host_visible");
+        }
+        if device.opaque_fd_buffer_pool_host_cached().is_some() {
+            expected_labels.push("opaque_fd_host_cached");
         }
         if device.opaque_fd_buffer_pool_device_local().is_some() {
             expected_labels.push("opaque_fd_device_local");

@@ -91,7 +91,10 @@ pub enum SurfaceExportStagingResidency {
     DeviceLocal,
     /// HOST_VISIBLE + HOST_COHERENT — the consumer maps the memory and
     /// reads it with the CPU. The compatibility path, for code that
-    /// speaks host memory only.
+    /// speaks host memory only. Allocated HOST_CACHED where the device
+    /// has a cached exportable type, since every consumer of this
+    /// residency reads the mapping; write-combined memory elsewhere,
+    /// which is slower to read but never unavailable.
     HostVisible,
 }
 
@@ -526,7 +529,10 @@ impl GpuContext {
                 )?
             }
             SurfaceExportStagingResidency::HostVisible => {
-                HostVulkanBuffer::new_opaque_fd_export(vulkan_device, shape.staging_byte_size)?
+                HostVulkanBuffer::new_opaque_fd_export_host_cached(
+                    vulkan_device,
+                    shape.staging_byte_size,
+                )?
             }
         });
         let refill_done_timeline = self.create_exportable_timeline_semaphore(0)?;
@@ -2127,6 +2133,22 @@ mod tests {
             !host_visible.staging_buffer().mapped_ptr().is_null(),
             "the host-visible residency is mapped"
         );
+
+        // Every consumer of this residency reads the mapping, so it must
+        // come off the cached pool wherever the device has one. On a
+        // device without, it degrades to the write-combined pool — slower
+        // to read, never refused, and never a third residency.
+        let vulkan_device = gpu.device().vulkan_device();
+        if vulkan_device.opaque_fd_buffer_pool_host_cached().is_some() {
+            assert_eq!(
+                host_visible
+                    .staging_buffer()
+                    .vma_allocation_is_host_cached(),
+                Some(true),
+                "a device with a cached exportable type must mint the HostVisible \
+                 residency from the cached pool"
+            );
+        }
 
         let host_visible_again = gpu
             .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)

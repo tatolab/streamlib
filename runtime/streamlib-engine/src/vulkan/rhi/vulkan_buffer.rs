@@ -11,6 +11,11 @@ use vulkanalia_vma as vma;
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
+use super::vulkan_device::memory_type_index_is_host_cached;
+// The pattern itself is Linux-only, like every OPAQUE_FD export path; the
+// cached/uncached question it answers is not.
+#[cfg(target_os = "linux")]
+use super::vulkan_device::MappedOpaqueFdBufferHostAccessPattern;
 
 /// Process-global HostVulkanDevice reference for DMA-BUF import.
 ///
@@ -384,6 +389,38 @@ impl HostVulkanBuffer {
         self.size
     }
 
+    /// Whether this buffer's allocation sits on a HOST_CACHED memory
+    /// type — what separates a readback staging a CPU can traverse at
+    /// speed from write-combined memory. `None` for imported buffers,
+    /// which have no VMA allocation here to read.
+    ///
+    /// Callers outside the RHI ask through this rather than reading
+    /// `VkMemoryPropertyFlags` themselves; raw `vulkanalia` stays in the
+    /// RHI.
+    pub fn vma_allocation_is_host_cached(&self) -> Option<bool> {
+        Some(memory_type_index_is_host_cached(
+            self.vulkan_device.allocator().get_memory_properties(),
+            self.vma_allocation_memory_type_index()?,
+        ))
+    }
+
+    /// Memory type index (`vmaGetAllocationInfo().memoryType`) of this
+    /// buffer's allocation — what a conforming consumer-side
+    /// `vkAllocateMemory(VkImportMemoryFdInfoKHR)` must state, since
+    /// OPAQUE_FD has no fd-properties query to derive it from.
+    /// `None` for imported buffers, whose allocation lives on the
+    /// foreign side; never defaulted, because every index including `0`
+    /// is a real value.
+    pub fn vma_allocation_memory_type_index(&self) -> Option<u32> {
+        let allocation = self.allocation?;
+        Some(
+            self.vulkan_device
+                .allocator()
+                .get_allocation_info(allocation)
+                .memoryType,
+        )
+    }
+
     /// Underlying Vulkan buffer handle.
     pub fn buffer(&self) -> vk::Buffer {
         self.buffer
@@ -430,10 +467,68 @@ impl HostVulkanBuffer {
     /// surface only at `vkGetMemoryFdKHR` time.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new_opaque_fd_export(vulkan_device: &Arc<HostVulkanDevice>, size: u64) -> Result<Self> {
+        let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
+            Error::GpuError(
+                "OPAQUE_FD buffer pool unavailable — external memory unsupported \
+                 or pool construction failed; CUDA / OpenCL interop requires this pool"
+                    .into(),
+            )
+        })?;
+        Self::new_opaque_fd_export_from_pool(
+            vulkan_device,
+            size,
+            pool,
+            MappedOpaqueFdBufferHostAccessPattern::SequentialWrite,
+            "HostVulkanBuffer::new_opaque_fd_export",
+        )
+    }
+
+    /// Create a new OPAQUE_FD-exportable HOST_VISIBLE staging buffer on a
+    /// HOST_CACHED memory type, for a consumer that *reads* the mapping.
+    ///
+    /// Same OPAQUE_FD export semantics as [`Self::new_opaque_fd_export`],
+    /// so the check-out and import path is identical; only the memory
+    /// properties differ, and with them how fast a CPU reader traverses
+    /// the mapping.
+    ///
+    /// Degrades to [`Self::new_opaque_fd_export`] on a device with no
+    /// cached exportable memory type rather than refusing: the plan's
+    /// contract is slower there, never unavailable.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
+    pub fn new_opaque_fd_export_host_cached(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        size: u64,
+    ) -> Result<Self> {
+        match vulkan_device.opaque_fd_buffer_pool_host_cached() {
+            Some(pool) => Self::new_opaque_fd_export_from_pool(
+                vulkan_device,
+                size,
+                pool,
+                MappedOpaqueFdBufferHostAccessPattern::Random,
+                "HostVulkanBuffer::new_opaque_fd_export_host_cached",
+            ),
+            None => Self::new_opaque_fd_export(vulkan_device, size),
+        }
+    }
+
+    /// Allocate a mapped OPAQUE_FD-exportable HOST_VISIBLE buffer from
+    /// `pool` under `host_access_pattern`.
+    ///
+    /// `pool` must have been probed with the same `host_access_pattern`
+    /// and the same usage flags: a VMA pool is pinned to one memory type
+    /// index, and a mismatch between the probe's `memoryTypeBits` and
+    /// this buffer's trips VUID-vkBindBufferMemory-memory-01035.
+    fn new_opaque_fd_export_from_pool(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        size: u64,
+        pool: &vma::Pool,
+        host_access_pattern: MappedOpaqueFdBufferHostAccessPattern,
+        constructor_label: &'static str,
+    ) -> Result<Self> {
         if size == 0 {
-            return Err(Error::Configuration(
-                "HostVulkanBuffer::new_opaque_fd_export: size must be > 0".into(),
-            ));
+            return Err(Error::Configuration(format!(
+                "{constructor_label}: size must be > 0"
+            )));
         }
         let size = size as vk::DeviceSize;
 
@@ -453,23 +548,17 @@ impl HostVulkanBuffer {
 
         let alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
-                | vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                | host_access_pattern.vma_allocation_create_flags(),
             required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
         };
 
-        let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
-            Error::GpuError(
-                "OPAQUE_FD buffer pool unavailable — external memory unsupported \
-                 or pool construction failed; CUDA / OpenCL interop requires this pool"
-                    .into(),
-            )
-        })?;
         let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
             .map_err(|e| {
-                Error::GpuError(format!("Failed to create OPAQUE_FD exportable buffer: {e}"))
+                Error::GpuError(format!(
+                    "{constructor_label}: failed to create the OPAQUE_FD exportable buffer: {e}"
+                ))
             })?;
 
         let allocator = vulkan_device.allocator();
@@ -477,10 +566,9 @@ impl HostVulkanBuffer {
         let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
         if mapped_ptr.is_null() {
             unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(Error::GpuError(
-                "VMA OPAQUE_FD staging buffer mapped pointer is null — expected persistent mapping"
-                    .into(),
-            ));
+            return Err(Error::GpuError(format!(
+                "{constructor_label}: VMA mapped pointer is null — expected persistent mapping"
+            )));
         }
 
         Ok(Self {
@@ -1119,6 +1207,175 @@ mod tests {
         println!("DMA-BUF exported: fd={fd}");
         // fd ownership is caller's — close it
         unsafe { libc::close(fd) };
+    }
+
+    /// A host-cached export lands on a HOST_CACHED memory type, or the
+    /// device has no cached exportable type and the pool is absent —
+    /// there is no third outcome, and in particular no refusal.
+    ///
+    /// Mental-revert: point `new_opaque_fd_export_host_cached` at
+    /// `opaque_fd_buffer_pool()` and the flags assertion fails on a rig
+    /// whose cached type differs from its write-combined one. Verified.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_host_cached_export_is_cached_or_the_device_has_no_cached_exportable_type() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_buffer_pool().is_none() {
+            println!("Skipping - OPAQUE_FD buffer pool unavailable on this driver");
+            return;
+        }
+
+        const SIZE: u64 = 128 * 128 * 4;
+        let buffer = HostVulkanBuffer::new_opaque_fd_export_host_cached(&device, SIZE)
+            .expect("a host-cached export must degrade, never refuse");
+        assert_eq!(buffer.size(), SIZE as vk::DeviceSize);
+        assert!(
+            !buffer.mapped_ptr().is_null(),
+            "a host-visible readback staging must be persistently mapped"
+        );
+
+        let memory_type_index = buffer
+            .vma_allocation_memory_type_index()
+            .expect("a VMA-allocated buffer states its memory type index");
+        let flags = device.allocator().get_memory_properties().memory_types
+            [memory_type_index as usize]
+            .property_flags;
+        assert!(
+            flags.contains(
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT
+            ),
+            "the child-side OPAQUE_FD import requires HOST_VISIBLE | HOST_COHERENT and \
+             nothing on this path flushes or invalidates"
+        );
+        if device.opaque_fd_buffer_pool_host_cached().is_some() {
+            assert!(
+                flags.contains(vk::MemoryPropertyFlags::HOST_CACHED),
+                "a device with a cached exportable pool must allocate the readback \
+                 staging from it, not from the write-combined pool"
+            );
+        } else {
+            println!(
+                "Device has no cached exportable memory type — the readback staging \
+                 degrades to the write-combined pool, which is the stated fallback"
+            );
+        }
+
+        let fd = buffer
+            .export_opaque_fd_memory()
+            .expect("a host-cached export is still an OPAQUE_FD export");
+        assert!(fd >= 0, "OPAQUE_FD fd must be non-negative");
+        unsafe { libc::close(fd) };
+    }
+
+    /// The consumer binds the memory type index the exporter states,
+    /// which is the whole point of putting it on the surface-share wire:
+    /// OPAQUE_FD has no fd-properties query, so an importer left to
+    /// search agrees with a host-cached exporter only by coincidence.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_consumer_import_binds_the_stated_memory_type_index_of_a_host_cached_export() {
+        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_buffer_pool().is_none() {
+            println!("Skipping - OPAQUE_FD buffer pool unavailable on this driver");
+            return;
+        }
+        let consumer_device = match ConsumerVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping - ConsumerVulkanDevice unavailable: {e}");
+                return;
+            }
+        };
+
+        const SIZE: u64 = 128 * 128 * 4;
+        const HOST_STAMP: u8 = 0xA7;
+        let exported = HostVulkanBuffer::new_opaque_fd_export_host_cached(&device, SIZE)
+            .expect("host-cached export");
+        unsafe { std::ptr::write_bytes(exported.mapped_ptr(), HOST_STAMP, SIZE as usize) };
+        let stated_memory_type_index = exported
+            .vma_allocation_memory_type_index()
+            .expect("the exporter states its memory type index");
+        let fd = exported.export_opaque_fd_memory().expect("export the fd");
+
+        // fd ownership transfers to the driver on success.
+        let imported = ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &consumer_device,
+            fd,
+            SIZE as vk::DeviceSize,
+            stated_memory_type_index,
+        );
+        // No close on the error arm: the import consumes the fd at its
+        // successful vkAllocateMemory, and the bind and mapping that can
+        // still fail run after it. Closing here would double-close.
+        let imported = imported.unwrap_or_else(|failure| {
+            panic!("a conforming stated-index import must bind: {failure}")
+        });
+
+        let seen = unsafe { std::slice::from_raw_parts(imported.mapped_ptr(), SIZE as usize) };
+        assert!(
+            seen.iter().all(|byte| *byte == HOST_STAMP),
+            "the importer must map the exporter's own memory, not a fresh allocation"
+        );
+    }
+
+    /// An index the imported buffer cannot bind is refused by name
+    /// rather than handed to `vkBindBufferMemory`, which would violate
+    /// VUID-vkBindBufferMemory-memory-01035 inside the driver. The fd is
+    /// never touched on this path, so the caller still owns it.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_stated_memory_type_index_the_importer_cannot_bind_is_refused_by_name() {
+        use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+
+        let consumer_device = match ConsumerVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping - ConsumerVulkanDevice unavailable: {e}");
+                return;
+            }
+        };
+
+        const NOT_A_MEMORY_TYPE_INDEX: u32 = 99;
+        let refusal = match ConsumerVulkanBuffer::from_opaque_fd_at_stated_memory_type_index(
+            &consumer_device,
+            -1,
+            4096,
+            NOT_A_MEMORY_TYPE_INDEX,
+        ) {
+            Ok(_) => panic!("an index past VK_MAX_MEMORY_TYPES binds nothing"),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            refusal.contains("99") && refusal.contains("memoryTypeBits"),
+            "the refusal must name the stated index and what the buffer can bind, \
+             got: {refusal}"
+        );
     }
 
     /// `new_opaque_fd_export` allocates from the OPAQUE_FD pool;

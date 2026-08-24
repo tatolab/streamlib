@@ -71,8 +71,9 @@ provides a live OPAQUE_FD allocation to anchor the kernel state.
 
 `HostVulkanDevice::new()` pre-warms every export-capable VMA pool —
 DMA-BUF buffer, DMA-BUF image linear, DMA-BUF image tiled, OPAQUE_FD
-HOST_VISIBLE buffer, OPAQUE_FD DEVICE_LOCAL buffer, OPAQUE_FD image —
-strictly before any caller can build a `VkSwapchainKHR`.
+HOST_VISIBLE buffer, OPAQUE_FD host-cached buffer, OPAQUE_FD
+DEVICE_LOCAL buffer, OPAQUE_FD image — strictly before any caller can
+build a `VkSwapchainKHR`.
 
 DMA-BUF probes are **allocate-and-drop** through the standard host
 RHI constructors. This still works because the compositor's
@@ -80,18 +81,18 @@ swapchain DMA-BUF imports provide a continuous live consumer for
 the DMA-BUF kernel state.
 
 OPAQUE_FD probes are **retained as long-lived sentinels** on the
-device (`HostVulkanDevice::opaque_fd_export_sentinels`). All three
-sentinels (HOST_VISIBLE buffer, DEVICE_LOCAL buffer, image) are
-intentionally **tiny** (8×8×4 = 256 bytes; the image one allocates an
-`R8G8B8A8_UNORM` `VkImage` with the same byte budget): empirical E2E
-on Cam Link 4K (run during PR `fix/opaque-fd-export-sentinels-637`)
-showed a consumer-resolution buffer sentinel (1920×1080×4 ≈ 8 MiB)
-*deterministically* blocked the consumer's same-size post-swapchain
-allocation, indicating NVIDIA tracks a cumulative byte budget on
-top of the per-handle-type state. Sentinels exist only to pin the
-per-handle-type kernel state, so they must not compete with
-consumer-class allocations. Sentinels are freed in
-`HostVulkanDevice::Drop` before the allocator is torn down.
+device (`HostVulkanDevice::opaque_fd_export_sentinels`). All four
+sentinels (HOST_VISIBLE buffer, host-cached buffer, DEVICE_LOCAL
+buffer, image) are intentionally **tiny** (8×8×4 = 256 bytes; the
+image one allocates an `R8G8B8A8_UNORM` `VkImage` with the same byte
+budget): empirical E2E on Cam Link 4K (run during PR
+`fix/opaque-fd-export-sentinels-637`) showed a consumer-resolution
+buffer sentinel (1920×1080×4 ≈ 8 MiB) *deterministically* blocked the
+consumer's same-size post-swapchain allocation, indicating NVIDIA
+tracks a cumulative byte budget on top of the per-handle-type state.
+Sentinels exist only to pin the per-handle-type kernel state, so they
+must not compete with consumer-class allocations. Sentinels are freed
+in `HostVulkanDevice::Drop` before the allocator is torn down.
 
 **Image-flavored sentinel — provisional retention pending consumer.**
 The OPAQUE_FD image pool ships a matching retained sentinel that

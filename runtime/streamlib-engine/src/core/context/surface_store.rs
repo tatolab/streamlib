@@ -1316,6 +1316,17 @@ impl SurfaceStoreInner {
         format: PixelFormat,
         refill_done: &crate::vulkan::rhi::HostVulkanTimelineSemaphore,
     ) -> Result<()> {
+        // Read ahead of the export so a staging with no allocation to
+        // state fails before an fd is minted. A conforming OPAQUE_FD
+        // import binds the exporter's memory type index
+        // (VUID-VkMemoryAllocateInfo-allocationSize-01742) and OPAQUE_FD
+        // has no fd-properties query to derive it from, so the consumer
+        // has nowhere else to get it.
+        let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
+            staging_buffer.vma_allocation_memory_type_index(),
+            surface_id,
+            "surface-export staging",
+        )?;
         let exported_staging_fd = staging_buffer.export_opaque_fd_memory()?;
         // SAFETY: each export mints a fresh fd this process owns and has
         // handed to no one; adopting it here is what closes it exactly once
@@ -1327,20 +1338,15 @@ impl SurfaceStoreInner {
             refill_done,
         )?;
 
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": surface_id,
-            "runtime_id": self.runtime_id,
-            "width": width,
-            "height": height,
-            "format": format.wire_name(),
-            "resource_type": "pixel_buffer",
-            "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
-            "plane_sizes": [staging_byte_size],
-            "plane_offsets": [0],
-            "has_produce_done_fd": true,
-            "has_consume_done_fd": false,
-        });
+        let request = surface_export_staging_registration_payload(
+            surface_id,
+            &self.runtime_id,
+            staging_byte_size,
+            width,
+            height,
+            format,
+            memory_type_index,
+        );
 
         self.send_surface_share_registration(
             "register_surface_export_staging",
@@ -1429,16 +1435,11 @@ impl SurfaceStoreInner {
             // Raw-handle export contract fields. Both exist by
             // construction here: the OPAQUE_FD memory export above
             // already proved the allocation and its owning device.
-            let memory_type_index = texture
-                .vulkan_inner()
-                .vma_allocation_memory_type_index()
-                .ok_or_else(|| {
-                    Error::GpuError(format!(
-                        "OPAQUE_FD texture registration for {surface_id:?} has no VMA \
-                         allocation to read a memory type index from; a consumer import \
-                         without one binds the wrong memory type instead of failing"
-                    ))
-                })?;
+            let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
+                texture.vulkan_inner().vma_allocation_memory_type_index(),
+                surface_id,
+                "OPAQUE_FD texture registration",
+            )?;
             let exporting_device_uuid = lowercase_hex_of_device_uuid(
                 texture
                     .vulkan_inner()
@@ -2031,6 +2032,61 @@ pub struct SurfaceStore {
 unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
+/// The memory type index an OPAQUE_FD registration must publish, or a
+/// refusal naming what had no allocation to read one from.
+///
+/// One rule for every OPAQUE_FD export: the handle type has no
+/// `vkGetMemoryFdPropertiesKHR` query, so an importer that is not told
+/// the index guesses, and a guess that happens to bind is the two sides
+/// coincidentally landing on the same memory type.
+#[cfg(target_os = "linux")]
+fn memory_type_index_stated_by_an_opaque_fd_export(
+    vma_allocation_memory_type_index: Option<u32>,
+    surface_id: &str,
+    exported_resource_description: &'static str,
+) -> Result<u32> {
+    vma_allocation_memory_type_index.ok_or_else(|| {
+        Error::GpuError(format!(
+            "{exported_resource_description} for {surface_id:?} has no VMA allocation to \
+             read a memory type index from; a consumer import without one binds the wrong \
+             memory type instead of failing"
+        ))
+    })
+}
+
+/// The surface-share registration payload for a CPU-readback export
+/// staging.
+///
+/// `memory_type_index` comes from
+/// [`memory_type_index_stated_by_an_opaque_fd_export`], which is where
+/// the reason it is mandatory is written down.
+#[cfg(target_os = "linux")]
+fn surface_export_staging_registration_payload(
+    surface_id: &str,
+    runtime_id: &str,
+    staging_byte_size: u64,
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    memory_type_index: u32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "op": "register",
+        "surface_id": surface_id,
+        "runtime_id": runtime_id,
+        "width": width,
+        "height": height,
+        "format": format.wire_name(),
+        "resource_type": "pixel_buffer",
+        "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
+        "plane_sizes": [staging_byte_size],
+        "plane_offsets": [0],
+        "has_produce_done_fd": true,
+        "has_consume_done_fd": false,
+        "vk_memory_type_index": memory_type_index,
+    })
+}
+
 /// The register-op payload a DMA-BUF-backed texture publishes.
 ///
 /// Carries the DRM format modifier and per-plane row pitch so the
@@ -2605,6 +2661,62 @@ mod dma_buf_registration_payload_tests {
             Some(VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT),
             "without this, the zero modifier above is indistinguishable on the \
              wire from an image that never carried a modifier at all"
+        );
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod surface_export_staging_registration_payload_tests {
+    use super::*;
+
+    #[test]
+    fn a_staging_registration_states_the_exporters_memory_type_index() {
+        const EXPORTER_MEMORY_TYPE_INDEX: u32 = 4;
+
+        let payload = surface_export_staging_registration_payload(
+            "surface-under-test-hostvisible",
+            "runtime-under-test",
+            64 * 64 * 4,
+            64,
+            64,
+            PixelFormat::Rgba32,
+            EXPORTER_MEMORY_TYPE_INDEX,
+        );
+
+        assert_eq!(
+            payload
+                .get("vk_memory_type_index")
+                .and_then(|value| value.as_u64()),
+            Some(EXPORTER_MEMORY_TYPE_INDEX as u64),
+            "without this the child picks a memory type by first match, which agrees \
+             with a host-cached exporter only by coincidence"
+        );
+        assert_eq!(
+            payload.get("handle_type").and_then(|value| value.as_str()),
+            Some(SURFACE_HANDLE_TYPE_OPAQUE_FD),
+            "the index is only meaningful because this is an OPAQUE_FD registration"
+        );
+    }
+
+    /// Zero is a real memory type index, so it must survive onto the wire
+    /// rather than reading as "absent" the way a defaulted field would.
+    #[test]
+    fn a_staging_registration_states_memory_type_index_zero_rather_than_omitting_it() {
+        let payload = surface_export_staging_registration_payload(
+            "surface-under-test-hostvisible",
+            "runtime-under-test",
+            4096,
+            32,
+            32,
+            PixelFormat::Rgba32,
+            0,
+        );
+        assert_eq!(
+            payload
+                .get("vk_memory_type_index")
+                .and_then(|value| value.as_u64()),
+            Some(0),
         );
     }
 }
