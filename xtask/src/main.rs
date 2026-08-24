@@ -200,6 +200,17 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "bash",
             &["scripts/check-license-headers.sh"],
         ),
+        // The dependency closure's licences, against `deny.toml`'s allowlist.
+        // Not a source-walking gate: those are in-process tree walkers by
+        // contract, and this shells out to a binary that is not part of the
+        // toolchain — `cargo install cargo-deny` if the run reports no such
+        // command. `--workspace` so a crate reached only from a workspace
+        // member nobody builds locally is still in scope.
+        (
+            "cargo deny check licenses",
+            "cargo",
+            &["deny", "--workspace", "check", "licenses"],
+        ),
         (
             "ship-change removed gate tests",
             "bash",
@@ -397,6 +408,7 @@ enum Commands {
     /// Run the gates CI runs, so a green run here predicts a green PR. Builds
     /// the workspace, so it is slower than `check-all-source-gates` alone.
     RunLocalCiGates,
+
 }
 
 fn main() -> Result<()> {

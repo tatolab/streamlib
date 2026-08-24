@@ -1,0 +1,177 @@
+# Licence policy for the whole dependency closure.
+#
+# The wheel is a binary distribution: BSD-3 and MIT require reproducing each
+# copyright notice, and Apache-2.0 §4(d) requires propagating upstream NOTICE
+# contents. `THIRD-PARTY-NOTICES.md` discharges that for the closure as it
+# stands today. This file is what keeps it discharged — a generated notices
+# file rots the moment a dependency lands under terms it does not cover, and
+# nobody regenerates on a dependency bump.
+#
+# So the allowlist is deliberately exhaustive rather than categorical: there is
+# no "permissive licences are fine" rule here, only sixteen named identifiers.
+# A new licence in the graph reds the gate and forces a decision, which is the
+# whole mechanism. Widening the list is that decision, made in a PR.
+#
+# Run by `cargo xtask run-local-ci-gates` and by the `source-gates` workflow.
+# `cargo install cargo-deny` if `cargo deny` is not on PATH.
+
+[graph]
+# No `targets`, so every platform's crates are in scope — a licence must not be
+# able to enter the tree behind a `cfg` the CI host does not build for. No
+# `all-features` either: it regenerates the vendored VMA bindings in place and
+# breaks every later build (see docs/architecture/vendored-vulkanalia.md).
+all-features = false
+
+[licenses]
+# Every identifier below is present in the closure today, and cargo-deny warns
+# on an allowed licence that goes unused — so this list cannot silently grow a
+# permission nobody needs.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "BUSL-1.1",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    # `option-ext`, reached through `dirs` in the Linux closure. MPL-2.0 is
+    # file-level copyleft: the obligation attaches to MPL-licensed files that
+    # have been modified, and we neither modify nor vendor them. Allowed on
+    # that reading, and named here so the reading is visible rather than
+    # inferred from the identifier's presence.
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# askalono's match score below which a licence file is not accepted as evidence
+# of the licence it claims to be. Stricter than cargo-deny's 0.8 default: at 0.8
+# a substantially edited licence file still passes as the licence it resembles,
+# and an edited licence is exactly the case where reading the text matters.
+# Named here rather than left implicit because the clarifications below only
+# make sense against a threshold this file states.
+confidence-threshold = 0.93
+
+# `r-efi` offers `MIT OR Apache-2.0 OR LGPL-2.1-or-later`. That is a choice, not
+# a conjunction, and we take MIT — pinned here so the LGPL arm can never be the
+# one a resolver reports.
+[[licenses.clarify]]
+name = "r-efi"
+expression = "MIT"
+license-files = []
+
+# Our own crates, one entry each.
+#
+# `[workspace.package] license-file = "LICENSE"` points at the BUSL-1.1
+# template with the parameters filled in, and askalono scores that at 0.56
+# against the canonical text — far under the threshold above, so every one of
+# these reads as `unlicensed`. Declaring `license = "BUSL-1.1"` alongside
+# `license-file` is not the fix: cargo then warns `only one of 'license' or
+# 'license-file' is necessary` on every build, and dropping `license-file`
+# would stop cargo copying the parameterized text into each published `.crate`.
+# `licenses.private.ignore` is no shortcut either: of the nineteen it would
+# reach only `xtask`, the one unpublished crate among them.
+#
+# A new workspace crate reds this gate until it is listed. That is the intended
+# cost: the list is also the roster of what ships under our own terms.
+
+[[licenses.clarify]]
+name = "streamlib"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-adapter-cpu-readback"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-adapter-cuda"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-adapter-opengl"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-adapter-skia"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-adapter-vulkan"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-consumer-rhi"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-engine"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-error"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-ipc-types"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-macros"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-media-builtins"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-moq"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-processor-schema"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-surface-adapter"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-surface-client"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "streamlib-test-fixtures"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "vulkan-jpeg"
+expression = "BUSL-1.1"
+license-files = []
+
+[[licenses.clarify]]
+name = "xtask"
+expression = "BUSL-1.1"
+license-files = []
