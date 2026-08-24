@@ -64,14 +64,15 @@ impl ConsumerVulkanBuffer {
     /// Single-FD only: OPAQUE_FD has no multi-plane semantics (CUDA imports
     /// flat memory; multi-plane DMA-BUFs go through [`Self::from_dma_buf_fds`]).
     ///
-    /// fd ownership transfers to the Vulkan driver at the successful
-    /// `vkAllocateMemory` inside this call, not at the call's own
-    /// success: the bind and the mapping run after the import, and this
-    /// frees the imported memory — which closes the fd — before
-    /// returning their failures. Only the refusals raised *before* the
-    /// import leave `fd` with the caller (a zero `allocation_size`, a
-    /// stated index this buffer cannot bind, a failed `create_buffer`).
-    /// A caller that closes `fd` on every error double-closes.
+    /// **Never close `fd` on error.** Ownership transfers to the driver
+    /// at the successful `vkAllocateMemory` inside this call, not at the
+    /// call's own success: every failure up to and including the import
+    /// leaves `fd` with the caller, but the bind and the mapping run
+    /// after it and free the imported memory — which closes the fd —
+    /// before returning. The two groups share error variants, so a caller
+    /// cannot tell them apart; closing on error is therefore a
+    /// double-close on the arms that already handed it over, and the only
+    /// safe rule is to leave it alone.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
@@ -96,9 +97,8 @@ impl ConsumerVulkanBuffer {
     /// refused here by name rather than tripping
     /// VUID-vkBindBufferMemory-memory-01035 inside the driver.
     ///
-    /// Same fd-ownership rule as [`Self::from_opaque_fd`]: the driver
-    /// takes the fd at the import, so only the refusals raised before it
-    /// — this one included — leave `fd` with the caller.
+    /// Same fd-ownership rule as [`Self::from_opaque_fd`]: never close
+    /// `fd` on error.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_opaque_fd_at_stated_memory_type_index(
         vulkan_device: &Arc<ConsumerVulkanDevice>,

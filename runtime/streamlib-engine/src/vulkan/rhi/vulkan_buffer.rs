@@ -11,9 +11,11 @@ use vulkanalia_vma as vma;
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
-use super::vulkan_device::{
-    MappedOpaqueFdBufferHostAccessPattern, memory_type_index_is_host_cached,
-};
+use super::vulkan_device::memory_type_index_is_host_cached;
+// The pattern itself is Linux-only, like every OPAQUE_FD export path; the
+// cached/uncached question it answers is not.
+#[cfg(target_os = "linux")]
+use super::vulkan_device::MappedOpaqueFdBufferHostAccessPattern;
 
 /// Process-global HostVulkanDevice reference for DMA-BUF import.
 ///
@@ -554,7 +556,9 @@ impl HostVulkanBuffer {
 
         let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
             .map_err(|e| {
-                Error::GpuError(format!("Failed to create OPAQUE_FD exportable buffer: {e}"))
+                Error::GpuError(format!(
+                    "{constructor_label}: failed to create the OPAQUE_FD exportable buffer: {e}"
+                ))
             })?;
 
         let allocator = vulkan_device.allocator();
@@ -562,10 +566,9 @@ impl HostVulkanBuffer {
         let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
         if mapped_ptr.is_null() {
             unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(Error::GpuError(
-                "VMA OPAQUE_FD staging buffer mapped pointer is null — expected persistent mapping"
-                    .into(),
-            ));
+            return Err(Error::GpuError(format!(
+                "{constructor_label}: VMA mapped pointer is null — expected persistent mapping"
+            )));
         }
 
         Ok(Self {

@@ -3643,8 +3643,11 @@ impl HostVulkanDevice {
 
     /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers on
     /// a HOST_CACHED memory type — the CPU-read sibling of
-    /// [`Self::opaque_fd_buffer_pool`], built by
-    /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
+    /// [`Self::opaque_fd_buffer_pool`].
+    ///
+    /// `HOST_CACHED` is a VMA *preference*, never a requirement, so this
+    /// is `None` on a device whose probe came back uncached — as well as
+    /// when external memory is unsupported.
     ///
     /// `None` is not a refusal:
     /// [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`]
