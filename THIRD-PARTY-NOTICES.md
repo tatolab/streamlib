@@ -12095,12 +12095,13 @@ the following restrictions:
 
 ## Vendored C++ sources
 
-The engine compiles GLSL at runtime through the `shaderc-sys` crate, which vendors the
-four projects below as sources and links them into `libshaderc_combined.a`. That archive
-is statically linked into the engine, so the wheel distributes their compiled form and
-their terms travel with it. None of the four is a package in the Cargo resolve graph, so
-these sections are appended by `cargo xtask generate-third-party-notices` rather than
-found by `cargo about`.
+The six projects below are compiled into the engine from vendored sources rather than
+linked as Cargo packages, so none of them appears in the resolve graph `cargo about`
+walks — and every one of them ships inside the wheel. shaderc, glslang, SPIRV-Tools and
+SPIRV-Headers arrive through the `shaderc-sys` crate, which links them into
+`libshaderc_combined.a`; VulkanMemoryAllocator and Vulkan-Headers are checked into this
+repository and compiled by `vendor/tatolab-vulkanalia-vma/build.rs`. These sections are
+appended by `cargo xtask generate-third-party-notices`.
 
 ### shaderc (Apache-2.0)
 
@@ -14048,4 +14049,40 @@ the avoidance of doubt, this paragraph does not form part of the
 public licenses.
 
 Creative Commons may be contacted at creativecommons.org.
+````
+
+### VulkanMemoryAllocator (MIT)
+
+Upstream: <https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator>
+
+````text
+Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+````
+
+### Vulkan-Headers (Apache-2.0, whose full text is reproduced above)
+
+Upstream: <https://github.com/KhronosGroup/Vulkan-Headers>
+
+````text
+Copyright 2015-2025 The Khronos Group Inc.
+
+SPDX-License-Identifier: Apache-2.0
 ````

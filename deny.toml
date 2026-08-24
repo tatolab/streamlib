@@ -17,15 +17,22 @@
 
 [graph]
 # No `targets`, so every platform's crates are in scope — a licence must not be
-# able to enter the tree behind a `cfg` the CI host does not build for. No
-# `all-features` either: it regenerates the vendored VMA bindings in place and
-# breaks every later build (see docs/architecture/vendored-vulkanalia.md).
-all-features = false
+# able to enter the tree behind a `cfg` the CI host does not build for. Same
+# reasoning for `all-features`: an optional feature is not a place a licence
+# gets to hide, and turning it on adds five crates here.
+#
+# `--all-features` is banned for *builds* in this repo because it regenerates
+# `vendor/tatolab-vulkanalia-vma/src/vma.rs` in place. It is safe here and only
+# here: cargo-deny compiles nothing, so the flag reaches `cargo metadata`, which
+# runs no build script (verified — the file's hash is unchanged across a run).
+all-features = true
 
 [licenses]
-# Every identifier below is present in the closure today, and cargo-deny warns
-# on an allowed licence that goes unused — so this list cannot silently grow a
-# permission nobody needs.
+# Every identifier below is present in the closure today. Both invocations pass
+# `-D license-not-encountered`, which turns cargo-deny's unused-allowance
+# warning into a failure — so this list cannot grow a permission nobody needs,
+# and cannot keep one after its last user leaves the graph. A warning would not
+# have done that: it exits zero, and nobody reads a green log.
 allow = [
     "0BSD",
     "Apache-2.0",
@@ -75,8 +82,9 @@ license-files = []
 # `license-file` is not the fix: cargo then warns `only one of 'license' or
 # 'license-file' is necessary` on every build, and dropping `license-file`
 # would stop cargo copying the parameterized text into each published `.crate`.
-# `licenses.private.ignore` is no shortcut either: of the nineteen it would
-# reach only `xtask`, the one unpublished crate among them.
+# `licenses.private.ignore` is no shortcut either: of the nineteen it reaches
+# only `xtask` and `streamlib-test-fixtures`, the two that set
+# `publish = false`, and the other seventeen still need an entry apiece.
 #
 # A new workspace crate reds this gate until it is listed. That is the intended
 # cost: the list is also the roster of what ships under our own terms.

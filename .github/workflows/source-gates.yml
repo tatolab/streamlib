@@ -17,7 +17,7 @@ name: Source Gates
 # `cargo deny check licenses` rides along at the end. It is not a source-walking
 # gate — it resolves the dependency graph rather than reading the tree — but it
 # is toolchain-only work that belongs with the other cheap gates rather than in
-# a thirteenth workflow.
+# a ninth workflow.
 #
 # Two things worth keeping in view:
 # - lint-logging deliberately does not shell out to `cargo clippy --workspace`.
@@ -107,5 +107,8 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
 
+      # `-D license-not-encountered` so an allowance whose last user left the
+      # graph fails rather than warns — deny.toml's claim that the list cannot
+      # keep a permission nobody needs is only true because of this flag.
       - name: cargo deny check licenses
-        run: cargo deny --workspace check licenses
+        run: cargo deny --workspace check licenses -D license-not-encountered

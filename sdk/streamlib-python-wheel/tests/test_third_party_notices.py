@@ -18,11 +18,20 @@ from importlib.metadata import distribution
 
 import pytest
 
-# The four C++ projects `shaderc-sys` vendors and links into the engine as
-# `libshaderc_combined.a`. `cargo about` reads `cargo metadata`, and none of
-# these is a package in that graph, so tooling cannot find them — they reach
-# the notices only because the generator appends them by hand.
-VENDORED_CPP_PROJECT_NAMES = ("shaderc", "glslang", "SPIRV-Tools", "SPIRV-Headers")
+# The six C++ projects compiled into the engine from vendored sources. Four
+# arrive through `shaderc-sys` as `libshaderc_combined.a`; VulkanMemoryAllocator
+# and Vulkan-Headers are checked into `vendor/tatolab-vulkanalia-vma/` and
+# compiled by its build script. `cargo about` reads `cargo metadata`, and none
+# of the six is a package in that graph, so tooling cannot find them — they
+# reach the notices only because the generator appends them by hand.
+VENDORED_CPP_PROJECT_NAMES = (
+    "shaderc",
+    "glslang",
+    "SPIRV-Tools",
+    "SPIRV-Headers",
+    "VulkanMemoryAllocator",
+    "Vulkan-Headers",
+)
 
 # A thin sample of the Rust closure, one per link shape: the IPC transport, the
 # binding layer this wheel is built on, and the GLSL compiler that pulled the
@@ -86,6 +95,11 @@ def test_the_shipped_notices_carry_the_vendored_cpp_projects(
     )
     missing = [name for name in VENDORED_CPP_PROJECT_NAMES if name not in contents]
     assert not missing, f"vendored C++ projects absent from the notices: {missing}"
+    # Naming the project is not reproducing its notice — these two carry no
+    # licence file at all, so the copyright line is the only thing that proves
+    # the generator read the header rather than the directory name.
+    assert "Advanced Micro Devices" in contents
+    assert "The Khronos Group Inc" in contents
 
 
 def test_the_shipped_notices_carry_the_rust_closure(installed_streamlib_distribution):

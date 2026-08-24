@@ -1352,22 +1352,7 @@ fn shortest_member_chain_to_engine<'graph>(
 /// that check catches a direct engine dep with precise file:line; this catches
 /// an engine reached through an intermediate workspace crate.
 fn run_trunk_transitive_check(project_root: &Path) -> Result<Vec<TrunkEngineChain>> {
-    let manifest_path = project_root.join("Cargo.toml");
-    let output = std::process::Command::new("cargo")
-        .args(["metadata", "--format-version", "1"])
-        .arg("--manifest-path")
-        .arg(&manifest_path)
-        .output()
-        .with_context(|| format!("running cargo metadata at {}", manifest_path.display()))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cargo metadata failed at {}: {}",
-            manifest_path.display(),
-            String::from_utf8_lossy(&output.stderr).trim(),
-        );
-    }
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("parsing cargo metadata JSON")?;
+    let metadata = crate::run_cargo_metadata_resolve_document(project_root)?;
     let graph = NormalBuildDepGraph::from_metadata(&metadata)?;
     Ok(find_trunk_engine_chains(&graph))
 }
