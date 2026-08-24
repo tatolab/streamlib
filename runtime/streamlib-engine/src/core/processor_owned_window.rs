@@ -17,7 +17,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::thread::{JoinHandle, Thread};
 use std::time::Duration;
 
 use winit::window::Window;
@@ -478,7 +478,13 @@ pub struct WindowPresentLoopForOwningProcessor {
         Arc<Mutex<CoalescedProcessorOwnedWindowStateForOwningProcessor>>,
     frames_composed_and_presented: Arc<AtomicU64>,
     present_loop_keeps_running: Arc<AtomicBool>,
-    present_loop_thread: Option<JoinHandle<()>>,
+    /// Held separately from the join handle so naming a surface can unpark
+    /// the loop without taking the lock the join needs.
+    present_loop_thread_for_unparking: Thread,
+    /// `None` once the thread has been joined, which is what makes closing
+    /// idempotent — a window closed by its owner and one closed by a user
+    /// gesture both end here.
+    present_loop_thread_awaiting_its_join: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl WindowPresentLoopForOwningProcessor {
@@ -525,7 +531,8 @@ impl WindowPresentLoopForOwningProcessor {
             coalesced_state_for_the_owning_processor,
             frames_composed_and_presented,
             present_loop_keeps_running,
-            present_loop_thread: Some(present_loop_thread),
+            present_loop_thread_for_unparking: present_loop_thread.thread().clone(),
+            present_loop_thread_awaiting_its_join: Mutex::new(Some(present_loop_thread)),
         }
     }
 
@@ -539,9 +546,7 @@ impl WindowPresentLoopForOwningProcessor {
             .latest_surface_named_by_the_owning_processor
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(named_surface);
-        if let Some(present_loop_thread) = self.present_loop_thread.as_ref() {
-            present_loop_thread.thread().unpark();
-        }
+        self.present_loop_thread_for_unparking.unpark();
     }
 
     /// Hand the owner its window's coalesced state and clear what a drain
@@ -571,19 +576,35 @@ impl WindowPresentLoopForOwningProcessor {
     pub fn frames_composed_and_presented(&self) -> u64 {
         self.frames_composed_and_presented.load(Ordering::Relaxed)
     }
-}
 
-impl Drop for WindowPresentLoopForOwningProcessor {
-    fn drop(&mut self) {
+    /// Stop the loop and wait for its thread, which is what closes the
+    /// window: the thread owns the pump registration, and dropping that
+    /// registration is the close.
+    ///
+    /// Idempotent — a window the user already closed has no thread left to
+    /// join, so an owner's explicit close and processor teardown both land
+    /// here and both leave the window reporting closed.
+    pub fn close_the_window_and_join_its_present_thread(&self) {
         self.present_loop_keeps_running
             .store(false, Ordering::Release);
-        let Some(present_loop_thread) = self.present_loop_thread.take() else {
+        let present_loop_thread = self
+            .present_loop_thread_awaiting_its_join
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(present_loop_thread) = present_loop_thread else {
             return;
         };
         present_loop_thread.thread().unpark();
         if present_loop_thread.join().is_err() {
             tracing::error!("processor-owned window: the present thread panicked");
         }
+    }
+}
+
+impl Drop for WindowPresentLoopForOwningProcessor {
+    fn drop(&mut self) {
+        self.close_the_window_and_join_its_present_thread();
     }
 }
 

@@ -166,9 +166,12 @@ pub(crate) struct EscalateRequestCloseProcessorOwnedWindow {
     pub(crate) request_id: String,
 
     /// The window to release, as `create_processor_owned_window` named it.
-    /// Closing a window already closed by a user gesture is not an error —
-    /// the op is the owner's explicit release, and processor teardown
-    /// releases every window this helper still holds either way.
+    ///
+    /// Closing a window already closed by a user gesture is not an error, and
+    /// the id stays this processor's — closed — until teardown, which
+    /// releases every window the helper still holds either way. So
+    /// `show_surface_on_processor_owned_window` after a close is the same
+    /// no-op reporting closed however the window closed.
     pub(crate) window_id: String,
 }
 
