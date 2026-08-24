@@ -165,11 +165,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   scope, rebased onto the cast object: it edits a staging, the block edge is the
   publication point, the engine orders the write-back ahead of its own next read,
   and leaving by a propagating exception discards the write without suppressing the
-  exception. `cpu()`'s array, where writable, is the surface's own coherent host
-  mapping — no staging between a store and the frame — so publication is per store
-  rather than at an edge, and a raise mid-edit leaves a complete edit of fewer
-  pixels, never a torn frame; the block edge still ends the write intent, and the
-  raise is never suppressed.
+  exception. `cpu()`'s array follows its backing: over a pixel-buffer frame it is
+  the surface's own coherent host mapping — no staging between a store and the
+  frame — so publication is per store, and a raise mid-edit leaves a complete edit
+  of fewer pixels; over a texture backing it is the surface's host-visible export
+  staging, publishing at the block edge and discarding on a propagating raise
+  (§Graphics states the staged door). Across both, the block edge ends the write
+  intent, a raise never suppresses, and no door publishes a torn frame.
   The wheel ships the protocol as one public composable piece any cast type composes,
   over the unchanged claim seam — `VideoFrame` is itself built from it, which is the
   proof it holds no privileged position over any library or user cast type. The bare
@@ -178,7 +180,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   through that surface's own protocol object. `cpu()` yields a numpy array writable
   exactly when the frame can take a write-back.
   Wheel-layer grammar only over the shipped staging, export and escalate
-  primitives — no engine change. [cast-object-tensor-protocol]
+  primitives — no engine change. [cast-object-tensor-protocol;
+  texture-backed-cpu-reach — the staged cpu() arm]
 
 ## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
 
@@ -314,7 +317,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   than at the `raise`, so the engine keeps the complete frame it already holds and lets
   the exception propagate — one rule for both device-write scopes, the CPU pixel-buffer
   scope included (the surface handle's scope and its pending *device* write —
-  distinct from the cast object's `cpu()`, whose host stores publish per store;
+  distinct from the cast object's `cpu()`, whose coherent-mapped stores publish per
+  store; its staged arm over a texture backing follows this same discard rule —
   see the cast-object entry in §Packages), and discarding never suppresses the
   exception. A write-back is always
   an edit of a frame the processor read, never a fresh-frame write: the engine refuses
@@ -332,6 +336,27 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_discards_the_write -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
+- **DECIDED** — CPU reach into a texture-backed surface goes through the same doors
+  as every surface — the cast object's `cpu()`, the surface handle's CPU lock and
+  `as_numpy()` — routed over the surface's host-visible export staging; no separate
+  readback vocabulary, and no door names the backing. The helper child checks out
+  and maps that staging itself; pixel bytes never cross the escalate socket.
+  Entering the staged CPU door always reads the current frame in — a pure write
+  included, which is what makes its write-back legal — and a writable staged array
+  publishes at the block edge, ordered ahead of the engine's next read; leaving by
+  a propagating exception discards the edit without suppressing the exception. The
+  door's one contract across both backings: a raise leaves the frame the engine
+  already held or a complete edit of fewer pixels, never a torn frame — which of
+  the two is the backing's own, and code that must not publish on failure edits
+  outside the scope. Every staging copy blocks: `contended` reaches no author, and
+  the unconsumed non-blocking surface — the `try_run_cpu_readback_copy` wire op,
+  the `contended` response variant, and the engine's `try_`-prefixed staging
+  copies — is deleted. The readback staging allocates host-cached from a third
+  OPAQUE_FD pool (probed HOST_ACCESS_RANDOM), falling back to the sequential-write
+  pool on a device with no cached exportable memory type — slower there, never
+  refused. Python's `acquire_texture` implies `copy_src` and `copy_dst`; Rust's
+  descriptor stays explicit; a texture whose usage still cannot take the copy
+  refuses the door by name. [texture-backed-cpu-reach]
 - **DECIDED** — Python spells a kernel as an object: constructed in `setup()` where the
   capability typestate is Full, dispatched per frame in `process()`. Construction is
   registration and dispatch is a method call; no kernel handle string reaches Python.
