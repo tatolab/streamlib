@@ -68,11 +68,9 @@ pub fn list_repository_files_under(
 /// Run `cargo metadata` for the workspace rooted at `manifest_dir` and return
 /// the parsed resolve document.
 ///
-/// One copy, because its callers must move together: the `--format-version 1`
-/// schema, the lock discipline and the failure wording are each things a change
-/// would have to apply to both. `--locked` for the reason every other cargo
-/// invocation here carries it — a gate that rewrites `Cargo.lock` as a side
-/// effect of reading the graph reports on a graph the commit does not contain.
+/// `--locked` for the reason every other cargo invocation here carries it: a
+/// gate that rewrites `Cargo.lock` as a side effect of reading the graph
+/// reports on a graph the commit does not contain.
 pub fn run_cargo_metadata_resolve_document(manifest_dir: &Path) -> Result<serde_json::Value> {
     let manifest_path = manifest_dir.join("Cargo.toml");
     let output = std::process::Command::new("cargo")
@@ -297,10 +295,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
         // contract, and this shells out to a binary that is not part of the
         // toolchain — `cargo install cargo-deny@0.20.2 --locked` if the run
         // reports no such command, matching the version `source-gates.yml`
-        // pins. `--workspace` so a crate reached only from a workspace member
-        // nobody builds locally is still in scope, and
-        // `-D license-not-encountered` so an allowance whose last user left the
-        // graph fails rather than warns.
+        // pins. `--locked` because cargo-deny will otherwise rewrite
+        // `Cargo.lock` to resolve the graph and then report on the rewrite.
+        // `--workspace` so a crate reached only from a workspace member nobody
+        // builds locally is still in scope, and `-D license-not-encountered` so
+        // an allowance whose last user left the graph fails rather than warns.
         //
         // Last, like CI runs it: it is the only entry here that resolves the
         // whole dependency graph, so a failure in it cannot cost the others
@@ -310,6 +309,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "cargo",
             &[
                 "deny",
+                "--locked",
                 "--workspace",
                 "check",
                 "licenses",
@@ -452,12 +452,14 @@ enum Commands {
     RunLocalCiGates,
 
     /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
-    /// via `cargo about generate`, plus the four C++ projects `shaderc-sys`
-    /// vendors and links into the engine, which are not packages in the Cargo
-    /// resolve graph and so reach the file only by being appended. Needs
-    /// `cargo-about` installed and the network, which is why it is a command
-    /// and not a gate; `cargo deny check licenses` is the half that runs on
-    /// every PR. See [`generate_third_party_notices`].
+    /// via `cargo about generate`, plus the six vendored C++ projects that are
+    /// not packages in the Cargo resolve graph and so reach the file only by
+    /// being appended: shaderc, glslang, SPIRV-Tools and SPIRV-Headers through
+    /// the `shaderc-sys` crate, and VulkanMemoryAllocator and Vulkan-Headers
+    /// out of `vendor/tatolab-vulkanalia-vma/`. Needs `cargo-about` installed
+    /// and the network, which is why it is a command and not a gate;
+    /// `cargo deny check licenses` is the half that runs on every PR. See
+    /// [`generate_third_party_notices`].
     GenerateThirdPartyNotices,
 }
 

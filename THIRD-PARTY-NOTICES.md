@@ -1,8 +1,11 @@
 # Third-party notices
 
 StreamLib distributes third-party code. This file reproduces each dependency's
-copyright notice and licence text, as BSD-3 and MIT require of a binary
-distribution and as Apache-2.0 §4(d) requires of upstream `NOTICE` contents.
+copyright notice and licence text as of its last regeneration, as BSD-3 and MIT
+require of a binary distribution and as Apache-2.0 §4(d) requires of upstream
+`NOTICE` contents. Regeneration is a manual step, so a dependency added since
+then may not be listed — please report one rather than assume it was excluded
+deliberately.
 
 Scope is the whole workspace's dependency closure across every target, which is
 a superset of what any one artifact links — the wheel ships this file entire
@@ -12095,13 +12098,13 @@ the following restrictions:
 
 ## Vendored C++ sources
 
-The six projects below are compiled into the engine from vendored sources rather than
+The projects below are compiled into the engine from vendored sources rather than
 linked as Cargo packages, so none of them appears in the resolve graph `cargo about`
-walks — and every one of them ships inside the wheel. shaderc, glslang, SPIRV-Tools and
-SPIRV-Headers arrive through the `shaderc-sys` crate, which links them into
-`libshaderc_combined.a`; VulkanMemoryAllocator and Vulkan-Headers are checked into this
-repository and compiled by `vendor/tatolab-vulkanalia-vma/build.rs`. These sections are
-appended by `cargo xtask generate-third-party-notices`.
+walks — and every one of them ships inside the wheel. These sections are appended by
+`cargo xtask generate-third-party-notices`.
+
+- Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: shaderc, glslang, SPIRV-Tools and SPIRV-Headers
+- Checked into this repository, compiled by `vendor/tatolab-vulkanalia-vma/build.rs`: VulkanMemoryAllocator and Vulkan-Headers
 
 ### shaderc (Apache-2.0)
 

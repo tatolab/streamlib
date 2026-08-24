@@ -1,7 +1,9 @@
 # What `cargo about generate` puts in THIRD-PARTY-NOTICES.md.
 #
 # Driven by `cargo xtask generate-third-party-notices`, which also appends the
-# four vendored C++ projects this tool structurally cannot see. Not run in CI:
+# six vendored C++ projects this tool structurally cannot see — four extracted
+# by the `shaderc-sys` crate, two checked into `vendor/tatolab-vulkanalia-vma/`.
+# None of them is a package in the resolve graph, and all six ship in the wheel. Not run in CI:
 # it needs `cargo-about` installed and reaches the network for crates that ship
 # no licence file of their own. The gate that runs on every PR is
 # `cargo deny check licenses` (deny.toml) — that one is the durable half.

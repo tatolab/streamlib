@@ -2,10 +2,16 @@
 #
 # The wheel is a binary distribution: BSD-3 and MIT require reproducing each
 # copyright notice, and Apache-2.0 §4(d) requires propagating upstream NOTICE
-# contents. `THIRD-PARTY-NOTICES.md` discharges that for the closure as it
-# stands today. This file is what keeps it discharged — a generated notices
-# file rots the moment a dependency lands under terms it does not cover, and
-# nobody regenerates on a dependency bump.
+# contents. `THIRD-PARTY-NOTICES.md` discharges that for the closure as it stood
+# at its last regeneration.
+#
+# What this file keeps true is narrower than that, and the difference matters:
+# it refuses a licence the notices could not cover, and nothing else. A crate
+# arriving under a licence already on the list — one more MIT dependency —
+# leaves this gate green while its copyright line is absent from the notices,
+# until someone runs `cargo xtask generate-third-party-notices`. Closing that
+# gap needs a name-level drift check against the notices, which does not exist
+# yet; regenerate on a dependency bump until it does.
 #
 # So the allowlist is deliberately exhaustive rather than categorical: there is
 # no "permissive licences are fine" rule here, only sixteen named identifiers.

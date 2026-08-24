@@ -28,6 +28,13 @@
 //! check that runs on every pull request is `cargo deny check licenses` —
 //! a generated file rots, and the gate is what stops a licence outside the
 //! allowlist landing quietly in between regenerations.
+//!
+//! `cargo about`'s own `--fail` is not the backstop and is not passed: the
+//! workspace's sixteen publishable crates carry `license-file` rather than an
+//! SPDX `license`, so it would fail every run. A dependency whose expression
+//! cannot be synthesised is warned about here and omitted from the output; what
+//! refuses it is `cargo deny check licenses`, which reads the same crate as
+//! `unlicensed`.
 
 use anyhow::{Context, Result};
 use std::fmt::Write as _;
@@ -36,7 +43,7 @@ use std::path::{Path, PathBuf};
 /// Generated at the workspace root, and reached from the wheel and the SDK
 /// crate by symlink so that both ship this exact text rather than a copy that
 /// can drift from it.
-pub const THIRD_PARTY_NOTICES_FILE_NAME: &str = "THIRD-PARTY-NOTICES.md";
+const THIRD_PARTY_NOTICES_FILE_NAME: &str = "THIRD-PARTY-NOTICES.md";
 
 /// The handlebars template `cargo about generate` renders. Alongside
 /// `about.toml`, which is the config it discovers by convention.
@@ -54,11 +61,26 @@ const SHADERC_VENDORED_SOURCES_DIR_NAME: &str = "build";
 /// `shaderc-sys` ships a licence file per project, and the trees the vulkanalia
 /// VMA fork vendors ship none.
 enum VendoredCppNoticeSource {
-    /// A licence file under `<shaderc-sys>/build/`, reproduced whole.
-    ShadercSysLicenseFile(&'static str),
-    /// The comment block heading a workspace-relative source file — the only
-    /// place these projects state their copyright.
-    LeadingCommentBlockOf(&'static str),
+    /// A licence file, reproduced whole.
+    ShadercSysLicenseFile {
+        path_relative_to_shaderc_sys_build_dir: &'static str,
+    },
+    /// The comment block heading a header — the only place these projects state
+    /// their copyright.
+    LeadingCommentBlockOf {
+        header_path_relative_to_workspace_root: &'static str,
+    },
+}
+
+/// The two trees the notices are read out of, resolved once per run.
+///
+/// One argument rather than two adjacent `&Path`s: they are the same type, and
+/// a transposition would compile clean and reproduce the wrong file's text.
+struct VendoredCppSourceTrees {
+    /// `<shaderc-sys>/build/`, in the cargo registry checkout.
+    shaderc_sys_vendored_sources_dir: PathBuf,
+    /// This repository's root, which `vendor/tatolab-vulkanalia-vma/` hangs off.
+    workspace_root: PathBuf,
 }
 
 /// One C++ project compiled into the engine, with the notice that has to travel
@@ -79,7 +101,9 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         display_name: "shaderc",
         upstream_repository_url: "https://github.com/google/shaderc",
         license_summary: "Apache-2.0",
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile("shaderc/LICENSE"),
+        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
+            path_relative_to_shaderc_sys_build_dir: "shaderc/LICENSE",
+        },
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "glslang",
@@ -88,27 +112,33 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         // `LICENSE.txt`, where the other three are `LICENSE`. Spelled out per
         // project rather than globbed for exactly this reason: a glob hides the
         // asymmetry, and hiding it is how a rename becomes a dropped notice.
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile("glslang/LICENSE.txt"),
+        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
+            path_relative_to_shaderc_sys_build_dir: "glslang/LICENSE.txt",
+        },
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "SPIRV-Tools",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Tools",
         license_summary: "Apache-2.0",
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile("spirv-tools/LICENSE"),
+        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
+            path_relative_to_shaderc_sys_build_dir: "spirv-tools/LICENSE",
+        },
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "SPIRV-Headers",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Headers",
         license_summary: "MIT, with an Apache-2.0 carve-out the file names",
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile("spirv-headers/LICENSE"),
+        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
+            path_relative_to_shaderc_sys_build_dir: "spirv-headers/LICENSE",
+        },
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "VulkanMemoryAllocator",
         upstream_repository_url: "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
         license_summary: "MIT",
-        notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf(
-            "vendor/tatolab-vulkanalia-vma/vendor/VulkanMemoryAllocator/include/vk_mem_alloc.h",
-        ),
+        notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
+            header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/VulkanMemoryAllocator/include/vk_mem_alloc.h",
+        },
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "Vulkan-Headers",
@@ -117,22 +147,22 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         // the notice below is the copyright line and the Apache-2.0 text it
         // points at is the one reproduced in full under "Apache License 2.0".
         license_summary: "Apache-2.0, whose full text is reproduced above",
-        notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf(
-            "vendor/tatolab-vulkanalia-vma/vendor/Vulkan-Headers/include/vulkan/vulkan_core.h",
-        ),
+        notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
+            header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/Vulkan-Headers/include/vulkan/vulkan_core.h",
+        },
     },
 ];
 
 /// Regenerate the notices file at the workspace root.
 pub fn run(workspace_root: &Path) -> Result<()> {
     let mut notices = run_cargo_about_generate(workspace_root)?;
-    let shaderc_sys_vendored_sources_dir = locate_shaderc_sys_vendored_sources_dir(workspace_root)?;
+    let source_trees = VendoredCppSourceTrees {
+        shaderc_sys_vendored_sources_dir: locate_shaderc_sys_vendored_sources_dir(workspace_root)?,
+        workspace_root: workspace_root.to_path_buf(),
+    };
 
     notices.push('\n');
-    notices.push_str(&render_vendored_cpp_appendix(
-        &shaderc_sys_vendored_sources_dir,
-        workspace_root,
-    )?);
+    notices.push_str(&render_vendored_cpp_appendix(&source_trees)?);
 
     let notices_path = workspace_root.join(THIRD_PARTY_NOTICES_FILE_NAME);
     std::fs::write(&notices_path, notices)
@@ -231,27 +261,38 @@ fn shaderc_sys_vendored_sources_dir_in(metadata: &serde_json::Value) -> Result<P
 ///
 /// A missing or unreadable notice is an error, never an omitted section. The
 /// failure mode this guards is a dependency bump or a re-vendor that renames or
-/// moves one of the six — silently shipping the binary without its terms is the
-/// one outcome worse than a red build.
-fn render_vendored_cpp_appendix(
-    shaderc_sys_vendored_sources_dir: &Path,
-    workspace_root: &Path,
-) -> Result<String> {
-    let mut appendix = String::from(
+/// moves one of the trees — silently shipping the binary without its terms is
+/// the one outcome worse than a red build.
+fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result<String> {
+    let mut appendix = String::new();
+    // The two rosters come off the table, and no count is stated at all. This
+    // paragraph ships inside a legal notice: a seventh project must not be able
+    // to leave it enumerating six with every test still green, and a number
+    // nobody wrote down is a number that cannot go stale.
+    write!(
+        appendix,
         "## Vendored C++ sources\n\
          \n\
-         The six projects below are compiled into the engine from vendored sources rather than\n\
+         The projects below are compiled into the engine from vendored sources rather than\n\
          linked as Cargo packages, so none of them appears in the resolve graph `cargo about`\n\
-         walks — and every one of them ships inside the wheel. shaderc, glslang, SPIRV-Tools and\n\
-         SPIRV-Headers arrive through the `shaderc-sys` crate, which links them into\n\
-         `libshaderc_combined.a`; VulkanMemoryAllocator and Vulkan-Headers are checked into this\n\
-         repository and compiled by `vendor/tatolab-vulkanalia-vma/build.rs`. These sections are\n\
-         appended by `cargo xtask generate-third-party-notices`.\n",
-    );
+         walks — and every one of them ships inside the wheel. These sections are appended by\n\
+         `cargo xtask generate-third-party-notices`.\n\
+         \n\
+         - Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: {}\n\
+         - Checked into this repository, compiled by \
+         `vendor/tatolab-vulkanalia-vma/build.rs`: {}\n",
+        joined_project_names(|source| matches!(
+            source,
+            VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
+        )),
+        joined_project_names(|source| matches!(
+            source,
+            VendoredCppNoticeSource::LeadingCommentBlockOf { .. }
+        )),
+    )?;
 
     for project in VENDORED_CPP_PROJECTS {
-        let notice =
-            read_vendored_cpp_notice(project, shaderc_sys_vendored_sources_dir, workspace_root)?;
+        let notice = read_vendored_cpp_notice(project, source_trees)?;
         write!(
             appendix,
             "\n### {} ({})\n\nUpstream: <{}>\n\n````text\n{}\n````\n",
@@ -259,27 +300,49 @@ fn render_vendored_cpp_appendix(
             project.license_summary,
             project.upstream_repository_url,
             notice.trim_end(),
-        )
-        .expect("writing to a String never fails");
+        )?;
     }
 
     Ok(appendix)
 }
 
+/// The display names of every project whose notice comes from a matching
+/// source, as an English list the surrounding sentence can take.
+fn joined_project_names(matches_source: impl Fn(&VendoredCppNoticeSource) -> bool) -> String {
+    let names: Vec<&str> = VENDORED_CPP_PROJECTS
+        .iter()
+        .filter(|project| matches_source(&project.notice_source))
+        .map(|project| project.display_name)
+        .collect();
+
+    match names.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, leading)) => format!("{} and {last}", leading.join(", ")),
+    }
+}
+
 /// Read one project's notice text from whichever tree holds it.
 fn read_vendored_cpp_notice(
     project: &VendoredCppProjectLinkedIntoTheEngine,
-    shaderc_sys_vendored_sources_dir: &Path,
-    workspace_root: &Path,
+    source_trees: &VendoredCppSourceTrees,
 ) -> Result<String> {
     let (path, notice) = match project.notice_source {
-        VendoredCppNoticeSource::ShadercSysLicenseFile(relative_path) => {
-            let path = shaderc_sys_vendored_sources_dir.join(relative_path);
+        VendoredCppNoticeSource::ShadercSysLicenseFile {
+            path_relative_to_shaderc_sys_build_dir,
+        } => {
+            let path = source_trees
+                .shaderc_sys_vendored_sources_dir
+                .join(path_relative_to_shaderc_sys_build_dir);
             let text = read_notice_file(&path, project.display_name)?;
             (path, text)
         }
-        VendoredCppNoticeSource::LeadingCommentBlockOf(relative_path) => {
-            let path = workspace_root.join(relative_path);
+        VendoredCppNoticeSource::LeadingCommentBlockOf {
+            header_path_relative_to_workspace_root,
+        } => {
+            let path = source_trees
+                .workspace_root
+                .join(header_path_relative_to_workspace_root);
             let source = read_notice_file(&path, project.display_name)?;
             let text = leading_comment_block_notice(&source).with_context(|| {
                 format!(
@@ -316,7 +379,9 @@ fn read_notice_file(path: &Path, display_name: &str) -> Result<String> {
 /// Not a C parser: it takes the first `//` run or `/* … */` block, skipping
 /// blank lines and preprocessor directives, which is where both of these trees
 /// state their copyright — VulkanMemoryAllocator opens the file with it, and
-/// Vulkan-Headers puts it after the include guard.
+/// Vulkan-Headers puts it after the include guard. Each branch strips only its
+/// own markers, so a `*` that is bullet text rather than a block-comment rail
+/// survives the line-comment shape.
 fn leading_comment_block_notice(source: &str) -> Result<String> {
     let mut lines = source
         .lines()
@@ -327,21 +392,30 @@ fn leading_comment_block_notice(source: &str) -> Result<String> {
         .peek()
         .context("the file holds no comment block at all")?;
 
-    let block: Vec<&str> = if first.trim_start().starts_with("//") {
+    let notice_lines: Vec<String> = if first.trim_start().starts_with("//") {
         lines
             .take_while(|line| line.trim_start().starts_with("//"))
+            .map(|line| line.trim().trim_start_matches("//").trim().to_owned())
             .collect()
     } else if first.trim_start().starts_with("/*") {
         let mut collected = Vec::new();
+        let mut block_comment_is_closed = false;
         for line in lines {
-            let terminates = line.contains("*/");
-            collected.push(line);
-            if terminates {
+            block_comment_is_closed = line.contains("*/");
+            collected.push(
+                line.trim()
+                    .trim_start_matches("/*")
+                    .trim_end_matches("*/")
+                    .trim_start_matches('*')
+                    .trim()
+                    .to_owned(),
+            );
+            if block_comment_is_closed {
                 break;
             }
         }
         anyhow::ensure!(
-            collected.last().is_some_and(|line| line.contains("*/")),
+            block_comment_is_closed,
             "the leading block comment is never closed"
         );
         collected
@@ -349,20 +423,7 @@ fn leading_comment_block_notice(source: &str) -> Result<String> {
         anyhow::bail!("the first non-directive line is not a comment: {first:?}");
     };
 
-    Ok(block
-        .iter()
-        .map(|line| {
-            line.trim()
-                .trim_start_matches("//")
-                .trim_start_matches("/*")
-                .trim_end_matches("*/")
-                .trim_start_matches('*')
-                .trim()
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_owned())
+    Ok(notice_lines.join("\n").trim().to_owned())
 }
 
 #[cfg(test)]
@@ -381,16 +442,21 @@ mod tests {
     }
 
     /// A stand-in for `<shaderc-sys>/build/` holding every licence file the
-    /// four shaderc-side projects declare, each naming the project it covers.
-    fn shaderc_sys_sources_fixture() -> TempDir {
+    /// shaderc-side projects declare, each naming the project it covers.
+    ///
+    /// Paired with the real workspace root, so the comment-block projects read
+    /// the actual vendored headers — `check-vendored-vulkanalia` hashes those
+    /// trees, so a re-vendor that drops a copyright line fails here.
+    fn vendored_cpp_source_trees_fixture() -> (TempDir, VendoredCppSourceTrees) {
         let fixture = TempDir::new().expect("temp dir");
         for project in VENDORED_CPP_PROJECTS {
-            let VendoredCppNoticeSource::ShadercSysLicenseFile(relative_path) =
-                project.notice_source
+            let VendoredCppNoticeSource::ShadercSysLicenseFile {
+                path_relative_to_shaderc_sys_build_dir,
+            } = project.notice_source
             else {
                 continue;
             };
-            let path = fixture.path().join(relative_path);
+            let path = fixture.path().join(path_relative_to_shaderc_sys_build_dir);
             fs::create_dir_all(path.parent().expect("a licence file sits in a directory"))
                 .expect("fixture dir");
             fs::write(
@@ -399,17 +465,17 @@ mod tests {
             )
             .expect("fixture licence file");
         }
-        fixture
+        let source_trees = VendoredCppSourceTrees {
+            shaderc_sys_vendored_sources_dir: fixture.path().to_path_buf(),
+            workspace_root: workspace_root(),
+        };
+        (fixture, source_trees)
     }
 
     #[test]
     fn the_appendix_reproduces_every_vendored_project_verbatim() {
-        let fixture = shaderc_sys_sources_fixture();
-        // The two comment-block projects read the real vendored headers, which
-        // `check-vendored-vulkanalia` pins byte-for-byte — so this also fails
-        // if a re-vendor drops their copyright line.
-        let appendix =
-            render_vendored_cpp_appendix(fixture.path(), &workspace_root()).expect("render");
+        let (_fixture, source_trees) = vendored_cpp_source_trees_fixture();
+        let appendix = render_vendored_cpp_appendix(&source_trees).expect("render");
 
         for project in VENDORED_CPP_PROJECTS {
             assert!(
@@ -429,18 +495,21 @@ mod tests {
 
     #[test]
     fn a_moved_licence_file_fails_the_render_naming_the_project() {
-        let fixture = shaderc_sys_sources_fixture();
+        let (fixture, source_trees) = vendored_cpp_source_trees_fixture();
         let moved = VENDORED_CPP_PROJECTS
             .iter()
             .find(|project| project.display_name == "glslang")
-            .expect("glslang is one of the six");
-        let VendoredCppNoticeSource::ShadercSysLicenseFile(relative_path) = moved.notice_source
+            .expect("glslang is one of the vendored projects");
+        let VendoredCppNoticeSource::ShadercSysLicenseFile {
+            path_relative_to_shaderc_sys_build_dir,
+        } = moved.notice_source
         else {
             panic!("glslang's notice comes from a shaderc-sys licence file")
         };
-        fs::remove_file(fixture.path().join(relative_path)).expect("remove");
+        fs::remove_file(fixture.path().join(path_relative_to_shaderc_sys_build_dir))
+            .expect("remove");
 
-        let failure = render_vendored_cpp_appendix(fixture.path(), &workspace_root())
+        let failure = render_vendored_cpp_appendix(&source_trees)
             .expect_err("a missing licence file must not render as an omitted section");
         let reported = format!("{failure:#}");
         assert!(
@@ -448,9 +517,50 @@ mod tests {
             "unhelpful failure: {reported}"
         );
         assert!(
-            reported.contains(relative_path),
+            reported.contains(path_relative_to_shaderc_sys_build_dir),
             "unhelpful failure: {reported}"
         );
+    }
+
+    /// The appendix's opening paragraph ships inside a legal notice, and its
+    /// two rosters are derived. A third notice source added later would render
+    /// its projects into sections while leaving them out of both rosters —
+    /// which is the paragraph claiming a coverage it no longer has.
+    #[test]
+    fn the_appendix_rosters_between_them_name_every_project_in_the_table() {
+        let (_fixture, source_trees) = vendored_cpp_source_trees_fixture();
+        let appendix = render_vendored_cpp_appendix(&source_trees).expect("render");
+
+        let rosters = [
+            joined_project_names(|source| {
+                matches!(
+                    source,
+                    VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
+                )
+            }),
+            joined_project_names(|source| {
+                matches!(
+                    source,
+                    VendoredCppNoticeSource::LeadingCommentBlockOf { .. }
+                )
+            }),
+        ];
+        for roster in &rosters {
+            assert!(
+                !roster.is_empty(),
+                "a roster emptied, leaving prose dangling"
+            );
+            assert!(appendix.contains(roster.as_str()));
+        }
+        for project in VENDORED_CPP_PROJECTS {
+            assert!(
+                rosters
+                    .iter()
+                    .any(|roster| roster.contains(project.display_name)),
+                "{} has a section but appears in neither roster",
+                project.display_name
+            );
+        }
     }
 
     #[test]
@@ -463,8 +573,9 @@ mod tests {
             .filter(|project| {
                 matches!(
                     project.notice_source,
-                    VendoredCppNoticeSource::ShadercSysLicenseFile(path)
-                        if path.ends_with("LICENSE.txt")
+                    VendoredCppNoticeSource::ShadercSysLicenseFile {
+                        path_relative_to_shaderc_sys_build_dir: path,
+                    } if path.ends_with("LICENSE.txt")
                 )
             })
             .map(|project| project.display_name)
@@ -500,17 +611,23 @@ mod tests {
 
     #[test]
     fn a_leading_block_with_no_copyright_is_refused_rather_than_reproduced() {
-        let fixture = shaderc_sys_sources_fixture();
         let project = VendoredCppProjectLinkedIntoTheEngine {
             display_name: "Nameless",
             upstream_repository_url: "https://example.invalid",
             license_summary: "none",
-            notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf("header.h"),
+            notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
+                header_path_relative_to_workspace_root: "header.h",
+            },
         };
         let workspace = TempDir::new().expect("temp dir");
         fs::write(workspace.path().join("header.h"), "// just a description\n").expect("write");
 
-        let failure = read_vendored_cpp_notice(&project, fixture.path(), workspace.path())
+        let source_trees = VendoredCppSourceTrees {
+            shaderc_sys_vendored_sources_dir: workspace.path().to_path_buf(),
+            workspace_root: workspace.path().to_path_buf(),
+        };
+
+        let failure = read_vendored_cpp_notice(&project, &source_trees)
             .expect_err("a block with no copyright discharges nothing");
         assert!(
             format!("{failure:#}").contains("no copyright line"),

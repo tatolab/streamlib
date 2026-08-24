@@ -110,5 +110,8 @@ jobs:
       # `-D license-not-encountered` so an allowance whose last user left the
       # graph fails rather than warns — deny.toml's claim that the list cannot
       # keep a permission nobody needs is only true because of this flag.
+      # `--locked` because cargo-deny will otherwise rewrite `Cargo.lock` to
+      # resolve the graph and then report on the rewrite rather than on what the
+      # commit contains.
       - name: cargo deny check licenses
-        run: cargo deny --workspace check licenses -D license-not-encountered
+        run: cargo deny --locked --workspace check licenses -D license-not-encountered
