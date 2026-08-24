@@ -26,6 +26,7 @@ use crate::core::rhi::GlslCompilationTargetStage;
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostSurfaceStoreExt;
 
+use super::subprocess_bridge::SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS;
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateComputeBindingKind, EscalateGraphicsBindingKind, EscalateRayTracingBindingKind,
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
@@ -63,7 +64,6 @@ use super::subprocess_escalate_wire_types::escalate_request::{
 // Each names a wire field the handler no longer reads: a depth attachment and
 // either half of a vertex input are refused, so only the tests that prove the
 // refusals still spell them.
-use super::subprocess_bridge::SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS;
 #[cfg(test)]
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
