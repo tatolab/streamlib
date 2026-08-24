@@ -176,11 +176,11 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
         "`docs/decisions/helper-process-placement-only.md`): **In-process placement**,",
     ),
     (
-        "docs/plan/changes/importable-python-library.md",
+        "docs/plan/changes/archive/2026-08-07-importable-python-library.md",
         "\"In-process Python authoring\" — in-process hosting of a Python processor is banned,",
     ),
     (
-        "docs/plan/changes/importable-python-library.md",
+        "docs/plan/changes/archive/2026-08-07-importable-python-library.md",
         "(A \"dev-mode GIL-hold watchdog\" clause was removed here 2026-08-04: it measured",
     ),
     // Wrapped halves: the phrase splits across the line break, so the line the
@@ -196,7 +196,7 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
     // "…never a co-tenancy test, since no two Python / processors share an
     // interpreter" — the denial wrapped away from what it denies.
     (
-        "docs/plan/changes/importable-python-library.md",
+        "docs/plan/changes/archive/2026-08-07-importable-python-library.md",
         "processors share an interpreter. Generated `.pyi` stubs ship in the wheel (IDE",
     ),
     // The 2026-08-02 pivot ADR, whose placement clauses the ruling retracts in

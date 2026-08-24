@@ -8,7 +8,8 @@ never round-tripped back) move together: every DECIDED entry is represented in t
 
 Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an owner decision.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ importable-python-library)
+## Product (the MVP sentence) — SHIPPED
+<!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU pip-installs streamlib
   (initially from this repo's releases; PyPI after the project rename) into an
@@ -16,7 +17,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   sees their camera live in a window within a minute, and makes the pipeline theirs by
   editing the scaffolded processor — zero ceremony: no manifest, no `main()`, no schema
   wrangling, a fast edit loop. Every ticket traces to this sentence or does not
-  exist. [importable-python-library]
+  exist. [importable-python-library — SHIPPED #1683, #1684, #1711]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_a_working_app -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
 - **DECIDED** — Terms of the sentence: StreamLib is an importable Python library — one
   PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
   pydantic-core model); a StreamLib app is a normal Python codebase — one venv, one
@@ -24,18 +28,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `dev`/`run` find `app.py`'s `setup(rt)` by convention, `-f <file>` overrides;
   processors are Python classes written in the app or imported from pip-installed
   packages, and `rt.add` takes the class; the pipeline API is `add`/`connect`.
-  [importable-python-library]
+  [importable-python-library — SHIPPED #1683, #1707, #1708]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
   matching, cast-at-read, no versions at the code layer); scaffolding for app and
   processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
-  Python version range. [importable-python-library]
+  Python version range. [importable-python-library — SHIPPED #1684, #1711; the
+  bags/schemas clause with schema-free-ports #1814]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffolded_processor_lives_outside_the_entry_file -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
-  source-compiled. [importable-python-library]
+  source-compiled. [importable-python-library — SHIPPED #1715]
+  <!-- verify: cargo test -p streamlib example_dir_has_no_ceremony_files -->
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library)
+## Packages & extension model — IN-FLIGHT
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -63,7 +72,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   runs the one engine, and a helper process imports the same wheel as a processor
   host, never as a second engine. Handles it exposes must be genuinely transferable
   across a process boundary (an fd, an exportable allocation) — an
-  address-space-local pointer is not a handle. [importable-python-library]
+  address-space-local pointer is not a handle.
+  [importable-python-library — SHIPPED #1710, #1756, #1757]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py -->
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export, the present target,
   texture rings, codec byte pumps, the audio clock, color resolution — surfaced to
@@ -74,8 +85,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   whenever one exists; a producer-internal texture never sources a cross-process
   export. The Vulkan↔CUDA and Vulkan↔GL interop adapters survive
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
-  `-abi` halves die with the plugin ABI. [importable-python-library;
+  `-abi` halves die with the plugin ABI. [importable-python-library — SHIPPED #1710;
   surface-id-lifetime-contract — SHIPPED #1868 for the source clause]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_pixel_exchange.py -->
 - **DECIDED** — Raw-handle export is public contract for both flavours, gated by
   the Full capability surface: a raw memory fd is minted only by
   `GpuContextFullAccess` — `export_dma_buf` for the DMA-BUF flavour,
@@ -194,7 +206,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
-## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
+## Processor model & scheduling — IN-FLIGHT
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -251,7 +263,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
   processor-granular — stop the processor, respawn its helper (a fresh interpreter
   re-imports the class), rewire its ports — never module-loading machinery.
-  [importable-python-library]
+  [importable-python-library — SHIPPED #1711]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_bad_config_is_reported_without_a_launcher_traceback -->
 - **DECIDED** — A processor's identity is its class, named by its fully-qualified
   import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust) —
   derived mechanically, never authored, and the same string in the registry, in the
@@ -298,7 +311,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
   executed by the engine on its device — no user-side Vulkan, ever.
-  [importable-python-library]
+  [importable-python-library — SHIPPED #1717 for the align; python-kernel-surface —
+  SHIPPED #1773, #1775]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py -->
 - **DECIDED** — Python reaches every kernel kind Rust authoring reaches: compute,
   graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
   names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
@@ -441,18 +456,20 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library)
+## Media I/O — camera, display, audio — IN-FLIGHT
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
   instantiated and configured from Python (`rt.add(CameraSource)`), whose per-frame
   paths never enter the interpreter. Lag-by-design ends: built-ins ship inside the
-  wheel, current by construction. [importable-python-library]
+  wheel, current by construction. [importable-python-library — SHIPPED #1709]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_native_builtin_blocks.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD import-export, present target,
   audio clock, color resolution, codec sessions — never against private engine guts;
   the layering wall survives the ABI's deletion as internal discipline.
-  [importable-python-library]
+  [importable-python-library — SHIPPED #1709, #1710]
 - **DECIDED** — V4L2 is the only capture backend (platform floor: Linux + NVIDIA).
   Apple capture (AVFoundation) is post-MVP and undesigned; only the TCC permission
   shims exist. [media-io-layering]
@@ -472,7 +489,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   arrangement the process main thread belongs to the user's script; `rt.run()` blocks
   with the GIL released while the engine pumps). A processor that cannot get a window
   drains and discards, so upstream still sees a live consumer.
-  [importable-python-library; shared-window-event-pump — SHIPPED #1734]
+  [importable-python-library — SHIPPED #1707 for the `rt.run()` clause;
+  shared-window-event-pump — SHIPPED #1734]
   <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-23-shared-window-event-pump.md -->
 - **DECIDED** — Window ownership is a processor capability, not a built-in privilege:
@@ -526,7 +544,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   allow: camera-class sources and block-level audio fit within the helper hop's
   budget; vsync-paced present loops and device audio callbacks stay native, always —
   a deadline the cross-process hop cannot meet, not a GIL argument.
-  [importable-python-library, helper-process-placement-only]
+  [importable-python-library; helper-process-placement-only — SHIPPED #1714]
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
   or compares — frames, bags, audio ticks, `ctx.time` — is the machine's monotonic clock
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
@@ -558,10 +576,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 ## Networking — transport, moq, webrtc
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
-  self-describing bags — never in-graph. [importable-python-library]
+  self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
 - **OPEN** — Everything else (transport choice, moq, webrtc, mesh discovery).
 
-## Language SDKs & parity — IN-FLIGHT (→ importable-python-library)
+## Language SDKs & parity — SHIPPED
+<!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
 
 - **DECIDED** — Python is the sole focus runtime: the importable PyO3 wheel is the
   primary authoring surface. The Deno SDK and the subprocess-polyglot machinery are
@@ -569,8 +588,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   not rejected — a future TypeScript SDK follows this same importable-library model
   (a native module a TypeScript app imports; Deno itself optional), aimed at the
   hobbyist / video-creator audience when it is scheduled.
-  [importable-python-library; importable-python-library-ripout — SHIPPED #1715 for the
-  deletion clause]
+  [importable-python-library — SHIPPED #1707, #1708; importable-python-library-ripout
+  — SHIPPED #1715 for the deletion clause]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The Python SDK carries a GIL-release contract: every native binding
   that can block releases the GIL around the blocking call, and pixels never cross
@@ -580,16 +599,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   blocking native binding never stalls the threads of its own interpreter — the app's
   for the app-side bindings, the helper child's for a processor's. It is never a
   co-tenancy remedy: no two Python processors share an interpreter.
-  [importable-python-library, helper-process-placement-only]
+  [importable-python-library — SHIPPED #1707, #1708; helper-process-placement-only —
+  SHIPPED #1714]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_the_gil_is_released_while_run_blocks -->
 - **DECIDED** — The wheel carries an interpreter-lifecycle contract: `rt.run()` owns
   SIGINT while it blocks (Ctrl-C returns cleanly and restores CPython's handler), and
   engine teardown strictly precedes interpreter finalization — all engine threads
   joined and every anchored thread state released before `rt.run()` returns, with an
   `atexit`/context-manager guarantee on the exception path. Proven against a real
   `python app.py` harness, the arrangement the spike never ran.
-  [importable-python-library]
+  [importable-python-library — SHIPPED #1707]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_ctrl_c_exits_cleanly -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
 
-## Distribution & versioning — IN-FLIGHT (→ importable-python-library)
+## Distribution & versioning — SHIPPED
+<!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
   (Python API + CLI + engine) and the `streamlib` crate for Rust apps. Initial
@@ -598,7 +622,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   publication waits for the project rename; the artifact is identical either way.
   Positioning is "realtime engine, Python authoring" — the Rust engine is named as
   material; never marketed as "a Python library" even though the shape is one.
-  [importable-python-library]
+  [importable-python-library — SHIPPED #1691, #1692, #1694, #1711]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_pins_streamlib_to_its_own_index -->
 - **DECIDED** — Wheel portability model: system libraries (Vulkan loader, window
   system, libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python
   manylinux shape; "baked in" means our Rust is compiled in, not that system deps
@@ -607,9 +632,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a
   C++ GLSL shader compiler so a kernel author needs no system shader toolchain. The
   wheel's adapter closure excludes skia. Helper processes import the wheel itself — one
-  native artifact, no separate helper cdylib. [importable-python-library]
+  native artifact, no separate helper cdylib.
+  [importable-python-library — SHIPPED #1691, #1692; the vendored GLSL compiler with
+  python-kernel-surface #1775]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ importable-python-library, control-plane-bind-posture)
+## Control plane & observability — IN-FLIGHT
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
@@ -622,7 +651,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the node and sharing its lifecycle; it has exactly one transport, and no CLI verb,
   stdio server, or bridge process stands between a host and that endpoint — an MCP
   host is configured with a running node's URL.
-  [importable-python-library; mcp-served-with-the-node — SHIPPED #1712]
+  [importable-python-library, mcp-served-with-the-node — SHIPPED #1712]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
@@ -638,8 +667,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   provisioning, and codegen verbs are deleted. The standalone streamlib-runtime
   binary retires. Python embeds the engine in-process via the wheel; the control
   plane exists to observe and drive *running* nodes, not to embed.
-  [importable-python-library; importable-python-library-ripout — SHIPPED #1715]
+  [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
+  — SHIPPED #1715]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
 - **DECIDED** — Node discovery is a per-user on-disk registry — one JSON file per live
   node in the OS's standard per-user runtime directory — written only by
   control-plane-hosting runtimes, pruned only when both liveness signals (control
