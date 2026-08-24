@@ -35,7 +35,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library]
 
-## Packages & extension model — IN-FLIGHT (→ importable-python-library, cast-object-tensor-protocol, texture-backed-cpu-reach)
+## Packages & extension model — IN-FLIGHT (→ importable-python-library, cast-object-tensor-protocol)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -181,7 +181,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   exactly when the frame can take a write-back.
   Wheel-layer grammar only over the shipped staging, export and escalate
   primitives — no engine change. [cast-object-tensor-protocol;
-  texture-backed-cpu-reach — the staged cpu() arm]
+  texture-backed-cpu-reach — SHIPPED #1942 for the staged cpu() arm]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
 ## Processor model & scheduling — IN-FLIGHT (→ importable-python-library)
 
@@ -280,7 +281,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ texture-backed-cpu-reach)
+## Graphics (RHI / GPU) — IN-FLIGHT
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
@@ -342,21 +343,37 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   readback vocabulary, and no door names the backing. The helper child checks out
   and maps that staging itself; pixel bytes never cross the escalate socket.
   Entering the staged CPU door always reads the current frame in — a pure write
-  included, which is what makes its write-back legal — and a writable staged array
-  publishes at the block edge, ordered ahead of the engine's next read; leaving by
-  a propagating exception discards the edit without suppressing the exception. The
-  door's one contract across both backings: a raise leaves the frame the engine
-  already held or a complete edit of fewer pixels, never a torn frame — which of
-  the two is the backing's own, and code that must not publish on failure edits
-  outside the scope. Every staging copy blocks: `contended` reaches no author, and
-  the unconsumed non-blocking surface — the `try_run_cpu_readback_copy` wire op,
+  included, which is what makes its write-back legal — and taking the host side is
+  what enters it: the lock alone reads nothing in, so a device-tensor scope under
+  the same lock costs no host copy. A writable staged array publishes at the block
+  edge, ordered ahead of the engine's next read; leaving by a propagating exception
+  discards the edit without suppressing the exception, and a second distinct
+  staging source inside one lock scope is refused by name rather than replacing the
+  first — neither staging holds both edits, so there is no publication order that
+  does not overwrite one. The door's one contract across both backings: a raise
+  leaves the frame the engine already held or a complete edit of fewer pixels,
+  never a torn frame — which of the two is the backing's own, and code that must
+  not publish on failure edits outside the scope. Every staging copy blocks:
+  `contended` reaches no author, and the unconsumed non-blocking surface — the
+  `try_run_cpu_readback_copy` wire op,
   the `contended` response variant, and the engine's `try_`-prefixed staging
   copies — is deleted. The readback staging allocates host-cached from a third
   OPAQUE_FD pool (probed HOST_ACCESS_RANDOM), falling back to the sequential-write
   pool on a device with no cached exportable memory type — slower there, never
-  refused. Python's `acquire_texture` implies `copy_src` and `copy_dst`; Rust's
-  descriptor stays explicit; a texture whose usage still cannot take the copy
-  refuses the door by name. [texture-backed-cpu-reach]
+  refused. Every OPAQUE_FD checkout binds the exporter's stated memory type index:
+  the staging registration puts it on the surface-share wire as texture
+  registrations already do, and an importer that cannot bind the stated index is
+  refused by name — a conforming OPAQUE_FD import has no fd-properties query to
+  derive one from. Python's `acquire_texture` implies `copy_src` and `copy_dst`;
+  Rust's descriptor stays explicit; a texture whose usage still cannot take the
+  copy refuses the door by name.
+  [texture-backed-cpu-reach — SHIPPED #1940, #1941, #1942]
+  <!-- verify: cargo test -p streamlib-engine a_device_whose_probed_type_is_not_host_cached_gets_no_host_cached_pool -->
+  <!-- verify: cargo test -p streamlib-engine a_staging_registration_states_the_exporters_memory_type_index -->
+  <!-- verify: cargo test -p streamlib-engine parse_texture_usages_combines_tokens_and_implies_both_copy_bits -->
+  <!-- verify: cargo test -p streamlib-engine the_seam_publishes_a_staged_edit_back_into_the_pooled_backing -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-24-texture-backed-cpu-reach.md -->
 - **DECIDED** — Python spells a kernel as an object: constructed in `setup()` where the
   capability typestate is Full, dispatched per frame in `process()`. Construction is
   registration and dispatch is a method call; no kernel handle string reaches Python.
