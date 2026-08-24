@@ -1843,7 +1843,7 @@ impl HostVulkanDevice {
                     * (PROBE_H as vk::DeviceSize)
                     * (PROBE_BPP as vk::DeviceSize),
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                /* not host mapped */ None,
+                None,
             )?;
             sentinels.push(sentinel);
         }
@@ -1900,8 +1900,7 @@ impl HostVulkanDevice {
 /// [`HostVulkanDevice::create_opaque_fd_buffer_pool_host_cached`] turns
 /// on this alone. Indices at or past `memoryTypeCount` are not real
 /// memory types and answer `false`.
-#[cfg(target_os = "linux")]
-fn memory_type_index_is_host_cached(
+pub(crate) fn memory_type_index_is_host_cached(
     memory_properties: &vk::PhysicalDeviceMemoryProperties,
     memory_type_index: u32,
 ) -> bool {

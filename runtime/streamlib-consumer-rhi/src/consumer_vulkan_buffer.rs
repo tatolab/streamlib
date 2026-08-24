@@ -505,7 +505,7 @@ mod stated_memory_type_index_tests {
             .expect_err("index 7 is clear in 0b1010");
         let refusal = refusal.to_string();
         assert!(
-            refusal.contains('7'),
+            refusal.contains("memory type index 7"),
             "must name the stated index: {refusal}"
         );
         assert!(

@@ -11,7 +11,9 @@ use vulkanalia_vma as vma;
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
-use super::vulkan_device::MappedOpaqueFdBufferHostAccessPattern;
+use super::vulkan_device::{
+    MappedOpaqueFdBufferHostAccessPattern, memory_type_index_is_host_cached,
+};
 
 /// Process-global HostVulkanDevice reference for DMA-BUF import.
 ///
@@ -394,16 +396,10 @@ impl HostVulkanBuffer {
     /// `VkMemoryPropertyFlags` themselves; raw `vulkanalia` stays in the
     /// RHI.
     pub fn vma_allocation_is_host_cached(&self) -> Option<bool> {
-        let memory_type_index = self.vma_allocation_memory_type_index()?;
-        let memory_properties = self.vulkan_device.allocator().get_memory_properties();
-        if memory_type_index >= memory_properties.memory_type_count {
-            return None;
-        }
-        Some(
-            memory_properties.memory_types[memory_type_index as usize]
-                .property_flags
-                .contains(vk::MemoryPropertyFlags::HOST_CACHED),
-        )
+        Some(memory_type_index_is_host_cached(
+            self.vulkan_device.allocator().get_memory_properties(),
+            self.vma_allocation_memory_type_index()?,
+        ))
     }
 
     /// Memory type index (`vmaGetAllocationInfo().memoryType`) of this

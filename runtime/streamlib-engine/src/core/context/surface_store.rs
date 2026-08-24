@@ -2043,7 +2043,7 @@ unsafe impl Sync for SurfaceStore {}
 fn memory_type_index_stated_by_an_opaque_fd_export(
     vma_allocation_memory_type_index: Option<u32>,
     surface_id: &str,
-    exported_resource_description: &str,
+    exported_resource_description: &'static str,
 ) -> Result<u32> {
     vma_allocation_memory_type_index.ok_or_else(|| {
         Error::GpuError(format!(
