@@ -1,0 +1,58 @@
+# What `cargo about generate` puts in THIRD-PARTY-NOTICES.md.
+#
+# Driven by `cargo xtask generate-third-party-notices`, which also appends the
+# four vendored C++ projects this tool structurally cannot see. Not run in CI:
+# it needs `cargo-about` installed and reaches the network for crates that ship
+# no licence file of their own. The gate that runs on every PR is
+# `cargo deny check licenses` (deny.toml) — that one is the durable half.
+
+# The same sixteen identifiers deny.toml allows — same set, different order. A
+# licence accepted by one tool and rejected by the other is a notices file that
+# silently omits a crate; `cargo deny check licenses` is what fails first if the
+# two sets drift.
+#
+# Order is preference, and it decides real obligations. Most of this closure is
+# `MIT OR Apache-2.0`: a disjunction is an election, and cargo-about takes the
+# first accepted arm. MIT and its neighbours come first because MIT asks only
+# that the notice be reproduced, which is exactly what this file does — whereas
+# Apache-2.0 §4(d) also requires propagating an upstream `NOTICE`, and
+# cargo-about does not collect those. Electing the arm the tooling can fully
+# discharge is the point of the ordering, not brevity.
+accepted = [
+    "MIT",
+    "MIT-0",
+    "0BSD",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "ISC",
+    "Unlicense",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MPL-2.0",
+    "BUSL-1.1",
+]
+
+# No `targets`, so the notices cover every platform's crates rather than the
+# generating host's. Over-attribution costs a longer file; under-attribution is
+# a term unmet, and the wheel is built in a manylinux container that is not the
+# machine this command runs on.
+
+# Test-only code is not distributed, so it owes nothing. Build dependencies are
+# kept: `cc`, `cmake` and `bindgen` emit code and headers that end up inside the
+# artifact, and deciding case by case which of them left a trace is not a
+# judgement worth making per release.
+ignore-dev-dependencies = true
+ignore-build-dependencies = false
+ignore-transitive-dependencies = false
+
+private = { ignore = true }
+
+# `r-efi` offers `MIT OR Apache-2.0 OR LGPL-2.1-or-later`; deny.toml pins the
+# same choice, and the notices must reproduce the arm we actually took.
+[r-efi]
+accepted = ["MIT"]

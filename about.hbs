@@ -1,0 +1,37 @@
+# Third-party notices
+
+StreamLib distributes third-party code. This file reproduces each dependency's
+copyright notice and licence text, as BSD-3 and MIT require of a binary
+distribution and as Apache-2.0 §4(d) requires of upstream `NOTICE` contents.
+
+Scope is the whole workspace's dependency closure across every target, which is
+a superset of what any one artifact links — the wheel ships this file entire
+rather than a per-artifact subset, because over-attribution costs a longer file
+and under-attribution is a term unmet.
+
+**Generated — do not edit.** Regenerate with `cargo xtask
+generate-third-party-notices`; the licence policy that decides what may appear
+here lives in `deny.toml` and is enforced on every pull request. StreamLib's own
+terms are in [`LICENSE`](LICENSE) and are not reproduced below.
+
+## Overview
+
+{{#each overview}}
+- **{{{name}}}** — {{count}} {{#if (eq count 1)}}crate{{else}}crates{{/if}}
+{{/each}}
+
+## Licence texts
+{{#each licenses}}
+
+### {{{name}}}
+
+Used by:
+
+{{#each used_by}}
+- {{#if crate.repository}}[{{{crate.name}}} {{{crate.version}}}]({{{crate.repository}}}){{else}}{{{crate.name}}} {{{crate.version}}}{{/if}}
+{{/each}}
+
+````text
+{{{text}}}
+````
+{{/each}}

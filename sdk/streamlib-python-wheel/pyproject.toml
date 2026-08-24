@@ -16,6 +16,16 @@ description = "StreamLib — a realtime streaming engine with Python authoring"
 # together or the wheel claims interpreters its ABI tag does not cover.
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
+# PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
+# discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
+# own, `THIRD-PARTY-NOTICES.md` for every dependency's. The SPDX id above says
+# BUSL-1.1 and nothing about who the Licensor is or when the Change Date falls
+# — the parameters are the licence, so the text has to travel too.
+#
+# Both are symlinks to the repo root. maturin refuses a licence file outside
+# the project root (see Cargo.toml) but follows one that resolves out of it, so
+# the root file stays the single copy and there is no second one to drift.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 classifiers = [
     "Development Status :: 3 - Alpha",

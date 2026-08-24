@@ -16,6 +16,7 @@ pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_vulkanalia;
+pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 
@@ -409,6 +410,14 @@ enum Commands {
     /// the workspace, so it is slower than `check-all-source-gates` alone.
     RunLocalCiGates,
 
+    /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
+    /// via `cargo about generate`, plus the four C++ projects `shaderc-sys`
+    /// vendors and links into the engine, which are not packages in the Cargo
+    /// resolve graph and so reach the file only by being appended. Needs
+    /// `cargo-about` installed and the network, which is why it is a command
+    /// and not a gate; `cargo deny check licenses` is the half that runs on
+    /// every PR. See [`generate_third_party_notices`].
+    GenerateThirdPartyNotices,
 }
 
 fn main() -> Result<()> {
@@ -442,6 +451,9 @@ fn main() -> Result<()> {
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
+        Commands::GenerateThirdPartyNotices => {
+            generate_third_party_notices::run(&workspace_root()?)?
+        }
     }
 
     Ok(())
