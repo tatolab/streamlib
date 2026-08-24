@@ -28,6 +28,8 @@ from ._engine import OpaqueFdTextureExport as OpaqueFdTextureExport
 from ._engine import ProcessorInputPortReference as ProcessorInputPortReference
 from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
 from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
+from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
+from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
 from ._engine import CameraSource as CameraSource
 from ._engine import DisplayWindow as DisplayWindow
 from ._engine import Runtime as _NativeRuntime
@@ -75,6 +77,8 @@ __all__ = [
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
+    "ProcessorOwnedWindow",
+    "ProcessorOwnedWindowEvents",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",

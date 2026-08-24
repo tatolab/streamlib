@@ -562,9 +562,9 @@ fn extract_named_field<'a, 'py, Field: FromPyObject<'a, 'py>>(
 
 fn nothing_about_this_names_a_published_surface_error(named: &Bound<'_, PyAny>) -> PyErr {
     PyRuntimeError::new_err(format!(
-        "show() cannot tell which surface a {} names. It takes a cast object read with \
-         `ctx.inputs.read(port, into=T)` — whose claim is what holds the frame still — a \
-         GpuSurfaceHandle a kernel wrote, or a bare surface id string.",
+        "show() was given a {}, and nothing about it names a published surface. It takes a \
+         cast object read with `ctx.inputs.read(port, into=T)` — whose claim is what holds the \
+         frame still — a GpuSurfaceHandle a kernel wrote, or a bare surface id string.",
         type_name_of(named)
     ))
 }
