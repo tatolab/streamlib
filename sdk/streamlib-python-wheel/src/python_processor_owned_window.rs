@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyMapping, PyString};
@@ -558,7 +558,16 @@ fn optional_attribute<'py>(
     attribute_name: &Bound<'py, PyString>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let named = match described.cast::<PyMapping>() {
-        Ok(mapping) => mapping.get_item(attribute_name).ok(),
+        // `get_item` runs `__getitem__`, so a missing key and a mapping that
+        // raised on the way arrive as the same `Err`. Only the missing key is
+        // absence; anything else is the described object's own account of
+        // itself, which the caller is owed — the rule every other read here
+        // follows.
+        Ok(mapping) => match mapping.get_item(attribute_name) {
+            Ok(value) => Some(value),
+            Err(refusal) if refusal.is_instance_of::<PyKeyError>(described.py()) => None,
+            Err(refusal) => return Err(refusal),
+        },
         Err(_) => described.getattr_opt(attribute_name)?,
     };
     Ok(named.filter(|value| !value.is_none()))
@@ -1104,6 +1113,43 @@ class Frame:
                 .expect("a mapping describes a mastering display as well as an object does");
             assert!((sidecar.display_primary_red[0] - 0.708).abs() < 1e-6);
             assert_eq!(sidecar.max_content_light_level, 1_000.0);
+        });
+    }
+
+    /// A mapping that raises on its way to a key is not a mapping without
+    /// that key, and only the second is absence. Same rule the attribute path
+    /// follows — a described object's own refusal reaches the caller.
+    #[test]
+    fn a_mapping_description_that_raises_reaches_the_caller_rather_than_reading_as_absent() {
+        Python::initialize();
+        Python::attach(|python| {
+            let refusal = named_by(
+                python,
+                "
+from collections.abc import Mapping
+
+class AColourDescriptionThatCannotBeRead(Mapping):
+    def __getitem__(self, key):
+        raise ValueError('this frame lost the colour description it was built with')
+
+    def __iter__(self):
+        return iter(())
+
+    def __len__(self):
+        return 0
+
+class Frame:
+    surface_id_the_claim_was_taken_on = 'slot-13#1'
+    color_info = AColourDescriptionThatCannotBeRead()
+",
+            )
+            .expect_err("the colour description refused");
+
+            let refusal = refusal.to_string();
+            assert!(
+                refusal.contains("lost the colour description"),
+                "the mapping's own refusal must reach the caller, got: {refusal}"
+            );
         });
     }
 
