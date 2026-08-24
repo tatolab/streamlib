@@ -58,7 +58,6 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries,
     EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer,
     EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata,
-    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
     EscalateRequestWaitDeviceIdle, RAY_TRACING_STAGE_INDEX_NONE,
 };
 // Each names a wire field the handler no longer reads: a depth attachment and
@@ -74,7 +73,7 @@ use super::subprocess_escalate_wire_types::escalate_request::{
 #[cfg(target_os = "linux")]
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseKernelBinding;
 use super::subprocess_escalate_wire_types::escalate_response::{
-    EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
+    EscalateResponseErr, EscalateResponseOk,
 };
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::color::{ColorTraits, HdrStaticMetadata, PrimariesId, TransferId};
@@ -121,7 +120,6 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => Some(&p.request_id),
-        EscalateRequest::TryRunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::RunComputeKernelBatch(p) => Some(&p.request_id),
@@ -622,36 +620,6 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "run_cpu_readback_copy is only available on Linux".to_string(),
-                }))
-            }
-        }
-        EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-            request_id: _,
-            surface_id,
-            direction,
-        }) => {
-            #[cfg(target_os = "linux")]
-            {
-                Some(handle_surface_export_staging_copy(
-                    sandbox,
-                    rid,
-                    &surface_id,
-                    SurfaceExportStagingCopyOp::TryRunCpuReadbackCopy(match direction {
-                        EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer => {
-                            SurfaceExportStagingCopyDirection::SurfaceIntoStaging
-                        }
-                        EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage => {
-                            SurfaceExportStagingCopyDirection::StagingBackIntoSurface
-                        }
-                    }),
-                ))
-            }
-            #[cfg(not(target_os = "linux"))]
-            {
-                let _ = (surface_id, direction);
-                Some(EscalateResponse::Err(EscalateResponseErr {
-                    request_id: rid,
-                    message: "try_run_cpu_readback_copy is only available on Linux".to_string(),
                 }))
             }
         }
@@ -1520,19 +1488,18 @@ fn assign_image_handle_id(
     Ok((handle_id, produce_done, consume_done))
 }
 
-/// The four wire ops that run one surface-export staging copy.
+/// The three wire ops that run one surface-export staging copy.
 ///
-/// Named as ops rather than as a (residency x direction x may-wait)
-/// product because that product has a cell the wire does not: there is no
-/// non-blocking device-export copy. Enumerating the ops keeps every state
-/// reachable and gives each one its name for free.
+/// Named as ops rather than as a (residency x direction) product because
+/// the wire does not spell the two axes alike: device-export gives each
+/// direction its own op name, cpu-readback carries direction as a field.
+/// Enumerating the ops gives each one its name for free.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 enum SurfaceExportStagingCopyOp {
     RefillDeviceExportStaging,
     CopyDeviceExportStagingBackToSurface,
     RunCpuReadbackCopy(SurfaceExportStagingCopyDirection),
-    TryRunCpuReadbackCopy(SurfaceExportStagingCopyDirection),
 }
 
 /// Which way one surface-export staging copy runs.
@@ -1547,14 +1514,6 @@ enum SurfaceExportStagingCopyDirection {
     StagingBackIntoSurface,
 }
 
-/// Whether a copy may wait for the staging's recorder.
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy)]
-enum SurfaceExportStagingCopyContention {
-    WaitForTheRecorder,
-    ReportContended,
-}
-
 #[cfg(target_os = "linux")]
 impl SurfaceExportStagingCopyOp {
     /// The wire op name, for error messages that have to say which
@@ -1566,7 +1525,6 @@ impl SurfaceExportStagingCopyOp {
                 "copy_device_export_staging_back_to_surface"
             }
             Self::RunCpuReadbackCopy(_) => "run_cpu_readback_copy",
-            Self::TryRunCpuReadbackCopy(_) => "try_run_cpu_readback_copy",
         }
     }
 
@@ -1575,9 +1533,7 @@ impl SurfaceExportStagingCopyOp {
             Self::RefillDeviceExportStaging | Self::CopyDeviceExportStagingBackToSurface => {
                 SurfaceExportStagingResidency::DeviceLocal
             }
-            Self::RunCpuReadbackCopy(_) | Self::TryRunCpuReadbackCopy(_) => {
-                SurfaceExportStagingResidency::HostVisible
-            }
+            Self::RunCpuReadbackCopy(_) => SurfaceExportStagingResidency::HostVisible,
         }
     }
 
@@ -1589,22 +1545,7 @@ impl SurfaceExportStagingCopyOp {
             Self::CopyDeviceExportStagingBackToSurface => {
                 SurfaceExportStagingCopyDirection::StagingBackIntoSurface
             }
-            Self::RunCpuReadbackCopy(direction) | Self::TryRunCpuReadbackCopy(direction) => {
-                direction
-            }
-        }
-    }
-
-    fn contention(self) -> SurfaceExportStagingCopyContention {
-        match self {
-            Self::TryRunCpuReadbackCopy(_) => SurfaceExportStagingCopyContention::ReportContended,
-            // Spelled out rather than caught: a wire op that gained the
-            // wrong contention here would answer `contended` to a child
-            // with no arm for it, and a catch-all would carry that
-            // silently past every test.
-            Self::RefillDeviceExportStaging
-            | Self::CopyDeviceExportStagingBackToSurface
-            | Self::RunCpuReadbackCopy(_) => SurfaceExportStagingCopyContention::WaitForTheRecorder,
+            Self::RunCpuReadbackCopy(direction) => direction,
         }
     }
 }
@@ -1695,12 +1636,10 @@ fn handle_open_surface_export_staging(
 /// capability, minted on first ask, with no installation step and
 /// nothing supplied by the application.
 ///
-/// Only `try_run_cpu_readback_copy` can answer
-/// [`EscalateResponse::Contended`], and only because another copy holds
-/// this staging's recorder. Every other refusal — a retired frame id, a
-/// read-only export, a geometry change — is an error for every op. The
-/// blocking arms map through `Some`, so a child with no `contended` arm
-/// can never be handed one.
+/// Every copy blocks: a busy recorder is waited for, never reported.
+/// Every refusal — a retired frame id, a read-only export, a geometry
+/// change — is an error for every op, so `ok` and `err` are the only two
+/// answers a child ever has to have an arm for.
 #[cfg(target_os = "linux")]
 fn handle_surface_export_staging_copy(
     sandbox: &GpuContextLimitedAccess,
@@ -1708,33 +1647,23 @@ fn handle_surface_export_staging_copy(
     surface_id: &str,
     op: SurfaceExportStagingCopyOp,
 ) -> EscalateResponse {
-    use SurfaceExportStagingCopyContention as Contention;
-    use SurfaceExportStagingCopyDirection as Direction;
-
     let copied = sandbox
         .surface_export_staging(surface_id, op.residency())
-        .and_then(|staging| match (op.direction(), op.contention()) {
-            (Direction::SurfaceIntoStaging, Contention::WaitForTheRecorder) => sandbox
-                .refill_surface_export_staging(&staging, surface_id)
-                .map(Some),
-            (Direction::StagingBackIntoSurface, Contention::WaitForTheRecorder) => sandbox
-                .copy_surface_export_staging_back_to_surface(&staging, surface_id)
-                .map(Some),
-            (Direction::SurfaceIntoStaging, Contention::ReportContended) => {
-                sandbox.try_refill_surface_export_staging(&staging, surface_id)
+        .and_then(|staging| match op.direction() {
+            SurfaceExportStagingCopyDirection::SurfaceIntoStaging => {
+                sandbox.refill_surface_export_staging(&staging, surface_id)
             }
-            (Direction::StagingBackIntoSurface, Contention::ReportContended) => {
-                sandbox.try_copy_surface_export_staging_back_to_surface(&staging, surface_id)
+            SurfaceExportStagingCopyDirection::StagingBackIntoSurface => {
+                sandbox.copy_surface_export_staging_back_to_surface(&staging, surface_id)
             }
         });
     match copied {
-        Ok(Some(signalled)) => EscalateResponse::Ok(EscalateResponseOk {
+        Ok(signalled) => EscalateResponse::Ok(EscalateResponseOk {
             request_id,
             handle_id: surface_id.to_string(),
             timeline_value: Some(signalled.to_string()),
             ..Default::default()
         }),
-        Ok(None) => EscalateResponse::Contended(EscalateResponseContended { request_id }),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
             request_id,
             message: format!("{} failed: {failure}", op.escalate_op_name()),
@@ -5399,11 +5328,6 @@ mod tests {
                     surface_id: "no-such-surface".into(),
                     direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
                 }),
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try".into(),
-                    surface_id: "no-such-surface".into(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage,
-                }),
                 EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
                     request_id: "req-open".into(),
                     surface_id: "no-such-surface".into(),
@@ -5501,69 +5425,6 @@ mod tests {
             );
         }
 
-        /// `try_` answers `contended` through the seam while another copy
-        /// holds the staging's recorder — the only thing that response
-        /// means now. Pins the contention mapping: were `TryRun` treated
-        /// as blocking, this would hang rather than answer.
-        /// GPU-gated: skips when no device is present.
-        #[test]
-        fn the_seam_answers_contended_while_the_recorder_is_held() {
-            let Some(gpu) = gpu_or_skip("the_seam_answers_contended_while_the_recorder_is_held")
-            else {
-                return;
-            };
-            let (pool_id, _pooled_backing) = gpu
-                .acquire_pixel_buffer(64, 64, PixelFormat::Rgba32)
-                .expect("acquire a frame to read back");
-            let surface_id = pool_id.to_string();
-            let staging = gpu
-                .surface_export_staging(
-                    &surface_id,
-                    crate::core::context::SurfaceExportStagingResidency::HostVisible,
-                )
-                .expect("open the staging so the test can hold its recorder");
-
-            let sandbox = GpuContextLimitedAccess::new(gpu.clone());
-            let registry = EscalateHandleRegistry::new();
-            // The recorder is held on *another* thread: held on this one, a
-            // mapping that wrongly waits would re-lock the same
-            // non-reentrant mutex and deadlock, turning the mutation this
-            // test exists to catch into an unbounded hang instead of a
-            // failure.
-            let recorder_is_held = std::sync::Arc::new(std::sync::Barrier::new(2));
-            let release_the_recorder = std::sync::Arc::new(std::sync::Barrier::new(2));
-            let holder = {
-                let staging = std::sync::Arc::clone(&staging);
-                let recorder_is_held = std::sync::Arc::clone(&recorder_is_held);
-                let release_the_recorder = std::sync::Arc::clone(&release_the_recorder);
-                std::thread::spawn(move || {
-                    staging.while_holding_the_refill_recorder_for_a_test(|| {
-                        recorder_is_held.wait();
-                        release_the_recorder.wait();
-                    })
-                })
-            };
-            recorder_is_held.wait();
-            let response = handle_escalate_op(
-                &sandbox,
-                &registry,
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-seam-try".into(),
-                    surface_id: surface_id.clone(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
-                }),
-            )
-            .expect("try_run_cpu_readback_copy always produces a response");
-            release_the_recorder.wait();
-            holder.join().expect("the recorder holder thread joins");
-            match response {
-                EscalateResponse::Contended(contended) => {
-                    assert_eq!(contended.request_id, "req-seam-try");
-                }
-                other => panic!("expected Contended, got {other:?}"),
-            }
-        }
-
         /// `buffer_to_image` through the seam refuses to publish a
         /// staging nothing has read a frame into. Pins the direction
         /// mapping: `image_to_buffer` would have succeeded here.
@@ -5601,19 +5462,19 @@ mod tests {
             }
         }
 
-        /// The `try_` publish direction, driven to success through the
-        /// seam: read a frame in, edit the mapping, publish it back.
+        /// The publish direction, driven to success through the seam:
+        /// read a frame in, edit the mapping, publish it back.
         ///
-        /// The only coverage the try_-publish path has. Swap
-        /// `TryRun + BufferToImage` to `SurfaceIntoStaging` and the edit is
-        /// silently discarded and overwritten by the frame — which this
-        /// catches, and nothing else did.
+        /// The only end-to-end coverage the publish path has. Swap the
+        /// second call's `BufferToImage` to `ImageToBuffer` and the edit
+        /// is silently discarded and overwritten by the frame — which
+        /// this catches, and nothing else does.
         /// GPU-gated: skips when no device is present.
         #[test]
-        fn the_seam_publishes_a_staged_edit_through_the_try_direction() {
+        fn the_seam_publishes_a_staged_edit_back_into_the_pooled_backing() {
             const EDIT: u8 = 0x6b;
             let Some(gpu) =
-                gpu_or_skip("the_seam_publishes_a_staged_edit_through_the_try_direction")
+                gpu_or_skip("the_seam_publishes_a_staged_edit_back_into_the_pooled_backing")
             else {
                 return;
             };
@@ -5628,16 +5489,16 @@ mod tests {
             let read = handle_escalate_op(
                 &sandbox,
                 &registry,
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-read".into(),
+                EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                    request_id: "req-read".into(),
                     surface_id: surface_id.clone(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer,
+                    direction: EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer,
                 }),
             )
-            .expect("try_run_cpu_readback_copy always produces a response");
+            .expect("run_cpu_readback_copy always produces a response");
             assert!(
                 matches!(read, EscalateResponse::Ok(_)),
-                "an uncontended read must succeed, got {read:?}"
+                "the read-in must succeed, got {read:?}"
             );
 
             let staging = gpu
@@ -5653,13 +5514,13 @@ mod tests {
             let published = handle_escalate_op(
                 &sandbox,
                 &registry,
-                EscalateRequest::TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy {
-                    request_id: "req-try-publish".into(),
+                EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
+                    request_id: "req-publish".into(),
                     surface_id: surface_id.clone(),
-                    direction: EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage,
+                    direction: EscalateRequestRunCpuReadbackCopyDirection::BufferToImage,
                 }),
             )
-            .expect("try_run_cpu_readback_copy always produces a response");
+            .expect("run_cpu_readback_copy always produces a response");
             let EscalateResponse::Ok(ok) = published else {
                 panic!("expected Ok, got {published:?}");
             };
@@ -10435,9 +10296,6 @@ void main() {
             EscalateResponse::Err(err) => {
                 panic!("acquire_pixel_buffer escalate failed: {}", err.message);
             }
-            EscalateResponse::Contended(_) => {
-                panic!("acquire_pixel_buffer must never return Contended")
-            }
         };
         assert_eq!(registry.handle_count(), 1);
 
@@ -10472,9 +10330,6 @@ void main() {
             EscalateResponse::Err(err) => {
                 panic!("acquire_texture escalate failed: {}", err.message);
             }
-            EscalateResponse::Contended(_) => {
-                panic!("acquire_texture must never return Contended")
-            }
         };
         assert_eq!(registry.handle_count(), 2);
 
@@ -10492,7 +10347,6 @@ void main() {
             EscalateResponse::Err(err) => {
                 panic!("release_handle (texture) failed: {}", err.message)
             }
-            EscalateResponse::Contended(_) => panic!("release_handle must never return Contended"),
         }
         assert_eq!(registry.handle_count(), 1);
 
@@ -10508,7 +10362,6 @@ void main() {
                 assert_eq!(ok.handle_id, buffer_handle_id);
             }
             EscalateResponse::Err(err) => panic!("release_handle failed: {}", err.message),
-            EscalateResponse::Contended(_) => panic!("release_handle must never return Contended"),
         }
         assert_eq!(registry.handle_count(), 0);
 
@@ -10524,9 +10377,6 @@ void main() {
                 assert!(err.message.contains("not found"));
             }
             EscalateResponse::Ok(_) => panic!("unknown handle should not succeed"),
-            EscalateResponse::Contended(_) => {
-                panic!("release_handle on unknown id must surface Err, not Contended")
-            }
         }
     }
 

@@ -85,9 +85,6 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "show_surface_on_processor_owned_window")]
     ShowSurfaceOnProcessorOwnedWindow(EscalateRequestShowSurfaceOnProcessorOwnedWindow),
 
-    #[serde(rename = "try_run_cpu_readback_copy")]
-    TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy),
-
     #[serde(rename = "wait_device_idle")]
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
 }
@@ -1955,37 +1952,6 @@ pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
     /// when the caller names a bare surface id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) producer_published_texture_layout: Option<i32>,
-}
-
-/// Same shape and same refusals as `run_cpu_readback_copy.direction`; only the
-/// response to a busy staging differs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum EscalateRequestTryRunCpuReadbackCopyDirection {
-    #[serde(rename = "buffer_to_image")]
-    BufferToImage,
-
-    #[serde(rename = "image_to_buffer")]
-    ImageToBuffer,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct EscalateRequestTryRunCpuReadbackCopy {
-    /// Same shape and same refusals as `run_cpu_readback_copy.direction`;
-    /// only the response to a busy staging differs.
-    pub(crate) direction: EscalateRequestTryRunCpuReadbackCopyDirection,
-
-    /// Correlates request with response. UUID string.
-    pub(crate) request_id: String,
-
-    /// Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
-    /// [`super::escalate_response::EscalateResponse::Contended`] response (no
-    /// timeline value, no copy executed) when another copy is already in
-    /// flight against this surface's staging. Subprocess customers use this
-    /// to skip a frame instead of stalling their thread runner. Every other
-    /// refusal — a retired frame id, a read-only export, an unfilled
-    /// staging — is an `err`, never `contended`.
-    pub(crate) surface_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

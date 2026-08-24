@@ -66,8 +66,8 @@ stay free for intercepted log capture), with a discriminator-tagged
 op enum covering
 the surface-acquire ops (`AcquireImage`, `AcquirePixelBuffer`,
 `AcquireTexture`), `Log`, `ReleaseHandle`, the cpu-readback
-trigger (`RunCpuReadbackCopy`, `TryRunCpuReadbackCopy`), the
-compute / graphics / ray-tracing register + run ops, and
+trigger (`RunCpuReadbackCopy`), the compute / graphics / ray-tracing
+register + run ops, and
 `RegisterAccelerationStructureBlas` / `Tlas`. See
 the `EscalateRequest` enum in `escalate_request.rs` for the canonical list.
 
@@ -319,13 +319,10 @@ on Linux` off it. The methods are `create_or_reuse_compute_kernel` /
 `graphics_kernel_by_id`, `create_or_reuse_ray_tracing_kernel` /
 `ray_tracing_kernel_by_id` and `register_acceleration_structure` /
 `acceleration_structure_by_id`. CPU readback has no `GpuContext` method of its
-own name — `run_cpu_readback_copy`, `try_run_cpu_readback_copy` and
-`open_cpu_readback_staging` are escalate ops, and they land on
-`GpuContextLimitedAccess`'s `refill_surface_export_staging` /
-`try_refill_surface_export_staging`,
-`copy_surface_export_staging_back_to_surface` /
-`try_copy_surface_export_staging_back_to_surface` and
-`surface_export_staging` + `share_surface_export_staging`.
+own name — `run_cpu_readback_copy` and `open_cpu_readback_staging` are escalate
+ops, and they land on `GpuContextLimitedAccess`'s
+`refill_surface_export_staging`, `copy_surface_export_staging_back_to_surface`
+and `surface_export_staging` + `share_surface_export_staging`.
 
 The hook is the canonical opt-in registration point for adapters that
 need pre-start GpuContext access. Application authors call

@@ -44,11 +44,8 @@
 //! One staging per (surface, residency), shared by every holder of that
 //! slot — so two consumers reading one surface at one residency map the
 //! same allocation, and nothing here arbitrates their overlap. The
-//! `try_` ops' `contended` reports a busy *recorder*, not a competing
-//! reader: it keeps two copies from interleaving, not two consumers from
-//! reading a buffer a third is refilling. The deleted cpu-readback
-//! bridge carried the same limitation in its own words; it is restated
-//! here because that is where the staging now lives.
+//! recorder lock serialises two *copies*; it does not keep two consumers
+//! from reading a buffer a third is refilling.
 //!
 //! Nothing here assumes the consumer lives in this process. A processor
 //! reaching this from its own helper process gets the same staging and
@@ -282,22 +279,6 @@ impl SurfaceExportStaging {
     /// Where this staging's memory lives.
     pub fn residency(&self) -> SurfaceExportStagingResidency {
         self.residency
-    }
-
-    /// Run `while_held` with this staging's recorder taken, so a test can
-    /// drive the contended path the `try_` ops report.
-    ///
-    /// Two concurrent copies produce this state on their own — that is
-    /// what `contended` reports. What a test cannot do without a hook is
-    /// make the window deterministic, because no engine path holds the
-    /// recorder *across* a call.
-    #[cfg(test)]
-    pub(crate) fn while_holding_the_refill_recorder_for_a_test<T>(
-        &self,
-        while_held: impl FnOnce() -> T,
-    ) -> T {
-        let _held = self.refill_submission.lock();
-        while_held()
     }
 
     /// Borrow the staging allocation (for export or import bookkeeping).
@@ -677,18 +658,14 @@ impl GpuContext {
     /// recording — a recorder left mid-recording refuses every later
     /// `begin`, which would brick this surface's export for the life of
     /// the cache entry.
-    ///
-    /// Takes the recorder it is handed rather than acquiring it, so the
-    /// blocking and non-blocking entry points differ only in how they got
-    /// one — and neither carries the other's return shape.
     fn submit_staging_copy_and_wait(
         staging: &SurfaceExportStaging,
-        mut submission: parking_lot::MutexGuard<'_, RefillSubmission>,
         holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
         record_copy: impl FnOnce(
             &mut RhiCommandRecorder,
         ) -> Result<Option<TextureLayoutSettledByThisCopy>>,
     ) -> Result<u64> {
+        let mut submission = staging.refill_submission.lock();
         submission.recorder.begin()?;
         let texture_layout_settled_by_this_copy = match record_copy(&mut submission.recorder) {
             Ok(settled) => settled,
@@ -726,23 +703,6 @@ impl GpuContext {
             .refill_done_timeline
             .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
         Ok(signal_value)
-    }
-
-    /// The contention contract in one place: only a busy recorder is
-    /// `Ok(None)`. Every guard refusal reaches here already as an `Err`,
-    /// because the guards run before the lock is even attempted.
-    fn try_submit_staging_copy_and_wait(
-        staging: &SurfaceExportStaging,
-        holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,
-        record_copy: impl FnOnce(
-            &mut RhiCommandRecorder,
-        ) -> Result<Option<TextureLayoutSettledByThisCopy>>,
-    ) -> Result<Option<u64>> {
-        let Some(submission) = staging.refill_submission.try_lock() else {
-            return Ok(None);
-        };
-        Self::submit_staging_copy_and_wait(staging, submission, holds_after_this_copy, record_copy)
-            .map(Some)
     }
 
     /// Refuse a surface whose pool slot this staging was not opened for.
@@ -859,27 +819,6 @@ impl GpuContext {
     ) -> Result<u64> {
         let source = self.resolve_refill_source(staging, surface_id)?;
         Self::submit_staging_copy_and_wait(
-            staging,
-            staging.refill_submission.lock(),
-            FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
-            |recorder| Self::record_refill(staging, &source, recorder),
-        )
-    }
-
-    /// [`Self::refill_surface_export_staging`], but answering `Ok(None)`
-    /// instead of queueing when another copy already holds this staging's
-    /// recorder — what the `try_` escalate op reports as `contended`.
-    ///
-    /// The guards and the source resolve run first and identically: a
-    /// retired frame id or a mismatched staging is an error either way,
-    /// never a contention report.
-    pub fn try_refill_surface_export_staging(
-        &self,
-        staging: &SurfaceExportStaging,
-        surface_id: &str,
-    ) -> Result<Option<u64>> {
-        let source = self.resolve_refill_source(staging, surface_id)?;
-        Self::try_submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::TheFrameJustReadIn(surface_id),
             |recorder| Self::record_refill(staging, &source, recorder),
@@ -1011,28 +950,6 @@ impl GpuContext {
     ) -> Result<u64> {
         let destination = self.resolve_write_back_destination(staging, surface_id)?;
         Self::submit_staging_copy_and_wait(
-            staging,
-            staging.refill_submission.lock(),
-            FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
-            |recorder| Self::record_write_back(staging, &destination, recorder),
-        )
-    }
-
-    /// [`Self::copy_surface_export_staging_back_to_surface`], but
-    /// answering `Ok(None)` instead of queueing when another copy already
-    /// holds this staging's recorder.
-    ///
-    /// Every refusal above — read-only export, a producer's texture
-    /// arriving over the slot, a backing-kind change, a usage the copy
-    /// is illegal for, a format or geometry change — stays an error
-    /// here. Only the recorder being busy is a contention report.
-    pub fn try_copy_surface_export_staging_back_to_surface(
-        &self,
-        staging: &SurfaceExportStaging,
-        surface_id: &str,
-    ) -> Result<Option<u64>> {
-        let destination = self.resolve_write_back_destination(staging, surface_id)?;
-        Self::try_submit_staging_copy_and_wait(
             staging,
             FrameThisStagingHoldsAfterTheCopy::WhateverItAlreadyHeld,
             |recorder| Self::record_write_back(staging, &destination, recorder),
@@ -1261,16 +1178,6 @@ impl crate::core::context::GpuContextLimitedAccess {
             .refill_surface_export_staging(staging, surface_id)
     }
 
-    /// See [`GpuContext::try_refill_surface_export_staging`].
-    pub fn try_refill_surface_export_staging(
-        &self,
-        staging: &SurfaceExportStaging,
-        surface_id: &str,
-    ) -> Result<Option<u64>> {
-        self.host_inner()
-            .try_refill_surface_export_staging(staging, surface_id)
-    }
-
     /// See [`GpuContext::copy_surface_export_staging_back_to_surface`].
     pub fn copy_surface_export_staging_back_to_surface(
         &self,
@@ -1279,16 +1186,6 @@ impl crate::core::context::GpuContextLimitedAccess {
     ) -> Result<u64> {
         self.host_inner()
             .copy_surface_export_staging_back_to_surface(staging, surface_id)
-    }
-
-    /// See [`GpuContext::try_copy_surface_export_staging_back_to_surface`].
-    pub fn try_copy_surface_export_staging_back_to_surface(
-        &self,
-        staging: &SurfaceExportStaging,
-        surface_id: &str,
-    ) -> Result<Option<u64>> {
-        self.host_inner()
-            .try_copy_surface_export_staging_back_to_surface(staging, surface_id)
     }
 
     /// See [`GpuContext::export_surface_export_staging_opaque_fd`].
@@ -2160,48 +2057,15 @@ mod tests {
         );
     }
 
-    /// `try_` answers `contended` while another copy holds the recorder,
-    /// and runs the copy once it is free.
+    /// A refill naming a surface this staging was not opened for is
+    /// refused, and the refusal names that surface.
     ///
-    /// This is what `contended` means now that the capability is the
-    /// engine's: not a foreign registry's counter, but work already in
-    /// flight against this staging.
+    /// The only cover the cross-surface guard has: without it a staging
+    /// would answer with whatever picture its own slot happens to hold,
+    /// which reads as a successful copy of the wrong frame.
     /// GPU-gated: skips when no device is present.
     #[test]
-    fn a_try_copy_answers_contended_only_while_the_recorder_is_held() {
-        let Some(gpu) = gpu_context_or_skip() else {
-            return;
-        };
-        let (pool_id, _pooled_backing) = gpu
-            .acquire_pixel_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, PixelFormat::Rgba32)
-            .expect("acquire a frame to read back");
-        let surface_id = pool_id.to_string();
-        let staging = gpu
-            .surface_export_staging(&surface_id, SurfaceExportStagingResidency::HostVisible)
-            .expect("the cpu-readback staging");
-
-        let held = staging.refill_submission.lock();
-        assert!(
-            gpu.try_refill_surface_export_staging(&staging, &surface_id)
-                .expect("contention is not an error")
-                .is_none(),
-            "a copy already holding the recorder must read as contended"
-        );
-        drop(held);
-
-        assert!(
-            gpu.try_refill_surface_export_staging(&staging, &surface_id)
-                .expect("the refill itself must succeed")
-                .is_some(),
-            "with the recorder free the try_ path must run the copy, not report contention"
-        );
-    }
-
-    /// A guard refusal stays an error in the `try_` spelling — never a
-    /// contention report, which a caller would retry forever.
-    /// GPU-gated: skips when no device is present.
-    #[test]
-    fn a_try_copy_reports_a_guard_refusal_as_an_error_and_never_as_contention() {
+    fn a_refill_of_a_surface_this_staging_does_not_export_is_refused_by_name() {
         let Some(gpu) = gpu_context_or_skip() else {
             return;
         };
@@ -2226,13 +2090,12 @@ mod tests {
             )
             .expect("the cpu-readback staging");
 
-        match gpu.try_refill_surface_export_staging(&staging, &other_surface_id) {
+        match gpu.refill_surface_export_staging(&staging, &other_surface_id) {
             Err(refusal) => assert!(
                 refusal.to_string().contains(&other_surface_id),
                 "the refusal must name the surface asked for, got: {refusal}"
             ),
-            Ok(None) => panic!("a staging opened for another surface is an error, not contention"),
-            Ok(Some(_)) => panic!("a staging must never carry another surface's pixels"),
+            Ok(_) => panic!("a staging must never carry another surface's pixels"),
         }
     }
 
