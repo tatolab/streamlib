@@ -268,9 +268,13 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
         f"the imported texture must read the kernel's own pixels: "
         f"{observation['opaque_device_pixel']!r}"
     )
-    assert "texture-backed" in observation["opaque_pixel_refusal"], (
-        f"the pixel refusal should name the tiled backing: "
-        f"{observation['opaque_pixel_refusal']!r}"
+    assert observation["opaque_cpu_pixel"] == FILL_CONSTANT_RGBA, (
+        f"the CPU door over the tiled texture must read the same pixels the "
+        f"device tensor did: {observation['opaque_cpu_pixel']!r}"
+    )
+    assert observation["opaque_cpu_bytes_per_row"] >= SURFACE_WIDTH * 4, (
+        f"the staged row pitch must span the row it describes: "
+        f"{observation['opaque_cpu_bytes_per_row']!r}"
     )
     assert "OPAQUE_FD" in observation["opaque_export_refusal"], (
         f"the export refusal should name the handle flavour: "

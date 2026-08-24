@@ -34,6 +34,11 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 
 # The two bindings differ in name and in kind, so a dispatch that resolved
 # them by slot order rather than by name would bind them backwards.
+# Opaque and asymmetric across channels: a probe that read the wrong
+# channel order, or somebody else's memory, cannot match by accident.
+FILLED_SOURCE_RGBA = (10, 20, 30, 255)
+DISCARDED_SOURCE_RGBA = (200, 210, 220, 255)
+
 SOURCE_BINDING = "source_image"
 OUTPUT_BINDING = "output_image"
 
@@ -206,26 +211,98 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
 
 @processor(
     execution="manual",
-    description="A device texture's pixels are not addressable in this process",
+    description="A texture's pixels reach the CPU through the staged door",
 )
-class TextureIsNotLocallyMappedProbe(_ComputeKernelProbeBase):
-    """`acquire_texture` mints a name, not a mapping. Asking for the pixels
-    says so, rather than answering with somebody else's memory."""
+class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
+    """The staged CPU door end to end, with numpy as the only consumer.
+
+    Fills an acquired texture through the CPU write door, dispatches a
+    kernel that samples it, and reads the kernel's own output back through
+    the CPU read door. No CUDA runtime and no GPU package take part: if
+    either door were still refusing a texture backing, or the block-edge
+    publish never landed in the surface's own allocation, the kernel would
+    read something other than what was written and this reports it.
+    """
 
     def observe(self, kernel, source, output) -> dict:
-        del kernel
-        try:
-            output.lock(read_only=True)
-            output.as_numpy()
-            pixels_refusal = None
-        except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
-            pixels_refusal = str(refusal)
+        source.lock(read_only=False)
+        source.as_numpy()[:] = FILLED_SOURCE_RGBA
+        source.unlock()
+
+        # Re-read through a fresh scope: the edit was staged, so seeing it
+        # here is the proof the block edge published it into the surface.
+        source.lock(read_only=True)
+        published_pixel = source.as_numpy()[11, 13].tolist()
+        source.unlock()
+
+        kernel.dispatch(
+            bindings={SOURCE_BINDING: source, OUTPUT_BINDING: output},
+            group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            push_constants=b"\x00\x00\x00\x00",
+        )
+
+        output.lock(read_only=True)
+        kernel_output_pixel = output.as_numpy()[11, 13].tolist()
+        output.unlock()
+
         return {
             "surface_id": output.surface_id,
             "width": output.width,
             "height": output.height,
-            "pixels_refusal": pixels_refusal,
             "source_surface_id": source.surface_id,
+            "published_pixel": published_pixel,
+            "kernel_output_pixel": kernel_output_pixel,
+        }
+
+
+@processor(
+    execution="manual",
+    description="A raise inside the staged CPU door discards the edit",
+)
+class StagedCpuDoorDiscardsOnRaiseProbe(_ComputeKernelProbeBase):
+    """Over a staging the door publishes at the block edge, so a raise has
+    something to discard — and the frame keeps the pixels it already held."""
+
+    def observe(self, kernel, source, output) -> dict:
+        del kernel, output
+        source.lock(read_only=False)
+        source.as_numpy()[:] = FILLED_SOURCE_RGBA
+        source.unlock()
+
+        raised = None
+        try:
+            with source:
+                source.lock(read_only=False)
+                source.as_numpy()[:] = DISCARDED_SOURCE_RGBA
+                raise RuntimeError("the edit does not finish")
+        except RuntimeError as propagated:
+            raised = str(propagated)
+
+        source.lock(read_only=True)
+        pixel_after_the_raise = source.as_numpy()[11, 13].tolist()
+        source.unlock()
+        return {
+            "raised": raised,
+            "pixel_after_the_raise": pixel_after_the_raise,
+        }
+
+
+@processor(
+    execution="manual",
+    description="An acquired texture takes a write-back without spelling copy usage",
+)
+class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
+    """`usage=["texture_binding"]` alone is enough: the engine implies both
+    copy bits, so the write door answers yes rather than refusing about a
+    flag the author never had reason to name."""
+
+    def observe(self, kernel, source, output) -> dict:
+        del kernel, source, output
+        gpu = self.gpu_full_access
+        lut = gpu.acquire_texture(256, 1, "rgba32_float", ["texture_binding"])
+        return {
+            "surface_id": lut.surface_id,
+            "takes_a_write_back": gpu.surface_can_take_write_back(lut.surface_id),
         }
 
 

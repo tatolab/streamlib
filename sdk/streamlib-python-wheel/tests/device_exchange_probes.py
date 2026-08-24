@@ -498,15 +498,18 @@ class TextureHandleRoundTripProbe:
                 )
                 del device_view
                 resolved_texture.unlock()
-                # Both outcomes recorded: a refusal that never arrives must
-                # fail the assertion that names it, not raise a KeyError.
-                try:
-                    observation["opaque_pixel_refusal"] = (
-                        f"no refusal: bytes_per_row answered "
-                        f"{resolved_texture.bytes_per_row}"
-                    )
-                except RuntimeError as refusal:
-                    observation["opaque_pixel_refusal"] = str(refusal)
+                # The same tiled texture, read on the CPU: the staged door
+                # routes it over the host-visible export staging, so the
+                # device tensor above and this array must agree about the
+                # kernel's pixels.
+                resolved_texture.lock(read_only=True)
+                observation["opaque_cpu_pixel"] = (
+                    resolved_texture.as_numpy()[11, 13].tolist()
+                )
+                observation["opaque_cpu_bytes_per_row"] = (
+                    resolved_texture.bytes_per_row
+                )
+                resolved_texture.unlock()
                 try:
                     exported = ctx.gpu_full_access.export_dma_buf(resolved_texture)
                     observation["opaque_export_refusal"] = (

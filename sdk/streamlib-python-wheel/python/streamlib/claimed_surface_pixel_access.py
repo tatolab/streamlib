@@ -82,8 +82,9 @@ def _report_the_first_read_only_cpu_door(surface_id: str) -> None:
     _a_read_only_cpu_door_has_been_reported = True
     warn(
         "cpu() is handing out read-only arrays for this surface: its frame cannot take a "
-        "write-back — it is a pool member its producer still owns, or a texture allocated "
-        "without copy-in usage — so no in-place edit publishes through any door; an edit "
+        "write-back — it is a pool member its producer still owns, or a foreign registration "
+        "whose texture cannot take a copy in — so no in-place edit publishes through any door; "
+        "an edit "
         "would land where other holders never see it. writable() refuses the same frames "
         "by name. Not reported again in this process.",
         surface_id=surface_id,
@@ -309,15 +310,21 @@ class PixelAccessToOneClaimedSurface:
         same rule that makes `writable()` refuse it — no door writes where
         other holders never see.
 
-        Where the array is writable it *is* the surface's own coherent host
-        mapping, so publication is per store, not at the block edge: a raise
-        mid-edit leaves a complete edit of fewer pixels, never a torn frame,
-        and there is no staging whose discard this could promise. What the
-        block edge does settle: the write intent ends, the scope closes, and
-        a propagating exception is never suppressed.
+        One contract across both backings: a raise leaves the frame the engine
+        already held or a complete edit of fewer pixels, never a torn frame —
+        which of the two is the backing's own, so code that must not publish on
+        failure edits outside the scope.
 
-        Texture-backed pixels (a kernel's output) have no host mapping at all
-        and are refused here by the surface itself; `writable()` is their door.
+        Over a pixel buffer the array *is* the surface's own coherent host
+        mapping, so publication is per store: a raise mid-edit leaves the
+        stores that already landed. Over a texture — a kernel's output, a
+        texture this processor acquired — it is the surface's host-visible
+        staging: entering reads the frame in, the writable array publishes at
+        the block edge, and a propagating raise discards the edit instead. No
+        door names the backing.
+
+        What the block edge settles either way: the write intent ends, the
+        scope closes, and a propagating exception is never suppressed.
 
         It resolves a surface of its own rather than sharing the bare view's:
         a shared handle would spend the block locked for *writing*, so a bare

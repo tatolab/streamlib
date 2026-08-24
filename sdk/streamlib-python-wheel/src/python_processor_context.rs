@@ -1072,8 +1072,9 @@ impl PythonGpuContextLimitedAccess {
     /// minted for it.
     ///
     /// The id is the whole handle: a kernel dispatch binds it, and a
-    /// downstream processor resolves it. The texture's memory is not mapped
-    /// into this process, so its pixels are not addressable here.
+    /// downstream processor resolves it. `copy_src` and `copy_dst` ride
+    /// every request, so the CPU doors reach the pixels over the surface's
+    /// host-visible staging with no transfer usage spelled here.
     fn acquire_texture(
         &self,
         python: Python<'_>,
