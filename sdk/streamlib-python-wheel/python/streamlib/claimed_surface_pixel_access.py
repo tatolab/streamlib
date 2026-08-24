@@ -221,9 +221,14 @@ class PixelAccessToOneClaimedSurface:
 
         The id read once at construction, so what a caller names downstream —
         a window's `show()`, above all — is the surface the claim protects and
-        never one a mutable composer re-pointed the field at since. Present
-        whether or not the claim itself was granted: a refused claim leaves the
-        frame riding pool depth, which still has pixels to name.
+        never one a mutable composer re-pointed the field at since.
+
+        The name says which id this is, not that a claim succeeded. It is
+        present whether or not one was taken: a refused claim, and an object
+        no typed read constructed (`VideoFrame.from_bag`, or one built by
+        hand), both leave the frame riding pool depth, which still has pixels
+        to name. Naming a surface the producer has since recycled is refused
+        loudly wherever the id is used, never answered with another frame.
         """
         return self._the_surface_id_the_claim_was_taken_on
 
@@ -528,9 +533,11 @@ class ClaimedSurfacePixelAccess:
     def surface_id_the_claim_was_taken_on(self) -> "str | None":
         """The id this object's claim was taken on — what names it downstream.
 
-        A type over several surfaces takes the same refusal the bare doors give
-        rather than guessing which one was meant; reach each surface's own
-        through `pixel_access_to_the_surface_declared_in`.
+        Present whether or not a claim was granted, on the same terms the
+        per-surface accessor states. A type over several surfaces takes the
+        refusal the bare doors give rather than guessing which one was meant;
+        reach each surface's own through
+        `pixel_access_to_the_surface_declared_in`.
         """
         return (
             self._the_one_claimed_surfaces_pixel_access().surface_id_the_claim_was_taken_on

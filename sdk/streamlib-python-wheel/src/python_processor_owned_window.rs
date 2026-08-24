@@ -11,12 +11,17 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use pyo3::exceptions::{PyAttributeError, PyRuntimeError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::{PyMapping, PyString};
+use serde::Deserialize;
+use serde::de::IntoDeserializer;
 
-use streamlib::sdk::color::{PrimariesId, TransferId};
+use streamlib::sdk::color::{ColorTraits, HdrStaticMetadata, PrimariesId, TransferId};
 use streamlib_media_builtins::video_frame::{ColorInfo, ContentLight, MasteringDisplay};
 
+use crate::python_bag_conversion::python_type_name_for_error_message;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_processor_context::PythonGpuSurfaceHandle;
 
@@ -38,23 +43,12 @@ pub(crate) struct SurfaceNamedForTheWindowsPresentLoop {
     pub(crate) source_width_in_pixels: u32,
     pub(crate) source_height_in_pixels: u32,
     pub(crate) producer_published_texture_layout: Option<i32>,
-    pub(crate) color_primaries_of_frame: Option<&'static str>,
-    pub(crate) color_transfer_of_frame: Option<&'static str>,
-    pub(crate) hdr_static_metadata_of_frame: Option<HdrStaticMetadataNamedForTheWindow>,
-}
-
-/// The HDR sidecar as the wire carries it — already the f32 units the driver
-/// takes, so nothing downstream of here converts.
-#[derive(Debug)]
-pub(crate) struct HdrStaticMetadataNamedForTheWindow {
-    pub(crate) display_primary_red: [f32; 2],
-    pub(crate) display_primary_green: [f32; 2],
-    pub(crate) display_primary_blue: [f32; 2],
-    pub(crate) white_point: [f32; 2],
-    pub(crate) min_luminance_cd_m2: f32,
-    pub(crate) max_luminance_cd_m2: f32,
-    pub(crate) max_content_light_level: f32,
-    pub(crate) max_frame_average_light_level: f32,
+    /// The engine's own colour types, spelled for the wire at `set_item` time.
+    /// Holding them rather than two strings makes this document a mirror of
+    /// the host struct it is bound for, and leaves one home for the H.273
+    /// collapse.
+    pub(crate) color_traits_of_frame: Option<ColorTraits>,
+    pub(crate) hdr_static_metadata_of_frame: Option<HdrStaticMetadata>,
 }
 
 /// The coalesced state one `drain_events()` took off a window.
@@ -129,6 +123,10 @@ pub(crate) struct PythonProcessorOwnedWindow {
     /// like the engine's own: once a window is closed nothing reopens it, so a
     /// cached true is never stale, and it is what lets `show()` stop paying a
     /// round trip for a window that will never draw again.
+    ///
+    /// `Relaxed` throughout: the flag orders no other memory, and a stronger
+    /// ordering would imply a happens-before a reader would look for and not
+    /// find.
     window_is_closed: AtomicBool,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
@@ -149,7 +147,7 @@ impl PythonProcessorOwnedWindow {
     /// of its own; `drain_events()` and `show()` are what keep it current.
     #[getter]
     fn is_closed(&self) -> bool {
-        self.window_is_closed.load(Ordering::Acquire)
+        self.window_is_closed.load(Ordering::Relaxed)
     }
 
     /// Name the frame this window shows next.
@@ -160,8 +158,18 @@ impl PythonProcessorOwnedWindow {
     /// be shown: the window presents at vsync, latest-wins, and naming nothing
     /// leaves the last frame up.
     ///
+    /// A bare id names a **texture-backed** surface only, and so does a cast
+    /// type that declares no `width`/`height`: naming no extent is how a
+    /// caller says it knows nothing else about the surface, and the engine
+    /// reads that as refusing a buffer-backed one. Such a frame does not
+    /// draw — the window keeps what it last had, and the engine logs it once
+    /// per pool slot rather than raising here. A camera or a test pattern
+    /// publishes buffer-backed frames; name those with the cast object.
+    ///
     /// A no-op once the window has closed, never an error — a user gesture
-    /// does not take a pipeline down.
+    /// does not take a pipeline down. The argument is still read, so a call
+    /// that names no surface at all is refused whether the window is open or
+    /// shut.
     fn show(
         &self,
         python: Python<'_>,
@@ -169,15 +177,19 @@ impl PythonProcessorOwnedWindow {
     ) -> PyResult<()> {
         #[cfg(target_os = "linux")]
         {
-            if self.window_is_closed.load(Ordering::Acquire) {
+            // Built before the closed window is answered, and deliberately:
+            // the no-op belongs to the user's gesture, not to an argument that
+            // names no surface. Collapsing the two would let a real mistake
+            // stop being reported the moment somebody shut the window.
+            let named_surface = surface_named_by_the_caller_of_show(frame_or_surface_to_show)?;
+            if self.window_is_closed.load(Ordering::Relaxed) {
                 return Ok(());
             }
-            let named_surface = surface_named_by_the_caller_of_show(frame_or_surface_to_show)?;
             let window_is_closed = self
                 .helper_process_exchange_client
                 .show_surface_on_processor_owned_window(python, &self.window_id, &named_surface)?;
             self.window_is_closed
-                .store(window_is_closed, Ordering::Release);
+                .store(window_is_closed, Ordering::Relaxed);
             Ok(())
         }
         #[cfg(not(target_os = "linux"))]
@@ -199,7 +211,7 @@ impl PythonProcessorOwnedWindow {
                 .helper_process_exchange_client
                 .drain_processor_owned_window_events(python, &self.window_id)?;
             self.window_is_closed
-                .store(drained.window_is_closed, Ordering::Release);
+                .store(drained.window_is_closed, Ordering::Relaxed);
             Ok(drained)
         }
         #[cfg(not(target_os = "linux"))]
@@ -220,7 +232,7 @@ impl PythonProcessorOwnedWindow {
                 .helper_process_exchange_client
                 .close_processor_owned_window(python, &self.window_id)?;
             self.window_is_closed
-                .store(window_is_closed, Ordering::Release);
+                .store(window_is_closed, Ordering::Relaxed);
             Ok(())
         }
         #[cfg(not(target_os = "linux"))]
@@ -234,7 +246,7 @@ impl PythonProcessorOwnedWindow {
         format!(
             "ProcessorOwnedWindow(title={:?}, is_closed={})",
             self.window_title,
-            self.window_is_closed.load(Ordering::Acquire),
+            self.window_is_closed.load(Ordering::Relaxed),
         )
     }
 }
@@ -275,7 +287,7 @@ impl PythonProcessorOwnedWindowEvents {
 
 #[cfg(not(target_os = "linux"))]
 fn window_unreachable_from_a_helper_process_error() -> PyErr {
-    PyRuntimeError::new_err(
+    pyo3::exceptions::PyRuntimeError::new_err(
         "a processor-owned window is not reachable from this platform: the engine's window \
          event pump and its present loop are Linux-only.",
     )
@@ -296,16 +308,12 @@ pub(crate) fn surface_named_by_the_caller_of_show(
             .borrow()
             .surface_id_and_extent_a_window_can_name()?;
         return Ok(SurfaceNamedForTheWindowsPresentLoop {
-            surface_id,
             source_width_in_pixels: width,
             source_height_in_pixels: height,
             // A handle names an allocation this helper acquired, never a
             // frame another producer published, so there is no producer
             // layout to override the pool's own default with.
-            producer_published_texture_layout: None,
-            color_primaries_of_frame: None,
-            color_transfer_of_frame: None,
-            hdr_static_metadata_of_frame: None,
+            ..surface_named_with_nothing_else_known_about_it(surface_id)
         });
     }
     surface_named_by_a_cast_object(frame_or_surface_to_show)
@@ -321,8 +329,7 @@ fn surface_named_with_nothing_else_known_about_it(
         source_width_in_pixels: 0,
         source_height_in_pixels: 0,
         producer_published_texture_layout: None,
-        color_primaries_of_frame: None,
-        color_transfer_of_frame: None,
+        color_traits_of_frame: None,
         hdr_static_metadata_of_frame: None,
     }
 }
@@ -337,50 +344,48 @@ fn surface_named_by_a_cast_object(
     cast_object: &Bound<'_, PyAny>,
 ) -> PyResult<SurfaceNamedForTheWindowsPresentLoop> {
     let python = cast_object.py();
-    let claimed_surface_id =
-        match cast_object.getattr(THE_CAST_OBJECTS_CLAIMED_SURFACE_ID_ATTRIBUTE) {
-            Ok(claimed_surface_id) => claimed_surface_id,
-            // Only a missing attribute means "this is not one of the three
-            // shapes". A cast type that has the attribute and refuses — one
-            // over several surfaces, one no typed read built — is answering
-            // with a refusal of its own, which says more than this one could.
-            Err(refusal) if refusal.is_instance_of::<PyAttributeError>(python) => {
-                return Err(nothing_about_this_names_a_published_surface_error(
-                    cast_object,
-                ));
-            }
-            Err(refusal) => return Err(refusal),
-        };
+    // Only a missing attribute means "this is not one of the three shapes". A
+    // cast type that has the attribute and refuses — one over several
+    // surfaces, one no typed read built — is answering with a refusal of its
+    // own, which says more than this one could, and `getattr_opt` propagates
+    // it rather than folding it into absence.
+    let Some(claimed_surface_id) = cast_object.getattr_opt(intern!(
+        python,
+        THE_CAST_OBJECTS_CLAIMED_SURFACE_ID_ATTRIBUTE
+    ))?
+    else {
+        return Err(nothing_about_this_names_a_published_surface_error(
+            cast_object,
+        ));
+    };
     let surface_id: String = claimed_surface_id.extract().map_err(|_| {
-        PyRuntimeError::new_err(format!(
-            "show() was given a {} whose claim names no surface, so there is nothing for the \
-             window to present. A cast type declares the field its surface id arrives in, and \
-             that field held {}",
-            type_name_of(cast_object),
-            claimed_surface_id.repr().map_or_else(
-                |_| "a value that cannot be shown here".to_string(),
-                |repr| repr.to_string()
-            ),
+        PyTypeError::new_err(format!(
+            "show() was given an argument of type {} whose claim names no surface, so there is \
+             nothing for the window to present. A cast type declares the field its surface id \
+             arrives in, and that field held {}",
+            python_type_name_for_error_message(cast_object, "object"),
+            python_repr_for_error_message(&claimed_surface_id),
         ))
     })?;
 
-    let color_info = optional_attribute(cast_object, "color_info")?;
-    let color_traits = match &color_info {
-        Some(color_info) => color_traits_named_by(color_info)?,
-        None => (None, None),
-    };
-    let mastering_display = optional_attribute(cast_object, "mastering_display")?;
-    let content_light = optional_attribute(cast_object, "content_light")?;
+    let color_info = optional_attribute(cast_object, intern!(python, "color_info"))?;
+    let mastering_display = optional_attribute(cast_object, intern!(python, "mastering_display"))?;
+    let content_light = optional_attribute(cast_object, intern!(python, "content_light"))?;
 
     Ok(SurfaceNamedForTheWindowsPresentLoop {
         surface_id,
-        source_width_in_pixels: optional_pixel_extent(cast_object, "width")?,
-        source_height_in_pixels: optional_pixel_extent(cast_object, "height")?,
-        producer_published_texture_layout: optional_attribute(cast_object, "texture_layout")?
-            .map(|texture_layout| extract_named_field(&texture_layout, "texture_layout"))
-            .transpose()?,
-        color_primaries_of_frame: color_traits.0,
-        color_transfer_of_frame: color_traits.1,
+        source_width_in_pixels: optional_pixel_extent(cast_object, intern!(python, "width"))?,
+        source_height_in_pixels: optional_pixel_extent(cast_object, intern!(python, "height"))?,
+        producer_published_texture_layout: optional_attribute(
+            cast_object,
+            intern!(python, "texture_layout"),
+        )?
+        .map(|texture_layout| extract_named_field(&texture_layout, "texture_layout"))
+        .transpose()?,
+        color_traits_of_frame: color_info
+            .map(|color_info| color_traits_named_by(&color_info))
+            .transpose()?
+            .flatten(),
         hdr_static_metadata_of_frame: mastering_display
             .map(|mastering_display| {
                 hdr_static_metadata_named_by(&mastering_display, content_light.as_ref())
@@ -389,56 +394,66 @@ fn surface_named_by_a_cast_object(
     })
 }
 
-/// The frame's colour description as the wire spells it, both axes.
+/// The frame's colour description as the engine's own pair, or `None` when the
+/// type carries a `color_info` that describes neither axis.
 ///
-/// Either axis alone is a description — the seam resolves the absent one — so
-/// they are read independently and neither implies the other.
-fn color_traits_named_by(
-    color_info: &Bound<'_, PyAny>,
-) -> PyResult<(Option<&'static str>, Option<&'static str>)> {
-    let primaries: Option<String> = optional_attribute(color_info, "primaries")?
+/// Either axis alone is a description — the seam resolves the absent one — but
+/// both empty is not: answering `Some` there would renegotiate the window's
+/// swapchain to the default pick on every frame.
+fn color_traits_named_by(color_info: &Bound<'_, PyAny>) -> PyResult<Option<ColorTraits>> {
+    let python = color_info.py();
+    let primaries: Option<String> = optional_attribute(color_info, intern!(python, "primaries"))?
         .map(|primaries| extract_named_field(&primaries, "color_info.primaries"))
         .transpose()?;
-    let transfer: Option<String> = optional_attribute(color_info, "transfer")?
+    let transfer: Option<String> = optional_attribute(color_info, intern!(python, "transfer"))?
         .map(|transfer| extract_named_field(&transfer, "color_info.transfer"))
         .transpose()?;
+    if primaries.is_none() && transfer.is_none() {
+        return Ok(None);
+    }
     // Through the bag's own H.273 vocabulary rather than a second reading of
     // it: the sixteen transfer characteristics collapse onto the five the
     // swapchain pick distinguishes, and that collapse has one home.
-    let color_traits = ColorInfo {
-        primaries: primaries
-            .map(|primaries| bag_color_axis_named(&primaries, "primaries"))
-            .transpose()?,
-        transfer: transfer
-            .map(|transfer| bag_color_axis_named(&transfer, "transfer"))
-            .transpose()?,
-        matrix: None,
-        range: None,
-    }
-    .engine_color_traits();
-    Ok((
-        color_traits.primaries.map(wire_name_of_primaries),
-        color_traits.transfer.map(wire_name_of_transfer),
+    Ok(Some(
+        ColorInfo {
+            primaries: primaries
+                .map(|primaries| bag_color_axis_named(&primaries, "primaries"))
+                .transpose()?,
+            transfer: transfer
+                .map(|transfer| bag_color_axis_named(&transfer, "transfer"))
+                .transpose()?,
+            matrix: None,
+            range: None,
+        }
+        .engine_color_traits(),
     ))
 }
 
 /// One axis of the bag's H.273 vocabulary, parsed by the same names the bag
 /// carries on the wire.
-fn bag_color_axis_named<Axis: serde::de::DeserializeOwned>(
+fn bag_color_axis_named<Axis: for<'de> Deserialize<'de>>(
     axis_value: &str,
     axis_name: &str,
 ) -> PyResult<Axis> {
-    serde_json::from_value(serde_json::Value::String(axis_value.to_string())).map_err(|_| {
-        PyRuntimeError::new_err(format!(
-            "show() was given a frame whose color_info.{axis_name} is {axis_value:?}, which is \
+    Axis::deserialize(IntoDeserializer::<serde::de::value::Error>::into_deserializer(axis_value))
+        .map_err(|_| {
+            PyValueError::new_err(format!(
+                "show() was given a frame whose color_info.{axis_name} is {axis_value:?}, which is \
              not an H.273 {axis_name} name the bag carries"
-        ))
-    })
+            ))
+        })
 }
 
-/// The wire spelling of an engine primaries id. The engine takes only its own
-/// ids in a public signature, so naming them on a wire is the caller's job.
-fn wire_name_of_primaries(primaries: PrimariesId) -> &'static str {
+/// The wire spelling of an engine primaries id.
+///
+/// The inverse of [`EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries`]'s
+/// serde renames, which this crate cannot reference — the engine takes only its
+/// own ids in a public signature and its wire enums are private to it, so a
+/// consumer owns this spelling at its own call site. An engine-side *rename*
+/// would drift silently; an engine-side *added variant* is a compile error here.
+///
+/// [`EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries`]: https://docs.rs/streamlib-engine
+pub(crate) fn wire_name_of_primaries(primaries: PrimariesId) -> &'static str {
     match primaries {
         PrimariesId::Bt709 => "bt709",
         PrimariesId::Bt470M => "bt470_m",
@@ -454,8 +469,9 @@ fn wire_name_of_primaries(primaries: PrimariesId) -> &'static str {
     }
 }
 
-/// The wire spelling of an engine transfer id.
-fn wire_name_of_transfer(transfer: TransferId) -> &'static str {
+/// The wire spelling of an engine transfer id, on the same terms as
+/// [`wire_name_of_primaries`].
+pub(crate) fn wire_name_of_transfer(transfer: TransferId) -> &'static str {
     match transfer {
         TransferId::Linear => "linear",
         TransferId::Srgb => "srgb",
@@ -470,76 +486,92 @@ fn wire_name_of_transfer(transfer: TransferId) -> &'static str {
 fn hdr_static_metadata_named_by(
     mastering_display: &Bound<'_, PyAny>,
     content_light: Option<&Bound<'_, PyAny>>,
-) -> PyResult<HdrStaticMetadataNamedForTheWindow> {
-    let increments = |field_name: &str| -> PyResult<u32> {
-        extract_named_field(
-            &mastering_display.getattr(field_name).map_err(|_| {
-                PyRuntimeError::new_err(format!(
-                    "show() was given a frame whose mastering_display carries no {field_name}; a \
-                     mastering display is the ST.2086 ten-tuple or it is absent"
-                ))
-            })?,
-            field_name,
-        )
-    };
+) -> PyResult<HdrStaticMetadata> {
+    let python = mastering_display.py();
     let content_light = content_light
         .map(|content_light| {
             Ok::<_, PyErr>(ContentLight {
-                max_cll: extract_named_field(
-                    &content_light.getattr("max_cll")?,
-                    "content_light.max_cll",
+                max_cll: required_whole_number(
+                    content_light,
+                    "content_light",
+                    intern!(python, "max_cll"),
                 )?,
-                max_fall: extract_named_field(
-                    &content_light.getattr("max_fall")?,
-                    "content_light.max_fall",
+                max_fall: required_whole_number(
+                    content_light,
+                    "content_light",
+                    intern!(python, "max_fall"),
                 )?,
             })
         })
         .transpose()?;
-    let engine_metadata = MasteringDisplay {
-        display_primaries_r_x: increments("display_primaries_r_x")?,
-        display_primaries_r_y: increments("display_primaries_r_y")?,
-        display_primaries_g_x: increments("display_primaries_g_x")?,
-        display_primaries_g_y: increments("display_primaries_g_y")?,
-        display_primaries_b_x: increments("display_primaries_b_x")?,
-        display_primaries_b_y: increments("display_primaries_b_y")?,
-        white_point_x: increments("white_point_x")?,
-        white_point_y: increments("white_point_y")?,
-        max_luminance: increments("max_luminance")?,
-        min_luminance: increments("min_luminance")?,
+    // Interned: ten reads per HDR frame on the per-frame path, and a plain
+    // `&str` allocates a Python string for each one.
+    let increments = |field_name: &Bound<'_, PyString>| {
+        required_whole_number(mastering_display, "mastering_display", field_name)
+    };
+    Ok(MasteringDisplay {
+        display_primaries_r_x: increments(intern!(python, "display_primaries_r_x"))?,
+        display_primaries_r_y: increments(intern!(python, "display_primaries_r_y"))?,
+        display_primaries_g_x: increments(intern!(python, "display_primaries_g_x"))?,
+        display_primaries_g_y: increments(intern!(python, "display_primaries_g_y"))?,
+        display_primaries_b_x: increments(intern!(python, "display_primaries_b_x"))?,
+        display_primaries_b_y: increments(intern!(python, "display_primaries_b_y"))?,
+        white_point_x: increments(intern!(python, "white_point_x"))?,
+        white_point_y: increments(intern!(python, "white_point_y"))?,
+        max_luminance: increments(intern!(python, "max_luminance"))?,
+        min_luminance: increments(intern!(python, "min_luminance"))?,
     }
-    .engine_hdr_static_metadata(content_light.as_ref());
-    Ok(HdrStaticMetadataNamedForTheWindow {
-        display_primary_red: engine_metadata.display_primary_red,
-        display_primary_green: engine_metadata.display_primary_green,
-        display_primary_blue: engine_metadata.display_primary_blue,
-        white_point: engine_metadata.white_point,
-        min_luminance_cd_m2: engine_metadata.min_luminance_cd_m2,
-        max_luminance_cd_m2: engine_metadata.max_luminance_cd_m2,
-        max_content_light_level: engine_metadata.max_content_light_level,
-        max_frame_average_light_level: engine_metadata.max_frame_average_light_level,
-    })
+    .engine_hdr_static_metadata(content_light.as_ref()))
+}
+
+/// One field a colour sidecar must carry, refused by name when it does not.
+///
+/// Absent is the only refusal this writes: a field that is there and raises is
+/// the described object's own account of itself, and folding that into "carries
+/// no {field}" would state something false about the caller's object.
+fn required_whole_number(
+    sidecar: &Bound<'_, PyAny>,
+    sidecar_name: &str,
+    field_name: &Bound<'_, PyString>,
+) -> PyResult<u32> {
+    let Some(value) = optional_attribute(sidecar, field_name)? else {
+        return Err(PyTypeError::new_err(format!(
+            "show() was given a frame whose {sidecar_name} carries no {field_name}; a \
+             {sidecar_name} is its whole tuple or it is absent"
+        )));
+    };
+    extract_named_field(&value, &format!("{sidecar_name}.{field_name}"))
 }
 
 /// One optional part of a frame's description: absent and `None` are the same
 /// answer, because the bag treats an unset key and an unset value alike.
+///
+/// Read as a mapping key when the described thing is a mapping, and as an
+/// attribute otherwise. A bag is a dict and reading it directly is always
+/// enough — `VideoFrame` casts its nested metadata, a hand-authored cast type
+/// need not — so a nested description left as the dict it arrived as has to
+/// reach the window. Folding it into "absent" would present the frame in the
+/// default colourspace with no refusal anywhere, which is the one quiet
+/// failure this module would otherwise have.
 fn optional_attribute<'py>(
     described: &Bound<'py, PyAny>,
-    attribute_name: &str,
+    attribute_name: &Bound<'py, PyString>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    match described.getattr(attribute_name) {
-        Ok(value) if value.is_none() => Ok(None),
-        Ok(value) => Ok(Some(value)),
-        Err(refusal) if refusal.is_instance_of::<PyAttributeError>(described.py()) => Ok(None),
-        Err(refusal) => Err(refusal),
-    }
+    let named = match described.cast::<PyMapping>() {
+        Ok(mapping) => mapping.get_item(attribute_name).ok(),
+        Err(_) => described.getattr_opt(attribute_name)?,
+    };
+    Ok(named.filter(|value| !value.is_none()))
 }
 
 /// One of the frame's own pixel dimensions, or zero when the type declares
 /// none — the same "nothing else is known about this surface" a bare id names.
-fn optional_pixel_extent(cast_object: &Bound<'_, PyAny>, attribute_name: &str) -> PyResult<u32> {
+fn optional_pixel_extent(
+    cast_object: &Bound<'_, PyAny>,
+    attribute_name: &Bound<'_, PyString>,
+) -> PyResult<u32> {
     match optional_attribute(cast_object, attribute_name)? {
-        Some(extent) => extract_named_field(&extent, attribute_name),
+        Some(extent) => extract_named_field(&extent, &attribute_name.to_string_lossy()),
         None => Ok(0),
     }
 }
@@ -551,29 +583,29 @@ fn extract_named_field<'a, 'py, Field: FromPyObject<'a, 'py>>(
     field_name: &str,
 ) -> PyResult<Field> {
     value.extract().map_err(|_| {
-        PyRuntimeError::new_err(format!(
+        PyTypeError::new_err(format!(
             "show() was given a frame whose {field_name} is {}, which the window cannot read",
-            value
-                .repr()
-                .map_or_else(|_| "unreadable".to_string(), |repr| repr.to_string())
+            python_repr_for_error_message(value)
         ))
     })
 }
 
 fn nothing_about_this_names_a_published_surface_error(named: &Bound<'_, PyAny>) -> PyErr {
-    PyRuntimeError::new_err(format!(
-        "show() was given a {}, and nothing about it names a published surface. It takes a \
-         cast object read with `ctx.inputs.read(port, into=T)` — whose claim is what holds the \
-         frame still — a GpuSurfaceHandle a kernel wrote, or a bare surface id string.",
-        type_name_of(named)
+    PyTypeError::new_err(format!(
+        "show() was given an argument of type {}, and nothing about it names a published \
+         surface. It takes a cast object read with `ctx.inputs.read(port, into=T)` — whose claim \
+         is what holds the frame still — a GpuSurfaceHandle a kernel wrote, or a bare surface id \
+         string.",
+        python_type_name_for_error_message(named, "object")
     ))
 }
 
-fn type_name_of(named: &Bound<'_, PyAny>) -> String {
-    named
-        .get_type()
-        .name()
-        .map_or_else(|_| "object".to_string(), |name| name.to_string())
+/// A value as it reads in a refusal, or a stand-in when even its `repr` raised.
+fn python_repr_for_error_message(value: &Bound<'_, PyAny>) -> String {
+    value.repr().map_or_else(
+        |_| "a value that cannot be shown here".to_string(),
+        |repr| repr.to_string(),
+    )
 }
 
 /// The whole of what `show()` reads off its argument, proven without a GPU.
@@ -630,6 +662,18 @@ class Frame:
         surface_named_by_the_caller_of_show(&frame)
     }
 
+    fn wire_colour_of(
+        named: &SurfaceNamedForTheWindowsPresentLoop,
+    ) -> (Option<&'static str>, Option<&'static str>) {
+        match named.color_traits_of_frame {
+            None => (None, None),
+            Some(color_traits) => (
+                color_traits.primaries.map(wire_name_of_primaries),
+                color_traits.transfer.map(wire_name_of_transfer),
+            ),
+        }
+    }
+
     fn named_by_a_frame_whose_transfer_is(
         python: Python<'_>,
         h273_transfer_name: &str,
@@ -646,8 +690,8 @@ class Frame:
 "
             ),
         )
+        .map(|named| wire_colour_of(&named).1)
         .unwrap()
-        .color_transfer_of_frame
     }
 
     #[test]
@@ -665,8 +709,7 @@ class Frame:
                 "a caller who named only an id knows no extent, and zero is how the host reads \
                  that"
             );
-            assert!(named.color_primaries_of_frame.is_none());
-            assert!(named.color_transfer_of_frame.is_none());
+            assert_eq!(wire_colour_of(&named), (None, None));
             assert!(named.hdr_static_metadata_of_frame.is_none());
             assert!(named.producer_published_texture_layout.is_none());
         });
@@ -763,7 +806,7 @@ class Frame:
         Python::attach(|python| {
             let named = named_by(python, A_CAST_OBJECT_OVER_A_DESCRIBED_FRAME).unwrap();
 
-            assert_eq!(named.color_primaries_of_frame, Some("bt2020"));
+            assert_eq!(wire_colour_of(&named).0, Some("bt2020"));
         });
     }
 
@@ -785,8 +828,7 @@ class Frame:
             )
             .unwrap();
 
-            assert_eq!(primaries_only.color_primaries_of_frame, Some("bt709"));
-            assert!(primaries_only.color_transfer_of_frame.is_none());
+            assert_eq!(wire_colour_of(&primaries_only), (Some("bt709"), None));
         });
     }
 
@@ -804,9 +846,81 @@ class Frame:
             )
             .unwrap();
 
-            assert!(named.color_primaries_of_frame.is_none());
-            assert!(named.color_transfer_of_frame.is_none());
+            assert_eq!(wire_colour_of(&named), (None, None));
         });
+    }
+
+    /// Both axes empty is not a description: answering `Some` there would
+    /// renegotiate the window's swapchain to the default pick every frame.
+    #[test]
+    fn a_colour_description_naming_neither_axis_describes_nothing() {
+        Python::initialize();
+        Python::attach(|python| {
+            let named = named_by(
+                python,
+                "
+class Frame:
+    surface_id_the_claim_was_taken_on = 'slot-9#1'
+    class color_info:
+        primaries = None
+        transfer = None
+",
+            )
+            .unwrap();
+
+            assert!(named.color_traits_of_frame.is_none());
+        });
+    }
+
+    /// The eleven spellings the engine renames its wire primaries to. The
+    /// engine's own half is pinned by its golden vector; this is the half
+    /// living in this crate, which nothing else would catch.
+    #[test]
+    fn every_primaries_id_keeps_its_wire_spelling() {
+        assert_eq!(
+            [
+                PrimariesId::Bt709,
+                PrimariesId::Bt470M,
+                PrimariesId::Bt470Bg,
+                PrimariesId::Smpte170m,
+                PrimariesId::Smpte240m,
+                PrimariesId::Film,
+                PrimariesId::Bt2020,
+                PrimariesId::Smpte428,
+                PrimariesId::Smpte431,
+                PrimariesId::Smpte432,
+                PrimariesId::Ebu3213,
+            ]
+            .map(wire_name_of_primaries),
+            [
+                "bt709",
+                "bt470_m",
+                "bt470_bg",
+                "smpte170m",
+                "smpte240m",
+                "film",
+                "bt2020",
+                "smpte428",
+                "smpte431",
+                "smpte432",
+                "ebu3213",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_transfer_id_keeps_its_wire_spelling() {
+        assert_eq!(
+            [
+                TransferId::Linear,
+                TransferId::Srgb,
+                TransferId::Bt709,
+                TransferId::Pq,
+                TransferId::Hlg,
+            ]
+            .map(wire_name_of_transfer),
+            ["linear", "srgb", "bt709", "pq", "hlg"]
+        );
     }
 
     #[test]
@@ -879,6 +993,117 @@ class Frame:
                 .expect("a mastering display is a description on its own");
             assert_eq!(sidecar.max_content_light_level, 0.0);
             assert_eq!(sidecar.max_frame_average_light_level, 0.0);
+        });
+    }
+
+    /// A sidecar field that is *there* and raises is the described object's
+    /// own account of itself. Folding that into "carries no max_luminance"
+    /// would state something false about the caller's object — the same rule
+    /// the claimed-id read follows.
+    #[test]
+    fn a_sidecar_field_that_raises_reaches_the_caller_rather_than_a_carries_no_refusal() {
+        Python::initialize();
+        Python::attach(|python| {
+            let refusal = named_by(
+                python,
+                // An instance, because a property only fires on one — the
+                // sidecar a real cast type carries is an object, not a class.
+                "
+class MasteringDisplayThatCannotReportItsPeak:
+    display_primaries_r_x = 35_400
+    display_primaries_r_y = 14_600
+    display_primaries_g_x = 8_500
+    display_primaries_g_y = 39_850
+    display_primaries_b_x = 6_550
+    display_primaries_b_y = 2_300
+    white_point_x = 15_635
+    white_point_y = 16_450
+    min_luminance = 50
+
+    @property
+    def max_luminance(self):
+        raise ValueError('this display never measured its peak luminance')
+
+class Frame:
+    surface_id_the_claim_was_taken_on = 'slot-10#1'
+    mastering_display = MasteringDisplayThatCannotReportItsPeak()
+",
+            )
+            .expect_err("the mastering display refused");
+
+            let refusal = refusal.to_string();
+            assert!(
+                refusal.contains("never measured its peak luminance"),
+                "the object's own refusal must reach the caller, got: {refusal}"
+            );
+            assert!(
+                !refusal.contains("carries no max_luminance"),
+                "a field that is present and raises is not a missing field, got: {refusal}"
+            );
+        });
+    }
+
+    /// A sidecar genuinely missing a field is refused by name, on both
+    /// sidecars — the ten-tuple and the content-light pair alike.
+    #[test]
+    fn a_sidecar_missing_a_field_is_refused_by_that_fields_name() {
+        Python::initialize();
+        Python::attach(|python| {
+            let refusal = named_by(
+                python,
+                "
+class Frame:
+    surface_id_the_claim_was_taken_on = 'slot-11#1'
+    class mastering_display:
+        display_primaries_r_x = 35_400
+    class content_light:
+        max_cll = 1_000
+",
+            )
+            .expect_err("an incomplete mastering display describes no display");
+
+            let refusal = refusal.to_string();
+            assert!(
+                refusal.contains("content_light carries no max_fall"),
+                "the content-light pair is named the same way the ten-tuple is, got: {refusal}"
+            );
+        });
+    }
+
+    /// A bag is a dict, and a cast type may keep its nested description as the
+    /// dict it arrived as. Reading that as "absent" would present the frame in
+    /// the default colourspace with no refusal anywhere — the one silent
+    /// wrongness this builder could have had.
+    #[test]
+    fn a_nested_description_left_as_the_dict_it_arrived_as_still_describes_the_frame() {
+        Python::initialize();
+        Python::attach(|python| {
+            let named = named_by(
+                python,
+                "
+class Frame:
+    surface_id_the_claim_was_taken_on = 'slot-12#1'
+    width = 1920
+    height = 1080
+    color_info = {'primaries': 'bt2020', 'transfer': 'smpte2084'}
+    mastering_display = {
+        'display_primaries_r_x': 35_400, 'display_primaries_r_y': 14_600,
+        'display_primaries_g_x': 8_500, 'display_primaries_g_y': 39_850,
+        'display_primaries_b_x': 6_550, 'display_primaries_b_y': 2_300,
+        'white_point_x': 15_635, 'white_point_y': 16_450,
+        'max_luminance': 10_000_000, 'min_luminance': 50,
+    }
+    content_light = {'max_cll': 1_000, 'max_fall': 400}
+",
+            )
+            .unwrap();
+
+            assert_eq!(wire_colour_of(&named), (Some("bt2020"), Some("pq")));
+            let sidecar = named
+                .hdr_static_metadata_of_frame
+                .expect("a mapping describes a mastering display as well as an object does");
+            assert!((sidecar.display_primary_red[0] - 0.708).abs() < 1e-6);
+            assert_eq!(sidecar.max_content_light_level, 1_000.0);
         });
     }
 

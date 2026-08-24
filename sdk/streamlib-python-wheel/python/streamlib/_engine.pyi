@@ -929,8 +929,18 @@ class ProcessorOwnedWindow:
         Returns without waiting for the frame to be shown: the window presents
         at vsync, latest-wins, and naming nothing leaves the last frame up.
 
+        A bare id names a **texture-backed** surface only, and so does a cast
+        type declaring no `width`/`height`: naming no extent is how a caller
+        says it knows nothing else about the surface, and the engine reads that
+        as refusing a buffer-backed one. Such a frame does not draw — the
+        window keeps what it last had, and the engine logs it once per pool
+        slot rather than raising here. A camera or a test pattern publishes
+        buffer-backed frames; name those with the cast object.
+
         A no-op once the window has closed, never an error — a user gesture
-        does not take a pipeline down.
+        does not take a pipeline down. The argument is still read, so a call
+        that names no surface at all is refused whether the window is open or
+        shut.
         """
 
     def drain_events(self) -> ProcessorOwnedWindowEvents:

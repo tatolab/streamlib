@@ -8,9 +8,10 @@ process while the engine presents it here, and its observation reaches this app
 — and the test driving it — over the child→parent log forwarding.
 
 A `DisplayWindow` rides alongside every probe that gets a window at all. Two
-window owners in one process is the arrangement the shared pump exists for, and
-a processor-owned window that only worked as the sole window would be a
-regression nobody would see with one on screen.
+windows on the app process's one event pump is the arrangement that pump exists
+for — the probe owning one of them runs in its own helper process, as every
+Python processor does — and a processor-owned window that only worked as the
+sole window would be a regression nobody would see with one on screen.
 
 The headless scenario is the same app with both display-server variables taken
 away before the engine boots — the arrangement a container gives an author who

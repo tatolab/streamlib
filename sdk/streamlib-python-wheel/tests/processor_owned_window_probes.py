@@ -21,9 +21,14 @@ import json
 import os
 import struct
 import traceback
+from dataclasses import dataclass
 
 from streamlib import (
+    ClaimedSurfacePixelAccess,
+    ColorInfo,
+    ContentLight,
     GpuSurfaceHandle,
+    MasteringDisplay,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -38,10 +43,17 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 # from a probe that goes on presenting, so the close needs a marker of its
 # own or it would have nowhere to be seen.
 CLOSE_MARKER = "MARKER:THE_USER_CLOSED_THE_WINDOW "
+# A probe that has already reported keeps driving its window, so anything
+# it raises afterwards needs a line of its own — silence there would make a
+# test asserting `show()` does not raise unable to fail.
+LATE_FAILURE_MARKER = "MARKER:RAISED_AFTER_REPORTING "
 
 WINDOW_TITLE = "streamlib processor-owned window"
-REQUESTED_WINDOW_WIDTH = 640
-REQUESTED_WINDOW_HEIGHT = 480
+# 720p, matching the built-in display's own default: this window is the thing a
+# human looks at on the rig, and a 1080p source scaled into a smaller one puts
+# any overlay text the source draws below the resolution to read it.
+REQUESTED_WINDOW_WIDTH = 1280
+REQUESTED_WINDOW_HEIGHT = 720
 
 KERNEL_OUTPUT_WIDTH = 256
 KERNEL_OUTPUT_HEIGHT = 256
@@ -112,6 +124,7 @@ class _WindowOwningProbeBase:
     def __init__(self) -> None:
         self.frames_seen = 0
         self.reported = False
+        self.failures_after_reporting = 0
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         gpu = ctx.gpu_full_access
@@ -149,12 +162,30 @@ class _WindowOwningProbeBase:
         self.frames_seen += 1
         try:
             self._drive(frame)
-        except BaseException:  # noqa: BLE001 — surfaced through the marker line
+        except BaseException:  # noqa: BLE001 — surfaced through a marker line
+            # Every failure, not only the first: these probes go on driving
+            # the window after they have reported, and the post-close `show()`
+            # calls are the whole subject of one of the tests. A raise that
+            # landed after the result line and went unreported would make that
+            # test unable to fail.
             if not self.reported:
                 self.reported = True
                 log.info(
                     RESULT_MARKER
                     + json.dumps({"pid": os.getpid(), "failure": traceback.format_exc()})
+                )
+            else:
+                self.failures_after_reporting += 1
+                log.info(
+                    LATE_FAILURE_MARKER
+                    + json.dumps(
+                        {
+                            "pid": os.getpid(),
+                            "failures_after_reporting": self.failures_after_reporting,
+                            "frames_seen": self.frames_seen,
+                            "failure": traceback.format_exc(),
+                        }
+                    )
                 )
 
     def _drive(self, frame: VideoFrame) -> None:
@@ -335,22 +366,38 @@ class AProcessThatCanGetNoWindowRefusesAtSetupProbe:
 @processor
 class ShowingSomethingThatNamesNoSurfaceIsRefusedProbe(_WindowOwningProbeBase):
     """A window refuses what names no published surface, in the caller's own
-    stack rather than a round trip later."""
+    stack rather than a round trip later — open or shut.
+
+    The closed half is the one worth the extra window: the no-op belongs to
+    the user's gesture, and an argument that names nothing is a programming
+    error, which the ADR keeps loud.
+    """
 
     def _drive(self, frame: VideoFrame) -> None:
         if self.reported:
             self.debug_window.show(frame)
             return
         self.reported = True
+        # The stub forbids these arguments, which is the first line of defence
+        # and not the one under test: an author reaches this refusal from
+        # untyped code, or from a variable a checker widened.
+        while_open = {
+            "refusal_for_an_object_naming_nothing": _refusal_of(
+                lambda: self.debug_window.show(object())  # pyright: ignore[reportArgumentType]
+            ),
+            "refusal_for_an_integer": _refusal_of(
+                lambda: self.debug_window.show(7)  # pyright: ignore[reportArgumentType]
+            ),
+        }
+        self.debug_window.close()
         _report(
             lambda: {
-                # The stub forbids both, which is the first line of defence
-                # and not the one under test: an author reaches this refusal
-                # from untyped code, or from a variable a checker widened.
-                "refusal_for_an_object_naming_nothing": _refusal_of(
+                **while_open,
+                "window_is_closed": self.debug_window.is_closed,
+                "refusal_after_the_window_closed": _refusal_of(
                     lambda: self.debug_window.show(object())  # pyright: ignore[reportArgumentType]
                 ),
-                "refusal_for_an_integer": _refusal_of(
+                "refusal_for_an_integer_after_the_window_closed": _refusal_of(
                     lambda: self.debug_window.show(7)  # pyright: ignore[reportArgumentType]
                 ),
             }
@@ -373,8 +420,8 @@ class AFrameDescribingItsColourReachesTheWindowProbe(_WindowOwningProbeBase):
     """
 
     def _drive(self, frame: VideoFrame) -> None:
-        described = _AnHdrFrameNaming(self.kernel_output.surface_id)
-        self.debug_window.show(described)  # pyright: ignore[reportArgumentType]
+        described = _AnHdrFrameNamingATextureBackedSurface(self.kernel_output.surface_id)
+        self.debug_window.show(described)
         if self.reported:
             return
         self.reported = True
@@ -386,37 +433,43 @@ class AFrameDescribingItsColourReachesTheWindowProbe(_WindowOwningProbeBase):
         )
 
 
-class _AnHdrFrameNaming:
+@dataclass(frozen=True, init=False)
+class _AnHdrFrameNamingATextureBackedSurface(ClaimedSurfacePixelAccess):
     """A cast type of the probe's own, describing a PQ / BT.2020 frame.
 
-    Written out rather than composed from `ClaimedSurfacePixelAccess` because
-    the claim needs a typed read to offer it, and this frame names a texture
-    the processor already owns — nothing to protect from a producer.
+    Composes the shipped composable exactly as a user-authored cast type does,
+    so this reaches `show()` on the declared contract rather than on a
+    duck-typed shape a checker would refuse. It takes no claim — no typed read
+    offered it one — and needs none: it names a texture this processor already
+    owns, which no producer can recycle underneath it.
     """
 
-    class color_info:
-        primaries = "bt2020"
-        # H.273's own name for PQ. That the wire carries `pq` instead is the
-        # collapse this probe is here to see survive the hop.
-        transfer = "smpte2084"
-
-    class mastering_display:
-        display_primaries_r_x = 35_400
-        display_primaries_r_y = 14_600
-        display_primaries_g_x = 8_500
-        display_primaries_g_y = 39_850
-        display_primaries_b_x = 6_550
-        display_primaries_b_y = 2_300
-        white_point_x = 15_635
-        white_point_y = 16_450
-        max_luminance = 10_000_000
-        min_luminance = 50
-
-    class content_light:
-        max_cll = 1_000
-        max_fall = 400
+    surface_id: str
+    width: int
+    height: int
+    color_info: ColorInfo
+    mastering_display: MasteringDisplay
+    content_light: ContentLight
 
     def __init__(self, surface_id: str) -> None:
-        self.surface_id_the_claim_was_taken_on = surface_id
-        self.width = KERNEL_OUTPUT_WIDTH
-        self.height = KERNEL_OUTPUT_HEIGHT
+        super().__init__(
+            surface_id=surface_id,
+            width=KERNEL_OUTPUT_WIDTH,
+            height=KERNEL_OUTPUT_HEIGHT,
+            # H.273's own name for PQ. That the wire carries `pq` instead is
+            # the collapse this probe is here to see survive the hop.
+            color_info=ColorInfo(primaries="bt2020", transfer="smpte2084"),
+            mastering_display=MasteringDisplay(
+                display_primaries_r_x=35_400,
+                display_primaries_r_y=14_600,
+                display_primaries_g_x=8_500,
+                display_primaries_g_y=39_850,
+                display_primaries_b_x=6_550,
+                display_primaries_b_y=2_300,
+                white_point_x=15_635,
+                white_point_y=16_450,
+                max_luminance=10_000_000,
+                min_luminance=50,
+            ),
+            content_light=ContentLight(max_cll=1_000, max_fall=400),
+        )

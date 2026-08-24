@@ -83,7 +83,23 @@ def run_probe(
     observation = json.loads(match.group(1))
     if "failure" in observation:
         pytest.fail(f"the probe raised in its helper process:\n{observation['failure']}")
+    assert_nothing_raised_after_reporting(app)
     return observation
+
+
+def assert_nothing_raised_after_reporting(app) -> None:
+    """These probes keep driving their window after they report.
+
+    A raise on any of those later frames — a post-close `show()` above all —
+    would otherwise land in a branch nobody reads, and the test claiming
+    `show()` no-ops would pass whether it no-ops or throws.
+    """
+    late = re.search(r"MARKER:RAISED_AFTER_REPORTING (\{.*\})", app.output)
+    assert late is None, (
+        f"the probe raised after reporting:\n{json.loads(late.group(1))['failure']}"
+        if late
+        else ""
+    )
 
 
 @needs_a_window_server
@@ -307,6 +323,7 @@ def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
     assert app.output.count("MARKER:THE_USER_CLOSED_THE_WINDOW") == 1
+    assert_nothing_raised_after_reporting(app)
 
 
 @needs_a_window_server
@@ -345,3 +362,24 @@ def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
 
     assert observed["the_described_frame_was_accepted"] is True
     assert observed["is_closed"] is False
+
+
+@needs_a_window_server
+def test_a_closed_window_still_refuses_an_argument_that_names_no_surface(
+    start_app_under_test,
+):
+    """The no-op belongs to the user's gesture, not to a programming error.
+
+    The ADR reserves loud refusal for programming errors, so `show(7)` has to
+    keep raising after somebody shuts the window — otherwise a real mistake
+    stops being reported the moment a user clicks the X.
+    """
+    observed = run_probe(
+        start_app_under_test, "ShowingSomethingThatNamesNoSurfaceIsRefusedProbe"
+    )
+
+    for refusal in (
+        observed["refusal_after_the_window_closed"],
+        observed["refusal_for_an_integer_after_the_window_closed"],
+    ):
+        assert "nothing about it names a published surface" in refusal, refusal
