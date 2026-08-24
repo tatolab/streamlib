@@ -355,3 +355,68 @@ class ShowingSomethingThatNamesNoSurfaceIsRefusedProbe(_WindowOwningProbeBase):
                 ),
             }
         )
+
+
+@processor
+class AFrameDescribingItsColourReachesTheWindowProbe(_WindowOwningProbeBase):
+    """A frame that names its colour and carries an HDR sidecar.
+
+    The wire's own golden vector proves the host parses this document; the
+    builder's unit tests prove the numbers. What only a live hop can prove is
+    that this side emits the keys the host reads — a typo in one of the eight
+    ST.2086 fields raises nowhere until a real HDR frame is shown, and then it
+    raises in a user's `process()`.
+
+    Its own cast type rather than the delivered `VideoFrame`, because the test
+    pattern and the camera both describe SDR: the description has to be one the
+    probe chooses.
+    """
+
+    def _drive(self, frame: VideoFrame) -> None:
+        described = _AnHdrFrameNaming(self.kernel_output.surface_id)
+        self.debug_window.show(described)  # pyright: ignore[reportArgumentType]
+        if self.reported:
+            return
+        self.reported = True
+        _report(
+            lambda: {
+                "the_described_frame_was_accepted": True,
+                "is_closed": self.debug_window.is_closed,
+            }
+        )
+
+
+class _AnHdrFrameNaming:
+    """A cast type of the probe's own, describing a PQ / BT.2020 frame.
+
+    Written out rather than composed from `ClaimedSurfacePixelAccess` because
+    the claim needs a typed read to offer it, and this frame names a texture
+    the processor already owns — nothing to protect from a producer.
+    """
+
+    class color_info:
+        primaries = "bt2020"
+        # H.273's own name for PQ. That the wire carries `pq` instead is the
+        # collapse this probe is here to see survive the hop.
+        transfer = "smpte2084"
+
+    class mastering_display:
+        display_primaries_r_x = 35_400
+        display_primaries_r_y = 14_600
+        display_primaries_g_x = 8_500
+        display_primaries_g_y = 39_850
+        display_primaries_b_x = 6_550
+        display_primaries_b_y = 2_300
+        white_point_x = 15_635
+        white_point_y = 16_450
+        max_luminance = 10_000_000
+        min_luminance = 50
+
+    class content_light:
+        max_cll = 1_000
+        max_fall = 400
+
+    def __init__(self, surface_id: str) -> None:
+        self.surface_id_the_claim_was_taken_on = surface_id
+        self.width = KERNEL_OUTPUT_WIDTH
+        self.height = KERNEL_OUTPUT_HEIGHT

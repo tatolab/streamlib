@@ -23,6 +23,7 @@ assert on that line.
 
 import ctypes
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -50,6 +51,16 @@ _SUBSTRUCTURE_NOTIFY_MASK = 1 << 19
 _SUBSTRUCTURE_REDIRECT_MASK = 1 << 20
 _CLOSE_REQUESTED_BY_A_USER_ACTION = 2
 
+# `requires_gpu` is the wheel's only rig marker, and most of this suite
+# needs a window server on top of the device. Skipping rather than failing
+# keeps a GPU box with no display — a container, an ssh session — reporting
+# what it actually checked. The headless arm is deliberately not gated: it
+# is the one that wants no window server.
+needs_a_window_server = pytest.mark.skipif(
+    not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
+    reason="display tier — this probe asks for a real window",
+)
+
 
 def run_probe(
     start_app_under_test,
@@ -75,6 +86,7 @@ def run_probe(
     return observation
 
 
+@needs_a_window_server
 def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
     start_app_under_test,
 ):
@@ -94,6 +106,7 @@ def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
     assert observed["is_closed"] is False
 
 
+@needs_a_window_server
 def test_the_window_reports_an_extent_of_its_own(start_app_under_test):
     """Not the requested one: the window server is free to hand back another,
     and the owner is told what it actually got."""
@@ -109,6 +122,7 @@ def test_the_window_reports_an_extent_of_its_own(start_app_under_test):
     assert observed["window_is_closed"] is False
 
 
+@needs_a_window_server
 def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
     start_app_under_test,
 ):
@@ -247,6 +261,7 @@ def the_window_titled(title: str) -> str:
     return ids[-1]
 
 
+@needs_a_window_server
 def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     start_app_under_test,
 ):
@@ -294,6 +309,7 @@ def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     assert app.output.count("MARKER:THE_USER_CLOSED_THE_WINDOW") == 1
 
 
+@needs_a_window_server
 def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
     start_app_under_test,
 ):
@@ -310,3 +326,22 @@ def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
         assert "read(port, into=T)" in refusal, refusal
         assert "GpuSurfaceHandle" in refusal, refusal
         assert "surface id" in refusal, refusal
+
+
+@needs_a_window_server
+def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
+    start_app_under_test,
+):
+    """The keys this side emits, checked against the host that reads them.
+
+    The builder's unit tests prove the numbers and the wire's golden vector
+    proves the host's parse; only a live hop proves the two agree about the
+    eight ST.2086 field names — and a disagreement raises in a user's
+    `process()` and nowhere before it.
+    """
+    observed = run_probe(
+        start_app_under_test, "AFrameDescribingItsColourReachesTheWindowProbe"
+    )
+
+    assert observed["the_described_frame_was_accepted"] is True
+    assert observed["is_closed"] is False
