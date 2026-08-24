@@ -126,3 +126,14 @@ jobs:
           # the display's fold onto the engine's present machinery — the rest of
           # that coverage is rig-gated and never runs in CI at all.
           cargo test --locked -p streamlib-media-builtins --lib
+          # The present-class escalate ops' headless arm. `streamlib-engine`'s
+          # lib tests are deliberately not run wholesale here (see
+          # python-wheel.yml's carve-out, which says so), so a named slice is
+          # how an engine-lib test reaches CI at all — otherwise the wire
+          # goldens, the setup-phase gate and the close-request semantics
+          # would run nowhere: the rest of that ticket's coverage is
+          # display-tier and never runs in CI.
+          cargo test --locked -p streamlib-engine --lib -- \
+            core::processor_owned_window \
+            processor_owned_window_ops \
+            escalate_wire_encoding_tests

@@ -32,6 +32,8 @@ use super::escalate_request::{
     EscalateRequestRegisterRayTracingKernelGroupKind,
     EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestRunCpuReadbackCopyDirection,
     EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunGraphicsDrawIndexBufferIndexType,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer,
     EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 use super::escalate_response::EscalateResponseOk;
@@ -109,7 +111,10 @@ fn escalate_request_vectors_round_trip() {
         AcquireImage => r#"{"op":"acquire_image","format":"acquire_image.format-1","height":2,"request_id":"acquire_image.request_id-3","width":4}"#,
         AcquirePixelBuffer => r#"{"op":"acquire_pixel_buffer","format":"acquire_pixel_buffer.format-5","height":6,"request_id":"acquire_pixel_buffer.request_id-7","width":8}"#,
         AcquireTexture => r#"{"op":"acquire_texture","format":"acquire_texture.format-9","height":10,"request_id":"acquire_texture.request_id-11","usage":["acquire_texture.usage[0]-12","acquire_texture.usage[1]-13"],"width":14}"#,
+        CloseProcessorOwnedWindow => r#"{"op":"close_processor_owned_window","request_id":"close_processor_owned_window.request_id-236","window_id":"close_processor_owned_window.window_id-237"}"#,
         CopyDeviceExportStagingBackToSurface => r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
+        CreateProcessorOwnedWindow => r#"{"op":"create_processor_owned_window","initial_height_in_physical_pixels":238,"initial_width_in_physical_pixels":239,"request_id":"create_processor_owned_window.request_id-240","window_title":"create_processor_owned_window.window_title-241"}"#,
+        DrainProcessorOwnedWindowEvents => r#"{"op":"drain_processor_owned_window_events","request_id":"drain_processor_owned_window_events.request_id-242","window_id":"drain_processor_owned_window_events.window_id-243"}"#,
         Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26"}"#,
         OpenCpuReadbackStaging => r#"{"op":"open_cpu_readback_staging","request_id":"open_cpu_readback_staging.request_id-201","surface_id":"open_cpu_readback_staging.surface_id-202"}"#,
         OpenDeviceExportStaging => r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
@@ -125,6 +130,7 @@ fn escalate_request_vectors_round_trip() {
         RunCpuReadbackCopy => r#"{"op":"run_cpu_readback_copy","direction":"buffer_to_image","request_id":"run_cpu_readback_copy.request_id-141","surface_id":"run_cpu_readback_copy.surface_id-142"}"#,
         RunGraphicsDraw => r#"{"op":"run_graphics_draw","bindings":[{"kind":"sampled_texture","name":"run_graphics_draw.bindings[0].name-143","surface_uuid":"run_graphics_draw.bindings[0].surface_uuid-145"},{"kind":"uniform_buffer","name":"run_graphics_draw.bindings[1].name-146","surface_uuid":"run_graphics_draw.bindings[1].surface_uuid-148"}],"color_target_uuids":["run_graphics_draw.color_target_uuids[0]-149","run_graphics_draw.color_target_uuids[1]-150"],"draw":{"first_index":151,"first_instance":152,"first_vertex":153,"index_count":154,"instance_count":155,"kind":"draw","vertex_count":157,"vertex_offset":158},"extent_height":159,"extent_width":160,"frame_index":161,"kernel_id":"run_graphics_draw.kernel_id-162","push_constants_hex":"run_graphics_draw.push_constants_hex-163","request_id":"run_graphics_draw.request_id-164","vertex_buffers":[{"binding":165,"offset":"run_graphics_draw.vertex_buffers[0].offset-166","surface_uuid":"run_graphics_draw.vertex_buffers[0].surface_uuid-167"},{"binding":168,"offset":"run_graphics_draw.vertex_buffers[1].offset-169","surface_uuid":"run_graphics_draw.vertex_buffers[1].surface_uuid-170"}],"depth_target_uuid":"run_graphics_draw.depth_target_uuid-171","index_buffer":{"index_type":"uint16","offset":"run_graphics_draw.index_buffer.offset-173","surface_uuid":"run_graphics_draw.index_buffer.surface_uuid-174"},"scissor":{"height":175,"width":176,"x":177,"y":178},"viewport":{"height":179.5,"max_depth":180.5,"min_depth":181.5,"width":182.5,"x":183.5,"y":184.5}}"#,
         RunRayTracingKernel => r#"{"op":"run_ray_tracing_kernel","bindings":[{"kind":"sampled_texture","name":"run_ray_tracing_kernel.bindings[0].name-185","target_id":"run_ray_tracing_kernel.bindings[0].target_id-187"},{"kind":"uniform_buffer","name":"run_ray_tracing_kernel.bindings[1].name-188","target_id":"run_ray_tracing_kernel.bindings[1].target_id-190"}],"depth":191,"height":192,"kernel_id":"run_ray_tracing_kernel.kernel_id-193","push_constants_hex":"run_ray_tracing_kernel.push_constants_hex-194","request_id":"run_ray_tracing_kernel.request_id-195","width":196}"#,
+        ShowSurfaceOnProcessorOwnedWindow => r#"{"op":"show_surface_on_processor_owned_window","request_id":"show_surface_on_processor_owned_window.request_id-244","source_height_in_pixels":245,"source_width_in_pixels":246,"surface_id":"show_surface_on_processor_owned_window.surface_id-247","window_id":"show_surface_on_processor_owned_window.window_id-248","color_primaries_of_frame":"bt2020","color_transfer_of_frame":"pq","hdr_static_metadata_of_frame":{"display_primary_blue":[250.5,251.5],"display_primary_green":[252.5,253.5],"display_primary_red":[254.5,255.5],"max_frame_average_light_level":256.5,"max_content_light_level":257.5,"max_luminance_cd_m2":258.5,"min_luminance_cd_m2":259.5,"white_point":[260.5,261.5]},"producer_published_texture_layout":249}"#,
         TryRunCpuReadbackCopy => r#"{"op":"try_run_cpu_readback_copy","direction":"image_to_buffer","request_id":"try_run_cpu_readback_copy.request_id-198","surface_id":"try_run_cpu_readback_copy.surface_id-199"}"#,
         WaitDeviceIdle => r#"{"op":"wait_device_idle","request_id":"wait_device_idle.request_id-200"}"#,
     );
@@ -136,7 +142,7 @@ fn escalate_response_vectors_round_trip() {
     assert_golden_vectors_round_trip!(EscalateResponse:
         Contended => r#"{"result":"contended","request_id":"contended.request_id-1"}"#,
         Err => r#"{"result":"err","message":"err.message-2","request_id":"err.request_id-3"}"#,
-        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
+        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","close_requested_by_user":true,"exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"processor_owned_window_is_closed":true,"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
     );
 }
 
@@ -153,6 +159,26 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
         }
         EscalateRequestLogSource {
             Python => "python",
+        }
+        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries {
+            Bt709 => "bt709",
+            Bt470M => "bt470_m",
+            Bt470Bg => "bt470_bg",
+            Smpte170m => "smpte170m",
+            Smpte240m => "smpte240m",
+            Film => "film",
+            Bt2020 => "bt2020",
+            Smpte428 => "smpte428",
+            Smpte431 => "smpte431",
+            Smpte432 => "smpte432",
+            Ebu3213 => "ebu3213",
+        }
+        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer {
+            Linear => "linear",
+            Srgb => "srgb",
+            Bt709 => "bt709",
+            Pq => "pq",
+            Hlg => "hlg",
         }
         EscalateComputeBindingKind {
             SampledImage => "sampled_image",

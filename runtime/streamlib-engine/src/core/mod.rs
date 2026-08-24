@@ -78,7 +78,8 @@ pub use streamlib_home::{get_streamlib_data_dir, get_streamlib_home, get_uv_cach
 /// with the engine's own subprocess hosts.
 pub mod helper_process_transport {
     pub use super::compiler::compiler_ops::subprocess_bridge::{
-        EscalateTransport, PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
-        SubprocessBridge, spawn_fd_line_reader, validate_subprocess_protocol,
+        EscalateTransport, PROTOCOL_VERSION_ENV, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
+        STREAMLIB_SUBPROCESS_PROTOCOL_VERSION, SubprocessBridge, spawn_fd_line_reader,
+        validate_subprocess_protocol,
     };
 }

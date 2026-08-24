@@ -26,13 +26,15 @@ use crate::core::rhi::GlslCompilationTargetStage;
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostSurfaceStoreExt;
 
+use super::subprocess_bridge::SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS;
 use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateComputeBindingKind, EscalateGraphicsBindingKind, EscalateRayTracingBindingKind,
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
-    EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestLog,
-    EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestOpenCpuReadbackStaging,
-    EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
-    EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateRequestCloseProcessorOwnedWindow, EscalateRequestCopyDeviceExportStagingBackToSurface,
+    EscalateRequestCreateProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
+    EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
+    EscalateRequestOpenCpuReadbackStaging, EscalateRequestOpenDeviceExportStaging,
+    EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
     EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelPipelineState,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
@@ -52,6 +54,10 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestRunComputeKernelBinding, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
     EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunRayTracingKernel,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindow,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer,
+    EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata,
     EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
     EscalateRequestWaitDeviceIdle, RAY_TRACING_STAGE_INDEX_NONE,
 };
@@ -71,6 +77,7 @@ use super::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
+use crate::core::color::{ColorTraits, HdrStaticMetadata, PrimariesId, TransferId};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::SurfaceExportStagingResidency;
@@ -80,10 +87,18 @@ use crate::core::context::{
     PooledTextureHandle, TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::logging::{LogLevel, LogRecord, Source, push_polyglot_record};
+use crate::core::processor_owned_window::{
+    ProcessorOwnedWindow, ProcessorOwnedWindowAwaitingItsPresentTarget,
+    ProcessorOwnedWindowRequest, SurfaceNamedForTheEnginesPresentLoop,
+    WindowPresentLoopForOwningProcessor,
+};
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
+use crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
+use crate::host_rhi::PresentScalingMode;
 
+use crate::core::error::Error;
 #[cfg(test)]
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 
 /// Wire tag marking a message as an escalate request. Bridges demux on this
 /// before falling through to lifecycle dispatch.
@@ -117,6 +132,10 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RegisterRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
+        EscalateRequest::CreateProcessorOwnedWindow(p) => Some(&p.request_id),
+        EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(p) => Some(&p.request_id),
+        EscalateRequest::DrainProcessorOwnedWindowEvents(p) => Some(&p.request_id),
+        EscalateRequest::CloseProcessorOwnedWindow(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
@@ -182,9 +201,31 @@ impl RegisteredHandle {
 /// resource from being immediately recycled while the subprocess still
 /// references it by ID. Dropping a [`PooledTextureHandle`] releases the pool
 /// slot; dropping an [`PixelBuffer`] releases its refcount.
+///
+/// It is the one per-subprocess state the escalate dispatch has, so the
+/// windows that subprocess owns and the lifecycle hook it is currently inside
+/// live here too — both are per-helper, and both are released or forgotten at
+/// the same teardown.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
     handles: Mutex<HashMap<String, RegisteredHandle>>,
+    /// The windows this subprocess owns, each driving its own present
+    /// thread. Not a [`RegisteredHandle`]: releasing one stops and waits for
+    /// a thread rather than evicting a texture-cache entry, and a window id
+    /// must never reach the surface-share release path.
+    ///
+    /// Held by `Arc` so every op works on a window with this map's lock
+    /// already released: closing one waits on a thread the window server can
+    /// hold for as long as it likes, and `SubprocessBridge`'s teardown — a
+    /// path that deliberately never blocks — takes this same lock.
+    processor_owned_windows: Mutex<HashMap<String, Arc<WindowPresentLoopForOwningProcessor>>>,
+    /// The lifecycle command the parent last sent this helper — the engine's
+    /// only reading of which hook the child is inside.
+    ///
+    /// Setup-phase-only ops refuse on it. The helper's own typestate (which
+    /// Python object carries the method) is the child's guard and never the
+    /// engine's: both Python capability tiers collapse onto this one wire.
+    last_lifecycle_command_sent_to_the_helper_process: Mutex<Option<String>>,
 }
 
 impl EscalateHandleRegistry {
@@ -260,6 +301,75 @@ impl EscalateHandleRegistry {
     #[cfg(test)]
     pub(crate) fn handle_count(&self) -> usize {
         self.handles.lock().expect("poisoned").len()
+    }
+
+    /// Record the lifecycle command the parent is about to send the helper,
+    /// so setup-phase-only escalate ops can refuse everything else by name.
+    pub(crate) fn note_lifecycle_command_sent_to_the_helper_process(&self, command: &str) {
+        *self
+            .last_lifecycle_command_sent_to_the_helper_process
+            .lock()
+            .expect("poisoned") = Some(command.to_string());
+    }
+
+    /// Whether the last thing the parent told this helper to do was `setup`.
+    ///
+    /// Named for what it reads rather than for the conclusion drawn from it:
+    /// nothing clears the field when a hook returns, so this still answers
+    /// true between setup completing and `run` being sent. That is the whole
+    /// engine-side reading of the child's phase, and it fails closed —
+    /// `false` before the parent has sent anything at all.
+    pub(crate) fn the_last_lifecycle_command_sent_to_the_helper_process_was_setup(&self) -> bool {
+        self.last_lifecycle_command_sent_to_the_helper_process
+            .lock()
+            .expect("poisoned")
+            .as_deref()
+            == Some(SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS)
+    }
+
+    /// The window map, recovered rather than panicked on when poisoned.
+    ///
+    /// The drain below runs from `SubprocessBridge`'s `Drop`, where a second
+    /// panic would abort the process instead of tearing one helper down.
+    fn locked_processor_owned_windows(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, Arc<WindowPresentLoopForOwningProcessor>>> {
+        self.processor_owned_windows
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn insert_processor_owned_window(
+        &self,
+        window_id: String,
+        present_loop: WindowPresentLoopForOwningProcessor,
+    ) {
+        let mut windows = self.locked_processor_owned_windows();
+        windows.insert(window_id, Arc::new(present_loop));
+    }
+
+    /// One window this subprocess owns, or `None` when the id names none.
+    ///
+    /// Hands the window out rather than running a closure under the map's
+    /// lock, so no op holds it while waiting on a present thread or reaching
+    /// the surface store.
+    pub(crate) fn processor_owned_window(
+        &self,
+        window_id: &str,
+    ) -> Option<Arc<WindowPresentLoopForOwningProcessor>> {
+        self.locked_processor_owned_windows()
+            .get(window_id)
+            .cloned()
+    }
+
+    /// Take every window this subprocess still owns, so a teardown path
+    /// closes them all — the release an owner that never called
+    /// `close_processor_owned_window` still gets.
+    pub(crate) fn drain_processor_owned_windows(
+        &self,
+    ) -> Vec<(String, Arc<WindowPresentLoopForOwningProcessor>)> {
+        let mut windows = self.locked_processor_owned_windows();
+        windows.drain().collect()
     }
 }
 
@@ -802,10 +912,404 @@ pub(crate) fn handle_escalate_op(
                 })
             })
         }
+        EscalateRequest::CreateProcessorOwnedWindow(req) => Some(
+            handle_create_processor_owned_window(sandbox, registry, rid, req),
+        ),
+        EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(req) => Some(
+            handle_show_surface_on_processor_owned_window(sandbox, registry, rid, req),
+        ),
+        EscalateRequest::DrainProcessorOwnedWindowEvents(
+            EscalateRequestDrainProcessorOwnedWindowEvents {
+                request_id: _,
+                window_id,
+            },
+        ) => Some(handle_drain_processor_owned_window_events(
+            registry, rid, window_id,
+        )),
+        EscalateRequest::CloseProcessorOwnedWindow(EscalateRequestCloseProcessorOwnedWindow {
+            request_id: _,
+            window_id,
+        }) => Some(handle_close_processor_owned_window(
+            registry, rid, window_id,
+        )),
         EscalateRequest::Log(log_op) => {
             push_polyglot_record(log_record_from_wire(log_op));
             None
         }
+    }
+}
+
+/// Mint a window for a helper process and start the engine's present loop on
+/// it, answering with the id every other present-class op names.
+///
+/// The pump round trip happens outside the escalate gate, for the reason
+/// [`ProcessorOwnedWindowAwaitingItsPresentTarget`] carries.
+fn handle_create_processor_owned_window(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    request: EscalateRequestCreateProcessorOwnedWindow,
+) -> EscalateResponse {
+    if !registry.the_last_lifecycle_command_sent_to_the_helper_process_was_setup() {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id,
+            message: format!(
+                "create_processor_owned_window is a setup-phase request: the window titled \
+                 {:?} was asked for outside this processor's setup() hook, and a window is \
+                 never minted mid-process()",
+                request.window_title
+            ),
+        });
+    }
+
+    let window_title = request.window_title.clone();
+    let registered_window =
+        match ProcessorOwnedWindowAwaitingItsPresentTarget::register_on_the_process_wide_window_event_pump(
+            ProcessorOwnedWindowRequest {
+                window_registration_request: WindowRegistrationRequestFromOwningProcessor {
+                    window_title: request.window_title,
+                    initial_width_in_physical_pixels: request.initial_width_in_physical_pixels,
+                    initial_height_in_physical_pixels: request.initial_height_in_physical_pixels,
+                },
+                // Letterbox, and no dial on the request: the compositor's
+                // default is the decided behaviour, and a scaling mode is
+                // additive surface rather than plan text.
+                scaling_mode_for_frame_in_window: PresentScalingMode::Fit,
+            },
+        ) {
+            Ok(registered_window) => registered_window,
+            Err(e) => {
+                return EscalateResponse::Err(processor_owned_window_could_not_be_minted_error(
+                    request_id,
+                    &window_title,
+                    &e,
+                ));
+            }
+        };
+
+    let processor_owned_window = sandbox.escalate(|full| {
+        ProcessorOwnedWindow::open_present_target_for_registered_window(full, registered_window)
+    });
+    let processor_owned_window = match processor_owned_window {
+        Ok(processor_owned_window) => processor_owned_window,
+        Err(e) => {
+            return EscalateResponse::Err(processor_owned_window_could_not_be_minted_error(
+                request_id,
+                &window_title,
+                &e,
+            ));
+        }
+    };
+
+    let (width, height) = processor_owned_window.current_extent_in_physical_pixels();
+    let present_loop = match WindowPresentLoopForOwningProcessor::start_for_processor_owned_window(
+        processor_owned_window,
+    ) {
+        Ok(present_loop) => present_loop,
+        Err(e) => {
+            return EscalateResponse::Err(processor_owned_window_could_not_be_minted_error(
+                request_id,
+                &window_title,
+                &e,
+            ));
+        }
+    };
+    let window_id = format!("processor-owned-window-{}", Uuid::new_v4());
+    registry.insert_processor_owned_window(window_id.clone(), present_loop);
+    EscalateResponse::Ok(EscalateResponseOk {
+        request_id,
+        handle_id: window_id,
+        width: Some(width),
+        height: Some(height),
+        processor_owned_window_is_closed: Some(false),
+        ..Default::default()
+    })
+}
+
+/// What one `show_surface_on_processor_owned_window` amounted to, once the
+/// window it named had been found. A window that was never found is the
+/// caller's own refusal, not one of these.
+enum ShowSurfaceOnProcessorOwnedWindowOutcome {
+    /// Handed to the window's present loop, which shows it at the next vsync
+    /// unless a newer id lands first.
+    NamedForTheNextPresent,
+    /// The engine had already closed the window, so nothing was named. The
+    /// op's answer to a user gesture, and deliberately not an error.
+    WindowIsClosedSoNothingWasNamed,
+    /// The id names a frame whose pool slot has been recycled since, carrying
+    /// the recycling's own account of it.
+    SurfaceIdWasRetired(String),
+}
+
+/// Name the frame a window shows next, without waiting for it to be shown.
+///
+/// No escalate gate: the gate serialises runtime-wide and waits for device
+/// idle, and this is a per-frame op that starts no GPU work of its own — the
+/// window's own thread does the acquiring and composing.
+///
+/// The closed window is answered before the surface id is judged: after a
+/// close this op is a no-op that reports closed, and a stale id in the same
+/// call must not turn that into the error the close was never allowed to be.
+fn handle_show_surface_on_processor_owned_window(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    request: EscalateRequestShowSurfaceOnProcessorOwnedWindow,
+) -> EscalateResponse {
+    let Some(present_loop) = registry.processor_owned_window(&request.window_id) else {
+        return EscalateResponse::Err(unknown_processor_owned_window_error(
+            request_id,
+            "show_surface_on_processor_owned_window",
+            &request.window_id,
+        ));
+    };
+
+    let outcome = if present_loop.window_is_closed() {
+        ShowSurfaceOnProcessorOwnedWindowOutcome::WindowIsClosedSoNothingWasNamed
+    } else if let Err(e) = sandbox
+        .host_inner()
+        .refuse_a_retired_frame_id(&request.surface_id)
+    {
+        // Refused here rather than left to the loop: the owner is owed the
+        // recycling by name at the call that got it wrong, never a window
+        // that quietly keeps its last frame. Judged after the closed window,
+        // because a stale id must not turn the close's no-op into an error.
+        ShowSurfaceOnProcessorOwnedWindowOutcome::SurfaceIdWasRetired(e.to_string())
+    } else {
+        present_loop
+            .name_surface_for_the_next_present(surface_named_for_the_present_loop_of(&request));
+        ShowSurfaceOnProcessorOwnedWindowOutcome::NamedForTheNextPresent
+    };
+    let window_id = request.window_id;
+
+    match outcome {
+        ShowSurfaceOnProcessorOwnedWindowOutcome::NamedForTheNextPresent => {
+            EscalateResponse::Ok(EscalateResponseOk {
+                request_id,
+                handle_id: window_id,
+                processor_owned_window_is_closed: Some(false),
+                ..Default::default()
+            })
+        }
+        ShowSurfaceOnProcessorOwnedWindowOutcome::WindowIsClosedSoNothingWasNamed => {
+            EscalateResponse::Ok(EscalateResponseOk {
+                request_id,
+                handle_id: window_id,
+                processor_owned_window_is_closed: Some(true),
+                ..Default::default()
+            })
+        }
+        ShowSurfaceOnProcessorOwnedWindowOutcome::SurfaceIdWasRetired(recycling) => {
+            EscalateResponse::Err(EscalateResponseErr {
+                request_id,
+                message: format!("show_surface_on_processor_owned_window refused: {recycling}"),
+            })
+        }
+    }
+}
+
+/// Hand the owner its window's coalesced state: current extent, whether the
+/// user asked to close it since the last drain, and whether the engine has
+/// closed it.
+fn handle_drain_processor_owned_window_events(
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    window_id: String,
+) -> EscalateResponse {
+    let drained = registry
+        .processor_owned_window(&window_id)
+        .map(|present_loop| present_loop.drain_coalesced_state_for_the_owning_processor());
+    match drained {
+        Some(drained) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id,
+            handle_id: window_id,
+            width: Some(drained.current_width_in_physical_pixels),
+            height: Some(drained.current_height_in_physical_pixels),
+            close_requested_by_user: Some(drained.close_requested_by_user),
+            processor_owned_window_is_closed: Some(drained.window_is_closed),
+            ..Default::default()
+        }),
+        None => EscalateResponse::Err(unknown_processor_owned_window_error(
+            request_id,
+            "drain_processor_owned_window_events",
+            &window_id,
+        )),
+    }
+}
+
+/// Release a window the owner is done with: the present thread stops and is
+/// waited for, and dropping the window's pump registration is what closes it.
+///
+/// The GPU work this runs is the present target's own drop — device-idle,
+/// then destroy its swapchain and surface — which orders itself against
+/// nothing but that target, so it needs no runtime-wide escalate gate. That
+/// is why the op takes none, not because closing is free.
+///
+/// The id stays this processor's until teardown, closed. One answer for a
+/// closed window however it closed — a user gesture and an owner's own close
+/// both leave `show…` a no-op reporting closed, rather than making the second
+/// one an error the first was never allowed to be. The answer reports what is
+/// true: a window server still holding the present thread past the close's
+/// grace window leaves the window open, and says so.
+fn handle_close_processor_owned_window(
+    registry: &EscalateHandleRegistry,
+    request_id: String,
+    window_id: String,
+) -> EscalateResponse {
+    match registry
+        .processor_owned_window(&window_id)
+        .map(|present_loop| present_loop.close_the_window_and_join_its_present_thread())
+    {
+        Some(window_is_closed) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id,
+            handle_id: window_id,
+            processor_owned_window_is_closed: Some(window_is_closed),
+            ..Default::default()
+        }),
+        None => EscalateResponse::Err(unknown_processor_owned_window_error(
+            request_id,
+            "close_processor_owned_window",
+            &window_id,
+        )),
+    }
+}
+
+/// The frame one request names, projected onto what the engine's present
+/// loop takes — the whole of it, so a field dropped on the way through is a
+/// test failure rather than a window quietly showing an undescribed frame.
+///
+/// Borrows and clones the id rather than consuming the request, because the
+/// response still owes the caller its window id; one short-string clone on a
+/// path that has just decoded this document from JSON.
+fn surface_named_for_the_present_loop_of(
+    request: &EscalateRequestShowSurfaceOnProcessorOwnedWindow,
+) -> SurfaceNamedForTheEnginesPresentLoop {
+    SurfaceNamedForTheEnginesPresentLoop {
+        surface_id: request.surface_id.clone(),
+        source_width_in_pixels: request.source_width_in_pixels,
+        source_height_in_pixels: request.source_height_in_pixels,
+        producer_published_texture_layout: request.producer_published_texture_layout,
+        color_traits_of_frame: color_traits_of_frame_named_over_the_wire(
+            request.color_primaries_of_frame,
+            request.color_transfer_of_frame,
+        ),
+        hdr_static_metadata_of_frame: request
+            .hdr_static_metadata_of_frame
+            .map(hdr_static_metadata_named_over_the_wire),
+    }
+}
+
+/// The frame's colour description, or `None` when the caller named neither
+/// axis.
+///
+/// Naming either axis alone is a description: the seam resolves the absent
+/// one itself, and answering `Some` with both axes empty would renegotiate
+/// the swapchain to the default pick rather than leave the window alone.
+fn color_traits_of_frame_named_over_the_wire(
+    color_primaries_of_frame: Option<
+        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries,
+    >,
+    color_transfer_of_frame: Option<EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer>,
+) -> Option<ColorTraits> {
+    if color_primaries_of_frame.is_none() && color_transfer_of_frame.is_none() {
+        return None;
+    }
+    Some(ColorTraits {
+        primaries: color_primaries_of_frame.map(|primaries| match primaries {
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt709 => {
+                PrimariesId::Bt709
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt470M => {
+                PrimariesId::Bt470M
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt470Bg => {
+                PrimariesId::Bt470Bg
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte170m => {
+                PrimariesId::Smpte170m
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte240m => {
+                PrimariesId::Smpte240m
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Film => {
+                PrimariesId::Film
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt2020 => {
+                PrimariesId::Bt2020
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte428 => {
+                PrimariesId::Smpte428
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte431 => {
+                PrimariesId::Smpte431
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Smpte432 => {
+                PrimariesId::Smpte432
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Ebu3213 => {
+                PrimariesId::Ebu3213
+            }
+        }),
+        transfer: color_transfer_of_frame.map(|transfer| match transfer {
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Linear => {
+                TransferId::Linear
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Srgb => TransferId::Srgb,
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Bt709 => {
+                TransferId::Bt709
+            }
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Pq => TransferId::Pq,
+            EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Hlg => TransferId::Hlg,
+        }),
+    })
+}
+
+/// The frame's HDR sidecar, field for field: the wire already carries the f32
+/// units the driver takes, so this converts nothing and only crosses types.
+fn hdr_static_metadata_named_over_the_wire(
+    hdr_static_metadata_of_frame: EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata,
+) -> HdrStaticMetadata {
+    HdrStaticMetadata {
+        display_primary_red: hdr_static_metadata_of_frame.display_primary_red,
+        display_primary_green: hdr_static_metadata_of_frame.display_primary_green,
+        display_primary_blue: hdr_static_metadata_of_frame.display_primary_blue,
+        white_point: hdr_static_metadata_of_frame.white_point,
+        min_luminance_cd_m2: hdr_static_metadata_of_frame.min_luminance_cd_m2,
+        max_luminance_cd_m2: hdr_static_metadata_of_frame.max_luminance_cd_m2,
+        max_content_light_level: hdr_static_metadata_of_frame.max_content_light_level,
+        max_frame_average_light_level: hdr_static_metadata_of_frame.max_frame_average_light_level,
+    }
+}
+
+/// The one refusal for a window this process could not get — no display
+/// server, a dead pump, a present target that would not mint. It carries the
+/// cause's own account rather than substituting for it, because that is what
+/// tells a Python author whether to handle the refusal or fix the call.
+fn processor_owned_window_could_not_be_minted_error(
+    request_id: String,
+    window_title: &str,
+    cause: &Error,
+) -> EscalateResponseErr {
+    EscalateResponseErr {
+        request_id,
+        message: format!(
+            "create_processor_owned_window failed for the window titled {window_title:?}: {cause}"
+        ),
+    }
+}
+
+/// The one refusal for an id that names no window this subprocess owns —
+/// never minted, or already released.
+fn unknown_processor_owned_window_error(
+    request_id: String,
+    op_wire_name: &str,
+    window_id: &str,
+) -> EscalateResponseErr {
+    EscalateResponseErr {
+        request_id,
+        message: format!(
+            "{op_wire_name}: window_id '{window_id}' names no window this processor owns"
+        ),
     }
 }
 
@@ -4507,6 +5011,347 @@ mod tests {
                 "storage_binding".to_string()
             ]
         );
+    }
+
+    /// The present-class ops' own gates: which lifecycle hook may mint a
+    /// window, and what every op answers for a window nobody owns.
+    mod processor_owned_window_ops {
+        use super::*;
+        use crate::core::context::GpuContext;
+
+        const A_WINDOW_ID_NOBODY_OWNS: &str = "processor-owned-window-never-minted";
+
+        fn sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+            match GpuContext::init_for_platform_sync() {
+                Ok(gpu) => Some(GpuContextLimitedAccess::new(gpu)),
+                Err(e) => {
+                    println!("{test_name}: no GPU device ({e}) — skipping");
+                    None
+                }
+            }
+        }
+
+        /// A refusal a person reads, so a hand-wrapped format string that
+        /// lost its line continuation is a defect rather than cosmetics —
+        /// and one no other gate catches, because `cargo fmt` does not
+        /// reflow string literals and clippy does not read them.
+        fn assert_no_collapsed_whitespace(message: &str) {
+            assert!(
+                !message.contains("  "),
+                "the refusal carries a run of literal spaces, so a line continuation was lost \
+                 when it was wrapped: {message:?}"
+            );
+        }
+
+        fn refusal_message_of(response: EscalateResponse, expected_request_id: &str) -> String {
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, expected_request_id);
+                    err.message
+                }
+                other => panic!("expected a refusal, got {other:?}"),
+            }
+        }
+
+        /// A window is a setup-phase resource request, so the engine decides
+        /// it — not the wheel's typestate. Both Python capability tiers
+        /// collapse onto this one wire, so which Python object carried the
+        /// call is invisible by the time the op arrives, and a guard that
+        /// lived only in the child would be no guard at all.
+        #[test]
+        fn only_the_setup_hook_may_mint_a_processor_owned_window() {
+            let registry = EscalateHandleRegistry::new();
+            assert!(
+                !registry.the_last_lifecycle_command_sent_to_the_helper_process_was_setup(),
+                "a request arriving before the parent has sent anything is inside no hook"
+            );
+
+            registry.note_lifecycle_command_sent_to_the_helper_process("setup");
+            assert!(
+                registry.the_last_lifecycle_command_sent_to_the_helper_process_was_setup(),
+                "the setup hook is the one place a window may be asked for"
+            );
+
+            for command_outside_the_setup_hook in [
+                "run",
+                "stop",
+                "teardown",
+                "on_pause",
+                "on_resume",
+                "update_config",
+            ] {
+                registry.note_lifecycle_command_sent_to_the_helper_process(
+                    command_outside_the_setup_hook,
+                );
+                assert!(
+                    !registry.the_last_lifecycle_command_sent_to_the_helper_process_was_setup(),
+                    "{command_outside_the_setup_hook} is not the setup hook, so a window minted \
+                     from it would be minted mid-pipeline"
+                );
+            }
+        }
+
+        /// Two ops need no GPU capability to answer, so their refusal is
+        /// checked wherever the suite runs: an id that names no window of
+        /// this processor's is refused by name, and never mistaken for the
+        /// different failure of having no display server.
+        #[test]
+        fn drain_and_close_refuse_a_window_this_processor_does_not_own_by_name() {
+            let registry = EscalateHandleRegistry::new();
+
+            let refusals = [
+                (
+                    "drain_processor_owned_window_events",
+                    handle_drain_processor_owned_window_events(
+                        &registry,
+                        "req-drain".to_string(),
+                        A_WINDOW_ID_NOBODY_OWNS.to_string(),
+                    ),
+                    "req-drain",
+                ),
+                (
+                    "close_processor_owned_window",
+                    handle_close_processor_owned_window(
+                        &registry,
+                        "req-close".to_string(),
+                        A_WINDOW_ID_NOBODY_OWNS.to_string(),
+                    ),
+                    "req-close",
+                ),
+            ];
+
+            for (op_wire_name, response, expected_request_id) in refusals {
+                let message = refusal_message_of(response, expected_request_id);
+                assert!(
+                    message.contains(op_wire_name) && message.contains(A_WINDOW_ID_NOBODY_OWNS),
+                    "{op_wire_name}: the refusal must name the op and the window id, got: {message}"
+                );
+                assert!(
+                    !message.contains("display"),
+                    "{op_wire_name}: an unowned window is not a missing display server, got: \
+                     {message}"
+                );
+                assert_no_collapsed_whitespace(&message);
+            }
+        }
+
+        /// The same refusal, reached the way a helper reaches it — through
+        /// the dispatch arm, with the request decoded from its wire variant.
+        #[test]
+        fn every_present_class_op_refuses_a_window_this_processor_does_not_own() {
+            let Some(sandbox) = sandbox_or_skip(
+                "every_present_class_op_refuses_a_window_this_processor_does_not_own",
+            ) else {
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let requests = [
+                EscalateRequest::ShowSurfaceOnProcessorOwnedWindow(
+                    EscalateRequestShowSurfaceOnProcessorOwnedWindow {
+                        request_id: "req-show".into(),
+                        window_id: A_WINDOW_ID_NOBODY_OWNS.into(),
+                        surface_id: "a-surface-this-process-never-saw".into(),
+                        source_width_in_pixels: 64,
+                        source_height_in_pixels: 64,
+                        color_primaries_of_frame: None,
+                        color_transfer_of_frame: None,
+                        hdr_static_metadata_of_frame: None,
+                        producer_published_texture_layout: None,
+                    },
+                ),
+                EscalateRequest::DrainProcessorOwnedWindowEvents(
+                    EscalateRequestDrainProcessorOwnedWindowEvents {
+                        request_id: "req-drain".into(),
+                        window_id: A_WINDOW_ID_NOBODY_OWNS.into(),
+                    },
+                ),
+                EscalateRequest::CloseProcessorOwnedWindow(
+                    EscalateRequestCloseProcessorOwnedWindow {
+                        request_id: "req-close".into(),
+                        window_id: A_WINDOW_ID_NOBODY_OWNS.into(),
+                    },
+                ),
+            ];
+
+            for request in requests {
+                let expected_request_id = request_id(&request)
+                    .expect("every present-class op carries a correlation token")
+                    .to_string();
+                let response = handle_escalate_op(&sandbox, &registry, request)
+                    .expect("every present-class op produces a response");
+                let message = refusal_message_of(response, &expected_request_id);
+                assert!(
+                    message.contains(A_WINDOW_ID_NOBODY_OWNS),
+                    "{expected_request_id}: the refusal must name the window id, got: {message}"
+                );
+                assert_no_collapsed_whitespace(&message);
+            }
+        }
+
+        /// The whole projection from one wire request onto what the present
+        /// loop takes. Every field asserted concretely, so dropping any one
+        /// on the way through fails here rather than showing an undescribed
+        /// frame on a window nobody is watching in CI.
+        #[test]
+        fn a_wire_request_projects_onto_the_frame_the_present_loop_shows() {
+            let named = surface_named_for_the_present_loop_of(
+                &EscalateRequestShowSurfaceOnProcessorOwnedWindow {
+                    request_id: "req-show".into(),
+                    window_id: A_WINDOW_ID_NOBODY_OWNS.into(),
+                    surface_id: "pool-slot-7#3".into(),
+                    source_width_in_pixels: 1920,
+                    source_height_in_pixels: 1080,
+                    color_primaries_of_frame: Some(
+                        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt2020,
+                    ),
+                    color_transfer_of_frame: Some(
+                        EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Pq,
+                    ),
+                    hdr_static_metadata_of_frame: Some(
+                        EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata {
+                            display_primary_red: [0.708, 0.292],
+                            display_primary_green: [0.170, 0.797],
+                            display_primary_blue: [0.131, 0.046],
+                            white_point: [0.3127, 0.3290],
+                            min_luminance_cd_m2: 0.005,
+                            max_luminance_cd_m2: 1000.0,
+                            max_content_light_level: 1000.0,
+                            max_frame_average_light_level: 400.0,
+                        },
+                    ),
+                    producer_published_texture_layout: Some(1000001002),
+                },
+            );
+
+            assert_eq!(named.surface_id, "pool-slot-7#3");
+            assert_eq!(named.source_width_in_pixels, 1920);
+            assert_eq!(named.source_height_in_pixels, 1080);
+            assert_eq!(named.producer_published_texture_layout, Some(1000001002));
+            assert_eq!(
+                named.color_traits_of_frame,
+                Some(ColorTraits {
+                    primaries: Some(PrimariesId::Bt2020),
+                    transfer: Some(TransferId::Pq),
+                }),
+                "the colour a helper named must reach the seam that renegotiates on it"
+            );
+            assert_eq!(
+                named
+                    .hdr_static_metadata_of_frame
+                    .map(|hdr| hdr.white_point),
+                Some([0.3127, 0.3290]),
+                "the HDR sidecar must reach the seam that signals it"
+            );
+        }
+
+        /// A frame's colour description survives the hop: either axis alone
+        /// is a description, and naming neither is silence rather than a
+        /// request for the default pick — which would renegotiate the
+        /// window's swapchain on every undescribed frame.
+        #[test]
+        fn a_frames_colour_description_crosses_the_wire_onto_the_engines_own_ids() {
+            assert_eq!(
+                color_traits_of_frame_named_over_the_wire(None, None),
+                None,
+                "an undescribed frame must leave the window on what it last applied"
+            );
+            assert_eq!(
+                color_traits_of_frame_named_over_the_wire(
+                    Some(EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries::Bt2020),
+                    Some(EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Pq),
+                ),
+                Some(ColorTraits {
+                    primaries: Some(PrimariesId::Bt2020),
+                    transfer: Some(TransferId::Pq),
+                }),
+                "HDR10's two axes are exactly what the seam renegotiates on"
+            );
+            assert_eq!(
+                color_traits_of_frame_named_over_the_wire(
+                    None,
+                    Some(EscalateRequestShowSurfaceOnProcessorOwnedWindowColorTransfer::Hlg),
+                ),
+                Some(ColorTraits {
+                    primaries: None,
+                    transfer: Some(TransferId::Hlg),
+                }),
+                "one axis alone is a description — the seam resolves the other itself"
+            );
+        }
+
+        /// The HDR sidecar crosses field for field, in the f32 units the
+        /// driver takes. A transposition here shows up as a mastering display
+        /// the window believes has the wrong primaries.
+        #[test]
+        fn the_hdr_sidecar_crosses_the_wire_field_for_field() {
+            let crossed = hdr_static_metadata_named_over_the_wire(
+                EscalateRequestShowSurfaceOnProcessorOwnedWindowHdrStaticMetadata {
+                    display_primary_red: [0.708, 0.292],
+                    display_primary_green: [0.170, 0.797],
+                    display_primary_blue: [0.131, 0.046],
+                    white_point: [0.3127, 0.3290],
+                    min_luminance_cd_m2: 0.005,
+                    max_luminance_cd_m2: 1000.0,
+                    max_content_light_level: 1000.0,
+                    max_frame_average_light_level: 400.0,
+                },
+            );
+            assert_eq!(
+                crossed,
+                HdrStaticMetadata {
+                    display_primary_red: [0.708, 0.292],
+                    display_primary_green: [0.170, 0.797],
+                    display_primary_blue: [0.131, 0.046],
+                    white_point: [0.3127, 0.3290],
+                    min_luminance_cd_m2: 0.005,
+                    max_luminance_cd_m2: 1000.0,
+                    max_content_light_level: 1000.0,
+                    max_frame_average_light_level: 400.0,
+                },
+                "BT.2020 mastering metadata must reach the driver unpermuted"
+            );
+        }
+
+        /// Asked for from anywhere but `setup()`, a window is refused with
+        /// the phase named and nothing minted — the plan's "requested in
+        /// setup() … never minted mid-process()", enforced where both Python
+        /// tiers land rather than in the object that carried the call.
+        #[test]
+        fn a_window_asked_for_outside_the_setup_hook_is_refused_and_none_is_minted() {
+            let Some(sandbox) = sandbox_or_skip(
+                "a_window_asked_for_outside_the_setup_hook_is_refused_and_none_is_minted",
+            ) else {
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+            registry.note_lifecycle_command_sent_to_the_helper_process("run");
+
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::CreateProcessorOwnedWindow(
+                    EscalateRequestCreateProcessorOwnedWindow {
+                        request_id: "req-create".into(),
+                        window_title: "a window asked for mid-pipeline".into(),
+                        initial_width_in_physical_pixels: 320,
+                        initial_height_in_physical_pixels: 240,
+                    },
+                ),
+            )
+            .expect("create_processor_owned_window produces a response");
+
+            let message = refusal_message_of(response, "req-create");
+            assert!(
+                message.contains("setup") && message.contains("a window asked for mid-pipeline"),
+                "the refusal must name the phase and the window, got: {message}"
+            );
+            assert_no_collapsed_whitespace(&message);
+            assert!(
+                registry.drain_processor_owned_windows().is_empty(),
+                "a refused request must leave no window behind"
+            );
+        }
     }
 
     /// The readback ops answer from `GpuContext` with nothing installed:

@@ -162,6 +162,16 @@ impl EscalateTransport {
     }
 }
 
+/// The lifecycle command whose hook may mint a processor-owned window. A
+/// window is a setup-phase resource request; `docs/plan/ARCHITECTURE.md`
+/// §Media I/O has it "requested in `setup()` … never minted
+/// mid-`process()`".
+///
+/// Named here, beside the protocol version, because the escalate dispatch
+/// reads it and the spawn host that sends it lives in another crate: a bare
+/// literal on each side would let a rename refuse every window silently.
+pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
+
 /// Shared writer handle. The host's lifecycle path and the reader
 /// thread's escalate-response path both write through this mutex.
 type SharedWriter = Arc<Mutex<BufWriter<UnixStream>>>;
@@ -244,6 +254,15 @@ impl SubprocessBridge {
                 self.processor_id
             )));
         }
+        // The lifecycle command is the engine's only reading of which hook the
+        // child is inside, and this is the one seam every command crosses.
+        // Setup-phase-only escalate ops (minting a processor-owned window)
+        // refuse on it, dispatched from the reader thread while the hook that
+        // is allowed to ask is still running.
+        if let Some(lifecycle_command) = msg.get("cmd").and_then(|c| c.as_str()) {
+            self.registry
+                .note_lifecycle_command_sent_to_the_helper_process(lifecycle_command);
+        }
         let mut writer = self
             .writer
             .lock()
@@ -303,6 +322,25 @@ impl Drop for SubprocessBridge {
         // The OS reaps the thread on process exit.
         if let Ok(writer) = self.writer.lock() {
             let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
+        }
+        // Windows first: each present thread resolves surface ids against the
+        // same capability the handle release below evicts from, and dropping
+        // one closes its window and joins its thread. A helper that never
+        // called `close_processor_owned_window` — or crashed — releases its
+        // windows here, which is what makes teardown the backstop the plan
+        // says it is.
+        for (window_id, present_loop) in self.registry.drain_processor_owned_windows() {
+            tracing::debug!(
+                "[{}] closing processor-owned window '{}' at teardown",
+                self.processor_id,
+                window_id
+            );
+            // Closed explicitly rather than by dropping the `Arc`: a request
+            // still in flight on the reader thread can hold the last
+            // reference, and teardown must close the window rather than hand
+            // that decision to whoever lets go last. The close is bounded and
+            // detaches, so this path still never blocks indefinitely.
+            present_loop.close_the_window_and_join_its_present_thread();
         }
         // Run the release path's kind-specific cleanup for everything the
         // helper never released — a crashed child must not strand cache
