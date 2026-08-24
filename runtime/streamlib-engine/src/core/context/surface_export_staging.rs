@@ -45,9 +45,7 @@
 //! slot — so two consumers reading one surface at one residency map the
 //! same allocation, and nothing here arbitrates their overlap. The
 //! recorder lock serialises two *copies*; it does not keep two consumers
-//! from reading a buffer a third is refilling. The deleted cpu-readback
-//! bridge carried the same limitation in its own words; it is restated
-//! here because that is where the staging now lives.
+//! from reading a buffer a third is refilling.
 //!
 //! Nothing here assumes the consumer lives in this process. A processor
 //! reaching this from its own helper process gets the same staging and
@@ -660,7 +658,6 @@ impl GpuContext {
     /// recording — a recorder left mid-recording refuses every later
     /// `begin`, which would brick this surface's export for the life of
     /// the cache entry.
-    ///
     fn submit_staging_copy_and_wait(
         staging: &SurfaceExportStaging,
         holds_after_this_copy: FrameThisStagingHoldsAfterTheCopy<'_>,

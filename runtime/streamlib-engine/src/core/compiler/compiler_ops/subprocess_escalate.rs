@@ -1493,8 +1493,7 @@ fn assign_image_handle_id(
 /// Named as ops rather than as a (residency x direction) product because
 /// the wire does not spell the two axes alike: device-export gives each
 /// direction its own op name, cpu-readback carries direction as a field.
-/// Enumerating the ops keeps every state reachable and gives each one its
-/// name for free.
+/// Enumerating the ops gives each one its name for free.
 #[cfg(target_os = "linux")]
 #[derive(Clone, Copy)]
 enum SurfaceExportStagingCopyOp {
@@ -1648,15 +1647,13 @@ fn handle_surface_export_staging_copy(
     surface_id: &str,
     op: SurfaceExportStagingCopyOp,
 ) -> EscalateResponse {
-    use SurfaceExportStagingCopyDirection as Direction;
-
     let copied = sandbox
         .surface_export_staging(surface_id, op.residency())
         .and_then(|staging| match op.direction() {
-            Direction::SurfaceIntoStaging => {
+            SurfaceExportStagingCopyDirection::SurfaceIntoStaging => {
                 sandbox.refill_surface_export_staging(&staging, surface_id)
             }
-            Direction::StagingBackIntoSurface => {
+            SurfaceExportStagingCopyDirection::StagingBackIntoSurface => {
                 sandbox.copy_surface_export_staging_back_to_surface(&staging, surface_id)
             }
         });

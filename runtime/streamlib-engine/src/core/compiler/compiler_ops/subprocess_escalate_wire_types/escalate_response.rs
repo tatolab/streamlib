@@ -129,9 +129,9 @@ pub(crate) struct EscalateResponseOk {
     /// Decimal-string-encoded u64 timeline value the host signaled
     /// on the surface's shared timeline semaphore at end-of-submit.
     /// Set on `run_cpu_readback_copy` responses, and on
-    /// `refill_device_export_staging` /
-    /// `copy_device_export_staging_back_to_surface` responses, where the
-    /// timeline is the staging's own `refill_done`. The subprocess waits on its
+    /// `refill_device_export_staging` / `copy_device_export_staging_back_to_surface`
+    /// responses, where the timeline is the staging's own `refill_done`. The
+    /// subprocess waits on its
     /// imported `ConsumerVulkanTimelineSemaphore` for this value before reading
     /// or writing the staging buffer mapped at registration time. JSON has no
     /// 64-bit integer — wire form is decimal-string, parsed back to u64 on
