@@ -334,13 +334,14 @@ impl DisplayWindowRenderLoop {
 }
 
 /// Whether an outcome spent one of the frames this display reports at stop.
-/// Only an id that never resolved leaves the count untouched — the window
-/// showed nothing and consumed nothing it could have shown later.
+/// Only an id that never resolved leaves the count untouched — the window had
+/// nothing to show, so counting it would report frames that never existed.
 fn the_display_counts_this_outcome_as_a_frame(outcome: NamedSurfacePresentationOutcome) -> bool {
     match outcome {
         NamedSurfacePresentationOutcome::ComposedAndPresented
-        | NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame
-        | NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription => true,
+        | NamedSurfacePresentationOutcome::CompositorRebuiltForThisFramesColorDescription
+        | NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription
+        | NamedSurfacePresentationOutcome::SwapchainWentOutOfDateSoNothingWasPresented => true,
         NamedSurfacePresentationOutcome::SurfaceIdDidNotResolve => false,
     }
 }
@@ -477,10 +478,13 @@ mod tests {
             NamedSurfacePresentationOutcome::ComposedAndPresented
         ));
         assert!(the_display_counts_this_outcome_as_a_frame(
-            NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame
+            NamedSurfacePresentationOutcome::CompositorRebuiltForThisFramesColorDescription
         ));
         assert!(the_display_counts_this_outcome_as_a_frame(
             NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription
+        ));
+        assert!(the_display_counts_this_outcome_as_a_frame(
+            NamedSurfacePresentationOutcome::SwapchainWentOutOfDateSoNothingWasPresented
         ));
         assert!(
             !the_display_counts_this_outcome_as_a_frame(

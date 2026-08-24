@@ -32,16 +32,6 @@ const SOURCE_EXTENT_IN_PIXELS: u32 = 256;
 /// per-frame `<slot>#<generation>` grammar a retired frame id carries.
 const UNRESOLVABLE_SURFACE_ID: &str = "a-surface-this-process-never-saw#7";
 
-/// A cross-process owner's window is driven from a thread the engine owns, so
-/// the window has to be movable onto it. Compiled on every target — including
-/// CI, where the test below is ignored — so the bound cannot be lost silently
-/// and then become a breaking reshape once #1929 needs it.
-const _: () = {
-    const fn assert_send<T: Send>() {}
-    assert_send::<ProcessorOwnedWindowAwaitingItsPresentTarget>();
-    assert_send::<ProcessorOwnedWindow>();
-};
-
 fn request_for(window_title: &str) -> ProcessorOwnedWindowRequest {
     ProcessorOwnedWindowRequest {
         window_registration_request: WindowRegistrationRequestFromOwningProcessor {
@@ -152,9 +142,14 @@ fn a_named_surface_reaches_the_window_and_an_unresolvable_id_leaves_the_last_fra
         NamedSurfacePresentationOutcome::SurfaceIdDidNotResolve,
         "renegotiation must not lose the surface the frame named"
     );
-    if renegotiating_outcome
-        != NamedSurfacePresentationOutcome::WindowCannotDrawThisFramesColorDescription
-    {
+    // Only the rebuild outcome promises the next frame draws. The other two
+    // reachable here say the opposite in their own docs — a window that cannot
+    // take the description, and a swapchain waiting on a resize.
+    if matches!(
+        renegotiating_outcome,
+        NamedSurfacePresentationOutcome::ComposedAndPresented
+            | NamedSurfacePresentationOutcome::CompositorRebuiltForThisFramesColorDescription
+    ) {
         assert_eq!(
             processor_owned_window
                 .show_named_surface(named_hdr_surface)

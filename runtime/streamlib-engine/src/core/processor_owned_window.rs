@@ -68,17 +68,32 @@ pub enum NamedSurfacePresentationOutcome {
     /// whatever it last presented, and the failure is logged once per pool
     /// slot rather than once per attempt.
     SurfaceIdDidNotResolve,
-    /// The window was brought in line with this frame rather than drawing
-    /// it: its compositor was rebuilt for a renegotiated colorspace, or the
-    /// window server had already invalidated the swapchain. The next named
-    /// surface draws.
-    WindowReconciledInsteadOfDrawingThisFrame,
+    /// The compositor was rebuilt for the attachment format this frame's
+    /// color description made the swapchain pick, rather than drawing the
+    /// frame. The next named surface draws against the rebuilt kernel.
+    CompositorRebuiltForThisFramesColorDescription,
     /// The compositor could not be rebuilt for the attachment format the
     /// renegotiated swapchain picked, so this window cannot draw a frame
     /// carrying this color description — nor any later one, until the
     /// description changes.
     WindowCannotDrawThisFramesColorDescription,
+    /// The window server had already invalidated the swapchain, so nothing
+    /// was acquired and nothing was drawn. Nothing was reconciled either:
+    /// the swapchain is recreated when the pump reports a resize, so a
+    /// window invalidated without one stays undrawable until the next
+    /// resize arrives.
+    SwapchainWentOutOfDateSoNothingWasPresented,
 }
+
+// A cross-process owner's window is driven from a thread the engine owns, so
+// both states have to be movable onto it. Asserted in the library rather than
+// a test: CI compiles no test-kind target in this workspace, so a bound
+// checked only there is a bound nothing checks.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<ProcessorOwnedWindowAwaitingItsPresentTarget>();
+    assert_send::<ProcessorOwnedWindow>();
+};
 
 /// What renegotiating the swapchain for a new color description left the
 /// window able to do.
@@ -116,11 +131,11 @@ pub struct ProcessorOwnedWindow {
     /// The last color description whose recreate failed, so the failure warns
     /// once per description instead of once per frame (each frame retries).
     last_failed_recreate_color_traits: Option<Option<ColorTraits>>,
-    /// Declared last so it drops last: the present target's `VkSurfaceKHR`
-    /// was minted from this window's raw handle, and the registration above
-    /// is otherwise the window's only owner. Holding a clone keeps the
-    /// platform window alive past the surface whatever order the fields are
-    /// declared in.
+    /// Declared after `registered_window` so it drops after it: the present
+    /// target's `VkSurfaceKHR` was minted from this window's raw handle, and
+    /// the registration is otherwise the window's only owner. Holding a clone
+    /// keeps the platform window alive past the registration however the
+    /// fields above are ordered.
     _window_kept_alive_past_the_present_surface: Arc<Window>,
 }
 
@@ -244,7 +259,7 @@ impl ProcessorOwnedWindow {
                 ColorspaceRenegotiationOutcome::ThisFrameStillDraws => {}
                 ColorspaceRenegotiationOutcome::CompositorRebuiltSoThisFrameIsSkipped => {
                     return Ok(
-                        NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame,
+                        NamedSurfacePresentationOutcome::CompositorRebuiltForThisFramesColorDescription,
                     );
                 }
                 ColorspaceRenegotiationOutcome::CompositorCouldNotBeRebuilt => {
@@ -282,7 +297,7 @@ impl ProcessorOwnedWindow {
         Ok(if presented {
             NamedSurfacePresentationOutcome::ComposedAndPresented
         } else {
-            NamedSurfacePresentationOutcome::WindowReconciledInsteadOfDrawingThisFrame
+            NamedSurfacePresentationOutcome::SwapchainWentOutOfDateSoNothingWasPresented
         })
     }
 

@@ -235,6 +235,17 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "attribute_macro_test",
             ],
         ),
+        (
+            "media built-ins unit tests",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-media-builtins",
+                "--lib",
+            ],
+        ),
     ];
 
     for (gate_name, program, arguments) in shelled_out_gates {
