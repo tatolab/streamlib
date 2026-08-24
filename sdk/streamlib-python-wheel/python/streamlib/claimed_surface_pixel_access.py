@@ -214,6 +214,19 @@ class PixelAccessToOneClaimedSurface:
             )
         return gpu_limited_access, surface_id
 
+    @property
+    def surface_id_the_claim_was_taken_on(self) -> "str | None":
+        """The id this object's claim was taken on, or `None` when the field
+        the cast type declared held no surface id.
+
+        The id read once at construction, so what a caller names downstream —
+        a window's `show()`, above all — is the surface the claim protects and
+        never one a mutable composer re-pointed the field at since. Present
+        whether or not the claim itself was granted: a refused claim leaves the
+        frame riding pool depth, which still has pixels to name.
+        """
+        return self._the_surface_id_the_claim_was_taken_on
+
     def _resolved_surface(self) -> GpuSurfaceHandle:
         """The imported surface behind every door, resolved on first reach.
 
@@ -509,6 +522,18 @@ class ClaimedSurfacePixelAccess:
             max_version=max_version,
             dl_device=dl_device,
             copy=copy,
+        )
+
+    @property
+    def surface_id_the_claim_was_taken_on(self) -> "str | None":
+        """The id this object's claim was taken on — what names it downstream.
+
+        A type over several surfaces takes the same refusal the bare doors give
+        rather than guessing which one was meant; reach each surface's own
+        through `pixel_access_to_the_surface_declared_in`.
+        """
+        return (
+            self._the_one_claimed_surfaces_pixel_access().surface_id_the_claim_was_taken_on
         )
 
     def writable(self) -> GpuSurfaceDeviceTensorScope:

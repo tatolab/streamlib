@@ -23,6 +23,7 @@ mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_import_path;
 mod python_processor_link_data_access;
+mod python_processor_owned_window;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
 #[cfg(all(test, target_os = "linux"))]
@@ -58,6 +59,8 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonRayTracingKernel>()?;
     module.add_class::<python_processor_context::PythonAccelerationStructureHandle>()?;
     module.add_class::<python_processor_context::PythonKernelDispatchBatch>()?;
+    module.add_class::<python_processor_owned_window::PythonProcessorOwnedWindow>()?;
+    module.add_class::<python_processor_owned_window::PythonProcessorOwnedWindowEvents>()?;
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
