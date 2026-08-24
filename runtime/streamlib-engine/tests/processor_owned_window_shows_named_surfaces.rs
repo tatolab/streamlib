@@ -18,7 +18,8 @@
 use streamlib_engine::core::color::{ColorTraits, PrimariesId, TransferId};
 use streamlib_engine::core::context::GpuContext;
 use streamlib_engine::core::processor_owned_window::{
-    NamedSurfacePresentationOutcome, ProcessorOwnedWindow, ProcessorOwnedWindowRequest,
+    NamedSurfacePresentationOutcome, ProcessorOwnedWindow,
+    ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
     SurfaceNamedForPresentationOnOwnedWindow,
 };
 use streamlib_engine::core::rhi::TextureFormat;
@@ -37,6 +38,7 @@ const UNRESOLVABLE_SURFACE_ID: &str = "a-surface-this-process-never-saw#7";
 /// and then become a breaking reshape once #1929 needs it.
 const _: () = {
     const fn assert_send<T: Send>() {}
+    assert_send::<ProcessorOwnedWindowAwaitingItsPresentTarget>();
     assert_send::<ProcessorOwnedWindow>();
 };
 
@@ -61,12 +63,13 @@ fn a_named_surface_reaches_the_window_and_an_unresolvable_id_leaves_the_last_fra
     let gpu_context_limited_access = gpu_context.limited_access();
     let request = request_for("streamlib processor-owned window test");
 
-    // The pump round trip is deliberately outside `escalate`: it touches no
-    // GPU, and holding the process-wide gate across it would let a wedged
-    // compositor stall every GPU escalation in the process.
+    // Registered outside `escalate`, minted inside it — the ordering the
+    // carrier type exists to keep.
     let registered_window =
-        ProcessorOwnedWindow::register_window_on_the_process_wide_window_event_pump(&request)
-            .expect("the pump mints a window");
+        ProcessorOwnedWindowAwaitingItsPresentTarget::register_on_the_process_wide_window_event_pump(
+            request,
+        )
+        .expect("the pump mints a window");
 
     let (published_surface_id, source_texture, mut processor_owned_window) =
         gpu_context_limited_access
@@ -81,7 +84,6 @@ fn a_named_surface_reaches_the_window_and_an_unresolvable_id_leaves_the_last_fra
                     ProcessorOwnedWindow::open_present_target_for_registered_window(
                         gpu_context_full_access,
                         registered_window,
-                        request,
                     )?;
                 Ok((published_surface_id, source_texture, processor_owned_window))
             })

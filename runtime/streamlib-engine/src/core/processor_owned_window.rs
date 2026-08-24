@@ -124,22 +124,34 @@ pub struct ProcessorOwnedWindow {
     _window_kept_alive_past_the_present_surface: Arc<Window>,
 }
 
-impl ProcessorOwnedWindow {
-    /// Ask the pump for the window, before any GPU capability is involved.
-    ///
-    /// Separate from [`Self::open_present_target_for_registered_window`] so a
-    /// caller can leave the escalate gate un-held across this call: the pump
-    /// round trip touches no GPU and is bounded by the pump's own timeout, so
-    /// holding the process-wide gate across it would let a wedged compositor
-    /// stall every GPU escalation in the process — the opposite of the bound
-    /// the pump's timeout exists to give.
-    pub fn register_window_on_the_process_wide_window_event_pump(
-        request: &ProcessorOwnedWindowRequest,
-    ) -> Result<WindowRegisteredWithEventPump> {
-        process_wide_window_event_pump()?
-            .request_window_for_owning_processor(request.window_registration_request.clone())
-    }
+/// A window the pump has minted, holding the request it was minted from
+/// until the GPU capability that mints its present target arrives.
+///
+/// The two steps are separate so a caller can leave the escalate gate
+/// un-held across the pump round trip: it touches no GPU and is bounded by
+/// the pump's own timeout, so holding the process-wide gate across it would
+/// let a wedged compositor stall every GPU escalation in the process — the
+/// opposite of the bound that timeout exists to give.
+pub struct ProcessorOwnedWindowAwaitingItsPresentTarget {
+    registered_window: WindowRegisteredWithEventPump,
+    request: ProcessorOwnedWindowRequest,
+}
 
+impl ProcessorOwnedWindowAwaitingItsPresentTarget {
+    /// Ask the pump for the window, before any GPU capability is involved.
+    pub fn register_on_the_process_wide_window_event_pump(
+        request: ProcessorOwnedWindowRequest,
+    ) -> Result<Self> {
+        let registered_window = process_wide_window_event_pump()?
+            .request_window_for_owning_processor(request.window_registration_request.clone())?;
+        Ok(Self {
+            registered_window,
+            request,
+        })
+    }
+}
+
+impl ProcessorOwnedWindow {
     /// Mint the present target and compositor for an already-registered
     /// window.
     ///
@@ -149,9 +161,12 @@ impl ProcessorOwnedWindow {
     /// deadlock against a nested one.
     pub fn open_present_target_for_registered_window(
         gpu_context_full_access: &GpuContextFullAccess,
-        registered_window: WindowRegisteredWithEventPump,
-        request: ProcessorOwnedWindowRequest,
+        registered_window: ProcessorOwnedWindowAwaitingItsPresentTarget,
     ) -> Result<Self> {
+        let ProcessorOwnedWindowAwaitingItsPresentTarget {
+            registered_window,
+            request,
+        } = registered_window;
         let window = Arc::clone(registered_window.window_shared_with_event_pump());
         let (width, height) = registered_window.current_physical_size();
         let present_target = gpu_context_full_access.create_present_target(

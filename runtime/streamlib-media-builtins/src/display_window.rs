@@ -26,7 +26,8 @@ use streamlib::sdk::engine::host_rhi::PresentScalingMode;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processor_owned_window::{
-    NamedSurfacePresentationOutcome, ProcessorOwnedWindow, ProcessorOwnedWindowRequest,
+    NamedSurfacePresentationOutcome, ProcessorOwnedWindow,
+    ProcessorOwnedWindowAwaitingItsPresentTarget, ProcessorOwnedWindowRequest,
     SurfaceNamedForPresentationOnOwnedWindow,
 };
 use streamlib::sdk::processors::ManualProcessor;
@@ -197,7 +198,7 @@ struct DisplayWindowRenderLoop {
     inputs: InputMailboxes,
     running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
-    processor_owned_window_request: ProcessorOwnedWindowRequest,
+    config: DisplayWindowConfig,
     /// The engine's window for this display. `None` is the degraded mode: no
     /// window could be had, so the display behaves as a sink — drains and
     /// discards — and upstream still sees a live consumer.
@@ -217,14 +218,7 @@ impl DisplayWindowRenderLoop {
             inputs,
             running,
             frame_counter,
-            processor_owned_window_request: ProcessorOwnedWindowRequest {
-                window_registration_request: WindowRegistrationRequestFromOwningProcessor {
-                    window_title: config.title,
-                    initial_width_in_physical_pixels: config.width,
-                    initial_height_in_physical_pixels: config.height,
-                },
-                scaling_mode_for_frame_in_window: config.scaling.present_scaling_mode(),
-            },
+            config,
             processor_owned_window: None,
         }
     }
@@ -233,7 +227,7 @@ impl DisplayWindowRenderLoop {
         if let Err(reason) = self.ask_the_engine_for_this_displays_window() {
             tracing::error!(
                 error = %reason,
-                window_title = %self.processor_owned_window_request.window_registration_request.window_title,
+                window_title = %self.config.title,
                 "DisplayWindow: no window — running degraded (frames drained, nothing shown)"
             );
         }
@@ -260,21 +254,20 @@ impl DisplayWindowRenderLoop {
         self.running.store(false, Ordering::Release);
     }
 
-    /// The pump round trip stays outside `escalate`: it touches no GPU, and
-    /// holding the process-wide gate across it would let a wedged compositor
-    /// stall every GPU escalation in the process.
     fn ask_the_engine_for_this_displays_window(&mut self) -> Result<()> {
         let registered_window =
-            ProcessorOwnedWindow::register_window_on_the_process_wide_window_event_pump(
-                &self.processor_owned_window_request,
+            ProcessorOwnedWindowAwaitingItsPresentTarget::register_on_the_process_wide_window_event_pump(
+                ProcessorOwnedWindowRequest {
+                    window_registration_request: WindowRegistrationRequestFromOwningProcessor {
+                        window_title: self.config.title.clone(),
+                        initial_width_in_physical_pixels: self.config.width,
+                        initial_height_in_physical_pixels: self.config.height,
+                    },
+                    scaling_mode_for_frame_in_window: self.config.scaling.present_scaling_mode(),
+                },
             )?;
-        let request = self.processor_owned_window_request.clone();
         let processor_owned_window = self.gpu_context.escalate(|full| {
-            ProcessorOwnedWindow::open_present_target_for_registered_window(
-                full,
-                registered_window,
-                request,
-            )
+            ProcessorOwnedWindow::open_present_target_for_registered_window(full, registered_window)
         })?;
         self.processor_owned_window = Some(processor_owned_window);
         Ok(())
@@ -294,7 +287,7 @@ impl DisplayWindowRenderLoop {
         };
         if events.close_requested_by_user {
             tracing::info!(
-                window_title = %self.processor_owned_window_request.window_registration_request.window_title,
+                window_title = %self.config.title,
                 "DisplayWindow: window close requested"
             );
             self.running.store(false, Ordering::Release);
