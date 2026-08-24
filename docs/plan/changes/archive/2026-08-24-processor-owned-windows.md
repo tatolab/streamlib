@@ -105,7 +105,12 @@ escape hatch. Events are polled coalesced state — no callback crosses the hop.
   fallback.
 - A native (Rust) processor may drive its own render thread against its present target
   exactly as the built-in does — the request seam is shared; the deadline constraint
-  binds only code outside the app process. No new Rust API is required by this change.
+  binds only code outside the app process.
+  > ~~No new Rust API is required by this change.~~ — Superseded 2026-08-24 by #1934
+  > (PR shipped): folding the built-in display onto the shared seam forces a public
+  > SDK export (`sdk/streamlib-sdk/src/lib.rs`), because the built-in lives in a
+  > separate crate. Mechanically forced by the fold this file mandates, not a widened
+  > design — the compositor still stays engine-private.
 
 ## REMOVED
 

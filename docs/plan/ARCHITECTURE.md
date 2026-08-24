@@ -441,7 +441,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library, processor-owned-windows)
+## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -487,12 +487,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   does not bind app-process code — while a Python processor reaches the request
   across the escalate path and feeds the engine-run loop; the per-frame naming is a
   camera-class-cadence message that fits the helper hop, and no vsync deadline ever
-  crosses it. A window is requested in `setup()`, where the typestate is Full, and
-  released at teardown or with its processor — never minted mid-`process()`. The
+  crosses it. Colour is no delta either: the per-frame naming carries the frame's
+  primaries, transfer and HDR sidecar in the engine's own vocabulary, so a Python
+  owner renegotiates the swapchain exactly as a native one does. A window is
+  requested in `setup()`, where the typestate is Full, and released at teardown or
+  with its processor — never minted mid-`process()`. The
   per-frame verb accepts anything that names a published surface: the cast object
   (whose claim guarantees the id un-recycled), a kernel-output handle, or a bare
-  surface id. The pump's two events reach the owner as coalesced state polled off
-  the window object, never a callback across the hop; an owner that reads neither
+  surface id — the last with one qualifier: naming no extent is how a caller says it
+  knows nothing else about the surface, so a bare id, or a cast type declaring none,
+  names a texture-backed surface only. A buffer-backed frame named that way does not
+  draw — the window keeps what it last had and the engine says so once per pool slot
+  rather than raising — so a camera or test pattern, which publishes buffer-backed
+  frames, is named with a cast object carrying its extent. The pump's two events
+  reach the owner as coalesced state polled off the window object, never a callback
+  across the hop; an owner that reads neither
   gets the defaults — resize just works (the engine owns every swapchain detail),
   and an unread close-request closes the window, after which the per-frame verb is
   a no-op and the window reports closed: a user gesture never takes down a pipeline.
@@ -503,7 +512,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   topology. The present compositor stays engine-internal — no cross-process spelling
   and no Python name; at this capability surface, present-class means windows. One
   present-loop machinery serves the built-in display and every processor-owned
-  window. [processor-owned-windows]
+  window. [processor-owned-windows — SHIPPED #1928, #1929, #1930]
+  <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_over_the_escalate_wire -->
+  <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_shows_named_surfaces -->
+  <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_refused_without_a_display_server -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
 - **DECIDED** — Camera → GPU transport: zero-copy DMA-BUF import when the device
   exports it, transparent CPU-upload fallback otherwise, selected automatically —
   no configuration dial. [media-io-layering]
