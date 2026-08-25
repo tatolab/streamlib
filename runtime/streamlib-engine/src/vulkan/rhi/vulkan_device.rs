@@ -1721,12 +1721,14 @@ impl HostVulkanDevice {
     /// probe failed, etc.) are skipped — the engine never produces a
     /// device that exposes a pool but won't pre-warm it.
     ///
-    /// **Verification:** `examples/camera-python-display` against a
-    /// real UVC camera (Cam Link 4K) reproduces the post-swapchain
-    /// failure intermittently when the OPAQUE_FD sentinels are
-    /// removed; with the sentinels retained the failure does not
-    /// reproduce. See `docs/learnings/nvidia-opaque-fd-after-swapchain.md`
-    /// for the run-and-revert protocol.
+    /// **Verification:** the pre-pivot `camera-python-display` example
+    /// against a real UVC camera (Cam Link 4K) reproduced the
+    /// post-swapchain failure intermittently when the OPAQUE_FD
+    /// sentinels were removed; with the sentinels retained it did not
+    /// reproduce. That example is retired and its OPAQUE_FD-buffer
+    /// consumer has no in-tree successor, so the protocol in
+    /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md` cannot be
+    /// re-run as written.
     #[cfg(target_os = "linux")]
     fn prewarm_export_pools(device: &Arc<Self>) -> Result<Vec<ExportPoolSentinel>> {
         use super::{HostVulkanBuffer, HostVulkanTexture};
@@ -1865,11 +1867,12 @@ impl HostVulkanDevice {
         //
         //    The empirical pre-warm-removed protocol per
         //    `docs/learnings/nvidia-opaque-fd-after-swapchain.md`
-        //    can't be run today — `camera-python-display` and the
-        //    other reproducers allocate OPAQUE_FD *buffers*, not
-        //    images. The protocol becomes runnable when a real
-        //    consumer-class OPAQUE_FD `VkImage` allocator lands
-        //    in-tree, and the retention should be re-validated there.
+        //    can't be run today — every reproducer it named allocated
+        //    OPAQUE_FD *buffers*, not images, and they are retired
+        //    with the pre-pivot examples. The protocol becomes
+        //    runnable when a real consumer-class OPAQUE_FD `VkImage`
+        //    allocator lands in-tree, and the retention should be
+        //    re-validated there.
         //    Dropping the sentinel if it turns out redundant is a
         //    one-line change here.
         //

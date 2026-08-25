@@ -13,12 +13,10 @@
 //! and an HDR PQ frame goes through the tone mapper (PQ → sRGB RGBA
 //! with BT.2390 EETF).
 //!
-//! Consumers (the [`BlendingCompositor`], the display, encoders
-//! targeting cross-color-space output) hold an `Arc<RhiToneMapper>`
-//! as a struct field — same shape as `LinuxCameraProcessor` holds
-//! `Arc<RhiColorConverter>` per `packages/camera/processors/camera_linux.rs`.
-//!
-//! [`BlendingCompositor`]: ../../../examples/camera-python-display/runner/src/blending_compositor.rs
+//! Consumers (the display, encoders targeting cross-color-space output)
+//! hold an `Arc<RhiToneMapper>` as a struct field — same shape as
+//! `LinuxCameraProcessor` holds `Arc<RhiColorConverter>` per
+//! `packages/camera/processors/camera_linux.rs`.
 
 use crate::core::color::TransferId;
 

@@ -1,5 +1,14 @@
 # NVIDIA Linux: OPAQUE_FD allocations are capped after swapchain creation
 
+> **The reproducers below are retired.** Every `camera-python-display`
+> reference in this note names the pre-pivot example, deleted with the module
+> system it was built on; `CameraToCudaCopyProcessor` went with it. The
+> driver behaviour, the diagnosis, and the sentinel fix in `vulkan_device.rs`
+> all still hold — what has no in-tree stand-in is the run-and-revert
+> protocol, because nothing in tree allocates a consumer-class OPAQUE_FD
+> buffer post-swapchain any more. A Python processor reaches device memory
+> through the wheel's export doors instead.
+
 ## Symptom
 
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` returned from `vmaCreateBuffer` (or
