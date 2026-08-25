@@ -14,6 +14,7 @@ a few milliseconds, so there is no CUDA stack to disagree with. The lite model
 from __future__ import annotations
 
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 import mediapipe
@@ -21,9 +22,9 @@ import numpy
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 
-from .avatar_rig import joints_from_world_landmarks
+from .avatar_rig import joints_from_world_landmarks, visibilities_from_world_landmarks
 
-__all__ = ["PoseTracker", "resolve_pose_model_file"]
+__all__ = ["PoseSample", "PoseTracker", "resolve_pose_model_file"]
 
 POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
@@ -47,6 +48,14 @@ def resolve_pose_model_file(explicit_model_path: "str | None" = None) -> Path:
     return cached_model
 
 
+@dataclass
+class PoseSample:
+    """One person's joints, and how much each one was actually seen."""
+
+    joints: "dict[str, numpy.ndarray]"
+    visibility: "dict[str, float]"
+
+
 class PoseTracker:
     """One person's world-space joints out of an RGB frame, or None."""
 
@@ -68,13 +77,17 @@ class PoseTracker:
 
     def world_joints(
         self, rgb_frame: numpy.ndarray, timestamp_ms: int
-    ) -> "dict[str, numpy.ndarray] | None":
+    ) -> "PoseSample | None":
         """The rig's joint set for the most confident person, mirrored.
 
         `rgb_frame` is HxWx3 uint8; `timestamp_ms` must increase between
         calls — video mode tracks across frames, and the camera's monotonic
         stamp is exactly that. None when nobody clears the confidence floor —
         the caller decides what an empty stage shows.
+
+        Visibility rides along per joint: the detector answers a position for
+        every landmark, seen or hallucinated, and downstream needs to know
+        which is which.
         """
         detection = self._landmarker.detect_for_video(
             mediapipe.Image(
@@ -85,7 +98,11 @@ class PoseTracker:
         )
         if not detection.pose_world_landmarks:
             return None
-        return joints_from_world_landmarks(detection.pose_world_landmarks[0])
+        landmarks = detection.pose_world_landmarks[0]
+        return PoseSample(
+            joints=joints_from_world_landmarks(landmarks),
+            visibility=visibilities_from_world_landmarks(landmarks),
+        )
 
     def close(self) -> None:
         self._landmarker.close()

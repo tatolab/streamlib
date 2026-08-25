@@ -25,6 +25,7 @@ __all__ = [
     "SegmentPlacement",
     "SmoothedPose",
     "idle_joints",
+    "resolve_pose_with_fallbacks",
     "solve_segment_placements",
 ]
 
@@ -188,6 +189,77 @@ def joints_from_world_landmarks(landmarks) -> "dict[str, numpy.ndarray]":
         )
         for name, index in _LANDMARKS.items()
     }
+
+
+def visibilities_from_world_landmarks(landmarks) -> "dict[str, float]":
+    """Per-joint confidence that the joint is genuinely in the picture.
+
+    The detector answers a position for every landmark whether or not the
+    camera can see it — a desk framing still "has" ankles, hallucinated
+    somewhere below the desk. Visibility is what separates seen from guessed.
+    """
+    return {
+        name: float(getattr(landmarks[index], "visibility", 1.0) or 0.0)
+        for name, index in _LANDMARKS.items()
+    }
+
+
+# The joints a pose cannot be anchored without, and the confidence band over
+# which a guessed joint hands over to its live-anchored stand-in.
+_TORSO_ANCHOR_JOINTS = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+_FALLBACK_FULL_TRUST_VISIBILITY = 0.7
+_FALLBACK_NO_TRUST_VISIBILITY = 0.4
+
+
+def _torso_local_idle_offsets() -> "dict[str, numpy.ndarray]":
+    """Each idle joint as an offset from the idle pelvis, torso-local.
+
+    The idle pose stands axis-aligned — shoulders along x, spine up y, facing
+    z — so its offsets are already in torso coordinates, ready to be carried
+    on a live torso's own basis.
+    """
+    idle = idle_joints(0.0)
+    idle_pelvis = (idle["left_hip"] + idle["right_hip"]) / 2.0
+    return {name: joint - idle_pelvis for name, joint in idle.items()}
+
+
+_IDLE_OFFSETS_FROM_PELVIS = _torso_local_idle_offsets()
+
+
+def resolve_pose_with_fallbacks(
+    joints: "dict[str, numpy.ndarray]",
+    visibility: "dict[str, float]",
+) -> "dict[str, numpy.ndarray] | None":
+    """The detected pose, with unseen joints standing in a neutral pose.
+
+    A desk camera sees head and torso; the detector hallucinates the rest and
+    the figure buckles on the noise — the take-a-knee failure. Every joint
+    below the trust band is replaced by its idle-pose stand-in anchored to the
+    *live* torso (pelvis position plus torso basis), and the band is a blend,
+    not a switch, so a joint entering frame walks in rather than popping.
+
+    None when the torso itself is not trustworthy — nothing to anchor to, and
+    the caller's idle stage is the honest answer.
+    """
+    if min(visibility[name] for name in _TORSO_ANCHOR_JOINTS) < 0.5:
+        return None
+
+    pelvis = (joints["left_hip"] + joints["right_hip"]) / 2.0
+    chest = (joints["left_shoulder"] + joints["right_shoulder"]) / 2.0
+    spine_up = _normalized(chest - pelvis)
+    across = _normalized(joints["left_shoulder"] - joints["right_shoulder"])
+    forward = _normalized(numpy.cross(across, spine_up))
+    across = _normalized(numpy.cross(spine_up, forward))
+    torso_basis = numpy.stack([across, spine_up, forward], axis=1)
+
+    trust_band = _FALLBACK_FULL_TRUST_VISIBILITY - _FALLBACK_NO_TRUST_VISIBILITY
+    resolved: "dict[str, numpy.ndarray]" = {}
+    for name, detected in joints.items():
+        trust = (visibility[name] - _FALLBACK_NO_TRUST_VISIBILITY) / trust_band
+        trust = min(max(trust, 0.0), 1.0)
+        anchored_stand_in = pelvis + torso_basis @ _IDLE_OFFSETS_FROM_PELVIS[name]
+        resolved[name] = detected * trust + anchored_stand_in * (1.0 - trust)
+    return resolved
 
 
 def _grounded(joints: "dict[str, numpy.ndarray]") -> "dict[str, numpy.ndarray]":

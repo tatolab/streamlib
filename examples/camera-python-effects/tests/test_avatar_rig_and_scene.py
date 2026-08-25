@@ -122,3 +122,49 @@ def test_the_scene_renders_a_frame(request) -> None:
     # A frame with the stage on it is neither empty nor a single colour.
     assert (frame[:, :, :3].sum(axis=2) > 20).mean() > 0.05
     assert len(numpy.unique(frame[:, :, 1])) > 30
+
+
+def test_unseen_legs_stand_instead_of_kneeling() -> None:
+    """The desk-camera failure: hallucinated legs must not buckle the figure."""
+    from camera_python_effects.avatar_rig import resolve_pose_with_fallbacks
+
+    joints = idle_joints(1.0)
+    # The detector's hallucination: legs folded up under the torso.
+    joints["left_knee"] = numpy.array([0.3, 0.95, 0.4])
+    joints["right_knee"] = numpy.array([-0.3, 0.9, 0.4])
+    joints["left_ankle"] = numpy.array([0.3, 0.85, 0.1])
+    joints["right_ankle"] = numpy.array([-0.3, 0.8, 0.1])
+    visibility = {name: 0.95 for name in JOINT_NAMES}
+    for hallucinated in ("left_knee", "right_knee", "left_ankle", "right_ankle",
+                         "left_foot", "right_foot"):
+        visibility[hallucinated] = 0.1
+
+    resolved = resolve_pose_with_fallbacks(joints, visibility)
+    assert resolved is not None
+    for side in ("left", "right"):
+        hip, knee, ankle = (
+            resolved[f"{side}_hip"], resolved[f"{side}_knee"], resolved[f"{side}_ankle"]
+        )
+        # Standing: each leg joint clearly below the one above it.
+        assert knee[1] < hip[1] - 0.25
+        assert ankle[1] < knee[1] - 0.25
+
+
+def test_fully_seen_joints_pass_through_untouched() -> None:
+    from camera_python_effects.avatar_rig import resolve_pose_with_fallbacks
+
+    joints = idle_joints(2.0)
+    visibility = {name: 0.95 for name in JOINT_NAMES}
+    resolved = resolve_pose_with_fallbacks(joints, visibility)
+    assert resolved is not None
+    for name in JOINT_NAMES:
+        assert numpy.allclose(resolved[name], joints[name], atol=1e-9)
+
+
+def test_an_untrusted_torso_answers_none() -> None:
+    from camera_python_effects.avatar_rig import resolve_pose_with_fallbacks
+
+    joints = idle_joints(1.0)
+    visibility = {name: 0.95 for name in JOINT_NAMES}
+    visibility["left_hip"] = 0.2
+    assert resolve_pose_with_fallbacks(joints, visibility) is None
