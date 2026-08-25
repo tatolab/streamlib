@@ -17,6 +17,7 @@ from __future__ import annotations
 import cupy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -27,9 +28,9 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
+    TEXTURE_FORMAT,
     video_frame_bag_naming,
 )
-from ..published_texture_ring import PublishedTextureRing
 
 
 @processor(description="Copies the camera's frame into a bindable device texture")
@@ -43,7 +44,9 @@ class CameraFrameToTexture:
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.output_ring = PublishedTextureRing(SAMPLED_ONLY_TEXTURE_USAGE)
+        self.output_ring = ProcessorOutputTextureRing(
+            TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
+        )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_camera", into=VideoFrame)

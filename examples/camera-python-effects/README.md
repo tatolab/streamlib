@@ -78,13 +78,13 @@ back with no new surface at all. That is the cheaper door whenever an effect
 does not need a shader; these effects do.
 
 **Output textures are allocated once, not per frame.** Every processor here
-publishes into a `PublishedTextureRing` — two slots taken on the first frame
-and rotated after that, which is the Python spelling of the engine's own
-`TextureRing` (`docs/architecture/texture-ring.md`). Acquiring a texture per
-frame instead costs 7.2 ms against 2.3 ms at 1080p, and hands you a lifetime
-bug: an acquired texture's registration *is* its handle, so a producer that
-lets go at the end of `process()` unregisters the surface id a consumer one
-process away was handed a millisecond earlier.
+publishes from a `streamlib.ProcessorOutputTextureRing` — two slots taken on
+the first frame and rotated after that, the cross-process sibling of the
+engine's own `TextureRing` (`docs/architecture/texture-ring.md`). Acquiring a
+texture per frame instead costs 7.2 ms against 2.3 ms at 1080p, and hands you
+a lifetime bug: an acquired texture's registration *is* its handle, so a
+producer that lets go at the end of `process()` unregisters the surface id a
+consumer one process away was handed a millisecond earlier.
 
 ## Tests
 
