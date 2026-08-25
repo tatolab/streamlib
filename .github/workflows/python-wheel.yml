@@ -48,10 +48,12 @@ jobs:
           persist-credentials: false
 
       # Same minimal engine build set as test.yml: the engine's build.rs
-      # compiles GLSL with glslc, the Linux dep set links Vulkan, and iceoryx2's
+      # compiles GLSL through the shaderc crate, the Linux dep set links Vulkan, and iceoryx2's
       # PAL crates run bindgen. `python3-dev` is the extra — the wheel crate's
       # unit tests link libpython (see the step below).
       # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
+      # `build-from-source`), which the build script now also compiles shaders
+      # with — there is no separate `glslc` binary to install any more. Taken
       # `build-from-source`); `ninja-build` is what makes that ~64s instead of
       # minutes — shaderc-sys picks the Ninja generator whenever `ninja` is on
       # PATH, so installing it is the whole configuration. Explicit rather than
@@ -66,7 +68,6 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
-            glslc
             python3-dev
             cmake
             ninja-build
