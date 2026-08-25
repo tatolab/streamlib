@@ -46,7 +46,7 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 | `CameraFrameToTexture` | Copies the camera frame into a texture, device to device, with cupy |
 | `CyberpunkGlitch` | Teal/magenta grade with intermittent glitch flashes |
 | `CrtFilmGrain` | Barrel curve, scanlines, aberration, vignette, 24 fps grain |
-| `PoseSkeletonOverlay` | YOLOv8 pose over a CUDA tensor, skeleton drawn as an SDF |
+| `CyberpunkAvatar` | MediaPipe 3D pose driving a procedural android on a neon stage |
 | `NeonOverlaySource` | Lower third and watermark, drawn with skia |
 | `BreakingNewsCompositor` | Blends the three layers with a sliding picture-in-picture |
 
@@ -55,12 +55,14 @@ Edit one and re-run `streamlib dev` — that is the whole edit loop.
 
 Config is constructor keyword arguments with ordinary Python defaults —
 `rt.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the tube.
-`CrtFilmGrain` takes every CRT parameter that way; `PoseSkeletonOverlay` takes
-`pose_model`, `keypoint_confidence_floor` and `skeleton_scale`.
+`CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar` takes
+`scene_width`, `scene_height` and `detection_confidence`.
 
-If pose detection cannot run — a CUDA stack that does not agree with itself is
-the usual cause — the skeleton layer stays empty, the warning is logged once,
-and the other five layers carry on.
+The avatar is three third-party worlds in one helper process — cupy reads the
+camera frame as a GPU tensor, MediaPipe lifts a 3D pose out of it on the CPU,
+ModernGL renders the posed android on its own stage — and the engine sees only
+a frame in and a frame out. If tracking cannot run, the android holds its idle
+sway, the warning is logged once, and the other five layers carry on.
 
 ## Two things worth knowing before you write a processor here
 

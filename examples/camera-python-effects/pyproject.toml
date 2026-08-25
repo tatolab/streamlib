@@ -16,9 +16,11 @@ dependencies = [
     # The overlay generator's 2D canvas. Not in the wheel's adapter closure —
     # it is an ordinary PyPI dependency of this app, like any other.
     "skia-python>=138",
-    # Pose detection. Pulls torch transitively; the model weights download on
-    # first run.
-    "ultralytics>=8.3",
+    # Pose detection: 33 landmarks with real depth, model bundled in the
+    # wheel, CPU-fast — no torch, no CUDA stack to disagree with.
+    "mediapipe>=0.10.14",
+    # The avatar's own GL world: offscreen render of the posed android.
+    "moderngl>=5.10",
 ]
 
 # streamlib is served from its own simple index until the PyPI publication that

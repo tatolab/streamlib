@@ -24,7 +24,6 @@ EVERY_SHADER = [
     pytest.param("fullscreen_triangle.vert", "vert", id="fullscreen_triangle"),
     pytest.param("cyberpunk_glitch.frag", "frag", id="cyberpunk_glitch"),
     pytest.param("crt_film_grain.frag", "frag", id="crt_film_grain"),
-    pytest.param("pose_skeleton.frag", "frag", id="pose_skeleton"),
     pytest.param("breaking_news_composite.frag", "frag", id="breaking_news_composite"),
 ]
 
