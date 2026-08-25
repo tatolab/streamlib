@@ -64,7 +64,8 @@ Avoid the two failure modes:
 - [@docs/learnings/vulkan-frames-in-flight.md](vulkan-frames-in-flight.md) —
   `MAX_FRAMES_IN_FLIGHT = 2`, NOT `swapchain.images.len()`
 - [@docs/learnings/camera-display-e2e-validation.md](camera-display-e2e-validation.md) —
-  Validate camera→display end-to-end via virtual camera + PNG sampling
+  Validate camera→display end-to-end via virtual camera + window capture; gate on
+  contracts, never on engine tracing prose
 - [@docs/learnings/vulkanalia-empty-slice-cast.md](vulkanalia-empty-slice-cast.md) —
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
 - [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
