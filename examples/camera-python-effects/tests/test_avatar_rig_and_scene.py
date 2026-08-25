@@ -168,3 +168,41 @@ def test_an_untrusted_torso_answers_none() -> None:
     visibility = {name: 0.95 for name in JOINT_NAMES}
     visibility["left_hip"] = 0.2
     assert resolve_pose_with_fallbacks(joints, visibility) is None
+
+
+class LandmarkStandIn:
+    def __init__(self, x: float, y: float, z: float) -> None:
+        self.x, self.y, self.z = x, y, z
+        self.visibility = 0.95
+
+
+def test_a_camera_facing_person_faces_the_viewer() -> None:
+    """The mirror-handedness lock: the visor goes where the face is.
+
+    Negating x without swapping the side labels builds a left-right-crossed
+    body whose torso forward points away from the scene camera — the android
+    showed the back of its head to the person driving it.
+    """
+    from camera_python_effects.avatar_rig import joints_from_world_landmarks
+
+    # A person square to the camera, in MediaPipe's own frame: their left
+    # side at +x, y down (shoulders above hips = more negative), the nose
+    # nearer the camera (more negative z).
+    landmarks = [LandmarkStandIn(0.0, 0.0, 0.0) for _ in range(33)]
+    landmarks[0] = LandmarkStandIn(0.0, -0.62, -0.12)     # nose
+    landmarks[7] = LandmarkStandIn(0.08, -0.60, -0.03)    # left ear
+    landmarks[8] = LandmarkStandIn(-0.08, -0.60, -0.03)   # right ear
+    landmarks[11] = LandmarkStandIn(0.18, -0.50, -0.02)   # left shoulder
+    landmarks[12] = LandmarkStandIn(-0.18, -0.50, -0.02)  # right shoulder
+    landmarks[23] = LandmarkStandIn(0.10, 0.0, 0.0)       # left hip
+    landmarks[24] = LandmarkStandIn(-0.10, 0.0, 0.0)      # right hip
+
+    joints = joints_from_world_landmarks(landmarks)
+    chest = (joints["left_shoulder"] + joints["right_shoulder"]) / 2.0
+    pelvis = (joints["left_hip"] + joints["right_hip"]) / 2.0
+    across = joints["left_shoulder"] - joints["right_shoulder"]
+    forward = numpy.cross(across, chest - pelvis)
+    # The scene camera looks down -z from +z, so facing the viewer is +z.
+    assert forward[2] > 0.0
+    # And the mirror: the person's right side plays the figure's screen-right.
+    assert joints["left_shoulder"][0] > joints["right_shoulder"][0]
