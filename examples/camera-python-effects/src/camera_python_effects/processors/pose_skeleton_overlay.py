@@ -19,6 +19,7 @@ from __future__ import annotations
 import struct
 
 import torch
+from ultralytics import YOLO
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     RuntimeContextFullAccess,
@@ -29,11 +30,11 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     output,
     processor,
 )
-from ultralytics import YOLO
 
 from ..gpu_surface_conventions import (
     COLOR_TARGET_TEXTURE_USAGE,
     TEXTURE_FORMAT,
+    RecentlyPublishedSurfaceRing,
     read_shader_source,
     video_frame_bag_naming,
 )
@@ -54,13 +55,24 @@ from ..single_pass_video_effect import (
 INFERENCE_HEIGHT = 384
 INFERENCE_WIDTH = 640
 
-DEFAULT_POSE_MODEL = "yolov8n-pose.pt"
-DEFAULT_KEYPOINT_CONFIDENCE_FLOOR = 0.5
-
-
 @processor(description="Neon COCO-17 skeleton drawn from a detected pose")
 class PoseSkeletonOverlay:
     """Camera frame in, transparent skeleton layer out."""
+
+    def __init__(
+        self,
+        pose_model: str = "yolov8n-pose.pt",
+        keypoint_confidence_floor: float = 0.5,
+        skeleton_scale: float = 0.5,
+    ) -> None:
+        self.pose_model_weights = pose_model
+        self.keypoint_confidence_floor = keypoint_confidence_floor
+        # The compositor samples this layer into a picture-in-picture box a
+        # quarter of the screen wide, so drawing it at the camera's full extent
+        # buys nothing and costs a slot in the pool bucket every other pass is
+        # publishing into. Keypoints are frame-normalized, so the shader draws
+        # the same skeleton at any extent.
+        self.skeleton_scale = skeleton_scale
 
     @input(delivery_profile="latest")
     def video_from_camera(self) -> VideoFrame: ...
@@ -69,12 +81,8 @@ class PoseSkeletonOverlay:
     def skeleton_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.confidence_floor = float(
-            ctx.config.get("keypoint_confidence_floor", DEFAULT_KEYPOINT_CONFIDENCE_FLOOR)
-        )
-        model_weights = ctx.config.get("pose_model", DEFAULT_POSE_MODEL)
-        log.info("loading the pose model", model=model_weights)
-        self.pose_model = YOLO(model_weights).to("cuda")
+        log.info("loading the pose model", model=self.pose_model_weights)
+        self.pose_model = YOLO(self.pose_model_weights).to("cuda")
 
         # No sampled bindings at all: the skeleton is drawn from push constants
         # over transparent black, and the camera picture it was detected in is
@@ -87,6 +95,8 @@ class PoseSkeletonOverlay:
             label="PoseSkeletonOverlay",
         )
         self.first_process_at_ns: int | None = None
+        self.recently_published = RecentlyPublishedSurfaceRing()
+        self.a_detection_failure_has_been_reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_camera", into=VideoFrame)
@@ -96,30 +106,58 @@ class PoseSkeletonOverlay:
             self.first_process_at_ns = ctx.time
         elapsed_seconds = (ctx.time - self.first_process_at_ns) / NANOSECONDS_PER_SECOND
 
-        packed_keypoints, visible_mask = self.detect_pose_in(frame)
+        try:
+            packed_keypoints, visible_mask = self.detect_pose_in(frame)
+        except Exception as detection_failure:  # noqa: BLE001 — see below
+            # Deliberately every failure. This is the one layer of six that
+            # depends on a CUDA stack outside the wheel, and the failure that
+            # actually happens is an environment one — a cuDNN whose
+            # sublibraries disagree, an out-of-memory, a driver mismatch —
+            # not a bug in the frame. A raise here would put a traceback on
+            # every camera frame forever; an empty skeleton keeps the other
+            # five layers on screen and says once what went wrong.
+            self.report_the_first_detection_failure(detection_failure)
+            packed_keypoints, visible_mask = [0] * COCO_KEYPOINT_COUNT, 0
 
+        skeleton_width = max(int(frame.width * self.skeleton_scale), 1)
+        skeleton_height = max(int(frame.height * self.skeleton_scale), 1)
         skeleton_target = ctx.gpu_limited_access.acquire_texture(
-            frame.width, frame.height, TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+            skeleton_width, skeleton_height, TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
         )
         self.graphics_kernel.draw(
             bindings={},
             color_targets=[skeleton_target],
-            extent=(frame.width, frame.height),
+            extent=(skeleton_width, skeleton_height),
             vertex_count=3,
             push_constants=struct.pack(
                 POSE_PUSH_CONSTANT_FORMAT,
                 *packed_keypoints,
                 visible_mask,
-                float(frame.width),
-                float(frame.height),
+                float(skeleton_width),
+                float(skeleton_height),
                 elapsed_seconds,
             ),
         )
+        self.recently_published.retain_published_surface(skeleton_target)
         ctx.outputs.write(
             "skeleton_to_downstream",
             video_frame_bag_naming(
-                skeleton_target.surface_id, frame.width, frame.height, frame.timestamp_ns
+                skeleton_target.surface_id,
+                skeleton_width,
+                skeleton_height,
+                frame.timestamp_ns,
             ),
+        )
+
+    def report_the_first_detection_failure(self, failure: BaseException) -> None:
+        """Say once, per process, that the skeleton layer is dark and why."""
+        if self.a_detection_failure_has_been_reported:
+            return
+        self.a_detection_failure_has_been_reported = True
+        log.warn(
+            "pose detection failed, so the skeleton layer stays empty; the rest of the "
+            "pipeline is unaffected. Not reported again in this process.",
+            failure=str(failure),
         )
 
     def detect_pose_in(self, frame: VideoFrame) -> "tuple[list[int], int]":
@@ -155,4 +193,4 @@ class PoseSkeletonOverlay:
             if keypoints.conf is not None
             else [1.0] * len(normalized_keypoints)
         )
-        return pack_keypoints(normalized_keypoints, confidences, self.confidence_floor)
+        return pack_keypoints(normalized_keypoints, confidences, self.keypoint_confidence_floor)

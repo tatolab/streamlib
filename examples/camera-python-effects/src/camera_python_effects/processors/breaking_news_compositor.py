@@ -25,6 +25,7 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 from ..gpu_surface_conventions import (
     COLOR_TARGET_TEXTURE_USAGE,
     TEXTURE_FORMAT,
+    RecentlyPublishedSurfaceRing,
     read_shader_source,
     video_frame_bag_naming,
 )
@@ -95,6 +96,7 @@ class BreakingNewsCompositor:
         self.latest_overlay: VideoFrame | None = None
         self.latest_skeleton: VideoFrame | None = None
         self.first_process_at_ns: int | None = None
+        self.recently_published = RecentlyPublishedSurfaceRing()
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         video = ctx.inputs.read(VIDEO_FROM_UPSTREAM, into=VideoFrame)
@@ -144,6 +146,7 @@ class BreakingNewsCompositor:
                 pip_slide_progress_at(elapsed_seconds),
             ),
         )
+        self.recently_published.retain_published_surface(composited)
         ctx.outputs.write(
             "video_to_downstream",
             video_frame_bag_naming(

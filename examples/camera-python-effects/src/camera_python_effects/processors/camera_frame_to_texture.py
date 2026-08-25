@@ -17,6 +17,7 @@ from __future__ import annotations
 import cupy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
     input,
@@ -27,6 +28,7 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
     TEXTURE_FORMAT,
+    RecentlyPublishedSurfaceRing,
     video_frame_bag_naming,
 )
 
@@ -40,6 +42,9 @@ class CameraFrameToTexture:
 
     @output()
     def video_to_downstream(self) -> VideoFrame: ...
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self.recently_published = RecentlyPublishedSurfaceRing()
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_camera", into=VideoFrame)
@@ -57,6 +62,7 @@ class CameraFrameToTexture:
         with texture.as_device_tensor() as writable_texture:
             cupy.from_dlpack(writable_texture)[...] = camera_pixels
 
+        self.recently_published.retain_published_surface(texture)
         ctx.outputs.write(
             "video_to_downstream",
             video_frame_bag_naming(
