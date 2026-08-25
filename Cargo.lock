@@ -5013,6 +5013,7 @@ version = "0.18.1"
 dependencies = [
  "serde",
  "serde_json",
+ "shaderc",
  "streamlib",
  "streamlib-macros",
 ]
@@ -5709,6 +5710,7 @@ version = "0.18.1"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",
+ "shaderc",
  "streamlib",
  "thiserror 2.0.18",
  "tracing",

@@ -209,6 +209,11 @@ required-features = []
 [build-dependencies]
 serde_json = { workspace = true }
 
+# The build script compiles this crate's GLSL to SPIR-V. Deliberately the
+# same pinned compiler the runtime links, so a shader baked at build time
+# and one compiled at runtime cannot come from different glslang versions.
+shaderc = { workspace = true }
+
 # Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
 tonic-build = "0.12"

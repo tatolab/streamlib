@@ -35,3 +35,9 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[build-dependencies]
+# The build script compiles this crate's GLSL to SPIR-V. The same pinned
+# compiler the engine uses, so no shader in the tree is compiled by a
+# different glslang than the one the runtime assumes.
+shaderc = { workspace = true }

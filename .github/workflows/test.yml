@@ -43,7 +43,7 @@ jobs:
           persist-credentials: false
 
       # `-p streamlib` pulls streamlib-engine, whose build.rs compiles GLSL
-      # compute shaders with glslc; the Linux engine dep set links Vulkan, and
+      # compute shaders through the shaderc crate; the Linux engine dep set links Vulkan, and
       # iceoryx2's PAL crates run bindgen. Minimal subset — no GPU/codec
       # backends.
       #
@@ -52,6 +52,8 @@ jobs:
       # goes missing. 12 minutes sits above the script's own 590s worst case so
       # the script reports the failure rather than being killed mid-sentence.
       # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
+      # `build-from-source`), which the build script now also compiles shaders
+      # with — there is no separate `glslc` binary to install any more. Taken
       # `build-from-source`); `ninja-build` is what makes that ~64s instead of
       # minutes — shaderc-sys picks the Ninja generator whenever `ninja` is on
       # PATH, so installing it is the whole configuration. Explicit rather than
@@ -66,7 +68,6 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
-            glslc
             cmake
             ninja-build
 
