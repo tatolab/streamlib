@@ -44,13 +44,15 @@ def push_constant_block_size_of(shader_source: str) -> int:
     if block is None:
         raise ValueError("this shader declares no push_constant block")
 
+    # Comments go first, then the split: a comment is free to contain a
+    # semicolon, and one that did used to cut a declaration in half.
+    body_without_comments = " ".join(
+        line.split("//")[0].strip() for line in block.group("body").splitlines()
+    )
+
     offset = 0
-    for statement in block.group("body").split(";"):
-        # Comments are stripped line by line, then the declaration is whatever
-        # non-empty text is left.
-        declaration = " ".join(
-            line.split("//")[0].strip() for line in statement.splitlines()
-        ).strip()
+    for statement in body_without_comments.split(";"):
+        declaration = statement.strip()
         if not declaration:
             continue
         member = _MEMBER.match(declaration)

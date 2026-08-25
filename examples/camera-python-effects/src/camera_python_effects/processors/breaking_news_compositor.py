@@ -29,13 +29,15 @@ from ..gpu_surface_conventions import (
     read_shader_source,
     video_frame_bag_naming,
 )
+from ..neon_overlay_canvas import ease_out_back
 from ..single_pass_video_effect import (
     NANOSECONDS_PER_SECOND,
     SHARED_VERTEX_SHADER_FILE_NAME,
 )
 
-# `vec2 frame_extent_in_pixels; uint present_layer_mask; float pip_slide_progress;`
-COMPOSITE_PUSH_CONSTANT_FORMAT = "<2fIf"
+# `vec2 frame_extent_in_pixels; uint present_layer_mask;
+#  float pip_slide_progress; float elapsed_seconds;`
+COMPOSITE_PUSH_CONSTANT_FORMAT = "<2fI2f"
 COMPOSITE_PUSH_CONSTANT_SIZE = struct.calcsize(COMPOSITE_PUSH_CONSTANT_FORMAT)
 
 VIDEO_LAYER_BIT = 1
@@ -56,10 +58,15 @@ PIP_HOLD_OFF_SECONDS = 3.0
 
 
 def pip_slide_progress_at(elapsed_seconds: float) -> float:
-    """0.0 fully off-screen, 1.0 docked, smoothly between."""
+    """0.0 fully off-screen, 1.0 docked — swinging past the dock on the way.
+
+    The overshoot is the point: the frame slams in, blows a little past its
+    mark and settles, the way the game's HUD panels arrive. The shader takes
+    a progress above 1.0 as a slide past the docked position.
+    """
     slid = (elapsed_seconds - PIP_HOLD_OFF_SECONDS) / PIP_SLIDE_IN_SECONDS
     clamped = min(max(slid, 0.0), 1.0)
-    return clamped * clamped * (3.0 - 2.0 * clamped)
+    return ease_out_back(clamped, overshoot=1.9)
 
 
 @processor(description="Three-layer compositor with a sliding picture-in-picture")
@@ -146,6 +153,7 @@ class BreakingNewsCompositor:
                 float(video.height),
                 present_layer_mask,
                 pip_slide_progress_at(elapsed_seconds),
+                elapsed_seconds,
             ),
         )
         ctx.outputs.write(
