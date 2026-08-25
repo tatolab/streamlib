@@ -49,6 +49,9 @@ from .claimed_surface_pixel_access import (
 from .claimed_surface_pixel_access import (
     PixelAccessToOneClaimedSurface as PixelAccessToOneClaimedSurface,
 )
+from .processor_output_texture_ring import (
+    ProcessorOutputTextureRing as ProcessorOutputTextureRing,
+)
 from .video_frame import ColorInfo as ColorInfo
 from .video_frame import ContentLight as ContentLight
 from .video_frame import MasteringDisplay as MasteringDisplay
@@ -77,6 +80,7 @@ __all__ = [
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
+    "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
     "Runtime",

@@ -232,7 +232,13 @@ contract).
   (`gpu.surface_store().register_texture(...)`) per
   [`adapter-runtime-integration.md`](adapter-runtime-integration.md);
   the engine ring is for in-process producer→consumer handoffs
-  via the texture cache (Path 1).
+  via the texture cache (Path 1). The cross-process sibling is the
+  wheel's `streamlib.ProcessorOutputTextureRing`
+  (`sdk/streamlib-python-wheel/python/streamlib/processor_output_texture_ring.py`):
+  same allocate-once-rotate discipline, composed over the escalate
+  `AcquireTexture` op, whose slots the engine allocates
+  cross-process-importable and registers with surface-share — which
+  is what a helper-placed producer's published ids need.
 - **Render-target rings for the display swapchain.** Display
   manages its own per-image render-finished semaphores keyed by
   `image_index` from `acquire_next_image_khr`
