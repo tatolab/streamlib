@@ -1,11 +1,10 @@
-# Camera-display E2E validation without windows or physical hardware
+# Camera-display E2E validation without physical hardware
 
 ## When you need this
 
-You changed anything in the GPU pipeline (`vulkan_device.rs`,
-`vulkan_buffer.rs`, `vulkan_texture.rs`,
-`packages/camera/processors/camera_linux.rs`,
-`linux/processors/display.rs`) and need to confirm:
+You changed anything in the GPU pipeline (`vulkan_device.rs`, `vulkan_buffer.rs`,
+`vulkan_texture.rs`, `runtime/streamlib-media-builtins/src/camera_source.rs`,
+`runtime/streamlib-media-builtins/src/display_window.rs`) and need to confirm:
 
 - Pipeline runs end-to-end without OOM or driver errors
 - Frames actually render (not just black/empty)
@@ -18,14 +17,21 @@ work and won't trigger in isolation. See
 
 ## One-time host setup
 
-```bash
-# v4l2loopback kernel module — virtual camera device
-sudo apt-get install v4l2loopback-dkms
-sudo modprobe v4l2loopback video_nr=10 card_label=Virtual_Camera exclusive_caps=0
-# Note: exclusive_caps=0 (NOT 1) — caps=1 breaks ffmpeg→v4l2loopback writes
+The fixture drives the in-kernel **vivid** V4L2 test driver — no DKMS and no
+out-of-tree module:
 
-# Tools
-sudo apt-get install ffmpeg imagemagick xdotool
+```bash
+sudo modprobe vivid
+sudo apt-get install xdotool x11-apps python3-pil   # xwd ships in x11-apps
+```
+
+v4l2loopback + an ffmpeg `testsrc` remains the setup for the *motion* scenario
+(a visible per-frame counter, for drop/repeat bugs), and carries one non-obvious
+constraint worth keeping: load it with `exclusive_caps=0`, **not** `1` — `caps=1`
+breaks ffmpeg→v4l2loopback writes.
+
+```bash
+sudo modprobe v4l2loopback video_nr=10 card_label=Virtual_Camera exclusive_caps=0
 ```
 
 ## Run
@@ -35,32 +41,48 @@ runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
 ```
 
 The script:
-1. Starts ffmpeg streaming a `testsrc` pattern to `/dev/video10`
-2. Runs `cargo run -p camera-display` with debug env vars (see below)
-3. Validates: DMA-BUF pools created, swapchain created, first frame
-   captured, zero OOM errors, ≥1 PNG sample produced
+1. Loads vivid and finds its capture node
+2. Boots `examples/camera-display` with `streamlib run` — the app is Python, so
+   there is no build step between an edit and the run
+3. Waits for the node to register, then asserts against `streamlib graph`:
+   both native built-ins present, linked camera → window
+4. Captures the window to PNG, then stops the node with SIGTERM and requires a
+   clean exit
+5. Gates the log on `OUT_OF_DEVICE_MEMORY` / `DEVICE_LOST` / `process() failed`
 
 Exit codes: 0 = pass, 1 = fail, 77 = skipped (prerequisites missing).
 
+## Assert on contracts, not on tracing prose
+
+> ~~Validates: DMA-BUF pools created, swapchain created, first frame captured.~~
+> — Superseded 2026-08-25. The fixture used to grep engine log prose
+> (`Ring textures created`, `First frame captured`, `Failed to create camera
+> texture`). Those strings were renamed or deleted during the pivot and the
+> gate went vacuous — it would have reported FAIL on a perfectly healthy run,
+> and nobody noticed because the example it built had stopped compiling too.
+
+Gate on things the plan makes durable: the `graph` tool's JSON shape, the JSONL
+log schema, process exit status, and the pixels in a captured PNG. Vulkan error
+strings (`OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`) are also stable — they come from
+the driver, not from us. Our own `tracing` messages are not a test API.
+
 ## AI-tappable validation
 
-PNG samples land in `$OUTPUT_DIR/png_samples/` as full-resolution
-1920x1080 BGRA→RGBA PNGs. Read them directly with the Read tool to
-visually verify pipeline correctness. The PNG writer is dependency-free
-(handwritten in `display.rs`) so adding more dependencies is unnecessary.
+The window capture lands in `$OUTPUT_DIR/png_samples/window.png`, grabbed with
+`xdotool search --name` → `xwd` → PIL (`tests/fixtures/capture_window.py`).
+Read it with the Read tool and describe what it shows.
 
-The samples come from the source HOST_VISIBLE pixel buffer (not a GPU
-readback of the rendered swapchain image), so they validate the camera→
-display data flow but NOT the actual rendering of the swapchain.
+Because it is a capture of the composited window, it validates the *whole* path
+including the swapchain present — which the retired in-process PNG sampler did
+not (it dumped the source HOST_VISIBLE pixel buffer before rendering).
 
-## Debug env vars (read by display.rs at start())
-
-| Var | Effect |
-|---|---|
-| `STREAMLIB_CAMERA_DEVICE=/dev/videoN` | Override default `/dev/video0` |
-| `STREAMLIB_DISPLAY_FRAME_LIMIT=N` | Auto-exit after N rendered frames (avoids stranded windows) |
-| `STREAMLIB_DISPLAY_PNG_SAMPLE_DIR=path` | Save sample frames as PNG |
-| `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY=N` | Sampling interval (default 30) |
+> ~~Debug env vars read by display.rs: `STREAMLIB_DISPLAY_FRAME_LIMIT`,
+> `STREAMLIB_DISPLAY_PNG_SAMPLE_DIR`, `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY`.~~
+> — Removed 2026-08-25: the display built-in reads none of them; they went with
+> the pre-pivot display processor. A run self-terminates on SIGTERM (`rt.run()`
+> owns it) and frames are sampled by capturing the window from outside.
+> `STREAMLIB_CAMERA_DEVICE` is unaffected — it is read by `examples/camera-display`'s
+> own `app.py`, not by the engine.
 
 ## Troubleshooting
 
@@ -78,9 +100,11 @@ For multi-scenario unit tests, build the EventLoop once and call
 
 **Process strands after timeout / Ctrl+C**
 Window-based runs sometimes don't respect SIGTERM cleanly (winit + X11
-interaction issue). Always use `timeout --kill-after=3 N ...` to force
-SIGKILL after a grace period, then `pkill -9 -f camera-display` defensively.
+interaction issue). The fixture waits 15s after SIGTERM and then SIGKILLs from
+its `trap`; a run that needs the SIGKILL is a finding, not a flake — the
+interpreter-lifecycle contract says engine teardown precedes interpreter
+finalization.
 
 ## Reference
 - Fixture scripts: `runtime/streamlib-engine/tests/fixtures/`
-- Display debug feature implementation: `runtime/streamlib-engine/src/linux/processors/display.rs` (search `png_sample_dir`)
+- The app under test: `examples/camera-display/app.py`
