@@ -62,13 +62,29 @@ If pose detection cannot run — a CUDA stack that does not agree with itself is
 the usual cause — the skeleton layer stays empty, the warning is logged once,
 and the other five layers carry on.
 
-## Why the camera frame goes through `CameraFrameToTexture`
+## Two things worth knowing before you write a processor here
 
-`CameraSource` publishes buffer-backed frames, and a kernel binding resolves
-texture-backed surfaces only — a draw handed a buffer-backed surface id is
-refused by name. So the chain opens by reading the frame as a GPU tensor and
-copying it into a texture this app acquired. cupy does nothing but that copy;
-any DLPack-speaking GPU package would serve.
+**A camera frame is not a texture.** `CameraSource` publishes buffer-backed
+frames and a kernel binding resolves texture-backed surfaces only, so a draw
+handed a camera surface id is refused by name. That is what
+`CameraFrameToTexture` is for: it reads the frame as a GPU tensor and copies it
+into a texture this app owns, device to device. cupy does nothing but that
+copy; any DLPack-speaking GPU package would serve.
+
+It is also the *only* reason the chain opens that way. A camera frame is
+writable in place — `with frame.writable() as t:` hands a third-party GPU
+package a device tensor over the frame's own pixels, and the edit publishes
+back with no new surface at all. That is the cheaper door whenever an effect
+does not need a shader; these effects do.
+
+**Output textures are allocated once, not per frame.** Every processor here
+publishes into a `PublishedTextureRing` — two slots taken on the first frame
+and rotated after that, which is the Python spelling of the engine's own
+`TextureRing` (`docs/architecture/texture-ring.md`). Acquiring a texture per
+frame instead costs 7.2 ms against 2.3 ms at 1080p, and hands you a lifetime
+bug: an acquired texture's registration *is* its handle, so a producer that
+lets go at the end of `process()` unregisters the surface id a consumer one
+process away was handed a millisecond earlier.
 
 ## Tests
 

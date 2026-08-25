@@ -27,10 +27,9 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
-    TEXTURE_FORMAT,
-    RecentlyPublishedSurfaceRing,
     video_frame_bag_naming,
 )
+from ..published_texture_ring import PublishedTextureRing
 
 
 @processor(description="Copies the camera's frame into a bindable device texture")
@@ -44,7 +43,7 @@ class CameraFrameToTexture:
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.recently_published = RecentlyPublishedSurfaceRing()
+        self.output_ring = PublishedTextureRing(SAMPLED_ONLY_TEXTURE_USAGE)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_camera", into=VideoFrame)
@@ -56,13 +55,12 @@ class CameraFrameToTexture:
         # pixels still for the length of the copy.
         camera_pixels = cupy.from_dlpack(frame)
 
-        texture = ctx.gpu_limited_access.acquire_texture(
-            frame.width, frame.height, TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
+        texture = self.output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, frame.width, frame.height
         )
         with texture.as_device_tensor() as writable_texture:
             cupy.from_dlpack(writable_texture)[...] = camera_pixels
 
-        self.recently_published.retain_published_surface(texture)
         ctx.outputs.write(
             "video_to_downstream",
             video_frame_bag_naming(

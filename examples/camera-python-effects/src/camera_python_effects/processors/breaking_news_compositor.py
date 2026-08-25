@@ -25,10 +25,10 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 from ..gpu_surface_conventions import (
     COLOR_TARGET_TEXTURE_USAGE,
     TEXTURE_FORMAT,
-    RecentlyPublishedSurfaceRing,
     read_shader_source,
     video_frame_bag_naming,
 )
+from ..published_texture_ring import PublishedTextureRing
 from ..single_pass_video_effect import (
     NANOSECONDS_PER_SECOND,
     SHARED_VERTEX_SHADER_FILE_NAME,
@@ -96,7 +96,7 @@ class BreakingNewsCompositor:
         self.latest_overlay: VideoFrame | None = None
         self.latest_skeleton: VideoFrame | None = None
         self.first_process_at_ns: int | None = None
-        self.recently_published = RecentlyPublishedSurfaceRing()
+        self.output_ring = PublishedTextureRing(COLOR_TARGET_TEXTURE_USAGE)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         video = ctx.inputs.read(VIDEO_FROM_UPSTREAM, into=VideoFrame)
@@ -126,8 +126,8 @@ class BreakingNewsCompositor:
             present_layer_mask |= POSE_LAYER_BIT
             pose_surface_id = self.latest_skeleton.surface_id
 
-        composited = ctx.gpu_limited_access.acquire_texture(
-            video.width, video.height, TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+        composited = self.output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, video.width, video.height
         )
         self.graphics_kernel.draw(
             bindings={
@@ -146,7 +146,6 @@ class BreakingNewsCompositor:
                 pip_slide_progress_at(elapsed_seconds),
             ),
         )
-        self.recently_published.retain_published_surface(composited)
         ctx.outputs.write(
             "video_to_downstream",
             video_frame_bag_naming(

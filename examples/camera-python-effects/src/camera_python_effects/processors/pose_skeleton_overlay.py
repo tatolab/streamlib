@@ -34,7 +34,6 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 from ..gpu_surface_conventions import (
     COLOR_TARGET_TEXTURE_USAGE,
     TEXTURE_FORMAT,
-    RecentlyPublishedSurfaceRing,
     read_shader_source,
     video_frame_bag_naming,
 )
@@ -44,6 +43,7 @@ from ..pose_keypoint_packing import (
     POSE_PUSH_CONSTANT_SIZE,
     pack_keypoints,
 )
+from ..published_texture_ring import PublishedTextureRing
 from ..single_pass_video_effect import (
     NANOSECONDS_PER_SECOND,
     SHARED_VERTEX_SHADER_FILE_NAME,
@@ -95,7 +95,7 @@ class PoseSkeletonOverlay:
             label="PoseSkeletonOverlay",
         )
         self.first_process_at_ns: int | None = None
-        self.recently_published = RecentlyPublishedSurfaceRing()
+        self.output_ring = PublishedTextureRing(COLOR_TARGET_TEXTURE_USAGE)
         self.a_detection_failure_has_been_reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -121,8 +121,8 @@ class PoseSkeletonOverlay:
 
         skeleton_width = max(int(frame.width * self.skeleton_scale), 1)
         skeleton_height = max(int(frame.height * self.skeleton_scale), 1)
-        skeleton_target = ctx.gpu_limited_access.acquire_texture(
-            skeleton_width, skeleton_height, TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+        skeleton_target = self.output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, skeleton_width, skeleton_height
         )
         self.graphics_kernel.draw(
             bindings={},
@@ -138,7 +138,6 @@ class PoseSkeletonOverlay:
                 elapsed_seconds,
             ),
         )
-        self.recently_published.retain_published_surface(skeleton_target)
         ctx.outputs.write(
             "skeleton_to_downstream",
             video_frame_bag_naming(

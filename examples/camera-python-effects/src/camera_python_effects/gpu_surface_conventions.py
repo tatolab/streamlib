@@ -5,17 +5,13 @@
 
 from __future__ import annotations
 
-from collections import deque
 from importlib import resources
 from typing import Any
-
-from streamlib import GpuSurfaceHandle
 
 __all__ = [
     "COLOR_TARGET_TEXTURE_USAGE",
     "SAMPLED_ONLY_TEXTURE_USAGE",
     "TEXTURE_FORMAT",
-    "RecentlyPublishedSurfaceRing",
     "read_shader_source",
     "video_frame_bag_naming",
 ]
@@ -29,37 +25,6 @@ COLOR_TARGET_TEXTURE_USAGE = ["render_attachment", "texture_binding"]
 
 # A texture written through a CPU or device-tensor door rather than a pass.
 SAMPLED_ONLY_TEXTURE_USAGE = ["texture_binding"]
-
-# How many published frames a producer keeps resolvable behind the newest one.
-# Deep rings do not scale: a bucket is keyed by extent, format and usage, the
-# engine caps one at 16 textures, and three passes publish full-extent colour
-# targets here — so three retained each plus one in flight each is 12, with
-# headroom. Three frames is ~100 ms at camera cadence, comfortably longer than
-# a consumer reading `latest` takes to wake. Raising it means raising the cap.
-PUBLISHED_SURFACE_RING_DEPTH = 3
-
-
-class RecentlyPublishedSurfaceRing:
-    """Holds the last few published surfaces so consumers can still resolve them.
-
-    An acquired texture's registration *is* its handle: dropping the handle
-    releases the pool slot and unregisters the surface id, so a consumer one
-    process away that was handed the id a millisecond ago resolves nothing and
-    its draw is refused by name. Publishing therefore means handing the id
-    downstream *and* keeping the handle for a while.
-
-    Depth bounds how far behind a consumer may fall, not how fast anything
-    runs: the producer never waits, and a consumer that falls further behind
-    than the ring misses frames rather than stalling it.
-    """
-
-    def __init__(self, depth: int = PUBLISHED_SURFACE_RING_DEPTH) -> None:
-        # Eviction is the release: the oldest handle leaves the deque, its last
-        # reference goes with it, and the wheel pays the parent its release.
-        self._recently_published: "deque[GpuSurfaceHandle]" = deque(maxlen=depth)
-
-    def retain_published_surface(self, surface: GpuSurfaceHandle) -> None:
-        self._recently_published.append(surface)
 
 
 def read_shader_source(shader_file_name: str) -> str:
