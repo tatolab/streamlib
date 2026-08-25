@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.3](https://github.com/tatolab/streamlib/compare/v0.18.2...v0.18.3) (2026-08-25)
+
+
+### Performance
+
+* **ci:** drop sccache from the release wheel build — measured, it loses ([#1960](https://github.com/tatolab/streamlib/issues/1960)) ([56269db](https://github.com/tatolab/streamlib/commit/56269db18d2eab158143e1ba13d13f01e028284c))
+
 ## [0.18.2](https://github.com/tatolab/streamlib/compare/v0.18.1...v0.18.2) (2026-08-25)
 
 
