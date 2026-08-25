@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.2](https://github.com/tatolab/streamlib/compare/v0.18.1...v0.18.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **build:** build-time shaders compile with the pinned shaderc, not an ambient glslc ([#1958](https://github.com/tatolab/streamlib/issues/1958)) ([c6fc15d](https://github.com/tatolab/streamlib/commit/c6fc15d5d1a472b2d16099b9082309ba36ebf276))
+
 ## [0.18.1](https://github.com/tatolab/streamlib/compare/v0.18.0...v0.18.1) (2026-08-24)
 
 
