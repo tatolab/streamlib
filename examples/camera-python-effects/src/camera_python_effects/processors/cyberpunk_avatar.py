@@ -43,10 +43,13 @@ from ..gpu_surface_conventions import (
 from ..pose_tracking import PoseTracker
 from ..single_pass_video_effect import NANOSECONDS_PER_SECOND
 
-# Every third pixel of a 1080p frame — 640x360, plenty for a detector that
-# resizes to 256 internally, and small enough that the device-to-host hop
-# costs a millisecond.
-CAMERA_DECIMATION_STRIDE = 3
+# Every second pixel of a 1080p frame — 960x540. The detector resizes
+# internally, but a desk-framed torso at 640 wide was marginal for it; the
+# device-to-host hop at this size still costs under two milliseconds.
+CAMERA_DECIMATION_STRIDE = 2
+
+# One line of tracking accounting roughly every ten seconds at camera rate.
+TRACKING_ACCOUNTING_EVERY_FRAMES = 300
 
 
 @processor(description="3D android on a neon stage, dancing your pose")
@@ -57,7 +60,7 @@ class CyberpunkAvatar:
         self,
         scene_width: int = 960,
         scene_height: int = 675,
-        detection_confidence: float = 0.5,
+        detection_confidence: float = 0.35,
         pose_model_path: "str | None" = None,
     ) -> None:
         self.scene_width = scene_width
@@ -87,7 +90,10 @@ class CyberpunkAvatar:
             )
         self.scene_renderer = AvatarSceneRenderer(self.scene_width, self.scene_height)
         self.smoothed_pose = SmoothedPose()
-        self.pose_memory = PoseMemory()
+        self.pose_memory = PoseMemory(hold_seconds=1.5)
+        self.frames_detected = 0
+        self.frames_held = 0
+        self.frames_idled = 0
         self.output_ring = ProcessorOutputTextureRing(
             "rgba8_unorm", SAMPLED_ONLY_TEXTURE_USAGE
         )
@@ -118,6 +124,20 @@ class CyberpunkAvatar:
         )
         remembered = self.pose_memory.target_for(resolved, elapsed_seconds)
         target_joints = remembered if remembered is not None else idle_joints(elapsed_seconds)
+        if resolved is not None:
+            self.frames_detected += 1
+        elif remembered is not None:
+            self.frames_held += 1
+        else:
+            self.frames_idled += 1
+        total_frames = self.frames_detected + self.frames_held + self.frames_idled
+        if total_frames % TRACKING_ACCOUNTING_EVERY_FRAMES == 0:
+            log.info(
+                "tracking accounting",
+                detected=self.frames_detected,
+                held_through_dropouts=self.frames_held,
+                idled=self.frames_idled,
+            )
         settled = self.smoothed_pose.settle(target_joints, dt_seconds)
 
         scene_pixels = self.scene_renderer.render(

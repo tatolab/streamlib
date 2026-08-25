@@ -243,11 +243,19 @@ def visibilities_from_world_landmarks(landmarks) -> "dict[str, float]":
     }
 
 
-# The joints a pose cannot be anchored without, and the confidence band over
-# which a guessed joint hands over to its live-anchored stand-in.
-_TORSO_ANCHOR_JOINTS = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+# What a pose can and cannot be anchored without. Shoulders are the one pair
+# a camera pointed at a person always sees; hips are exactly what a desk
+# framing occludes, so requiring them made the whole pose flicker out at the
+# threshold while the upper body tracked fine. Below the pair, the trust band
+# over which a guessed joint hands over to its live-anchored stand-in.
+_SHOULDER_ANCHOR_JOINTS = ("left_shoulder", "right_shoulder")
+_HIP_JOINTS = ("left_hip", "right_hip")
 _FALLBACK_FULL_TRUST_VISIBILITY = 0.7
 _FALLBACK_NO_TRUST_VISIBILITY = 0.4
+
+# Chest-to-pelvis distance of the idle template, used to synthesize a pelvis
+# under a chest whose hips the camera cannot see.
+_IDLE_TORSO_LENGTH = 0.5
 
 
 def _torso_local_idle_offsets() -> "dict[str, numpy.ndarray]":
@@ -277,16 +285,26 @@ def resolve_pose_with_fallbacks(
     *live* torso (pelvis position plus torso basis), and the band is a blend,
     not a switch, so a joint entering frame walks in rather than popping.
 
-    None when the torso itself is not trustworthy — nothing to anchor to, and
-    the caller's idle stage is the honest answer.
+    None only when the shoulders themselves are not trustworthy — with no
+    anchor at all, the caller's idle stage is the honest answer. Unseen hips
+    do not disqualify the pose: the pelvis is synthesized a torso-length
+    below the chest, upright-biased, and the hip joints take the same
+    stand-in treatment as any other unseen joint.
     """
-    if min(visibility[name] for name in _TORSO_ANCHOR_JOINTS) < 0.5:
+    if min(visibility[name] for name in _SHOULDER_ANCHOR_JOINTS) < 0.5:
         return None
 
-    pelvis = (joints["left_hip"] + joints["right_hip"]) / 2.0
     chest = (joints["left_shoulder"] + joints["right_shoulder"]) / 2.0
-    spine_up = _normalized(chest - pelvis)
     across = _normalized(joints["left_shoulder"] - joints["right_shoulder"])
+    if min(visibility[name] for name in _HIP_JOINTS) >= 0.5:
+        pelvis = (joints["left_hip"] + joints["right_hip"]) / 2.0
+        spine_up = _normalized(chest - pelvis)
+    else:
+        # No hips to read the lean from: stand the spine up, orthogonal to
+        # the shoulder line, and hang the pelvis a torso-length below.
+        world_up = numpy.array([0.0, 1.0, 0.0])
+        spine_up = _normalized(world_up - across * float(across @ world_up))
+        pelvis = chest - spine_up * _IDLE_TORSO_LENGTH
     forward = _normalized(numpy.cross(across, spine_up))
     across = _normalized(numpy.cross(spine_up, forward))
     torso_basis = numpy.stack([across, spine_up, forward], axis=1)

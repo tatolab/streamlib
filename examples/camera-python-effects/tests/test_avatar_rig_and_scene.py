@@ -161,13 +161,35 @@ def test_fully_seen_joints_pass_through_untouched() -> None:
         assert numpy.allclose(resolved[name], joints[name], atol=1e-9)
 
 
-def test_an_untrusted_torso_answers_none() -> None:
+def test_untrusted_shoulders_answer_none() -> None:
     from camera_python_effects.avatar_rig import resolve_pose_with_fallbacks
 
     joints = idle_joints(1.0)
     visibility = {name: 0.95 for name in JOINT_NAMES}
-    visibility["left_hip"] = 0.2
+    visibility["left_shoulder"] = 0.2
     assert resolve_pose_with_fallbacks(joints, visibility) is None
+
+
+def test_unseen_hips_do_not_disqualify_a_tracked_upper_body() -> None:
+    """The desk-camera reset: hip visibility flickering at the threshold must
+    not take a well-tracked upper body down with it."""
+    from camera_python_effects.avatar_rig import resolve_pose_with_fallbacks
+
+    joints = idle_joints(1.0)
+    visibility = {name: 0.95 for name in JOINT_NAMES}
+    for occluded in ("left_hip", "right_hip", "left_knee", "right_knee",
+                     "left_ankle", "right_ankle", "left_foot", "right_foot"):
+        visibility[occluded] = 0.2
+
+    resolved = resolve_pose_with_fallbacks(joints, visibility)
+    assert resolved is not None
+    chest = (resolved["left_shoulder"] + resolved["right_shoulder"]) / 2.0
+    pelvis = (resolved["left_hip"] + resolved["right_hip"]) / 2.0
+    # A synthesized pelvis hangs below the chest, and the legs stand under it.
+    assert pelvis[1] < chest[1] - 0.3
+    for side in ("left", "right"):
+        assert resolved[f"{side}_knee"][1] < resolved[f"{side}_hip"][1] - 0.25
+        assert resolved[f"{side}_ankle"][1] < resolved[f"{side}_knee"][1] - 0.25
 
 
 class LandmarkStandIn:
