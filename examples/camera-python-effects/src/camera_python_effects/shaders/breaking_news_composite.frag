@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 // Three-layer Porter-Duff "over" compositor with animated picture-in-picture
-// chrome. Every source is premultiplied: the overlay generator hands over a
+// chrome, plus the finishing pass that makes the UI belong to the same broken
+// screen as the video: a faint interlace, a light global vignette, and an
+// intermittent full-frame glitch burst that displaces EVERYTHING — video and
+// interface alike, the way 2077's HUD malfunctions with the world.
+//
+// Every source is premultiplied: the overlay generator hands over a
 // premultiplied skia canvas and the skeleton pass writes premultiplied, so
 // `src.rgb + dst.rgb * (1 - src.a)` is the whole blend.
 //
@@ -23,8 +28,9 @@ layout(push_constant, std430) uniform BreakingNewsCompositePushConstants {
     vec2 frame_extent_in_pixels;
     // Bit 0 the video layer, bit 1 the overlay layer, bit 2 the pose layer.
     uint present_layer_mask;
-    // 0.0 fully off-screen right, 1.0 docked.
+    // 0.0 fully off-screen right, 1.0 docked; the easing may overshoot past 1.
     float pip_slide_progress;
+    float elapsed_seconds;
 } pc;
 
 const uint VIDEO_LAYER_BIT = 1u;
@@ -43,6 +49,19 @@ const float PIP_MARGIN = 0.02;
 const float PIP_BORDER = 0.004;
 const float TITLE_BAR_HEIGHT = 0.045;
 
+// The glitch burst cadence: one window per period, its start jittered inside,
+// nothing before the UI has finished sliding in.
+const float GLITCH_PERIOD_SECONDS = 4.7;
+const float GLITCH_BURST_SECONDS = 0.22;
+const float GLITCH_QUIET_LEAD_SECONDS = 2.5;
+
+float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+
 bool inside(vec2 uv, vec2 low_corner, vec2 high_corner) {
     return uv.x >= low_corner.x && uv.x <= high_corner.x
         && uv.y >= low_corner.y && uv.y <= high_corner.y;
@@ -53,6 +72,31 @@ vec4 over(vec4 source, vec4 destination) {
         source.rgb + destination.rgb * (1.0 - source.a),
         source.a + destination.a * (1.0 - source.a)
     );
+}
+
+// 1.0 inside this moment's glitch burst, 0.0 outside it.
+float glitch_burst_now() {
+    float period_index = floor(pc.elapsed_seconds / GLITCH_PERIOD_SECONDS);
+    float burst_start = period_index * GLITCH_PERIOD_SECONDS
+        + hash11(period_index + 17.0) * (GLITCH_PERIOD_SECONDS - GLITCH_BURST_SECONDS);
+    float in_burst = step(burst_start, pc.elapsed_seconds)
+        * step(pc.elapsed_seconds, burst_start + GLITCH_BURST_SECONDS);
+    return in_burst * step(GLITCH_QUIET_LEAD_SECONDS, pc.elapsed_seconds);
+}
+
+// Horizontal slice displacement for the whole frame — UI included.
+vec2 glitch_displaced(vec2 uv, float burst) {
+    if (burst < 0.5) {
+        return uv;
+    }
+    float burst_seed = floor(pc.elapsed_seconds * 24.0);
+    float slice_index = floor(uv.y * 28.0);
+    float slice_random = hash11(slice_index * 1.7 + burst_seed);
+    // Only some slices tear; the rest hold, which is what reads as
+    // malfunction rather than blur.
+    float slice_tears = step(0.66, slice_random);
+    float offset = (hash11(slice_index + burst_seed * 3.1) - 0.5) * 0.055;
+    return vec2(uv.x + offset * slice_tears, uv.y);
 }
 
 vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
@@ -96,6 +140,10 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         if (fract(uv.y * 200.0) < 0.1) {
             title_bar.rgb *= 0.9;
         }
+        // A brighter band sweeping the title bar, endlessly.
+        float across_the_bar = (uv.x - pip_left) / max(pip_right - pip_left, 1e-6);
+        float sweep = smoothstep(0.14, 0.0, abs(across_the_bar - fract(pc.elapsed_seconds * 0.4)));
+        title_bar.rgb *= 1.0 + 0.22 * sweep;
         return title_bar;
     }
 
@@ -107,7 +155,15 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         (uv.x - pip_left) / (pip_right - pip_left),
         (uv.y - pip_top) / (pip_bottom - pip_top)
     );
-    vec4 result = over(texture(pose_from_skeleton_overlay, pip_uv), CYBER_DARK);
+
+    // A faint cyan dot grid under the skeleton — the scanner bed it reads
+    // against, instead of a void.
+    vec4 pip_backdrop = CYBER_DARK;
+    vec2 grid_cell = fract(pip_uv * vec2(36.0, 22.0)) - 0.5;
+    float grid_dot = smoothstep(0.11, 0.05, length(grid_cell));
+    pip_backdrop.rgb += CYBER_CYAN.rgb * 0.05 * grid_dot;
+
+    vec4 result = over(texture(pose_from_skeleton_overlay, pip_uv), pip_backdrop);
 
     const float corner_length = 0.015;
     const float techmark_thickness = 0.002;
@@ -121,22 +177,58 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         || (pip_uv.x > 1.0 - corner_x && pip_uv.y < thickness_y) || (pip_uv.x > 1.0 - thickness_x && pip_uv.y < corner_y)
         || (pip_uv.x < corner_x && pip_uv.y > 1.0 - thickness_y) || (pip_uv.x < thickness_x && pip_uv.y > 1.0 - corner_y)
         || (pip_uv.x > 1.0 - corner_x && pip_uv.y > 1.0 - thickness_y) || (pip_uv.x > 1.0 - thickness_x && pip_uv.y > 1.0 - corner_y);
-    return on_a_corner_techmark ? CYBER_CYAN : result;
+    if (on_a_corner_techmark) {
+        // The techmarks breathe rather than sit still.
+        vec4 techmark = CYBER_CYAN;
+        techmark.rgb *= 0.75 + 0.25 * sin(pc.elapsed_seconds * 3.0);
+        return techmark;
+    }
+    return result;
 }
 
 void main() {
+    float burst = glitch_burst_now();
+    vec2 uv = glitch_displaced(screen_uv, burst);
+
     // The dark-blue stand-in keeps the window showing something on cold start,
     // before the first camera frame has made it down the chain.
-    vec4 result = (pc.present_layer_mask & VIDEO_LAYER_BIT) != 0u
-        ? texture(video_from_upstream, screen_uv)
-        : vec4(0.05, 0.05, 0.12, 1.0);
+    vec4 result;
+    if ((pc.present_layer_mask & VIDEO_LAYER_BIT) != 0u) {
+        result = texture(video_from_upstream, uv);
+        // The burst splits the video's channels; the UI layers over it stay
+        // whole, so the interface reads as glitching WITH the feed, not as
+        // three copies of itself.
+        if (burst > 0.5) {
+            float split = 0.0045;
+            result.r = texture(video_from_upstream, uv + vec2(split, 0.0)).r;
+            result.b = texture(video_from_upstream, uv - vec2(split, 0.0)).b;
+        }
+    } else {
+        result = vec4(0.05, 0.05, 0.12, 1.0);
+    }
 
     if ((pc.present_layer_mask & OVERLAY_LAYER_BIT) != 0u) {
-        result = over(texture(overlay_from_neon_source, screen_uv), result);
+        result = over(texture(overlay_from_neon_source, uv), result);
     }
     if ((pc.present_layer_mask & POSE_LAYER_BIT) != 0u && pc.pip_slide_progress > 0.0) {
-        result = draw_pip_frame(screen_uv, pc.pip_slide_progress, result);
+        result = draw_pip_frame(uv, pc.pip_slide_progress, result);
     }
+
+    // Cyan interference lines riding the burst, over everything.
+    if (burst > 0.5) {
+        float line_noise = hash11(floor(pc.elapsed_seconds * 30.0) * 7.0
+            + floor(uv.y * pc.frame_extent_in_pixels.y));
+        if (line_noise > 0.982) {
+            result.rgb += vec3(0.0, 0.25, 0.25);
+        }
+    }
+
+    // The finishing pass: a faint interlace so the whole frame reads as one
+    // screen, and a light vignette pulling the corners down under the HUD.
+    float interlace = mix(0.955, 1.0, step(1.0, mod(gl_FragCoord.y, 2.0)));
+    result.rgb *= interlace;
+    vec2 uv_from_centre = screen_uv * 2.0 - 1.0;
+    result.rgb *= clamp(1.0 - dot(uv_from_centre, uv_from_centre) * 0.16, 0.78, 1.0);
 
     composited_colour = result;
 }
