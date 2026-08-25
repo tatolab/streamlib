@@ -162,17 +162,47 @@ except Exception as failure:
 
 nodes = graph.get("nodes", [])
 links = graph.get("links", [])
-types = {node.get("type", "") for node in nodes}
+
+
+def processor_id_of(type_fragment):
+    for node in nodes:
+        if type_fragment in node.get("type", ""):
+            return node.get("id")
+    return None
+
+
+camera_id = processor_id_of("CameraSource")
+window_id = processor_id_of("DisplayWindow")
 
 missing = [
-    wanted
-    for wanted in ("CameraSource", "DisplayWindow")
-    if not any(wanted in one_type for one_type in types)
+    name
+    for name, found in (("CameraSource", camera_id), ("DisplayWindow", window_id))
+    if found is None
 ]
 if missing:
-    print(f"missing {', '.join(missing)} in {sorted(types)}")
-elif not links:
-    print(f"no links between the {len(nodes)} processors")
+    print(f"missing {', '.join(missing)} in {sorted(n.get('type', '') for n in nodes)}")
+    raise SystemExit(0)
+
+# The direction and both port names, not merely "some link exists" — a reversed
+# link, a link to an unrelated processor, or one on the wrong port is exactly
+# the wiring bug this fixture is here to catch.
+wired = [
+    link
+    for link in links
+    if link.get("source", {}).get("processor_id") == camera_id
+    and link.get("source", {}).get("port_name") == "video"
+    and link.get("target", {}).get("processor_id") == window_id
+    and link.get("target", {}).get("port_name") == "video"
+]
+if not wired:
+    present = [
+        f"{link.get('source', {}).get('processor_id')}"
+        f":{link.get('source', {}).get('port_name')}"
+        f" -> {link.get('target', {}).get('processor_id')}"
+        f":{link.get('target', {}).get('port_name')}"
+        for link in links
+    ]
+    print(f"no CameraSource:video -> DisplayWindow:video link; found {present}")
 else:
     print("ok")
 PYEOF
@@ -207,6 +237,14 @@ for _ in $(seq 1 15); do
     fi
     sleep 1
 done
+# Reap only a process that is actually dying. A node that ignores SIGTERM would
+# otherwise block `wait` forever — and the EXIT trap cannot fire while we are
+# blocked in it, so the fixture would hang instead of reporting the failure it
+# just detected. Hanging CI is strictly worse than a FAIL.
+if [ "$SHUTDOWN_STATUS" = "timeout" ]; then
+    echo "[e2e] Node ignored SIGTERM for 15s — escalating to SIGKILL."
+    kill -KILL "$NODE_PID" 2>/dev/null || true
+fi
 wait "$NODE_PID" 2>/dev/null || true
 NODE_PID=""
 

@@ -100,9 +100,12 @@ For multi-scenario unit tests, build the EventLoop once and call
 
 **Process strands after timeout / Ctrl+C**
 Window-based runs sometimes don't respect SIGTERM cleanly (winit + X11
-interaction issue). The fixture waits 15s after SIGTERM and then SIGKILLs from
-its `trap`; a run that needs the SIGKILL is a finding, not a flake — the
-interpreter-lifecycle contract says engine teardown precedes interpreter
+interaction issue). The fixture waits 15s after SIGTERM and then escalates to
+SIGKILL *inline*, before reaping — deliberately not from the `trap`, because a
+`wait` on a process that ignores SIGTERM blocks forever and the EXIT trap cannot
+fire while the script is blocked in it. A hung fixture reports nothing; a killed
+one reports the failure. A run that needs the SIGKILL is a finding, not a flake —
+the interpreter-lifecycle contract says engine teardown precedes interpreter
 finalization.
 
 ## Reference
