@@ -52,12 +52,20 @@ jobs:
           target: x86_64
           manylinux: 2_28
           args: --release --out dist
-          # This job runs only at release, from a cold container, so every
-          # release recompiled the whole dependency closure from scratch.
-          # `sccache` is maturin-action's own input for exactly this; the
-          # cache is keyed on hashed compiler inputs, so an unchanged
-          # dependency is a hit and a changed one is not.
-          sccache: 'true'
+          # No `sccache`, and the reason is measured rather than assumed.
+          # maturin-action offers it and enabling it is the common move, so it
+          # was tried here and rejected on its own numbers: two runs of this
+          # job against the same tag, one cold and one warm.
+          #
+          #   cold cache   0.55 % hits    cargo phase 12.9 min
+          #   warm cache  99.45 % hits    cargo phase 11.7 min
+          #   no sccache        —         cargo phase  7.3 min
+          #
+          # A 99.45 % hit rate still lost to simply recompiling. The backend is
+          # the Actions cache over the network: 359 objects at ~0.3 s each is
+          # ~1.8 min of download before anything compiles, and sccache turns
+          # incremental compilation off to do it. Fetching a cached Rust crate
+          # costs more here than rebuilding it. Re-measure before re-enabling.
           # The engine's build.rs compiles GLSL through the `shaderc` crate it
           # already links, so the container needs that crate's build toolchain
           # and nothing else. `cmake` + `ninja-build` are what shaderc-sys
