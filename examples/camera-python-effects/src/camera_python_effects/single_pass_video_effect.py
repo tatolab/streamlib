@@ -24,10 +24,10 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 from .gpu_surface_conventions import (
     COLOR_TARGET_TEXTURE_USAGE,
     TEXTURE_FORMAT,
-    RecentlyPublishedSurfaceRing,
     read_shader_source,
     video_frame_bag_naming,
 )
+from .published_texture_ring import PublishedTextureRing
 
 __all__ = ["SinglePassVideoEffect"]
 
@@ -51,7 +51,7 @@ class SinglePassVideoEffect:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.first_process_at_ns: int | None = None
-        self.recently_published = RecentlyPublishedSurfaceRing()
+        self.output_ring = PublishedTextureRing(COLOR_TARGET_TEXTURE_USAGE)
         self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[TEXTURE_FORMAT],
             vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),
@@ -73,8 +73,8 @@ class SinglePassVideoEffect:
             self.first_process_at_ns = ctx.time
         elapsed_seconds = (ctx.time - self.first_process_at_ns) / NANOSECONDS_PER_SECOND
 
-        color_target = ctx.gpu_limited_access.acquire_texture(
-            frame.width, frame.height, TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+        color_target = self.output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, frame.width, frame.height
         )
         self.graphics_kernel.draw(
             bindings={VIDEO_FROM_UPSTREAM: frame.surface_id},
@@ -83,7 +83,6 @@ class SinglePassVideoEffect:
             vertex_count=3,
             push_constants=self.push_constants_for(frame, elapsed_seconds),
         )
-        self.recently_published.retain_published_surface(color_target)
         ctx.outputs.write(
             "video_to_downstream",
             video_frame_bag_naming(

@@ -25,8 +25,6 @@ from streamlib import (
 
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
-    TEXTURE_FORMAT,
-    RecentlyPublishedSurfaceRing,
     video_frame_bag_naming,
 )
 from ..neon_overlay_canvas import (
@@ -34,6 +32,7 @@ from ..neon_overlay_canvas import (
     OVERLAY_COLOR_TYPE,
     draw_neon_overlay,
 )
+from ..published_texture_ring import PublishedTextureRing
 from ..single_pass_video_effect import NANOSECONDS_PER_SECOND
 
 OVERLAY_REDRAW_INTERVAL_MS = 33
@@ -64,7 +63,7 @@ class NeonOverlaySource:
             )
         )
         self.first_process_at_ns: int | None = None
-        self.recently_published = RecentlyPublishedSurfaceRing()
+        self.output_ring = PublishedTextureRing(SAMPLED_ONLY_TEXTURE_USAGE)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.first_process_at_ns is None:
@@ -77,22 +76,18 @@ class NeonOverlaySource:
             )
         drawn_overlay = numpy.array(self.skia_surface.makeImageSnapshot())
 
-        overlay_texture = ctx.gpu_limited_access.acquire_texture(
-            self.overlay_width,
-            self.overlay_height,
-            TEXTURE_FORMAT,
-            SAMPLED_ONLY_TEXTURE_USAGE,
+        overlay_texture = self.output_ring.next_texture_for_this_frame(
+            ctx.gpu_limited_access, self.overlay_width, self.overlay_height
         )
         # `unlock` in a `finally` rather than a `with`: the handle's context
-        # manager closes the surface on the way out, which is exactly what the
-        # ring below exists to postpone.
+        # manager closes the surface on the way out, and this slot has to
+        # outlive the frame — the ring owns it for the processor's life.
         overlay_texture.lock(read_only=False)
         try:
             overlay_texture.as_numpy()[...] = drawn_overlay
         finally:
             overlay_texture.unlock()
 
-        self.recently_published.retain_published_surface(overlay_texture)
         ctx.outputs.write(
             "overlay_to_downstream",
             video_frame_bag_naming(
