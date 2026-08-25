@@ -103,9 +103,16 @@ class LeRobotEpisodeRecording:
             features["observation.images.stylized"] = {
                 "dtype": "video", "shape": image_shape, "names": image_axis_names,
             }
-        self._dataset = LeRobotDataset.create(
-            repo_id, fps=fps, features=features, root=Path(root)
-        )
+        # A root that already holds a dataset is a session to continue, not a
+        # refusal: `create` on it raises, and a recorder that dies on its own
+        # previous output would record exactly once per directory.
+        root_path = Path(root)
+        if (root_path / "meta" / "info.json").is_file():
+            self._dataset = LeRobotDataset.resume(repo_id, root=root_path)
+        else:
+            self._dataset = LeRobotDataset.create(
+                repo_id, fps=fps, features=features, root=root_path
+            )
         self.frames_in_current_episode = 0
         self.episodes_saved = 0
 

@@ -120,3 +120,35 @@ def test_the_dataset_round_trips_through_lerobots_own_loader(tmp_path) -> None:
     assert tuple(sample["observation.images.stylized"].shape) == (3, 48, 64)
     # Action mirrors state — the pose the operator is commanding.
     assert numpy.allclose(sample["action"], sample["observation.state"])
+
+
+def test_a_second_session_resumes_the_dataset_instead_of_refusing(tmp_path) -> None:
+    """Recording twice into one root must append episodes, not die at setup."""
+    lerobot_dataset = pytest.importorskip("lerobot.datasets.lerobot_dataset")
+    from camera_python_effects.lerobot_episode_recording import LeRobotEpisodeRecording
+
+    def one_session(frames: int) -> None:
+        recording = LeRobotEpisodeRecording(
+            root=tmp_path / "dataset",
+            repo_id="tatolab/format-contract-test",
+            fps=30,
+            camera_height=48,
+            camera_width=64,
+            task="mirror the operator's pose",
+        )
+        for i in range(frames):
+            recording.add(
+                _pose_bag(1_000_000 * i),
+                numpy.full((48, 64, 3), 60, numpy.uint8),
+                numpy.full((48, 64, 3), 120, numpy.uint8),
+            )
+        recording.close()
+
+    one_session(6)
+    one_session(6)
+
+    loaded = lerobot_dataset.LeRobotDataset(
+        "tatolab/format-contract-test", root=tmp_path / "dataset", video_backend="pyav"
+    )
+    assert loaded.num_episodes == 2
+    assert loaded.num_frames == 12
