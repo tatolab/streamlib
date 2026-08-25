@@ -2028,12 +2028,6 @@ vulkanalia.workspace = true
         assert!(fork.is_empty(), "dotted-key form should pass: {:?}", fork);
     }
 
-    // The camera-python-display effects crate is NOT allowlisted — the
-    // kernel wrappers ride VulkanGraphicsKernel::offscreen_render plus
-    // RhiCommandRecorder and contain no direct vulkanalia. The general
-    // "non-allowlisted path rejects vulkanalia" regression locks cover
-    // this; no example-specific lock is needed.
-
     #[test]
     fn allows_use_vulkanalia_in_tests() {
         let dir = empty_workspace();

@@ -486,8 +486,10 @@ When a new field lands on `TextureRegistration`:
   `runtime/streamlib-engine/src/core/context/gpu_context.rs`.
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
   `packages/display/processors/display_linux.rs`.
-- **First adapter-output producer**: `register_render_target_surface`
-  in `examples/camera-python-display/src/linux.rs`.
+- **First adapter-output producer**: `register_render_target_surface` in
+  the pre-pivot `camera-python-display` example, which is retired — host-side
+  surface pre-registration went with it, and a Python processor now acquires
+  its own textures.
 - **First in-tree producer**: `LinuxCameraProcessor` in the
   `streamlib-camera` package —
   `packages/camera/processors/camera_linux.rs`.
