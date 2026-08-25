@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.4](https://github.com/tatolab/streamlib/compare/v0.18.3...v0.18.4) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ci:** stop blocking the engine compile on shaderc's C++ build ([#1962](https://github.com/tatolab/streamlib/issues/1962)) ([c0043cb](https://github.com/tatolab/streamlib/commit/c0043cb0994368409984b06c7c054d2ad826dad8))
+
 ## [0.18.3](https://github.com/tatolab/streamlib/compare/v0.18.2...v0.18.3) (2026-08-25)
 
 
