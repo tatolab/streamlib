@@ -61,9 +61,13 @@ class PoseTracker:
 
     def __init__(
         self,
-        detection_confidence: float = 0.5,
+        detection_confidence: float = 0.35,
         model_path: "str | None" = None,
+        tracking_confidence: float = 0.3,
     ) -> None:
+        # Floors deliberately low: the rig's own visibility gating decides
+        # what to trust per joint, so a marginal detection is more useful
+        # delivered than withheld — withheld is what reads as a reset.
         self._landmarker = vision.PoseLandmarker.create_from_options(
             vision.PoseLandmarkerOptions(
                 base_options=BaseOptions(
@@ -71,7 +75,7 @@ class PoseTracker:
                 ),
                 running_mode=vision.RunningMode.VIDEO,
                 min_pose_detection_confidence=detection_confidence,
-                min_tracking_confidence=0.5,
+                min_tracking_confidence=tracking_confidence,
             )
         )
 
