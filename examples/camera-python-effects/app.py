@@ -10,7 +10,7 @@ those six runs in its own child process with its own interpreter.
 
     CameraSource ─┬─ CameraFrameToTexture ─ CyberpunkGlitch ─ CrtFilmGrain ─┐
                   │                                                         ▼
-                  └─ PoseSkeletonOverlay ──────────────────▶ BreakingNewsCompositor ─ DisplayWindow
+                  └─ CyberpunkAvatar ──────────────────────▶ BreakingNewsCompositor ─ DisplayWindow
                                                                             ▲
                                           NeonOverlaySource ────────────────┘
 """
@@ -26,7 +26,7 @@ from camera_python_effects.processors.camera_frame_to_texture import (
 from camera_python_effects.processors.crt_film_grain import CrtFilmGrain
 from camera_python_effects.processors.cyberpunk_glitch import CyberpunkGlitch
 from camera_python_effects.processors.neon_overlay_source import NeonOverlaySource
-from camera_python_effects.processors.pose_skeleton_overlay import PoseSkeletonOverlay
+from camera_python_effects.processors.cyberpunk_avatar import CyberpunkAvatar
 
 from streamlib import CameraSource, DisplayWindow, Runtime
 
@@ -49,7 +49,7 @@ def setup(rt: Runtime) -> None:
     camera_texture = rt.add(CameraFrameToTexture)
     glitch = rt.add(CyberpunkGlitch)
     crt = rt.add(CrtFilmGrain)
-    pose = rt.add(PoseSkeletonOverlay)
+    avatar = rt.add(CyberpunkAvatar)
     overlay = rt.add(
         NeonOverlaySource, config={"width": FRAME_WIDTH, "height": FRAME_HEIGHT}
     )
@@ -78,11 +78,11 @@ def setup(rt: Runtime) -> None:
     )
 
     # Detection reads the camera directly rather than the effect chain: the
-    # skeleton should follow the person, not the grade applied over them.
-    rt.connect(camera.output("video"), pose.input("video_from_camera"))
+    # android should follow the person, not the grade applied over them.
+    rt.connect(camera.output("video"), avatar.input("video_from_camera"))
     rt.connect(
-        pose.output("skeleton_to_downstream"),
-        compositor.input("pose_from_skeleton_overlay"),
+        avatar.output("scene_to_downstream"),
+        compositor.input("avatar_from_pose_scene"),
     )
     rt.connect(
         overlay.output("overlay_to_downstream"),

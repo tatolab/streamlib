@@ -16,10 +16,6 @@ import struct
 import pytest
 
 from camera_python_effects.gpu_surface_conventions import read_shader_source
-from camera_python_effects.pose_keypoint_packing import (
-    POSE_PUSH_CONSTANT_FORMAT,
-    POSE_PUSH_CONSTANT_SIZE,
-)
 from camera_python_effects.processors.breaking_news_compositor import (
     COMPOSITE_PUSH_CONSTANT_FORMAT,
     COMPOSITE_PUSH_CONSTANT_SIZE,
@@ -35,9 +31,7 @@ from camera_python_effects.processors.cyberpunk_glitch import (
 
 from .glsl_push_constant_block import push_constant_block_size_of
 
-# The floor Vulkan guarantees for a push-constant range. Every block here has
-# to fit inside it, which is why the pose keypoints are packed rather than
-# passed as vectors.
+# The floor Vulkan guarantees for a push-constant range.
 GUARANTEED_PUSH_CONSTANT_BYTES = 128
 
 EVERY_PUSH_CONSTANT_CONTRACT = [
@@ -52,12 +46,6 @@ EVERY_PUSH_CONSTANT_CONTRACT = [
         CRT_PUSH_CONSTANT_FORMAT,
         CRT_PUSH_CONSTANT_SIZE,
         id="crt_film_grain",
-    ),
-    pytest.param(
-        "pose_skeleton.frag",
-        POSE_PUSH_CONSTANT_FORMAT,
-        POSE_PUSH_CONSTANT_SIZE,
-        id="pose_skeleton",
     ),
     pytest.param(
         "breaking_news_composite.frag",

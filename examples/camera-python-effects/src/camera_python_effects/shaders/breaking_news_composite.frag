@@ -8,11 +8,11 @@
 // interface alike, the way 2077's HUD malfunctions with the world.
 //
 // Every source is premultiplied: the overlay generator hands over a
-// premultiplied skia canvas and the skeleton pass writes premultiplied, so
+// premultiplied skia canvas and the avatar's stage arrives opaque, so
 // `src.rgb + dst.rgb * (1 - src.a)` is the whole blend.
 //
 // Layer-size contract: the video and overlay layers are sampled at the same
-// screen UV as the output and must match its extent. The pose layer may be any
+// screen UV as the output and must match its extent. The avatar layer may be any
 // size — it is bilinearly resampled into the PiP rect by the hardware sampler.
 
 #version 450
@@ -22,11 +22,11 @@ layout(location = 0) out vec4 composited_colour;
 
 layout(set = 0, binding = 0) uniform sampler2D video_from_upstream;
 layout(set = 0, binding = 1) uniform sampler2D overlay_from_neon_source;
-layout(set = 0, binding = 2) uniform sampler2D pose_from_skeleton_overlay;
+layout(set = 0, binding = 2) uniform sampler2D avatar_from_pose_scene;
 
 layout(push_constant, std430) uniform BreakingNewsCompositePushConstants {
     vec2 frame_extent_in_pixels;
-    // Bit 0 the video layer, bit 1 the overlay layer, bit 2 the pose layer.
+    // Bit 0 the video layer, bit 1 the overlay layer, bit 2 the avatar layer.
     uint present_layer_mask;
     // 0.0 fully off-screen right, 1.0 docked; the easing may overshoot past 1.
     float pip_slide_progress;
@@ -156,14 +156,14 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         (uv.y - pip_top) / (pip_bottom - pip_top)
     );
 
-    // A faint cyan dot grid under the skeleton — the scanner bed it reads
-    // against, instead of a void.
+    // A faint cyan dot grid for the moments before the avatar's first frame
+    // arrives — its stage covers this fully once it does.
     vec4 pip_backdrop = CYBER_DARK;
     vec2 grid_cell = fract(pip_uv * vec2(36.0, 22.0)) - 0.5;
     float grid_dot = smoothstep(0.11, 0.05, length(grid_cell));
     pip_backdrop.rgb += CYBER_CYAN.rgb * 0.05 * grid_dot;
 
-    vec4 result = over(texture(pose_from_skeleton_overlay, pip_uv), pip_backdrop);
+    vec4 result = over(texture(avatar_from_pose_scene, pip_uv), pip_backdrop);
 
     const float corner_length = 0.015;
     const float techmark_thickness = 0.002;
