@@ -101,7 +101,47 @@ jobs:
             # extension-module wheel links no libpython, so the headers it
             # brings are not needed here. The Ubuntu test workflow does need
             # them; that job builds the crate's unit tests, which link it.
-            dnf install -y pkgconfig protobuf-compiler clang-devel \
+            # Bounded, mirror-escaping install. An unbounded `dnf install`
+            # here is the last unbounded network fetch on the release path:
+            # `check-bounded-apt-install` covers the apt family under
+            # .github/ and states this one is out of its reach, "a real
+            # unbounded fetch all the same".
+            #
+            # The mode that costs is a *slow* mirror, not a stalled one — a
+            # measured apt run fetched 35.6 MB at 48 kB/s over 12m17s while
+            # every request made forward progress, so retry-on-error and
+            # inactivity timeouts both sit idle through it. Only a wall-clock
+            # bound detects that, which is what `timeout` is for.
+            #
+            # Unlike apt, retrying is a real escape here: AlmaLinux resolves a
+            # `mirrorlist=` per invocation, so a fresh attempt can land on a
+            # different host. `dnf clean all` between attempts is what forces
+            # that re-resolution rather than reusing the cached choice. (The
+            # apt script switches mirrors explicitly precisely because apt has
+            # only the one configured.)
+            #
+            # 420s per attempt is deliberately generous: the slowest setup
+            # phase on record is 282s, so a merely-mediocre mirror still
+            # finishes on the first attempt rather than being killed and
+            # retried. Three attempts bounds the pathological case at ~21 min
+            # against the job's 90-minute ceiling, where today it could run
+            # most of that ceiling down on its own.
+            dnf_attempt_timeout_seconds=420
+            dnf_attempt_limit=3
+            install_build_dependencies_with_bounded_retry() {
+              for attempt in $(seq 1 "$dnf_attempt_limit"); do
+                if timeout --kill-after=10s "${dnf_attempt_timeout_seconds}s" \
+                  dnf install -y --setopt=retries=3 --setopt=timeout=30 "$@"; then
+                  return 0
+                fi
+                echo "::warning::dnf attempt ${attempt} failed or blew the ${dnf_attempt_timeout_seconds}s bound; clearing the cache so the next attempt re-resolves the mirrorlist"
+                dnf clean all >/dev/null 2>&1 || true
+              done
+              echo "::error::dnf install did not complete in ${dnf_attempt_limit} bounded attempts of ${dnf_attempt_timeout_seconds}s"
+              return 1
+            }
+            install_build_dependencies_with_bounded_retry \
+              pkgconfig protobuf-compiler clang-devel \
               vulkan-headers vulkan-loader-devel \
               cmake ninja-build git
             GLSLC_CACHE_DIR="${GITHUB_WORKSPACE:-}/.glslc-cache"
