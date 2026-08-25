@@ -206,3 +206,39 @@ def test_a_camera_facing_person_faces_the_viewer() -> None:
     assert forward[2] > 0.0
     # And the mirror: the person's right side plays the figure's screen-right.
     assert joints["left_shoulder"][0] > joints["right_shoulder"][0]
+
+
+def test_a_dropout_inside_the_hold_keeps_the_pose() -> None:
+    """A single lost detection must not lurch the figure toward idle."""
+    from camera_python_effects.avatar_rig import PoseMemory
+
+    memory = PoseMemory(hold_seconds=1.0)
+    pose = idle_joints(3.0)
+    assert memory.target_for(pose, 10.0) is pose
+    assert memory.target_for(None, 10.3) is pose
+    assert memory.target_for(None, 10.9) is pose
+
+
+def test_a_sustained_loss_hands_the_stage_to_idle() -> None:
+    from camera_python_effects.avatar_rig import PoseMemory
+
+    memory = PoseMemory(hold_seconds=1.0)
+    memory.target_for(idle_joints(3.0), 10.0)
+    assert memory.target_for(None, 11.2) is None
+
+
+def test_a_reacquired_pose_restarts_the_hold() -> None:
+    from camera_python_effects.avatar_rig import PoseMemory
+
+    memory = PoseMemory(hold_seconds=1.0)
+    memory.target_for(idle_joints(1.0), 10.0)
+    assert memory.target_for(None, 11.5) is None
+    fresh = idle_joints(2.0)
+    assert memory.target_for(fresh, 12.0) is fresh
+    assert memory.target_for(None, 12.6) is fresh
+
+
+def test_nothing_ever_seen_means_idle_from_the_start() -> None:
+    from camera_python_effects.avatar_rig import PoseMemory
+
+    assert PoseMemory().target_for(None, 0.5) is None

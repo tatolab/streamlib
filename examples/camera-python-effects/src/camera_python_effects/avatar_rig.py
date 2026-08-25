@@ -24,6 +24,7 @@ __all__ = [
     "JOINT_NAMES",
     "SegmentPlacement",
     "SmoothedPose",
+    "PoseMemory",
     "idle_joints",
     "resolve_pose_with_fallbacks",
     "solve_segment_placements",
@@ -150,6 +151,38 @@ class SmoothedPose:
             held = self._state[name]
             held += (joint - held) * blend
         return self._state
+
+
+class PoseMemory:
+    """Rides out detection dropouts by holding the last resolved pose.
+
+    The detector loses a person for odd frames — a re-acquisition, a
+    visibility flicker, a hand across the face — and a target that snaps to
+    idle on every one of them makes the figure lurch through a reset. A
+    dropout inside the hold window freezes the last good pose instead;
+    only a sustained loss hands the stage back to idle, and the smoother
+    downstream makes that hand-off the glide it always was.
+    """
+
+    def __init__(self, hold_seconds: float = 1.0) -> None:
+        self._hold_seconds = hold_seconds
+        self._held_joints: "dict[str, numpy.ndarray] | None" = None
+        self._held_at_seconds = float("-inf")
+
+    def target_for(
+        self,
+        resolved_joints: "dict[str, numpy.ndarray] | None",
+        elapsed_seconds: float,
+    ) -> "dict[str, numpy.ndarray] | None":
+        """The pose to aim at now, or None once idle is the honest answer."""
+        if resolved_joints is not None:
+            self._held_joints = resolved_joints
+            self._held_at_seconds = elapsed_seconds
+            return resolved_joints
+        held_for = elapsed_seconds - self._held_at_seconds
+        if self._held_joints is not None and held_for < self._hold_seconds:
+            return self._held_joints
+        return None
 
 
 def idle_joints(elapsed_seconds: float) -> "dict[str, numpy.ndarray]":
