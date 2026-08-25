@@ -14,6 +14,7 @@ from __future__ import annotations
 import struct
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -28,7 +29,6 @@ from ..gpu_surface_conventions import (
     read_shader_source,
     video_frame_bag_naming,
 )
-from ..published_texture_ring import PublishedTextureRing
 from ..single_pass_video_effect import (
     NANOSECONDS_PER_SECOND,
     SHARED_VERTEX_SHADER_FILE_NAME,
@@ -96,7 +96,9 @@ class BreakingNewsCompositor:
         self.latest_overlay: VideoFrame | None = None
         self.latest_skeleton: VideoFrame | None = None
         self.first_process_at_ns: int | None = None
-        self.output_ring = PublishedTextureRing(COLOR_TARGET_TEXTURE_USAGE)
+        self.output_ring = ProcessorOutputTextureRing(
+            TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+        )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         video = ctx.inputs.read(VIDEO_FROM_UPSTREAM, into=VideoFrame)

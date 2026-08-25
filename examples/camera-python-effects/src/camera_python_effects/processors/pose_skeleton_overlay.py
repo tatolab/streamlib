@@ -22,6 +22,7 @@ import torch
 from ultralytics import YOLO
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -43,7 +44,6 @@ from ..pose_keypoint_packing import (
     POSE_PUSH_CONSTANT_SIZE,
     pack_keypoints,
 )
-from ..published_texture_ring import PublishedTextureRing
 from ..single_pass_video_effect import (
     NANOSECONDS_PER_SECOND,
     SHARED_VERTEX_SHADER_FILE_NAME,
@@ -95,7 +95,9 @@ class PoseSkeletonOverlay:
             label="PoseSkeletonOverlay",
         )
         self.first_process_at_ns: int | None = None
-        self.output_ring = PublishedTextureRing(COLOR_TARGET_TEXTURE_USAGE)
+        self.output_ring = ProcessorOutputTextureRing(
+            TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+        )
         self.a_detection_failure_has_been_reported = False
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

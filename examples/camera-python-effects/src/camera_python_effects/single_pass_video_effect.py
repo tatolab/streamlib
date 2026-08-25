@@ -14,6 +14,7 @@ is here so each effect module is only its effect.
 from __future__ import annotations
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -27,7 +28,6 @@ from .gpu_surface_conventions import (
     read_shader_source,
     video_frame_bag_naming,
 )
-from .published_texture_ring import PublishedTextureRing
 
 __all__ = ["SinglePassVideoEffect"]
 
@@ -51,7 +51,9 @@ class SinglePassVideoEffect:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.first_process_at_ns: int | None = None
-        self.output_ring = PublishedTextureRing(COLOR_TARGET_TEXTURE_USAGE)
+        self.output_ring = ProcessorOutputTextureRing(
+            TEXTURE_FORMAT, COLOR_TARGET_TEXTURE_USAGE
+        )
         self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[TEXTURE_FORMAT],
             vertex_source=read_shader_source(SHARED_VERTEX_SHADER_FILE_NAME),

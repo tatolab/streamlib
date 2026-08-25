@@ -16,6 +16,7 @@ import numpy
 import skia
 
 from streamlib import (
+    ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
@@ -25,6 +26,7 @@ from streamlib import (
 
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
+    TEXTURE_FORMAT,
     video_frame_bag_naming,
 )
 from ..neon_overlay_canvas import (
@@ -32,7 +34,6 @@ from ..neon_overlay_canvas import (
     OVERLAY_COLOR_TYPE,
     draw_neon_overlay,
 )
-from ..published_texture_ring import PublishedTextureRing
 from ..single_pass_video_effect import NANOSECONDS_PER_SECOND
 
 OVERLAY_REDRAW_INTERVAL_MS = 33
@@ -63,7 +64,9 @@ class NeonOverlaySource:
             )
         )
         self.first_process_at_ns: int | None = None
-        self.output_ring = PublishedTextureRing(SAMPLED_ONLY_TEXTURE_USAGE)
+        self.output_ring = ProcessorOutputTextureRing(
+            TEXTURE_FORMAT, SAMPLED_ONLY_TEXTURE_USAGE
+        )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.first_process_at_ns is None:
