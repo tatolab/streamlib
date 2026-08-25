@@ -28,7 +28,12 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     processor,
 )
 
-from ..avatar_rig import SmoothedPose, idle_joints, solve_segment_placements
+from ..avatar_rig import (
+    SmoothedPose,
+    idle_joints,
+    resolve_pose_with_fallbacks,
+    solve_segment_placements,
+)
 from ..avatar_scene import AvatarSceneRenderer
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
@@ -98,10 +103,17 @@ class CyberpunkAvatar:
         dt_seconds = max(elapsed_seconds - self.previous_elapsed_seconds, 1e-3)
         self.previous_elapsed_seconds = elapsed_seconds
 
-        joints = self.detect_joints_in(frame)
-        # An empty stage targets the idle sway; the smoother makes both the
-        # hand-off to idle and the snap back onto a person a glide.
-        target_joints = joints if joints is not None else idle_joints(elapsed_seconds)
+        sample = self.detect_joints_in(frame)
+        # Unseen joints stand in a neutral pose anchored to the live torso —
+        # a desk camera drives the upper body without buckling the legs — and
+        # an empty stage targets the idle sway; the smoother makes every
+        # hand-off a glide.
+        resolved = (
+            resolve_pose_with_fallbacks(sample.joints, sample.visibility)
+            if sample is not None
+            else None
+        )
+        target_joints = resolved if resolved is not None else idle_joints(elapsed_seconds)
         settled = self.smoothed_pose.settle(target_joints, dt_seconds)
 
         scene_pixels = self.scene_renderer.render(
