@@ -4,14 +4,9 @@
 #![allow(clippy::disallowed_macros)] // build.rs uses println!/eprintln! for `cargo:` directives
 
 //! Build script: compiles the fused JPEG decode compute shader at
-//! `src/shaders/jpeg_decode.comp` to SPIR-V and stages the artifact in
-//! `OUT_DIR` for `include_bytes!` to consume at compile time. Linux-only —
-//! the GPU kernel is gated behind `target_os = "linux"`.
-//!
-//! Compiled through the pinned `shaderc` crate rather than the `glslc`
-//! binary, for the reason the engine's build script gives: the pinned crate
-//! is the compiler whose version the pipeline-cache key assumes, and a
-//! binary found on `PATH` is not.
+//! `src/shaders/jpeg_decode.comp` to SPIR-V via `glslc` and stages
+//! the artifact in `OUT_DIR` for `include_bytes!` to consume at compile
+//! time. Linux-only — the GPU kernel is gated behind `target_os = "linux"`.
 
 fn main() {
     #[cfg(target_os = "linux")]
@@ -21,6 +16,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn compile_shaders() {
     use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     let shaders: &[(&str, &str, &str)] =
         &[("src/shaders/jpeg_decode.comp", "jpeg_decode.spv", "compute")];
@@ -41,40 +37,23 @@ fn compile_shaders() {
         shader_include_dir
     );
 
-    let compiler = shaderc::Compiler::new().expect("failed to create the shaderc compiler");
-    let mut options =
-        shaderc::CompileOptions::new().expect("failed to create shaderc compile options");
-    options.set_optimization_level(shaderc::OptimizationLevel::Performance);
-    // The `glslc -I` this replaces.
-    options.set_include_callback(move |requested, _include_type, _requesting, _depth| {
-        let resolved = Path::new(shader_include_dir).join(requested);
-        let content = std::fs::read_to_string(&resolved)
-            .map_err(|e| format!("failed to read include {}: {e}", resolved.display()))?;
-        Ok(shaderc::ResolvedInclude {
-            resolved_name: resolved.to_string_lossy().into_owned(),
-            content,
-        })
-    });
-
     for (src, dst, stage) in shaders {
         let src_path = Path::new(src);
         let dst_path: PathBuf = Path::new(&out_dir).join(dst);
 
         println!("cargo:rerun-if-changed={}", src);
 
-        assert_eq!(*stage, "compute", "only compute shaders are compiled here");
-        let source_text = std::fs::read_to_string(src_path)
-            .unwrap_or_else(|e| panic!("failed to read {}: {e}", src_path.display()));
-        let compiled = compiler
-            .compile_into_spirv(
-                &source_text,
-                shaderc::ShaderKind::Compute,
-                src,
-                "main",
-                Some(&options),
-            )
-            .unwrap_or_else(|e| panic!("failed to compile {src}: {e}"));
-        std::fs::write(&dst_path, compiled.as_binary_u8())
-            .unwrap_or_else(|e| panic!("failed to write {}: {e}", dst_path.display()));
+        let status = Command::new("glslc")
+            .arg(format!("-fshader-stage={stage}"))
+            .arg("-O")
+            .arg("-I")
+            .arg(shader_include_dir)
+            .arg(src_path)
+            .arg("-o")
+            .arg(&dst_path)
+            .status()
+            .expect("Failed to run glslc. Install the Vulkan SDK or ensure glslc is in PATH.");
+
+        assert!(status.success(), "glslc failed to compile {}", src);
     }
 }

@@ -22,13 +22,11 @@ jobs:
       - uses: actions/checkout@v4
 
       # generate_openapi links the api-server, which pulls in streamlib-engine;
-      # its build.rs compiles GLSL through the shaderc crate and links Vulkan, its dependency
+      # its build.rs compiles GLSL with glslc and links Vulkan, its dependency
       # iceoryx2-pal-posix runs bindgen — which needs libclang and clang's
       # builtin headers — and the audio path links opus. Mirrors test.yml's
       # Linux engine dep set.
       # `cmake` builds the engine's vendored GLSL compiler (shaderc, taken
-      # `build-from-source`), which the build script now also compiles shaders
-      # with — there is no separate `glslc` binary to install any more. Taken
       # `build-from-source`); `ninja-build` is what makes that ~64s instead of
       # minutes — shaderc-sys picks the Ninja generator whenever `ninja` is on
       # PATH, so installing it is the whole configuration. Explicit rather than
@@ -43,6 +41,7 @@ jobs:
             libclang1-18
             libclang-common-18-dev
             libvulkan-dev
+            glslc
             cmake
             ninja-build
             libopus-dev

@@ -25,6 +25,11 @@ on:
         type: string
         required: false
 
+env:
+  # The shaderc release `glslc` is built from, and the glslc cache key. One
+  # place, so a bump cannot move the binary without moving the key.
+  GLSLC_SHADERC_TAG: v2026.3
+
 jobs:
   build-wheel:
     name: manylinux wheel
@@ -45,11 +50,21 @@ jobs:
       # wgpu/opencv-python shape — the Vulkan loader, the window system and
       # libcuda are dlopen'd at runtime, never linked, so the only glibc floor
       # that matters is the one our own code compiles against.
+      # Keyed on the shaderc tag alone: the same tag always yields the same
+      # binary, so this is a build-once-per-tag-bump cache, not a
+      # rebuild-per-release one.
+      - name: Cache the glslc binary
+        uses: actions/cache@v4
+        with:
+          path: .glslc-cache
+          key: glslc-${{ env.GLSLC_SHADERC_TAG }}-manylinux_2_28
+
       - name: Build the wheel
         uses: PyO3/maturin-action@v1
         with:
           working-directory: sdk/streamlib-python-wheel
           target: x86_64
+          docker-options: -e GLSLC_SHADERC_TAG -e GITHUB_WORKSPACE
           manylinux: 2_28
           args: --release --out dist
           # No `sccache`, and the reason is measured rather than assumed.
@@ -66,21 +81,19 @@ jobs:
           # ~1.8 min of download before anything compiles, and sccache turns
           # incremental compilation off to do it. Fetching a cached Rust crate
           # costs more here than rebuilding it. Re-measure before re-enabling.
-          # The engine's build.rs compiles GLSL through the `shaderc` crate it
-          # already links, so the container needs that crate's build toolchain
-          # and nothing else. `cmake` + `ninja-build` are what shaderc-sys
-          # `build-from-source` uses — shaderc-sys picks the Ninja generator
-          # whenever `ninja` is on PATH, which is the difference between ~64s
-          # and minutes.
+          # The engine's build.rs invokes `glslc`. AlmaLinux 8 — the
+          # manylinux_2_28 base — packages none in base or EPEL, and Google's
+          # prebuilt link 404s, so it is built from the pinned shaderc tag.
+          # That costs ~4 min, and unlike the `shaderc` crate's own C++ build
+          # (which cargo overlaps with everything else) it sits strictly before
+          # cargo starts, so every second of it is on the critical path.
           #
-          # No `glslc` here any more. This job used to `git clone` shaderc
-          # v2026.3 and build `glslc_exe` with cmake+ninja — about 4 minutes,
-          # plus an unbounded network fetch on the release-critical path — to
-          # get a binary the build script shelled out to. That compiled
-          # shaderc/glslang/SPIRV-Tools a second time, at a different version
-          # from the pinned `=0.10.1` crate the runtime links. The build script
-          # now uses the crate, so both halves come from one pinned compiler
-          # and the second build is gone.
+          # Hence the cache above: the binary depends only on GLSLC_SHADERC_TAG,
+          # so it is built once per tag bump instead of once per release. The
+          # workspace is mounted into the container at the same path it has on
+          # the host, so $GITHUB_WORKSPACE resolves on both sides. If it is
+          # somehow unset the script still builds from source — slower, never
+          # wrong.
           before-script-linux: |
             set -euo pipefail
             # No python3-devel: it replaces the image's /usr/bin/python3
@@ -90,7 +103,33 @@ jobs:
             # them; that job builds the crate's unit tests, which link it.
             dnf install -y pkgconfig protobuf-compiler clang-devel \
               vulkan-headers vulkan-loader-devel \
-              cmake ninja-build
+              cmake ninja-build git
+            GLSLC_CACHE_DIR="${GITHUB_WORKSPACE:-}/.glslc-cache"
+            if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -x "$GLSLC_CACHE_DIR/glslc" ]; then
+              echo "reusing the cached glslc"
+              install -m 0755 "$GLSLC_CACHE_DIR/glslc" /usr/local/bin/glslc
+            else
+              echo "building glslc from shaderc ${GLSLC_SHADERC_TAG}"
+              git clone --depth 1 --branch "${GLSLC_SHADERC_TAG}" \
+                https://github.com/google/shaderc /tmp/shaderc
+              # In a subshell: maturin runs in the shell this script leaves
+              # behind, so a bare `cd` here builds the wheel from the shaderc
+              # checkout and fails with "Can't find /tmp/shaderc/Cargo.toml".
+              (
+                cd /tmp/shaderc
+                ./utils/git-sync-deps
+                cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
+                  -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
+                  -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
+                ninja -C build glslc_exe
+                install -m 0755 build/glslc/glslc /usr/local/bin/glslc
+              )
+              if [ -n "${GITHUB_WORKSPACE:-}" ]; then
+                mkdir -p "$GLSLC_CACHE_DIR"
+                install -m 0755 /usr/local/bin/glslc "$GLSLC_CACHE_DIR/glslc"
+              fi
+            fi
+            glslc --version
 
       # A wheel that cannot be installed and cannot answer `--help` is not a
       # release artifact. This is the first moment the console script exists as

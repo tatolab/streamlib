@@ -85,9 +85,7 @@ Given a SPIR-V blob and a small typed declaration, the kernel:
 
 2. **Wire the shader into `build.rs`.** Append an entry to the `shaders`
    array in `runtime/streamlib-engine/build.rs`. The build script invokes
-   the pinned `shaderc` crate with debug info and performance optimization
-   (`glslc -g -O`'s equivalents) and writes the SPIR-V into `OUT_DIR`. The
-   debug info is not
+   `glslc -g -O` and writes the SPIR-V into `OUT_DIR`. The `-g` is not
    optional: `-O` strips every `OpName`, and reflection refuses a module
    whose binding names are gone. SPIR-V is read at
    compile time via
