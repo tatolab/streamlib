@@ -83,9 +83,14 @@ class NeonOverlaySource:
             TEXTURE_FORMAT,
             SAMPLED_ONLY_TEXTURE_USAGE,
         )
+        # `unlock` in a `finally` rather than a `with`: the handle's context
+        # manager closes the surface on the way out, which is exactly what the
+        # ring below exists to postpone.
         overlay_texture.lock(read_only=False)
-        overlay_texture.as_numpy()[...] = drawn_overlay
-        overlay_texture.unlock()
+        try:
+            overlay_texture.as_numpy()[...] = drawn_overlay
+        finally:
+            overlay_texture.unlock()
 
         self.recently_published.retain_published_surface(overlay_texture)
         ctx.outputs.write(
