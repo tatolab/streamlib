@@ -29,25 +29,31 @@ __all__ = [
     "solve_segment_placements",
 ]
 
-# The MediaPipe pose-landmark indices this rig reads, by name.
+# The MediaPipe pose-landmark indices this rig reads, by name — with the
+# sides deliberately crossed. The rig mirrors (x is negated below), and a
+# mirror swaps handedness: your left hand is the reflection's right hand. The
+# indices here are MediaPipe's right-side landmarks under this rig's left-side
+# names and vice versa; negating x without this swap builds a left-right-
+# crossed body whose computed forward faces away from the viewer — the visor
+# ends up where the person's back is.
 _LANDMARKS = {
     "nose": 0,
-    "left_ear": 7,
-    "right_ear": 8,
-    "left_shoulder": 11,
-    "right_shoulder": 12,
-    "left_elbow": 13,
-    "right_elbow": 14,
-    "left_wrist": 15,
-    "right_wrist": 16,
-    "left_hip": 23,
-    "right_hip": 24,
-    "left_knee": 25,
-    "right_knee": 26,
-    "left_ankle": 27,
-    "right_ankle": 28,
-    "left_foot": 31,
-    "right_foot": 32,
+    "left_ear": 8,
+    "right_ear": 7,
+    "left_shoulder": 12,
+    "right_shoulder": 11,
+    "left_elbow": 14,
+    "right_elbow": 13,
+    "left_wrist": 16,
+    "right_wrist": 15,
+    "left_hip": 24,
+    "right_hip": 23,
+    "left_knee": 26,
+    "right_knee": 25,
+    "left_ankle": 28,
+    "right_ankle": 27,
+    "left_foot": 32,
+    "right_foot": 31,
 }
 
 JOINT_NAMES = tuple(_LANDMARKS)
@@ -178,10 +184,10 @@ def idle_joints(elapsed_seconds: float) -> "dict[str, numpy.ndarray]":
 def joints_from_world_landmarks(landmarks) -> "dict[str, numpy.ndarray]":
     """MediaPipe world landmarks → this rig's joint set, mirrored.
 
-    World landmarks are metres with y down; the scene is y up. x is negated
-    too, so the android moves like a mirror — raise your right hand and the
-    figure facing you raises the hand on your right, which is how every
-    filter-style effect reads as "me".
+    World landmarks are metres with y down; the scene is y up. The mirroring
+    is the pair of x negated here plus the side-swapped index table above —
+    raise your right hand and the figure facing you raises the hand on your
+    right, which is how every filter-style effect reads as "me".
     """
     return {
         name: numpy.array(
