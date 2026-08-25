@@ -54,8 +54,8 @@ class CyberpunkAvatar:
 
     def __init__(
         self,
-        scene_width: int = 640,
-        scene_height: int = 450,
+        scene_width: int = 960,
+        scene_height: int = 675,
         detection_confidence: float = 0.5,
         pose_model_path: "str | None" = None,
     ) -> None:
