@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.5](https://github.com/tatolab/streamlib/compare/v0.18.4...v0.18.5) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ci:** bound the release wheel's dnf fetch ([#1964](https://github.com/tatolab/streamlib/issues/1964)) ([078b8f8](https://github.com/tatolab/streamlib/commit/078b8f81a741699e4f13671748508e2524c7d80a))
+
 ## [0.18.4](https://github.com/tatolab/streamlib/compare/v0.18.3...v0.18.4) (2026-08-25)
 
 
