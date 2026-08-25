@@ -3,11 +3,14 @@
 
 """The android's stage: an offscreen ModernGL scene rendered to numpy pixels.
 
-The full stage rig: a synthwave sun sinking behind the figure, two coloured
-point lights orbiting it, a neon grid floor with a faked planar reflection and
-a contact glow pooling under the feet, drifting dust motes, additive motion
-trails that arm when the dancer moves fast — and a real bloom pass over the
-lot, because neon that does not glow is just paint.
+The full stage rig: a synthwave sun sinking behind a three-layer parallax
+Night City skyline — lit windows, blinking tower beacons, air-traffic streams
+— two coloured point lights orbiting the figure, drones crossing on staggered
+flight paths, a neon grid floor with a faked planar reflection and a contact
+glow pooling under the feet, drifting dust motes, additive motion trails that
+arm when the dancer moves fast, a periodic clone burst fanning the android
+into chromatic echoes of its own recent poses — and a real bloom pass over
+the lot, because neon that does not glow is just paint.
 
 This is a third-party GL world, deliberately: ModernGL owns its own context,
 vertex buffers, framebuffers and shaders here, and the engine only ever sees
@@ -23,7 +26,9 @@ from collections import deque
 import moderngl
 import numpy
 
-from .avatar_rig import SegmentPlacement
+# The drone builder reuses the rig's placement helpers — same package,
+# same vocabulary; a second copy here would only drift.
+from .avatar_rig import SegmentPlacement, _orb, _placement
 
 __all__ = [
     "AvatarSceneRenderer",
@@ -39,7 +44,16 @@ TRAIL_POSE_MEMORY = 14
 TRAIL_GHOST_COUNT = 4
 TRAIL_FULL_STRENGTH_SPEED = 1.6
 
-DUST_MOTE_COUNT = 240
+DUST_MOTE_COUNT = 380
+
+# The clone burst: every period, jittered inside it, the android fans out
+# into chromatic echoes of its own recent poses for about a second.
+CLONE_BURST_PERIOD_SECONDS = 8.5
+CLONE_BURST_SECONDS = 1.1
+CLONE_COPIES_PER_SIDE = 3
+
+TRAIL_ECHO_CYAN = (0.0, 0.95, 1.0)
+CLONE_MAGENTA = (1.0, 0.15, 0.65)
 
 CHARACTER_VERTEX_SHADER = """
 #version 330
@@ -72,8 +86,10 @@ uniform float u_elapsed_seconds;
 uniform float u_brightness;
 uniform vec3 u_orbit_light_a;
 uniform vec3 u_orbit_light_b;
-// Ghost mode: the whole fragment collapses to an additive rim shell.
+// Ghost mode: the whole fragment collapses to an additive rim shell,
+// tinted — trails run cyan, clone bursts split cyan/magenta.
 uniform float u_ghost_alpha;
+uniform vec3 u_ghost_colour;
 out vec4 out_colour;
 
 const vec3 KEY_LIGHT_DIRECTION = normalize(vec3(0.5, 0.85, 0.6));
@@ -100,9 +116,9 @@ void main() {
     float fresnel = pow(1.0 - max(dot(normal, to_camera), 0.0), 5.0);
 
     if (u_ghost_alpha > 0.0) {
-        // An afterimage is pure edge: the body's shell in trail cyan,
+        // An afterimage is pure edge: the body's shell in its tint,
         // brightest at the silhouette, added over what came before.
-        out_colour = vec4(RIM_COLOUR * (0.10 + fresnel * 1.4) * u_ghost_alpha, 1.0);
+        out_colour = vec4(u_ghost_colour * (0.10 + fresnel * 1.4) * u_ghost_alpha, 1.0);
         return;
     }
 
@@ -149,6 +165,7 @@ BACKDROP_FRAGMENT_SHADER = """
 in vec2 v_screen;
 uniform float u_elapsed_seconds;
 uniform float u_aspect;
+uniform float u_camera_sway;
 out vec4 out_colour;
 
 float hash21(vec2 p) {
@@ -157,15 +174,80 @@ float hash21(vec2 p) {
     return fract(p.x * p.y);
 }
 
+float hash11(float p) {
+    p = fract(p * 0.1031);
+    p *= p + 33.33;
+    p *= p + p;
+    return fract(p);
+}
+
+// A lane of headlights crossing the sky between the towers.
+float air_traffic(vec2 s, float lane_height, float speed) {
+    float lane = smoothstep(0.0045, 0.0, abs(s.y - lane_height));
+    float along = s.x * 2.0 - u_elapsed_seconds * speed;
+    float car = step(0.62, hash11(floor(along) * 13.7));
+    float body = smoothstep(0.0, 0.12, fract(along)) * smoothstep(0.45, 0.30, fract(along));
+    return lane * car * body;
+}
+
+// One skyline layer: procedural tower silhouettes with lit windows and
+// beacons, drifting at its own depth's parallax rate.
+vec3 city_layer(
+    vec3 sky, vec2 s, float nearness, float seed, vec3 silhouette
+) {
+    float drift = u_elapsed_seconds * mix(0.004, 0.017, nearness)
+                + u_camera_sway * mix(0.04, 0.16, nearness);
+    float x = s.x + drift;
+    float columns = mix(17.0, 8.0, nearness);
+    float column = floor(x * columns);
+    float tower = hash21(vec2(column, seed));
+    // Squared so most towers stay low and a few spike.
+    float top = -0.04 + tower * tower * mix(0.24, 0.52, nearness);
+
+    if (s.y > top) {
+        // Blinking beacon over the tall spikes only.
+        if (tower > 0.78) {
+            vec2 to_beacon = vec2(
+                (fract(x * columns) - 0.5) * 0.8,
+                (s.y - top - 0.012) * columns * 0.55
+            );
+            float blink = step(0.5, fract(u_elapsed_seconds * 0.9 + tower * 9.0));
+            sky += vec3(1.0, 0.15, 0.22) * blink
+                 * smoothstep(0.30, 0.02, length(to_beacon)) * 0.8;
+        }
+        return sky;
+    }
+
+    // Inside a tower: silhouette plus its window grid. A few windows flicker
+    // like something is happening in them, which is all a city is.
+    vec2 window_cell = vec2(fract(x * columns * 3.0), fract(s.y * 26.0));
+    vec2 window_id = vec2(floor(x * columns * 3.0), floor(s.y * 26.0));
+    float lit = hash21(window_id + seed * 3.1);
+    float flicker = step(0.994, hash21(window_id + floor(u_elapsed_seconds * 2.0)));
+    vec3 tower_colour = silhouette;
+    if (window_cell.x > 0.24 && window_cell.x < 0.76
+        && window_cell.y > 0.28 && window_cell.y < 0.70
+        && lit > 0.80 - flicker) {
+        vec3 window_light = mix(
+            vec3(1.0, 0.78, 0.42), vec3(0.35, 0.90, 1.0),
+            step(0.55, hash21(window_id.yx + seed))
+        );
+        tower_colour += window_light * (0.20 + 0.55 * flicker) * mix(0.5, 1.0, nearness);
+    }
+    return tower_colour;
+}
+
 void main() {
+    vec2 s = vec2(v_screen.x * u_aspect, v_screen.y);
+
     // Deep blue-violet falling to near-black overhead, with a magenta haze
     // low on the horizon.
     float horizon = clamp(1.0 - (v_screen.y * 0.5 + 0.5), 0.0, 1.0);
     vec3 sky = mix(vec3(0.010, 0.008, 0.030), vec3(0.055, 0.015, 0.085), horizon * horizon);
     sky += vec3(0.25, 0.05, 0.35) * pow(horizon, 6.0) * 0.35;
 
-    // The synthwave sun, sunk halfway behind the horizon line the floor cuts.
-    vec2 from_sun = vec2((v_screen.x - 0.02) * u_aspect, v_screen.y - 0.28);
+    // The synthwave sun, sunk behind the skyline the layers cut into it.
+    vec2 from_sun = vec2(s.x - 0.02, v_screen.y - 0.28);
     float sun_distance = length(from_sun);
     float sun_disc = smoothstep(0.46, 0.44, sun_distance);
     // Slit gaps widen toward the sun's lower half — the genre's signature.
@@ -176,9 +258,18 @@ void main() {
     // The halo bleeds past the disc so the bloom pass has something to take.
     sky += sun_colour * exp(-sun_distance * 3.4) * 0.45;
 
+    // Air lanes behind the towers, two directions, two colours.
+    sky += vec3(1.0, 0.62, 0.25) * air_traffic(s, 0.170, 0.115) * 0.55;
+    sky += vec3(1.0, 0.20, 0.30) * air_traffic(s, 0.243, -0.085) * 0.5;
+
+    // Far to near; each layer occludes what stands behind it.
+    sky = city_layer(sky, s, 0.0, 11.0, vec3(0.055, 0.035, 0.105));
+    sky = city_layer(sky, s, 0.5, 47.0, vec3(0.030, 0.018, 0.062));
+    sky = city_layer(sky, s, 1.0, 83.0, vec3(0.012, 0.008, 0.028));
+
     // Sparse drifting static, so the void is alive.
     float grain = hash21(floor(v_screen * 240.0 + u_elapsed_seconds * 3.0));
-    sky += vec3(0.05) * step(0.997, grain);
+    sky += vec3(0.05) * step(0.9985, grain);
     out_colour = vec4(sky, 1.0);
 }
 """
@@ -444,6 +535,84 @@ def _look_at(eye: numpy.ndarray, target: numpy.ndarray) -> numpy.ndarray:
     return view
 
 
+def _hash11(seed: float) -> float:
+    """The shaders' own hash, matched in Python so timing lines up."""
+    seed = math.modf(seed * 0.1031)[0]
+    seed *= seed + 33.33
+    seed *= seed + seed
+    return math.modf(seed)[0]
+
+
+# Each drone: crossing period (s), altitude, depth behind the figure, and
+# direction. Staggered so the sky is busy without being a swarm.
+_DRONE_FLIGHTS = (
+    (11.0, 1.95, -2.3, 1.0),
+    (17.0, 1.55, -1.6, -1.0),
+    (23.0, 2.25, -2.9, 1.0),
+)
+
+_DRONE_BODY = (0.10, 0.11, 0.15)
+_DRONE_DARK = (0.05, 0.055, 0.08)
+
+
+def drone_placements(elapsed_seconds: float) -> "list[SegmentPlacement]":
+    """The drones currently crossing, posed as rig segments.
+
+    They ride the character's own shader and lights, so the stage lights
+    catch them on the way past and the bloom takes their lamps.
+    """
+    placements: "list[SegmentPlacement]" = []
+    for flight, (period, altitude, depth, direction) in enumerate(_DRONE_FLIGHTS):
+        phase = (elapsed_seconds / period + flight * 0.37) % 1.0
+        x = (phase * 2.0 - 1.0) * 3.6 * direction
+        y = altitude + math.sin(elapsed_seconds * 1.9 + flight * 2.1) * 0.05
+        centre = numpy.array([x, y, depth])
+        level = numpy.array([1.0, 0.0, 0.0])
+        forward = numpy.array([0.0, 0.0, 1.0])
+
+        placements += [
+            # Body: a wide flat slab; rotor bar across it; lamps below and aft.
+            _placement("box", centre, centre + numpy.array([0.0, 0.055, 0.0]),
+                       0.20, _DRONE_BODY, 0.0, forward, depth=0.11),
+            _placement("prism", centre + level * -0.17 + numpy.array([0.0, 0.05, 0.0]),
+                       centre + level * 0.17 + numpy.array([0.0, 0.05, 0.0]),
+                       0.020, _DRONE_DARK, 0.0, forward),
+            _orb(centre + numpy.array([0.0, -0.012, 0.0]), 0.024,
+                 (0.0, 0.95, 1.0), 1.0),
+            _orb(centre + level * (-0.13 * direction) + numpy.array([0.0, 0.045, 0.0]),
+                 0.016, (1.0, 0.12, 0.2),
+                 1.0 if math.modf(elapsed_seconds * 2.2 + flight * 0.4)[0] < 0.5 else 0.15),
+        ]
+    return placements
+
+
+def clone_burst_echoes(elapsed_seconds: float) -> "list[tuple[float, float, tuple[float, float, float], int]]":
+    """The burst's echoes as `(x_offset, alpha, tint, pose_age_steps)`.
+
+    Empty outside a burst. Inside one, the copies fan outward on an eased
+    curve and fade as they go — cyan to one side, magenta to the other, each
+    echo striking a slightly older pose so the fan reads as time tearing
+    sideways.
+    """
+    period_index = math.floor(elapsed_seconds / CLONE_BURST_PERIOD_SECONDS)
+    burst_start = period_index * CLONE_BURST_PERIOD_SECONDS + _hash11(
+        period_index + 5.0
+    ) * (CLONE_BURST_PERIOD_SECONDS - CLONE_BURST_SECONDS)
+    progress = (elapsed_seconds - burst_start) / CLONE_BURST_SECONDS
+    if not 0.0 <= progress <= 1.0:
+        return []
+
+    fan = 1.0 - (1.0 - min(progress * 1.6, 1.0)) ** 3
+    fade = (1.0 - progress) ** 1.5
+    echoes = []
+    for copy in range(1, CLONE_COPIES_PER_SIDE + 1):
+        spread = 0.34 * copy * fan
+        alpha = fade * 0.55 / copy
+        echoes.append((spread, alpha, TRAIL_ECHO_CYAN, copy * 3))
+        echoes.append((-spread, alpha, CLONE_MAGENTA, copy * 3))
+    return echoes
+
+
 def _character_speed(
     newest: "list[SegmentPlacement]", previous: "list[SegmentPlacement]", dt: float
 ) -> float:
@@ -563,16 +732,22 @@ class AvatarSceneRenderer:
         *,
         mirrored_under_the_floor: bool = False,
         ghost_alpha: float = 0.0,
+        ghost_colour: "tuple[float, float, float]" = TRAIL_ECHO_CYAN,
+        x_offset: float = 0.0,
     ) -> None:
         mirror = numpy.diag([1.0, -1.0, 1.0, 1.0])
         self._character_program["u_elapsed_seconds"].value = elapsed_seconds
         self._character_program["u_camera_position"].value = tuple(camera_position)
         self._character_program["u_brightness"].value = 0.85 if mirrored_under_the_floor else 1.0
         self._character_program["u_ghost_alpha"].value = ghost_alpha
+        self._character_program["u_ghost_colour"].value = ghost_colour
         # A mirrored draw flips the winding, so the cull side flips with it.
         self.gl.front_face = "cw" if mirrored_under_the_floor else "ccw"
         for placement in placements:
             model = mirror @ placement.model_matrix if mirrored_under_the_floor else placement.model_matrix
+            if x_offset != 0.0:
+                model = model.copy()
+                model[0, 3] += x_offset
             # Inverse-transpose of rotation-times-scale is the rotation with
             # the scale divided back out — the model's columns, normalized.
             linear = model[:3, :3]
@@ -636,6 +811,8 @@ class AvatarSceneRenderer:
 
         self._backdrop_program["u_elapsed_seconds"].value = elapsed_seconds
         self._backdrop_program["u_aspect"].value = self.width / self.height
+        # The skyline parallaxes against the same sway the camera rides.
+        self._backdrop_program["u_camera_sway"].value = sway
         self._backdrop.render(moderngl.TRIANGLES)
 
         self.gl.enable(moderngl.DEPTH_TEST)
@@ -655,6 +832,24 @@ class AvatarSceneRenderer:
         self._floor.render(moderngl.TRIANGLES)
         self.gl.disable(moderngl.BLEND)
         self._draw_character(placements, elapsed_seconds, eye)
+        # The drones cross behind the figure on the same shader, so the stage
+        # lights catch them and the bloom takes their lamps.
+        self._draw_character(drone_placements(elapsed_seconds), elapsed_seconds, eye)
+
+        # The clone burst: chromatic echoes fanning out of the body, each one
+        # striking a slightly older pose.
+        echoes = clone_burst_echoes(elapsed_seconds)
+        if echoes:
+            self.gl.enable(moderngl.BLEND)
+            self.gl.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+            poses = list(self._recent_poses)
+            for x_offset, alpha, tint, pose_age in echoes:
+                echo_pose = poses[max(len(poses) - 1 - pose_age, 0)][1]
+                self._draw_character(
+                    echo_pose, elapsed_seconds, eye,
+                    ghost_alpha=alpha, ghost_colour=tint, x_offset=x_offset,
+                )
+            self.gl.disable(moderngl.BLEND)
 
         # Afterimages, added over the solid body, armed by how fast it moves —
         # a still figure leaves none, a dancing one smears cyan.
