@@ -74,6 +74,9 @@ class CyberpunkAvatar:
     @output()
     def scene_to_downstream(self) -> VideoFrame: ...
 
+    @output(description="The resolved pose as data: joints, visibility, provenance")
+    def pose_to_downstream(self) -> None: ...
+
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # The one setup step that can touch the network (the model fetch, on
         # a cold cache). An idle android beats a dead processor, so a failure
@@ -126,10 +129,14 @@ class CyberpunkAvatar:
         target_joints = remembered if remembered is not None else idle_joints(elapsed_seconds)
         if resolved is not None:
             self.frames_detected += 1
+            pose_provenance = "detected"
         elif remembered is not None:
             self.frames_held += 1
+            pose_provenance = "held"
         else:
             self.frames_idled += 1
+            pose_provenance = "idle"
+
         total_frames = self.frames_detected + self.frames_held + self.frames_idled
         if total_frames % TRACKING_ACCOUNTING_EVERY_FRAMES == 0:
             log.info(
@@ -139,6 +146,26 @@ class CyberpunkAvatar:
                 idled=self.frames_idled,
             )
         settled = self.smoothed_pose.settle(target_joints, dt_seconds)
+
+        # The pose as a bag, keyed to the exact camera frame it was lifted
+        # from — what joins the streams downstream. The joints published are
+        # the settled ones actually driving the figure.
+        ctx.outputs.write(
+            "pose_to_downstream",
+            {
+                "timestamp_ns": frame.timestamp_ns,
+                "provenance": pose_provenance,
+                "joints": {
+                    name: [float(axis) for axis in joint]
+                    for name, joint in settled.items()
+                },
+                "visibility": (
+                    {name: float(seen) for name, seen in sample.visibility.items()}
+                    if sample is not None
+                    else {}
+                ),
+            },
+        )
 
         scene_pixels = self.scene_renderer.render(
             solve_segment_placements(settled), elapsed_seconds
