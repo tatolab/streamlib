@@ -90,3 +90,21 @@ def setup(rt: Runtime) -> None:
     )
 
     rt.connect(compositor.output("video_to_downstream"), window.input("video"))
+
+    # Opt-in imitation-learning capture: point STREAMLIB_LEROBOT_ROOT at a
+    # directory and the same graph doubles as a LeRobot data-collection rig —
+    # raw view, stylized view and the solved pose, timestamp-joined into
+    # episodes, written by LeRobot's own writer in one more helper process.
+    lerobot_root = os.environ.get("STREAMLIB_LEROBOT_ROOT")
+    if lerobot_root:
+        from camera_python_effects.processors.lerobot_recorder import LeRobotRecorder
+
+        recorder = rt.add(LeRobotRecorder, config={"dataset_root": lerobot_root})
+        rt.connect(camera.output("video"), recorder.input("video_from_camera"))
+        rt.connect(
+            avatar.output("pose_to_downstream"), recorder.input("pose_from_avatar")
+        )
+        rt.connect(
+            compositor.output("video_to_downstream"),
+            recorder.input("stylized_from_compositor"),
+        )

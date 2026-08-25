@@ -99,6 +99,29 @@ packs against the ones its shader declares, the pose keypoint packing, and the
 skia overlay. Shaders are compiled by `glslangValidator` where one is installed,
 skipped where not.
 
+## The physical-AI story: this graph is a data-collection rig
+
+Point `STREAMLIB_LEROBOT_ROOT` at a directory and the same graph records
+imitation-learning episodes while it runs:
+
+```bash
+uv sync --extra lerobot
+STREAMLIB_LEROBOT_ROOT=./dataset STREAMLIB_CAMERA_DEVICE=/dev/video1 streamlib dev
+```
+
+One more helper process (`LeRobotRecorder`) taps three streams that all
+descend from the same camera frame — the raw view, the composited output, and
+the avatar's solved pose — joins them on the frame's own monotonic timestamp,
+and writes episodes through LeRobot's official writer. Per frame: two video
+streams, the 51-dim pose state, per-joint visibility, the true capture stamp,
+and the pose as `action` — the target a retargeting consumer servos toward.
+
+The dataset loads in LeRobot's own tooling (`LeRobotDataset(...,
+video_backend="pyav")`), visualizes with their viewer, and pushes to the Hub
+with `dataset.push_to_hub()`. Episode saves video-encode for whole seconds —
+and stall exactly one process. The camera keeps capturing, the effects keep
+running, the window stays at vsync.
+
 ## Observing it
 
 The running app is a node. From another terminal:

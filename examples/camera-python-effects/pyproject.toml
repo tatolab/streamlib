@@ -40,6 +40,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/camera_python_effects"]
 
+[project.optional-dependencies]
+# The LeRobot bridge: `uv sync --extra lerobot` (or install lerobot[dataset]
+# by hand). Only the recorder processor's helper imports it.
+lerobot = ["lerobot[dataset]>=0.6"]
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
