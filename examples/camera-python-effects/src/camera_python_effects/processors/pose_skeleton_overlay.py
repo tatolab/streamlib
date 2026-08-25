@@ -113,13 +113,13 @@ class PoseSkeletonOverlay:
         except Exception as detection_failure:  # noqa: BLE001 — see below
             # Deliberately every failure. This is the one layer of six that
             # depends on a CUDA stack outside the wheel, and the failure that
-            # actually happens is an environment one — a cuDNN whose
-            # sublibraries disagree, an out-of-memory, a driver mismatch —
-            # not a bug in the frame. A raise here would put a traceback on
-            # every camera frame forever; an empty skeleton keeps the other
-            # five layers on screen and says once what went wrong.
-            self.report_the_first_detection_failure(detection_failure)
-            packed_keypoints, visible_mask = [0] * COCO_KEYPOINT_COUNT, 0
+            # actually happens is an environment one, not a bug in the frame.
+            # A raise here would put a traceback on every camera frame
+            # forever; the handler self-heals the one failure it can and
+            # degrades to an empty skeleton for the rest.
+            packed_keypoints, visible_mask = self.detect_after_a_failure(
+                frame, detection_failure
+            )
 
         skeleton_width = max(int(frame.width * self.skeleton_scale), 1)
         skeleton_height = max(int(frame.height * self.skeleton_scale), 1)
@@ -149,6 +149,34 @@ class PoseSkeletonOverlay:
                 frame.timestamp_ns,
             ),
         )
+
+    def detect_after_a_failure(
+        self, frame: VideoFrame, failure: BaseException
+    ) -> "tuple[list[int], int]":
+        """One self-heal for a cuDNN failure, the empty skeleton for the rest.
+
+        torch bundles its own cuDNN, and a host carrying a different system
+        cuDNN can poison it: the bundled wheel ships no
+        `engines_tensor_ir` sublibrary, the dispatcher's probe falls through
+        to the system's newer copy, and every convolution fails with a
+        sublibrary version mismatch. Convolution without cuDNN works — torch's
+        own kernels carry it, slower — so the first cuDNN-shaped failure turns
+        cuDNN off and retries. Anything else, or a second failure, stays an
+        empty skeleton reported once.
+        """
+        if "cudnn" in str(failure).lower() and torch.backends.cudnn.enabled:
+            torch.backends.cudnn.enabled = False
+            log.warn(
+                "pose detection hit a cuDNN failure; retrying with cuDNN "
+                "disabled for the rest of this process",
+                failure=str(failure),
+            )
+            try:
+                return self.detect_pose_in(frame)
+            except Exception as second_failure:  # noqa: BLE001 — degrades below
+                failure = second_failure
+        self.report_the_first_detection_failure(failure)
+        return [0] * COCO_KEYPOINT_COUNT, 0
 
     def report_the_first_detection_failure(self, failure: BaseException) -> None:
         """Say once, per process, that the skeleton layer is dark and why."""
