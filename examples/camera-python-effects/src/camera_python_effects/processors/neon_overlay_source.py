@@ -26,6 +26,7 @@ from streamlib import (
 from ..gpu_surface_conventions import (
     SAMPLED_ONLY_TEXTURE_USAGE,
     TEXTURE_FORMAT,
+    RecentlyPublishedSurfaceRing,
     video_frame_bag_naming,
 )
 from ..neon_overlay_canvas import (
@@ -34,9 +35,6 @@ from ..neon_overlay_canvas import (
     draw_neon_overlay,
 )
 from ..single_pass_video_effect import NANOSECONDS_PER_SECOND
-
-DEFAULT_OVERLAY_WIDTH = 1920
-DEFAULT_OVERLAY_HEIGHT = 1080
 
 OVERLAY_REDRAW_INTERVAL_MS = 33
 
@@ -49,12 +47,14 @@ OVERLAY_REDRAW_INTERVAL_MS = 33
 class NeonOverlaySource:
     """A transparent RGBA layer, redrawn every tick."""
 
+    def __init__(self, width: int = 1920, height: int = 1080) -> None:
+        self.overlay_width = width
+        self.overlay_height = height
+
     @output()
     def overlay_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.overlay_width = int(ctx.config.get("width", DEFAULT_OVERLAY_WIDTH))
-        self.overlay_height = int(ctx.config.get("height", DEFAULT_OVERLAY_HEIGHT))
         self.skia_surface = skia.Surface.MakeRaster(
             skia.ImageInfo.Make(
                 self.overlay_width,
@@ -64,6 +64,7 @@ class NeonOverlaySource:
             )
         )
         self.first_process_at_ns: int | None = None
+        self.recently_published = RecentlyPublishedSurfaceRing()
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self.first_process_at_ns is None:
@@ -86,6 +87,7 @@ class NeonOverlaySource:
         overlay_texture.as_numpy()[...] = drawn_overlay
         overlay_texture.unlock()
 
+        self.recently_published.retain_published_surface(overlay_texture)
         ctx.outputs.write(
             "overlay_to_downstream",
             video_frame_bag_naming(

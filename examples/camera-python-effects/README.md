@@ -53,9 +53,14 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 Effects live in `src/camera_python_effects/shaders/` as ordinary `.frag` files.
 Edit one and re-run `streamlib dev` — that is the whole edit loop.
 
-Two dials worth knowing: `CrtFilmGrain` takes every CRT parameter as config
-(`rt.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the tube), and
-`PoseSkeletonOverlay` takes `pose_model` and `keypoint_confidence_floor`.
+Config is constructor keyword arguments with ordinary Python defaults —
+`rt.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the tube.
+`CrtFilmGrain` takes every CRT parameter that way; `PoseSkeletonOverlay` takes
+`pose_model`, `keypoint_confidence_floor` and `skeleton_scale`.
+
+If pose detection cannot run — a CUDA stack that does not agree with itself is
+the usual cause — the skeleton layer stays empty, the warning is logged once,
+and the other five layers carry on.
 
 ## Why the camera frame goes through `CameraFrameToTexture`
 
