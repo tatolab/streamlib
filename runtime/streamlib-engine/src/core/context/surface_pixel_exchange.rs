@@ -18,13 +18,14 @@
 //! compositor's sampled blit — which is also where the optional long-edge
 //! downscale rides. Nothing walks pixels on the CPU.
 
-use crate::core::color::{ColorSpaceKind, resolve_color_defaults};
+use crate::core::color::resolve_color_defaults;
 use crate::core::context::GpuContext;
 use crate::core::context::surface_export_staging::ResolvedBlitSource;
 use crate::core::error::{Error, Result};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, SourceLayoutInfo, Texture, TextureDescriptor, TextureFormat,
     TextureReadbackDescriptor, TextureSourceLayout, TextureUsages, VulkanLayout,
+    pixel_format_color_kind,
 };
 use crate::host_rhi::{VulkanAccess, VulkanStage};
 use crate::vulkan::rhi::{ImageCopyRegion, PresentScalingMode};
@@ -262,8 +263,17 @@ impl GpuContext {
                 self.transition_storage_image_to_general(&image_texture)?;
                 let color_converter =
                     self.color_converter(source_pixel_format, PixelFormat::Rgba32)?;
-                let resolved_color =
-                    resolve_color_defaults(None, None, None, None, ColorSpaceKind::Yuv);
+                // No color description travels with a surface, so the
+                // defaults the format itself implies are what the matrix and
+                // range come from — the same resolve a camera runs before it
+                // has read a frame's metadata.
+                let resolved_color = resolve_color_defaults(
+                    None,
+                    None,
+                    None,
+                    None,
+                    pixel_format_color_kind(source_pixel_format),
+                );
                 color_converter.convert_buffer_to_image_pixel(
                     pixel_buffer,
                     tightly_packed_source_layout_of(
@@ -459,6 +469,363 @@ fn claimed_frame_backing_extent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::core::rhi::TextureFormat;
+
+    /// A frame small enough to fill by hand, and non-square so a downscale
+    /// that ignored aspect shows up as a wrong extent rather than as the
+    /// right one by luck.
+    const FRAME_PIXEL_WIDTH: u32 = 96;
+    const FRAME_PIXEL_HEIGHT: u32 = 48;
+    /// The RGBA a pooled frame is published with — four distinct channels,
+    /// so a swizzle is a failure rather than a coincidence.
+    const PUBLISHED_RGBA8_PIXEL: [u8; 4] = [0x21, 0x43, 0x65, 0xFF];
+    /// What a texture-backed producer renders.
+    const KERNEL_OUTPUT_RGBA8_PIXEL: [u8; 4] = [0x9A, 0x2C, 0x5E, 0xFF];
+
+    fn gpu_context_or_skip() -> Option<GpuContext> {
+        match GpuContext::init_for_platform() {
+            Ok(gpu) => Some(gpu),
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                None
+            }
+        }
+    }
+
+    /// Write `pattern`, repeated, over every byte of a pooled allocation —
+    /// the producer's side of publishing a frame.
+    fn fill_pooled_backing_with(pixel_buffer: &PixelBuffer, pattern: &[u8]) {
+        let base_address = pixel_buffer.plane_base_address(0);
+        assert!(
+            !base_address.is_null(),
+            "a pooled allocation must be host-mapped for this fixture to publish into it"
+        );
+        let byte_count = pixel_buffer.plane_size(0) as usize;
+        let backing =
+            unsafe { std::slice::from_raw_parts_mut(base_address, byte_count) };
+        for (index, byte) in backing.iter_mut().enumerate() {
+            *byte = pattern[index % pattern.len()];
+        }
+    }
+
+    /// A YUYV frame whose top half is the limited-range black point and
+    /// whose bottom half is the white point, both with neutral chroma —
+    /// what a camera hands the engine, in the layout
+    /// `color_convert_yuyv_buffer_to_rgba.comp` reads (`[Y0, U, Y1, V]`).
+    fn fill_pooled_backing_with_a_two_tone_yuyv_frame(pixel_buffer: &PixelBuffer) {
+        const LIMITED_RANGE_BLACK_LUMA: u8 = 0x10;
+        const LIMITED_RANGE_WHITE_LUMA: u8 = 0xEB;
+        const NEUTRAL_CHROMA: u8 = 0x80;
+
+        let base_address = pixel_buffer.plane_base_address(0);
+        assert!(!base_address.is_null(), "the YUYV allocation must be mapped");
+        let byte_count = pixel_buffer.plane_size(0) as usize;
+        let backing =
+            unsafe { std::slice::from_raw_parts_mut(base_address, byte_count) };
+        let bytes_per_row = (FRAME_PIXEL_WIDTH * 2) as usize;
+        for (row, row_bytes) in backing.chunks_mut(bytes_per_row).enumerate() {
+            let luma = if (row as u32) < FRAME_PIXEL_HEIGHT / 2 {
+                LIMITED_RANGE_BLACK_LUMA
+            } else {
+                LIMITED_RANGE_WHITE_LUMA
+            };
+            for macro_pixel in row_bytes.chunks_mut(4) {
+                if macro_pixel.len() < 4 {
+                    break;
+                }
+                macro_pixel.copy_from_slice(&[luma, NEUTRAL_CHROMA, luma, NEUTRAL_CHROMA]);
+            }
+        }
+    }
+
+    fn assert_every_pixel_is(rgba8_pixel_bytes: &[u8], expected: [u8; 4], subject: &str) {
+        assert!(!rgba8_pixel_bytes.is_empty(), "{subject} came back empty");
+        for (pixel_index, pixel) in rgba8_pixel_bytes.chunks_exact(4).enumerate() {
+            assert_eq!(
+                pixel, expected,
+                "{subject}: pixel {pixel_index} is {pixel:02x?}, expected {expected:02x?}"
+            );
+        }
+    }
+
+    fn pixel_at(image: &PublishedSurfaceFrameHostRgba8Image, x: u32, y: u32) -> [u8; 4] {
+        let offset = ((y * image.image_pixel_width + x) * 4) as usize;
+        image.rgba8_pixel_bytes[offset..offset + 4]
+            .try_into()
+            .expect("four bytes per pixel")
+    }
+
+    /// The pooled arm end to end: what the exchange copies out is the frame
+    /// the bag published, channel order intact.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (published_frame_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame's pooled backing");
+        fill_pooled_backing_with(&pooled_backing, &PUBLISHED_RGBA8_PIXEL);
+
+        let exchanged = gpu
+            .copy_published_surface_frame_to_host_rgba8_image(
+                &published_frame_id.to_string(),
+                None,
+            )
+            .expect("exchange the published frame");
+
+        assert_eq!(
+            (exchanged.image_pixel_width, exchanged.image_pixel_height),
+            (FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT),
+            "no cap means the exact source resolution"
+        );
+        assert_eq!(
+            (
+                exchanged.source_surface_pixel_width,
+                exchanged.source_surface_pixel_height
+            ),
+            (FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT)
+        );
+        assert_every_pixel_is(
+            &exchanged.rgba8_pixel_bytes,
+            PUBLISHED_RGBA8_PIXEL,
+            "the exchanged pooled frame",
+        );
+    }
+
+    /// The texture arm: a kernel output has no pooled member, and its own
+    /// usage flags need not suit a readback — the RHI's blit is what makes
+    /// it readable, so this covers both the resolve and the conversion.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (surface_id, kernel_output_texture) = gpu
+            .acquire_output_texture(
+                FRAME_PIXEL_WIDTH,
+                FRAME_PIXEL_HEIGHT,
+                TextureFormat::Rgba8Unorm,
+            )
+            .expect("acquire a kernel-output texture");
+        let (_, upload_source) = gpu
+            .acquire_pixel_buffer(FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the upload source");
+        fill_pooled_backing_with(&upload_source, &KERNEL_OUTPUT_RGBA8_PIXEL);
+        gpu.copy_pixel_buffer_to_texture(
+            &upload_source,
+            &kernel_output_texture,
+            &surface_id,
+            FRAME_PIXEL_WIDTH,
+            FRAME_PIXEL_HEIGHT,
+        )
+        .expect("render the kernel's output");
+
+        let exchanged = gpu
+            .copy_published_surface_frame_to_host_rgba8_image(&surface_id, None)
+            .expect("exchange the texture-backed surface");
+
+        assert_eq!(
+            (exchanged.image_pixel_width, exchanged.image_pixel_height),
+            (FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT)
+        );
+        assert_every_pixel_is(
+            &exchanged.rgba8_pixel_bytes,
+            KERNEL_OUTPUT_RGBA8_PIXEL,
+            "the exchanged texture-backed frame",
+        );
+    }
+
+    /// A camera publishes YUV, and converting it is the RHI's job. The
+    /// assertion is that a conversion ran at all: a frame copied through
+    /// byte-for-byte would read the packed `[Y, U, Y, V]` as RGBA and come
+    /// back strongly green, not as the neutral grey ramp this frame
+    /// encodes.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_yuyv_camera_frame_is_converted_in_the_rhi_rather_than_copied_through() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (published_frame_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT, PixelFormat::Yuyv422)
+            .expect("acquire a YUYV pooled backing");
+        fill_pooled_backing_with_a_two_tone_yuyv_frame(&pooled_backing);
+
+        let exchanged = gpu
+            .copy_published_surface_frame_to_host_rgba8_image(
+                &published_frame_id.to_string(),
+                None,
+            )
+            .expect("exchange the YUYV frame");
+
+        let dark = pixel_at(&exchanged, 0, 0);
+        let light = pixel_at(&exchanged, 0, FRAME_PIXEL_HEIGHT - 1);
+        for (subject, pixel) in [("the black half", dark), ("the white half", light)] {
+            let spread = pixel[..3].iter().max().unwrap() - pixel[..3].iter().min().unwrap();
+            assert!(
+                spread <= 8,
+                "{subject} must decode to neutral grey, got {pixel:02x?}"
+            );
+            assert_eq!(pixel[3], 0xFF, "{subject} must be opaque");
+        }
+        assert!(
+            dark[0] < 0x30,
+            "the limited-range black point must decode near black, got {dark:02x?}"
+        );
+        assert!(
+            light[0] > 0xC8,
+            "the limited-range white point must decode near white, got {light:02x?}"
+        );
+    }
+
+    /// The claim is bounded to the copy. In one address space the pool's
+    /// accounting *is* the `PixelBuffer` refcount — the count
+    /// `PixelBufferRingEntry::hand_off_if_unheld_in_process` reads before it
+    /// rehands a slot — so a claim the exchange forgot to drop shows up
+    /// here as a hold that never comes back.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn sequential_exchanges_of_one_frame_never_pin_more_than_one_hold() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (published_frame_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame's pooled backing");
+        fill_pooled_backing_with(&pooled_backing, &PUBLISHED_RGBA8_PIXEL);
+        let holds_before_any_exchange = pooled_backing.strong_count();
+
+        for exchange_number in 1..=4 {
+            gpu.copy_published_surface_frame_to_host_rgba8_image(
+                &published_frame_id.to_string(),
+                None,
+            )
+            .expect("exchange the published frame");
+            assert_eq!(
+                pooled_backing.strong_count(),
+                holds_before_any_exchange,
+                "exchange {exchange_number} left a hold on the slot"
+            );
+        }
+    }
+
+    /// A retired `<slot>#<generation>` id names a frame the producer has
+    /// already overwritten. Refused by name, before any bytes move — never
+    /// answered with the slot's newer pixels.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_retired_frame_id_is_refused_at_the_exchange_naming_the_recycling() {
+        // Its own extent, so this test walks a pool no other test has
+        // advanced, and the ring is small enough that this many hand-offs
+        // cycles it several times over.
+        const RECYCLING_FRAME_PIXEL_WIDTH: u32 = 32;
+        const RECYCLING_FRAME_PIXEL_HEIGHT: u32 = 32;
+        const HAND_OFFS_THAT_CYCLE_THE_RING: usize = 16;
+
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (retired_frame_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(
+                RECYCLING_FRAME_PIXEL_WIDTH,
+                RECYCLING_FRAME_PIXEL_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("acquire the frame that will be recycled");
+        let retired_frame_id = retired_frame_id.to_string();
+        // Nothing holds the slot, so the producer may have it back.
+        drop(pooled_backing);
+        for _ in 0..HAND_OFFS_THAT_CYCLE_THE_RING {
+            let (_, handed_off) = gpu
+                .acquire_pixel_buffer(
+                    RECYCLING_FRAME_PIXEL_WIDTH,
+                    RECYCLING_FRAME_PIXEL_HEIGHT,
+                    PixelFormat::Rgba32,
+                )
+                .expect("the producer keeps acquiring");
+            drop(handed_off);
+        }
+
+        // `let ... else` rather than `expect_err`: the success value holds
+        // a whole frame, and `Debug`-formatting it into a panic message
+        // would print megabytes of pixels.
+        let Err(refusal) =
+            gpu.copy_published_surface_frame_to_host_rgba8_image(&retired_frame_id, None)
+        else {
+            panic!("a retired frame id must not exchange for pixels");
+        };
+        assert!(
+            matches!(refusal, Error::SurfaceFrameRecycled { .. }),
+            "the refusal must name the recycling, got: {refusal}"
+        );
+        assert!(
+            refusal.to_string().contains(&retired_frame_id),
+            "the refusal must name the id asked for: {refusal}"
+        );
+    }
+
+    /// The cap bounds the long edge and nothing else: the image shrinks,
+    /// the aspect holds, and the surface's true extent is still reported.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_downscale_cap_bounds_the_long_edge_and_still_states_the_true_extent() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let (published_frame_id, pooled_backing) = gpu
+            .acquire_pixel_buffer(FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the frame's pooled backing");
+        fill_pooled_backing_with(&pooled_backing, &PUBLISHED_RGBA8_PIXEL);
+
+        let exchanged = gpu
+            .copy_published_surface_frame_to_host_rgba8_image(
+                &published_frame_id.to_string(),
+                Some(FRAME_PIXEL_WIDTH / 4),
+            )
+            .expect("exchange the published frame under a cap");
+
+        assert_eq!(
+            (exchanged.image_pixel_width, exchanged.image_pixel_height),
+            (FRAME_PIXEL_WIDTH / 4, FRAME_PIXEL_HEIGHT / 4),
+            "both axes take the cap's ratio"
+        );
+        assert_eq!(
+            (
+                exchanged.source_surface_pixel_width,
+                exchanged.source_surface_pixel_height
+            ),
+            (FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT),
+            "a downscaled image still reports the resolution the surface holds"
+        );
+        assert_eq!(
+            exchanged.rgba8_pixel_bytes.len(),
+            (FRAME_PIXEL_WIDTH / 4 * FRAME_PIXEL_HEIGHT / 4 * 4) as usize
+        );
+    }
+
+    /// An id nothing published is an absence, not a device fault — the
+    /// answer says so and names both doors it tried.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_surface_id_no_backing_answers_for_is_reported_as_not_found() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let Err(refusal) =
+            gpu.copy_published_surface_frame_to_host_rgba8_image("no-surface-of-this-name", None)
+        else {
+            panic!("an unknown surface has no pixels to hand back");
+        };
+        assert!(
+            matches!(refusal, Error::NotFound(_)),
+            "an unknown surface is an absence, got: {refusal}"
+        );
+        assert!(refusal.to_string().contains("no-surface-of-this-name"));
+    }
 
     #[test]
     fn no_cap_and_a_cap_above_the_long_edge_both_keep_the_source_extent() {
