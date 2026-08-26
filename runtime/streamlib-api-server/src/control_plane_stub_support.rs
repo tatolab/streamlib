@@ -88,6 +88,14 @@ macro_rules! graph_mutation_ops_are_unreachable {
 
 pub(crate) use graph_mutation_ops_are_unreachable;
 
+/// A published pool frame id is `<slot>#<generation>`, and `#` starts a URL
+/// fragment — so the wire form is percent-encoded and a front end has to
+/// hand the operation the decoded id.
+pub(crate) const EXCHANGED_FRAME_ID: &str = "pool-slot-a#7";
+
+/// [`EXCHANGED_FRAME_ID`] as it travels in a URL path segment.
+pub(crate) const EXCHANGED_FRAME_ID_PERCENT_ENCODED: &str = "pool-slot-a%237";
+
 /// The `(surface id, downscale cap)` pairs a front end handed the exchange
 /// operation, in call order.
 pub(crate) type RecordedSurfaceExchangeCalls =

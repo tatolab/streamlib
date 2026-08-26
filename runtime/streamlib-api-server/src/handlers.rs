@@ -240,6 +240,14 @@ static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> 
         axum::http::HeaderName::from_static("x-streamlib-surface-pixel-height")
     });
 
+/// The REST spelling of the exchange, as an OpenAPI path template.
+///
+/// The MCP tool names this route in its result so a caller that needs the
+/// exact bytes has one call to make; a test asserts the served spec
+/// carries exactly this path, so the two spellings cannot drift.
+pub(crate) const SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE: &str =
+    "/api/surfaces/{surface_id}/image";
+
 /// Query parameters for the surface exchange.
 #[derive(Deserialize)]
 pub(crate) struct SurfaceImageExchangeQuery {
@@ -616,7 +624,8 @@ mod router_surface_and_auth_gate_tests {
 
     use super::*;
     use crate::control_plane_stub_support::{
-        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+        EXCHANGED_FRAME_ID, EXCHANGED_FRAME_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
+        STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
     };
     use axum::body::Body;
     use axum::http::{
@@ -970,12 +979,6 @@ mod router_surface_and_auth_gate_tests {
     // Surface exchange: a published surface id in, image bytes out
     // ------------------------------------------------------------------
 
-    /// A published pool frame id is `<slot>#<generation>`, and `#` starts a
-    /// URL fragment — so the wire form is percent-encoded and the route has
-    /// to hand the operation the decoded id.
-    const EXCHANGED_FRAME_ID: &str = "pool-slot-a#7";
-    const EXCHANGED_FRAME_ID_PERCENT_ENCODED: &str = "pool-slot-a%237";
-
     fn router_with_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
         build_router(
             Arc::new(runtime),
@@ -1177,8 +1180,8 @@ mod router_surface_and_auth_gate_tests {
         let path = spec
             .paths
             .paths
-            .get("/api/surfaces/{surface_id}/image")
-            .expect("the exchange route is in the spec");
+            .get(SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE)
+            .expect("the exchange route is in the spec, at the path the MCP tool names");
         let operation = path.get.as_ref().expect("it is a GET");
         let ok = operation
             .responses

@@ -54,6 +54,12 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 getrandom = "0.2"
 constant_time_eq = "0.3"
 
+# The MCP `exchange` tool's image content block: base64 for the inline PNG,
+# percent-encoding for the surface id in the REST route the result names.
+# Both are already in this tree via axum, so neither adds a build.
+base64 = "0.22"
+percent-encoding = "2.3"
+
 [dev-dependencies]
 # Enables the engine's `test-support` in-memory `TapSubscription` constructor
 # for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent

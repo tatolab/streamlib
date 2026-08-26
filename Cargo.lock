@@ -4781,10 +4781,12 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "constant_time_eq",
  "futures-util",
  "getrandom 0.2.17",
  "parking_lot",
+ "percent-encoding",
  "serde",
  "serde_json",
  "serial_test",

@@ -13,10 +13,17 @@
 //! attach. It exposes the runtime as MCP *tools* so an LLM agent observes the
 //! live graph the same way the REST client does.
 //!
-//! The vocabulary is observation-shaped — graph, tap, logs, shutdown. Live
-//! graph mutation is not part of it: code is the source of truth and the edit
-//! loop is `dev`, so there is no tool that submits, replaces, connects, or
-//! removes.
+//! The vocabulary is observation-shaped — graph, tap, logs, exchange,
+//! shutdown. Live graph mutation is not part of it: code is the source of
+//! truth and the edit loop is `dev`, so there is no tool that submits,
+//! replaces, connects, or removes.
+//!
+//! `exchange` is the one tool whose result is not text: it answers a
+//! published surface id with the frame itself, as an image content block the
+//! host renders in-session — so an agent on another machine sees the pixels
+//! with no shared filesystem and no screenshot tooling. It composes with
+//! `tap` entirely at the caller, which decodes a bag and reads whatever field
+//! it knows carries a surface id; `tap` itself is untouched.
 //!
 //! Two of the tools (`tap`, `logs`) front WebSocket *streams* in the REST API.
 //! MCP tools are request/response, so each bridges its stream to a **bounded
@@ -33,12 +40,13 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use base64::Engine as _;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
 
 use crate::state::{AppState, RuntimeShutdownRequest};
 
@@ -66,6 +74,27 @@ const MAX_SAMPLE_COUNT: usize = 1024;
 /// reported, but only the first this-many bytes are hex-encoded into the result
 /// so a large encoded bag cannot bloat the JSON-RPC payload.
 const MAX_TAP_BAG_PREVIEW_BYTES: usize = 4096;
+
+/// Long-edge ceiling for the image an `exchange` result carries inline, and
+/// the default when a caller names no cap of its own.
+///
+/// A vision-model ingestion ceiling — not a GPU or protocol constant — which
+/// is why it is declared here and restated in every result rather than
+/// silently applied. It is a ceiling and not merely a default because a
+/// full-resolution frame is megabytes of base64 against a per-image API
+/// limit; exact bytes are the REST spelling's job.
+const EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP: u32 = 1568;
+
+/// RFC 3986's unreserved set: everything outside it is percent-encoded in
+/// the REST route an `exchange` result names. A pooled frame id is
+/// `<slot>#<generation>`, and a bare `#` would turn the generation into a
+/// URL fragment.
+const SURFACE_ID_PATH_SEGMENT_ESCAPE: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
 
 /// Upper bound on how long the `logs` tool waits to fill its sample before
 /// returning what it has collected. This is the bounded sample *window* for the
@@ -229,6 +258,19 @@ fn tool_definitions() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "exchange",
+            "description": "Exchange a published surface id for that frame's pixels, returned as a PNG image block you can see directly. Ids come from bags a `tap` returned — this tool never reads a channel itself. The image is downscaled to a declared long-edge cap; the result states the surface's true extent and the REST route that returns the exact full-resolution bytes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "surface_id": { "type": "string", "description": "A surface id a bag published, e.g. the `{slot}#{generation}` of a pooled frame. A retired id is refused rather than answered with the slot's newer pixels — tap a newer bag and exchange that." },
+                    "downscale_long_edge_pixel_cap": { "type": "integer", "minimum": 1, "maximum": EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP, "description": "Bound the returned image's long edge to this many pixels, aspect preserved and never upscaled. Defaults to the maximum, and a larger value is clamped to it: full resolution is the REST route's job, never an inline block." }
+                },
+                "required": ["surface_id"],
+                "additionalProperties": false
+            },
+        }),
+        json!({
             "name": "shutdown",
             "description": "Ask the runtime to shut down. This is a request observed by whoever owns the run loop, which then runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited.",
             "inputSchema": {
@@ -268,6 +310,7 @@ async fn tools_call(
         "graph" => call_graph(runtime).await,
         "tap" => call_tap(runtime, arguments).await,
         "logs" => call_logs(runtime, arguments).await,
+        "exchange" => call_exchange(runtime, arguments).await,
         "shutdown" => call_shutdown(runtime, arguments),
         other => tool_error(format!("unknown tool: {other}")),
     };
@@ -379,6 +422,43 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
     }))
 }
 
+/// Exchange a published surface id for that frame's pixels, inline.
+///
+/// The only tool whose result carries an image block. It reaches the same
+/// `RuntimeOperations` op the REST route spends, so there is no second path
+/// to the engine and no pixel work in the api-server.
+async fn call_exchange(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
+    #[derive(Deserialize)]
+    struct ExchangeArgs {
+        surface_id: String,
+        #[serde(default)]
+        downscale_long_edge_pixel_cap: Option<u32>,
+    }
+    let ExchangeArgs {
+        surface_id,
+        downscale_long_edge_pixel_cap,
+    } = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(e) => return tool_error(format!("exchange arguments: {e}")),
+    };
+    // A caller may ask for less than the ceiling, never more — clamped rather
+    // than refused, so an agent that guessed high still gets its picture.
+    let long_edge_pixel_cap = downscale_long_edge_pixel_cap
+        .unwrap_or(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
+        .clamp(1, EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP);
+
+    match runtime
+        .exchange_published_surface_id_for_png_image_bytes_async(
+            surface_id.clone(),
+            Some(long_edge_pixel_cap),
+        )
+        .await
+    {
+        Ok(exchanged) => exchanged_frame_image_result(&surface_id, long_edge_pixel_cap, &exchanged),
+        Err(e) => tool_error(format!("exchange failed: {e}")),
+    }
+}
+
 /// Sync, unlike every other tool call: `request_runtime_shutdown` is
 /// fire-and-forget with no completion payload, so there is nothing to await
 /// and nothing to block on.
@@ -405,11 +485,67 @@ fn call_shutdown(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Valu
 /// A successful `tools/call` result: the value rendered as a pretty-JSON text
 /// content block (the universally-supported MCP tool-result form).
 fn tool_ok(value: Value) -> Value {
-    let text = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
     json!({
-        "content": [{ "type": "text", "text": text }],
+        "content": [json_text_content_block(&value)],
         "isError": false,
     })
+}
+
+/// One pretty-JSON text content block — how every tool here states a result
+/// a caller parses.
+fn json_text_content_block(value: &Value) -> Value {
+    let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    json!({ "type": "text", "text": text })
+}
+
+/// A successful `exchange` result: the frame as an image block the host
+/// renders in-session, then a text block stating what the surface itself
+/// carries and where the exact bytes live.
+///
+/// The two extents are both reported because they differ whenever the cap
+/// applied, and a downscaled picture whose true resolution went unsaid is a
+/// measurement waiting to be wrong.
+fn exchanged_frame_image_result(
+    published_surface_id: &str,
+    downscale_long_edge_pixel_cap: u32,
+    exchanged: &ExchangedPublishedSurfaceFramePngImage,
+) -> Value {
+    let stated = json!({
+        "surface_id": published_surface_id,
+        "source_surface_pixel_width": exchanged.source_surface_pixel_width,
+        "source_surface_pixel_height": exchanged.source_surface_pixel_height,
+        "encoded_image_pixel_width": exchanged.encoded_image_pixel_width,
+        "encoded_image_pixel_height": exchanged.encoded_image_pixel_height,
+        "downscale_long_edge_pixel_cap": downscale_long_edge_pixel_cap,
+        "exact_bytes_rest_route": exact_bytes_rest_route(published_surface_id),
+    });
+    json!({
+        "content": [
+            {
+                "type": "image",
+                "data": base64::engine::general_purpose::STANDARD.encode(&exchanged.png_image_bytes),
+                "mimeType": "image/png",
+            },
+            json_text_content_block(&stated),
+        ],
+        "isError": false,
+    })
+}
+
+/// The REST spelling's route for this surface id, as method plus path, so a
+/// caller that needs the exact full-resolution bytes has one call to make.
+///
+/// Built from the route's own template rather than a second spelling of it,
+/// because a path that drifted would send a caller chasing a 404.
+fn exact_bytes_rest_route(published_surface_id: &str) -> String {
+    let path_segment =
+        percent_encoding::utf8_percent_encode(published_surface_id, SURFACE_ID_PATH_SEGMENT_ESCAPE)
+            .to_string();
+    format!(
+        "GET {}",
+        crate::handlers::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE
+            .replace("{surface_id}", &path_segment)
+    )
 }
 
 /// A failed `tools/call` result: an `isError` text block. Tool failures are
@@ -480,13 +616,16 @@ mod tests {
     //! The catalog assertions are two-sided on purpose — what is advertised,
     //! and what must never be again.
 
+    use crate::control_plane_stub_support::{
+        EXCHANGED_FRAME_ID, EXCHANGED_FRAME_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
+        STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+    };
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
+    use base64::Engine as _;
     use streamlib::sdk::error::Error;
-    use streamlib::sdk::runtime::{
-        BoxFuture, ExchangedPublishedSurfaceFramePngImage, RuntimeOperations, TapSubscription,
-    };
+    use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
     use tower::ServiceExt;
 
     use super::*;
@@ -515,6 +654,7 @@ mod tests {
     struct ControlPlaneMcpDispatchStubRuntime {
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
+        exchange: StubSurfaceExchange,
     }
 
     impl ControlPlaneMcpDispatchStubRuntime {
@@ -522,6 +662,7 @@ mod tests {
             Self {
                 tap_plan: None,
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
+                exchange: StubSurfaceExchange::default(),
             }
         }
 
@@ -585,20 +726,7 @@ mod tests {
             })
         }
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("tool");
-        /// The dispatch serves no `exchange` tool yet, so nothing here can
-        /// reach this; answering rather than panicking keeps the day it
-        /// does a test failure about the tool, not a stub abort.
-        fn exchange_published_surface_id_for_png_image_bytes_async(
-            &self,
-            published_surface_id: String,
-            _downscale_long_edge_pixel_cap: Option<u32>,
-        ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
-            Box::pin(async move {
-                Err(Error::NotFound(format!(
-                    "stub runtime holds no surface '{published_surface_id}'"
-                )))
-            })
-        }
+        crate::control_plane_stub_support::surface_exchange_op_answers_the_stub!();
         fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
             self.recorded_shutdown_reasons
                 .lock()
@@ -612,7 +740,7 @@ mod tests {
 
     /// The control vocabulary, in catalog order. This is the whole of it —
     /// `tools/list` is asserted equal to this, not merely a superset.
-    const OBSERVATION_TOOL_NAMES: &[&str] = &["graph", "tap", "logs", "shutdown"];
+    const OBSERVATION_TOOL_NAMES: &[&str] = &["graph", "tap", "logs", "exchange", "shutdown"];
 
     /// The tools this control plane deliberately does not serve: every graph
     /// mutation the pre-pivot MCP veneer exposed.
@@ -1006,5 +1134,282 @@ mod tests {
             recorded_shutdowns.lock().is_empty(),
             "a malformed call must not reach the runtime"
         );
+    }
+
+    // ------------------------------------------------------------------
+    // exchange: a published surface id in, an image content block out
+    // ------------------------------------------------------------------
+
+    fn exchange_stub(exchange: StubSurfaceExchange) -> Arc<ControlPlaneMcpDispatchStubRuntime> {
+        Arc::new(ControlPlaneMcpDispatchStubRuntime {
+            exchange,
+            ..ControlPlaneMcpDispatchStubRuntime::new()
+        })
+    }
+
+    /// Drive `tools/call` on `exchange` with `arguments`, returning the
+    /// `result` object and the `(surface id, cap)` pairs the tool handed the
+    /// operation.
+    async fn call_exchange_tool(arguments: Value) -> (Value, Vec<(String, Option<u32>)>) {
+        let runtime = exchange_stub(StubSurfaceExchange::default());
+        let recorded = runtime.exchange.recorded_calls.clone();
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 20, "method": "tools/call",
+                "params": { "name": "exchange", "arguments": arguments }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let calls = recorded.lock().clone();
+        (body["result"].clone(), calls)
+    }
+
+    fn content_block_of_type<'a>(result: &'a Value, block_type: &str) -> &'a Value {
+        result["content"]
+            .as_array()
+            .unwrap_or_else(|| panic!("a content array; got {result}"))
+            .iter()
+            .find(|block| block["type"] == block_type)
+            .unwrap_or_else(|| panic!("a `{block_type}` content block; got {result}"))
+    }
+
+    /// The whole point of the MCP spelling: the frame arrives *in the
+    /// session* as a picture, not as a path or a URL the host would have to
+    /// fetch — which is also why a host on another machine needs no shared
+    /// filesystem.
+    #[tokio::test]
+    async fn tools_call_exchange_returns_the_frame_as_a_renderable_png_image_block() {
+        let (result, _) = call_exchange_tool(json!({ "surface_id": EXCHANGED_FRAME_ID })).await;
+
+        assert_eq!(result["isError"], false, "result={result}");
+        let image = content_block_of_type(&result, "image");
+        assert_eq!(image["mimeType"], "image/png");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(image["data"].as_str().expect("base64 image data"))
+            .expect("the image block carries decodable base64");
+        assert_eq!(
+            decoded, STUB_EXCHANGED_IMAGE_BYTES,
+            "the tool re-encodes nothing: the block is base64 of the operation's own bytes"
+        );
+    }
+
+    /// A downscaled picture without its true extent is a measurement trap —
+    /// so the text block states what the surface actually carries, which id
+    /// it answered, and the one route that returns the exact bytes.
+    #[tokio::test]
+    async fn tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route() {
+        let (result, _) = call_exchange_tool(json!({ "surface_id": EXCHANGED_FRAME_ID })).await;
+
+        let text = content_block_of_type(&result, "text")["text"]
+            .as_str()
+            .expect("text content block");
+        let stated: Value = serde_json::from_str(text).expect("the text block is JSON");
+
+        let (source_pixel_width, source_pixel_height) = STUB_SOURCE_SURFACE_EXTENT;
+        assert_eq!(stated["surface_id"], EXCHANGED_FRAME_ID);
+        assert_eq!(stated["source_surface_pixel_width"], source_pixel_width);
+        assert_eq!(stated["source_surface_pixel_height"], source_pixel_height);
+        assert_eq!(
+            stated["encoded_image_pixel_width"], EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP,
+            "the inline image is the downscaled one, and says so"
+        );
+        assert_eq!(
+            stated["exact_bytes_rest_route"],
+            format!("GET /api/surfaces/{EXCHANGED_FRAME_ID_PERCENT_ENCODED}/image"),
+            "the `#` of a frame id must be percent-encoded or the route names a fragment"
+        );
+    }
+
+    /// The route the tool points at has to be the route the server serves;
+    /// a drifting path would send an agent chasing a 404 for exact bytes.
+    #[tokio::test]
+    async fn the_exact_bytes_route_the_tool_names_is_the_route_the_spec_serves() {
+        let (result, _) = call_exchange_tool(json!({ "surface_id": EXCHANGED_FRAME_ID })).await;
+        let text = content_block_of_type(&result, "text")["text"]
+            .as_str()
+            .expect("text content block");
+        let stated: Value = serde_json::from_str(text).unwrap();
+        let named_route = stated["exact_bytes_rest_route"].as_str().unwrap();
+
+        let served = crate::handlers::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE
+            .replace("{surface_id}", EXCHANGED_FRAME_ID_PERCENT_ENCODED);
+        assert_eq!(named_route, format!("GET {served}"));
+        assert!(
+            crate::handlers::control_plane_openapi_spec()
+                .paths
+                .paths
+                .contains_key(crate::handlers::SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE),
+            "the route the tool names must exist in the served spec"
+        );
+    }
+
+    /// Downscaled *by default*: a caller that names no cap still gets an
+    /// image bounded to the declared ceiling, because a full-resolution
+    /// frame inline is the one banned combination.
+    #[tokio::test]
+    async fn tools_call_exchange_applies_the_declared_cap_when_the_caller_names_none() {
+        let (result, calls) = call_exchange_tool(json!({ "surface_id": EXCHANGED_FRAME_ID })).await;
+
+        assert_eq!(result["isError"], false, "result={result}");
+        assert_eq!(
+            calls,
+            vec![(
+                EXCHANGED_FRAME_ID.to_string(),
+                Some(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
+            )],
+            "the operation must never be handed `None` from this front end"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_exchange_honours_a_caller_cap_below_the_declared_ceiling() {
+        let (_, calls) = call_exchange_tool(json!({
+            "surface_id": EXCHANGED_FRAME_ID,
+            "downscale_long_edge_pixel_cap": 512
+        }))
+        .await;
+
+        assert_eq!(calls, vec![(EXCHANGED_FRAME_ID.to_string(), Some(512))]);
+    }
+
+    /// Full resolution lives on REST and nowhere else, so a cap above the
+    /// declared ceiling is clamped rather than obeyed — an agent cannot ask
+    /// its way into a payload its own API will refuse.
+    #[tokio::test]
+    async fn tools_call_exchange_clamps_a_caller_cap_above_the_declared_ceiling() {
+        let (result, calls) = call_exchange_tool(json!({
+            "surface_id": EXCHANGED_FRAME_ID,
+            "downscale_long_edge_pixel_cap": 4096
+        }))
+        .await;
+
+        assert_eq!(result["isError"], false, "result={result}");
+        assert_eq!(
+            calls,
+            vec![(
+                EXCHANGED_FRAME_ID.to_string(),
+                Some(EXCHANGE_IMAGE_LONG_EDGE_PIXEL_CAP)
+            )],
+            "a larger cap is clamped to the ceiling, never passed through"
+        );
+    }
+
+    /// A retired id is an in-band tool error naming the recycling, so the
+    /// agent reads why its call returned no picture and taps a newer bag —
+    /// never a JSON-RPC error, and never the slot's newer pixels.
+    #[tokio::test]
+    async fn tools_call_exchange_on_a_recycled_frame_is_a_tool_error_naming_the_recycling() {
+        let (status, body) = mcp_call(
+            exchange_stub(StubSurfaceExchange::refusing_as_recycled(
+                EXCHANGED_FRAME_ID,
+            )),
+            json!({
+                "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+                "params": { "name": "exchange", "arguments": { "surface_id": EXCHANGED_FRAME_ID } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        let reported = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            reported.contains(EXCHANGED_FRAME_ID),
+            "the refusal must name the id asked for: {reported}"
+        );
+        assert!(
+            reported.contains("recycled"),
+            "the refusal must say the frame was recycled: {reported}"
+        );
+        assert!(
+            body["result"]["content"]
+                .as_array()
+                .is_some_and(|content| content.iter().all(|block| block["type"] == "text")),
+            "a refusal carries no image block: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_exchange_without_a_surface_id_is_an_in_band_tool_error() {
+        let runtime = exchange_stub(StubSurfaceExchange::default());
+        let recorded = runtime.exchange.recorded_calls.clone();
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 22, "method": "tools/call",
+                "params": { "name": "exchange", "arguments": { "downscale_long_edge_pixel_cap": 64 } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("exchange arguments"),
+            "the tool error must name the offending argument set: {body}"
+        );
+        assert!(
+            recorded.lock().is_empty(),
+            "a malformed call must not reach the runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_exchange_with_a_malformed_cap_is_an_in_band_tool_error() {
+        let runtime = exchange_stub(StubSurfaceExchange::default());
+        let recorded = runtime.exchange.recorded_calls.clone();
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 23, "method": "tools/call",
+                "params": {
+                    "name": "exchange",
+                    "arguments": { "surface_id": EXCHANGED_FRAME_ID, "downscale_long_edge_pixel_cap": "big" }
+                }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        assert!(
+            recorded.lock().is_empty(),
+            "a malformed call must not reach the runtime"
+        );
+    }
+
+    /// The change this rides states it plainly: tap is untouched in every
+    /// spelling. Its schema is the mechanical form of that — no new
+    /// argument, nothing renamed, nothing removed.
+    #[tokio::test]
+    async fn the_tap_tool_schema_is_unchanged_by_the_exchange_joining_the_catalog() {
+        let (_, body) = mcp_call(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            json!({ "jsonrpc": "2.0", "id": 24, "method": "tools/list" }),
+        )
+        .await;
+
+        let tap = body["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .find(|tool| tool["name"] == "tap")
+            .expect("the tap tool");
+        let mut argument_names: Vec<&str> = tap["inputSchema"]["properties"]
+            .as_object()
+            .expect("tap declares properties")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        argument_names.sort_unstable();
+        assert_eq!(argument_names, ["channel", "count"]);
+        assert_eq!(tap["inputSchema"]["required"], json!(["channel"]));
     }
 }
