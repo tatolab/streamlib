@@ -363,7 +363,7 @@ def test_the_observation_verbs_are_served_by_this_wheel(
     assert "not in this wheel yet" not in finished.stderr
 
     listed = run_cli("--help")
-    for verb in ("graph", "tap", "logs"):
+    for verb in ("graph", "tap", "logs", "exchange"):
         assert verb in listed.stdout, f"`streamlib {verb}` must be a served verb"
 
 
@@ -387,7 +387,16 @@ def test_this_wheel_is_the_only_streamlib_cli():
     assert len(subcommand_actions) == 1
     served = set(subcommand_actions[0].choices)
 
-    assert served == {"new", "run", "dev", "nodes", "graph", "tap", "logs"}
+    assert served == {
+        "new",
+        "run",
+        "dev",
+        "nodes",
+        "graph",
+        "tap",
+        "logs",
+        "exchange",
+    }
 
 
 def test_the_wheel_serves_no_mcp_verb(tmp_path: Path):

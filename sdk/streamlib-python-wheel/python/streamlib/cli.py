@@ -741,7 +741,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
     exchange_command.add_argument(
         "--count",
         type=int,
-        default=1,
         metavar="N",
         help="(--channel only) Frames to exchange before returning. Default 1.",
     )
@@ -749,14 +748,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--every",
         dest="every_nth_bag",
         type=int,
-        default=1,
         metavar="N",
         help="(--channel only) Exchange every Nth sampled bag. Default 1.",
     )
     exchange_command.add_argument(
         "--field",
         dest="surface_id_bag_field_name",
-        default=DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
         metavar="NAME",
         help=(
             "(--channel only) Bag field carrying the surface id "
@@ -879,13 +876,9 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
         channel_form_flags = [
             name
             for name, given in (
-                ("--count", arguments.count != 1),
-                ("--every", arguments.every_nth_bag != 1),
-                (
-                    "--field",
-                    arguments.surface_id_bag_field_name
-                    != DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
-                ),
+                ("--count", arguments.count is not None),
+                ("--every", arguments.every_nth_bag is not None),
+                ("--field", arguments.surface_id_bag_field_name is not None),
             )
             if given
         ]
@@ -902,9 +895,11 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
         )
         return 0
 
-    if arguments.count < 1:
+    wanted_image_count = 1 if arguments.count is None else arguments.count
+    every_nth_bag = 1 if arguments.every_nth_bag is None else arguments.every_nth_bag
+    if wanted_image_count < 1:
         raise ObservationVerbUsageError("`--count` must be at least 1.")
-    if arguments.every_nth_bag < 1:
+    if every_nth_bag < 1:
         raise ObservationVerbUsageError("`--every` must be at least 1.")
 
     url = resolve_control_url(arguments.requested_url, arguments.requested_node)
@@ -912,19 +907,21 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
         url,
         arguments.channel,
         arguments.output_directory,
-        wanted_image_count=arguments.count,
-        every_nth_bag=arguments.every_nth_bag,
-        surface_id_bag_field_name=arguments.surface_id_bag_field_name,
+        wanted_image_count=wanted_image_count,
+        every_nth_bag=every_nth_bag,
+        surface_id_bag_field_name=(
+            arguments.surface_id_bag_field_name or DEFAULT_SURFACE_ID_BAG_FIELD_NAME
+        ),
     )
     for image_path in report.written_image_paths:
         print(image_path)
     _print_sampled_channel_exchange_report(
-        arguments.channel, report, arguments.count
+        arguments.channel, report, wanted_image_count
     )
     # A short sample is a failure, not a partial success: a harness that read the
     # directory and found fewer frames than it asked for would otherwise take
     # exit 0 as "this is all the channel had".
-    return 0 if len(report.written_image_paths) == arguments.count else 1
+    return 0 if len(report.written_image_paths) == wanted_image_count else 1
 
 
 def _run_logs_verb(arguments: argparse.Namespace) -> int:

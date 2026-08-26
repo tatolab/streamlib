@@ -1121,7 +1121,15 @@ def test_a_surface_id_that_does_not_resolve_fails_the_verb(
 
 
 @pytest.mark.parametrize(
-    "flag, value", [("--count", "3"), ("--every", "2"), ("--field", "frame_id")]
+    "flag, value",
+    [
+        ("--count", "3"),
+        ("--every", "2"),
+        ("--field", "frame_id"),
+        # Explicitly asking for the value the channel form would have defaulted
+        # to is still asking for the channel form.
+        ("--count", "1"),
+    ],
 )
 def test_a_channel_form_flag_beside_a_surface_id_is_refused(
     isolated_registry, tmp_path, capsys, flag, value
