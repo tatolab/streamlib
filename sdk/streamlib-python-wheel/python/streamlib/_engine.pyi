@@ -1179,10 +1179,10 @@ def decode_tapped_channel_bag_frame_to_python_object(
     """Decode one raw bag a `tap` forwarded — transport-framed msgpack — into
     ordinary Python data.
 
-    The bytes a tap hands back are the channel's wire bytes verbatim, header and
-    fixed-capacity slack included; this reads exactly the payload the header
-    declares. Refuses a sample shorter than its own declared length rather than
-    returning the prefix that did arrive.
+    The bytes a tap hands back are the channel's wire bytes verbatim, header
+    included; this reads exactly the payload the header declares. Refuses a bag
+    shorter than its own declared length rather than returning the prefix that
+    did arrive.
     """
 
 def monotonic_now_ns() -> int:

@@ -449,9 +449,10 @@ impl FrameHeader {
     /// reader that sliced to the end of the buffer would hand back a payload
     /// the sender never wrote, silently.
     ///
-    /// The tail past the stamped length is not padding to trim — a slice off
-    /// the wire is fixed-capacity, so it holds whatever an earlier, larger
-    /// frame left behind.
+    /// The stamped length bounds the read rather than being trusted by it: it
+    /// is a `u32` off the wire. `buf` may be longer than the frame, because a
+    /// caller hands over whatever buffer it received the frame in — the
+    /// transport itself sends a slice of exactly the stamped size.
     pub fn read_payload_from_slice(buf: &[u8]) -> Option<&[u8]> {
         let body = buf.get(FRAME_HEADER_SIZE..)?;
         body.get(..Self::read_from_slice(buf).len as usize)
@@ -701,15 +702,15 @@ mod tests {
 
     #[test]
     fn read_payload_from_slice_stops_at_the_stamped_length() {
-        // The filler stands in for an earlier, larger frame's leftovers: the
-        // slice is longer than the payload, and everything past it is slack.
+        // A caller's buffer, longer than the frame it received. The two fillers
+        // discriminate: reading to the end of the buffer would return both.
         let mut frame = frame_with_payload_filler("cam", 8, 0xAB);
         frame.resize(FRAME_HEADER_SIZE + 64, 0xCD);
 
         assert_eq!(
             FrameHeader::read_payload_from_slice(&frame),
             Some(&[0xABu8; 8][..]),
-            "reading past the stamped length appends the slice's slack to the payload"
+            "the stamp bounds the payload, not the length of the buffer it arrived in"
         );
     }
 

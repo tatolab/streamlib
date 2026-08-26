@@ -56,14 +56,15 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
 
 /// Decode one raw tapped-channel bag into ordinary Python data.
 ///
-/// A tap forwards the channel's wire bytes verbatim, so what arrives is a whole
-/// iceoryx2 sample and the transport's own accessor is what bounds the msgpack
-/// value inside it.
+/// A tap forwards the channel's wire bytes verbatim, header included, so the
+/// transport's own accessor is what bounds the msgpack value inside them.
 #[pyfunction]
 pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
     python: Python<'py>,
     framed_bag_bytes: &[u8],
 ) -> PyResult<Bound<'py, PyAny>> {
+    // The two arms below are `read_payload_from_slice`'s two `None` cases, in
+    // order; a third would need one here too.
     let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag_bytes) else {
         return Err(PyValueError::new_err(
             if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
@@ -440,9 +441,9 @@ mod tests {
     /// How many bytes the truncation fixture cuts off the end of a whole frame.
     const BYTES_THE_PREVIEW_CUT: usize = 8;
 
-    /// Frame a msgpack payload the way the transport does, then pad the slice
-    /// out to at least `slice_capacity_at_least` — an iceoryx2 sample is
-    /// fixed-capacity, so a small bag usually arrives with slack behind it.
+    /// Frame a msgpack payload the way the transport does, in a buffer of at
+    /// least `slice_capacity_at_least` — a caller may hold the frame in
+    /// something larger than the frame.
     fn frame_like_the_transport(payload: &[u8], slice_capacity_at_least: usize) -> Vec<u8> {
         let mut framed = vec![0u8; slice_capacity_at_least.max(FRAME_HEADER_SIZE + payload.len())];
         FrameHeader::new("processor/port", 1_234, payload.len() as u32)
@@ -452,8 +453,10 @@ mod tests {
         framed
     }
 
-    /// The whole job: strip the transport header, decode exactly the declared
-    /// payload, and ignore the sample's slack.
+    /// The whole job end to end: strip the transport header and decode the
+    /// declared payload. The bound itself is pinned in `streamlib-ipc-types`;
+    /// what the oversized buffer proves here is that a frame held in one does
+    /// not derail the decode.
     #[test]
     fn a_tapped_bag_decodes_to_what_the_channel_published() {
         Python::initialize();
@@ -467,9 +470,14 @@ mod tests {
             let decoded =
                 decode_tapped_channel_bag_frame_to_python_object(python, &framed).unwrap();
 
+            assert_eq!(
+                FrameHeader::read_payload_from_slice(&framed).map(<[u8]>::len),
+                Some(payload.len()),
+                "the buffer's trailing bytes were handed to the decoder"
+            );
             assert!(
                 decoded.eq(&published).unwrap(),
-                "the slice's trailing slack leaked into the decoded bag"
+                "the decode changed the bag"
             );
         });
     }
