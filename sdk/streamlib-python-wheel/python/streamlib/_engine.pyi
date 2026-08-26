@@ -1172,6 +1172,18 @@ def gpu_limited_access_of_the_typed_read_in_progress() -> GpuContextLimitedAcces
     registration, no marker and no privileged type.
     """
 
+def decode_tapped_channel_bag_frame_to_python_object(
+    framed_bag_bytes: bytes,
+) -> Any:
+    """Decode one raw bag a `tap` forwarded — transport-framed msgpack — into
+    ordinary Python data.
+
+    The bytes a tap hands back are the channel's wire bytes verbatim, header and
+    fixed-capacity slack included; this reads exactly the payload the header
+    declares. Refuses a sample shorter than its own declared length rather than
+    returning the prefix that did arrive.
+    """
+
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
 
