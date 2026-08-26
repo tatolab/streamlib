@@ -3,10 +3,13 @@
 
 """Every processor's push-constant payload against its shader's own block.
 
-The one contract in this app that nothing else checks. A wrong size is refused
-at the draw, but a *right* size with the members in the wrong order is not —
-the engine sees bytes — so it reaches the screen as an effect quietly reading
-somebody else's number. These lock both.
+The one contract in this app that nothing else checks. What these lock is the
+byte size: a wrong size is refused at the draw, and a drifted member list
+shows up here as a size mismatch. What no test here can lock is member ORDER
+at equal size — the engine sees bytes and the Python side packs positionally,
+so a same-size reorder reaches the screen as an effect quietly reading
+somebody else's number. Order is covered by the per-shader format comments
+next to each `struct` format string, and by looking at the picture.
 """
 
 from __future__ import annotations
