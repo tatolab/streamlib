@@ -56,6 +56,7 @@ __all__ = [
     "TestBagFeeder",
     "await_test_harness_bag",
     "close_test_harness_channel",
+    "decode_tapped_channel_bag_frame_to_python_object",
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
@@ -1170,6 +1171,18 @@ def gpu_limited_access_of_the_typed_read_in_progress() -> GpuContextLimitedAcces
     surface against producer reuse is what the shipped `VideoFrame` does with
     it. Any class reachable through `into=` may call this; there is no
     registration, no marker and no privileged type.
+    """
+
+def decode_tapped_channel_bag_frame_to_python_object(
+    framed_bag_bytes: bytes,
+) -> Any:
+    """Decode one raw bag a `tap` forwarded — transport-framed msgpack — into
+    ordinary Python data.
+
+    The bytes a tap hands back are the channel's wire bytes verbatim, header
+    included; this reads exactly the payload the header declares. Refuses a bag
+    shorter than its own declared length rather than returning the prefix that
+    did arrive.
     """
 
 def monotonic_now_ns() -> int:

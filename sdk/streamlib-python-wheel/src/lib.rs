@@ -68,6 +68,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_bag_conversion::decode_tapped_channel_bag_frame_to_python_object,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(

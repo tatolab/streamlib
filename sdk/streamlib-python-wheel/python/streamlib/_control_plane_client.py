@@ -1,13 +1,18 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A JSON-RPC client for a running node's control plane.
+"""A client for a running node's control plane.
 
 The MCP tool set is the control vocabulary, and this is a pure client of it:
 every verb marshals its arguments into one `tools/call` against the node's
 `POST {url}/mcp` and prints the tool result. There is no second dispatch and no
 local runtime — the control plane exists to observe nodes that are already
 running.
+
+One operation has a second spelling this also drives: the surface exchange
+serves the exact frame as a binary `image/png` over REST, where the MCP tool
+serves a downscaled block sized for a model's eyes. A caller writing evidence to
+disk wants the exact bytes, so it takes the REST route.
 
 Stdlib only, deliberately: the wheel must not grow a dependency to let a user
 look at their own pipeline.
@@ -20,16 +25,19 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple, Optional
 
 if TYPE_CHECKING:
     from ._node_registry import NodeRegistryEntry
 
 __all__ = [
     "ControlPlaneError",
+    "SurfaceImageExchangeRefusal",
+    "ExchangedSurfaceImage",
     "control_plane_answers",
     "resolve_control_url",
     "call_tool",
+    "fetch_surface_image_png_bytes",
 ]
 
 #: Bearer token forwarded when the node has auth enabled. Absent by default —
@@ -61,30 +69,40 @@ def _mcp_endpoint(url: str) -> str:
     return f"{url.rstrip('/')}/mcp"
 
 
+def _refuse_a_non_http_url(url: str) -> None:
+    """Refuse a URL `urlopen` would dispatch to a non-HTTP handler.
+
+    `urlopen` dispatches on the scheme, so an unchecked URL — a `--url
+    file:///etc/passwd`, or a corrupt `control_url` read out of a registry
+    entry — would select a handler that is not HTTP at all.
+    """
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ControlPlaneError(f"control-plane URL must be http or https; got `{url}`")
+
+
+def _authorized_request(
+    endpoint: str, *, method: str, data: "Optional[bytes]" = None
+) -> urllib.request.Request:
+    """A request carrying the node's bearer token when one is configured."""
+    request = urllib.request.Request(endpoint, data=data, method=method)
+    bearer_token = os.environ.get(BEARER_TOKEN_ENVIRONMENT_VARIABLE)
+    if bearer_token:
+        request.add_header("authorization", f"Bearer {bearer_token}")
+    return request
+
+
 def _post_jsonrpc(url: str, body: str, timeout_seconds: float) -> str:
     """POST one JSON-RPC body to `{url}/mcp` and return the response body.
 
     Raises [`ControlPlaneError`] on a transport failure or a non-2xx status. A
     `202` (a notification ack) yields an empty string.
     """
-    # `urlopen` dispatches on the scheme, so an unchecked URL — a `--url
-    # file:///etc/passwd`, or a corrupt `control_url` read out of a registry
-    # entry — would select a handler that is not HTTP at all.
-    scheme = urllib.parse.urlparse(url).scheme
-    if scheme not in ("http", "https"):
-        raise ControlPlaneError(
-            f"control-plane URL must be http or https; got `{url}`"
-        )
+    _refuse_a_non_http_url(url)
 
-    request = urllib.request.Request(
-        _mcp_endpoint(url),
-        data=body.encode("utf-8"),
-        method="POST",
-        headers={"content-type": "application/json"},
+    request = _authorized_request(
+        _mcp_endpoint(url), method="POST", data=body.encode("utf-8")
     )
-    bearer_token = os.environ.get(BEARER_TOKEN_ENVIRONMENT_VARIABLE)
-    if bearer_token:
-        request.add_header("authorization", f"Bearer {bearer_token}")
+    request.add_header("content-type", "application/json")
 
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
@@ -235,3 +253,126 @@ def call_tool(url: str, tool_name: str, arguments: "dict[str, Any]") -> str:
             f"{tool_name} returned no text content: {response_body}"
         )
     return text
+
+
+#: The REST spelling of the exchange, as the api-server serves it. Kept as the
+#: template rather than a formatted string so the one place that fills it is
+#: also the one place that percent-encodes the id.
+SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE = "/api/surfaces/{surface_id}/image"
+
+#: Headers stating the surface's own extent, which differs from the returned
+#: image's whenever a downscale cap applied.
+SOURCE_SURFACE_PIXEL_WIDTH_HEADER = "x-streamlib-surface-pixel-width"
+SOURCE_SURFACE_PIXEL_HEIGHT_HEADER = "x-streamlib-surface-pixel-height"
+
+#: The status the exchange answers when the id named a frame whose pool slot has
+#: since been recycled. Its own answer, distinct from a `404`: the id was
+#: well-formed and the frame is simply gone, so the caller taps a newer bag
+#: rather than concluding the surface never existed.
+RECYCLED_FRAME_HTTP_STATUS = 410
+
+
+class ExchangedSurfaceImage(NamedTuple):
+    """One frame's pixels, plus the extent of the surface they came from."""
+
+    png_image_bytes: bytes
+    source_surface_pixel_width: "Optional[int]"
+    source_surface_pixel_height: "Optional[int]"
+
+
+class SurfaceImageExchangeRefusal(ControlPlaneError):
+    """An exchange the node answered and refused, carrying the status it used.
+
+    The status is the whole point: a recycled frame composes as a retry against
+    a newer bag, while a `404` or a `501` will refuse identically forever and
+    must stop the caller instead.
+    """
+
+    def __init__(self, message: str, *, http_status: int) -> None:
+        super().__init__(message, server_answered=True)
+        self.http_status = http_status
+
+    @property
+    def names_a_recycled_frame(self) -> bool:
+        """Whether the frame existed and its pool slot has since been reused."""
+        return self.http_status == RECYCLED_FRAME_HTTP_STATUS
+
+
+def _surface_image_exchange_endpoint(url: str, published_surface_id: str) -> str:
+    """The exchange route for one surface id, ready to put on the wire.
+
+    A pooled frame id is `<slot>#<generation>`, and a bare `#` would make the
+    generation a URL fragment the server never sees — so the id is encoded down
+    to RFC 3986's unreserved set, which is what `quote(safe="")` leaves alone.
+    """
+    path = SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace(
+        "{surface_id}", urllib.parse.quote(published_surface_id, safe="")
+    )
+    return f"{url.rstrip('/')}{path}"
+
+
+def _refusal_detail(body: bytes) -> str:
+    """The message out of the route's `{"error": …}` body, or its raw text."""
+    text = body.decode("utf-8", errors="replace").strip()
+    try:
+        decoded = json.loads(text)
+    except ValueError:
+        return text
+    if isinstance(decoded, dict) and isinstance(decoded.get("error"), str):
+        return decoded["error"]
+    return text
+
+
+def _header_pixel_extent(response: Any, header_name: str) -> "Optional[int]":
+    """One extent header as an int, or `None` when it is absent or malformed.
+
+    Absent rather than fatal: the extent annotates the image, and a node that
+    stopped stating it would still have handed back real pixels.
+    """
+    raw = response.headers.get(header_name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def fetch_surface_image_png_bytes(
+    url: str,
+    published_surface_id: str,
+    *,
+    timeout_seconds: float = CONTROL_VERB_TIMEOUT_SECONDS,
+) -> ExchangedSurfaceImage:
+    """Exchange one published surface id for that frame's exact PNG bytes.
+
+    The full-resolution REST spelling, not the MCP tool's downscaled block: this
+    is what gets written to disk as evidence.
+    """
+    _refuse_a_non_http_url(url)
+    request = _authorized_request(
+        _surface_image_exchange_endpoint(url, published_surface_id), method="GET"
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            return ExchangedSurfaceImage(
+                png_image_bytes=response.read(),
+                source_surface_pixel_width=_header_pixel_extent(
+                    response, SOURCE_SURFACE_PIXEL_WIDTH_HEADER
+                ),
+                source_surface_pixel_height=_header_pixel_extent(
+                    response, SOURCE_SURFACE_PIXEL_HEIGHT_HEADER
+                ),
+            )
+    except urllib.error.HTTPError as http_failure:
+        detail = _refusal_detail(http_failure.read())
+        raise SurfaceImageExchangeRefusal(
+            f"exchange of surface `{published_surface_id}` answered "
+            f"{http_failure.code}" + (f": {detail}" if detail else ""),
+            http_status=http_failure.code,
+        ) from http_failure
+    except (urllib.error.URLError, OSError, TimeoutError) as transport_failure:
+        raise ControlPlaneError(
+            f"no control plane reachable at {url} ({transport_failure})"
+        ) from transport_failure

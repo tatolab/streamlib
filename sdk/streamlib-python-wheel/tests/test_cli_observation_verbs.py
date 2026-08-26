@@ -21,17 +21,20 @@ import io
 import json
 import os
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Generator, Optional
+from typing import Any, Generator, NamedTuple, Optional
 
 import pytest
 
 from streamlib import cli
 from streamlib._control_plane_client import (
     ControlPlaneError,
+    SurfaceImageExchangeRefusal,
     call_tool,
     control_plane_answers,
+    fetch_surface_image_png_bytes,
     resolve_control_url,
 )
 from streamlib._node_registry import registry_directory, scan_check_and_prune
@@ -57,19 +60,48 @@ UNUSED_PID = 4_000_000
 PID_OUTSIDE_PID_T = 4_000_000_000
 
 
+class StubSurfaceImageAnswer(NamedTuple):
+    """How the stub answers one `GET /api/surfaces/{id}/image`.
+
+    A `410` is the load-bearing one: the id was real and its pool slot has since
+    been recycled, which is the refusal the channel form composes as a retry.
+    """
+
+    status: int
+    png_image_bytes: bytes = b""
+    source_surface_pixel_width: "Optional[int]" = None
+    source_surface_pixel_height: "Optional[int]" = None
+    error_message: str = ""
+
+
 class StubControlPlane:
-    """A loopback HTTP server standing in for a node's `POST /mcp`.
+    """A loopback HTTP server standing in for a node's control plane.
 
     Records every request body so a test can prove the verb marshalled what it
     claimed to, and answers from a queue so tool errors and auth rejections are
     reachable without a live runtime.
+
+    Both front ends of the exchange live here, because the CLI drives both: the
+    `POST /mcp` the tool calls ride, and the binary `GET` the full-resolution
+    image route serves.
     """
 
-    def __init__(self, status: int = 200, body: "Optional[str]" = None) -> None:
+    def __init__(
+        self,
+        status: int = 200,
+        body: "Optional[str]" = None,
+        *,
+        queued_bodies: "Optional[list[str]]" = None,
+        surface_image_answers: "Optional[dict[str, StubSurfaceImageAnswer]]" = None,
+    ) -> None:
         self.recorded_bodies: "list[str]" = []
         self.recorded_authorizations: "list[Optional[str]]" = []
+        self.recorded_image_request_paths: "list[str]" = []
+        self.recorded_image_authorizations: "list[Optional[str]]" = []
         self._status = status
         self._body = body if body is not None else _tool_result_body("{}")
+        self._queued_bodies = list(queued_bodies or [])
+        self._surface_image_answers = dict(surface_image_answers or {})
 
         stub = self
 
@@ -78,9 +110,45 @@ class StubControlPlane:
                 length = int(self.headers.get("content-length", "0"))
                 stub.recorded_bodies.append(self.rfile.read(length).decode("utf-8"))
                 stub.recorded_authorizations.append(self.headers.get("authorization"))
-                payload = stub._body.encode("utf-8")
+                # The queue drains in order and then the fixed body answers
+                # forever, so a test names only the rounds it cares about.
+                body = (
+                    stub._queued_bodies.pop(0) if stub._queued_bodies else stub._body
+                )
+                payload = body.encode("utf-8")
                 self.send_response(stub._status)
                 self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_GET(self) -> None:  # noqa: N802 — BaseHTTPRequestHandler's name
+                stub.recorded_image_request_paths.append(self.path)
+                stub.recorded_image_authorizations.append(
+                    self.headers.get("authorization")
+                )
+                answer = stub._surface_image_answers.get(
+                    _surface_id_in_image_route_path(self.path),
+                    StubSurfaceImageAnswer(404, error_message="no such surface"),
+                )
+                if answer.status == 200:
+                    self.send_response(200)
+                    self.send_header("content-type", "image/png")
+                    if answer.source_surface_pixel_width is not None:
+                        self.send_header(
+                            "x-streamlib-surface-pixel-width",
+                            str(answer.source_surface_pixel_width),
+                        )
+                    if answer.source_surface_pixel_height is not None:
+                        self.send_header(
+                            "x-streamlib-surface-pixel-height",
+                            str(answer.source_surface_pixel_height),
+                        )
+                    payload = answer.png_image_bytes
+                else:
+                    self.send_response(answer.status)
+                    self.send_header("content-type", "application/json")
+                    payload = json.dumps({"error": answer.error_message}).encode("utf-8")
                 self.send_header("content-length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)
@@ -97,6 +165,14 @@ class StubControlPlane:
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
+
+
+def _surface_id_in_image_route_path(path: str) -> str:
+    """The surface id out of `/api/surfaces/{surface_id}/image`, decoded."""
+    segments = urllib.parse.urlparse(path).path.strip("/").split("/")
+    if len(segments) != 4 or segments[0] != "api" or segments[1] != "surfaces":
+        return ""
+    return urllib.parse.unquote(segments[2])
 
 
 def _tool_result_body(text: str, *, is_error: bool = False) -> str:
@@ -726,7 +802,7 @@ def served_verbs() -> "list[str]":
 
 
 def test_every_observation_verb_is_a_subcommand():
-    for verb in ("nodes", "graph", "tap", "logs"):
+    for verb in ("nodes", "graph", "tap", "logs", "exchange"):
         assert verb in served_verbs(), f"`streamlib {verb}` must be a real subcommand"
 
 
@@ -819,3 +895,996 @@ def test_logs_without_a_runtime_id_names_list(isolated_registry, capsys, monkeyp
     assert cli.main(["logs"]) == 1
 
     assert "--list" in capsys.readouterr().err
+
+
+# ─── The surface exchange ────────────────────────────────────────────────────
+#
+# The wire fixtures below are written by hand rather than through the engine's
+# own encoder: a decode this CLI depends on must be proved against the format
+# the transport actually writes, not against a round trip with itself.
+
+#: `[port_key_len: 1][port_key_name: 63][timestamp_ns: 8 LE][payload_len: 4 LE]`,
+#: as `runtime/streamlib-ipc-types` lays it out.
+FRAME_HEADER_SIZE = 76
+PORT_KEY_SIZE = 64
+
+
+def msgpack_named_map(entries: "dict[str, Any]") -> bytes:
+    """A bag's msgpack bytes: a string-keyed map of strings and small ints."""
+    encoded = bytearray([0x80 | len(entries)])
+    for key, value in entries.items():
+        encoded += _msgpack_scalar(key)
+        encoded += _msgpack_scalar(value)
+    return bytes(encoded)
+
+
+def _msgpack_scalar(value: Any) -> bytes:
+    if isinstance(value, str):
+        text = value.encode("utf-8")
+        if len(text) < 32:
+            return bytes([0xA0 | len(text)]) + text
+        return b"\xd9" + bytes([len(text)]) + text
+    if isinstance(value, int) and 0 <= value < 128:
+        return bytes([value])
+    if isinstance(value, int) and 0 <= value <= 0xFFFFFFFF:
+        return b"\xce" + value.to_bytes(4, "big")
+    raise AssertionError(f"the fixture encoder carries no arm for {value!r}")
+
+
+def framed_bag(payload: bytes, *, slice_capacity: int = 0) -> bytes:
+    """One bag as the channel carries it: header, payload, then slice slack.
+
+    `slice_capacity` pads the sample out the way iceoryx2 does — a fixed-capacity
+    slice whose tail holds whatever an earlier, larger frame left behind.
+    """
+    port_name = b"cam/frame"
+    sample = bytearray(max(slice_capacity, FRAME_HEADER_SIZE + len(payload)))
+    sample[0] = len(port_name)
+    sample[1 : 1 + len(port_name)] = port_name
+    sample[PORT_KEY_SIZE : PORT_KEY_SIZE + 8] = (7_000).to_bytes(8, "little", signed=True)
+    sample[PORT_KEY_SIZE + 8 : FRAME_HEADER_SIZE] = len(payload).to_bytes(4, "little")
+    sample[FRAME_HEADER_SIZE : FRAME_HEADER_SIZE + len(payload)] = payload
+    return bytes(sample)
+
+
+def bag_publishing_surface_id(
+    published_surface_id: str, *, field: str = "surface_id"
+) -> bytes:
+    """A framed bag whose `field` carries `published_surface_id`."""
+    return framed_bag(
+        msgpack_named_map({field: published_surface_id, "width": 640}),
+        slice_capacity=1024,
+    )
+
+
+def tap_result_body(
+    channel: str,
+    framed_bags: "list[bytes]",
+    *,
+    hex_truncated: bool = False,
+    truncated_bag_indexes: "frozenset[int]" = frozenset(),
+    report_byte_len: bool = True,
+) -> str:
+    """One `tap` tool result carrying these bags, shaped as the tool shapes it.
+
+    `truncated_bag_indexes` caps just those bags' previews, so a test can put an
+    oversized bag where the stride will or will not reach it.
+    """
+    return _tool_result_body(
+        json.dumps(
+            {
+                "channel": channel,
+                "requested": len(framed_bags),
+                "received": len(framed_bags),
+                "window_ms": 500,
+                "dropped_bags": 0,
+                "bags": [
+                    {
+                        # The tool reports the whole bag's length, not the
+                        # preview's, so a capped bag reads as larger than what
+                        # rode with it. `report_byte_len=False` models a node
+                        # that flags the cap without sizing it.
+                        **(
+                            {
+                                "byte_len": (
+                                    9000
+                                    if hex_truncated or index in truncated_bag_indexes
+                                    else len(bag)
+                                )
+                            }
+                            if report_byte_len
+                            else {}
+                        ),
+                        "hex_preview": bag.hex(),
+                        "hex_truncated": (
+                            hex_truncated or index in truncated_bag_indexes
+                        ),
+                    }
+                    for index, bag in enumerate(framed_bags)
+                ],
+            }
+        )
+    )
+
+
+def png_bytes_for(label: str) -> bytes:
+    """Stand-in image bytes, distinguishable per surface so a test can tell
+    which frame landed in which file."""
+    return b"\x89PNG\r\n\x1a\n" + label.encode("utf-8")
+
+
+def image_answer(label: str) -> StubSurfaceImageAnswer:
+    return StubSurfaceImageAnswer(
+        200,
+        png_image_bytes=png_bytes_for(label),
+        source_surface_pixel_width=1920,
+        source_surface_pixel_height=1080,
+    )
+
+
+RECYCLED_FRAME_ANSWER = StubSurfaceImageAnswer(
+    410, error_message="surface frame recycled: slot reused since that generation"
+)
+
+
+# ─── The REST spelling of the exchange ───────────────────────────────────────
+
+
+def test_a_pooled_frame_id_is_percent_encoded_into_the_route(stub_control_plane):
+    # A bare `#` would make the generation a URL fragment the node never sees,
+    # so the exchange would resolve the wrong frame — or none.
+    server = stub_control_plane(
+        surface_image_answers={"cam/frame#7": image_answer("seven")}
+    )
+
+    exchanged = fetch_surface_image_png_bytes(server.url, "cam/frame#7")
+
+    assert exchanged.png_image_bytes == png_bytes_for("seven")
+    assert server.recorded_image_request_paths == [
+        "/api/surfaces/cam%2Fframe%237/image"
+    ]
+
+
+def test_the_exchange_states_the_surface_s_own_extent(stub_control_plane):
+    server = stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+
+    exchanged = fetch_surface_image_png_bytes(server.url, "s#1")
+
+    assert exchanged.source_surface_pixel_width == 1920
+    assert exchanged.source_surface_pixel_height == 1080
+
+
+def test_the_exchange_carries_the_bearer_token(stub_control_plane, monkeypatch):
+    # It joins the bearer-gated set beside the tap WebSocket, so a gated node
+    # must be reachable by this client at all.
+    monkeypatch.setenv("STREAMLIB_MCP_TOKEN", "s3cret")
+    server = stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+
+    fetch_surface_image_png_bytes(server.url, "s#1")
+
+    assert server.recorded_image_authorizations == ["Bearer s3cret"]
+
+
+def test_a_recycled_frame_is_a_refusal_that_composes_as_a_retry(stub_control_plane):
+    server = stub_control_plane(surface_image_answers={"s#1": RECYCLED_FRAME_ANSWER})
+
+    with pytest.raises(SurfaceImageExchangeRefusal) as refused:
+        fetch_surface_image_png_bytes(server.url, "s#1")
+
+    assert refused.value.names_a_recycled_frame
+    assert "recycled" in str(refused.value)
+
+
+@pytest.mark.parametrize("status", [404, 501])
+def test_a_refusal_that_is_not_a_recycled_frame_does_not_compose(
+    stub_control_plane, status
+):
+    # A surface that never existed, or a format with no conversion arm, will
+    # refuse identically forever — retrying it would spin rather than recover.
+    server = stub_control_plane(
+        surface_image_answers={"s#1": StubSurfaceImageAnswer(status, error_message="no")}
+    )
+
+    with pytest.raises(SurfaceImageExchangeRefusal) as refused:
+        fetch_surface_image_png_bytes(server.url, "s#1")
+
+    assert not refused.value.names_a_recycled_frame
+    assert refused.value.http_status == status
+
+
+def test_an_exchange_against_a_non_http_url_is_refused_before_any_request():
+    with pytest.raises(ControlPlaneError, match="http or https"):
+        fetch_surface_image_png_bytes("file:///etc/passwd", "s#1")
+
+
+# ─── `streamlib exchange <SURFACE_ID>` ───────────────────────────────────────
+
+
+def test_the_id_form_writes_the_exact_bytes_and_prints_the_path(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        surface_image_answers={"cam/frame#7": image_answer("seven")}
+    )
+    output_directory = tmp_path / "frames"
+
+    assert (
+        cli.main(
+            ["exchange", "cam/frame#7", "--out", str(output_directory), "--url", server.url]
+        )
+        == 0
+    )
+
+    written = capsys.readouterr().out.strip()
+    assert Path(written).read_bytes() == png_bytes_for("seven")
+    assert Path(written).parent == output_directory
+
+
+def test_the_id_form_creates_the_output_directory(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+    output_directory = tmp_path / "nested" / "frames"
+
+    assert (
+        cli.main(["exchange", "s#1", "--out", str(output_directory), "--url", server.url])
+        == 0
+    )
+
+    assert output_directory.is_dir()
+    assert len(list(output_directory.glob("*.png"))) == 1
+
+
+def test_a_surface_id_that_does_not_resolve_fails_the_verb(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(surface_image_answers={})
+
+    assert (
+        cli.main(["exchange", "gone#1", "--out", str(tmp_path), "--url", server.url]) == 1
+    )
+
+    assert "gone#1" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--count", "3"),
+        ("--every", "2"),
+        ("--field", "frame_id"),
+        # Explicitly asking for the value the channel form would have defaulted
+        # to is still asking for the channel form.
+        ("--count", "1"),
+    ],
+)
+def test_a_channel_form_flag_beside_a_surface_id_is_refused(
+    isolated_registry, tmp_path, capsys, flag, value
+):
+    # These sample a channel; a surface id already names one frame, so applying
+    # them would be silently ignored rather than honoured.
+    assert cli.main(["exchange", "s#1", "--out", str(tmp_path), flag, value]) == 1
+
+    assert flag in capsys.readouterr().err
+
+
+def test_exchange_needs_a_surface_id_or_a_channel(isolated_registry, tmp_path, capsys):
+    assert cli.main(["exchange", "--out", str(tmp_path)]) == 1
+
+    assert "--channel" in capsys.readouterr().err
+
+
+def test_exchange_refuses_a_surface_id_and_a_channel_together(
+    isolated_registry, tmp_path, capsys
+):
+    assert (
+        cli.main(["exchange", "s#1", "--channel", "cam/frame", "--out", str(tmp_path)])
+        == 1
+    )
+
+    assert "not both" in capsys.readouterr().err
+
+
+def test_the_output_directory_is_required(tmp_path):
+    # Without it the verb would write PNGs into whatever directory it was run
+    # from, which is never what a harness meant.
+    with pytest.raises(SystemExit):
+        cli.main(["exchange", "s#1"])
+
+
+# ─── `streamlib exchange --channel` ──────────────────────────────────────────
+
+
+def test_the_channel_form_taps_then_exchanges_each_sampled_id(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one"), "s#2": image_answer("two")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    tap_arguments = json.loads(server.recorded_bodies[0])["params"]["arguments"]
+    assert tap_arguments == {"channel": "cam/frame", "count": 2}
+
+    printed = capsys.readouterr()
+    written = [Path(line) for line in printed.out.splitlines()]
+    assert [path.read_bytes() for path in written] == [
+        png_bytes_for("one"),
+        png_bytes_for("two"),
+    ]
+    assert "exchanged 2 of 2" in printed.err
+
+
+def test_the_engine_is_never_asked_to_read_a_bag(
+    isolated_registry, stub_control_plane, tmp_path
+):
+    # The composition is the client's whole job: `tap` keeps its shipped
+    # contract, gaining no field argument and no decode.
+    server = stub_control_plane(
+        queued_bodies=[
+            tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    cli.main(
+        [
+            "exchange",
+            "--channel",
+            "cam/frame",
+            "--field",
+            "surface_id",
+            "--out",
+            str(tmp_path),
+            "--url",
+            server.url,
+        ]
+    )
+
+    tap_arguments = json.loads(server.recorded_bodies[0])["params"]["arguments"]
+    assert set(tap_arguments) == {"channel", "count"}
+
+
+def test_the_field_override_reads_the_key_the_caller_named(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#9", field="rendered_surface")],
+            )
+        ],
+        surface_image_answers={"s#9": image_answer("nine")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--field",
+                "rendered_surface",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    assert Path(capsys.readouterr().out.strip()).read_bytes() == png_bytes_for("nine")
+
+
+def test_a_recycled_frame_is_retried_against_a_newer_bag_and_reported(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # The loud half of the contract: the run recovers, and says which id it had
+    # to give up on, so a sample can never quietly become a different frame.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body("cam/frame", [bag_publishing_surface_id("stale#1")]),
+            tap_result_body("cam/frame", [bag_publishing_surface_id("fresh#2")]),
+        ],
+        surface_image_answers={
+            "stale#1": RECYCLED_FRAME_ANSWER,
+            "fresh#2": image_answer("fresh"),
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr()
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("fresh")
+    assert "retried 1 recycled frame" in printed.err
+    assert "stale#1" in printed.err
+
+
+def test_a_bag_without_the_named_field_is_counted_rather_than_fatal(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [
+                    framed_bag(msgpack_named_map({"width": 640}), slice_capacity=1024),
+                    bag_publishing_surface_id("s#1"),
+                ],
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr()
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
+    assert "1 bag carried no surface id" in printed.err
+
+
+def test_every_nth_bag_selects_the_stride(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    labels = ["a", "b", "c", "d", "e", "f"]
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id(f"s#{label}") for label in labels],
+            )
+        ],
+        surface_image_answers={f"s#{label}": image_answer(label) for label in labels},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--every",
+                "3",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    written = [Path(line) for line in capsys.readouterr().out.splitlines()]
+    assert [path.read_bytes() for path in written] == [
+        png_bytes_for("a"),
+        png_bytes_for("d"),
+    ]
+    # Enough bags to satisfy the stride were asked for, not just the frame count.
+    assert json.loads(server.recorded_bodies[0])["params"]["arguments"]["count"] == 6
+
+
+def test_the_stride_runs_across_tap_rounds_rather_than_restarting(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # A stride reset per round would exchange `a` then `c` — the first bag of
+    # each round — reporting a stride it did not apply. Continuing the count
+    # across rounds selects `a` then `d`.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id(f"s#{label}") for label in ("a", "b")],
+            ),
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id(f"s#{label}") for label in ("c", "d")],
+            ),
+        ],
+        surface_image_answers={
+            f"s#{label}": image_answer(label) for label in ("a", "b", "c", "d")
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--every",
+                "3",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    written = [Path(line) for line in capsys.readouterr().out.splitlines()]
+    assert [path.read_bytes() for path in written] == [
+        png_bytes_for("a"),
+        png_bytes_for("d"),
+    ], "the stride restarted at each tap round"
+
+
+def test_a_short_sample_exits_nonzero(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # A harness reading the directory must not take "fewer frames than I asked
+    # for" as "this is all the channel had".
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "3",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    assert "exchanged 1 of 3" in printed.err
+    # The one frame that did land is still real, and still named.
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
+
+
+def test_a_refusal_that_cannot_be_retried_stops_the_run(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body("cam/frame", [bag_publishing_surface_id("s#1")])
+        ],
+        surface_image_answers={
+            "s#1": StubSurfaceImageAnswer(501, error_message="no conversion arm")
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    assert "no conversion arm" in capsys.readouterr().err
+
+
+def test_frames_that_landed_before_a_fatal_stop_are_still_printed(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # A PNG on disk whose path was never printed is evidence a harness cannot
+    # use and a human will not find, so the stop is reported beside the frames
+    # rather than instead of them.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+            )
+        ],
+        surface_image_answers={
+            "s#1": image_answer("one"),
+            "s#2": StubSurfaceImageAnswer(404, error_message="no such surface"),
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    written = [Path(line) for line in printed.out.splitlines()]
+    assert [path.read_bytes() for path in written] == [png_bytes_for("one")]
+    assert "no such surface" in printed.err
+    # Every PNG on disk is a PNG that was named.
+    assert len(list(tmp_path.glob("*.png"))) == len(written)
+
+
+def test_a_bag_the_tap_truncated_stops_the_run_by_name(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # The tap tool hex-previews only a bounded prefix of a large bag. Decoding
+    # that prefix would hand back a bag missing its later fields — including,
+    # possibly, the surface id.
+    whole_bag = framed_bag(
+        msgpack_named_map({"surface_id": "s#1", "filler": "x" * 200})
+    )
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[tap_result_body("cam/frame", [whole_bag[:-32]])],
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    assert "truncated" in capsys.readouterr().err
+
+
+def test_a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # The tap tool says when it capped a bag. Counting one as "published no
+    # surface id" would blame the channel for something this client could not
+    # read, and retrying it would never converge.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame", [bag_publishing_surface_id("s#1")], hex_truncated=True
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    reported = capsys.readouterr().err
+    assert "past the prefix `tap` previews" in reported
+    assert "9000 bytes" in reported, "the diagnosis must name the size that did not fit"
+    # The id form still reaches such a frame, and the message says so.
+    assert "streamlib exchange <surface-id>" in reported
+
+
+def test_a_capped_bag_with_no_reported_size_is_still_diagnosed_as_capped(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # `--url` reaches any node, so the size is the tool's to report and may be
+    # missing. Losing the cap would misdiagnose the bag as one this client
+    # could not decode — blaming the channel for the tool's own limit.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1")],
+                hex_truncated=True,
+                report_byte_len=False,
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    assert "past the prefix `tap` previews" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag, value", [("--count", "0"), ("--every", "0")])
+def test_a_sample_bound_below_one_is_refused(
+    isolated_registry, tmp_path, capsys, flag, value
+):
+    assert (
+        cli.main(
+            ["exchange", "--channel", "cam/frame", "--out", str(tmp_path), flag, value]
+        )
+        == 1
+    )
+
+    assert flag in capsys.readouterr().err
+
+
+def test_the_stride_steps_over_an_oversized_bag_rather_than_dying_on_it(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # The loop must actually reach the capped bag and pass it by, so bag 0 is
+    # selected but publishes no id — without that the run finishes on bag 0 and
+    # never proves where the cap check sits relative to the stride.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [
+                    framed_bag(msgpack_named_map({"width": 640}), slice_capacity=1024),
+                    bag_publishing_surface_id("s#2"),
+                    bag_publishing_surface_id("s#3"),
+                ],
+                truncated_bag_indexes=frozenset({1}),
+            )
+        ],
+        surface_image_answers={"s#3": image_answer("three")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "1",
+                "--every",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    ), "a capped bag the stride skipped ended a run that never needed it"
+
+    assert Path(capsys.readouterr().out.strip()).read_bytes() == png_bytes_for("three")
+
+
+def test_a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # Bag 1 is past the preview cap, and `--every 2` never selects it. A run
+    # that needs only bag 0 must not fail on a bag it never reads.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+                truncated_bag_indexes=frozenset({1}),
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "1",
+                "--every",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    assert Path(capsys.readouterr().out.strip()).read_bytes() == png_bytes_for("one")
+
+
+def test_an_oversized_bag_does_not_discard_the_readable_bags_beside_it(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # Bag 0 is readable and bag 1 is not. Failing the whole tap round would
+    # throw away a frame that had already been exchanged.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+                truncated_bag_indexes=frozenset({1}),
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
+    assert "9000 bytes" in printed.err
+
+
+def test_a_write_that_fails_still_names_the_frames_that_landed(
+    isolated_registry, stub_control_plane, tmp_path, capsys, monkeypatch
+):
+    # The filesystem half of the same promise the report exists to keep: a PNG
+    # on disk whose path was never printed is evidence nobody can use.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one"), "s#2": image_answer("two")},
+    )
+
+    real_write_bytes = Path.write_bytes
+    written_so_far: "list[Path]" = []
+
+    def write_bytes_failing_on_the_second(self: Path, data: bytes) -> int:
+        written_so_far.append(self)
+        if len(written_so_far) == 2:
+            raise PermissionError(13, "Permission denied")
+        return real_write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes_failing_on_the_second)
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
+    assert "Permission denied" in printed.err
+
+
+def test_an_output_directory_that_cannot_be_written_is_reported_not_raised(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # `--out` naming an existing regular file is a typo, and typos get a
+    # message rather than a Python traceback.
+    server = stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+    already_a_file = tmp_path / "already-a-file"
+    already_a_file.write_text("not a directory")
+
+    assert (
+        cli.main(
+            ["exchange", "s#1", "--out", str(already_a_file), "--url", server.url]
+        )
+        == 1
+    )
+
+    assert "could not write into" in capsys.readouterr().err

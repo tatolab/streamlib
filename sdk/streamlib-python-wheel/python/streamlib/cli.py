@@ -3,8 +3,8 @@
 
 """The `streamlib` console script: `new`, `run`, `dev`, and the observation verbs.
 
-`nodes`, `graph`, `tap`, and `logs` observe nodes that are already running —
-`nodes` off the on-disk registry, the rest as JSON-RPC clients of a node's
+`nodes`, `graph`, `tap`, `logs`, and `exchange` observe nodes that are already
+running — `nodes` off the on-disk registry, the rest as clients of a node's
 control plane. None of them mutates a graph: a node's graph is defined by its
 code, and the edit loop is re-running `dev`.
 
@@ -35,6 +35,12 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from . import Runtime
 from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
+from ._surface_image_exchange import (
+    DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
+    SampledChannelExchangeReport,
+    exchange_one_published_surface_id_into_directory,
+    sample_channel_into_exchanged_surface_images,
+)
 
 if TYPE_CHECKING:
     from ._runtime_log_reader import LogRecordFilters
@@ -55,8 +61,8 @@ class ObservationVerbUsageError(Exception):
     """An observation verb invoked with flags that contradict each other.
 
     Distinct from [`AppLaunchError`], which names the `run` / `dev` path: these
-    are argument mistakes on `nodes` / `graph` / `tap` / `logs`, and the two
-    surfaces are free to diverge in how they report.
+    are argument mistakes on `nodes` / `graph` / `tap` / `logs` / `exchange`,
+    and the two surfaces are free to diverge in how they report.
     """
 
 
@@ -702,6 +708,62 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     add_control_target_flags(tap_command)
 
+    exchange_command = subcommands.add_parser(
+        "exchange",
+        help="Exchange published surface ids for PNG files on disk.",
+        description=(
+            "With SURFACE_ID, exchanges that one id. With --channel, taps the "
+            "channel, reads a surface id out of each sampled bag, and exchanges "
+            "it — one warm process, no window in the graph and no display server "
+            "in the path. Writes exact full-resolution PNGs into --out and prints "
+            "their paths on stdout, one per line — those paths are this run's "
+            "frames, and --out is not cleared, so read them rather than listing "
+            "the directory."
+        ),
+    )
+    exchange_command.add_argument(
+        "surface_id",
+        nargs="?",
+        metavar="SURFACE_ID",
+        help="A surface id a bag published, e.g. `{slot}#{generation}`.",
+    )
+    exchange_command.add_argument(
+        "--out",
+        dest="output_directory",
+        required=True,
+        type=Path,
+        metavar="DIR",
+        help="Directory the PNGs are written into (created when absent).",
+    )
+    exchange_command.add_argument(
+        "--channel",
+        metavar="CHANNEL",
+        help="Sample this channel instead of naming one id, e.g. {proc}/{port}.",
+    )
+    exchange_command.add_argument(
+        "--count",
+        type=int,
+        metavar="N",
+        help="(--channel only) Frames to exchange before returning. Default 1.",
+    )
+    exchange_command.add_argument(
+        "--every",
+        dest="every_nth_bag",
+        type=int,
+        metavar="N",
+        help="(--channel only) Exchange every Nth sampled bag. Default 1.",
+    )
+    exchange_command.add_argument(
+        "--field",
+        dest="surface_id_bag_field_name",
+        metavar="NAME",
+        help=(
+            "(--channel only) Bag field carrying the surface id "
+            f"(default: {DEFAULT_SURFACE_ID_BAG_FIELD_NAME})."
+        ),
+    )
+    add_control_target_flags(exchange_command)
+
     logs_command = subcommands.add_parser(
         "logs",
         help="Read a runtime's JSONL log file, or a running node's event stream.",
@@ -763,6 +825,114 @@ def build_argument_parser() -> argparse.ArgumentParser:
     add_control_target_flags(logs_command)
 
     return parser
+
+
+def _print_sampled_channel_exchange_report(
+    channel: str, report: "SampledChannelExchangeReport", wanted_image_count: int
+) -> None:
+    """Say what the run exchanged and what it had to retry, on stderr.
+
+    stdout carries the paths and nothing else, so a harness can consume it
+    directly; the accounting a human needs goes beside it rather than into it.
+    """
+    print(
+        f"exchanged {len(report.written_image_paths)} of {wanted_image_count} "
+        f"requested frames from `{channel}` "
+        f"({report.bags_examined} bags examined over {report.tap_rounds} tap "
+        f"{'round' if report.tap_rounds == 1 else 'rounds'})",
+        file=sys.stderr,
+    )
+    if report.retried_recycled_surface_ids:
+        print(
+            f"retried {len(report.retried_recycled_surface_ids)} recycled "
+            f"{'frame' if len(report.retried_recycled_surface_ids) == 1 else 'frames'} "
+            f"against newer bags: {', '.join(report.retried_recycled_surface_ids)}",
+            file=sys.stderr,
+        )
+    if report.bags_missing_the_surface_id_field:
+        missing = report.bags_missing_the_surface_id_field
+        print(
+            f"{missing} {'bag' if missing == 1 else 'bags'} carried no surface id in "
+            f"the named field — name the right one with `--field`",
+            file=sys.stderr,
+        )
+    if report.stopped_early_because:
+        print(f"error: {report.stopped_early_because}", file=sys.stderr)
+
+
+def _run_exchange_verb(arguments: argparse.Namespace) -> int:
+    """`exchange` has two forms; naming an id or a channel picks one.
+
+    The channel-form flags have no meaning against a single id, so passing them
+    with one is a wiring error rather than a silently-ignored flag.
+    """
+    if arguments.surface_id and arguments.channel:
+        raise ObservationVerbUsageError(
+            "`exchange` takes a surface id or `--channel`, not both. One id is one "
+            "exchange; `--channel` samples ids off a channel."
+        )
+    if not arguments.surface_id and not arguments.channel:
+        raise ObservationVerbUsageError(
+            "`exchange` needs a surface id or `--channel`. Ids come from bags — "
+            "`streamlib tap <channel>` shows what one carries."
+        )
+
+    if arguments.surface_id:
+        channel_form_flags = [
+            name
+            for name, given in (
+                ("--count", arguments.count is not None),
+                ("--every", arguments.every_nth_bag is not None),
+                ("--field", arguments.surface_id_bag_field_name is not None),
+            )
+            if given
+        ]
+        if channel_form_flags:
+            raise ObservationVerbUsageError(
+                f"{', '.join(channel_form_flags)} sample a channel, and a surface id "
+                f"names one frame already. Use `--channel` instead of SURFACE_ID."
+            )
+        url = resolve_control_url(arguments.requested_url, arguments.requested_node)
+        try:
+            written_image_path = exchange_one_published_surface_id_into_directory(
+                url, arguments.surface_id, arguments.output_directory
+            )
+        except OSError as write_failure:
+            # A `--out` that names an existing file, or a directory this user
+            # cannot write: a typo, and typos get a message, not a traceback.
+            raise ObservationVerbUsageError(
+                f"could not write into `{arguments.output_directory}`: {write_failure}"
+            ) from write_failure
+        print(written_image_path)
+        return 0
+
+    wanted_image_count = 1 if arguments.count is None else arguments.count
+    every_nth_bag = 1 if arguments.every_nth_bag is None else arguments.every_nth_bag
+    if wanted_image_count < 1:
+        raise ObservationVerbUsageError("`--count` must be at least 1.")
+    if every_nth_bag < 1:
+        raise ObservationVerbUsageError("`--every` must be at least 1.")
+
+    url = resolve_control_url(arguments.requested_url, arguments.requested_node)
+    report = sample_channel_into_exchanged_surface_images(
+        url,
+        arguments.channel,
+        arguments.output_directory,
+        wanted_image_count=wanted_image_count,
+        every_nth_bag=every_nth_bag,
+        surface_id_bag_field_name=(
+            arguments.surface_id_bag_field_name or DEFAULT_SURFACE_ID_BAG_FIELD_NAME
+        ),
+    )
+    for image_path in report.written_image_paths:
+        print(image_path)
+    _print_sampled_channel_exchange_report(
+        arguments.channel, report, wanted_image_count
+    )
+    # A short sample is a failure, not a partial success: a harness that read the
+    # directory and found fewer frames than it asked for would otherwise take
+    # exit 0 as "this is all the channel had".
+    return 0 if len(report.written_image_paths) == wanted_image_count else 1
 
 
 def _run_logs_verb(arguments: argparse.Namespace) -> int:
@@ -851,6 +1021,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 requested_node=arguments.requested_node,
                 arguments=tap_arguments,
             )
+        if arguments.verb == "exchange":
+            return _run_exchange_verb(arguments)
         if arguments.verb == "logs":
             return _run_logs_verb(arguments)
         return launch_app_node(

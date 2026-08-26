@@ -16,6 +16,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
 
+use streamlib::sdk::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
+
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
 /// Encode a bag to the msgpack bytes the wire carries.
@@ -50,6 +52,41 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
     let value = rmpv::decode::read_value(&mut &encoded[..])
         .map_err(|decode_failure| PyValueError::new_err(decode_failure.to_string()))?;
     msgpack_value_to_python_object(python, &value)
+}
+
+/// Decode one raw tapped-channel bag into ordinary Python data.
+///
+/// A tap forwards the channel's wire bytes verbatim, header included, so the
+/// transport's own accessor is what bounds the msgpack value inside them.
+#[pyfunction]
+pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
+    python: Python<'py>,
+    framed_bag_bytes: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    // The two arms below are `read_payload_from_slice`'s two `None` cases, in
+    // order; a third would need one here too.
+    let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag_bytes) else {
+        return Err(PyValueError::new_err(
+            if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
+                format!(
+                    "a tapped bag carries a {}-byte frame header; got {} bytes, which \
+                     cannot hold one",
+                    FRAME_HEADER_SIZE,
+                    framed_bag_bytes.len()
+                )
+            } else {
+                format!(
+                    "the tapped bag's header declares a {}-byte payload but only {} \
+                     bytes followed it — the sample arrived truncated, and decoding it \
+                     would invent a bag the channel never carried",
+                    FrameHeader::read_from_slice(framed_bag_bytes).len,
+                    framed_bag_bytes.len() - FRAME_HEADER_SIZE
+                )
+            },
+        ));
+    };
+
+    decode_msgpack_to_python_object(python, payload)
 }
 
 /// Cast or construct a decoded bag into the type an author named with
@@ -397,6 +434,89 @@ fn msgpack_value_to_python_object<'py>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No slack behind the payload — the frame ends where the bag does.
+    const SLICE_HOLDS_ONLY_THE_BAG: usize = 0;
+
+    /// How many bytes the truncation fixture cuts off the end of a whole frame.
+    const BYTES_THE_PREVIEW_CUT: usize = 8;
+
+    /// Frame a msgpack payload the way the transport does, in a buffer of at
+    /// least `slice_capacity_at_least` — a caller may hold the frame in
+    /// something larger than the frame.
+    fn frame_like_the_transport(payload: &[u8], slice_capacity_at_least: usize) -> Vec<u8> {
+        let mut framed = vec![0u8; slice_capacity_at_least.max(FRAME_HEADER_SIZE + payload.len())];
+        FrameHeader::new("processor/port", 1_234, payload.len() as u32)
+            .expect("port key fits")
+            .write_to_slice(&mut framed);
+        framed[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + payload.len()].copy_from_slice(payload);
+        framed
+    }
+
+    /// The whole job end to end: strip the transport header and decode the
+    /// declared payload. The bound itself is pinned in `streamlib-ipc-types`;
+    /// what the oversized buffer proves here is that a frame held in one does
+    /// not derail the decode.
+    #[test]
+    fn a_tapped_bag_decodes_to_what_the_channel_published() {
+        Python::initialize();
+        Python::attach(|python| {
+            let published = PyDict::new(python);
+            published.set_item("surface_id", "camera/frame#7").unwrap();
+            published.set_item("width", 1920i64).unwrap();
+            let payload = encode_bag_to_msgpack(published.as_any()).unwrap();
+
+            let framed = frame_like_the_transport(&payload, 4096);
+            let decoded =
+                decode_tapped_channel_bag_frame_to_python_object(python, &framed).unwrap();
+
+            assert_eq!(
+                FrameHeader::read_payload_from_slice(&framed).map(<[u8]>::len),
+                Some(payload.len()),
+                "the buffer's trailing bytes were handed to the decoder"
+            );
+            assert!(
+                decoded.eq(&published).unwrap(),
+                "the decode changed the bag"
+            );
+        });
+    }
+
+    /// The tap tool hex-previews only the first bytes of a large bag. Decoding
+    /// that prefix must refuse by name: msgpack would otherwise happily read the
+    /// leading map entries and hand back a bag missing its later fields.
+    #[test]
+    fn a_truncated_sample_is_refused_rather_than_half_decoded() {
+        Python::initialize();
+        Python::attach(|python| {
+            let published = PyDict::new(python);
+            published.set_item("surface_id", "camera/frame#7").unwrap();
+            published.set_item("filler", "x".repeat(512)).unwrap();
+            let payload = encode_bag_to_msgpack(published.as_any()).unwrap();
+
+            let framed = frame_like_the_transport(&payload, SLICE_HOLDS_ONLY_THE_BAG);
+            let truncated = &framed[..framed.len() - BYTES_THE_PREVIEW_CUT];
+
+            let refusal = decode_tapped_channel_bag_frame_to_python_object(python, truncated)
+                .expect_err("a truncated sample must not decode");
+            assert!(
+                refusal.to_string().contains("truncated"),
+                "the refusal must name the truncation; got {refusal}"
+            );
+        });
+    }
+
+    /// Fewer bytes than a header is not a zero-length bag — it is a caller
+    /// handing over something that was never a frame.
+    #[test]
+    fn bytes_too_short_to_hold_a_header_are_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let refusal = decode_tapped_channel_bag_frame_to_python_object(python, &[0u8; 8])
+                .expect_err("8 bytes cannot be a framed bag");
+            assert!(refusal.to_string().contains("frame header"));
+        });
+    }
 
     /// Every value shape a bag can carry survives Python → msgpack → Python
     /// with its type and value intact.
