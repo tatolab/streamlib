@@ -484,7 +484,9 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
     use streamlib::sdk::error::Error;
-    use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
+    use streamlib::sdk::runtime::{
+        BoxFuture, ExchangedPublishedSurfaceFramePngImage, RuntimeOperations, TapSubscription,
+    };
     use tower::ServiceExt;
 
     use super::*;
@@ -583,6 +585,20 @@ mod tests {
             })
         }
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("tool");
+        /// The dispatch serves no `exchange` tool yet, so nothing here can
+        /// reach this; answering rather than panicking keeps the day it
+        /// does a test failure about the tool, not a stub abort.
+        fn exchange_published_surface_id_for_png_image_bytes_async(
+            &self,
+            published_surface_id: String,
+            _downscale_long_edge_pixel_cap: Option<u32>,
+        ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
+            Box::pin(async move {
+                Err(Error::NotFound(format!(
+                    "stub runtime holds no surface '{published_surface_id}'"
+                )))
+            })
+        }
         fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
             self.recorded_shutdown_reasons
                 .lock()

@@ -124,7 +124,19 @@ impl GpuContext {
         // refcount clone, or the registration keeping a texture backing
         // alive. Held across the copy below and dropped at the end of this
         // function, which is what bounds the claim to the copy.
-        let claimed_frame_backing = self.resolve_device_export_source(published_surface_id)?;
+        //
+        // Its one failure is "neither backing answered", which for a
+        // caller naming a surface is an absence, not a device fault — both
+        // misses travel inside so the answer still says which doors were
+        // tried.
+        let claimed_frame_backing = self
+            .resolve_device_export_source(published_surface_id)
+            .map_err(|no_backing_answered| {
+                Error::NotFound(format!(
+                    "surface '{published_surface_id}' names no frame this runtime holds: \
+                     {no_backing_answered}"
+                ))
+            })?;
 
         let (source_surface_pixel_width, source_surface_pixel_height) =
             claimed_frame_backing_extent(published_surface_id, &claimed_frame_backing)?;
