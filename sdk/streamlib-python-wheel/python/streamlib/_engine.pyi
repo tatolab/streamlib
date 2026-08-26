@@ -56,6 +56,7 @@ __all__ = [
     "TestBagFeeder",
     "await_test_harness_bag",
     "close_test_harness_channel",
+    "decode_tapped_channel_bag_frame_to_python_object",
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
