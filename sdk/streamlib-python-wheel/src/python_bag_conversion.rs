@@ -499,9 +499,8 @@ mod tests {
     fn bytes_too_short_to_hold_a_header_are_refused() {
         Python::initialize();
         Python::attach(|python| {
-            let refusal =
-                decode_tapped_channel_bag_frame_to_python_object(python, &[0u8; 8])
-                    .expect_err("8 bytes cannot be a framed bag");
+            let refusal = decode_tapped_channel_bag_frame_to_python_object(python, &[0u8; 8])
+                .expect_err("8 bytes cannot be a framed bag");
             assert!(refusal.to_string().contains("frame header"));
         });
     }
