@@ -638,21 +638,28 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ control-plane-surface-pixel-exchange)
+## Control plane & observability — IN-FLIGHT
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
   control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans use
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
-  Post-pivot the vocabulary is observation-shaped: graph, tap, logs, health, nodes.
-  The live-mutation verbs (submit / replace / connect / remove) and their MCP tools
-  are removed — code is the source of truth; the edit loop is `dev`, not live
-  mutation. MCP is served by the node's control plane at `POST /mcp`, mounted with
-  the node and sharing its lifecycle; it has exactly one transport, and no CLI verb,
-  stdio server, or bridge process stands between a host and that endpoint — an MCP
-  host is configured with a running node's URL.
-  [importable-python-library, mcp-served-with-the-node — SHIPPED #1712]
+  Post-pivot the vocabulary is observation-shaped, and the served MCP tool set is
+  exactly `graph`, `tap`, `logs`, `exchange` and `shutdown` — `health` is a REST route
+  and `nodes` a registry surface, neither of them a tool. `exchange` joins as an
+  observation verb without loosening the pivot's rule: the control plane never mutates
+  the graph — the live-mutation verbs (submit / replace / connect / remove) and their
+  MCP tools are removed, code is the source of truth, the edit loop is `dev`, not live
+  mutation — because a read that costs the node a bounded copy is still a read. MCP is
+  served by the node's control plane at `POST /mcp`, mounted with the node and sharing
+  its lifecycle; it has exactly one transport, and no CLI verb, stdio server, or bridge
+  process stands between a host and that endpoint — an MCP host is configured with a
+  running node's URL.
+  [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
+  control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
+  sentence]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
+  <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_observation_vocabulary -->
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
@@ -663,14 +670,22 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   prerequisite of the rip-out. [control-plane-one-surface]
 - **DECIDED** — The CLI ships inside the wheel and slims to `new` / `dev` / `run` (a
   thin runner over the same engine the wheel exposes) plus the observation verbs
-  (`nodes` / `graph` / `tap` / `logs`); build-orchestration, packaging,
-  provisioning, and codegen verbs are deleted. The standalone streamlib-runtime
-  binary retires. Python embeds the engine in-process via the wheel; the control
-  plane exists to observe and drive *running* nodes, not to embed.
+  (`nodes` / `graph` / `tap` / `logs` / `exchange`); build-orchestration, packaging,
+  provisioning, and codegen verbs are deleted. `exchange` takes a surface id, or a
+  channel: the channel form composes tap → decode → exchange client-side in one warm
+  process — one connection, the exchange fired the moment the bag lands, `--count` and
+  every-Nth sampling as client flags. It is the cold-spawn latency fix and the
+  throttling surface in one, and it adds nothing to the engine: the CLI stays a pure
+  JSON-RPC client composing the same two operations any consumer composes. The
+  standalone streamlib-runtime binary retires. Python embeds the engine in-process via
+  the wheel; the control plane exists to observe and drive *running* nodes, not to
+  embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
-  — SHIPPED #1715]
+  — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
+  `exchange` verb]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
 - **DECIDED** — Node discovery is a per-user on-disk registry — one JSON file per live
   node in the OS's standard per-user runtime directory — written only by
   control-plane-hosting runtimes, pruned only when both liveness signals (control
@@ -678,6 +693,82 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
   inspection ride the same control plane. [control-plane-one-surface]
+- **DECIDED** — The control plane exposes one composable door for pixels: `exchange`
+  takes a published surface id and hands back that frame's image bytes, out of process,
+  with no window in the graph and no display server in the path. It is its own verb,
+  peer to `graph` / `tap` / `logs` — never a mode of any of them. Tap keeps exactly its
+  shipped contract: bags forwarded verbatim as bytes, no decode, no field named, no new
+  argument. Its non-interference guarantee is untouched because the two doors touch
+  different systems — tap's guarantee is about the channel (one reserved subscriber
+  slot, completeness traded away and reported as `dropped_bags`), while the exchange
+  never attaches to a channel and is a pool consumer on the same terms as any typed cast
+  in a downstream processor, one frame at a time. Composition happens entirely at the
+  consumer: it decodes the bag itself, reads whatever field it knows carries a surface
+  id, and calls `exchange` with that id. The engine therefore still inspects no bag
+  content anywhere. This is how verification sees pixels, and equally how any API
+  consumer sees them, because the door knows nothing about verification.
+  [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  <!-- verify: cargo test -p streamlib-api-server the_tap_tool_schema_is_unchanged_by_the_exchange_joining_the_catalog -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels -->
+- **DECIDED** — The exchange is a pool claim, bounded to the copy. Inside one operation
+  call: resolve the id, claim the frame through the pool's own claim seam (the refcount
+  in-process, the checkout lease cross-process — the shipped seam, never a new one), run
+  the GPU conversion and the GPU→CPU copy under the claim, release, then encode and
+  return. Encoding happens after the release, so the claim window is the copy alone and
+  an encoder's cost can never extend it. The producer never waits regardless: the pool
+  skips claimed slots and grows to its cap, so an exchange costs the node memory at
+  worst, never another processor's cadence. Without the claim a producer could recycle
+  the slot mid-copy and the caller would receive a torn frame — half one frame, half the
+  next — which is precisely the silent wrongness the surface-id lifetime contract exists
+  to kill. [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  <!-- verify: cargo test -p streamlib-engine --lib sequential_exchanges_of_one_frame_never_pin_more_than_one_hold -->
+- **DECIDED** — Staleness fails loud and composes as a retry, never as wrong pixels. A
+  surface id is per-frame (`<slot>#<generation>`), and resolving a retired one is refused
+  with the recycled-frame error before any bytes move — `410 Gone` over REST, never a
+  `200` carrying the slot's newer pixels. So when an exchange succeeds the bytes are
+  exactly the tapped bag's frame — the generation grammar is what proves the pairing —
+  and when it is too slow the caller taps a newer bag and exchanges that.
+  Sample-and-exchange-as-you-go is therefore the intended loop, and temporal sampling
+  falls out of composition rather than needing a batched verb. The publish-to-claim
+  window is the one every pool consumer already obeys: it rides pool depth, and
+  outwaiting it is an error. [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  <!-- verify: cargo test -p streamlib-engine --lib a_retired_frame_id_is_refused_at_the_exchange_naming_the_recycling -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_on_a_recycled_frame_is_a_tool_error_naming_the_recycling -->
+- **DECIDED** — The engine converts, in the RHI, or the caller gets nothing viewable: a
+  camera frame is NV12 or YUYV and converting it is the RHI's existing job, while
+  readback is an always-present `GpuContext` capability. No pixel conversion happens
+  outside the RHI and no second converter is built. The operation reaches the engine
+  through `RuntimeOperations` and nothing else — the api-server's HTTP task deliberately
+  holds only `Arc<dyn RuntimeOperations>`, the trait gains one operation, and `Runner`
+  implements it over the shipped doors: the surface store's checkout for a pooled
+  pixel-buffer backing, the host-visible export staging for a texture backing, the same
+  doors the cast object's `cpu()` rides. No new surface-resolution path exists, and the
+  caller needs no Vulkan device, no surface socket and no runtime link.
+  [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered -->
+- **DECIDED** — Two spellings of one operation: MCP tool and REST route serve the same
+  `exchange` with the same arguments, differing only in result shape. REST serves the
+  exact frame as a binary `image/png` body — lossless, full resolution, no base64
+  inflation, remote-capable: the evidence and PSNR path, and what the CLI writes into a
+  caller-named directory. The MCP tool returns an image content block, downscaled by
+  default to a declared long-edge cap (~1568 px, the resolution ceiling vision models
+  actually use), with the result stating the true extent and the exact-bytes route — the
+  agent's in-session view, always under the per-image payload ceiling. The downscale
+  rides the RHI's existing blit path, never a second scaler, and raw unconverted planes
+  stay deferred until something needs them. The REST spelling joins the bearer-gated set
+  beside the tap WebSocket and MCP inherits the gate the whole dispatch already has:
+  whatever the auth entry below decides later, it decides for this verb the same as the
+  rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974]
+  <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
+  <!-- verify: cargo test -p streamlib-api-server the_exchange_route_rejects_a_missing_token_with_401_when_auth_on -->
+- **DECIDED** — The observer effect is the problem being removed, and its absence is the
+  proof. Reading a channel no longer requires terminating it in a window, so a mid-graph
+  channel is observable in the topology that ships. Window capture survives only where
+  the window is genuinely the subject — the present and swapchain path.
+  [control-plane-surface-pixel-exchange — SHIPPED #1972, #1976]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-26-control-plane-surface-pixel-exchange.md -->
 - **OPEN** — Auth and remote-access posture: how a node authenticates and authorizes
   control-plane callers, and what it exposes to a mesh. Scoping exposure down is decided
   here and only here — it is a question of who may call, never of what the node listens
