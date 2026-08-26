@@ -69,7 +69,8 @@ class TappedBagFrame(NamedTuple):
     """
 
     framed_bytes: bytes
-    byte_len_when_preview_was_capped: "Optional[int]"
+    preview_was_capped: bool
+    whole_bag_byte_len: "Optional[int]"
 
 
 class SampledChannelExchangeReport(NamedTuple):
@@ -163,11 +164,15 @@ def _tapped_bag_frames(
                 f"tap of `{channel}` returned a bag whose hex preview does not decode: "
                 f"{decode_failure}"
             ) from decode_failure
+        whole_bag_byte_len = bag.get("byte_len")
         frames.append(
             TappedBagFrame(
                 framed_bytes=framed_bytes,
-                byte_len_when_preview_was_capped=(
-                    bag.get("byte_len") if bag.get("hex_truncated") else None
+                preview_was_capped=bool(bag.get("hex_truncated")),
+                whole_bag_byte_len=(
+                    whole_bag_byte_len
+                    if isinstance(whole_bag_byte_len, int)
+                    else None
                 ),
             )
         )
@@ -235,10 +240,17 @@ def sample_channel_into_exchanged_surface_images(
                 if not selected:
                     continue
 
-                if tapped_bag.byte_len_when_preview_was_capped is not None:
+                if tapped_bag.preview_was_capped:
+                    # The length is the tool's to report, so say what is known
+                    # rather than letting a node that omitted it read as a bag
+                    # this client simply could not decode.
+                    size = (
+                        f"is {tapped_bag.whole_bag_byte_len} bytes"
+                        if tapped_bag.whole_bag_byte_len is not None
+                        else "is larger than"
+                    )
                     raise ControlPlaneError(
-                        f"a bag the sample selected on `{channel}` is "
-                        f"{tapped_bag.byte_len_when_preview_was_capped} bytes, past the "
+                        f"a bag the sample selected on `{channel}` {size}, past the "
                         f"prefix `tap` previews, so its surface id cannot be read from "
                         f"here. Exchange an id from this channel directly: "
                         f"`streamlib exchange <surface-id> --out <dir>`."
@@ -272,8 +284,12 @@ def sample_channel_into_exchanged_surface_images(
                 )
                 if len(written_image_paths) == wanted_image_count:
                     break
-    except (ControlPlaneError, OSError) as failure:
+    except ControlPlaneError as failure:
         stopped_early_because = str(failure)
+    except OSError as write_failure:
+        stopped_early_because = (
+            f"could not write into `{output_directory}`: {write_failure}"
+        )
 
     return SampledChannelExchangeReport(
         written_image_paths=written_image_paths,

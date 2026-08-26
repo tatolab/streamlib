@@ -963,6 +963,7 @@ def tap_result_body(
     *,
     hex_truncated: bool = False,
     truncated_bag_indexes: "frozenset[int]" = frozenset(),
+    report_byte_len: bool = True,
 ) -> str:
     """One `tap` tool result carrying these bags, shaped as the tool shapes it.
 
@@ -981,11 +982,18 @@ def tap_result_body(
                     {
                         # The tool reports the whole bag's length, not the
                         # preview's, so a capped bag reads as larger than what
-                        # rode with it.
-                        "byte_len": (
-                            9000
-                            if hex_truncated or index in truncated_bag_indexes
-                            else len(bag)
+                        # rode with it. `report_byte_len=False` models a node
+                        # that flags the cap without sizing it.
+                        **(
+                            {
+                                "byte_len": (
+                                    9000
+                                    if hex_truncated or index in truncated_bag_indexes
+                                    else len(bag)
+                                )
+                            }
+                            if report_byte_len
+                            else {}
                         ),
                         "hex_preview": bag.hex(),
                         "hex_truncated": (
@@ -1641,6 +1649,43 @@ def test_a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size(
     assert "streamlib exchange <surface-id>" in reported
 
 
+def test_a_capped_bag_with_no_reported_size_is_still_diagnosed_as_capped(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # `--url` reaches any node, so the size is the tool's to report and may be
+    # missing. Losing the cap would misdiagnose the bag as one this client
+    # could not decode — blaming the channel for the tool's own limit.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1")],
+                hex_truncated=True,
+                report_byte_len=False,
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    assert "past the prefix `tap` previews" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("flag, value", [("--count", "0"), ("--every", "0")])
 def test_a_sample_bound_below_one_is_refused(
     isolated_registry, tmp_path, capsys, flag, value
@@ -1653,6 +1698,50 @@ def test_a_sample_bound_below_one_is_refused(
     )
 
     assert flag in capsys.readouterr().err
+
+
+def test_the_stride_steps_over_an_oversized_bag_rather_than_dying_on_it(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # The loop must actually reach the capped bag and pass it by, so bag 0 is
+    # selected but publishes no id — without that the run finishes on bag 0 and
+    # never proves where the cap check sits relative to the stride.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [
+                    framed_bag(msgpack_named_map({"width": 640}), slice_capacity=1024),
+                    bag_publishing_surface_id("s#2"),
+                    bag_publishing_surface_id("s#3"),
+                ],
+                truncated_bag_indexes=frozenset({1}),
+            )
+        ],
+        surface_image_answers={"s#3": image_answer("three")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "1",
+                "--every",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    ), "a capped bag the stride skipped ended a run that never needed it"
+
+    assert Path(capsys.readouterr().out.strip()).read_bytes() == png_bytes_for("three")
 
 
 def test_a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized(
