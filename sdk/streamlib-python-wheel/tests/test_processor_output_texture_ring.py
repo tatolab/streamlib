@@ -128,5 +128,14 @@ def test_a_depthless_ring_is_refused_naming_the_depth() -> None:
         ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=0)
 
 
+def test_a_fractional_or_boolean_depth_is_refused_at_construction() -> None:
+    """`range(1.5)` would raise a bare TypeError at the first frame instead,
+    and `True` would silently become a one-deep ring."""
+    with pytest.raises(ValueError, match="whole"):
+        ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=1.5)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="whole"):
+        ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=True)
+
+
 def test_the_standard_depth_matches_the_engines_own_ring() -> None:
     assert ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE).depth == 2

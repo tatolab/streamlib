@@ -52,6 +52,12 @@ class ProcessorOutputTextureRing:
         texture_usage: "list[str]",
         depth: int = STANDARD_RING_DEPTH,
     ) -> None:
+        # `bool` is an `int` subclass; a ring of depth `True` is a bug.
+        if not isinstance(depth, int) or isinstance(depth, bool):
+            raise ValueError(
+                f"depth must be an int, got {depth!r} — a ring holds a whole "
+                f"number of textures"
+            )
         if depth < 1:
             raise ValueError(
                 f"a ring of depth {depth} holds no texture to publish from — "
