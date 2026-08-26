@@ -141,6 +141,18 @@ run_hook 'STREAMLIB_CAMERA_DEVICE=/dev/video0 streamlib run --dir examples/camer
 echo "launched $!"'
 expect_ask "the skill's own prescribed launch shape escalates"
 
+# A text-tool line ABOVE a launch must not hide it either — the skill tells you
+# to probe the rig before self-running, so probe-then-launch is the common
+# shape. Only the per-line filter keeps these visible; a first-line-only guard
+# reads the preamble and silences the launch below it.
+run_hook 'echo starting
+streamlib run --dir examples/camera-display &'
+expect_ask "an echo preamble does not hide the launch beneath it"
+
+run_hook 'grep -q vivid /proc/modules
+streamlib run --dir examples/camera-display &'
+expect_ask "probing the rig then launching still escalates"
+
 # Exec wrappers. Bounding an unattended run is precisely what a sandboxed
 # firing does, so a launch behind `timeout` or `nohup` is the case this brake
 # most needs to catch.
@@ -159,17 +171,38 @@ expect_ask "a launch behind uv run escalates"
 run_hook 'DISPLAY=:1 STREAMLIB_CAMERA_DEVICE=/dev/video0 nohup streamlib run --dir examples/camera-display >/tmp/log 2>&1 &'
 expect_ask "env assignments plus a wrapper plus redirection still escalates"
 
-# Distinguishes the command-position regex from a bare substring match: python3
-# is not a text tool by first-word, so ONLY the anchoring keeps this silent.
-# Replace the anchored regex with `streamlib[[:space:]]+(run|dev)` and this
-# case is the one that goes red.
 run_hook "python3 -c \"print('streamlib run --dir examples/x')\""
 expect_silent "printing the launch path from a script is not launching it"
 
-# `bash -c` stays uncovered and is locked as such: the quote that would make it
-# a launch is the same quote that makes the case above text.
+# These two hold the command-position anchoring specifically. Neither command's
+# first word is a text tool, so the text-tool filter does not reach them —
+# replace the anchored regex with a bare `streamlib[[:space:]]+(run|dev)` and
+# these are what go red.
+run_hook 'curl -sX POST -d "streamlib run --dir examples/x" http://localhost:9000/notes'
+expect_silent "posting the launch path as data is not launching it"
+
+run_hook 'ls examples/ && grep -rn "cargo run" examples/'
+expect_silent "listing then grepping for cargo run does not escalate"
+
+# The cargo key is anchored the same way its streamlib twin is; a read that
+# merely prints the phrase is not a build.
+run_hook 'tail -20 examples/vulkan-video-roundtrip/README.md'
+expect_silent "reading an example README does not escalate"
+
+# ── Known-uncovered shapes, locked so a change to them fails loudly ──
+# A `bash -c "…"` body is an unparsed string: any rule that reaches a launch
+# inside it also reaches inside `bash -c "grep -rn 'streamlib run' examples/"`.
 run_hook 'bash -c "streamlib run --dir examples/camera-display"'
-expect_silent "a launch inside bash -c is NOT braked (known, see the hook comment)"
+expect_silent "a launch inside bash -c is NOT braked (unparsed string body)"
+
+# A heredoc body line is indistinguishable from a command line, so writing an
+# evidence report that quotes the launch command asks. This is the one residual
+# FALSE POSITIVE, and it fires on the skill's own E2E report template.
+run_hook 'cat > /tmp/evidence/report.md <<EOF
+**Command**:
+streamlib run --dir examples/camera-display
+EOF'
+expect_ask "a heredoc quoting the launch command DOES escalate (residual false positive)"
 
 # ── The class this key deliberately does NOT cover ───────────────────
 # The ticket scopes the launch key to apps under examples/. `streamlib new`

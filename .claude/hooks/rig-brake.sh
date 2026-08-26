@@ -39,33 +39,44 @@ names_an_example() {
 }
 
 # A text tool that merely carries a launch command in an argument is not a
-# launch. `git commit -m "… streamlib run --dir examples/x"` and
-# `sed 's|streamlib run|…|' examples/README.md` are the commands a session
-# working on this hook writes constantly, and prompting on them is what teaches
-# an owner to click through without reading.
+# launch. `git commit -m "… streamlib run --dir examples/x"`,
+# `sed 's|streamlib run|…|' examples/README.md` and `git grep -n "cargo run"
+# -- examples/` are the commands a session working on this hook writes
+# constantly, and prompting on them is what teaches an owner to click through
+# without reading.
 #
-# Only the FIRST command word decides. `has` is `grep -Eq`, which anchors `^`
-# per line, so testing the raw input would let any line of a multi-line command
-# suppress the whole thing — including the backgrounded launch + `echo $!` shape
-# /verify-live itself prescribes.
-first_command_word_is_a_text_tool() {
+# The filter is per line, not per command. `has` is `grep -Eq`, which is
+# line-oriented, so testing the raw input let any line silence every other one
+# — including the backgrounded launch + `echo $!` shape /verify-live itself
+# prescribes. Dropping the text-tool lines and matching what survives keeps
+# `git status && streamlib run …` silent (one line, led by git) while
+# `echo starting` on a line above a real launch no longer hides it.
+launch_candidate_lines() {
   printf '%s' "$cmd" \
-    | sed -n '/[^[:space:]]/{p;q}' \
-    | grep -Eq '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(git|gh|sed|grep|rg|awk|perl|python3?|node|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)'
+    | grep -Ev '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(git|gh|sed|grep|rg|awk|perl|python3?|node|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)'
 }
 
-# The binary may sit behind env assignments and behind an exec wrapper —
-# `timeout` and `nohup` especially, since bounding an unattended run is exactly
-# what a sandboxed firing does. `bash -c "…"` stays uncovered: the quote that
-# makes it a launch is the same quote that makes `python3 -c "print(…)"` text.
-LAUNCH_AT_COMMAND_POSITION='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((nohup|timeout|env|stdbuf|xvfb-run|uv|poetry)([[:space:]]+[^[:space:]]+)*[[:space:]]+)*([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)'
+matches() { printf '%s' "$2" | grep -Eq -- "$1"; }
 
-# Both launch spellings share the guard: `git grep -n "cargo run" -- examples/`
-# is the same false positive as its streamlib twin. The observation verbs
-# (nodes/graph/tap/logs/exchange) are control-plane reads and match neither key
-# — /verify-live runs them per frame, and a prompt there would stall the audit.
-if ! first_command_word_is_a_text_tool && names_an_example; then
-  if has "$LAUNCH_AT_COMMAND_POSITION" || has 'cargo[[:space:]]+run'; then
+# Both keys are anchored to a command position: start of a line or just past a
+# separator, after any env assignments and any exec wrapper. `timeout` and
+# `nohup` earn their place — bounding an unattended run is what a sandboxed
+# firing does. The observation verbs (nodes/graph/tap/logs/exchange) match
+# neither key; /verify-live runs them per frame and a prompt would stall it.
+#
+# Two shapes stay uncovered by construction. A `bash -c "…"` body is an
+# unparsed string, so any rule reaching inside it also reaches inside
+# `bash -c "grep -rn 'streamlib run' examples/"`. And a heredoc body line is
+# indistinguishable from a command line — writing an evidence report that
+# quotes the launch command will ask. Both cost one prompt or one exit 144,
+# never a wrong result.
+LAUNCH_AT_COMMAND_POSITION='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((nohup|timeout|env|stdbuf|xvfb-run|uv|poetry)([[:space:]]+[^[:space:]]+)*[[:space:]]+)*([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)'
+CARGO_RUN_AT_COMMAND_POSITION='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((nohup|timeout|env|stdbuf|xvfb-run)([[:space:]]+[^[:space:]]+)*[[:space:]]+)*cargo[[:space:]]+run([[:space:]]|$)'
+
+if names_an_example; then
+  candidates="$(launch_candidate_lines)"
+  if matches "$LAUNCH_AT_COMMAND_POSITION" "$candidates" \
+     || matches "$CARGO_RUN_AT_COMMAND_POSITION" "$candidates"; then
     ask_rig
   fi
 fi
