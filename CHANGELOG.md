@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.7](https://github.com/tatolab/streamlib/compare/v0.18.6...v0.18.7) (2026-08-26)
+
+
+### Features
+
+* **control-plane:** exchange a published surface id for that frame's PNG bytes over REST ([#1978](https://github.com/tatolab/streamlib/issues/1978)) ([44fa147](https://github.com/tatolab/streamlib/commit/44fa147d58f95050d2c23d13c6d4fa3d81b05e3c))
+
 ## [0.18.6](https://github.com/tatolab/streamlib/compare/v0.18.5...v0.18.6) (2026-08-26)
 
 
