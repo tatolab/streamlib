@@ -13,8 +13,8 @@ use crate::core::graph::{
     ProcessorUniqueId, StateComponent,
 };
 use crate::core::processors::{ProcessorSpec, ProcessorState};
-use crate::core::runtime::ExchangedPublishedSurfaceFramePngImage;
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
+use crate::core::runtime::ExchangedPublishedSurfaceFramePngImage;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
 
@@ -465,7 +465,9 @@ impl RuntimeOperations for Runner {
             })
             .await
             .map_err(|join_error| {
-                Error::Runtime(format!("surface-exchange task failed to join: {join_error}"))
+                Error::Runtime(format!(
+                    "surface-exchange task failed to join: {join_error}"
+                ))
             })?
         })
     }

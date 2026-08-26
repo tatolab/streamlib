@@ -633,9 +633,13 @@ mod router_surface_and_auth_gate_tests {
     /// PNG: what the route owes is verbatim pass-through plus the right
     /// headers, and a recognizable string proves that where a real image
     /// would only prove the encoder still works.
+    /// The `(surface id, downscale cap)` pairs the route handed the
+    /// operation, in call order.
+    type RecordedExchangeCalls = Arc<Mutex<Vec<(String, Option<u32>)>>>;
+
     #[derive(Clone, Default)]
     struct StubSurfaceExchange {
-        recorded_calls: Arc<Mutex<Vec<(String, Option<u32>)>>>,
+        recorded_calls: RecordedExchangeCalls,
         recycled_surface_id: Option<String>,
     }
 

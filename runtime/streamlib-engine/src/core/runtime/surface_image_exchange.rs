@@ -56,11 +56,8 @@ pub(crate) fn encode_rgba8_pixels_as_png_image_bytes(
     }
 
     let mut png_image_bytes = Vec::new();
-    let mut encoder = png::Encoder::new(
-        &mut png_image_bytes,
-        image_pixel_width,
-        image_pixel_height,
-    );
+    let mut encoder =
+        png::Encoder::new(&mut png_image_bytes, image_pixel_width, image_pixel_height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(png_encode_failure)?;
@@ -75,7 +72,9 @@ pub(crate) fn encode_rgba8_pixels_as_png_image_bytes(
 const PNG_RGBA8_BYTES_PER_PIXEL: u64 = 4;
 
 fn png_encode_failure(failure: png::EncodingError) -> Error {
-    Error::Runtime(format!("PNG encode of the exchanged frame failed: {failure}"))
+    Error::Runtime(format!(
+        "PNG encode of the exchanged frame failed: {failure}"
+    ))
 }
 
 /// Claim `published_surface_id`'s frame, copy it to the host under the

@@ -212,12 +212,10 @@ impl GpuContext {
                 if !downscale_applies
                     && producer_texture.format() == EXCHANGE_IMAGE_TEXTURE_FORMAT
                     && producer_texture.supports_transfer_read()
-                {
-                    if let Some(readable_layout) =
+                    && let Some(readable_layout) =
                         TextureSourceLayout::from_vulkan_layout_raw(registration.current_layout().0)
-                    {
-                        return Ok((producer_texture.clone(), readable_layout));
-                    }
+                {
+                    return Ok((producer_texture.clone(), readable_layout));
                 }
                 let composed = self.blit_texture_into_an_exchange_image_texture(
                     producer_texture,
@@ -370,7 +368,8 @@ impl GpuContext {
             EXCHANGE_IMAGE_TEXTURE_FORMAT,
             image_pixel_width,
             image_pixel_height,
-            TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::COPY_SRC,
         )?;
         let compositor = self.create_present_compositor(EXCHANGE_IMAGE_TEXTURE_FORMAT)?;
@@ -483,6 +482,10 @@ mod tests {
     /// What a texture-backed producer renders.
     const KERNEL_OUTPUT_RGBA8_PIXEL: [u8; 4] = [0x9A, 0x2C, 0x5E, 0xFF];
 
+    // A GPU-gated test that finds no device passes trivially, so the skip
+    // has to reach the person reading the run — and stdout is the only
+    // channel a test harness surfaces.
+    #[allow(clippy::disallowed_macros)]
     fn gpu_context_or_skip() -> Option<GpuContext> {
         match GpuContext::init_for_platform() {
             Ok(gpu) => Some(gpu),
@@ -502,8 +505,7 @@ mod tests {
             "a pooled allocation must be host-mapped for this fixture to publish into it"
         );
         let byte_count = pixel_buffer.plane_size(0) as usize;
-        let backing =
-            unsafe { std::slice::from_raw_parts_mut(base_address, byte_count) };
+        let backing = unsafe { std::slice::from_raw_parts_mut(base_address, byte_count) };
         for (index, byte) in backing.iter_mut().enumerate() {
             *byte = pattern[index % pattern.len()];
         }
@@ -519,10 +521,12 @@ mod tests {
         const NEUTRAL_CHROMA: u8 = 0x80;
 
         let base_address = pixel_buffer.plane_base_address(0);
-        assert!(!base_address.is_null(), "the YUYV allocation must be mapped");
+        assert!(
+            !base_address.is_null(),
+            "the YUYV allocation must be mapped"
+        );
         let byte_count = pixel_buffer.plane_size(0) as usize;
-        let backing =
-            unsafe { std::slice::from_raw_parts_mut(base_address, byte_count) };
+        let backing = unsafe { std::slice::from_raw_parts_mut(base_address, byte_count) };
         let bytes_per_row = (FRAME_PIXEL_WIDTH * 2) as usize;
         for (row, row_bytes) in backing.chunks_mut(bytes_per_row).enumerate() {
             let luma = if (row as u32) < FRAME_PIXEL_HEIGHT / 2 {
@@ -570,10 +574,7 @@ mod tests {
         fill_pooled_backing_with(&pooled_backing, &PUBLISHED_RGBA8_PIXEL);
 
         let exchanged = gpu
-            .copy_published_surface_frame_to_host_rgba8_image(
-                &published_frame_id.to_string(),
-                None,
-            )
+            .copy_published_surface_frame_to_host_rgba8_image(&published_frame_id.to_string(), None)
             .expect("exchange the published frame");
 
         assert_eq!(
@@ -656,10 +657,7 @@ mod tests {
         fill_pooled_backing_with_a_two_tone_yuyv_frame(&pooled_backing);
 
         let exchanged = gpu
-            .copy_published_surface_frame_to_host_rgba8_image(
-                &published_frame_id.to_string(),
-                None,
-            )
+            .copy_published_surface_frame_to_host_rgba8_image(&published_frame_id.to_string(), None)
             .expect("exchange the YUYV frame");
 
         let dark = pixel_at(&exchanged, 0, 0);
