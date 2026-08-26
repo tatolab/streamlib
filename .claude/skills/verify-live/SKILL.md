@@ -26,7 +26,9 @@ When unsure, default to the more demanding scenario (encode/decode also exercise
 
 It matters because window capture could only ever read a channel that *terminates in a window*, so observing a mid-graph channel meant adding a `DisplayWindow` to look at it — and you were then testing a topology you don't ship. Exchange reads any channel and leaves the graph alone. It is also exact: a window grab returns whatever the compositor composited (scaled, letterboxed), which makes PSNR against it meaningless.
 
-**Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries; `streamlib graph` gives the exact channel names.
+**Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries.
+
+**Deriving the channel name is the one fiddly step.** A channel is `{source_processor_id}/{output_port}`, but the processor-id chunk is **lowercased** — `streamlib graph` prints `Po8z66n…` and the channel is `po8z66n…/video`. Copying the id out of the graph verbatim gets you `no tappable channel named …`. The port name is author-supplied and is *not* normalized, so it rides through exactly as declared (`runtime/streamlib-engine/src/iceoryx2/channel_name.rs`).
 
 ### The spelling you will use — CLI, channel form
 
@@ -47,7 +49,7 @@ The other spellings, when they fit:
 - **Exact bytes over HTTP**: `GET /api/surfaces/{surface_id}/image` → binary `image/png`, full resolution. The evidence and PSNR path.
 
 ### Staleness is a retry, never wrong pixels
-A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
+A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. The refusal states both generations ("this id published generation 105, the slot is on generation 163"), so the gap tells you how far behind the sample fell. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
 
 ### The one surviving env var
 `STREAMLIB_CAMERA_DEVICE` overrides which capture node an example opens. It is read by the example app's own `app.py`, **not** by the engine — so it works for the apps under `examples/` and nowhere else.
@@ -66,7 +68,7 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 ## Modes
 - **SELF-RUN (primary — rig available).** Run the pipeline yourself, no owner in the path. Probe the rig first (device nodes, `$DISPLAY`, `/dev/dri/*`) and only self-run when it is present.
   1. **Launch** under the Bash `dangerouslyDisableSandbox` bypass — the sandbox blocks the rig, and the bypass is what unlocks GPU/V4L2/X11. An app under `examples/` is Python, so there is no build step between an edit and the run: `streamlib run --dir <app>`, backgrounded, with its output redirected to a log file you will grep. Point it at the vivid virtual camera with `STREAMLIB_CAMERA_DEVICE=/dev/videoN` (resolve N by probe; the default grabs whatever capture device the engine finds first). The CLI ships in the wheel — use `sdk/streamlib-python-wheel/.venv/bin/streamlib` when nothing is on PATH.
-  2. **Confirm it is live**: `streamlib nodes` until the node registers, then `streamlib graph` for the topology and the exact channel names. These are control-plane reads — `rig-brake` lets them through, and they need no bypass.
+  2. **Confirm it is live**: `streamlib nodes` until the node registers, then `streamlib graph` for the topology. Derive the channel name from it as above, and `streamlib tap` it once to confirm both the name and the id field before you exchange. These are control-plane reads — `rig-brake` lets them through, and they need no bypass.
   3. **Read pixels**: `streamlib exchange --channel <chan> --out <dir> --count N`, on a channel chosen for what the change touched. Prefer a **mid-graph** channel — that it needs no window is the proof the observation isn't changing the graph.
   4. **Audit**: Read each printed PNG and describe it / compute PSNR, per the checklist below. Attach the PNG(s) to R2 and embed them in the PR (see the `attach-artifact` skill).
   5. **Stop the node** with SIGTERM and require a clean exit — `rt.run()` owns teardown, and a node that needs SIGKILL is a finding, not a flake.
