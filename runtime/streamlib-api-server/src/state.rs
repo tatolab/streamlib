@@ -70,6 +70,7 @@ pub(crate) struct ErrorResponse {
         (name = "graph", description = "Graph inspection"),
         (name = "registry", description = "Processor and schema registry"),
         (name = "runtime", description = "Runtime lifecycle control"),
+        (name = "surfaces", description = "Published-surface pixel exchange"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )
 )]

@@ -111,6 +111,12 @@ vulkanalia = { workspace = true, optional = true }
 # OpenAPI schema derives on the JSON wire types in `core/json_schema.rs`.
 utoipa = { version = "5.3", features = ["axum_extras"] }
 
+# PNG encoding for the control plane's `exchange` verb (surface id in,
+# image bytes out) and decoding for shader-output fixture comparisons.
+# Pure Rust end to end (miniz_oxide / fdeflate), so it links nothing the
+# wheel's portability contract forbids.
+png = "0.17"
+
 # Platform-specific: macOS/iOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2.workspace = true
@@ -177,7 +183,6 @@ hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for logging and runtime tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
-png = "0.17"  # PNG decoding for shader-output fixture comparisons
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against

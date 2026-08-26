@@ -10,7 +10,8 @@ use axum::{
     extract::State,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
-    response::IntoResponse,
+    http::header::CONTENT_TYPE,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use futures_util::{SinkExt, StreamExt};
@@ -46,7 +47,9 @@ fn always_open_routes() -> OpenApiRouter<AppState> {
 
 /// The REST routes the bearer middleware covers when auth is opted in.
 fn bearer_gated_routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::new().routes(routes!(request_runtime_shutdown))
+    OpenApiRouter::new()
+        .routes(routes!(request_runtime_shutdown))
+        .routes(routes!(exchange_published_surface_id_for_png_image))
 }
 
 /// The OpenAPI document for the REST surface, built from the same two route
@@ -218,6 +221,112 @@ pub(crate) async fn request_runtime_shutdown(
         )
             .into_response(),
     }
+}
+
+/// Header carrying the width the surface's own backing holds, so a caller
+/// that asked for a downscaled image still learns the true resolution —
+/// the PNG's own header states only what was encoded.
+///
+/// Parsed once rather than per response: `HeaderName::from_static` panics on
+/// a malformed name, and once at first use beats once per 200.
+static SURFACE_PIXEL_WIDTH_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
+    std::sync::LazyLock::new(|| {
+        axum::http::HeaderName::from_static("x-streamlib-surface-pixel-width")
+    });
+
+/// Height counterpart of [`SURFACE_PIXEL_WIDTH_HEADER`].
+static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
+    std::sync::LazyLock::new(|| {
+        axum::http::HeaderName::from_static("x-streamlib-surface-pixel-height")
+    });
+
+/// Query parameters for the surface exchange.
+#[derive(Deserialize)]
+pub(crate) struct SurfaceImageExchangeQuery {
+    /// Bound the returned image's long edge to this many pixels, aspect
+    /// preserved and never upscaled; absent returns the frame at its exact
+    /// source resolution.
+    downscale_long_edge_pixel_cap: Option<u32>,
+}
+
+/// `GET /api/surfaces/{surface_id}/image` — exchange a published surface id
+/// for that frame's pixels as a PNG.
+///
+/// The exact frame, losslessly, with no window in the graph and no display
+/// server in the path. A pooled frame id carries a `#<generation>` suffix,
+/// so a client percent-encodes it (`slot%237`). The claim on the frame is
+/// taken and released inside the operation; this handler only carries
+/// bytes.
+#[utoipa::path(
+    get,
+    path = "/api/surfaces/{surface_id}/image",
+    tag = "surfaces",
+    params(
+        ("surface_id" = String, Path, description = "A surface id a bag published; percent-encode the `#` of a `<slot>#<generation>` frame id"),
+        ("downscale_long_edge_pixel_cap" = Option<u32>, Query, description = "Bound the image's long edge to this many pixels, aspect preserved and never upscaled; absent returns the exact source resolution")
+    ),
+    responses(
+        (status = 200, description = "The frame as a lossless RGBA8 PNG. `x-streamlib-surface-pixel-width` / `-height` report the surface's own extent, which differs from the image's when a downscale cap applied.", content_type = "image/png"),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
+        (status = 404, description = "No surface of that id resolves on this node", body = ErrorResponse),
+        (status = 410, description = "The id named a frame whose pool slot has since been recycled; tap a newer bag and exchange that", body = ErrorResponse),
+        (status = 501, description = "The surface resolves, but its pixel format has no conversion arm in the RHI yet", body = ErrorResponse),
+        (status = 500, description = "The frame could not be copied off the GPU", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn exchange_published_surface_id_for_png_image(
+    State(state): State<AppState>,
+    Path(surface_id): Path<String>,
+    Query(query): Query<SurfaceImageExchangeQuery>,
+) -> Response {
+    match state
+        .runtime
+        .exchange_published_surface_id_for_png_image_bytes_async(
+            surface_id,
+            query.downscale_long_edge_pixel_cap,
+        )
+        .await
+    {
+        Ok(exchanged) => (
+            StatusCode::OK,
+            [
+                (CONTENT_TYPE, "image/png".to_string()),
+                (
+                    SURFACE_PIXEL_WIDTH_HEADER.clone(),
+                    exchanged.source_surface_pixel_width.to_string(),
+                ),
+                (
+                    SURFACE_PIXEL_HEIGHT_HEADER.clone(),
+                    exchanged.source_surface_pixel_height.to_string(),
+                ),
+            ],
+            exchanged.png_image_bytes,
+        )
+            .into_response(),
+        Err(failure) => surface_exchange_failure_response(&failure),
+    }
+}
+
+/// Status for a refused exchange.
+///
+/// A recycled frame is its own answer: the id was well-formed and the
+/// frame is gone, so the caller taps a newer bag rather than concluding the
+/// surface never existed.
+fn surface_exchange_failure_response(failure: &Error) -> Response {
+    let status = match failure {
+        Error::SurfaceFrameRecycled { .. } => StatusCode::GONE,
+        Error::NotFound(_) => StatusCode::NOT_FOUND,
+        Error::NotSupported(_) => StatusCode::NOT_IMPLEMENTED,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(ErrorResponse {
+            error: failure.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -511,7 +620,7 @@ mod router_surface_and_auth_gate_tests {
         Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
     };
-    use streamlib::sdk::runtime::BoxFuture;
+    use streamlib::sdk::runtime::{BoxFuture, ExchangedPublishedSurfaceFramePngImage};
     use tower::ServiceExt;
 
     /// Stub runtime backing the router tests: it answers the observation ops
@@ -526,6 +635,55 @@ mod router_surface_and_auth_gate_tests {
     #[derive(Default)]
     struct ControlPlaneRouterStubRuntime {
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
+        exchange: StubSurfaceExchange,
+    }
+
+    /// The `(surface id, downscale cap)` pairs the route handed the
+    /// operation, in call order.
+    type RecordedExchangeCalls = Arc<Mutex<Vec<(String, Option<u32>)>>>;
+
+    /// What the stub's `exchange` answers. The bytes are deliberately not a
+    /// PNG: what the route owes is verbatim pass-through plus the right
+    /// headers, and a recognizable string proves that where a real image
+    /// would only prove the encoder still works.
+    #[derive(Clone, Default)]
+    struct StubSurfaceExchange {
+        recorded_calls: RecordedExchangeCalls,
+        recycled_surface_id: Option<String>,
+    }
+
+    const STUB_EXCHANGED_IMAGE_BYTES: &[u8] = b"stub-exchanged-image-bytes";
+    const STUB_SOURCE_SURFACE_EXTENT: (u32, u32) = (1920, 1080);
+
+    impl StubSurfaceExchange {
+        fn answer_for(
+            &self,
+            published_surface_id: &str,
+            downscale_long_edge_pixel_cap: Option<u32>,
+        ) -> Result<ExchangedPublishedSurfaceFramePngImage> {
+            self.recorded_calls.lock().push((
+                published_surface_id.to_string(),
+                downscale_long_edge_pixel_cap,
+            ));
+            if self.recycled_surface_id.as_deref() == Some(published_surface_id) {
+                return Err(Error::SurfaceFrameRecycled {
+                    surface_id: published_surface_id.to_string(),
+                    published_generation: 7,
+                    current_generation: 9,
+                });
+            }
+            let (source_surface_pixel_width, source_surface_pixel_height) =
+                STUB_SOURCE_SURFACE_EXTENT;
+            let encoded_image_pixel_width =
+                downscale_long_edge_pixel_cap.unwrap_or(source_surface_pixel_width);
+            Ok(ExchangedPublishedSurfaceFramePngImage {
+                png_image_bytes: STUB_EXCHANGED_IMAGE_BYTES.to_vec(),
+                encoded_image_pixel_width,
+                encoded_image_pixel_height: source_surface_pixel_height,
+                source_surface_pixel_width,
+                source_surface_pixel_height,
+            })
+        }
     }
 
     impl RuntimeOperations for ControlPlaneRouterStubRuntime {
@@ -547,6 +705,17 @@ mod router_surface_and_auth_gate_tests {
             _count: Option<usize>,
         ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
+        }
+
+        fn exchange_published_surface_id_for_png_image_bytes_async(
+            &self,
+            published_surface_id: String,
+            downscale_long_edge_pixel_cap: Option<u32>,
+        ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
+            let exchange = self.exchange.clone();
+            Box::pin(async move {
+                exchange.answer_for(&published_surface_id, downscale_long_edge_pixel_cap)
+            })
         }
 
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
@@ -849,6 +1018,234 @@ mod router_surface_and_auth_gate_tests {
             status_on(auth_disabled_router(), tap_ws_request()).await,
             StatusCode::UNAUTHORIZED,
             "GET /ws/tap/{{channel}} must be reachable with auth off (no token)"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Surface exchange: a published surface id in, image bytes out
+    // ------------------------------------------------------------------
+
+    /// A published pool frame id is `<slot>#<generation>`, and `#` starts a
+    /// URL fragment — so the wire form is percent-encoded and the route has
+    /// to hand the operation the decoded id.
+    const EXCHANGED_FRAME_ID: &str = "pool-slot-a#7";
+    const EXCHANGED_FRAME_ID_PERCENT_ENCODED: &str = "pool-slot-a%237";
+
+    fn router_with_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
+        build_router(
+            Arc::new(runtime),
+            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    fn router_without_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
+        build_router(
+            Arc::new(runtime),
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    fn exchange_request(uri: &str) -> Request<Body> {
+        Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    fn exchange_uri(surface_id: &str) -> String {
+        format!("/api/surfaces/{surface_id}/image")
+    }
+
+    /// The route's whole job: hand the operation the decoded surface id, and
+    /// carry its bytes back verbatim under `image/png`, with the surface's
+    /// own extent stated alongside.
+    #[tokio::test]
+    async fn the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image() {
+        let runtime = ControlPlaneRouterStubRuntime::default();
+        let recorded = runtime.exchange.recorded_calls.clone();
+        let response = router_without_bearer_auth(runtime)
+            .oneshot(exchange_request(&exchange_uri(
+                EXCHANGED_FRAME_ID_PERCENT_ENCODED,
+            )))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "image/png",
+            "the body is an image, not a JSON envelope carrying one"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(&*SURFACE_PIXEL_WIDTH_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1920"),
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(&*SURFACE_PIXEL_HEIGHT_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1080"),
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            body.as_ref(),
+            STUB_EXCHANGED_IMAGE_BYTES,
+            "the route re-encodes nothing"
+        );
+        assert_eq!(
+            *recorded.lock(),
+            vec![(EXCHANGED_FRAME_ID.to_string(), None)],
+            "the operation must be handed the decoded frame id and no cap"
+        );
+    }
+
+    /// The cap is the MCP spelling's dial, but it reaches the operation
+    /// through the same argument whichever front end spends it.
+    #[tokio::test]
+    async fn the_downscale_cap_reaches_the_operation_from_the_query_string() {
+        let runtime = ControlPlaneRouterStubRuntime::default();
+        let recorded = runtime.exchange.recorded_calls.clone();
+        let status = router_without_bearer_auth(runtime)
+            .oneshot(exchange_request(&format!(
+                "{}?downscale_long_edge_pixel_cap=1568",
+                exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED)
+            )))
+            .await
+            .unwrap()
+            .status();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            *recorded.lock(),
+            vec![(EXCHANGED_FRAME_ID.to_string(), Some(1568))]
+        );
+    }
+
+    /// A recycled frame is `410 Gone`, not `404`: the id was well-formed and
+    /// the frame existed, so the caller taps a newer bag and exchanges that
+    /// rather than concluding the surface never existed. Never `200` with
+    /// the slot's newer pixels.
+    #[tokio::test]
+    async fn a_recycled_frame_id_is_gone_and_the_body_names_the_recycling() {
+        let runtime = ControlPlaneRouterStubRuntime {
+            exchange: StubSurfaceExchange {
+                recycled_surface_id: Some(EXCHANGED_FRAME_ID.to_string()),
+                ..StubSurfaceExchange::default()
+            },
+            ..ControlPlaneRouterStubRuntime::default()
+        };
+        let response = router_without_bearer_auth(runtime)
+            .oneshot(exchange_request(&exchange_uri(
+                EXCHANGED_FRAME_ID_PERCENT_ENCODED,
+            )))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::GONE);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let reported = body["error"].as_str().unwrap_or_default();
+        assert!(
+            reported.contains(EXCHANGED_FRAME_ID),
+            "the refusal must name the id asked for: {reported}"
+        );
+    }
+
+    /// The exchange joins the bearer-gated set beside the tap WebSocket —
+    /// same middleware, same binding. Deleting it from `bearer_gated_routes`
+    /// flips this from 401 to 200.
+    #[tokio::test]
+    async fn the_exchange_route_rejects_a_missing_token_with_401_when_auth_on() {
+        assert_eq!(
+            status_on(
+                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
+                exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn the_exchange_route_rejects_a_wrong_token_with_403() {
+        let mut request = exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED));
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, bearer("not-the-secret").try_into().unwrap());
+        assert_eq!(
+            status_on(
+                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
+                request
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn the_exchange_route_serves_the_image_with_a_valid_token() {
+        let mut request = exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED));
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
+        assert_eq!(
+            status_on(
+                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
+                request
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+
+    /// The zero-ceremony default: with auth off the exchange is open like
+    /// every other observation route.
+    #[tokio::test]
+    async fn the_exchange_route_is_open_with_auth_off() {
+        assert_eq!(
+            status_on(
+                auth_disabled_router(),
+                exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+
+    /// The exchange is part of the documented surface, so a generated client
+    /// can reach it without hand-written paths.
+    #[test]
+    fn the_openapi_spec_documents_the_exchange_route_as_an_image_response() {
+        let spec = control_plane_openapi_spec();
+        let path = spec
+            .paths
+            .paths
+            .get("/api/surfaces/{surface_id}/image")
+            .expect("the exchange route is in the spec");
+        let operation = path.get.as_ref().expect("it is a GET");
+        let ok = operation
+            .responses
+            .responses
+            .get("200")
+            .expect("it documents a 200");
+        let rendered = serde_json::to_string(ok).expect("the 200 response serializes");
+        assert!(
+            rendered.contains("image/png"),
+            "the 200 must be documented as binary PNG: {rendered}"
         );
     }
 }

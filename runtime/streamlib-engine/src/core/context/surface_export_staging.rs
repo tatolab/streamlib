@@ -353,7 +353,7 @@ impl SurfaceExportStagingTextureCopyDirection {
 
 /// What a refill resolved this frame — looked up fresh on every copy so
 /// a rotating producer's re-registration is honoured, never a snapshot.
-enum ResolvedBlitSource {
+pub(crate) enum ResolvedBlitSource {
     RegisteredTexture(crate::core::context::TextureRegistration),
     PixelBuffer(crate::core::rhi::PixelBuffer),
 }
@@ -393,7 +393,10 @@ impl GpuContext {
     /// miss there is a blocking socket round trip, which for a
     /// texture-only surface would be paid on every refill to learn what
     /// the local pool already knows.
-    fn resolve_device_export_source(&self, surface_id: &str) -> Result<ResolvedBlitSource> {
+    pub(crate) fn resolve_device_export_source(
+        &self,
+        surface_id: &str,
+    ) -> Result<ResolvedBlitSource> {
         if let Some(pixel_buffer) = self.pooled_backing_held_in_this_process(surface_id) {
             return Ok(ResolvedBlitSource::PixelBuffer(pixel_buffer));
         }
