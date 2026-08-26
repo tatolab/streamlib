@@ -179,9 +179,6 @@ for i in "${!REF_PNGS[@]}"; do
     mkdir -p "$ref_png_dir"
 
     log_file="$LOG_DIR/${idx}_${name}.log"
-    STREAMLIB_DISPLAY_PNG_SAMPLE_DIR="$ref_png_dir" \
-    STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY="$PNG_SAMPLE_EVERY" \
-    STREAMLIB_DISPLAY_FRAME_LIMIT="$FIXTURE_REPS" \
     DISPLAY="${DISPLAY:-:0}" \
     RUST_LOG=warn,streamlib=info \
     timeout --kill-after=3 "$RUN_SECS" "$BINARY" \

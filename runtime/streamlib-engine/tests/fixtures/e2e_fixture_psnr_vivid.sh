@@ -149,9 +149,6 @@ BINARY="$REPO_ROOT/target/debug/vulkan-video-roundtrip"
 # ── Run ──────────────────────────────────────────────────────────────
 echo "[vivid-color] Running roundtrip..."
 DISPLAY="${DISPLAY:-:0}" \
-STREAMLIB_DISPLAY_PNG_SAMPLE_DIR="$PNG_DIR" \
-STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY="$PNG_SAMPLE_EVERY" \
-STREAMLIB_DISPLAY_FRAME_LIMIT="$FRAME_LIMIT" \
 RUST_LOG=warn,streamlib=info \
 timeout --kill-after=3 $((DURATION_SECS + 8)) \
     "$BINARY" "$CODEC" "$VIVID_DEVICE" "$DURATION_SECS" \
