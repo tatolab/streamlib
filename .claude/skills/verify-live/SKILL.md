@@ -1,6 +1,6 @@
 ---
 name: verify-live
-description: The live end-to-end verification for changes that touch GPU / camera / display / codec. Use when a change needs a real pipeline run (a plain Bash call can't — the rig-brake blocks it), when the owner asks to verify a change on the rig, or when a PR claims E2E evidence that needs auditing. Primary SELF-RUN mode — the session runs the pipeline itself via the dangerouslyDisableSandbox bypass, captures the window, and audits it (log gates, PNG content, PSNR); falls back to the owner-terminal command-block handshake only when the rig is unavailable.
+description: The live end-to-end verification for changes that touch GPU / camera / display / codec. Use when a change needs a real pipeline run (a plain Bash call can't — the rig-brake blocks it), when the owner asks to verify a change on the rig, or when a PR claims E2E evidence that needs auditing. Primary SELF-RUN mode — the session runs the pipeline itself via the dangerouslyDisableSandbox bypass, exchanges tapped surface ids for the frames' pixels, and audits them (log gates, PNG content, PSNR); falls back to the owner-terminal command-block handshake only when the rig is unavailable.
 ---
 
 # verify-live — real-pipeline verification
@@ -8,7 +8,7 @@ description: The live end-to-end verification for changes that touch GPU / camer
 Unit tests come first and catch most bugs. This skill is for the cases they can't reach: GPU/driver, V4L2, swapchain — where a run is the only proof. A plain `Bash` call cannot run the pipeline (exit 144; the `rig-brake` hook blocks rig-consuming commands), but the Bash `dangerouslyDisableSandbox` bypass unlocks the rig — so when the rig is present the session runs the pipeline **itself** (SELF-RUN mode, primary) rather than handing it to the owner. Only when the session can't run it (rig unavailable, bypass denied) does it fall back to the **handshake**: emit the command for the owner's terminal, then audit what it produced. The `evidence-verifier` agent owns the audit and the fallback command block; this skill is the reference it and any reviewer share.
 
 ## Device indices are never hardcoded
-Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, then confirm with a probe (`v4l2-ctl --list-devices`, `--get-fmt-video`). A runtime probe always beats the file. Every `/dev/videoN` in a command block is resolved this way — the indices below are placeholders.
+Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, then confirm with a probe (`v4l2-ctl --list-devices`, `--get-fmt-video`). A runtime probe always beats the file. Every `/dev/videoN` in a command block is resolved this way — the indices below are placeholders. The profile is gitignored and per-machine; when it is absent, the probe is the whole answer.
 
 ## Scenario decision tree
 1. **Can a unit test cover it?** (pure logic, parser, state machine) → write the unit test, done. No rig.
@@ -20,15 +20,40 @@ Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, t
 
 When unsure, default to the more demanding scenario (encode/decode also exercises camera + display). Current run commands live in the fixture scripts under the engine's `tests/fixtures/` — read them for the exact invocation (they drift; don't cache them here).
 
-## Display PNG-sampler env vars
-Set on any windowed run so it self-terminates and writes AI-readable samples:
+## Reading pixels — the exchange door
 
-| env var | effect |
-|---|---|
-| `STREAMLIB_DISPLAY_PNG_SAMPLE_DIR` | directory to write PNG samples into; unset disables sampling |
-| `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY` | sample interval in displayed frames (default 30) |
-| `STREAMLIB_DISPLAY_FRAME_LIMIT` | auto-exit after N frames — **always set this** so no winit window strands |
-| `STREAMLIB_CAMERA_DEVICE` | override the default camera node |
+**You do not need a window to see a frame.** The control plane serves `exchange`: a published surface id in, that frame's pixels out, out of process — no window in the graph, no display server in the path. This is how verification sees pixels.
+
+It matters because window capture could only ever read a channel that *terminates in a window*, so observing a mid-graph channel meant adding a `DisplayWindow` to look at it — and you were then testing a topology you don't ship. Exchange reads any channel and leaves the graph alone. It is also exact: a window grab returns whatever the compositor composited (scaled, letterboxed), which makes PSNR against it meaningless.
+
+**Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries; `streamlib graph` gives the exact channel names.
+
+### The spelling you will use — CLI, channel form
+
+```
+streamlib exchange --channel <processor>/<output_port> --out <dir> --count N [--every N] [--field NAME]
+```
+
+One warm process: it taps, reads a surface id out of each sampled bag, and exchanges it as the bag lands. Writes **exact full-resolution** PNGs into `--out` and prints their paths on stdout, one per line. **Read those printed paths** — `--out` is not cleared, so listing the directory can hand you an older run's frames.
+
+- `--count N` — frames to exchange before returning (default 1). A short sample **exits 1**: fewer frames than you asked for is a failure, not a partial success.
+- `--every N` — exchange every Nth sampled bag, for temporal spread.
+- `--field NAME` — the bag field carrying the id (default `surface_id`). If the run reports bags carrying no id in the named field, name the right one from `streamlib tap`.
+- `--url` / `--node` pin the target node; with neither, the sole live node is resolved.
+
+The other spellings, when they fit:
+- **One id you already have**: `streamlib exchange <SURFACE_ID> --out <dir>`.
+- **In-session view (MCP host wired to the node)**: the `exchange` tool returns an image content block, downscaled to a declared long-edge cap, stating the surface's true extent and the REST route for exact bytes.
+- **Exact bytes over HTTP**: `GET /api/surfaces/{surface_id}/image` → binary `image/png`, full resolution. The evidence and PSNR path.
+
+### Staleness is a retry, never wrong pixels
+A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
+
+### The one surviving env var
+`STREAMLIB_CAMERA_DEVICE` overrides which capture node an example opens. It is read by the example app's own `app.py`, **not** by the engine — so it works for the apps under `examples/` and nowhere else.
+
+## Window capture — only when the window is the subject
+Grabbing the window is still the right tool for exactly one thing: proving the **present / swapchain** path, which is the one stretch of pipeline that exchange does not traverse. `runtime/streamlib-engine/tests/fixtures/e2e_camera_display.sh` does it (`xdotool search --name` → ImageMagick `import`, or `xwd` + `capture_window.py`), and it needs `$DISPLAY`. For anything upstream of the present — the camera frame, a kernel's output, a filter's result — use exchange; a composited grab is the wrong pixels for that job.
 
 ## PSNR rigs
 Three fixture rigs guard the color path; each has bug-injection modes that must deterministically FAIL to prove the gate is live:
@@ -39,7 +64,14 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 **PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout).
 
 ## Modes
-- **SELF-RUN (primary — rig available).** Run the pipeline yourself, no owner in the path. Build in the sandbox as usual, then run the built binary under the Bash `dangerouslyDisableSandbox` bypass (the sandbox blocks the rig; the bypass is what unlocks GPU/V4L2/X11). Recipe that works on this rig: run with `DISPLAY=:1` and `STREAMLIB_CAMERA_DEVICE=/dev/video0` for the vivid virtual camera (the default `None` grabs the Cam Link 4K on `/dev/video4`); set the PNG-sampler env vars below (always `STREAMLIB_DISPLAY_FRAME_LIMIT` so the window self-terminates); capture the window with `xdotool search --name <window> | import -window <id> <png>`; then Read the PNG and describe it / compute PSNR, and audit per the checklist below. Attach the PNG(s) to R2 and embed them in the PR (see the `attach-artifact` skill). Probe the rig first (device nodes, `$DISPLAY`, `/dev/dri/*`) and only self-run when it is present; read-only observation evals auto-run, but a real-world SAFETY gate (actuators, motors, drone control) still asks the owner first.
+- **SELF-RUN (primary — rig available).** Run the pipeline yourself, no owner in the path. Probe the rig first (device nodes, `$DISPLAY`, `/dev/dri/*`) and only self-run when it is present.
+  1. **Launch** under the Bash `dangerouslyDisableSandbox` bypass — the sandbox blocks the rig, and the bypass is what unlocks GPU/V4L2/X11. An app under `examples/` is Python, so there is no build step between an edit and the run: `streamlib run --dir <app>`, backgrounded, with its output redirected to a log file you will grep. Point it at the vivid virtual camera with `STREAMLIB_CAMERA_DEVICE=/dev/videoN` (resolve N by probe; the default grabs whatever capture device the engine finds first). The CLI ships in the wheel — use `sdk/streamlib-python-wheel/.venv/bin/streamlib` when nothing is on PATH.
+  2. **Confirm it is live**: `streamlib nodes` until the node registers, then `streamlib graph` for the topology and the exact channel names. These are control-plane reads — `rig-brake` lets them through, and they need no bypass.
+  3. **Read pixels**: `streamlib exchange --channel <chan> --out <dir> --count N`, on a channel chosen for what the change touched. Prefer a **mid-graph** channel — that it needs no window is the proof the observation isn't changing the graph.
+  4. **Audit**: Read each printed PNG and describe it / compute PSNR, per the checklist below. Attach the PNG(s) to R2 and embed them in the PR (see the `attach-artifact` skill).
+  5. **Stop the node** with SIGTERM and require a clean exit — `rt.run()` owns teardown, and a node that needs SIGKILL is a finding, not a flake.
+
+  Read-only observation evals auto-run, but a real-world SAFETY gate (actuators, motors, drone control) still asks the owner first.
 - **Handshake fallback (rig unavailable / bypass denied).** Print the command block for the owner's terminal, then audit what it produced. Two sub-modes:
   - *Interactive* — print the command block now; the owner runs it; you audit the output directory in the same session.
   - *Async* — the owner comments "done, output in `<dir>`" on the issue; spawn `evidence-verifier` to audit `<dir>` when they report back.
@@ -47,7 +79,7 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 ## Auditing the output (all modes)
 1. **Log gates — all zero.** Grep the pipeline log for `OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`, `process() failed`, `Validation Error`. Any nonzero fails (a `Validation Error` is acceptable only if it also exists on `main` for the same scenario — say so if you claim it).
 2. **Progress markers** — first-frame-encoded/-decoded/-captured and ≥1 progress line fired.
-3. **Read every sampled PNG with the Read tool and describe what it shows.** "Looks fine" is banned. A black/uniform frame with clean logs **IS a regression**.
+3. **Read every exchanged PNG with the Read tool and describe what it shows.** "Looks fine" is banned. A black/uniform frame with clean logs **IS a regression**.
 4. **PSNR vs the pass bar** when a reference exists; for a real camera write `n/a — real-camera source` and treat the visual description as the sole gate.
 5. **Fill the report template below, verbatim.**
 
@@ -57,15 +89,15 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 ### E2E Test Report
 
 - **Scenario**: encoder/decoder | camera+display-only
-- **Example**: `vulkan-video-roundtrip` | `camera-display` | `e2e_camera_display.sh`
+- **App / fixture**: `examples/camera-python-effects` | `examples/camera-display` | `e2e_camera_display.sh`
 - **Codec**: h264 | h265 | n/a
 - **Camera device**: `/dev/videoN` (vivid | Cam Link 4K | other)
 - **Resolution**: 1920x1080 | 1280x720 | other
-- **Duration / frame limit**: `STREAMLIB_DISPLAY_FRAME_LIMIT=… ` (run length in seconds)
-- **Build profile**: debug | release
+- **Run length**: <seconds the node was up before SIGTERM>
+- **Build profile**: debug | release | n/a — Python app, no build step
 - **Command**:
     ```
-    <exact cargo run command with env vars>
+    <exact launch command with env vars, and the exchange command>
     ```
 
 #### Log signals
@@ -77,18 +109,19 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 - `First frame encoded` / `First frame decoded` / `First frame captured`: <timestamps or "not seen">
 - `Encode progress` / `Decode progress` high-water mark: <frames>
 
-#### PNG samples
+#### Exchanged frames
 
-- Directory: `<OUT>/png_samples/`
-- Sample count: <N>
-- Sample interval: `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY=<N>`
-- PNGs read with Read tool: `<file1>`, `<file2>`, …
+- Channel: `<processor>/<output_port>` — <mid-graph, or terminal and why>
+- `DisplayWindow` in the observation path: no | yes — <why the window was the subject>
+- Sampling: `--count <N>` `--every <N>`
+- PNGs read with Read tool: `<path1>`, `<path2>`, … (the paths the run printed)
 - **What was in the image(s)**: <one or two sentences per PNG read — what you
   actually saw. E.g., "frame 60: dark room with chair back and wood door,
   matches the Cam Link scene" or "frame 30: vivid green/purple SMPTE bars
   with `00:00:06:603` timecode overlay, matches expected test pattern". A
   response of "looks fine" is NOT acceptable — describe the content so a
   reviewer can tell at a glance whether you actually looked.>
+- Recycled ids retried / bags missing the id field: <from the run's stderr report, or "none">
 - Anomalies (black frames, tearing, wrong colors, off-center, etc.): <list or "none">
 
 #### PSNR
