@@ -240,6 +240,37 @@ static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> 
         axum::http::HeaderName::from_static("x-streamlib-surface-pixel-height")
     });
 
+/// The REST spelling of the exchange, as an OpenAPI path template.
+///
+/// The MCP tool names this route in its result so a caller that needs the
+/// exact bytes has one call to make; a test asserts the served spec
+/// carries exactly this path, so the two spellings cannot drift.
+pub(crate) const SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE: &str =
+    "/api/surfaces/{surface_id}/image";
+
+/// RFC 3986's unreserved set: everything outside it is percent-encoded into
+/// the route's `{surface_id}` segment. A pooled frame id is
+/// `<slot>#<generation>`, and a bare `#` would make the generation a URL
+/// fragment.
+const SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+
+/// This route's path for one surface id, ready to put on the wire.
+pub(crate) fn surface_image_exchange_route_path_for_surface_id(
+    published_surface_id: &str,
+) -> String {
+    let path_segment = percent_encoding::utf8_percent_encode(
+        published_surface_id,
+        SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET,
+    )
+    .to_string();
+    SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace("{surface_id}", &path_segment)
+}
+
 /// Query parameters for the surface exchange.
 #[derive(Deserialize)]
 pub(crate) struct SurfaceImageExchangeQuery {
@@ -615,12 +646,16 @@ mod router_surface_and_auth_gate_tests {
     //! stub.
 
     use super::*;
+    use crate::control_plane_stub_support::{
+        STUB_EXCHANGED_FRAME_SURFACE_ID, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+    };
     use axum::body::Body;
     use axum::http::{
         Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
     };
-    use streamlib::sdk::runtime::{BoxFuture, ExchangedPublishedSurfaceFramePngImage};
+    use streamlib::sdk::runtime::BoxFuture;
     use tower::ServiceExt;
 
     /// Stub runtime backing the router tests: it answers the observation ops
@@ -636,54 +671,6 @@ mod router_surface_and_auth_gate_tests {
     struct ControlPlaneRouterStubRuntime {
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         exchange: StubSurfaceExchange,
-    }
-
-    /// The `(surface id, downscale cap)` pairs the route handed the
-    /// operation, in call order.
-    type RecordedExchangeCalls = Arc<Mutex<Vec<(String, Option<u32>)>>>;
-
-    /// What the stub's `exchange` answers. The bytes are deliberately not a
-    /// PNG: what the route owes is verbatim pass-through plus the right
-    /// headers, and a recognizable string proves that where a real image
-    /// would only prove the encoder still works.
-    #[derive(Clone, Default)]
-    struct StubSurfaceExchange {
-        recorded_calls: RecordedExchangeCalls,
-        recycled_surface_id: Option<String>,
-    }
-
-    const STUB_EXCHANGED_IMAGE_BYTES: &[u8] = b"stub-exchanged-image-bytes";
-    const STUB_SOURCE_SURFACE_EXTENT: (u32, u32) = (1920, 1080);
-
-    impl StubSurfaceExchange {
-        fn answer_for(
-            &self,
-            published_surface_id: &str,
-            downscale_long_edge_pixel_cap: Option<u32>,
-        ) -> Result<ExchangedPublishedSurfaceFramePngImage> {
-            self.recorded_calls.lock().push((
-                published_surface_id.to_string(),
-                downscale_long_edge_pixel_cap,
-            ));
-            if self.recycled_surface_id.as_deref() == Some(published_surface_id) {
-                return Err(Error::SurfaceFrameRecycled {
-                    surface_id: published_surface_id.to_string(),
-                    published_generation: 7,
-                    current_generation: 9,
-                });
-            }
-            let (source_surface_pixel_width, source_surface_pixel_height) =
-                STUB_SOURCE_SURFACE_EXTENT;
-            let encoded_image_pixel_width =
-                downscale_long_edge_pixel_cap.unwrap_or(source_surface_pixel_width);
-            Ok(ExchangedPublishedSurfaceFramePngImage {
-                png_image_bytes: STUB_EXCHANGED_IMAGE_BYTES.to_vec(),
-                encoded_image_pixel_width,
-                encoded_image_pixel_height: source_surface_pixel_height,
-                source_surface_pixel_width,
-                source_surface_pixel_height,
-            })
-        }
     }
 
     impl RuntimeOperations for ControlPlaneRouterStubRuntime {
@@ -707,17 +694,7 @@ mod router_surface_and_auth_gate_tests {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
 
-        fn exchange_published_surface_id_for_png_image_bytes_async(
-            &self,
-            published_surface_id: String,
-            downscale_long_edge_pixel_cap: Option<u32>,
-        ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
-            let exchange = self.exchange.clone();
-            Box::pin(async move {
-                exchange.answer_for(&published_surface_id, downscale_long_edge_pixel_cap)
-            })
-        }
-
+        crate::control_plane_stub_support::surface_exchange_op_answers_the_stub!();
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
 
@@ -1025,12 +1002,6 @@ mod router_surface_and_auth_gate_tests {
     // Surface exchange: a published surface id in, image bytes out
     // ------------------------------------------------------------------
 
-    /// A published pool frame id is `<slot>#<generation>`, and `#` starts a
-    /// URL fragment — so the wire form is percent-encoded and the route has
-    /// to hand the operation the decoded id.
-    const EXCHANGED_FRAME_ID: &str = "pool-slot-a#7";
-    const EXCHANGED_FRAME_ID_PERCENT_ENCODED: &str = "pool-slot-a%237";
-
     fn router_with_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
         build_router(
             Arc::new(runtime),
@@ -1070,7 +1041,7 @@ mod router_surface_and_auth_gate_tests {
         let recorded = runtime.exchange.recorded_calls.clone();
         let response = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&exchange_uri(
-                EXCHANGED_FRAME_ID_PERCENT_ENCODED,
+                STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
             )))
             .await
             .unwrap();
@@ -1081,19 +1052,20 @@ mod router_surface_and_auth_gate_tests {
             "image/png",
             "the body is an image, not a JSON envelope carrying one"
         );
+        let (source_pixel_width, source_pixel_height) = STUB_SOURCE_SURFACE_EXTENT;
         assert_eq!(
             response
                 .headers()
                 .get(&*SURFACE_PIXEL_WIDTH_HEADER)
                 .and_then(|value| value.to_str().ok()),
-            Some("1920"),
+            Some(source_pixel_width.to_string().as_str()),
         );
         assert_eq!(
             response
                 .headers()
                 .get(&*SURFACE_PIXEL_HEIGHT_HEADER)
                 .and_then(|value| value.to_str().ok()),
-            Some("1080"),
+            Some(source_pixel_height.to_string().as_str()),
         );
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -1106,7 +1078,7 @@ mod router_surface_and_auth_gate_tests {
         );
         assert_eq!(
             *recorded.lock(),
-            vec![(EXCHANGED_FRAME_ID.to_string(), None)],
+            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), None)],
             "the operation must be handed the decoded frame id and no cap"
         );
     }
@@ -1120,7 +1092,7 @@ mod router_surface_and_auth_gate_tests {
         let status = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&format!(
                 "{}?downscale_long_edge_pixel_cap=1568",
-                exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED)
+                exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED)
             )))
             .await
             .unwrap()
@@ -1129,7 +1101,7 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             *recorded.lock(),
-            vec![(EXCHANGED_FRAME_ID.to_string(), Some(1568))]
+            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), Some(1568))]
         );
     }
 
@@ -1140,15 +1112,12 @@ mod router_surface_and_auth_gate_tests {
     #[tokio::test]
     async fn a_recycled_frame_id_is_gone_and_the_body_names_the_recycling() {
         let runtime = ControlPlaneRouterStubRuntime {
-            exchange: StubSurfaceExchange {
-                recycled_surface_id: Some(EXCHANGED_FRAME_ID.to_string()),
-                ..StubSurfaceExchange::default()
-            },
+            exchange: StubSurfaceExchange::refusing_as_recycled(STUB_EXCHANGED_FRAME_SURFACE_ID),
             ..ControlPlaneRouterStubRuntime::default()
         };
         let response = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&exchange_uri(
-                EXCHANGED_FRAME_ID_PERCENT_ENCODED,
+                STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
             )))
             .await
             .unwrap();
@@ -1160,7 +1129,7 @@ mod router_surface_and_auth_gate_tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let reported = body["error"].as_str().unwrap_or_default();
         assert!(
-            reported.contains(EXCHANGED_FRAME_ID),
+            reported.contains(STUB_EXCHANGED_FRAME_SURFACE_ID),
             "the refusal must name the id asked for: {reported}"
         );
     }
@@ -1173,7 +1142,9 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(
             status_on(
                 router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
-                exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
+                exchange_request(&exchange_uri(
+                    STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
+                ))
             )
             .await,
             StatusCode::UNAUTHORIZED
@@ -1182,7 +1153,9 @@ mod router_surface_and_auth_gate_tests {
 
     #[tokio::test]
     async fn the_exchange_route_rejects_a_wrong_token_with_403() {
-        let mut request = exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED));
+        let mut request = exchange_request(&exchange_uri(
+            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        ));
         request
             .headers_mut()
             .insert(AUTHORIZATION, bearer("not-the-secret").try_into().unwrap());
@@ -1198,7 +1171,9 @@ mod router_surface_and_auth_gate_tests {
 
     #[tokio::test]
     async fn the_exchange_route_serves_the_image_with_a_valid_token() {
-        let mut request = exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED));
+        let mut request = exchange_request(&exchange_uri(
+            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        ));
         request
             .headers_mut()
             .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
@@ -1219,7 +1194,9 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(
             status_on(
                 auth_disabled_router(),
-                exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
+                exchange_request(&exchange_uri(
+                    STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
+                ))
             )
             .await,
             StatusCode::OK
@@ -1234,8 +1211,8 @@ mod router_surface_and_auth_gate_tests {
         let path = spec
             .paths
             .paths
-            .get("/api/surfaces/{surface_id}/image")
-            .expect("the exchange route is in the spec");
+            .get(SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE)
+            .expect("the exchange route is in the spec, at the path the MCP tool names");
         let operation = path.get.as_ref().expect("it is a GET");
         let ok = operation
             .responses

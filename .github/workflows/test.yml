@@ -148,3 +148,9 @@ jobs:
           # pre-existing `println!` in test code that trips
           # `clippy::disallowed_macros` under `--all-targets`.
           cargo test --locked -p streamlib-consumer-rhi --lib
+          # The control plane was reached by no cargo invocation here for the
+          # same reason: the clippy step builds default targets and never its
+          # test target. These are the only tests of the REST routes and the
+          # MCP tool dispatch — the surface an agent and every programmatic
+          # client drive the runtime through.
+          cargo test --locked -p streamlib-api-server --lib
