@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.6](https://github.com/tatolab/streamlib/compare/v0.18.5...v0.18.6) (2026-08-26)
+
+
+### Features
+
+* **python:** ProcessorOutputTextureRing — allocate-once output texture ring for helper processors ([#1969](https://github.com/tatolab/streamlib/issues/1969)) ([177b118](https://github.com/tatolab/streamlib/commit/177b118e6d2fcd8d142cc69cfa795c507d5cd733))
+
 ## [0.18.5](https://github.com/tatolab/streamlib/compare/v0.18.4...v0.18.5) (2026-08-25)
 
 
