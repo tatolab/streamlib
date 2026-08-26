@@ -38,19 +38,32 @@ names_an_example() {
   cwd_has '(^|/)examples(/|$)' || has '(^|[^[:alnum:]_.-])examples/'
 }
 
-# `streamlib` has to sit at a command position: a session greps its own skill
-# text constantly, and quoting the launch path is not launching anything. The
-# observation verbs (nodes/graph/tap/logs/exchange) are control-plane reads and
-# deliberately fall through — /verify-live's own procedure runs them per frame.
-if has '(^|[;&|]|[[:space:]])([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)' \
+# A text tool that merely carries the launch path in an argument is not the
+# launch path. `git commit -m "… streamlib run --dir examples/x"` and
+# `sed 's|streamlib run|…|' examples/README.md` are the commands a session
+# writing about this hook actually runs, and prompting on them is what teaches
+# an owner to click through without reading.
+#
+# The cost is that a compound LED by a text tool hides a real launch behind it
+# (`git status && streamlib run …`). That trade is deliberate: those are rare
+# and cost one exit-144, while the quoted-prose commands above are constant.
+mentions_it_as_text() {
+  has '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(git|gh|sed|grep|rg|awk|perl|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)'
+}
+
+# `streamlib` has to sit at a command position — start of the command or just
+# past a separator, after any env-var assignments. The observation verbs
+# (nodes/graph/tap/logs/exchange) are control-plane reads and deliberately fall
+# through: /verify-live's own procedure runs them per frame, and a prompt there
+# would stall the audit it exists to perform.
+if ! mentions_it_as_text \
+   && has '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)' \
    && names_an_example; then
   ask_rig
 fi
 
-if has 'cargo[[:space:]]+run'; then
-  if has '(-p|--package)[[:space:]]+vulkan-video-roundtrip' || names_an_example; then
-    ask_rig
-  fi
+if has 'cargo[[:space:]]+run' && names_an_example; then
+  ask_rig
 fi
 
 # 3. e2e_ fixture scripts under tests/fixtures/.

@@ -28,7 +28,7 @@ It matters because window capture could only ever read a channel that *terminate
 
 **Ids come from bags, and the engine never reads one for you.** Tap is untouched — it forwards bags verbatim. The consumer decodes the bag, finds the surface id, and exchanges it. `streamlib tap <channel>` shows what a bag actually carries.
 
-**Deriving the channel name is the one fiddly step.** A channel is `{source_processor_id}/{output_port}`, but the processor-id chunk is **lowercased** — `streamlib graph` prints `Po8z66n…` and the channel is `po8z66n…/video`. Copying the id out of the graph verbatim gets you `no tappable channel named …`. The port name is author-supplied and is *not* normalized, so it rides through exactly as declared (`runtime/streamlib-engine/src/iceoryx2/channel_name.rs`).
+**Deriving the channel name is the one fiddly step.** A channel is `{source_processor_id}/{output_port}`, but the processor-id chunk is **lowercased** — `streamlib graph` prints `Po8z66n…` and the channel is `po8z66n…/video`. Copying the id out of the graph verbatim gets you `no tappable channel named …`. The port name is author-supplied and is *not* normalized, so it rides through exactly as declared. Lowercasing is the whole recipe for a default `P{cuid2}` id; a name long enough to overflow the wire bound hash-legalizes the processor chunk instead, so derive it rather than assume (`runtime/streamlib-engine/src/iceoryx2/channel_name.rs`).
 
 ### The spelling you will use — CLI, channel form
 
@@ -36,17 +36,19 @@ It matters because window capture could only ever read a channel that *terminate
 streamlib exchange --channel <processor>/<output_port> --out <dir> --count N [--every N] [--field NAME]
 ```
 
-One warm process: it taps, reads a surface id out of each sampled bag, and exchanges it as the bag lands. Writes **exact full-resolution** PNGs into `--out` and prints their paths on stdout, one per line. **Read those printed paths** — `--out` is not cleared, so listing the directory can hand you an older run's frames.
+One warm process: it taps a bounded round of bags, reads a surface id out of each sampled bag, and exchanges them — per tap round, not per bag as it lands. Writes **exact full-resolution** PNGs into `--out` and prints their paths on stdout, one per line. **Read those printed paths** — `--out` is not cleared, so listing the directory can hand you an older run's frames.
 
 - `--count N` — frames to exchange before returning (default 1). A short sample **exits 1**: fewer frames than you asked for is a failure, not a partial success.
 - `--every N` — exchange every Nth sampled bag, for temporal spread.
 - `--field NAME` — the bag field carrying the id (default `surface_id`). If the run reports bags carrying no id in the named field, name the right one from `streamlib tap`.
 - `--url` / `--node` pin the target node; with neither, the sole live node is resolved.
 
+**Two shipped ceilings, so you can tell a bound from a regression.** The run gives up after **8 tap rounds** and returns short (exit 1) — on a fast-recycling channel that is the bound, not a broken channel. And `tap` previews only the first **4096 bytes** of a bag: a *selected* bag longer than that fails the channel form by name, and the single-id form is the way through (tap the channel, pull the id yourself, exchange it).
+
 The other spellings, when they fit:
 - **One id you already have**: `streamlib exchange <SURFACE_ID> --out <dir>`.
 - **In-session view (MCP host wired to the node)**: the `exchange` tool returns an image content block, downscaled to a declared long-edge cap, stating the surface's true extent and the REST route for exact bytes.
-- **Exact bytes over HTTP**: `GET /api/surfaces/{surface_id}/image` → binary `image/png`, full resolution. The evidence and PSNR path.
+- **Exact bytes over HTTP**: `GET /api/surfaces/{surface_id}/image` → binary `image/png`, full resolution. The evidence and PSNR path. **Percent-encode the id**: its `#<generation>` suffix is a URL fragment otherwise, so `curl …/api/surfaces/abc#105/image` asks for `/api/surfaces/abc` and the generation never reaches the server — send `abc%23105`. On a token-enabled node this route is bearer-gated beside the tap WebSocket.
 
 ### Staleness is a retry, never wrong pixels
 A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The refusal states both generations ("this id published generation 105, the slot is on generation 163"), and that gap measures how far behind the sample fell. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.

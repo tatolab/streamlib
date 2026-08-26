@@ -99,16 +99,50 @@ expect_silent "streamlib graph is a control-plane read"
 run_hook 'streamlib logs abc123'
 expect_silent "streamlib logs is a control-plane read"
 
-# Prose mentioning the launch path is not the launch path. A session greps its
-# own skill text constantly; quoting `streamlib run` must not cost a prompt.
+# Prose mentioning the launch path is not the launch path. A session working on
+# this hook writes these constantly; prompting on them is what teaches an owner
+# to click through without reading, which costs every other key its meaning.
 run_hook 'grep -rn "streamlib run" examples/ .claude/'
 expect_silent "grepping for the words streamlib run does not escalate"
+
+run_hook 'git commit -m "fix(cli): streamlib run --dir examples/foo now resolves app.py"'
+expect_silent "a commit message quoting the launch path does not escalate"
+
+run_hook 'gh pr create --title docs --body "run it with streamlib run --dir examples/x"'
+expect_silent "a PR body quoting the launch path does not escalate"
+
+run_hook 'sed -i "s|streamlib run |streamlib dev |" examples/camera-display/README.md'
+expect_silent "rewriting the launch path in a doc does not escalate"
+
+# The accepted cost of that suppression: a compound whose FIRST word is a text
+# tool hides a real launch behind it. Rare, and the failure is a benign exit
+# 144, where the false positives above are frequent and corrosive. A compound
+# led by anything else still escalates — see the `cd` case below.
+run_hook 'git status && streamlib run --dir examples/camera-display'
+expect_silent "a launch hidden behind a leading text tool is NOT braked (accepted trade-off)"
+
+run_hook 'cd examples/camera-display && streamlib run'
+expect_ask "a compound not led by a text tool still escalates"
+
+# ── The class this key deliberately does NOT cover ───────────────────
+# The ticket scopes the launch key to apps under examples/. `streamlib new`
+# scaffolds an app anywhere, and running one boots a Runtime and a GPU context
+# just the same — so these are unbraked by construction, not by accident.
+# Locked here so the gap is visible and a decision to close it fails loudly.
+run_hook 'streamlib run --dir /tmp/myapp'
+expect_silent "a scaffolded app outside examples/ is NOT braked (scoped by the ticket)"
+
+run_hook 'streamlib dev --dir /home/dev/scaffolds/camera-app'
+expect_silent "streamlib dev outside examples/ is NOT braked (scoped by the ticket)"
 
 # ── cargo run ────────────────────────────────────────────────────────
 # examples/* are not workspace members, so no `-p` spelling resolves one. The
 # example crates that remain are reached by cwd or manifest path.
 run_hook 'cargo run -p camera-display'
 expect_silent "cargo run -p camera-display names a crate that no longer exists"
+
+run_hook 'cargo run -p vulkan-video-roundtrip'
+expect_silent "no -p spelling reaches an example, so neither dead key survives"
 
 run_hook 'cargo run --release' '/home/dev/streamlib/examples/vulkan-video-roundtrip'
 expect_ask "cargo run from inside an example directory escalates"
