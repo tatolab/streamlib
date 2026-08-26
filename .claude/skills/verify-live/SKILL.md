@@ -49,7 +49,7 @@ The other spellings, when they fit:
 - **Exact bytes over HTTP**: `GET /api/surfaces/{surface_id}/image` → binary `image/png`, full resolution. The evidence and PSNR path.
 
 ### Staleness is a retry, never wrong pixels
-A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. The refusal states both generations ("this id published generation 105, the slot is on generation 163"), so the gap tells you how far behind the sample fell. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
+A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The refusal states both generations ("this id published generation 105, the slot is on generation 163"), and that gap measures how far behind the sample fell. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
 
 ### The one surviving env var
 `STREAMLIB_CAMERA_DEVICE` overrides which capture node an example opens. It is read by the example app's own `app.py`, **not** by the engine — so it works for the apps under `examples/` and nowhere else.
