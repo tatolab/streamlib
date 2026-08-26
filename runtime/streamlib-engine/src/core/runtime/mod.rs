@@ -10,6 +10,7 @@ mod runtime;
 mod runtime_shutdown_request;
 mod runtime_unique_id;
 mod status;
+mod surface_image_exchange;
 mod tap;
 
 pub use operations::{BoxFuture, RuntimeOperations};
@@ -22,4 +23,5 @@ pub use runtime_shutdown_request::{
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
+pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
 pub use tap::TapSubscription;

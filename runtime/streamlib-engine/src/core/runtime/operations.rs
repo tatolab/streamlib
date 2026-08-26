@@ -4,7 +4,7 @@
 use crate::core::error::Result;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
-use crate::core::runtime::TapSubscription;
+use crate::core::runtime::{ExchangedPublishedSurfaceFramePngImage, TapSubscription};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -90,6 +90,41 @@ pub trait RuntimeOperations: Send + Sync {
         channel: String,
         count: Option<usize>,
     ) -> BoxFuture<'_, Result<TapSubscription>>;
+
+    /// Exchange a published surface id for that frame's pixels, encoded as
+    /// a PNG.
+    ///
+    /// `published_surface_id` is a surface id a bag carried
+    /// (`<slot>#<generation>` for a pooled frame). The operation resolves
+    /// it, claims the frame through the pool's own claim seam, converts
+    /// and copies it to the host under that claim, releases, and only then
+    /// encodes — so an encoder's cost never extends the window a producer
+    /// is kept out of its own slot.
+    ///
+    /// `downscale_long_edge_pixel_cap` bounds the encoded image's long
+    /// edge, preserving aspect and never upscaling; `None` returns the
+    /// frame at its exact source resolution. The result reports both
+    /// extents, so a caller handing on a reduced image can still state the
+    /// true one.
+    ///
+    /// Composes with [`Self::tap_async`] entirely at the caller: this
+    /// never attaches to a channel and the engine inspects no bag content
+    /// — a consumer decodes its own bag, reads the field it knows carries
+    /// a surface id, and calls this with it.
+    ///
+    /// A retired frame id fails with [`Error::SurfaceFrameRecycled`]
+    /// before any bytes move, never resolving to the slot's newer pixels;
+    /// the caller taps a newer bag and exchanges that.
+    ///
+    /// There is no sync variant: the copy blocks on the GPU, so every
+    /// caller is already async or on a blocking pool.
+    ///
+    /// [`Error::SurfaceFrameRecycled`]: crate::core::error::Error::SurfaceFrameRecycled
+    fn exchange_published_surface_id_for_png_image_bytes_async(
+        &self,
+        published_surface_id: String,
+        downscale_long_edge_pixel_cap: Option<u32>,
+    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>>;
 
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)

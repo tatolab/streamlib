@@ -8,7 +8,9 @@ pub(crate) mod isolation;
 mod runtime_context;
 pub(crate) mod surface_check_out_lease_registry;
 #[cfg(target_os = "linux")]
-mod surface_export_staging;
+pub(crate) mod surface_export_staging;
+#[cfg(target_os = "linux")]
+pub(crate) mod surface_pixel_exchange;
 pub(crate) mod surface_store;
 pub mod texture_pool;
 pub(crate) mod texture_registration;

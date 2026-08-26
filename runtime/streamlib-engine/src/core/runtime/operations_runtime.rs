@@ -6,12 +6,14 @@ use std::sync::Arc;
 use super::Runner;
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
+use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent,
 };
 use crate::core::processors::{ProcessorSpec, ProcessorState};
+use crate::core::runtime::ExchangedPublishedSurfaceFramePngImage;
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
@@ -417,6 +419,53 @@ impl RuntimeOperations for Runner {
                 Error::Runtime(format!(
                     "channel-tap start task failed to join: {join_error}"
                 ))
+            })?
+        })
+    }
+
+    #[tracing::instrument(
+        name = "runtime.exchange",
+        skip(self),
+        fields(
+            surface_id = %published_surface_id,
+            downscale_long_edge_pixel_cap = ?downscale_long_edge_pixel_cap,
+        )
+    )]
+    fn exchange_published_surface_id_for_png_image_bytes_async(
+        &self,
+        published_surface_id: String,
+        downscale_long_edge_pixel_cap: Option<u32>,
+    ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
+        // Read the context BEFORE spawning: a node that has not started has
+        // no pool to claim from and no device to convert on, and saying so
+        // here names the actual state rather than failing inside a resolve.
+        let gpu_context = self
+            .runtime_context
+            .lock()
+            .as_ref()
+            .map(|runtime_context| runtime_context.gpu.clone())
+            .ok_or_else(|| {
+                Error::Runtime(
+                    "the runtime has no GPU context, so no surface can be exchanged for an                      image; start the runtime first"
+                        .into(),
+                )
+            });
+
+        Box::pin(async move {
+            let gpu_context = gpu_context?;
+            // The copy blocks on the GPU and the encode on the CPU; both
+            // run off the async worker so a tap streaming on the same
+            // control plane keeps its cadence.
+            tokio::task::spawn_blocking(move || {
+                exchange_published_surface_id_for_png_image_bytes(
+                    &gpu_context,
+                    &published_surface_id,
+                    downscale_long_edge_pixel_cap,
+                )
+            })
+            .await
+            .map_err(|join_error| {
+                Error::Runtime(format!("surface-exchange task failed to join: {join_error}"))
             })?
         })
     }
