@@ -233,16 +233,17 @@ impl GpuContext {
                 // caller would get bytes from a later frame under the id it
                 // asked for. The blit is what makes every later step read
                 // storage the exchange owns.
-                let composed = self.blit_texture_into_an_exchange_image_texture(
-                    registration.texture(),
-                    registration.current_layout(),
-                    image_pixel_width,
-                    image_pixel_height,
-                )?;
+                let exchange_image_blitted_from_the_producer_texture = self
+                    .blit_texture_into_an_exchange_image_texture(
+                        registration.texture(),
+                        registration.current_layout(),
+                        image_pixel_width,
+                        image_pixel_height,
+                    )?;
                 // The blit left the producer's texture sampled, and the
                 // registration is what its next consumer barriers from.
                 registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-                Ok(composed)
+                Ok(exchange_image_blitted_from_the_producer_texture)
             }
         }
     }
