@@ -248,6 +248,29 @@ static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> 
 pub(crate) const SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE: &str =
     "/api/surfaces/{surface_id}/image";
 
+/// RFC 3986's unreserved set: everything outside it is percent-encoded into
+/// the route's `{surface_id}` segment. A pooled frame id is
+/// `<slot>#<generation>`, and a bare `#` would make the generation a URL
+/// fragment.
+const SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET: &percent_encoding::AsciiSet =
+    &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+
+/// This route's path for one surface id, ready to put on the wire.
+pub(crate) fn surface_image_exchange_route_path_for_surface_id(
+    published_surface_id: &str,
+) -> String {
+    let path_segment = percent_encoding::utf8_percent_encode(
+        published_surface_id,
+        SURFACE_ID_PATH_SEGMENT_PERCENT_ENCODE_ASCII_SET,
+    )
+    .to_string();
+    SURFACE_IMAGE_EXCHANGE_ROUTE_PATH_TEMPLATE.replace("{surface_id}", &path_segment)
+}
+
 /// Query parameters for the surface exchange.
 #[derive(Deserialize)]
 pub(crate) struct SurfaceImageExchangeQuery {
@@ -624,8 +647,8 @@ mod router_surface_and_auth_gate_tests {
 
     use super::*;
     use crate::control_plane_stub_support::{
-        EXCHANGED_FRAME_ID, EXCHANGED_FRAME_ID_PERCENT_ENCODED, STUB_EXCHANGED_IMAGE_BYTES,
-        STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+        STUB_EXCHANGED_FRAME_SURFACE_ID, STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
     };
     use axum::body::Body;
     use axum::http::{
@@ -1018,7 +1041,7 @@ mod router_surface_and_auth_gate_tests {
         let recorded = runtime.exchange.recorded_calls.clone();
         let response = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&exchange_uri(
-                EXCHANGED_FRAME_ID_PERCENT_ENCODED,
+                STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
             )))
             .await
             .unwrap();
@@ -1055,7 +1078,7 @@ mod router_surface_and_auth_gate_tests {
         );
         assert_eq!(
             *recorded.lock(),
-            vec![(EXCHANGED_FRAME_ID.to_string(), None)],
+            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), None)],
             "the operation must be handed the decoded frame id and no cap"
         );
     }
@@ -1069,7 +1092,7 @@ mod router_surface_and_auth_gate_tests {
         let status = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&format!(
                 "{}?downscale_long_edge_pixel_cap=1568",
-                exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED)
+                exchange_uri(STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED)
             )))
             .await
             .unwrap()
@@ -1078,7 +1101,7 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             *recorded.lock(),
-            vec![(EXCHANGED_FRAME_ID.to_string(), Some(1568))]
+            vec![(STUB_EXCHANGED_FRAME_SURFACE_ID.to_string(), Some(1568))]
         );
     }
 
@@ -1089,12 +1112,12 @@ mod router_surface_and_auth_gate_tests {
     #[tokio::test]
     async fn a_recycled_frame_id_is_gone_and_the_body_names_the_recycling() {
         let runtime = ControlPlaneRouterStubRuntime {
-            exchange: StubSurfaceExchange::refusing_as_recycled(EXCHANGED_FRAME_ID),
+            exchange: StubSurfaceExchange::refusing_as_recycled(STUB_EXCHANGED_FRAME_SURFACE_ID),
             ..ControlPlaneRouterStubRuntime::default()
         };
         let response = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&exchange_uri(
-                EXCHANGED_FRAME_ID_PERCENT_ENCODED,
+                STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
             )))
             .await
             .unwrap();
@@ -1106,7 +1129,7 @@ mod router_surface_and_auth_gate_tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let reported = body["error"].as_str().unwrap_or_default();
         assert!(
-            reported.contains(EXCHANGED_FRAME_ID),
+            reported.contains(STUB_EXCHANGED_FRAME_SURFACE_ID),
             "the refusal must name the id asked for: {reported}"
         );
     }
@@ -1119,7 +1142,9 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(
             status_on(
                 router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
-                exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
+                exchange_request(&exchange_uri(
+                    STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
+                ))
             )
             .await,
             StatusCode::UNAUTHORIZED
@@ -1128,7 +1153,9 @@ mod router_surface_and_auth_gate_tests {
 
     #[tokio::test]
     async fn the_exchange_route_rejects_a_wrong_token_with_403() {
-        let mut request = exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED));
+        let mut request = exchange_request(&exchange_uri(
+            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        ));
         request
             .headers_mut()
             .insert(AUTHORIZATION, bearer("not-the-secret").try_into().unwrap());
@@ -1144,7 +1171,9 @@ mod router_surface_and_auth_gate_tests {
 
     #[tokio::test]
     async fn the_exchange_route_serves_the_image_with_a_valid_token() {
-        let mut request = exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED));
+        let mut request = exchange_request(&exchange_uri(
+            STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED,
+        ));
         request
             .headers_mut()
             .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
@@ -1165,7 +1194,9 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(
             status_on(
                 auth_disabled_router(),
-                exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
+                exchange_request(&exchange_uri(
+                    STUB_EXCHANGED_FRAME_SURFACE_ID_PERCENT_ENCODED
+                ))
             )
             .await,
             StatusCode::OK
