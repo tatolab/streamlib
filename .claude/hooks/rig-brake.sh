@@ -30,11 +30,25 @@ if has '\bffmpeg\b' && has '\-f[[:space:]]+v4l2|/dev/video[0-9]+'; then
   ask_rig
 fi
 
-# 2. cargo run for example crates that open camera/display at runtime.
+# 2. Launching an example app, which opens a camera/display at runtime. Two
+#    spellings: `streamlib run`/`dev` for the Python apps, `cargo run` for the
+#    example crates still written in Rust. examples/* are not workspace members,
+#    so neither spelling reaches one by `-p` from the repo root.
+names_an_example() {
+  cwd_has '(^|/)examples(/|$)' || has '(^|[^[:alnum:]_.-])examples/'
+}
+
+# `streamlib` has to sit at a command position: a session greps its own skill
+# text constantly, and quoting the launch path is not launching anything. The
+# observation verbs (nodes/graph/tap/logs/exchange) are control-plane reads and
+# deliberately fall through — /verify-live's own procedure runs them per frame.
+if has '(^|[;&|]|[[:space:]])([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)' \
+   && names_an_example; then
+  ask_rig
+fi
+
 if has 'cargo[[:space:]]+run'; then
-  if has '(-p|--package)[[:space:]]+(camera-display|vulkan-video-roundtrip)' \
-     || cwd_has '(^|/)examples(/|$)' \
-     || has '(^|[^[:alnum:]_.-])examples/'; then
+  if has '(-p|--package)[[:space:]]+vulkan-video-roundtrip' || names_an_example; then
     ask_rig
   fi
 fi
