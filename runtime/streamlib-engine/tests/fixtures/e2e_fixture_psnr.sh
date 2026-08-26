@@ -151,9 +151,6 @@ trap cleanup EXIT
 RUN_SECS=$(( TOTAL_FRAMES / FPS + 8 ))
 echo "[psnr] Running pipeline for ~${RUN_SECS}s (reps=$FIXTURE_REPS, every=$PNG_SAMPLE_EVERY)..."
 
-STREAMLIB_DISPLAY_PNG_SAMPLE_DIR="$PNG_DIR" \
-STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY="$PNG_SAMPLE_EVERY" \
-STREAMLIB_DISPLAY_FRAME_LIMIT="$TOTAL_FRAMES" \
 DISPLAY="${DISPLAY:-:0}" \
 RUST_LOG=warn,streamlib=info,vulkan_video=info \
 timeout --kill-after=3 "$RUN_SECS" "$BINARY" \
