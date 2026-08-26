@@ -370,9 +370,12 @@ Per-adapter conformance:
    `HostVulkanDevice::validation_layer_message_counts()` around both the
    burst and the adapter's teardown.
 
-2. **E2E** — `camera-python-display` through the full multi-process
-   polyglot pipeline with `VK_LOADER_LAYERS_ENABLE=*validation*`.
-   Zero timeline-monotonicity validation errors.
+2. **E2E** — the pre-pivot `camera-python-display` example through the
+   full multi-process polyglot pipeline with
+   `VK_LOADER_LAYERS_ENABLE=*validation*`, for zero
+   timeline-monotonicity validation errors. That example is retired and
+   this arm has no in-tree stand-in: the surface adapters it drove are no
+   longer wired from any example.
 
 When a new adapter lands, add the same dual-timeline conformance
 coverage to its tests; the single-writer-per-timeline contract is

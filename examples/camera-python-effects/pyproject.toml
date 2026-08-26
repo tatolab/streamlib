@@ -1,0 +1,52 @@
+[project]
+name = "camera-python-effects"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    # `ProcessorOutputTextureRing` ships from 0.18.6; the index serves it
+    # once the release that precedes this example lands.
+    "streamlib>=0.18.6",
+    "numpy>=2.1",
+    # The bridge processor's device-to-device copy. Any DLPack-speaking GPU
+    # array package would do; cupy is the smallest one that does nothing else.
+    # Its CUDA major version has to match the one torch brings below, or the
+    # two disagree about which cuDNN is on the loader path and inference fails
+    # with a sublibrary version mismatch.
+    "cupy-cuda13x>=14.2",
+    # The overlay generator's 2D canvas. Not in the wheel's adapter closure —
+    # it is an ordinary PyPI dependency of this app, like any other.
+    "skia-python>=138",
+    # Pose detection: 33 landmarks with real depth, model bundled in the
+    # wheel, CPU-fast — no torch, no CUDA stack to disagree with.
+    "mediapipe>=0.10.14",
+    # The avatar's own GL world: offscreen render of the posed android.
+    "moderngl>=5.10",
+]
+
+# streamlib is served from its own simple index until the PyPI publication that
+# follows the project rename; everything else resolves from PyPI as usual.
+[[tool.uv.index]]
+name = "streamlib"
+url = "https://tatolab.github.io/streamlib/simple/"
+explicit = true
+
+[tool.uv.sources]
+streamlib = { index = "streamlib" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/camera_python_effects"]
+
+[project.optional-dependencies]
+# The LeRobot bridge: `uv sync --extra lerobot` (or install lerobot[dataset]
+# by hand). Only the recorder processor's helper imports it.
+lerobot = ["lerobot[dataset]>=0.6"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

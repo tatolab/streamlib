@@ -25,7 +25,7 @@ def setup(rt: Runtime) -> None:
 - This app declares no processor of its own. One that did would live in its own
   module — never in `app.py` — because every Python processor runs in its own
   child interpreter that imports the class by name. `streamlib new` scaffolds
-  that shape; see `examples/camera-python-display` for processors in anger.
+  that shape; see `examples/camera-python-effects` for processors in anger.
 
 ## Run it
 

@@ -40,11 +40,11 @@ that the demo needs to bypass (typically `VULKANALIA_ALLOWLIST` and
   PR that lands the engine feature.
 
 ```rust
-// camera-python-display (#487) — TRANSITIONAL exception. Removed
-// when RDG (#631) ships and absorbs the kernel wrappers into
-// render-graph passes.
+// some-example (#487) — TRANSITIONAL exception. Removed when RDG
+// (#631) ships and absorbs the kernel wrappers into render-graph
+// passes.
 AllowEntry {
-    path: "examples/camera-python-display/",
+    path: "examples/some-example/",
     kind: AllowKind::PathPrefix,
     rationale: "transitional kernel-wrapper sandbox pending RDG (#631)",
 },
@@ -139,15 +139,13 @@ These are the failure modes the recipe exists to prevent:
 
 ## Reference
 
-- First in-tree application: #487 (camera-python-display kernel
-  wrappers + shaders relocated from `runtime/streamlib-engine/src/vulkan/rhi/`
-  into the example crate, gated for RDG #631).
+- First in-tree application: #487 (the pre-pivot `camera-python-display`
+  kernel wrappers + shaders relocated from
+  `runtime/streamlib-engine/src/vulkan/rhi/` into the example crate, gated
+  for RDG #631). That example is retired and carried no allowlist entry by
+  the end — the wrappers rode `VulkanGraphicsKernel::offscreen_render` and
+  `RhiCommandRecorder` and touched no vulkanalia directly — so the pattern
+  below has no live instance in tree today.
 - Cleanup follow-up: #689 (`Blocked by` #631).
 - Boundary-check implementation: `xtask/src/check_boundaries.rs`
-  (`VULKANALIA_ALLOWLIST` + `VULKANALIA_CARGO_DEP_ALLOWLIST`
-  entries for `examples/camera-python-display/`, locking tests
-  `allows_use_vulkanalia_in_camera_python_display_example` and
-  `allows_vulkanalia_cargo_dep_in_camera_python_display_example`).
-- Sandboxed wrappers (reference shape):
-  `examples/camera-python-display/runner/src/blending_compositor_kernel.rs`,
-  `examples/camera-python-display/runner/src/crt_film_grain_kernel.rs`.
+  (`VULKANALIA_ALLOWLIST` + `VULKANALIA_CARGO_DEP_ALLOWLIST`).
