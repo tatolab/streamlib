@@ -243,6 +243,10 @@ mod tests {
     /// The whole path a `curl` drives, minus the HTTP hop: pool frame in,
     /// decodable PNG of exactly those pixels out.
     /// GPU-gated: skips when no device is present.
+    // Same reason as the skip in `core::context::surface_pixel_exchange`: a
+    // gated test that finds no device passes trivially, and stdout is the
+    // only channel a test harness surfaces.
+    #[allow(clippy::disallowed_macros)]
     #[test]
     #[serial_test::serial]
     fn a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels() {

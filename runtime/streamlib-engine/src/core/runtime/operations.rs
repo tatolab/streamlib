@@ -104,7 +104,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// both extents either way.
     ///
     /// Never attaches to a channel — composing this with [`Self::tap_async`]
-    /// is entirely the caller's, because the engine inspects no bag content.
+    /// is entirely the caller's job, because the engine inspects no bag
+    /// content.
     /// Why the verb has this shape:
     /// `docs/decisions/control-plane-pixel-exchange.md`.
     ///

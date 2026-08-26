@@ -172,12 +172,15 @@ impl GpuContext {
             (source_surface_pixel_width, source_surface_pixel_height),
             (image_pixel_width, image_pixel_height),
         )?;
-        // The claim ends here. Every arm above submits and waits, so the GPU
-        // has finished reading the producer's frame; what the readback below
-        // copies is the exchange's own texture, which the producer has no
-        // claim on and cannot recycle. Releasing here rather than after the
-        // readback makes the window the conversion and the copy off the
-        // producer's slot — and nothing else.
+        // The claim ends here, and it is `normalize` above that earns it:
+        // every arm of it copies into a texture this call allocated and
+        // waits for that copy, so nothing below reads anything the producer
+        // owns. That is the invariant to hold on to — an arm that handed
+        // back the producer's own texture would move the copy off it to
+        // after this line, where a ring rewrite lands in the answer.
+        // Releasing here rather than after the readback makes the window
+        // the conversion and the copy off the producer's slot, and nothing
+        // else.
         drop(claimed_frame_backing);
 
         let rgba8_pixel_bytes = self.read_exchange_image_texture_into_host_bytes(&image)?;
@@ -200,9 +203,6 @@ impl GpuContext {
         (source_surface_pixel_width, source_surface_pixel_height): (u32, u32),
         (image_pixel_width, image_pixel_height): (u32, u32),
     ) -> Result<ExchangeImageTextureReadyForReadback> {
-        let downscale_applies = (image_pixel_width, image_pixel_height)
-            != (source_surface_pixel_width, source_surface_pixel_height);
-
         match claimed_frame_backing {
             ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
                 let at_source_extent = self.copy_pooled_frame_into_an_exchange_image_texture(
@@ -211,6 +211,8 @@ impl GpuContext {
                     source_surface_pixel_width,
                     source_surface_pixel_height,
                 )?;
+                let downscale_applies = (image_pixel_width, image_pixel_height)
+                    != (source_surface_pixel_width, source_surface_pixel_height);
                 if !downscale_applies {
                     return Ok(at_source_extent);
                 }
@@ -222,26 +224,17 @@ impl GpuContext {
                 )
             }
             ResolvedBlitSource::RegisteredTexture(registration) => {
-                let producer_texture = registration.texture();
-                // A producer's own texture is readable as-is only when it
-                // is already the exchange's format, extent and transfer
-                // usage, and its registered layout is one the readback can
-                // restore. Otherwise the compositor's sampled blit does
-                // the conversion — it asks nothing of the source but that
-                // it be sampleable.
-                if !downscale_applies
-                    && producer_texture.format() == EXCHANGE_IMAGE_TEXTURE_FORMAT
-                    && producer_texture.supports_transfer_read()
-                    && let Some(readable_layout) =
-                        TextureSourceLayout::from_vulkan_layout_raw(registration.current_layout().0)
-                {
-                    return Ok(ExchangeImageTextureReadyForReadback {
-                        texture: producer_texture.clone(),
-                        layout_the_last_barrier_left_it_in: readable_layout,
-                    });
-                }
+                // Always through the blit, never straight out of the
+                // producer's own texture — even when that texture is
+                // already this format, extent and transfer usage. Handing
+                // the producer's allocation on to the readback would put
+                // the copy off it *after* this frame's backing is released,
+                // and a producer's ring rewrites its slots in place: the
+                // caller would get bytes from a later frame under the id it
+                // asked for. The blit is what makes every later step read
+                // storage the exchange owns.
                 let composed = self.blit_texture_into_an_exchange_image_texture(
-                    producer_texture,
+                    registration.texture(),
                     registration.current_layout(),
                     image_pixel_width,
                     image_pixel_height,
@@ -681,15 +674,16 @@ mod tests {
         );
     }
 
-    /// The texture arm's *other* path: a producer texture that already is
-    /// the exchange's format, is transfer-readable, and sits in a layout
-    /// the readback can restore is read straight out, with no blit at all.
-    /// This is what a Python kernel output takes — `acquire_texture` puts
-    /// `COPY_SRC | COPY_DST` on every request — so the four-way guard that
-    /// selects it is production behaviour, not a fallback.
+    /// A producer texture that is already the exchange's format, extent and
+    /// transfer usage — everything a readback would need to copy it
+    /// directly — still goes through the blit into exchange-owned storage.
+    /// This is the shape a Python kernel output has (`acquire_texture` puts
+    /// `COPY_SRC | COPY_DST` on every request), so it is the common case,
+    /// and reading it directly would move the copy off the producer's
+    /// allocation to after the frame's backing is released.
     /// GPU-gated: skips when no device is present.
     #[test]
-    fn a_transfer_readable_producer_texture_is_read_without_a_blit() {
+    fn a_transfer_readable_producer_texture_is_still_copied_into_exchange_storage() {
         let Some(gpu) = gpu_context_or_skip() else {
             return;
         };
@@ -712,7 +706,8 @@ mod tests {
             .expect("a transfer-readable producer texture");
         assert!(
             transfer_readable_texture.supports_transfer_read(),
-            "the fixture must take the direct-readback arm, not the blit"
+            "the fixture must be a texture a readback could copy directly, or it proves \
+             nothing about the arm that declines to"
         );
 
         let surface_id = format!("kernel-output-{}", uuid::Uuid::new_v4());
@@ -736,7 +731,7 @@ mod tests {
         assert_every_pixel_is(
             &exchanged.rgba8_pixel_bytes,
             KERNEL_OUTPUT_RGBA8_PIXEL,
-            "the directly-read producer texture",
+            "the transfer-readable producer texture",
         );
     }
 
