@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   repo-gates:
-    name: License headers + ship-change removed gate
+    name: License headers + repo script gates
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -46,3 +46,6 @@ jobs:
 
       - name: ship-change-removed-gate tests
         run: bash .claude/scripts/tests/ship-change-removed-gate.test.sh
+
+      - name: rig-brake tests
+        run: bash .claude/scripts/tests/rig-brake.test.sh

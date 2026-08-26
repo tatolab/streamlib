@@ -237,6 +237,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &[".claude/scripts/tests/ship-change-removed-gate.test.sh"],
         ),
         (
+            "rig-brake tests",
+            "bash",
+            &[".claude/scripts/tests/rig-brake.test.sh"],
+        ),
+        (
             "xtask gate fixture tests",
             "cargo",
             &["test", "--locked", "-p", "xtask"],
