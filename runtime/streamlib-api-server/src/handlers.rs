@@ -615,12 +615,15 @@ mod router_surface_and_auth_gate_tests {
     //! stub.
 
     use super::*;
+    use crate::control_plane_stub_support::{
+        STUB_EXCHANGED_IMAGE_BYTES, STUB_SOURCE_SURFACE_EXTENT, StubSurfaceExchange,
+    };
     use axum::body::Body;
     use axum::http::{
         Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
     };
-    use streamlib::sdk::runtime::{BoxFuture, ExchangedPublishedSurfaceFramePngImage};
+    use streamlib::sdk::runtime::BoxFuture;
     use tower::ServiceExt;
 
     /// Stub runtime backing the router tests: it answers the observation ops
@@ -636,54 +639,6 @@ mod router_surface_and_auth_gate_tests {
     struct ControlPlaneRouterStubRuntime {
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         exchange: StubSurfaceExchange,
-    }
-
-    /// The `(surface id, downscale cap)` pairs the route handed the
-    /// operation, in call order.
-    type RecordedExchangeCalls = Arc<Mutex<Vec<(String, Option<u32>)>>>;
-
-    /// What the stub's `exchange` answers. The bytes are deliberately not a
-    /// PNG: what the route owes is verbatim pass-through plus the right
-    /// headers, and a recognizable string proves that where a real image
-    /// would only prove the encoder still works.
-    #[derive(Clone, Default)]
-    struct StubSurfaceExchange {
-        recorded_calls: RecordedExchangeCalls,
-        recycled_surface_id: Option<String>,
-    }
-
-    const STUB_EXCHANGED_IMAGE_BYTES: &[u8] = b"stub-exchanged-image-bytes";
-    const STUB_SOURCE_SURFACE_EXTENT: (u32, u32) = (1920, 1080);
-
-    impl StubSurfaceExchange {
-        fn answer_for(
-            &self,
-            published_surface_id: &str,
-            downscale_long_edge_pixel_cap: Option<u32>,
-        ) -> Result<ExchangedPublishedSurfaceFramePngImage> {
-            self.recorded_calls.lock().push((
-                published_surface_id.to_string(),
-                downscale_long_edge_pixel_cap,
-            ));
-            if self.recycled_surface_id.as_deref() == Some(published_surface_id) {
-                return Err(Error::SurfaceFrameRecycled {
-                    surface_id: published_surface_id.to_string(),
-                    published_generation: 7,
-                    current_generation: 9,
-                });
-            }
-            let (source_surface_pixel_width, source_surface_pixel_height) =
-                STUB_SOURCE_SURFACE_EXTENT;
-            let encoded_image_pixel_width =
-                downscale_long_edge_pixel_cap.unwrap_or(source_surface_pixel_width);
-            Ok(ExchangedPublishedSurfaceFramePngImage {
-                png_image_bytes: STUB_EXCHANGED_IMAGE_BYTES.to_vec(),
-                encoded_image_pixel_width,
-                encoded_image_pixel_height: source_surface_pixel_height,
-                source_surface_pixel_width,
-                source_surface_pixel_height,
-            })
-        }
     }
 
     impl RuntimeOperations for ControlPlaneRouterStubRuntime {
@@ -707,17 +662,7 @@ mod router_surface_and_auth_gate_tests {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
 
-        fn exchange_published_surface_id_for_png_image_bytes_async(
-            &self,
-            published_surface_id: String,
-            downscale_long_edge_pixel_cap: Option<u32>,
-        ) -> BoxFuture<'_, Result<ExchangedPublishedSurfaceFramePngImage>> {
-            let exchange = self.exchange.clone();
-            Box::pin(async move {
-                exchange.answer_for(&published_surface_id, downscale_long_edge_pixel_cap)
-            })
-        }
-
+        crate::control_plane_stub_support::surface_exchange_op_answers_the_stub!();
         crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
 
@@ -1081,19 +1026,20 @@ mod router_surface_and_auth_gate_tests {
             "image/png",
             "the body is an image, not a JSON envelope carrying one"
         );
+        let (source_pixel_width, source_pixel_height) = STUB_SOURCE_SURFACE_EXTENT;
         assert_eq!(
             response
                 .headers()
                 .get(&*SURFACE_PIXEL_WIDTH_HEADER)
                 .and_then(|value| value.to_str().ok()),
-            Some("1920"),
+            Some(source_pixel_width.to_string().as_str()),
         );
         assert_eq!(
             response
                 .headers()
                 .get(&*SURFACE_PIXEL_HEIGHT_HEADER)
                 .and_then(|value| value.to_str().ok()),
-            Some("1080"),
+            Some(source_pixel_height.to_string().as_str()),
         );
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -1140,10 +1086,7 @@ mod router_surface_and_auth_gate_tests {
     #[tokio::test]
     async fn a_recycled_frame_id_is_gone_and_the_body_names_the_recycling() {
         let runtime = ControlPlaneRouterStubRuntime {
-            exchange: StubSurfaceExchange {
-                recycled_surface_id: Some(EXCHANGED_FRAME_ID.to_string()),
-                ..StubSurfaceExchange::default()
-            },
+            exchange: StubSurfaceExchange::refusing_as_recycled(EXCHANGED_FRAME_ID),
             ..ControlPlaneRouterStubRuntime::default()
         };
         let response = router_without_bearer_auth(runtime)
