@@ -36,6 +36,7 @@ from ._engine import decode_tapped_channel_bag_frame_to_python_object
 
 __all__ = [
     "DEFAULT_SURFACE_ID_BAG_FIELD_NAME",
+    "TappedBagFrame",
     "SampledChannelExchangeReport",
     "exchange_one_published_surface_id_into_directory",
     "sample_channel_into_exchanged_surface_images",
@@ -57,6 +58,18 @@ MAX_TAP_ROUNDS_PER_SAMPLE_RUN = 8
 FILE_NAME_SAFE_CHARACTERS = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
 )
+
+
+class TappedBagFrame(NamedTuple):
+    """One bag a tap forwarded, and whether the tool capped its preview.
+
+    The cap travels with the bag rather than failing the round that carried it:
+    whether a bag this client cannot read matters at all depends on whether the
+    stride goes on to select it.
+    """
+
+    framed_bytes: bytes
+    byte_len_when_preview_was_capped: "Optional[int]"
 
 
 class SampledChannelExchangeReport(NamedTuple):
@@ -108,14 +121,15 @@ def exchange_one_published_surface_id_into_directory(
     )
 
 
-def _tapped_bag_frames(url: str, channel: str, requested_bag_count: int) -> "list[bytes]":
+def _tapped_bag_frames(
+    url: str, channel: str, requested_bag_count: int
+) -> "list[TappedBagFrame]":
     """One `tap` call's bags, as the framed bytes the channel carried.
 
-    The tool hex-encodes a bounded prefix of each bag, and says so: a bag past
-    that cap arrives cut short, and no amount of retrying will make this
-    channel readable from here. That stops the run and names the size, rather
-    than being counted as a bag that published no id — which would blame the
-    channel for something this client could not read.
+    The tool hex-encodes a bounded prefix of each bag, and says so. That flag is
+    carried per bag, not raised here: a bag the stride never selects is a bag
+    this run never needed, and failing the whole round on one would also throw
+    away the readable bags that came before it.
     """
     result_text = call_tool(
         url, "tap", {"channel": channel, "count": max(1, requested_bag_count)}
@@ -135,27 +149,28 @@ def _tapped_bag_frames(url: str, channel: str, requested_bag_count: int) -> "lis
             f"tap of `{channel}` returned no `bags` array: {result_text}"
         )
 
-    frames: "list[bytes]" = []
+    frames: "list[TappedBagFrame]" = []
     for bag in bags:
         hex_preview = bag.get("hex_preview") if isinstance(bag, dict) else None
         if not isinstance(hex_preview, str):
             raise ControlPlaneError(
                 f"tap of `{channel}` returned a bag with no hex preview: {bag!r}"
             )
-        if bag.get("hex_truncated"):
-            raise ControlPlaneError(
-                f"a bag on `{channel}` is {bag.get('byte_len', 'more')} bytes, past the "
-                f"prefix `tap` previews, so its surface id cannot be read from here. "
-                f"Exchange an id from this channel directly: "
-                f"`streamlib exchange <surface-id> --out <dir>`."
-            )
         try:
-            frames.append(bytes.fromhex(hex_preview))
+            framed_bytes = bytes.fromhex(hex_preview)
         except ValueError as decode_failure:
             raise ControlPlaneError(
                 f"tap of `{channel}` returned a bag whose hex preview does not decode: "
                 f"{decode_failure}"
             ) from decode_failure
+        frames.append(
+            TappedBagFrame(
+                framed_bytes=framed_bytes,
+                byte_len_when_preview_was_capped=(
+                    bag.get("byte_len") if bag.get("hex_truncated") else None
+                ),
+            )
+        )
     return frames
 
 
@@ -212,7 +227,7 @@ def sample_channel_into_exchanged_surface_images(
         ):
             tap_rounds += 1
             still_wanted = wanted_image_count - len(written_image_paths)
-            for framed_bag_bytes in _tapped_bag_frames(
+            for tapped_bag in _tapped_bag_frames(
                 url, channel, still_wanted * every_nth_bag
             ):
                 selected = bags_examined % every_nth_bag == 0
@@ -220,8 +235,17 @@ def sample_channel_into_exchanged_surface_images(
                 if not selected:
                     continue
 
+                if tapped_bag.byte_len_when_preview_was_capped is not None:
+                    raise ControlPlaneError(
+                        f"a bag the sample selected on `{channel}` is "
+                        f"{tapped_bag.byte_len_when_preview_was_capped} bytes, past the "
+                        f"prefix `tap` previews, so its surface id cannot be read from "
+                        f"here. Exchange an id from this channel directly: "
+                        f"`streamlib exchange <surface-id> --out <dir>`."
+                    )
+
                 published_surface_id = _surface_id_in_bag(
-                    framed_bag_bytes, channel, surface_id_bag_field_name
+                    tapped_bag.framed_bytes, channel, surface_id_bag_field_name
                 )
                 if published_surface_id is None:
                     bags_missing_the_surface_id_field += 1
@@ -248,7 +272,7 @@ def sample_channel_into_exchanged_surface_images(
                 )
                 if len(written_image_paths) == wanted_image_count:
                     break
-    except ControlPlaneError as failure:
+    except (ControlPlaneError, OSError) as failure:
         stopped_early_because = str(failure)
 
     return SampledChannelExchangeReport(

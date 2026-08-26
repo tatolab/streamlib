@@ -958,9 +958,17 @@ def bag_publishing_surface_id(
 
 
 def tap_result_body(
-    channel: str, framed_bags: "list[bytes]", *, hex_truncated: bool = False
+    channel: str,
+    framed_bags: "list[bytes]",
+    *,
+    hex_truncated: bool = False,
+    truncated_bag_indexes: "frozenset[int]" = frozenset(),
 ) -> str:
-    """One `tap` tool result carrying these bags, shaped as the tool shapes it."""
+    """One `tap` tool result carrying these bags, shaped as the tool shapes it.
+
+    `truncated_bag_indexes` caps just those bags' previews, so a test can put an
+    oversized bag where the stride will or will not reach it.
+    """
     return _tool_result_body(
         json.dumps(
             {
@@ -971,11 +979,20 @@ def tap_result_body(
                 "dropped_bags": 0,
                 "bags": [
                     {
-                        "byte_len": len(bag),
+                        # The tool reports the whole bag's length, not the
+                        # preview's, so a capped bag reads as larger than what
+                        # rode with it.
+                        "byte_len": (
+                            9000
+                            if hex_truncated or index in truncated_bag_indexes
+                            else len(bag)
+                        ),
                         "hex_preview": bag.hex(),
-                        "hex_truncated": hex_truncated,
+                        "hex_truncated": (
+                            hex_truncated or index in truncated_bag_indexes
+                        ),
                     }
-                    for bag in framed_bags
+                    for index, bag in enumerate(framed_bags)
                 ],
             }
         )
@@ -1619,6 +1636,7 @@ def test_a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size(
 
     reported = capsys.readouterr().err
     assert "past the prefix `tap` previews" in reported
+    assert "9000 bytes" in reported, "the diagnosis must name the size that did not fit"
     # The id form still reaches such a frame, and the message says so.
     assert "streamlib exchange <surface-id>" in reported
 
@@ -1635,3 +1653,149 @@ def test_a_sample_bound_below_one_is_refused(
     )
 
     assert flag in capsys.readouterr().err
+
+
+def test_a_bag_the_stride_skips_cannot_kill_the_run_by_being_oversized(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # Bag 1 is past the preview cap, and `--every 2` never selects it. A run
+    # that needs only bag 0 must not fail on a bag it never reads.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+                truncated_bag_indexes=frozenset({1}),
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "1",
+                "--every",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    assert Path(capsys.readouterr().out.strip()).read_bytes() == png_bytes_for("one")
+
+
+def test_an_oversized_bag_does_not_discard_the_readable_bags_beside_it(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # Bag 0 is readable and bag 1 is not. Failing the whole tap round would
+    # throw away a frame that had already been exchanged.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+                truncated_bag_indexes=frozenset({1}),
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
+    assert "9000 bytes" in printed.err
+
+
+def test_a_write_that_fails_still_names_the_frames_that_landed(
+    isolated_registry, stub_control_plane, tmp_path, capsys, monkeypatch
+):
+    # The filesystem half of the same promise the report exists to keep: a PNG
+    # on disk whose path was never printed is evidence nobody can use.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one"), "s#2": image_answer("two")},
+    )
+
+    real_write_bytes = Path.write_bytes
+    written_so_far: "list[Path]" = []
+
+    def write_bytes_failing_on_the_second(self: Path, data: bytes) -> int:
+        written_so_far.append(self)
+        if len(written_so_far) == 2:
+            raise PermissionError(13, "Permission denied")
+        return real_write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", write_bytes_failing_on_the_second)
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
+    assert "Permission denied" in printed.err
+
+
+def test_an_output_directory_that_cannot_be_written_is_reported_not_raised(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # `--out` naming an existing regular file is a typo, and typos get a
+    # message rather than a Python traceback.
+    server = stub_control_plane(surface_image_answers={"s#1": image_answer("one")})
+    already_a_file = tmp_path / "already-a-file"
+    already_a_file.write_text("not a directory")
+
+    assert (
+        cli.main(
+            ["exchange", "s#1", "--out", str(already_a_file), "--url", server.url]
+        )
+        == 1
+    )
+
+    assert "could not write into" in capsys.readouterr().err

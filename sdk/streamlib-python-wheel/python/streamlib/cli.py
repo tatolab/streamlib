@@ -893,11 +893,17 @@ def _run_exchange_verb(arguments: argparse.Namespace) -> int:
                 f"names one frame already. Use `--channel` instead of SURFACE_ID."
             )
         url = resolve_control_url(arguments.requested_url, arguments.requested_node)
-        print(
-            exchange_one_published_surface_id_into_directory(
+        try:
+            written_image_path = exchange_one_published_surface_id_into_directory(
                 url, arguments.surface_id, arguments.output_directory
             )
-        )
+        except OSError as write_failure:
+            # A `--out` that names an existing file, or a directory this user
+            # cannot write: a typo, and typos get a message, not a traceback.
+            raise ObservationVerbUsageError(
+                f"could not write into `{arguments.output_directory}`: {write_failure}"
+            ) from write_failure
+        print(written_image_path)
         return 0
 
     wanted_image_count = 1 if arguments.count is None else arguments.count
