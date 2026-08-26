@@ -1,8 +1,8 @@
 name: Repo Gates
 
 # The toolchain-free gates: bash, git and jq only, no Rust, no Python, no
-# network. Each began as its own workflow; together they finish in seconds, so
-# they share one runner rather than three.
+# network. The first two began as their own workflows; all three finish in
+# seconds, so they share one runner.
 #
 # - License headers: every Rust and Python file carries the BUSL header. The
 #   implementation is `scripts/check-license-headers.sh` rather than inline YAML

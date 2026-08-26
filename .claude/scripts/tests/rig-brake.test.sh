@@ -124,6 +124,53 @@ expect_silent "a launch hidden behind a leading text tool is NOT braked (accepte
 run_hook 'cd examples/camera-display && streamlib run'
 expect_ask "a compound not led by a text tool still escalates"
 
+# ONLY the first command word may suppress. `has` is line-oriented, so testing
+# the raw input let any line of a multi-line command silence the launch — and
+# the shape /verify-live prescribes (background the node, echo its pid) is
+# exactly that. These three were silent until the guard read the first line only.
+run_hook 'streamlib run --dir examples/camera-display > /tmp/rig.log 2>&1 &
+echo "pid $!"'
+expect_ask "a backgrounded launch followed by echo still escalates"
+
+run_hook 'cd examples/camera-display
+streamlib run > /tmp/rig.log 2>&1 &
+echo started'
+expect_ask "a multi-line cd + launch + echo still escalates"
+
+run_hook 'STREAMLIB_CAMERA_DEVICE=/dev/video0 streamlib run --dir examples/camera-display > /tmp/rig.log 2>&1 &
+echo "launched $!"'
+expect_ask "the skill's own prescribed launch shape escalates"
+
+# Exec wrappers. Bounding an unattended run is precisely what a sandboxed
+# firing does, so a launch behind `timeout` or `nohup` is the case this brake
+# most needs to catch.
+run_hook 'nohup streamlib run --dir examples/camera-display &'
+expect_ask "a launch behind nohup escalates"
+
+run_hook 'timeout 30 streamlib run --dir examples/camera-display'
+expect_ask "a launch behind timeout escalates"
+
+run_hook 'timeout --kill-after=5 30 streamlib run --dir examples/camera-display'
+expect_ask "a launch behind timeout with flags escalates"
+
+run_hook 'uv run streamlib run --dir examples/camera-display'
+expect_ask "a launch behind uv run escalates"
+
+run_hook 'DISPLAY=:1 STREAMLIB_CAMERA_DEVICE=/dev/video0 nohup streamlib run --dir examples/camera-display >/tmp/log 2>&1 &'
+expect_ask "env assignments plus a wrapper plus redirection still escalates"
+
+# Distinguishes the command-position regex from a bare substring match: python3
+# is not a text tool by first-word, so ONLY the anchoring keeps this silent.
+# Replace the anchored regex with `streamlib[[:space:]]+(run|dev)` and this
+# case is the one that goes red.
+run_hook "python3 -c \"print('streamlib run --dir examples/x')\""
+expect_silent "printing the launch path from a script is not launching it"
+
+# `bash -c` stays uncovered and is locked as such: the quote that would make it
+# a launch is the same quote that makes the case above text.
+run_hook 'bash -c "streamlib run --dir examples/camera-display"'
+expect_silent "a launch inside bash -c is NOT braked (known, see the hook comment)"
+
 # ── The class this key deliberately does NOT cover ───────────────────
 # The ticket scopes the launch key to apps under examples/. `streamlib new`
 # scaffolds an app anywhere, and running one boots a Runtime and a GPU context
@@ -143,6 +190,13 @@ expect_silent "cargo run -p camera-display names a crate that no longer exists"
 
 run_hook 'cargo run -p vulkan-video-roundtrip'
 expect_silent "no -p spelling reaches an example, so neither dead key survives"
+
+# The text-tool guard covers both launch keys, not just the streamlib one.
+run_hook 'git grep -n "cargo run" -- examples/'
+expect_silent "grepping for cargo run in examples/ does not escalate"
+
+run_hook 'git commit -m "docs: cargo run in examples/ still works"'
+expect_silent "a commit message naming cargo run in examples/ does not escalate"
 
 run_hook 'cargo run --release' '/home/dev/streamlib/examples/vulkan-video-roundtrip'
 expect_ask "cargo run from inside an example directory escalates"

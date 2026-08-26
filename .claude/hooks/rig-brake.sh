@@ -38,32 +38,36 @@ names_an_example() {
   cwd_has '(^|/)examples(/|$)' || has '(^|[^[:alnum:]_.-])examples/'
 }
 
-# A text tool that merely carries the launch path in an argument is not the
-# launch path. `git commit -m "… streamlib run --dir examples/x"` and
+# A text tool that merely carries a launch command in an argument is not a
+# launch. `git commit -m "… streamlib run --dir examples/x"` and
 # `sed 's|streamlib run|…|' examples/README.md` are the commands a session
-# writing about this hook actually runs, and prompting on them is what teaches
+# working on this hook writes constantly, and prompting on them is what teaches
 # an owner to click through without reading.
 #
-# The cost is that a compound LED by a text tool hides a real launch behind it
-# (`git status && streamlib run …`). That trade is deliberate: those are rare
-# and cost one exit-144, while the quoted-prose commands above are constant.
-mentions_it_as_text() {
-  has '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(git|gh|sed|grep|rg|awk|perl|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)'
+# Only the FIRST command word decides. `has` is `grep -Eq`, which anchors `^`
+# per line, so testing the raw input would let any line of a multi-line command
+# suppress the whole thing — including the backgrounded launch + `echo $!` shape
+# /verify-live itself prescribes.
+first_command_word_is_a_text_tool() {
+  printf '%s' "$cmd" \
+    | sed -n '/[^[:space:]]/{p;q}' \
+    | grep -Eq '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(git|gh|sed|grep|rg|awk|perl|python3?|node|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)'
 }
 
-# `streamlib` has to sit at a command position — start of the command or just
-# past a separator, after any env-var assignments. The observation verbs
-# (nodes/graph/tap/logs/exchange) are control-plane reads and deliberately fall
-# through: /verify-live's own procedure runs them per frame, and a prompt there
-# would stall the audit it exists to perform.
-if ! mentions_it_as_text \
-   && has '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)' \
-   && names_an_example; then
-  ask_rig
-fi
+# The binary may sit behind env assignments and behind an exec wrapper —
+# `timeout` and `nohup` especially, since bounding an unattended run is exactly
+# what a sandboxed firing does. `bash -c "…"` stays uncovered: the quote that
+# makes it a launch is the same quote that makes `python3 -c "print(…)"` text.
+LAUNCH_AT_COMMAND_POSITION='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*((nohup|timeout|env|stdbuf|xvfb-run|uv|poetry)([[:space:]]+[^[:space:]]+)*[[:space:]]+)*([[:alnum:]_./-]*/)?streamlib[[:space:]]+(run|dev)([[:space:]]|$)'
 
-if has 'cargo[[:space:]]+run' && names_an_example; then
-  ask_rig
+# Both launch spellings share the guard: `git grep -n "cargo run" -- examples/`
+# is the same false positive as its streamlib twin. The observation verbs
+# (nodes/graph/tap/logs/exchange) are control-plane reads and match neither key
+# — /verify-live runs them per frame, and a prompt there would stall the audit.
+if ! first_command_word_is_a_text_tool && names_an_example; then
+  if has "$LAUNCH_AT_COMMAND_POSITION" || has 'cargo[[:space:]]+run'; then
+    ask_rig
+  fi
 fi
 
 # 3. e2e_ fixture scripts under tests/fixtures/.
