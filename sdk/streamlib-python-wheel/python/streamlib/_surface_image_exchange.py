@@ -9,10 +9,10 @@ consumer and nowhere else. The node is never asked to read a bag — it forwards
 bags verbatim, this decodes them, reads whatever field the caller says carries a
 surface id, and exchanges that id on its own.
 
-The composition lives in one process on purpose. The measured 60 ms round-trip
-was a CLI process spawning and connecting per frame, not the operation; holding
-one process across the whole sample is what keeps a sampled frame inside the
-pool-depth window instead of outwaiting it.
+The composition runs in the CLI's own process on purpose. The measured 60 ms
+round-trip was a CLI process spawning and connecting per frame, not the
+operation; holding one CLI process across the whole sample is what keeps a
+sampled frame inside the pool-depth window instead of outwaiting it.
 
 A frame whose pool slot was recycled before the exchange reached it is a retry
 against a newer bag, never a silent skip: the run reports every id it retried,
@@ -103,8 +103,11 @@ def exchange_one_published_surface_id_into_directory(
 def _tapped_bag_frames(url: str, channel: str, requested_bag_count: int) -> "list[bytes]":
     """One `tap` call's bags, as the framed bytes the channel carried.
 
-    The tool hex-encodes a bounded prefix of each bag; `bytes.fromhex` undoes
-    that, and the decode downstream refuses anything the prefix cut short.
+    The tool hex-encodes a bounded prefix of each bag, and says so: a bag past
+    that cap arrives cut short, and no amount of retrying will make this
+    channel readable from here. That stops the run and names the size, rather
+    than being counted as a bag that published no id — which would blame the
+    channel for something this client could not read.
     """
     result_text = call_tool(
         url, "tap", {"channel": channel, "count": max(1, requested_bag_count)}
@@ -128,6 +131,13 @@ def _tapped_bag_frames(url: str, channel: str, requested_bag_count: int) -> "lis
         if not isinstance(hex_preview, str):
             raise ControlPlaneError(
                 f"tap of `{channel}` returned a bag with no hex preview: {bag!r}"
+            )
+        if bag.get("hex_truncated"):
+            raise ControlPlaneError(
+                f"a bag on `{channel}` is {bag.get('byte_len', 'more')} bytes, past the "
+                f"prefix `tap` previews, so its surface id cannot be read from here. "
+                f"Exchange an id from this channel directly: "
+                f"`streamlib exchange <surface-id> --out <dir>`."
             )
         try:
             frames.append(bytes.fromhex(hex_preview))

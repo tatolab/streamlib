@@ -57,36 +57,35 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
 /// Decode one raw tapped-channel bag into ordinary Python data.
 ///
 /// A tap forwards the channel's wire bytes verbatim, so what arrives is a whole
-/// iceoryx2 sample: the transport's [`FrameHeader`] still on the front, and a
-/// fixed-capacity slice behind it whose tail is slack left by an earlier, larger
-/// frame. The header's declared length is therefore the only thing that bounds
-/// the msgpack value — reading to the end of the slice would append that slack.
+/// iceoryx2 sample and the transport's own accessor is what bounds the msgpack
+/// value inside it.
 #[pyfunction]
 pub(crate) fn decode_tapped_channel_bag_frame_to_python_object<'py>(
     python: Python<'py>,
     framed_bag_bytes: &[u8],
 ) -> PyResult<Bound<'py, PyAny>> {
-    if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
-        return Err(PyValueError::new_err(format!(
-            "a tapped bag carries a {}-byte frame header; got {} bytes, which cannot hold one",
-            FRAME_HEADER_SIZE,
-            framed_bag_bytes.len()
-        )));
-    }
+    let Some(payload) = FrameHeader::read_payload_from_slice(framed_bag_bytes) else {
+        return Err(PyValueError::new_err(
+            if framed_bag_bytes.len() < FRAME_HEADER_SIZE {
+                format!(
+                    "a tapped bag carries a {}-byte frame header; got {} bytes, which \
+                     cannot hold one",
+                    FRAME_HEADER_SIZE,
+                    framed_bag_bytes.len()
+                )
+            } else {
+                format!(
+                    "the tapped bag's header declares a {}-byte payload but only {} \
+                     bytes followed it — the sample arrived truncated, and decoding it \
+                     would invent a bag the channel never carried",
+                    FrameHeader::read_from_slice(framed_bag_bytes).len,
+                    framed_bag_bytes.len() - FRAME_HEADER_SIZE
+                )
+            },
+        ));
+    };
 
-    let payload_byte_len = FrameHeader::read_from_slice(framed_bag_bytes).len as usize;
-    let payload_end = FRAME_HEADER_SIZE + payload_byte_len;
-    if payload_end > framed_bag_bytes.len() {
-        return Err(PyValueError::new_err(format!(
-            "the tapped bag's header declares a {}-byte payload but only {} bytes followed \
-             it — the sample arrived truncated, and decoding it would invent a bag the \
-             channel never carried",
-            payload_byte_len,
-            framed_bag_bytes.len() - FRAME_HEADER_SIZE
-        )));
-    }
-
-    decode_msgpack_to_python_object(python, &framed_bag_bytes[FRAME_HEADER_SIZE..payload_end])
+    decode_msgpack_to_python_object(python, payload)
 }
 
 /// Cast or construct a decoded bag into the type an author named with
@@ -435,11 +434,17 @@ fn msgpack_value_to_python_object<'py>(
 mod tests {
     use super::*;
 
+    /// No slack behind the payload — the frame ends where the bag does.
+    const SLICE_HOLDS_ONLY_THE_BAG: usize = 0;
+
+    /// How many bytes the truncation fixture cuts off the end of a whole frame.
+    const BYTES_THE_PREVIEW_CUT: usize = 8;
+
     /// Frame a msgpack payload the way the transport does, then pad the slice
-    /// out to `slice_capacity` — an iceoryx2 sample is fixed-capacity, so a
-    /// small bag always arrives with slack behind it.
-    fn frame_like_the_transport(payload: &[u8], slice_capacity: usize) -> Vec<u8> {
-        let mut framed = vec![0u8; slice_capacity.max(FRAME_HEADER_SIZE + payload.len())];
+    /// out to at least `slice_capacity_at_least` — an iceoryx2 sample is
+    /// fixed-capacity, so a small bag usually arrives with slack behind it.
+    fn frame_like_the_transport(payload: &[u8], slice_capacity_at_least: usize) -> Vec<u8> {
+        let mut framed = vec![0u8; slice_capacity_at_least.max(FRAME_HEADER_SIZE + payload.len())];
         FrameHeader::new("processor/port", 1_234, payload.len() as u32)
             .expect("port key fits")
             .write_to_slice(&mut framed);
@@ -481,8 +486,8 @@ mod tests {
             published.set_item("filler", "x".repeat(512)).unwrap();
             let payload = encode_bag_to_msgpack(published.as_any()).unwrap();
 
-            let framed = frame_like_the_transport(&payload, 0);
-            let truncated = &framed[..framed.len() - 8];
+            let framed = frame_like_the_transport(&payload, SLICE_HOLDS_ONLY_THE_BAG);
+            let truncated = &framed[..framed.len() - BYTES_THE_PREVIEW_CUT];
 
             let refusal = decode_tapped_channel_bag_frame_to_python_object(python, truncated)
                 .expect_err("a truncated sample must not decode");

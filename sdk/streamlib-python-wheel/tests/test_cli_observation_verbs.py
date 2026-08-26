@@ -957,7 +957,9 @@ def bag_publishing_surface_id(
     )
 
 
-def tap_result_body(channel: str, framed_bags: "list[bytes]") -> str:
+def tap_result_body(
+    channel: str, framed_bags: "list[bytes]", *, hex_truncated: bool = False
+) -> str:
     """One `tap` tool result carrying these bags, shaped as the tool shapes it."""
     return _tool_result_body(
         json.dumps(
@@ -971,7 +973,7 @@ def tap_result_body(channel: str, framed_bags: "list[bytes]") -> str:
                     {
                         "byte_len": len(bag),
                         "hex_preview": bag.hex(),
-                        "hex_truncated": False,
+                        "hex_truncated": hex_truncated,
                     }
                     for bag in framed_bags
                 ],
@@ -1488,6 +1490,43 @@ def test_a_bag_the_tap_truncated_stops_the_run_by_name(
     )
 
     assert "truncated" in capsys.readouterr().err
+
+
+def test_a_bag_past_the_taps_preview_cap_stops_the_run_and_names_the_size(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # The tap tool says when it capped a bag. Counting one as "published no
+    # surface id" would blame the channel for something this client could not
+    # read, and retrying it would never converge.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame", [bag_publishing_surface_id("s#1")], hex_truncated=True
+            )
+        ],
+        surface_image_answers={"s#1": image_answer("one")},
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    reported = capsys.readouterr().err
+    assert "past the prefix `tap` previews" in reported
+    # The id form still reaches such a frame, and the message says so.
+    assert "streamlib exchange <surface-id>" in reported
 
 
 @pytest.mark.parametrize("flag, value", [("--count", "0"), ("--every", "0")])
