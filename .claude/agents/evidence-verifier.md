@@ -1,6 +1,6 @@
 ---
 name: evidence-verifier
-description: The live-verification audit agent. Primary pipeline execution is SELF-RUN — the session runs it via /verify-live; spawn this agent to audit an output directory (log gates, PNG content description, PSNR vs thresholds), to re-validate any PR claiming E2E evidence, or — when the rig is unavailable — to emit the exact env-var'd command block for the owner's terminal (the handshake fallback). It never runs the pipeline itself.
+description: The live-verification audit agent. Primary pipeline execution is SELF-RUN — the session runs it via /verify-live; spawn this agent to audit an output directory (log gates, PNG content description, PSNR vs thresholds), to re-validate any PR claiming E2E evidence, or — when the rig is unavailable — to emit the exact command block for the owner's terminal (the handshake fallback). It never runs the pipeline itself.
 tools: Read, Bash, Grep, Glob
 model: opus
 ---
@@ -18,14 +18,14 @@ Pick the scenario from the change class, reading the fixture scripts under the e
 - **Frame-ordering / timestamp / drop-sensitive change** → the v4l2loopback motion scenario (a source with a visible per-frame counter, so a drop or repeat is visible by eye).
 - **Color-path change** → the PSNR fixture rigs, including at least one negative-injection mode to prove the gate is non-vacuous.
 
-Emit a ready-to-paste block with the display PNG-sampler env vars set (`STREAMLIB_DISPLAY_PNG_SAMPLE_DIR`, `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY`, `STREAMLIB_DISPLAY_FRAME_LIMIT`, `STREAMLIB_CAMERA_DEVICE`) and a self-terminating frame limit, and name the output directory the owner should report back. The full scenario matrix, env-var reference, and the verbatim E2E report template live in the `/verify-live` skill — read it and reuse it; do not re-invent the template here.
+Emit a ready-to-paste block in three parts: **launch** the app (`streamlib run --dir <app>`, `STREAMLIB_CAMERA_DEVICE=/dev/videoN` resolved by probe), **read pixels** off a channel (`streamlib exchange --channel <processor>/<output_port> --out <dir> --count N`), and **stop** the node with SIGTERM. Name the output directory the owner should report back, and prefer a mid-graph channel — exchange needs no window, so the owner should never have to add a `DisplayWindow` to see a frame. Window capture belongs in the block only when the present / swapchain path is itself the subject. The full scenario matrix, the exchange reference, and the verbatim E2E report template live in the `/verify-live` skill — read it and reuse it; do not re-invent the template here.
 
 ## Phase B — audit the output directory
 Given an output dir the owner ran, verify against the bar:
 
 1. **Log gates — all must be zero.** Grep the pipeline log for `OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`, `process() failed`, and `Validation Error`. Any nonzero count fails the gate (a validation error is acceptable only if it also exists on `main` for the same scenario; say so if you claim that).
 2. **Progress markers fired** — the first-frame-encoded / -decoded / -captured markers and at least one progress line.
-3. **Read every sampled PNG with the Read tool and DESCRIBE its content.** "Looks fine" is banned — say what the frame actually shows (e.g. "vivid green/purple SMPTE bars with a `00:00:…` timecode overlay" or "the physical Cam Link scene: a dark room, chair back, wood door"). A reviewer must be able to tell from your description alone that you actually looked. **A black or uniform frame with clean logs IS a regression** — flag it.
+3. **Read every exchanged PNG with the Read tool and DESCRIBE its content.** "Looks fine" is banned — say what the frame actually shows (e.g. "vivid green/purple SMPTE bars with a `00:00:…` timecode overlay" or "the physical Cam Link scene: a dark room, chair back, wood door"). A reviewer must be able to tell from your description alone that you actually looked. **A black or uniform frame with clean logs IS a regression** — flag it.
 4. **PSNR vs thresholds** when a reference frame exists: Y ≥ 35 dB passes, 30–35 dB is a flag, < 30 dB fails (investigate color matrix / range / plane layout). For a real-camera source there is no ground truth — write `n/a — real-camera source` and treat the visual description as the sole gate.
 5. **Fill the standardized E2E report template verbatim** (from the `/verify-live` skill) — every field, "N/A with a reason" allowed, a blank field not.
 

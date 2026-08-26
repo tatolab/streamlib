@@ -2,7 +2,9 @@
 
 > **The reproducers below are retired.** Every `camera-python-display`
 > reference in this note names the pre-pivot example, deleted with the module
-> system it was built on; `CameraToCudaCopyProcessor` went with it. The
+> system it was built on; `CameraToCudaCopyProcessor` went with it, and the
+> `STREAMLIB_DISPLAY_FRAME_LIMIT` in each protocol's step 3 went with the
+> in-process display sampler — the engine reads it nowhere. The
 > driver behaviour, the diagnosis, and the sentinel fix in `vulkan_device.rs`
 > all still hold — what has no in-tree stand-in is the run-and-revert
 > protocol, because nothing in tree allocates a consumer-class OPAQUE_FD
