@@ -32,7 +32,7 @@ It matters because window capture could only ever read a channel that *terminate
 
 ### The spelling you will use — CLI, channel form
 
-```
+```bash
 streamlib exchange --channel <processor>/<output_port> --out <dir> --count N [--every N] [--field NAME]
 ```
 
