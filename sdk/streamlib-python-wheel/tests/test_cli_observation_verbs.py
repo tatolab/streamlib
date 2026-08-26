@@ -1345,7 +1345,7 @@ def test_a_bag_without_the_named_field_is_counted_rather_than_fatal(
 
     printed = capsys.readouterr()
     assert Path(printed.out.strip()).read_bytes() == png_bytes_for("one")
-    assert "1 bags carried no surface id" in printed.err
+    assert "1 bag carried no surface id" in printed.err
 
 
 def test_every_nth_bag_selects_the_stride(

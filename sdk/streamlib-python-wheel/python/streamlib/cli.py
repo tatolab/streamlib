@@ -848,9 +848,10 @@ def _print_sampled_channel_exchange_report(
             file=sys.stderr,
         )
     if report.bags_missing_the_surface_id_field:
+        missing = report.bags_missing_the_surface_id_field
         print(
-            f"{report.bags_missing_the_surface_id_field} bags carried no surface id "
-            f"in the named field — name the right one with `--field`",
+            f"{missing} {'bag' if missing == 1 else 'bags'} carried no surface id in "
+            f"the named field — name the right one with `--field`",
             file=sys.stderr,
         )
 
