@@ -95,26 +95,18 @@ pub trait RuntimeOperations: Send + Sync {
     /// a PNG.
     ///
     /// `published_surface_id` is a surface id a bag carried
-    /// (`<slot>#<generation>` for a pooled frame). The operation resolves
-    /// it, claims the frame through the pool's own claim seam, converts
-    /// and copies it to the host under that claim, releases, and only then
-    /// encodes — so an encoder's cost never extends the window a producer
-    /// is kept out of its own slot.
+    /// (`<slot>#<generation>` for a pooled frame); a retired one fails with
+    /// [`Error::SurfaceFrameRecycled`] before any bytes move, never
+    /// resolving to the slot's newer pixels, so the caller taps a newer bag
+    /// and exchanges that. `downscale_long_edge_pixel_cap` bounds the
+    /// encoded image's long edge, preserving aspect and never upscaling;
+    /// `None` returns the exact source resolution, and the result reports
+    /// both extents either way.
     ///
-    /// `downscale_long_edge_pixel_cap` bounds the encoded image's long
-    /// edge, preserving aspect and never upscaling; `None` returns the
-    /// frame at its exact source resolution. The result reports both
-    /// extents, so a caller handing on a reduced image can still state the
-    /// true one.
-    ///
-    /// Composes with [`Self::tap_async`] entirely at the caller: this
-    /// never attaches to a channel and the engine inspects no bag content
-    /// — a consumer decodes its own bag, reads the field it knows carries
-    /// a surface id, and calls this with it.
-    ///
-    /// A retired frame id fails with [`Error::SurfaceFrameRecycled`]
-    /// before any bytes move, never resolving to the slot's newer pixels;
-    /// the caller taps a newer bag and exchanges that.
+    /// Never attaches to a channel — composing this with [`Self::tap_async`]
+    /// is entirely the caller's, because the engine inspects no bag content.
+    /// Why the verb has this shape:
+    /// `docs/decisions/control-plane-pixel-exchange.md`.
     ///
     /// There is no sync variant: the copy blocks on the GPU, so every
     /// caller is already async or on a blocking pool.

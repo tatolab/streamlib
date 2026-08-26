@@ -226,10 +226,19 @@ pub(crate) async fn request_runtime_shutdown(
 /// Header carrying the width the surface's own backing holds, so a caller
 /// that asked for a downscaled image still learns the true resolution —
 /// the PNG's own header states only what was encoded.
-const SURFACE_PIXEL_WIDTH_HEADER: &str = "x-streamlib-surface-pixel-width";
+///
+/// Parsed once rather than per response: `HeaderName::from_static` panics on
+/// a malformed name, and once at first use beats once per 200.
+static SURFACE_PIXEL_WIDTH_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
+    std::sync::LazyLock::new(|| {
+        axum::http::HeaderName::from_static("x-streamlib-surface-pixel-width")
+    });
 
 /// Height counterpart of [`SURFACE_PIXEL_WIDTH_HEADER`].
-const SURFACE_PIXEL_HEIGHT_HEADER: &str = "x-streamlib-surface-pixel-height";
+static SURFACE_PIXEL_HEIGHT_HEADER: std::sync::LazyLock<axum::http::HeaderName> =
+    std::sync::LazyLock::new(|| {
+        axum::http::HeaderName::from_static("x-streamlib-surface-pixel-height")
+    });
 
 /// Query parameters for the surface exchange.
 #[derive(Deserialize)]
@@ -284,11 +293,11 @@ pub(crate) async fn exchange_published_surface_id_for_png_image(
             [
                 (CONTENT_TYPE, "image/png".to_string()),
                 (
-                    axum::http::HeaderName::from_static(SURFACE_PIXEL_WIDTH_HEADER),
+                    SURFACE_PIXEL_WIDTH_HEADER.clone(),
                     exchanged.source_surface_pixel_width.to_string(),
                 ),
                 (
-                    axum::http::HeaderName::from_static(SURFACE_PIXEL_HEIGHT_HEADER),
+                    SURFACE_PIXEL_HEIGHT_HEADER.clone(),
                     exchanged.source_surface_pixel_height.to_string(),
                 ),
             ],
@@ -629,14 +638,14 @@ mod router_surface_and_auth_gate_tests {
         exchange: StubSurfaceExchange,
     }
 
-    /// What the stub's `exchange` answers. The bytes are deliberately not a
-    /// PNG: what the route owes is verbatim pass-through plus the right
-    /// headers, and a recognizable string proves that where a real image
-    /// would only prove the encoder still works.
     /// The `(surface id, downscale cap)` pairs the route handed the
     /// operation, in call order.
     type RecordedExchangeCalls = Arc<Mutex<Vec<(String, Option<u32>)>>>;
 
+    /// What the stub's `exchange` answers. The bytes are deliberately not a
+    /// PNG: what the route owes is verbatim pass-through plus the right
+    /// headers, and a recognizable string proves that where a real image
+    /// would only prove the encoder still works.
     #[derive(Clone, Default)]
     struct StubSurfaceExchange {
         recorded_calls: RecordedExchangeCalls,
@@ -1022,10 +1031,19 @@ mod router_surface_and_auth_gate_tests {
     const EXCHANGED_FRAME_ID: &str = "pool-slot-a#7";
     const EXCHANGED_FRAME_ID_PERCENT_ENCODED: &str = "pool-slot-a%237";
 
-    fn router_over(runtime: ControlPlaneRouterStubRuntime, auth_on: bool) -> Router {
+    fn router_with_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
         build_router(
             Arc::new(runtime),
-            auth_on.then(|| ApiServerBearerToken::from_secret(TEST_TOKEN)),
+            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    fn router_without_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
+        build_router(
+            Arc::new(runtime),
+            None,
             #[cfg(feature = "moq")]
             "test-runtime-id".to_string(),
         )
@@ -1050,7 +1068,7 @@ mod router_surface_and_auth_gate_tests {
     async fn the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image() {
         let runtime = ControlPlaneRouterStubRuntime::default();
         let recorded = runtime.exchange.recorded_calls.clone();
-        let response = router_over(runtime, false)
+        let response = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&exchange_uri(
                 EXCHANGED_FRAME_ID_PERCENT_ENCODED,
             )))
@@ -1066,14 +1084,14 @@ mod router_surface_and_auth_gate_tests {
         assert_eq!(
             response
                 .headers()
-                .get(SURFACE_PIXEL_WIDTH_HEADER)
+                .get(&*SURFACE_PIXEL_WIDTH_HEADER)
                 .and_then(|value| value.to_str().ok()),
             Some("1920"),
         );
         assert_eq!(
             response
                 .headers()
-                .get(SURFACE_PIXEL_HEIGHT_HEADER)
+                .get(&*SURFACE_PIXEL_HEIGHT_HEADER)
                 .and_then(|value| value.to_str().ok()),
             Some("1080"),
         );
@@ -1099,7 +1117,7 @@ mod router_surface_and_auth_gate_tests {
     async fn the_downscale_cap_reaches_the_operation_from_the_query_string() {
         let runtime = ControlPlaneRouterStubRuntime::default();
         let recorded = runtime.exchange.recorded_calls.clone();
-        let status = router_over(runtime, false)
+        let status = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&format!(
                 "{}?downscale_long_edge_pixel_cap=1568",
                 exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED)
@@ -1128,7 +1146,7 @@ mod router_surface_and_auth_gate_tests {
             },
             ..ControlPlaneRouterStubRuntime::default()
         };
-        let response = router_over(runtime, false)
+        let response = router_without_bearer_auth(runtime)
             .oneshot(exchange_request(&exchange_uri(
                 EXCHANGED_FRAME_ID_PERCENT_ENCODED,
             )))
@@ -1154,7 +1172,7 @@ mod router_surface_and_auth_gate_tests {
     async fn the_exchange_route_rejects_a_missing_token_with_401_when_auth_on() {
         assert_eq!(
             status_on(
-                router_over(ControlPlaneRouterStubRuntime::default(), true),
+                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
                 exchange_request(&exchange_uri(EXCHANGED_FRAME_ID_PERCENT_ENCODED))
             )
             .await,
@@ -1170,7 +1188,7 @@ mod router_surface_and_auth_gate_tests {
             .insert(AUTHORIZATION, bearer("not-the-secret").try_into().unwrap());
         assert_eq!(
             status_on(
-                router_over(ControlPlaneRouterStubRuntime::default(), true),
+                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
                 request
             )
             .await,
@@ -1186,7 +1204,7 @@ mod router_surface_and_auth_gate_tests {
             .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
         assert_eq!(
             status_on(
-                router_over(ControlPlaneRouterStubRuntime::default(), true),
+                router_with_bearer_auth(ControlPlaneRouterStubRuntime::default()),
                 request
             )
             .await,

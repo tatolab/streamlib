@@ -844,6 +844,24 @@ pub struct GpuContext {
     color_converter_cache: Arc<
         RwLock<HashMap<(PixelFormat, PixelFormat), Arc<crate::core::rhi::RhiColorConverterInner>>>,
     >,
+    /// Present compositors keyed by attachment format — the graphics twin of
+    /// `color_converter_cache`, and cached for the same reason: building one
+    /// compiles two SPIR-V modules and a whole graphics pipeline, which is
+    /// not per-call work.
+    ///
+    /// Each entry is behind its own lock because the draw, not just the
+    /// build, is the shared resource: `compose_to_offscreen_texture` stages
+    /// one descriptor-ring slot and then submits, so two concurrent draws
+    /// through one compositor would overwrite each other's bindings.
+    #[cfg(target_os = "linux")]
+    present_compositor_cache: Arc<
+        parking_lot::Mutex<
+            HashMap<
+                TextureFormat,
+                Arc<parking_lot::Mutex<crate::vulkan::rhi::VulkanPresentCompositor>>,
+            >,
+        >,
+    >,
     /// Serializes [`GpuContextLimitedAccess::escalate`] scopes across
     /// threads so concurrent GPU resource creation (video
     /// sessions, DPB images, swapchain) can't race on the device. The
@@ -923,6 +941,8 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -958,6 +978,8 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1955,6 +1977,12 @@ impl GpuContext {
 
     /// Build a [`crate::vulkan::rhi::VulkanPresentCompositor`] for
     /// `attachment_format`.
+    ///
+    /// A caller that owns its compositor across frames — a window, whose
+    /// swapchain can flip the attachment format under it — builds one here.
+    /// A caller that just wants one draw uses
+    /// [`Self::compose_texture_onto_offscreen_texture`] instead, which shares
+    /// a cached compositor rather than compiling a pipeline per call.
     #[cfg(target_os = "linux")]
     pub fn create_present_compositor(
         &self,
@@ -1966,6 +1994,46 @@ impl GpuContext {
             "GpuContext::create_present_compositor"
         );
         crate::vulkan::rhi::VulkanPresentCompositor::new(&self.device.inner, attachment_format)
+    }
+
+    /// Draw `source` onto `destination` — scaled, aspect-managed, no window —
+    /// through a compositor cached on this context for `destination`'s format.
+    ///
+    /// Submits and waits: `destination` comes back in
+    /// `COLOR_ATTACHMENT_OPTIMAL` and `source` in `SHADER_READ_ONLY_OPTIMAL`.
+    /// Concurrent callers serialize on the cached compositor's lock, which is
+    /// also what makes one descriptor-ring slot enough.
+    #[cfg(target_os = "linux")]
+    pub fn compose_texture_onto_offscreen_texture(
+        &self,
+        destination: &Texture,
+        source: &Texture,
+        source_current_layout: VulkanLayout,
+        scaling: crate::vulkan::rhi::PresentScalingMode,
+    ) -> Result<()> {
+        let attachment_format = destination.format();
+        let compositor = {
+            let mut cache = self.present_compositor_cache.lock();
+            match cache.get(&attachment_format) {
+                Some(cached) => Arc::clone(cached),
+                None => {
+                    let built = Arc::new(parking_lot::Mutex::new(
+                        self.create_present_compositor(attachment_format)?,
+                    ));
+                    cache.insert(attachment_format, Arc::clone(&built));
+                    built
+                }
+            }
+        };
+        // One slot, always, because the lock is held across stage and submit.
+        const ONLY_DESCRIPTOR_RING_SLOT: u32 = 0;
+        compositor.lock().compose_to_offscreen_texture(
+            ONLY_DESCRIPTOR_RING_SLOT,
+            destination,
+            source,
+            source_current_layout,
+            scaling,
+        )
     }
 
     /// Create a Vulkan video session — the privileged

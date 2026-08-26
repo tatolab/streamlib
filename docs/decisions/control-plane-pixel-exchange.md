@@ -38,6 +38,19 @@ refused as the recycled-frame error before any bytes move, so a successful excha
 returns exactly the tapped bag's frame, and a slow caller taps a newer bag and exchanges
 that.
 
+**What the claim reaches, and what it does not.** The operation runs in the process that
+owns the pool — every producer acquires through it, helper children over the escalate op
+included — so the pool's in-process refcount is the whole claim seam here, and the
+cross-process checkout lease has nothing to protect that the refcount does not already.
+A surface that resolves only through a cross-process lookup carries no pixel extent and
+is refused by name rather than claimed. A **texture backing is not claimed at all**: the
+texture pool gates reuse on its own in-use flag, not on the registration's refcount, so
+holding the registration keeps the texture alive without stopping its producer rewriting
+it. A texture-backed exchange rides its producer's ring depth the way a pooled one rides
+pool depth. That is the same exposure the shipped export-staging refill already has —
+this verb inherits it rather than introducing it — and it is why the retired-id refusal
+matters most where the id *is* per-frame.
+
 ## Rejected alternatives
 
 - **Resolve inside tap** — a flag that makes the tap decode each bag, notice a surface
@@ -84,6 +97,12 @@ that.
   arguments; the CLI verb is a pure JSON-RPC client of it.
 - A PNG encoder enters library code. It is pure Rust end to end, so the wheel's
   portability contract — system libraries dlopen'd, our code compiled in — is untouched.
+- The engine's present compositor becomes a cached, format-keyed resource on the GPU
+  context, beside the colour converter and for the same reason: building one compiles a
+  graphics pipeline, which is not per-call work for a verb whose intended use is a
+  sample-as-you-go loop. Sharing it means one draw at a time per attachment format, which
+  a control-plane read can afford and a window — which owns its own compositor because a
+  swapchain can flip the attachment format under it — does not have to.
 - The verb joins the bearer-gated set beside the tap WebSocket. That is mechanism
   parity, not a trust boundary the exchange imposes: whatever the open auth and
   remote-access question decides later, it decides for this verb the same as the rest.

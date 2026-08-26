@@ -5,12 +5,28 @@
 //! surface id in, that frame's pixels on the host out.
 //!
 //! Order inside one call is the contract — resolve, claim, convert and
-//! copy under the claim, release. The claim is the pool's own seam: the
+//! copy under the claim, release. Encoding happens in the caller, after
+//! this returns, so the claim window is the conversion and the copy off
+//! the producer's slot, and nothing else.
+//!
+//! **What the claim covers, exactly.** A pooled backing is claimed: the
 //! resolved [`PixelBuffer`] *is* the refcount clone the ring reads before
 //! it rehands a slot ([`GpuContext::acquire_pixel_buffer`]), so holding it
 //! is what keeps a producer from recycling the frame mid-copy and handing
-//! the caller half of one frame and half of the next. Encoding happens in
-//! the caller, after this returns, so the claim window is the copy alone.
+//! the caller half of one frame and half of the next. That refcount is a
+//! same-address-space test, and it is the whole seam here because this
+//! runs in the process that owns the pool — every producer, helper
+//! children included, acquires through it. A surface that resolves only
+//! through a cross-process `lookup` carries no pixel extent and is refused
+//! by name rather than claimed.
+//!
+//! A **texture backing is not claimed**, because there is nothing to claim
+//! it with: holding the registration keeps the texture alive, but a
+//! producer's ring rewrites its slots in place, and the texture pool gates
+//! reuse on its own in-use flag rather than on that refcount. A
+//! texture-backed exchange therefore rides its producer's ring depth the
+//! way a pooled one rides pool depth — the same exposure the shipped
+//! export-staging refill has, not a new one.
 //!
 //! Every pixel conversion runs in the RHI or not at all: a YUV camera
 //! frame goes through the engine's color converter, an RGBA pool frame
@@ -35,19 +51,11 @@ use crate::vulkan::rhi::{ImageCopyRegion, PresentScalingMode};
 /// producer happened to publish.
 const EXCHANGE_IMAGE_TEXTURE_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
 
-/// Bytes per pixel of [`EXCHANGE_IMAGE_TEXTURE_FORMAT`].
-const EXCHANGE_IMAGE_BYTES_PER_PIXEL: u64 = 4;
-
 /// How long the host waits on one exchange's GPU→CPU copy before calling
 /// it a stall. A control-plane read is a single frame's copy on a queue
 /// that is otherwise making progress; past this the device is wedged, not
 /// slow, and a caller waiting forever learns nothing.
 const EXCHANGE_READBACK_WAIT_TIMEOUT_NANOSECONDS: u64 = 2_000_000_000;
-
-/// The descriptor-ring slot the exchange's one-shot compositor draw uses.
-/// The compositor is built per exchange and never has a second draw in
-/// flight, so slot zero is always free.
-const EXCHANGE_COMPOSITOR_FRAME_INDEX: u32 = 0;
 
 /// One published frame's pixels, copied to the host as tightly-packed
 /// RGBA8, with the extent they were encoded at and the extent the surface
@@ -93,17 +101,27 @@ pub(crate) fn downscaled_image_extent_under_long_edge_cap(
     )
 }
 
-/// The plane strides a pool allocation carries: pool slots are allocated
-/// tightly packed for their format, so the shader walks `width`-derived
-/// strides with no driver padding to honour.
-fn tightly_packed_source_layout_of(
-    source_pixel_format: PixelFormat,
-    source_surface_pixel_width: u32,
-    source_surface_pixel_height: u32,
-) -> SourceLayoutInfo {
-    match source_pixel_format {
-        PixelFormat::Yuyv422 => SourceLayoutInfo::yuyv_tight(source_surface_pixel_width),
-        _ => SourceLayoutInfo::nv12_tight(source_surface_pixel_width, source_surface_pixel_height),
+/// One RGBA8 image the readback can copy straight out, and the layout it
+/// is sitting in.
+///
+/// The layout travels with the texture because only the step that recorded
+/// the last barrier knows it, and [`crate::vulkan::rhi::VulkanTextureReadback::submit`]
+/// both transitions out of it and restores back to it — a caller that
+/// re-derived it would read a texture through the wrong layout the moment
+/// a terminal barrier changed.
+struct ExchangeImageTextureReadyForReadback {
+    texture: Texture,
+    layout_the_last_barrier_left_it_in: TextureSourceLayout,
+}
+
+impl ExchangeImageTextureReadyForReadback {
+    /// The same layout as the barrier vocabulary spells it, for a step that
+    /// records rather than reads.
+    fn vulkan_layout(&self) -> VulkanLayout {
+        VulkanLayout(
+            self.layout_the_last_barrier_left_it_in
+                .to_vulkan_layout_raw(),
+        )
     }
 }
 
@@ -121,10 +139,11 @@ impl GpuContext {
     ) -> Result<PublishedSurfaceFrameHostRgba8Image> {
         self.refuse_a_retired_frame_id(published_surface_id)?;
 
-        // Resolving hands back the claim itself — the pooled buffer's
-        // refcount clone, or the registration keeping a texture backing
-        // alive. Held across the copy below and dropped at the end of this
-        // function, which is what bounds the claim to the copy.
+        // Resolving hands back the claim itself for a pooled backing — the
+        // refcount clone the ring reads — and, for a texture backing, the
+        // registration that keeps the texture alive but does not stop its
+        // producer rewriting it (see the module docs). Held across the copy
+        // below and dropped the moment that copy is done.
         //
         // Its one failure is "neither backing answered", which for a
         // caller naming a surface is an absence, not a device fault — both
@@ -147,19 +166,21 @@ impl GpuContext {
             downscale_long_edge_pixel_cap,
         );
 
-        let (image_texture, image_texture_layout) = self
-            .normalize_claimed_frame_into_an_exchange_image_texture(
-                published_surface_id,
-                &claimed_frame_backing,
-                (source_surface_pixel_width, source_surface_pixel_height),
-                (image_pixel_width, image_pixel_height),
-            )?;
-        let rgba8_pixel_bytes =
-            self.read_exchange_image_texture_into_host_bytes(&image_texture, image_texture_layout)?;
-
-        // The claim ends here: the caller encodes with the slot already
-        // back in its producer's hands.
+        let image = self.normalize_claimed_frame_into_an_exchange_image_texture(
+            published_surface_id,
+            &claimed_frame_backing,
+            (source_surface_pixel_width, source_surface_pixel_height),
+            (image_pixel_width, image_pixel_height),
+        )?;
+        // The claim ends here. Every arm above submits and waits, so the GPU
+        // has finished reading the producer's frame; what the readback below
+        // copies is the exchange's own texture, which the producer has no
+        // claim on and cannot recycle. Releasing here rather than after the
+        // readback makes the window the conversion and the copy off the
+        // producer's slot — and nothing else.
         drop(claimed_frame_backing);
+
+        let rgba8_pixel_bytes = self.read_exchange_image_texture_into_host_bytes(&image)?;
 
         Ok(PublishedSurfaceFrameHostRgba8Image {
             rgba8_pixel_bytes,
@@ -171,14 +192,14 @@ impl GpuContext {
     }
 
     /// Bring whichever backing answered for the surface into one RGBA8
-    /// texture at the image extent, and report the layout it is left in.
+    /// texture at the image extent, ready for the readback.
     fn normalize_claimed_frame_into_an_exchange_image_texture(
         &self,
         published_surface_id: &str,
         claimed_frame_backing: &ResolvedBlitSource,
         (source_surface_pixel_width, source_surface_pixel_height): (u32, u32),
         (image_pixel_width, image_pixel_height): (u32, u32),
-    ) -> Result<(Texture, TextureSourceLayout)> {
+    ) -> Result<ExchangeImageTextureReadyForReadback> {
         let downscale_applies = (image_pixel_width, image_pixel_height)
             != (source_surface_pixel_width, source_surface_pixel_height);
 
@@ -191,15 +212,14 @@ impl GpuContext {
                     source_surface_pixel_height,
                 )?;
                 if !downscale_applies {
-                    return Ok((at_source_extent, TextureSourceLayout::General));
+                    return Ok(at_source_extent);
                 }
-                let downscaled = self.blit_texture_into_an_exchange_image_texture(
-                    &at_source_extent,
-                    VulkanLayout::GENERAL,
+                self.blit_texture_into_an_exchange_image_texture(
+                    &at_source_extent.texture,
+                    at_source_extent.vulkan_layout(),
                     image_pixel_width,
                     image_pixel_height,
-                )?;
-                Ok((downscaled, TextureSourceLayout::ColorAttachment))
+                )
             }
             ResolvedBlitSource::RegisteredTexture(registration) => {
                 let producer_texture = registration.texture();
@@ -215,7 +235,10 @@ impl GpuContext {
                     && let Some(readable_layout) =
                         TextureSourceLayout::from_vulkan_layout_raw(registration.current_layout().0)
                 {
-                    return Ok((producer_texture.clone(), readable_layout));
+                    return Ok(ExchangeImageTextureReadyForReadback {
+                        texture: producer_texture.clone(),
+                        layout_the_last_barrier_left_it_in: readable_layout,
+                    });
                 }
                 let composed = self.blit_texture_into_an_exchange_image_texture(
                     producer_texture,
@@ -226,7 +249,7 @@ impl GpuContext {
                 // The blit left the producer's texture sampled, and the
                 // registration is what its next consumer barriers from.
                 registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-                Ok((composed, TextureSourceLayout::ColorAttachment))
+                Ok(composed)
             }
         }
     }
@@ -240,10 +263,9 @@ impl GpuContext {
         pixel_buffer: &PixelBuffer,
         source_surface_pixel_width: u32,
         source_surface_pixel_height: u32,
-    ) -> Result<Texture> {
+    ) -> Result<ExchangeImageTextureReadyForReadback> {
         let image_texture = self.create_exchange_image_texture(
             "surface-exchange-source",
-            EXCHANGE_IMAGE_TEXTURE_FORMAT,
             source_surface_pixel_width,
             source_surface_pixel_height,
             TextureUsages::STORAGE_BINDING
@@ -252,35 +274,30 @@ impl GpuContext {
                 | TextureUsages::COPY_SRC,
         )?;
 
+        // Pool slots are allocated tightly packed for their format, so every
+        // stride below is `width`-derived with no driver padding to honour.
+        // Each format names its own layout rather than falling through a
+        // default: handing one format's plane strides to another's shader
+        // produces garbage pixels and no error anywhere.
         let source_pixel_format = pixel_buffer.format();
         match source_pixel_format {
-            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange | PixelFormat::Yuyv422 => {
-                // The converter writes through an `imageStore`, so the
-                // destination has to be GENERAL before the dispatch — the
-                // kernel records no layout transition of its own.
-                self.transition_storage_image_to_general(&image_texture)?;
-                let color_converter =
-                    self.color_converter(source_pixel_format, PixelFormat::Rgba32)?;
-                // No color description travels with a surface, so the
-                // defaults the format itself implies are what the matrix and
-                // range come from — the same resolve a camera runs before it
-                // has read a frame's metadata.
-                let resolved_color = resolve_color_defaults(
-                    None,
-                    None,
-                    None,
-                    None,
-                    pixel_format_color_kind(source_pixel_format),
-                );
-                color_converter.convert_buffer_to_image_pixel(
+            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange => {
+                self.convert_pooled_frame_into_texture(
                     pixel_buffer,
-                    tightly_packed_source_layout_of(
-                        source_pixel_format,
+                    source_pixel_format,
+                    SourceLayoutInfo::nv12_tight(
                         source_surface_pixel_width,
                         source_surface_pixel_height,
                     ),
                     &image_texture,
-                    &resolved_color,
+                )?;
+            }
+            PixelFormat::Yuyv422 => {
+                self.convert_pooled_frame_into_texture(
+                    pixel_buffer,
+                    source_pixel_format,
+                    SourceLayoutInfo::yuyv_tight(source_surface_pixel_width),
+                    &image_texture,
                 )?;
             }
             PixelFormat::Rgba32 => {
@@ -300,7 +317,43 @@ impl GpuContext {
                 )));
             }
         }
-        Ok(image_texture)
+        Ok(ExchangeImageTextureReadyForReadback {
+            texture: image_texture,
+            layout_the_last_barrier_left_it_in: TextureSourceLayout::General,
+        })
+    }
+
+    /// Run the RHI's color converter over a YUV pool allocation, into an
+    /// RGBA8 texture this exchange owns.
+    fn convert_pooled_frame_into_texture(
+        &self,
+        pixel_buffer: &PixelBuffer,
+        source_pixel_format: PixelFormat,
+        source_plane_layout: SourceLayoutInfo,
+        image_texture: &Texture,
+    ) -> Result<()> {
+        // The converter writes through an `imageStore`, so the destination
+        // has to be GENERAL before the dispatch — the kernel records no
+        // layout transition of its own.
+        self.transition_storage_image_to_general(image_texture)?;
+        let color_converter = self.color_converter(source_pixel_format, PixelFormat::Rgba32)?;
+        // No color description travels with a surface, so the defaults the
+        // format itself implies are what the matrix and range come from —
+        // the same resolve a camera runs before it has read a frame's
+        // metadata.
+        let resolved_color = resolve_color_defaults(
+            None,
+            None,
+            None,
+            None,
+            pixel_format_color_kind(source_pixel_format),
+        );
+        color_converter.convert_buffer_to_image_pixel(
+            pixel_buffer,
+            source_plane_layout,
+            image_texture,
+            &resolved_color,
+        )
     }
 
     /// Copy an already-RGBA pool allocation into `image_texture`, leaving
@@ -353,89 +406,77 @@ impl GpuContext {
         recorder.submit_and_wait()
     }
 
-    /// Draw `source` onto a fresh RGBA8 texture of the requested extent
-    /// through the RHI's existing display blit — the one scaler the engine
-    /// has, and the only place the downscale cap is spent.
+    /// Draw `texture_to_sample_from` onto a fresh RGBA8 texture of the
+    /// requested extent through the RHI's existing display blit — the one
+    /// scaler the engine has, and the only place the downscale cap is spent.
+    ///
+    /// It samples rather than copies, so it asks nothing of its source but
+    /// that it be sampleable: neither the source's format nor its transfer
+    /// usage has to suit a readback.
     fn blit_texture_into_an_exchange_image_texture(
         &self,
-        source: &Texture,
-        source_current_layout: VulkanLayout,
+        texture_to_sample_from: &Texture,
+        layout_that_texture_is_currently_in: VulkanLayout,
         image_pixel_width: u32,
         image_pixel_height: u32,
-    ) -> Result<Texture> {
+    ) -> Result<ExchangeImageTextureReadyForReadback> {
         let image_texture = self.create_exchange_image_texture(
             "surface-exchange-image",
-            EXCHANGE_IMAGE_TEXTURE_FORMAT,
             image_pixel_width,
             image_pixel_height,
             TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::COPY_SRC,
         )?;
-        let compositor = self.create_present_compositor(EXCHANGE_IMAGE_TEXTURE_FORMAT)?;
         // `Fit` rather than `Stretch`: the destination extent preserves the
         // source aspect to within a rounded pixel, and letterboxing that
         // remainder is a sub-pixel bar, where stretching it is a distorted
         // picture.
-        compositor.compose_to_offscreen_texture(
-            EXCHANGE_COMPOSITOR_FRAME_INDEX,
+        self.compose_texture_onto_offscreen_texture(
             &image_texture,
-            source,
-            source_current_layout,
+            texture_to_sample_from,
+            layout_that_texture_is_currently_in,
             PresentScalingMode::Fit,
         )?;
-        Ok(image_texture)
+        Ok(ExchangeImageTextureReadyForReadback {
+            texture: image_texture,
+            layout_the_last_barrier_left_it_in: TextureSourceLayout::ColorAttachment,
+        })
     }
 
-    /// Allocate one of the exchange's own textures. Device-local and
-    /// same-process: the exchange exports nothing, so it never spends the
-    /// DMA-BUF budget a swapchain shares
-    /// (`docs/learnings/nvidia-dma-buf-after-swapchain.md`).
+    /// Allocate one of the exchange's own textures, always at
+    /// [`EXCHANGE_IMAGE_TEXTURE_FORMAT`]. Device-local and same-process: the
+    /// exchange exports nothing, so it never spends the DMA-BUF budget a
+    /// swapchain shares (`docs/learnings/nvidia-dma-buf-after-swapchain.md`).
     fn create_exchange_image_texture(
         &self,
         label: &str,
-        format: TextureFormat,
         pixel_width: u32,
         pixel_height: u32,
         usage: TextureUsages,
     ) -> Result<Texture> {
         self.device().create_texture_local(
-            &TextureDescriptor::new(pixel_width, pixel_height, format)
+            &TextureDescriptor::new(pixel_width, pixel_height, EXCHANGE_IMAGE_TEXTURE_FORMAT)
                 .with_label(label)
                 .with_usage(usage),
         )
     }
 
-    /// Copy `image_texture` to the host and own the bytes.
+    /// Copy the exchange's own image texture to the host and own the bytes.
     fn read_exchange_image_texture_into_host_bytes(
         &self,
-        image_texture: &Texture,
-        image_texture_layout: TextureSourceLayout,
+        image: &ExchangeImageTextureReadyForReadback,
     ) -> Result<Vec<u8>> {
         let readback = self.create_texture_readback(&TextureReadbackDescriptor {
             label: "surface-exchange-readback",
-            format: image_texture.format(),
-            width: image_texture.width(),
-            height: image_texture.height(),
+            format: image.texture.format(),
+            width: image.texture.width(),
+            height: image.texture.height(),
         })?;
-        let ticket = readback.submit(image_texture, image_texture_layout)?;
-        let host_bytes = readback
+        let ticket = readback.submit(&image.texture, image.layout_the_last_barrier_left_it_in)?;
+        Ok(readback
             .wait_and_read(ticket, EXCHANGE_READBACK_WAIT_TIMEOUT_NANOSECONDS)?
-            .to_vec();
-
-        let expected_byte_count = u64::from(image_texture.width())
-            * u64::from(image_texture.height())
-            * EXCHANGE_IMAGE_BYTES_PER_PIXEL;
-        if host_bytes.len() as u64 != expected_byte_count {
-            return Err(Error::GpuError(format!(
-                "surface exchange read back {} bytes for a {}x{} RGBA8 image that needs \
-                 {expected_byte_count}",
-                host_bytes.len(),
-                image_texture.width(),
-                image_texture.height(),
-            )));
-        }
-        Ok(host_bytes)
+            .to_vec())
     }
 }
 
@@ -637,6 +678,65 @@ mod tests {
             &exchanged.rgba8_pixel_bytes,
             KERNEL_OUTPUT_RGBA8_PIXEL,
             "the exchanged texture-backed frame",
+        );
+    }
+
+    /// The texture arm's *other* path: a producer texture that already is
+    /// the exchange's format, is transfer-readable, and sits in a layout
+    /// the readback can restore is read straight out, with no blit at all.
+    /// This is what a Python kernel output takes — `acquire_texture` puts
+    /// `COPY_SRC | COPY_DST` on every request — so the four-way guard that
+    /// selects it is production behaviour, not a fallback.
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    fn a_transfer_readable_producer_texture_is_read_without_a_blit() {
+        let Some(gpu) = gpu_context_or_skip() else {
+            return;
+        };
+        let transfer_readable_texture = gpu
+            .device()
+            .create_texture_local(
+                &TextureDescriptor::new(
+                    FRAME_PIXEL_WIDTH,
+                    FRAME_PIXEL_HEIGHT,
+                    EXCHANGE_IMAGE_TEXTURE_FORMAT,
+                )
+                .with_label("producer-texture-a-readback-can-copy")
+                .with_usage(
+                    TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::STORAGE_BINDING,
+                ),
+            )
+            .expect("a transfer-readable producer texture");
+        assert!(
+            transfer_readable_texture.supports_transfer_read(),
+            "the fixture must take the direct-readback arm, not the blit"
+        );
+
+        let surface_id = format!("kernel-output-{}", uuid::Uuid::new_v4());
+        gpu.register_texture(&surface_id, transfer_readable_texture.clone());
+        let (_, upload_source) = gpu
+            .acquire_pixel_buffer(FRAME_PIXEL_WIDTH, FRAME_PIXEL_HEIGHT, PixelFormat::Rgba32)
+            .expect("acquire the upload source");
+        fill_pooled_backing_with(&upload_source, &KERNEL_OUTPUT_RGBA8_PIXEL);
+        gpu.copy_pixel_buffer_to_texture(
+            &upload_source,
+            &transfer_readable_texture,
+            &surface_id,
+            FRAME_PIXEL_WIDTH,
+            FRAME_PIXEL_HEIGHT,
+        )
+        .expect("render the kernel's output");
+
+        let exchanged = gpu
+            .copy_published_surface_frame_to_host_rgba8_image(&surface_id, None)
+            .expect("exchange the transfer-readable texture");
+        assert_every_pixel_is(
+            &exchanged.rgba8_pixel_bytes,
+            KERNEL_OUTPUT_RGBA8_PIXEL,
+            "the directly-read producer texture",
         );
     }
 
