@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.8](https://github.com/tatolab/streamlib/compare/v0.18.7...v0.18.8) (2026-08-26)
+
+
+### Features
+
+* **cli:** streamlib exchange — a surface id, or a channel sampled for them ([#1982](https://github.com/tatolab/streamlib/issues/1982)) ([cc186f0](https://github.com/tatolab/streamlib/commit/cc186f00eae20ae6458085f78c45f51953589cf8))
+* **control-plane:** serve the exchange as an MCP image content block ([#1981](https://github.com/tatolab/streamlib/issues/1981)) ([94ac198](https://github.com/tatolab/streamlib/commit/94ac19886595bb487b7268b1a92efb34cef96c2b))
+
 ## [0.18.7](https://github.com/tatolab/streamlib/compare/v0.18.6...v0.18.7) (2026-08-26)
 
 
