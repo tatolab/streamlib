@@ -1,8 +1,8 @@
 name: Repo Gates
 
-# The toolchain-free gates: bash and git only, no Rust, no Python, no network.
-# Both ran as their own workflow; together they finish in seconds, so they share
-# one runner rather than two.
+# The toolchain-free gates: bash, git and jq only, no Rust, no Python, no
+# network. Each began as its own workflow; together they finish in seconds, so
+# they share one runner rather than three.
 #
 # - License headers: every Rust and Python file carries the BUSL header. The
 #   implementation is `scripts/check-license-headers.sh` rather than inline YAML
@@ -14,6 +14,12 @@ name: Repo Gates
 #   whose artifacts were all still on disk. Only the gate's own tests run here —
 #   active change files legitimately fail the gate, since their removals have
 #   not happened yet, so CI never runs it against them.
+# - rig-brake: unit tests for the PreToolUse hook that escalates rig-consuming
+#   commands to the human. It guards in both directions — a key that can never
+#   fire reports safe on a command nobody vetted, and one that fires on a benign
+#   probe trains the owner to click through. This workflow has no paths-ignore,
+#   which is what keeps the hook's tests running on the `.claude/`-only PRs that
+#   are the ones most likely to change it.
 
 on:
   pull_request:
