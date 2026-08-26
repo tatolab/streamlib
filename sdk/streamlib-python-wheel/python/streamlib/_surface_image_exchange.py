@@ -60,13 +60,21 @@ FILE_NAME_SAFE_CHARACTERS = frozenset(
 
 
 class SampledChannelExchangeReport(NamedTuple):
-    """What one channel-form run exchanged, and what it had to retry."""
+    """What one channel-form run exchanged, and what it had to retry.
+
+    `stopped_early_because` carries a failure the run could not compose past —
+    a refusal that is not a recycled frame, a channel that stopped answering.
+    It is reported rather than raised so the frames that did land are still
+    named: a PNG on disk whose path was never printed is evidence a harness
+    cannot use and a human will not find.
+    """
 
     written_image_paths: "list[Path]"
     retried_recycled_surface_ids: "list[str]"
     bags_missing_the_surface_id_field: int
     bags_examined: int
     tap_rounds: int
+    stopped_early_because: "Optional[str]" = None
 
 
 def _file_name_stem_for_surface_id(published_surface_id: str) -> str:
@@ -113,13 +121,15 @@ def _tapped_bag_frames(url: str, channel: str, requested_bag_count: int) -> "lis
         url, "tap", {"channel": channel, "count": max(1, requested_bag_count)}
     )
     try:
-        sample = json.loads(result_text)
+        tap_tool_result = json.loads(result_text)
     except ValueError as decode_failure:
         raise ControlPlaneError(
             f"tap of `{channel}` returned a non-JSON result: {result_text}"
         ) from decode_failure
 
-    bags = sample.get("bags") if isinstance(sample, dict) else None
+    bags = (
+        tap_tool_result.get("bags") if isinstance(tap_tool_result, dict) else None
+    )
     if not isinstance(bags, list):
         raise ControlPlaneError(
             f"tap of `{channel}` returned no `bags` array: {result_text}"
@@ -182,57 +192,64 @@ def sample_channel_into_exchanged_surface_images(
 ) -> SampledChannelExchangeReport:
     """Tap `channel`, exchange the sampled bags' surface ids, write the PNGs.
 
-    Bags are selected by a stride running across the whole sample, not restarted
-    per tap round, so `--every` means the same thing whether the frames arrived
-    in one round or several.
+    The stride counts bags this client received, and runs across the whole run
+    rather than restarting per tap round — otherwise a run that needed a second
+    round would exchange two adjacent frames while reporting a stride. It is
+    not a stride over the channel: each round is a fresh attach, so an unknown
+    number of bags flow by between rounds and are never counted.
     """
     written_image_paths: "list[Path]" = []
     retried_recycled_surface_ids: "list[str]" = []
     bags_missing_the_surface_id_field = 0
     bags_examined = 0
     tap_rounds = 0
+    stopped_early_because: "Optional[str]" = None
 
-    while (
-        len(written_image_paths) < wanted_image_count
-        and tap_rounds < MAX_TAP_ROUNDS_PER_SAMPLE_RUN
-    ):
-        tap_rounds += 1
-        still_wanted = wanted_image_count - len(written_image_paths)
-        for framed_bag_bytes in _tapped_bag_frames(
-            url, channel, still_wanted * every_nth_bag
+    try:
+        while (
+            len(written_image_paths) < wanted_image_count
+            and tap_rounds < MAX_TAP_ROUNDS_PER_SAMPLE_RUN
         ):
-            selected = bags_examined % every_nth_bag == 0
-            bags_examined += 1
-            if not selected:
-                continue
+            tap_rounds += 1
+            still_wanted = wanted_image_count - len(written_image_paths)
+            for framed_bag_bytes in _tapped_bag_frames(
+                url, channel, still_wanted * every_nth_bag
+            ):
+                selected = bags_examined % every_nth_bag == 0
+                bags_examined += 1
+                if not selected:
+                    continue
 
-            published_surface_id = _surface_id_in_bag(
-                framed_bag_bytes, channel, surface_id_bag_field_name
-            )
-            if published_surface_id is None:
-                bags_missing_the_surface_id_field += 1
-                continue
-
-            try:
-                exchanged = fetch_surface_image_png_bytes(url, published_surface_id)
-            except SurfaceImageExchangeRefusal as refusal:
-                # A recycled frame is the one refusal that composes: the id was
-                # real and its slot has moved on, so the next bag is the answer.
-                if not refusal.names_a_recycled_frame:
-                    raise
-                retried_recycled_surface_ids.append(published_surface_id)
-                continue
-
-            written_image_paths.append(
-                _write_exchanged_surface_image(
-                    output_directory,
-                    f"{len(written_image_paths):04d}-"
-                    f"{_file_name_stem_for_surface_id(published_surface_id)}.png",
-                    exchanged,
+                published_surface_id = _surface_id_in_bag(
+                    framed_bag_bytes, channel, surface_id_bag_field_name
                 )
-            )
-            if len(written_image_paths) == wanted_image_count:
-                break
+                if published_surface_id is None:
+                    bags_missing_the_surface_id_field += 1
+                    continue
+
+                try:
+                    exchanged = fetch_surface_image_png_bytes(url, published_surface_id)
+                except SurfaceImageExchangeRefusal as refusal:
+                    # A recycled frame is the one refusal that composes: the id
+                    # was real and its slot has moved on, so the next bag is the
+                    # answer. Every other refusal will answer the same forever.
+                    if not refusal.names_a_recycled_frame:
+                        raise
+                    retried_recycled_surface_ids.append(published_surface_id)
+                    continue
+
+                written_image_paths.append(
+                    _write_exchanged_surface_image(
+                        output_directory,
+                        f"{len(written_image_paths):04d}-"
+                        f"{_file_name_stem_for_surface_id(published_surface_id)}.png",
+                        exchanged,
+                    )
+                )
+                if len(written_image_paths) == wanted_image_count:
+                    break
+    except ControlPlaneError as failure:
+        stopped_early_because = str(failure)
 
     return SampledChannelExchangeReport(
         written_image_paths=written_image_paths,
@@ -240,4 +257,5 @@ def sample_channel_into_exchanged_surface_images(
         bags_missing_the_surface_id_field=bags_missing_the_surface_id_field,
         bags_examined=bags_examined,
         tap_rounds=tap_rounds,
+        stopped_early_because=stopped_early_because,
     )

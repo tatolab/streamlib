@@ -1393,6 +1393,55 @@ def test_every_nth_bag_selects_the_stride(
     assert json.loads(server.recorded_bodies[0])["params"]["arguments"]["count"] == 6
 
 
+def test_the_stride_runs_across_tap_rounds_rather_than_restarting(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # A stride reset per round would exchange `a` then `c` — the first bag of
+    # each round — reporting a stride it did not apply. Continuing the count
+    # across rounds selects `a` then `d`.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id(f"s#{label}") for label in ("a", "b")],
+            ),
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id(f"s#{label}") for label in ("c", "d")],
+            ),
+        ],
+        surface_image_answers={
+            f"s#{label}": image_answer(label) for label in ("a", "b", "c", "d")
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--every",
+                "3",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 0
+    )
+
+    written = [Path(line) for line in capsys.readouterr().out.splitlines()]
+    assert [path.read_bytes() for path in written] == [
+        png_bytes_for("a"),
+        png_bytes_for("d"),
+    ], "the stride restarted at each tap round"
+
+
 def test_a_short_sample_exits_nonzero(
     isolated_registry, stub_control_plane, tmp_path, capsys
 ):
@@ -1458,6 +1507,51 @@ def test_a_refusal_that_cannot_be_retried_stops_the_run(
     )
 
     assert "no conversion arm" in capsys.readouterr().err
+
+
+def test_frames_that_landed_before_a_fatal_stop_are_still_printed(
+    isolated_registry, stub_control_plane, tmp_path, capsys
+):
+    # A PNG on disk whose path was never printed is evidence a harness cannot
+    # use and a human will not find, so the stop is reported beside the frames
+    # rather than instead of them.
+    server = stub_control_plane(
+        body=tap_result_body("cam/frame", []),
+        queued_bodies=[
+            tap_result_body(
+                "cam/frame",
+                [bag_publishing_surface_id("s#1"), bag_publishing_surface_id("s#2")],
+            )
+        ],
+        surface_image_answers={
+            "s#1": image_answer("one"),
+            "s#2": StubSurfaceImageAnswer(404, error_message="no such surface"),
+        },
+    )
+
+    assert (
+        cli.main(
+            [
+                "exchange",
+                "--channel",
+                "cam/frame",
+                "--count",
+                "2",
+                "--out",
+                str(tmp_path),
+                "--url",
+                server.url,
+            ]
+        )
+        == 1
+    )
+
+    printed = capsys.readouterr()
+    written = [Path(line) for line in printed.out.splitlines()]
+    assert [path.read_bytes() for path in written] == [png_bytes_for("one")]
+    assert "no such surface" in printed.err
+    # Every PNG on disk is a PNG that was named.
+    assert len(list(tmp_path.glob("*.png"))) == len(written)
 
 
 def test_a_bag_the_tap_truncated_stops_the_run_by_name(

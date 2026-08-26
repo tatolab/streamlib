@@ -715,8 +715,10 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "With SURFACE_ID, exchanges that one id. With --channel, taps the "
             "channel, reads a surface id out of each sampled bag, and exchanges "
             "it — one warm process, no window in the graph and no display server "
-            "in the path. Writes exact full-resolution PNGs into --out and "
-            "prints their paths, one per line."
+            "in the path. Writes exact full-resolution PNGs into --out and prints "
+            "their paths on stdout, one per line — those paths are this run's "
+            "frames, and --out is not cleared, so read them rather than listing "
+            "the directory."
         ),
     )
     exchange_command.add_argument(
@@ -854,6 +856,8 @@ def _print_sampled_channel_exchange_report(
             f"the named field — name the right one with `--field`",
             file=sys.stderr,
         )
+    if report.stopped_early_because:
+        print(f"error: {report.stopped_early_because}", file=sys.stderr)
 
 
 def _run_exchange_verb(arguments: argparse.Namespace) -> int:
