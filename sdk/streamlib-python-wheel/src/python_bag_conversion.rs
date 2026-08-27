@@ -435,6 +435,61 @@ fn msgpack_value_to_python_object<'py>(
 mod tests {
     use super::*;
 
+    /// The bytes a Rust producer's own `AudioBlock` puts on the wire, decoded
+    /// the way a Python processor's read decodes them.
+    ///
+    /// The joint between the two halves each side locks alone: the cast's wire
+    /// test asserts what `rmp_serde::to_vec_named` emits, and the Python cast's
+    /// tests assert what it builds from a named map — this is the one place
+    /// the real struct's bytes meet the real decode, so a rename on either
+    /// side surfaces here rather than at a microphone.
+    #[test]
+    fn a_rust_audio_block_decodes_into_the_named_map_the_python_cast_reads() {
+        Python::initialize();
+        let payload: Vec<u8> = [-1.0f32, -0.5, 0.0, 0.5]
+            .iter()
+            .flat_map(|scalar| scalar.to_le_bytes())
+            .collect();
+        let block = streamlib_media_builtins::AudioBlock {
+            interleaved_sample_bytes: payload.clone(),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 2,
+            dtype: streamlib_media_builtins::AudioSampleDtype::F32,
+            first_sample_timestamp_ns: 123_456_789,
+        };
+        let wire_bytes = rmp_serde::to_vec_named(&block).expect("msgpack serialize");
+
+        Python::attach(|python| {
+            let bag = decode_msgpack_to_python_object(python, &wire_bytes)
+                .expect("a Rust producer's bag decodes")
+                .cast_into::<PyDict>()
+                .expect("a bag is a named map");
+            let entry = |key: &str| {
+                bag.get_item(key)
+                    .expect("lookup")
+                    .unwrap_or_else(|| panic!("the bag carries {key:?}"))
+            };
+            assert_eq!(
+                entry("samples")
+                    .cast::<PyBytes>()
+                    .expect("the payload arrives as bytes, which is what numpy views")
+                    .as_bytes(),
+                payload.as_slice()
+            );
+            assert_eq!(entry("sample_rate").extract::<u32>().expect("u32"), 48_000);
+            assert_eq!(entry("channels").extract::<u32>().expect("u32"), 2);
+            assert_eq!(entry("sample_count").extract::<u32>().expect("u32"), 2);
+            assert_eq!(entry("dtype").extract::<String>().expect("str"), "f32");
+            assert_eq!(
+                entry("first_sample_timestamp_ns")
+                    .extract::<i64>()
+                    .expect("i64"),
+                123_456_789
+            );
+        });
+    }
+
     /// No slack behind the payload — the frame ends where the bag does.
     const SLICE_HOLDS_ONLY_THE_BAG: usize = 0;
 

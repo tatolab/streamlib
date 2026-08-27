@@ -22,6 +22,7 @@ import numpy
 import pytest
 
 from streamlib import AudioBlock, ProcessorLinkDataAccess
+from streamlib.audio_block import _NUMPY_TYPE_FOR_DTYPE
 
 OUTPUT_PORT = "audio_to_downstream"
 INPUT_PORT = "audio_from_upstream"
@@ -262,3 +263,15 @@ def test_an_audio_block_takes_no_surface_and_holds_no_claim():
     assert not hasattr(block, "surface_id")
     assert not hasattr(block, "writable")
     assert not hasattr(block, "__dlpack__")
+
+
+def test_the_numpy_types_are_spelled_little_endian_at_the_source():
+    """The one decision on this cast no behavioural assertion can catch.
+
+    numpy answers the native spelling and the little-endian spelling with the
+    same dtype on a little-endian host, and the platform floor is little-endian
+    — so a cast that asked for `"f4"` would pass every other test in this file
+    while decoding every sample wrong for a big-endian reader. What protects
+    that reader is the spelling itself, so the spelling is what this asserts.
+    """
+    assert _NUMPY_TYPE_FOR_DTYPE == {"f32": "<f4", "i16": "<i2"}

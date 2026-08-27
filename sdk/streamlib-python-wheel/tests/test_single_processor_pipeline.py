@@ -10,9 +10,9 @@ processor writes comes back to the test — across two process boundaries, in
 order, losing nothing.
 """
 
-import pytest
-
 import struct
+
+import pytest
 
 from single_processor_under_test import (
     AudioBlockInspector,
