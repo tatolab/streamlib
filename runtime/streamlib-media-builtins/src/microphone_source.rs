@@ -243,6 +243,7 @@ fn publish_captured_blocks(
     {
         publish_one_captured_block(captured, outputs, published_block_counter, stream_format);
     }
+    warn_about_any_new_drops(hand_off_ring, &mut warn_at_dropped_block_count);
 }
 
 fn publish_one_captured_block(
@@ -312,6 +313,10 @@ mod tests {
         AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     };
 
+    const TEST_SAMPLE_RATE: u32 = 48_000;
+    const TEST_QUANTUM_SAMPLES: usize = 512;
+    const TEST_TICK_TIMESTAMP_NS: i64 = 1_000_000_000;
+
     /// An [`AudioClock`] whose ticks the test fires by hand, so what is under
     /// test is the wiring rather than how promptly a timer thread woke.
     struct HandFiredTestAudioClock {
@@ -323,7 +328,7 @@ mod tests {
     impl HandFiredTestAudioClock {
         fn new() -> Self {
             Self {
-                config: AudioClockConfig::new(48_000, 512),
+                config: AudioClockConfig::new(TEST_SAMPLE_RATE, TEST_QUANTUM_SAMPLES),
                 callbacks: Mutex::new(Vec::new()),
                 next_tick_number: AtomicU64::new(0),
             }
@@ -331,7 +336,7 @@ mod tests {
 
         fn fire_one_tick(&self) {
             let tick = AudioTickContext {
-                timestamp_ns: 1_000_000_000,
+                timestamp_ns: TEST_TICK_TIMESTAMP_NS,
                 samples_needed: self.config.buffer_size,
                 sample_rate: self.config.sample_rate,
                 tick_number: self.next_tick_number.fetch_add(1, Ordering::SeqCst),
@@ -411,14 +416,28 @@ mod tests {
             "every block the ring could not hold is counted at the device edge"
         );
 
-        let mut survived = 0;
-        while let NextCapturedAudioBlockToPublish::Block(block) =
-            hand_off_ring.wait_for_next_block_to_publish(Duration::ZERO)
-        {
-            assert_eq!(block.sample_count, 512);
-            survived += 1;
-        }
-        assert_eq!(survived, BLOCKS_THE_RING_HOLDS, "the newest audio survives");
+        let survived: Vec<i64> = std::iter::from_fn(|| {
+            match hand_off_ring.wait_for_next_block_to_publish(Duration::ZERO) {
+                NextCapturedAudioBlockToPublish::Block(block) => {
+                    Some(block.first_sample_timestamp_ns)
+                }
+                _ => None,
+            }
+        })
+        .collect();
+        let newest_captured: Vec<i64> = (BLOCKS_NOBODY_DRAINS - BLOCKS_THE_RING_HOLDS
+            ..BLOCKS_NOBODY_DRAINS)
+            .map(|block_index| {
+                TEST_TICK_TIMESTAMP_NS
+                    + (block_index * TEST_QUANTUM_SAMPLES) as i64 * 1_000_000_000
+                        / i64::from(TEST_SAMPLE_RATE)
+            })
+            .collect();
+        assert_eq!(
+            survived, newest_captured,
+            "the oldest block is what a full ring gives up, so the newest audio is what \
+             reaches the link"
+        );
     }
 
     #[test]
