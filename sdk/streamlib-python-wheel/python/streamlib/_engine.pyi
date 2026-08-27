@@ -48,6 +48,7 @@ __all__ = [
     "ProcessorOutputPortReference",
     "CameraSource",
     "DisplayWindow",
+    "MicrophoneSource",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
@@ -88,6 +89,23 @@ class DisplayWindow:
     with the engine's shared event pump and renders on its own thread. An
     instance that cannot get a window drains its input without showing
     anything, so upstream still sees a live consumer.
+    """
+
+@final
+class MicrophoneSource:
+    """Native built-in block: audio capture as timestamped sample blocks.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(MicrophoneSource, config={"device_id": "..."})`); it is never
+    instantiated and its capture callback never enters the interpreter.
+
+    The backend chain is probed once per process with no configuration dial;
+    where no audio backend exists at all the blocks are silence, so a pipeline
+    authored on a workstation runs unchanged in a headless container. Omitting
+    `device_id` takes the backend's default device; naming one the backend
+    cannot open raises rather than landing on a different device.
+
+    Blocks arrive on the `audio` output as bags `streamlib.AudioBlock` casts.
     """
 
 @final

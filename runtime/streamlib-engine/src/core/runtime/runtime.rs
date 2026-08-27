@@ -434,7 +434,9 @@ impl Runner {
         // Clone iceoryx2 Node (created in new() for early PUBSUB initialization)
         let iceoryx2_node = self.iceoryx2_node.clone();
 
-        // Create audio clock - platform-specific for best precision
+        // Create audio clock - platform-specific for best precision. It paces
+        // deviceless audio only, so whatever needs it is what starts it — a
+        // graph with no audio in it never runs the timer.
         let audio_clock_config = AudioClockConfig::default();
         let audio_clock: SharedAudioClock = {
             #[cfg(target_os = "macos")]
@@ -489,10 +491,6 @@ impl Runner {
         // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
         // RuntimeContext handles all platform-specific details internally.
         runtime_ctx.ensure_platform_ready()?;
-
-        // Start the audio clock
-        tracing::info!("[start] Starting audio clock");
-        audio_clock.start()?;
 
         // Set graph state to Running
         self.compiler.scope(|graph, _tx| {

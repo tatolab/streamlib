@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod audio_clock;
+mod audio_device_backend;
 pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
 mod runtime_context;
+pub(crate) mod silent_null_audio_device_backend;
 pub(crate) mod surface_check_out_lease_registry;
 #[cfg(target_os = "linux")]
 pub(crate) mod surface_export_staging;
@@ -20,6 +22,11 @@ mod time_context;
 pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
+};
+pub use audio_device_backend::{
+    AudioCaptureSampleFormat, AudioCaptureStream, AudioCaptureStreamFormat,
+    AudioCaptureStreamRequest, AudioDeviceBackend, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff, SharedAudioDeviceBackend, probe_audio_device_backend,
 };
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;

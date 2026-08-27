@@ -307,6 +307,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "escalate_wire_encoding_tests",
                 "core::compiler::compiler_ops::subprocess_escalate::tests::parse_texture_usages",
                 "core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits",
+                "core::context::audio_device_backend",
+                "core::context::silent_null_audio_device_backend",
             ],
         ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.
