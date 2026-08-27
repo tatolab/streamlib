@@ -43,6 +43,7 @@ from ._engine import monotonic_now_ns as monotonic_now_ns
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
 from ._processor_declaration import processor as processor
+from .audio_block import AudioBlock as AudioBlock
 from .claimed_surface_pixel_access import (
     ClaimedSurfacePixelAccess as ClaimedSurfacePixelAccess,
 )
@@ -61,6 +62,7 @@ from .video_frame import VideoFrame as VideoFrame
 # authoring grammar reads `@input(...)` / `@output(...)`, matching the old SDK.
 __all__ = [
     "AddedProcessor",
+    "AudioBlock",
     "CameraSource",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",

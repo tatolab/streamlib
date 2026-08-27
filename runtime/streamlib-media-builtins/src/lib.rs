@@ -9,15 +9,19 @@
 //! Written against the SDK's handle-shaped primitives only — pixel-buffer
 //! pool, texture cache, present target — never private engine guts.
 
+pub mod audio_block;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
 #[cfg(target_os = "linux")]
 pub mod display_window;
+#[cfg(test)]
+mod msgpack_wire_test_support;
 pub mod test_pattern_source;
 #[cfg(target_os = "linux")]
 pub mod v4l2_color;
 pub mod video_frame;
 
+pub use audio_block::{AudioBlock, AudioSampleDtype};
 #[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
 #[cfg(target_os = "linux")]

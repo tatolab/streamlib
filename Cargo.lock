@@ -4928,6 +4928,7 @@ dependencies = [
  "rmp-serde",
  "rmpv",
  "serde",
+ "serde_bytes",
  "serde_json",
  "streamlib",
  "tracing",
