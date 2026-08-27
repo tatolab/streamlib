@@ -49,7 +49,8 @@ REAPER's dedicated-process firewalling, Carla/yabridge as bridge architectures �
 yabridge does the realtime `process()` across processes via shared-memory buffers
 + socket sync at normal DAW buffer sizes. Ardour's in-process counterargument
 assumes hundreds of plugins at 1.3 ms buffers; at StreamLib's 5–11 ms blocks with
-a handful of chains, two SHM crossings cost ~20–100 µs — under 1% of budget. The
+a handful of chains, two SHM crossings cost ~20–100 µs — at most ~2% of the block
+budget at its 5 ms low end. The
 shape is StreamLib's existing helper-process doctrine applied to another foreign
 binary, over the transport it already owns. Known costs: lifecycle + param/state
 plumbing, and scanning in a throwaway subprocess (scanning executes arbitrary

@@ -112,15 +112,16 @@ the owner names. _Avoid_: "debug window" as the concept (a use, not the capabili
 graphics, or ray-tracing. _Avoid_: "shader" for the whole object (that is its source
 text), "pipeline" (the Vulkan-internal object it builds).
 
-**AudioBlock**: the audio bag and its cast — a timestamped run of samples riding the
-link inline (first-sample timestamp, rate, channels, dtype), CPU-resident, never
-surface-backed. _Avoid_: "AudioFrame" (the dead schema-era type; in device APIs a
-frame is one sample across channels), "audio chunk".
+**AudioBlock**: the audio bag and its cast — a timestamped run of interleaved samples
+riding the link inline (first-sample timestamp, rate, channels, dtype; the sample
+count is per channel), CPU-resident, never surface-backed. _Avoid_: "AudioFrame"
+(the dead schema-era type; in device APIs a frame is one sample across channels),
+"audio chunk".
 
 **Window contract**: an audio input port's declared rate / channels / dtype / window /
-hop — the engine resamples, mixes down, and frames to it natively, so `process()`
-receives exact-size blocks. _Avoid_: "windower" as an object name (it is a port
-declaration, not a graph node).
+hop — window and hop in samples at the declared rate — the engine resamples, mixes
+down, and frames to it natively, so `process()` receives exact-size blocks.
+_Avoid_: "windower" as an object name (it is a port declaration, not a graph node).
 
 **Conditioning**: the engine-internal AEC / noise-suppression / AGC chain between an
 audio device and its published `AudioBlock`, declared on the built-ins and bypassable.

@@ -578,7 +578,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   are the cadence source, and a block's timestamp derives from the backend's own
   timing (status minus reported delay) in the machine monotonic epoch — never from a
   free-running timer. The timerfd `AudioClock` remains the SDK clock primitive and
-  paces deviceless graphs only (null backend, tests). [audio-subsystem]
+  paces deviceless graphs only (null backend, tests). A graph's audio path has
+  exactly one cadence source: device ticks and timer ticks never interleave.
+  [audio-subsystem]
 - **DECIDED** — A/V sync is block-level join-by-timestamp on the one monotonic clock:
   an `AudioBlock` carries its first sample's timestamp, rate, and sample count, so any
   sample's instant is derivable and audio joins camera frames by timestamp alone. No
@@ -586,7 +588,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — The audio data model is the `AudioBlock` bag: samples ride the link
   inline as msgpack bin, CPU-resident, interleaved, with sample rate, channel count,
   dtype, and first-sample timestamp beside them; dtype is metadata with `f32` the
-  default and `i16` legal. Audio touches no surface machinery — no surface ids, no
+  default and `i16` legal. The sample count counts per-channel samples — an
+  interleaved block of `channels` channels carries `sample_count × channels`
+  scalars — so duration and the next block's expected timestamp derive from count
+  and rate alone. Audio touches no surface machinery — no surface ids, no
   claims, no lifetime contract, no `exchange` — and the `AudioBlock` cast composes a
   zero-copy view of the samples (numpy in Python). [audio-subsystem]
 - **DECIDED** — An audio input port may declare a window contract — rate, channels,
@@ -601,7 +606,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   engine-internal chain between device and published block, bypassable for
   microphones whose hardware DSP already conditions. `SpeakerSink` playback cancels
   immediately and reports played-up-to timestamps — the barge-in door and the AEC
-  reference are one mechanism. [audio-subsystem]
+  reference are one mechanism. A device callback never blocks on a slow consumer:
+  at capacity `MicrophoneSource` drops at the device edge and the loss is
+  explicit — the timestamp gap is derivable from the blocks around it and the
+  source counts what it dropped — never silent. [audio-subsystem]
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
   concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
   out-of-process in its own helper over the engine's IPC transport, never in the app

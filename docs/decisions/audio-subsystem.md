@@ -26,7 +26,11 @@ material, their form is the pre-pivot model.
 ## Decision rationale
 
 **Backend chain (PipeWire → ALSA → null, all dlopen).** The wheel's `DT_NEEDED` gate
-permits nine host libraries; every audio library must therefore bind at runtime. The
+permits nine host libraries; every *system* audio library — one the host machine may
+or may not supply, `libpipewire`, `libasound` — must therefore bind at runtime.
+Vendored code the wheel compiles in (WebRTC APM below, like shaderc before it) is
+the other side of the same portability rule, not an exception to it: static linking
+adds nothing to `DT_NEEDED`. The
 supposed blocker — PipeWire's SPA layer being macro/inline-heavy — is a build-time
 concern only: SPA is header-only with no shared object, so it compiles into the wheel
 while the ~33 `pw_*` symbols bind via dlopen. SDL3 ships exactly this split as its

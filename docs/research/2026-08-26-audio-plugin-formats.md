@@ -12,7 +12,9 @@ host? Licensing claims below were verified against actual licence text.
    Technologies GmbH", unmodified MIT). The old dual regime (GPLv3 or a
    countersigned proprietary Steinberg agreement) is withdrawn. Trademark use
    (VST name/logo in marketing) is separate and optional; "loads VST3 plugins"
-   descriptively is fine. Do NOT build on `vst3-sys` (GPLv3, pre-MIT derivative);
+   descriptively is fine, but any product material that references VST must follow
+   Steinberg's trademark usage and attribution guidelines — the MIT SDK licence
+   does not remove them. Do NOT build on `vst3-sys` (GPLv3, pre-MIT derivative);
    use coupler-rs `vst3` (MIT/Apache, regenerated from the MIT headers).
 2. **Bridging does not collapse the problem.** `clap-wrapper` runs the wrong
    direction (wraps CLAP plugins *for* VST3/AU hosts); no mature VST3→CLAP
