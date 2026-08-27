@@ -46,6 +46,12 @@ const PUBLISH_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// lost block.
 const DROPPED_BLOCKS_BETWEEN_WARNINGS: u64 = 300;
 
+/// Failed writes between reports once the first has been logged. An output
+/// port nobody connected fails every block — roughly 94 a second at the
+/// default quantum — and the first line already says what the next thousand
+/// would.
+const FAILED_WRITES_BETWEEN_REPORTS: u64 = 300;
+
 /// Bound on the wait for the publishing thread to exit. A consumer whose port
 /// declares `lossless` can hold that thread inside `write` for as long as it
 /// likes; detaching keeps the runtime's shutdown chain moving.
@@ -219,6 +225,7 @@ fn publish_captured_blocks(
     stream_format: AudioCaptureStreamFormat,
 ) {
     let mut warn_at_dropped_block_count = 1u64;
+    let mut consecutive_write_failures = 0u64;
     while is_publishing.load(Ordering::Acquire) {
         match hand_off_ring.wait_for_next_block_to_publish(PUBLISH_WAIT_POLL_INTERVAL) {
             NextCapturedAudioBlockToPublish::Block(captured) => {
@@ -226,6 +233,7 @@ fn publish_captured_blocks(
                     captured,
                     outputs,
                     published_block_counter,
+                    &mut consecutive_write_failures,
                     stream_format,
                 );
                 warn_about_any_new_drops(hand_off_ring, &mut warn_at_dropped_block_count);
@@ -241,15 +249,32 @@ fn publish_captured_blocks(
     while let NextCapturedAudioBlockToPublish::Block(captured) =
         hand_off_ring.wait_for_next_block_to_publish(Duration::ZERO)
     {
-        publish_one_captured_block(captured, outputs, published_block_counter, stream_format);
+        publish_one_captured_block(
+            captured,
+            outputs,
+            published_block_counter,
+            &mut consecutive_write_failures,
+            stream_format,
+        );
     }
     warn_about_any_new_drops(hand_off_ring, &mut warn_at_dropped_block_count);
+}
+
+/// Whether a failure at this point in a run of them is one to report.
+///
+/// A write failure is not a passing condition: an output port with no link
+/// fails every block for as long as the graph runs, so reporting each one
+/// buries the rest of the log rather than telling anyone anything new.
+fn write_failure_is_worth_reporting(consecutive_write_failures: u64) -> bool {
+    consecutive_write_failures == 1
+        || consecutive_write_failures.is_multiple_of(FAILED_WRITES_BETWEEN_REPORTS)
 }
 
 fn publish_one_captured_block(
     captured: CapturedAudioBlockAwaitingPublish,
     outputs: &OutputWriter,
     published_block_counter: &AtomicU64,
+    consecutive_write_failures: &mut u64,
     stream_format: AudioCaptureStreamFormat,
 ) {
     let block = audio_block_captured_as(captured, stream_format);
@@ -258,9 +283,18 @@ fn publish_one_captured_block(
     // publication rather than the instant of capture, and A/V sync is the
     // subtraction of two capture instants.
     if let Err(e) = outputs.write_with_timestamp("audio", &block, block.first_sample_timestamp_ns) {
-        tracing::error!(error = %e, "MicrophoneSource: failed to write an audio block");
+        *consecutive_write_failures += 1;
+        if write_failure_is_worth_reporting(*consecutive_write_failures) {
+            tracing::error!(
+                consecutive_failures = *consecutive_write_failures,
+                error = %e,
+                "MicrophoneSource: cannot publish — the audio output port has no link, \
+                 so every captured block fails to write. Connect it to a consumer."
+            );
+        }
         return;
     }
+    *consecutive_write_failures = 0;
     published_block_counter.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -498,6 +532,34 @@ mod tests {
             block.interleaved_sample_bytes.len(),
             block.sample_count as usize * block.channels as usize * 2
         );
+    }
+
+    /// An output port with no link fails every block for as long as the graph
+    /// runs. Reporting each one buried an observed run under 18 059 identical
+    /// lines at ~94 a second, which is the rest of the log gone.
+    #[test]
+    fn a_run_of_write_failures_is_reported_periodically_rather_than_per_block() {
+        let reported = (1..=1000)
+            .filter(|failure| write_failure_is_worth_reporting(*failure))
+            .collect::<Vec<u64>>();
+        assert_eq!(
+            reported,
+            vec![
+                1,
+                FAILED_WRITES_BETWEEN_REPORTS,
+                2 * FAILED_WRITES_BETWEEN_REPORTS,
+                3 * FAILED_WRITES_BETWEEN_REPORTS
+            ],
+            "the first failure says everything the next thousand would"
+        );
+    }
+
+    /// The counter is consecutive, not cumulative: a link that comes up after
+    /// a stretch of failures should not keep the source quiet about the next
+    /// stretch.
+    #[test]
+    fn the_first_failure_after_a_recovery_is_reported_again() {
+        assert!(write_failure_is_worth_reporting(1));
     }
 
     /// `rt.add(MicrophoneSource)` sends `{}` to the engine, and every field of
