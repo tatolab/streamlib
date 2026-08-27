@@ -322,7 +322,6 @@ constructed in `setup()`).
 - **First consumers (CPU-upload shape)**:
   - `packages/h264/processors/decoder_linux.rs`
   - `packages/h265/processors/decoder_linux.rs`
-  - `packages/debug-utilities/processors/bgra_file_source.rs`
 - **Related abstractions**:
   - [`texture-registration.md`](texture-registration.md) —
     per-surface lifecycle record the ring populates at

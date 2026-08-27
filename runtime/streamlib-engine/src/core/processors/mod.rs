@@ -60,4 +60,3 @@ impl<'de> serde::Deserialize<'de> for EmptyConfig {
 
 // Audio processors (capture, output, mixer, channel converter, resampler,
 // buffer rechunker, chord generator) live in `@tatolab/audio` (#672).
-// SimplePassthrough lives in `@tatolab/debug-utilities` (#783).
