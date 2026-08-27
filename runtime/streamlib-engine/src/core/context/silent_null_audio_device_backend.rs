@@ -9,8 +9,8 @@
 //! audio clock instead of failing to start. A test needs no audio hardware for
 //! the same reason.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
 
@@ -62,7 +62,7 @@ impl AudioDeviceBackend for SilentNullAudioDeviceBackend {
 
 /// What the clock's tick callback and the stream share.
 ///
-/// Held by the callback as a [`Weak`] because an [`AudioClock`] never
+/// Held by the callback as a [`Weak`](std::sync::Weak) because an [`AudioClock`] never
 /// unregisters one: a dropped stream must leave an inert callback behind
 /// rather than a live one delivering into nothing.
 ///
@@ -126,7 +126,9 @@ impl AudioCaptureStream for SilentNullAudioCaptureStream {
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
         *self.pacing.anchor_timestamp_ns.lock() = None;
-        self.pacing.delivered_sample_count.store(0, Ordering::SeqCst);
+        self.pacing
+            .delivered_sample_count
+            .store(0, Ordering::SeqCst);
         *self.pacing.hand_off.lock() = Some(hand_off);
         // Idempotent, and the runtime stops it at teardown. Starting it here
         // is what keeps a device-paced graph — and a graph with no audio in
@@ -293,12 +295,12 @@ mod tests {
     #[test]
     fn a_named_device_is_refused_by_name_rather_than_opened_as_something_else() {
         let clock = test_clock();
-        let Err(refusal) = SilentNullAudioDeviceBackend.open_capture_stream(
-            &AudioCaptureStreamRequest {
+        let Err(refusal) =
+            SilentNullAudioDeviceBackend.open_capture_stream(&AudioCaptureStreamRequest {
                 device_id: Some("alsa_input.pci-0000_00_1f.3".to_string()),
                 deviceless_pacing_clock: clock as SharedAudioClock,
-            },
-        ) else {
+            })
+        else {
             panic!("a named device cannot exist on a backend with no devices");
         };
         assert!(
@@ -408,8 +410,8 @@ mod tests {
             vec![
                 one_wake_time_ns,
                 one_wake_time_ns + TEST_QUANTUM_NANOS,
-                one_wake_time_ns + 2 * TEST_QUANTUM_SAMPLES as i64 * 1_000_000_000
-                    / TEST_SAMPLE_RATE as i64,
+                one_wake_time_ns
+                    + 2 * TEST_QUANTUM_SAMPLES as i64 * 1_000_000_000 / TEST_SAMPLE_RATE as i64,
             ]
         );
     }

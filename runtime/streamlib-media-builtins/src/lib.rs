@@ -12,8 +12,10 @@
 pub mod audio_block;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
+pub mod captured_audio_block_hand_off_ring;
 #[cfg(target_os = "linux")]
 pub mod display_window;
+pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod test_pattern_source;
@@ -24,8 +26,12 @@ pub mod video_frame;
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 #[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
+pub use captured_audio_block_hand_off_ring::{
+    CapturedAudioBlockAwaitingPublish, CapturedAudioBlockHandOffRing,
+};
 #[cfg(target_os = "linux")]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
+pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
 
@@ -36,6 +42,7 @@ use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 /// so hosts may call it more than once.
 pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
+    PROCESSOR_REGISTRY.register::<microphone_source::MicrophoneSource::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(target_os = "linux")]
