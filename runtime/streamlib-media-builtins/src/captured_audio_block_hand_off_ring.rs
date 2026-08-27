@@ -221,6 +221,39 @@ mod tests {
         );
     }
 
+    /// The loss is explicit in both directions: the counter says how many
+    /// blocks went, and the timestamps either side say when. Nothing is
+    /// interpolated and no sample is invented, so the gap is arithmetic a
+    /// consumer can do rather than a silence it cannot see.
+    #[test]
+    fn the_gap_a_drop_leaves_is_visible_in_the_timestamps_around_it() {
+        const ONE_BLOCK_NS: i64 = 10_000_000;
+        let ring = CapturedAudioBlockHandOffRing::with_capacity(2);
+
+        ring.hand_off_from_device_callback(block_stamped(0));
+        let published_before_the_stall = timestamps_drained_from(&ring);
+
+        // The publisher stalls on a `lossless` consumer; the device keeps
+        // capturing regardless, which is the whole situation the ring is for.
+        for block_index in 1..=3 {
+            ring.hand_off_from_device_callback(block_stamped(block_index * ONE_BLOCK_NS));
+        }
+        let published_after_the_stall = timestamps_drained_from(&ring);
+
+        assert_eq!(published_before_the_stall, vec![0]);
+        assert_eq!(
+            published_after_the_stall,
+            vec![2 * ONE_BLOCK_NS, 3 * ONE_BLOCK_NS]
+        );
+        assert_eq!(ring.dropped_block_count(), 1);
+        assert_eq!(
+            published_after_the_stall[0] - published_before_the_stall[0],
+            (ring.dropped_block_count() as i64 + 1) * ONE_BLOCK_NS,
+            "the jump across the gap is the blocks that were lost plus the one that \
+             survived — which is what makes the loss derivable downstream"
+        );
+    }
+
     /// Ending the hand-off is not a discard: whatever the device already
     /// captured still reaches the link.
     #[test]

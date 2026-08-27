@@ -81,9 +81,16 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
             "reading a block must add no copy of its payload"
         )
         assert reading["loudest_sample"] == 0.0, (
-            "no audio backend is reachable in a test environment, so the "
-            "chain's last arm captures silence"
+            "the chain resolves to its silent last arm, and silence is zeroed "
+            "scalars — not near-zero ones"
         )
+
+    # Checked before the arithmetic below, which a real gap would break: a
+    # dropped block is a legitimate outcome of a stalled consumer, and it
+    # should fail here by name rather than as a confusing subtraction.
+    assert "dropped at the device edge" not in app.output, (
+        f"the source dropped blocks while the probe was reporting:\n{app.output}"
+    )
 
     stamps = [reading["first_sample_timestamp_ns"] for reading in readings]
     assert stamps == sorted(set(stamps)), (
