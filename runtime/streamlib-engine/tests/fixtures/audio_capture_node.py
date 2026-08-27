@@ -24,7 +24,12 @@ def main() -> None:
     microphone = runtime.add(streamlib.MicrophoneSource, config=config)
     drain = runtime.add(AudioChannelDrain)
     runtime.connect(microphone.output("audio"), drain.input("audio_from_upstream"))
-    runtime.host_control_plane(bind_port=int(os.environ.get("CONTROL_PORT", "9000")))
+    # Loopback rather than the default every interface: this node exists to be
+    # tapped from the machine it runs on, and it carries no authentication.
+    runtime.host_control_plane(
+        bind_host="127.0.0.1",
+        bind_port=int(os.environ.get("CONTROL_PORT", "9000")),
+    )
     runtime.run()
 
 

@@ -117,7 +117,9 @@ jobs:
       # the no-build job — they need the wheel this job installed above.
       - name: Audio channel tap controls
         working-directory: runtime/streamlib-engine/tests/fixtures
-        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_tap_audio_channel
+        run: >-
+          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
+          -m unittest test_tap_audio_channel
 
       # The only check that compares the stub to the binary. It imports the
       # built module, introspects it, and fails on a name or signature the
@@ -211,4 +213,6 @@ jobs:
       # rig where nobody would see them go stale.
       - name: Audio loopback fixture negative controls
         working-directory: runtime/streamlib-engine/tests/fixtures
-        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_known_audio_signal
+        run: >-
+          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python"
+          -m unittest test_known_audio_signal

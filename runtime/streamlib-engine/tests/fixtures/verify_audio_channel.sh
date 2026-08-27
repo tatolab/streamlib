@@ -11,7 +11,11 @@
 #
 # Usage:
 #   ./verify_audio_channel.sh <processor-display-name> [--url URL] [--count N]
-#                             [--expect-frame-not-restamped]
+#                             [--port NAME] [--expect-frame-not-restamped]
+#
+# `--port` names which output to tap. Without it the processor must declare
+# exactly one, because guessing at a processor that declares several would tap
+# whichever the graph happened to list first.
 #
 # `--expect-frame-not-restamped` requires the transport frame's timestamp to
 # match the block's own, which a capture built-in publishes and a producer that
@@ -28,11 +32,13 @@ PROCESSOR="${1:?usage: verify_audio_channel.sh <processor-display-name> [--url U
 shift
 CONTROL_URL="http://127.0.0.1:9000"
 BAG_COUNT=8
+OUTPUT_PORT=""
 EXPECT_FRAME_NOT_RESTAMPED=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --url) CONTROL_URL="$2"; shift 2 ;;
         --count) BAG_COUNT="$2"; shift 2 ;;
+        --port) OUTPUT_PORT="$2"; shift 2 ;;
         --expect-frame-not-restamped) EXPECT_FRAME_NOT_RESTAMPED="--expect-frame-not-restamped"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -42,22 +48,38 @@ OUTPUT_DIR="$(mktemp -d -t streamlib-audio-channel-XXXXXX)"
 
 # The channel name is the source's processor id lowercased, then its port —
 # copying the id out of `graph` verbatim gets "no tappable channel named".
-CHANNEL="$("$PYTHON" - "$CONTROL_URL" "$PROCESSOR" <<'PY'
+CHANNEL="$("$PYTHON" - "$CONTROL_URL" "$PROCESSOR" "$OUTPUT_PORT" <<'PY'
 import json, sys
 
 # The engine's own client rather than a hand-written URL, so this cannot drift
 # from the endpoint `streamlib graph` actually drives.
 from streamlib._control_plane_client import call_tool
 
-control_url, wanted = sys.argv[1], sys.argv[2]
+control_url, wanted, requested_port = sys.argv[1], sys.argv[2], sys.argv[3]
 graph = json.loads(call_tool(control_url, "graph", {}))
 for node in graph["nodes"]:
     if node["display_name"] != wanted:
         continue
-    outputs = node["ports"]["outputs"]
-    if not outputs:
+    declared = [output["name"] for output in node["ports"]["outputs"]]
+    if not declared:
         sys.exit(f"{wanted} declares no output port")
-    print(f"{node['id'].lower()}/{outputs[0]['name']}")
+    if requested_port:
+        if requested_port not in declared:
+            sys.exit(
+                f"{wanted} declares no output named {requested_port!r}; "
+                f"it declares {', '.join(declared)}"
+            )
+        port = requested_port
+    elif len(declared) > 1:
+        # Refused rather than guessed: taking the first would tap whichever the
+        # graph happened to list first, and be right by luck.
+        sys.exit(
+            f"{wanted} declares {len(declared)} outputs ({', '.join(declared)}); "
+            f"name one with --port"
+        )
+    else:
+        port = declared[0]
+    print(f"{node['id'].lower()}/{port}")
     break
 else:
     sys.exit(f"no processor named {wanted} in the running graph")
