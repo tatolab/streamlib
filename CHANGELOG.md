@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.12](https://github.com/tatolab/streamlib/compare/v0.18.11...v0.18.12) (2026-08-27)
+
+
+### Bug Fixes
+
+* **engine:** an unconnected audio output no longer logs an error per block ([#2005](https://github.com/tatolab/streamlib/issues/2005)) ([a4903e1](https://github.com/tatolab/streamlib/commit/a4903e152cc931da1b0d0e6ecac0193c7b42f0f8))
+
 ## [0.18.11](https://github.com/tatolab/streamlib/compare/v0.18.10...v0.18.11) (2026-08-27)
 
 
