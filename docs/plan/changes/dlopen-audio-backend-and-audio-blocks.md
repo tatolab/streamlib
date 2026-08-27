@@ -15,8 +15,14 @@ align that decided these entries, over four research memos in `docs/research/202
 nothing below decides past it. No RHI primitive is touched, no processor-model rule changes, and
 no Vulkan call is added.
 
-**Precondition.** Six of the seven `[audio-subsystem]` entries are DECIDED and this change
-implements them (`ARCHITECTURE.md:569-612`). The seventh — audio plugins, `:613-619` — is OPEN
+**Precondition.** Six of the seven `[audio-subsystem]` entries are DECIDED
+(`ARCHITECTURE.md:569-612`), and this change implements four of them: the backend chain
+(`:569-576`), device pacing (`:577-583`), the block-level timestamp join (`:584-587`), and the
+`AudioBlock` data model (`:588-596`). The other two DECIDED entries — the port window contract
+with its always-on resampler (`:597-602`) and conditioning on the built-ins (`:603-612`) — are
+later rungs, and only the `MicrophoneSource` / `SpeakerSink` half of the second is built here;
+Not in scope says which parts of each are deferred and why. The seventh entry — audio plugins,
+`:613-619` — is OPEN
 and is not on this change's path: nothing here loads, scans for, hosts or names a third-party
 plugin binary, and the out-of-process helper that lane would need is not built or prepared for.
 `§Media I/O`'s header carries the section-wide IN-FLIGHT status every worked section carries.
@@ -39,7 +45,13 @@ plugin binary, and the out-of-process helper that lane would need is not built o
   `SilentNullAudioDeviceBackend`. No configuration dial selects a backend, no environment
   variable overrides the probe, and a machine with no audio library lands on the null backend
   rather than failing to import — the wheel must run in `manylinux_2_28` and headless GPU
-  containers, which carry no audio libraries at all.
+  containers, which carry no audio libraries at all. **An arm is chosen by opening, not by
+  loading**: a library that resolves but yields no usable connection — `libpipewire` present with
+  no daemon answering, the common container case — demotes to the next arm exactly as a missing
+  library does. Probing on presence alone would strand precisely the machines the chain exists to
+  serve. A caller-named `device_id` is the one case that does not demote: it raises at `setup()`,
+  because a wrong device id is a wiring error and silently landing on a different device is worse
+  than failing.
 
 - **DECIDED** — Every audio symbol binds at runtime; the wheel's `DT_NEEDED` set does not grow.
   `libpipewire-0.3.so.0` and `libasound.so.2` are resolved through `libloading`, the pattern
@@ -141,12 +153,15 @@ plugin binary, and the out-of-process helper that lane would need is not built o
   statement rather than an assumption: it is the property a bag decoded by a tap, a CLI, or
   another language depends on.
 
-- **DECIDED** — `samples` is msgpack `bin`, which the Rust side cannot spell today. `serde_bytes`
-  is absent from the workspace, and without it a `Vec<f32>` field goes through `serialize_seq`
-  and lands on the wire as a msgpack **array** — five bytes per sample, and a shape Python's own
-  `bytes` → `bin` path (`sdk/streamlib-python-wheel/src/python_bag_conversion.rs:300-301,406`)
-  does not agree with. So `serde_bytes` enters the workspace and the samples field is annotated
-  with it, and the wire-key test asserts `rmpv::Value::Binary` specifically — the audio analogue
+- **DECIDED** — `samples` is msgpack `bin`, so the field is a byte buffer and `dtype` says how to
+  read it — not a typed vector. `serde_bytes` is absent from the workspace, and it would not help
+  a `Vec<f32>` in any case: it serializes byte containers only. A `Vec<f32>` field would go
+  through `serialize_seq` and land on the wire as a msgpack **array** — five bytes per sample,
+  and a shape Python's own `bytes` → `bin` path
+  (`sdk/streamlib-python-wheel/src/python_bag_conversion.rs:300-301,406`) does not agree with. So
+  the samples field carries interleaved little-endian scalars as bytes, annotated with
+  `serde_bytes`, and one field spelling serves `f32` and `i16` alike. The wire-key test asserts
+  `rmpv::Value::Binary` for both — the audio analogue
   of `video_frame_msgpack_wire_is_a_named_map_with_the_documented_keys`
   (`video_frame.rs:429`), which is the one test that can catch an array-for-`bin` mistake.
 
@@ -156,10 +171,14 @@ plugin binary, and the out-of-process helper that lane would need is not built o
   `.pyi` entry — pyright checks it from source, as it does `VideoFrame`. It must not compose
   `ClaimedSurfacePixelAccess`: that class demands a surface-id field in `__init_subclass__` and
   takes claims in `__init__`, and audio has no surface, no claim and no lifetime contract
-  (`ARCHITECTURE.md:594-596`). Its `samples` property returns
-  `numpy.frombuffer(...).reshape(-1, channels)` over the decoded payload, with numpy imported
-  lazily so the wheel still declares no numpy dependency — the pattern
-  `python_processor_context.rs:621-655` already uses for `as_numpy`.
+  (`ARCHITECTURE.md:594-596`). Its `samples` property maps the declared `dtype` to an explicit
+  little-endian numpy type — `"f32"` to `<f4`, `"i16"` to `<i2`, never the platform-native
+  spelling, because the wire is little-endian by contract and not by luck — and returns
+  `numpy.frombuffer(payload, dtype=...)` reshaped to `(sample_count, channels)`, with numpy
+  imported lazily so the wheel still declares no numpy dependency, the pattern
+  `python_processor_context.rs:621-655` already uses for `as_numpy`. A payload whose length is
+  not `sample_count × channels × itemsize` is refused by name at the cast rather than reshaped
+  into a plausible-looking wrong answer.
 
 - **DECIDED** — "Zero-copy" is a claim about the cast, and is stated as exactly that. Between
   shared memory and `process()` the payload is copied four times today — out of the iceoryx2
