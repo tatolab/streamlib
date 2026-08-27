@@ -204,4 +204,4 @@ jobs:
       # rig where nobody would see them go stale.
       - name: Audio loopback fixture negative controls
         working-directory: runtime/streamlib-engine/tests/fixtures
-        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_known_audio_signal
+        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_known_audio_signal test_tap_audio_channel

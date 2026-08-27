@@ -12,6 +12,7 @@ engine — which is what lets the measurement half be checked everywhere the
 loopback itself cannot run.
 """
 
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -240,8 +241,25 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
 
     def test_nothing_here_pulls_in_the_engine(self):
         """Runtime independence is the fixture's reason to exist rather than a
-        demo app: it has to run and report when StreamLib will not build."""
-        self.assertNotIn("streamlib", sys.modules)
+        demo app: it has to run and report when StreamLib will not build.
+
+        Asked in its own interpreter, because `sys.modules` is process-wide and
+        any sibling suite that legitimately imports the wheel would otherwise
+        answer this question on the analyser's behalf.
+        """
+        proof = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys, known_audio_signal;"
+                " sys.exit(1 if 'streamlib' in sys.modules else 0)",
+            ],
+            cwd=str(Path(__file__).parent),
+            capture_output=True,
+        )
+        self.assertEqual(
+            proof.returncode, 0, "importing the analyser pulled in the engine"
+        )
 
     def test_the_spectrogram_is_a_readable_png(self):
         """The half a human and a session judge by eye — a report with an
