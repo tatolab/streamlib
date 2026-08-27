@@ -11,11 +11,11 @@
 #
 # Usage:
 #   ./verify_audio_channel.sh <processor-display-name> [--url URL] [--count N]
-#                             [--expect-device-stamped]
+#                             [--expect-frame-not-restamped]
 #
-# `--expect-device-stamped` requires the transport frame to carry the device's
-# own instant of capture, which a capture built-in publishes and other
-# producers do not — so it is asked for rather than assumed.
+# `--expect-frame-not-restamped` requires the transport frame's timestamp to
+# match the block's own, which a capture built-in publishes and a producer that
+# stamps at publication does not — so it is asked for rather than assumed.
 #
 # Assumes a node is already running and hosting its control plane. Exit status
 # is the verdict; stdout is the report JSON, progress is on stderr.
@@ -28,12 +28,12 @@ PROCESSOR="${1:?usage: verify_audio_channel.sh <processor-display-name> [--url U
 shift
 CONTROL_URL="http://127.0.0.1:9000"
 BAG_COUNT=8
-EXPECT_DEVICE_STAMPED=""
+EXPECT_FRAME_NOT_RESTAMPED=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --url) CONTROL_URL="$2"; shift 2 ;;
         --count) BAG_COUNT="$2"; shift 2 ;;
-        --expect-device-stamped) EXPECT_DEVICE_STAMPED="--expect-device-stamped"; shift ;;
+        --expect-frame-not-restamped) EXPECT_FRAME_NOT_RESTAMPED="--expect-frame-not-restamped"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -73,7 +73,7 @@ fi
 
 # shellcheck disable=SC2086  # deliberately unquoted: empty means "not asked for"
 "$PYTHON" "$HERE/tap_audio_channel.py" "$OUTPUT_DIR/tapped.json" \
-    --waveform "$OUTPUT_DIR/published.wav" $EXPECT_DEVICE_STAMPED \
+    --waveform "$OUTPUT_DIR/published.wav" $EXPECT_FRAME_NOT_RESTAMPED \
     | tee "$OUTPUT_DIR/report.json"
 VERDICT=${PIPESTATUS[0]}
 

@@ -30,8 +30,10 @@ from typing import NamedTuple
 import known_audio_signal
 
 # The transport frame every bag arrives inside: a 64-byte port key, then the
-# capture timestamp, then the payload length. Read here because the frame's own
-# timestamp is a second, independent record of when the block was captured.
+# timestamp, then the payload length. Read here so the frame's stamp can be
+# compared with the block's own. Both are written by the producer, so what the
+# comparison proves is that nothing re-stamped the frame at publication — NOT
+# that the stamp is the device's, which needs evidence this tool cannot see.
 FRAME_PORT_KEY_BYTES = 64
 
 # How far a block may sit from where the one before it predicted, as a fraction
@@ -40,8 +42,10 @@ FRAME_PORT_KEY_BYTES = 64
 # stops discriminating entirely at 128.
 MAX_CONTINUITY_ERROR_AS_FRACTION_OF_A_BLOCK = 0.5
 
-# Loss spread thinly stays under the per-gap bound while still adding up.
-MAX_CUMULATIVE_CONTINUITY_ERROR_AS_BLOCKS = 1.0
+# Loss spread thinly stays under the per-gap bound while still adding up. Scaled
+# by the number of gaps, so a longer tap is not a laxer one: a fixed budget
+# makes sensitivity a function of how many bags were asked for.
+MAX_CUMULATIVE_CONTINUITY_ERROR_PER_GAP_AS_BLOCKS = 0.15
 
 
 class TappedBagWasTruncated(Exception):
@@ -142,9 +146,11 @@ def waveform_from(tapped):
 
     origin = tapped[0].block.first_sample_timestamp_ns
     sample_rate = tapped[0].block.sample_rate
-    last = tapped[-1]
-    length = (
-        _sample_offset_of(last, origin, sample_rate) + last.block.sample_count
+    # From the furthest-reaching block rather than the last one: a block that
+    # overruns the block after it would otherwise not fit the buffer.
+    length = max(
+        _sample_offset_of(entry, origin, sample_rate) + entry.block.sample_count
+        for entry in tapped
     )
     waveform = numpy.zeros(length, dtype="<f8")
     for entry in tapped:
@@ -163,8 +169,32 @@ def _sample_offset_of(entry, origin_ns, sample_rate):
     )
 
 
-def report_for(tapped, tap_result=None, expect_device_stamped=False):
+def declares_a_possible_format(tapped):
+    """Whether every block declares a format audio can actually have.
+
+    Checked before anything is graded, because a zero here does not make the
+    stream merely unusual — it makes every measurement below it meaningless,
+    and falling through to "no bound" would grade a self-contradicting stream
+    as healthy.
+    """
+    return all(
+        getattr(entry.block, attribute) > 0
+        for entry in tapped
+        for attribute in ("sample_rate", "channels", "sample_count")
+    )
+
+
+def report_for(tapped, tap_result=None, expect_frame_not_restamped=False):
     """What the processor published, as facts a caller can assert on."""
+    if not declares_a_possible_format(tapped):
+        return {
+            "blocks": len(tapped),
+            "failed": ["declared_format"],
+            "verdict": "FAIL",
+            "reason": "a block declares a sample rate, channel count or sample "
+            "count of zero, which no audio has",
+            "signal_measured": False,
+        }
     sample_count = one_value_across(tapped, "sample_count")
     sample_rate = one_value_across(tapped, "sample_rate")
     block_ms = (
@@ -188,6 +218,10 @@ def report_for(tapped, tap_result=None, expect_device_stamped=False):
             for entry in tapped
         ),
         "bags_dropped_by_the_tap": dropped_by_the_tap,
+        # Said in every report rather than only where a waveform was written:
+        # the verdict covers what the blocks declare about themselves, never
+        # what they carry.
+        "signal_measured": False,
     }
 
     failures = []
@@ -204,15 +238,16 @@ def report_for(tapped, tap_result=None, expect_device_stamped=False):
     if block_ms is not None:
         if abs(worst) > MAX_CONTINUITY_ERROR_AS_FRACTION_OF_A_BLOCK * block_ms:
             failures.append("block_continuity_error_ms")
-        if (
-            abs(report["cumulative_continuity_error_ms"])
-            > MAX_CUMULATIVE_CONTINUITY_ERROR_AS_BLOCKS * block_ms
+        if abs(report["cumulative_continuity_error_ms"]) > (
+            MAX_CUMULATIVE_CONTINUITY_ERROR_PER_GAP_AS_BLOCKS
+            * block_ms
+            * max(len(errors), 1)
         ):
             failures.append("cumulative_continuity_error_ms")
-    if expect_device_stamped and report["frame_versus_block_timestamp_error_ns"]:
-        # Only a capture built-in publishes with the device's own instant; every
-        # other producer stamps the frame at publication, so this is what the
-        # caller asks for rather than what every channel owes.
+    if expect_frame_not_restamped and report["frame_versus_block_timestamp_error_ns"]:
+        # Only a capture built-in carries the device's instant into the frame;
+        # every other producer stamps at publication, so this is what the caller
+        # asks for rather than what every channel owes.
         failures.append("frame_versus_block_timestamp_error_ns")
 
     report["failed"] = failures
@@ -225,9 +260,10 @@ def main(argv):
     parser.add_argument("tapped_bags_json", help="what `streamlib tap` returned")
     parser.add_argument("--waveform", help="write the published samples here as WAV")
     parser.add_argument(
-        "--expect-device-stamped",
+        "--expect-frame-not-restamped",
         action="store_true",
-        help="require the frame's timestamp to be the device's, as a capture built-in publishes",
+        help="require the frame's timestamp to match the block's own, as a capture "
+        "built-in publishes and a producer that stamps at publication does not",
     )
     arguments = parser.parse_args(argv[1:])
 
@@ -246,17 +282,16 @@ def main(argv):
     report = report_for(
         tapped,
         tap_result if isinstance(tap_result, dict) else None,
-        expect_device_stamped=arguments.expect_device_stamped,
+        expect_frame_not_restamped=arguments.expect_frame_not_restamped,
     )
-    if arguments.waveform:
+    # Printed before the waveform is written: reassembling a self-contradicting
+    # stream can fail, and the diagnosis is already computed by here — losing it
+    # to a traceback is the operator's whole answer gone.
+    print(json.dumps(report, indent=2))
+    if arguments.waveform and report["verdict"] == "PASS":
         known_audio_signal.write_wav(
             arguments.waveform, waveform_from(tapped), report["sample_rate"]
         )
-        report["waveform"] = arguments.waveform
-        # Said plainly rather than left to the verdict, which covers what the
-        # blocks declare about themselves and not what they carry.
-        report["signal_measured"] = False
-    print(json.dumps(report, indent=2))
     return 0 if report["verdict"] == "PASS" else 1
 
 

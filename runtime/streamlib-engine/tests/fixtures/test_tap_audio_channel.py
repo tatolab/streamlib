@@ -114,7 +114,7 @@ class TappedAudioChannel(unittest.TestCase):
             "only a capture built-in publishes the device's own instant, so this "
             "is not something every channel owes",
         )
-        report = self.report_for_bags(bags, expect_device_stamped=True)
+        report = self.report_for_bags(bags, expect_frame_not_restamped=True)
         self.assertEqual(
             report["failed"], ["frame_versus_block_timestamp_error_ns"], report
         )
@@ -128,6 +128,60 @@ class TappedAudioChannel(unittest.TestCase):
         with self.assertRaises(tap_audio_channel.TappedBagWasTruncated) as refusal:
             tap_audio_channel.audio_blocks_from_tapped_bags(bags)
         self.assertIn("preview", str(refusal.exception))
+
+    def test_a_format_no_audio_could_have_is_refused_rather_than_graded(self):
+        """A zero here does not make the stream unusual, it makes every
+        measurement below it meaningless — and falling through to "no bound"
+        would grade a stream that contradicts itself as healthy."""
+        for attribute in ("sample_count", "channels", "sample_rate"):
+            with self.subTest(zeroed=attribute):
+                zeroed = {attribute: 0}
+                if attribute == "sample_count":
+                    zeroed["samples"] = b""
+                elif attribute == "channels":
+                    zeroed["samples"] = b""
+                bags = self.tapped_bags(
+                    count=3, overrides=dict.fromkeys(range(3), zeroed)
+                )
+                report = self.report_for_bags(bags)
+                self.assertEqual(report["verdict"], "FAIL", report)
+                self.assertEqual(report["failed"], ["declared_format"], report)
+
+    def test_a_single_bag_is_not_enough_to_call_a_stream_continuous(self):
+        """One block has no gap to measure, so a consistent report on it says
+        nothing about cadence."""
+        report = self.report_for_bags(self.tapped_bags(count=1))
+        self.assertEqual(report["failed"], ["blocks"], report)
+
+    def test_continuity_is_measured_at_the_rate_the_blocks_declare(self):
+        """Not at the one every other control happens to use: the rate is the
+        device's to choose, and a bound that assumes one is no bound."""
+        # Far enough from the rate every other control uses that assuming it
+        # produces an error larger than the bound; 16 kHz is an ordinary speech
+        # rate, not a contrived one.
+        quantum, rate = 160, 16_000
+        duration_ns = quantum * 1_000_000_000 // rate
+        bags = [
+            _framed_bag(
+                {
+                    "samples": b"\x00" * (quantum * 4),
+                    "sample_rate": rate,
+                    "channels": 1,
+                    "sample_count": quantum,
+                    "dtype": "f32",
+                    "first_sample_timestamp_ns": 1_000_000_000 + index * duration_ns,
+                }
+            )
+            for index in range(5)
+        ]
+        self.assertEqual(self.report_for_bags(bags)["verdict"], "PASS")
+        del bags[2]
+        self.assertIn("block_continuity_error_ms", self.report_for_bags(bags)["failed"])
+
+    def test_every_report_says_whether_a_signal_was_measured(self):
+        """The verdict covers what the blocks declare about themselves, never
+        what they carry, and a reader should not have to know that."""
+        self.assertIs(self.report_for_bags(self.tapped_bags())["signal_measured"], False)
 
     def test_a_payload_that_contradicts_its_declared_shape_is_refused(self):
         """The corruption this tool exists to catch, and the one the truncation
@@ -199,6 +253,7 @@ class TappedAudioChannel(unittest.TestCase):
             {"dropped_bags": 3},
         )
         self.assertEqual(report["failed"], ["bags_dropped_by_the_tap"], report)
+        self.assertEqual(report["bags_dropped_by_the_tap"], 3)
 
     def test_a_bag_that_is_not_an_audio_block_is_named(self):
         bags = self.tapped_bags(count=1)
@@ -206,6 +261,36 @@ class TappedAudioChannel(unittest.TestCase):
         with self.assertRaises(ValueError) as refusal:
             tap_audio_channel.audio_blocks_from_tapped_bags(bags)
         self.assertIn("samples", str(refusal.exception))
+
+    def test_a_stereo_block_is_downmixed_rather_than_read_from_one_channel(self):
+        """Identical channels cannot tell a downmix apart from taking channel
+        zero, so this carries a different level in each."""
+        loud_left_silent_right = numpy.array(
+            [1.0, 0.0] * SAMPLE_COUNT, dtype="<f4"
+        ).tobytes()
+        bags = [
+            _framed_bag(
+                {
+                    "samples": loud_left_silent_right,
+                    "sample_rate": SAMPLE_RATE,
+                    "channels": 2,
+                    "sample_count": SAMPLE_COUNT,
+                    "dtype": "f32",
+                    "first_sample_timestamp_ns": 1_000_000_000
+                    + index * BLOCK_DURATION_NS,
+                }
+            )
+            for index in range(2)
+        ]
+        waveform = tap_audio_channel.waveform_from(
+            tap_audio_channel.audio_blocks_from_tapped_bags(bags)
+        )
+        self.assertAlmostEqual(
+            float(waveform.max()),
+            0.5,
+            places=4,
+            msg="the mean of a loud and a silent channel, not the loud one alone",
+        )
 
     def test_a_gap_is_left_as_silence_rather_than_closed_up(self):
         """Blocks are placed by their own timestamps, not concatenated. A gap
@@ -260,9 +345,10 @@ class TappedAudioChannel(unittest.TestCase):
                 report = known_audio_signal.analyse(
                     str(captured), str(Path(self.workspace.name) / "spectrogram.png")
                 )
-                self.assertEqual(
-                    report["symbols"], known_audio_signal.DTMF_DIGITS, report
-                )
+                # The verdict, not just the symbols: identity survives gross
+                # corruption by design, so a control that stops there would
+                # bless a 32768x amplitude error as a clean read.
+                self.assertEqual(report["verdict"], "PASS", report)
 
     def test_a_processor_that_dropped_a_block_fails_the_signal_measurement_too(self):
         """The two halves agree: a block missing from the published stream is a

@@ -109,15 +109,15 @@ jobs:
       # extension module (the `extension-module` feature is off by default for
       # exactly this), which is why `python3-dev` is in the apt list above.
       # Without this step they run on developer machines only.
+      - name: Wheel crate unit tests
+        run: cargo test --locked -p streamlib-python-wheel --lib
+
       # The tap controls decode transport-framed bags through the wheel's own
       # decoder, so unlike the loopback fixture's analysis half they cannot ride
-      # the no-build job — they need the wheel this job just installed.
+      # the no-build job — they need the wheel this job installed above.
       - name: Audio channel tap controls
         working-directory: runtime/streamlib-engine/tests/fixtures
         run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_tap_audio_channel
-
-      - name: Wheel crate unit tests
-        run: cargo test --locked -p streamlib-python-wheel --lib
 
       # The only check that compares the stub to the binary. It imports the
       # built module, introspects it, and fails on a name or signature the
@@ -152,7 +152,7 @@ jobs:
       # second stop is a no-op. `test.yml` deliberately does not run
       # streamlib-engine's lib tests, so this carve-out is their only home.
       #
-      # Last, so that a failure here cannot cost the four steps above their
+      # Last, so that a failure here cannot cost the five steps above their
       # report — while this ran first, the wheel was never built when it failed.
       - name: Shutdown-signal ownership and stop-idempotency tests
         run: |
