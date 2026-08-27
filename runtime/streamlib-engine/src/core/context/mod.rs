@@ -7,7 +7,7 @@ pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
 mod runtime_context;
-mod silent_null_audio_device_backend;
+pub(crate) mod silent_null_audio_device_backend;
 pub(crate) mod surface_check_out_lease_registry;
 #[cfg(target_os = "linux")]
 pub(crate) mod surface_export_staging;
@@ -36,7 +36,6 @@ pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess}
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };

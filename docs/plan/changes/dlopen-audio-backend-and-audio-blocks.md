@@ -105,9 +105,13 @@ plugin binary, and the out-of-process helper that lane would need is not built o
   `rt.add(MicrophoneSource, config={"device_id": "..."})`. Both are `execution = manual`, the
   mode `CameraSource` uses for a device that paces itself (`camera_source.rs:121`), with
   `scheduling = realtime` — an audio device callback is the deadline `ThreadPriority::RealTime`
-  exists for (`sdk/streamlib-processor-schema/src/thread_priority.rs:35`), and the engine's
-  existing `linux/rtkit.rs` already carries the RealtimeKit hop, degrading to best-effort in a
-  container rather than failing the stream.
+  exists for (`sdk/streamlib-processor-schema/src/thread_priority.rs:35`). The declaration names
+  that deadline; it does not apply a priority here. The engine skips `apply_thread_priority` for
+  every `manual` processor by design — "real work runs on OS-managed callback threads"
+  (`core/compiler/compiler_ops/spawn_processor_op.rs:216-238`), which is exactly right for audio,
+  where the deadline belongs to the backend's own callback thread and not to the source's
+  publishing thread. `linux/rtkit.rs` carries the RealtimeKit hop for the non-`manual` path,
+  degrading to best-effort in a container rather than failing.
 
 - **DECIDED** — The device stamps the block, and the engine never re-stamps it. A capture
   block's timestamp is the backend's own timing for its first sample — `pw_time`-derived status

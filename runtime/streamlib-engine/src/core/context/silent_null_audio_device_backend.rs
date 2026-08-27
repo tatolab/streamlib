@@ -9,8 +9,8 @@
 //! audio clock instead of failing to start. A test needs no audio hardware for
 //! the same reason.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
@@ -45,14 +45,14 @@ impl AudioDeviceBackend for SilentNullAudioDeviceBackend {
                  is reachable."
             )));
         }
-        let sample_rate = request.deviceless_pacing_clock.sample_rate();
-        if sample_rate == 0 {
+        let Some(sample_rate) = NonZeroU32::new(request.deviceless_pacing_clock.sample_rate())
+        else {
             return Err(Error::Configuration(
                 "the pacing clock reports a sample rate of 0 Hz, which no block duration \
                  can be derived from"
                     .into(),
             ));
-        }
+        };
         Ok(Box::new(SilentNullAudioCaptureStream::opened_on(
             Arc::clone(&request.deviceless_pacing_clock),
             sample_rate,
@@ -60,60 +60,64 @@ impl AudioDeviceBackend for SilentNullAudioDeviceBackend {
     }
 }
 
-/// What the clock's tick callback and the stream share.
+/// Everything a tick reads and writes, under one lock.
 ///
-/// Held by the callback as a [`Weak`](std::sync::Weak) because an [`AudioClock`] never
-/// unregisters one: a dropped stream must leave an inert callback behind
-/// rather than a live one delivering into nothing.
-///
-/// [`AudioClock`]: super::AudioClock
+/// One lock rather than four primitives because beginning delivery resets the
+/// anchor and the count while a tick may be mid-flight: split, a tick can read
+/// the old anchor and then the reset count, and stamp one block with a
+/// timestamp from neither stream.
 struct SilentNullAudioCaptureStreamPacing {
     /// Where captured blocks go; `None` while the stream is not delivering.
-    hand_off: Mutex<Option<CapturedAudioBlockHandOff>>,
+    hand_off: Option<CapturedAudioBlockHandOff>,
     /// Zeroed once and re-handed every tick, so a tick allocates nothing.
-    silence: Mutex<Vec<u8>>,
+    silence: Vec<u8>,
     /// The monotonic instant delivery began, taken from the first tick after
     /// it did. Every block's timestamp derives from this and the samples
     /// delivered before it, so the timeline is exact and gap-free even when
     /// the timer fires a catch-up burst whose ticks all carry one wake time.
-    anchor_timestamp_ns: Mutex<Option<i64>>,
-    delivered_sample_count: AtomicU64,
-    format: AudioCaptureStreamFormat,
+    anchor_timestamp_ns: Option<i64>,
+    delivered_sample_count: u64,
 }
 
 /// Silence, paced by the clock the request handed the backend.
 struct SilentNullAudioCaptureStream {
     pacing_clock: SharedAudioClock,
-    pacing: Arc<SilentNullAudioCaptureStreamPacing>,
+    capture_stream_format: AudioCaptureStreamFormat,
+    pacing: Arc<Mutex<SilentNullAudioCaptureStreamPacing>>,
 }
 
 impl SilentNullAudioCaptureStream {
-    fn opened_on(pacing_clock: SharedAudioClock, sample_rate: u32) -> Self {
-        let format = AudioCaptureStreamFormat {
-            sample_rate,
+    fn opened_on(pacing_clock: SharedAudioClock, sample_rate: NonZeroU32) -> Self {
+        let capture_stream_format = AudioCaptureStreamFormat {
+            sample_rate: sample_rate.get(),
             channels: SILENT_NULL_CAPTURE_CHANNELS,
             sample_format: AudioCaptureSampleFormat::F32,
         };
-        let quantum_byte_count = pacing_clock.buffer_size()
-            * SILENT_NULL_CAPTURE_CHANNELS as usize
-            * format.sample_format.bytes_per_sample();
-        let pacing = Arc::new(SilentNullAudioCaptureStreamPacing {
-            hand_off: Mutex::new(None),
-            silence: Mutex::new(vec![0u8; quantum_byte_count]),
-            anchor_timestamp_ns: Mutex::new(None),
-            delivered_sample_count: AtomicU64::new(0),
-            format,
-        });
+        let pacing = Arc::new(Mutex::new(SilentNullAudioCaptureStreamPacing {
+            hand_off: None,
+            silence: vec![
+                0u8;
+                capture_stream_format
+                    .interleaved_byte_count_for(pacing_clock.buffer_size() as u32)
+            ],
+            anchor_timestamp_ns: None,
+            delivered_sample_count: 0,
+        }));
 
+        // An `AudioClock` never unregisters a callback, so a dropped stream
+        // cannot take its own back. Holding the state weakly is what lets the
+        // stream's memory go and leaves an inert callback rather than a live
+        // one delivering into nothing — the clock still walks it every tick.
         let pacing_from_tick = Arc::downgrade(&pacing);
         pacing_clock.on_tick(Box::new(move |tick: AudioTickContext| {
             if let Some(pacing) = pacing_from_tick.upgrade() {
-                deliver_one_silent_block(&pacing, tick);
+                deliver_one_silent_block(&pacing, capture_stream_format, sample_rate, tick);
             }
         }));
 
         Self {
             pacing_clock,
+            capture_stream_format,
             pacing,
         }
     }
@@ -121,15 +125,16 @@ impl SilentNullAudioCaptureStream {
 
 impl AudioCaptureStream for SilentNullAudioCaptureStream {
     fn stream_format(&self) -> AudioCaptureStreamFormat {
-        self.pacing.format
+        self.capture_stream_format
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
-        *self.pacing.anchor_timestamp_ns.lock() = None;
-        self.pacing
-            .delivered_sample_count
-            .store(0, Ordering::SeqCst);
-        *self.pacing.hand_off.lock() = Some(hand_off);
+        {
+            let mut pacing = self.pacing.lock();
+            pacing.anchor_timestamp_ns = None;
+            pacing.delivered_sample_count = 0;
+            pacing.hand_off = Some(hand_off);
+        }
         // Idempotent, and the runtime stops it at teardown. Starting it here
         // is what keeps a device-paced graph — and a graph with no audio in
         // it — from ever running the timer.
@@ -139,53 +144,58 @@ impl AudioCaptureStream for SilentNullAudioCaptureStream {
     fn stop_delivering(&mut self) -> Result<()> {
         // The clock keeps running for whatever else paces on it; the runtime
         // owns stopping it.
-        *self.pacing.hand_off.lock() = None;
+        self.pacing.lock().hand_off = None;
         Ok(())
     }
 }
 
-fn deliver_one_silent_block(pacing: &SilentNullAudioCaptureStreamPacing, tick: AudioTickContext) {
-    let hand_off = pacing.hand_off.lock();
-    let Some(hand_off) = hand_off.as_ref() else {
+fn deliver_one_silent_block(
+    pacing: &Mutex<SilentNullAudioCaptureStreamPacing>,
+    capture_stream_format: AudioCaptureStreamFormat,
+    sample_rate: NonZeroU32,
+    tick: AudioTickContext,
+) {
+    let mut pacing = pacing.lock();
+    if pacing.hand_off.is_none() {
         return;
-    };
-
-    let sample_count = tick.samples_needed as u32;
-    let anchor_timestamp_ns = *pacing
-        .anchor_timestamp_ns
-        .lock()
-        .get_or_insert(tick.timestamp_ns);
-    let delivered_before = pacing
-        .delivered_sample_count
-        .fetch_add(u64::from(sample_count), Ordering::SeqCst);
-
-    let mut silence = pacing.silence.lock();
-    let quantum_byte_count = sample_count as usize
-        * pacing.format.channels as usize
-        * pacing.format.sample_format.bytes_per_sample();
-    if silence.len() < quantum_byte_count {
-        silence.resize(quantum_byte_count, 0);
     }
 
+    let sample_count = tick.samples_needed as u32;
+    let anchor_timestamp_ns = *pacing.anchor_timestamp_ns.get_or_insert(tick.timestamp_ns);
+    let samples_delivered_before = pacing.delivered_sample_count;
+    pacing.delivered_sample_count += u64::from(sample_count);
+
+    let quantum_byte_count = capture_stream_format.interleaved_byte_count_for(sample_count);
+    if pacing.silence.len() < quantum_byte_count {
+        pacing.silence.resize(quantum_byte_count, 0);
+    }
+
+    let SilentNullAudioCaptureStreamPacing {
+        hand_off, silence, ..
+    } = &*pacing;
+    let hand_off = hand_off
+        .as_ref()
+        .expect("the hand-off was present at the top of this lock scope");
     hand_off(CapturedAudioBlockFromDevice {
         interleaved_sample_bytes: &silence[..quantum_byte_count],
         sample_count,
         first_sample_timestamp_ns: anchor_timestamp_ns
-            + nanoseconds_occupied_by(delivered_before, pacing.format.sample_rate),
+            + nanoseconds_occupied_by_sample_count_at_rate(samples_delivered_before, sample_rate),
     });
 }
 
 /// Nanoseconds `sample_count` per-channel samples occupy at `sample_rate`,
 /// computed wide so a long run accumulates no truncation drift.
-fn nanoseconds_occupied_by(sample_count: u64, sample_rate: u32) -> i64 {
-    (i128::from(sample_count) * 1_000_000_000 / i128::from(sample_rate)) as i64
+fn nanoseconds_occupied_by_sample_count_at_rate(sample_count: u64, sample_rate: NonZeroU32) -> i64 {
+    let nanoseconds = i128::from(sample_count) * 1_000_000_000 / i128::from(sample_rate.get());
+    i64::try_from(nanoseconds).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback};
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
     const TEST_QUANTUM_SAMPLES: usize = 512;

@@ -12,7 +12,7 @@
 pub mod audio_block;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
-pub mod captured_audio_block_hand_off_ring;
+pub(crate) mod captured_audio_block_hand_off_ring;
 #[cfg(target_os = "linux")]
 pub mod display_window;
 pub mod microphone_source;
@@ -26,9 +26,6 @@ pub mod video_frame;
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 #[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
-pub use captured_audio_block_hand_off_ring::{
-    CapturedAudioBlockAwaitingPublish, CapturedAudioBlockHandOffRing,
-};
 #[cfg(target_os = "linux")]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};

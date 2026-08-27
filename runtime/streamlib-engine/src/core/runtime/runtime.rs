@@ -434,9 +434,7 @@ impl Runner {
         // Clone iceoryx2 Node (created in new() for early PUBSUB initialization)
         let iceoryx2_node = self.iceoryx2_node.clone();
 
-        // Create the audio clock — platform-specific for best precision. It is
-        // not started here: it paces deviceless graphs only, so whatever needs
-        // it starts it, and a graph with no audio never runs the timer.
+        // Create audio clock - platform-specific for best precision
         let audio_clock_config = AudioClockConfig::default();
         let audio_clock: SharedAudioClock = {
             #[cfg(target_os = "macos")]

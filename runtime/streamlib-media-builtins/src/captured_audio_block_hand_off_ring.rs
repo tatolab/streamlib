@@ -36,24 +36,41 @@ struct CapturedAudioBlocksAwaitingPublish {
     hand_off_has_ended: bool,
 }
 
+/// What a publisher's wait produced.
+///
+/// Three answers rather than an `Option`, because collapsing "nothing arrived
+/// yet" into "nothing will ever arrive again" leaves the caller's loop to tell
+/// them apart — and a caller that gets that wrong spins at full tilt instead
+/// of ending.
+#[derive(Debug)]
+pub enum NextCapturedAudioBlockToPublish {
+    /// The oldest block that was awaiting publication.
+    Block(CapturedAudioBlockAwaitingPublish),
+    /// Nothing arrived inside the wait; the device may still be capturing.
+    WaitTimedOut,
+    /// No further block will ever be handed off, and none is left.
+    HandOffEnded,
+}
+
 /// A bounded drop-oldest queue from a device capture callback to the thread
 /// that publishes what it captured.
 #[derive(Debug)]
 pub struct CapturedAudioBlockHandOffRing {
     blocks_awaiting_publish: Mutex<CapturedAudioBlocksAwaitingPublish>,
     a_block_arrived_or_the_hand_off_ended: Condvar,
-    capacity: usize,
+    block_capacity: usize,
     dropped_block_count: AtomicU64,
 }
 
 impl CapturedAudioBlockHandOffRing {
-    /// A ring holding at most `capacity` blocks before it starts dropping the
-    /// oldest. A capacity of zero would drop every block, so one is the floor.
-    pub fn with_capacity(capacity: usize) -> Self {
+    /// A ring holding at most `block_capacity` blocks before it starts
+    /// dropping the oldest. A capacity of zero would drop every block, so one
+    /// is the floor.
+    pub fn with_capacity(block_capacity: usize) -> Self {
         Self {
             blocks_awaiting_publish: Mutex::new(CapturedAudioBlocksAwaitingPublish::default()),
             a_block_arrived_or_the_hand_off_ended: Condvar::new(),
-            capacity: capacity.max(1),
+            block_capacity: block_capacity.max(1),
             dropped_block_count: AtomicU64::new(0),
         }
     }
@@ -65,7 +82,7 @@ impl CapturedAudioBlockHandOffRing {
     /// consumer would stall the device itself.
     pub fn hand_off_from_device_callback(&self, block: CapturedAudioBlockAwaitingPublish) {
         let mut awaiting = self.lock_blocks_awaiting_publish();
-        while awaiting.blocks.len() >= self.capacity {
+        while awaiting.blocks.len() >= self.block_capacity {
             awaiting.blocks.pop_front();
             self.dropped_block_count.fetch_add(1, Ordering::Relaxed);
         }
@@ -75,19 +92,22 @@ impl CapturedAudioBlockHandOffRing {
     }
 
     /// Take the oldest block awaiting publication, waiting up to `timeout` for
-    /// one to arrive. `None` means the wait timed out or the hand-off ended,
-    /// which the caller distinguishes by its own shutdown flag.
+    /// one to arrive.
+    ///
+    /// Blocks already handed off outlive the end of the hand-off: `HandOffEnded`
+    /// only comes back once the ring is also empty, so a publisher that drains
+    /// until it sees that one loses nothing the device captured.
     pub fn wait_for_next_block_to_publish(
         &self,
         timeout: Duration,
-    ) -> Option<CapturedAudioBlockAwaitingPublish> {
+    ) -> NextCapturedAudioBlockToPublish {
         let mut awaiting = self.lock_blocks_awaiting_publish();
         loop {
             if let Some(block) = awaiting.blocks.pop_front() {
-                return Some(block);
+                return NextCapturedAudioBlockToPublish::Block(block);
             }
             if awaiting.hand_off_has_ended {
-                return None;
+                return NextCapturedAudioBlockToPublish::HandOffEnded;
             }
             let (next_awaiting, wait) = self
                 .a_block_arrived_or_the_hand_off_ended
@@ -95,7 +115,10 @@ impl CapturedAudioBlockHandOffRing {
                 .unwrap_or_else(PoisonError::into_inner);
             awaiting = next_awaiting;
             if wait.timed_out() {
-                return awaiting.blocks.pop_front();
+                return match awaiting.blocks.pop_front() {
+                    Some(block) => NextCapturedAudioBlockToPublish::Block(block),
+                    None => NextCapturedAudioBlockToPublish::WaitTimedOut,
+                };
             }
         }
     }
@@ -141,7 +164,9 @@ mod tests {
 
     fn timestamps_drained_from(ring: &CapturedAudioBlockHandOffRing) -> Vec<i64> {
         let mut stamps = Vec::new();
-        while let Some(block) = ring.wait_for_next_block_to_publish(Duration::ZERO) {
+        while let NextCapturedAudioBlockToPublish::Block(block) =
+            ring.wait_for_next_block_to_publish(Duration::ZERO)
+        {
             stamps.push(block.first_sample_timestamp_ns);
         }
         stamps
@@ -190,10 +215,10 @@ mod tests {
     fn waiting_on_an_empty_ring_times_out_rather_than_hanging() {
         let ring = CapturedAudioBlockHandOffRing::with_capacity(4);
         let waiting_began = Instant::now();
-        assert!(
-            ring.wait_for_next_block_to_publish(A_WAIT_SHORT_ENOUGH_TO_TIME_OUT_IN)
-                .is_none()
-        );
+        assert!(matches!(
+            ring.wait_for_next_block_to_publish(A_WAIT_SHORT_ENOUGH_TO_TIME_OUT_IN),
+            NextCapturedAudioBlockToPublish::WaitTimedOut
+        ));
         assert!(waiting_began.elapsed() >= A_WAIT_SHORT_ENOUGH_TO_TIME_OUT_IN);
     }
 
@@ -213,8 +238,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(20));
         ring.end_hand_off();
 
-        let (block, waited) = waiting_publisher.join().expect("publisher thread panicked");
-        assert!(block.is_none());
+        let (waited_for, waited) = waiting_publisher.join().expect("publisher thread panicked");
+        assert!(matches!(
+            waited_for,
+            NextCapturedAudioBlockToPublish::HandOffEnded
+        ));
         assert!(
             waited < A_WAIT_LONG_ENOUGH_TO_BE_WOKEN_FROM,
             "the publisher sat out its whole timeout ({waited:?}) instead of being woken"
@@ -255,12 +283,21 @@ mod tests {
     }
 
     /// Ending the hand-off is not a discard: whatever the device already
-    /// captured still reaches the link.
+    /// captured still reaches the link, and only once the ring is empty does
+    /// the publisher learn there is nothing more.
     #[test]
     fn blocks_already_handed_off_survive_the_end_of_the_hand_off() {
         let ring = CapturedAudioBlockHandOffRing::with_capacity(4);
         ring.hand_off_from_device_callback(block_stamped(10));
         ring.end_hand_off();
-        assert_eq!(timestamps_drained_from(&ring), vec![10]);
+
+        assert!(matches!(
+            ring.wait_for_next_block_to_publish(Duration::ZERO),
+            NextCapturedAudioBlockToPublish::Block(block) if block.first_sample_timestamp_ns == 10
+        ));
+        assert!(matches!(
+            ring.wait_for_next_block_to_publish(Duration::ZERO),
+            NextCapturedAudioBlockToPublish::HandOffEnded
+        ));
     }
 }

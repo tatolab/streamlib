@@ -44,6 +44,14 @@ pub struct AudioCaptureStreamFormat {
     pub sample_format: AudioCaptureSampleFormat,
 }
 
+impl AudioCaptureStreamFormat {
+    /// Bytes a block of `sample_count` per-channel samples occupies once
+    /// interleaved.
+    pub fn interleaved_byte_count_for(self, sample_count: u32) -> usize {
+        sample_count as usize * self.channels as usize * self.sample_format.bytes_per_sample()
+    }
+}
+
 /// One block of samples as a device delivered it, borrowed for the length of
 /// the hand-off — a callee that keeps the samples copies them.
 #[derive(Debug, Clone, Copy)]
@@ -62,8 +70,10 @@ pub struct CapturedAudioBlockFromDevice<'a> {
 
 /// What a capture stream calls with each block it captures.
 ///
-/// Runs on the backend's own callback thread, so it must not block: the
-/// implementation hands the samples off and returns.
+/// Runs on the backend's own callback thread, so it must not block, and it
+/// must not re-enter the stream it was installed on: a backend is free to hold
+/// the stream's own lock across this call, so calling back into
+/// [`AudioCaptureStream::stop_delivering`] from here deadlocks it.
 pub type CapturedAudioBlockHandOff = Box<dyn Fn(CapturedAudioBlockFromDevice<'_>) + Send + Sync>;
 
 /// What a caller asks a backend to open a capture stream for.
@@ -112,11 +122,9 @@ static PROBED_AUDIO_DEVICE_BACKEND: OnceLock<SharedAudioDeviceBackend> = OnceLoc
 
 /// Probe the audio backend chain once per process and log the arm it chose.
 ///
-/// An arm is chosen by opening, not by loading: a library that resolves but
-/// yields no usable connection demotes exactly as a missing library does,
-/// because probing on presence alone would strand the containers the chain
-/// exists to serve. The last arm needs no audio library at all, so the chain
-/// always resolves and no configuration dial selects an arm.
+/// The chain has one arm today, and it is the last one: it needs no audio
+/// library at all, so the probe always resolves and no configuration dial
+/// selects an arm.
 pub fn probe_audio_device_backend() -> SharedAudioDeviceBackend {
     Arc::clone(PROBED_AUDIO_DEVICE_BACKEND.get_or_init(|| {
         let backend: SharedAudioDeviceBackend = Arc::new(SilentNullAudioDeviceBackend);
