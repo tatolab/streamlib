@@ -132,13 +132,19 @@ jobs:
           # how an engine-lib test reaches CI at all — otherwise the wire
           # goldens, the setup-phase gate and the close-request semantics
           # would run nowhere: the rest of that ticket's coverage is
-          # display-tier and never runs in CI.
+          # display-tier and never runs in CI. The audio-seam entries are the
+          # genuinely deviceless half of the audio path — the null backend
+          # needs no audio library and its cadence is driven by a hand-fired
+          # test clock, so unlike anything that boots a graph (which needs a
+          # GPU this runner does not have) they really do run here.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
             escalate_wire_encoding_tests \
             core::compiler::compiler_ops::subprocess_escalate::tests::parse_texture_usages \
-            core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits
+            core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits \
+            core::context::audio_device_backend \
+            core::context::silent_null_audio_device_backend
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU
