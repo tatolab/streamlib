@@ -17,6 +17,7 @@ path = "src/lib.rs"
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.8", default-features = false }
 serde = { workspace = true }
+serde_bytes = { workspace = true }
 tracing = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
