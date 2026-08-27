@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.11](https://github.com/tatolab/streamlib/compare/v0.18.10...v0.18.11) (2026-08-27)
+
+
+### Features
+
+* **test:** verify audio per processor by tapping its channel ([#2003](https://github.com/tatolab/streamlib/issues/2003)) ([424a59b](https://github.com/tatolab/streamlib/commit/424a59b8e4031a1d6a2f6eb9239a0a0fa31716ec))
+
 ## [0.18.10](https://github.com/tatolab/streamlib/compare/v0.18.9...v0.18.10) (2026-08-27)
 
 
