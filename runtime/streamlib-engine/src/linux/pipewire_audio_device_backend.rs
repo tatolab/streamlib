@@ -596,8 +596,10 @@ mod tests {
         (length > 0).then(|| device_id.to_string_lossy()[..length].to_string())
     }
 
-    /// How many properties the shim composes at most; sized from the C side's
-    /// own maximum so a property added there cannot overflow this array.
+    /// `STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES`, restated. The shim refuses to
+    /// compose anything when handed a smaller capacity than its own maximum, so
+    /// a property added on the C side without updating this fails these tests
+    /// loudly rather than overflowing the array.
     const MAX_STREAM_PROPERTIES: usize = 5;
 
     /// The key/value pairs the shim would announce a stream with, read back as

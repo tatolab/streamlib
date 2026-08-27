@@ -85,10 +85,16 @@ const DEFAULT_MAX_TAP_BAG_BYTES: usize = 1024 * 1024;
 /// The two are one number rather than two so the bound holds by construction:
 /// were the per-bag cap allowed above this, a single bag could exceed the whole
 /// response budget and nothing would stop it. Hex doubles this on the wire, and
-/// the JSON-RPC body doubles it again in transit, which is why the figure is
-/// modest next to what a channel may carry — a bag too big for a
-/// request/response tool is what `/ws/tap/{channel}` streams verbatim.
+/// serializing the result holds the encoded text and the JSON body at once,
+/// which is why the figure is modest next to what a channel may carry — a bag
+/// too big for a request/response tool is what `/ws/tap/{channel}` streams
+/// verbatim.
 const MAX_TAP_RESPONSE_BAG_BYTES: usize = 16 * 1024 * 1024;
+
+// The default has to fit the budget it is charged against, or the very first
+// bag of an ordinary call would trip it. Checked by the compiler rather than a
+// test, because it is a fact about two literals.
+const _: () = assert!(DEFAULT_MAX_TAP_BAG_BYTES <= MAX_TAP_RESPONSE_BAG_BYTES);
 
 /// Long-edge ceiling for the image an `exchange` result carries inline, and
 /// the default when a caller names no cap of its own.
@@ -235,7 +241,7 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "tap",
-            "description": "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; the hex plus byte length per bag). Bags arrive whole unless one exceeds `max_bag_bytes`, which is flagged as `hex_truncated`. The whole result is also byte-budgeted: a sample cut short by it stops with `bags_withheld_at_byte_budget` above zero, which is the reason `received` can be under `requested` with time left in the window.",
+            "description": "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; the hex plus byte length per bag). Bags arrive whole unless one exceeds `max_bag_bytes`, which is flagged as `hex_truncated`. The whole result is also byte-budgeted: the sample stops at the first bag that would exceed it, so `bags_withheld_at_byte_budget` is 0 or 1 — that one bag was received and discarded, and it accounts for the whole gap between `requested` and `received` when the window had time left.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -1048,8 +1054,6 @@ mod tests {
         );
     }
 
-    /// A bag over the cap is still reported and still flagged — the escape
-    /// hatch is naming a bigger cap, not guessing at half a value.
     /// The bound the response budget's doc claims, held where it was false: a
     /// caller cannot name a per-bag cap above the whole-response budget, so one
     /// bag can never exceed it and the loop needs no exemption for the first.
@@ -1064,10 +1068,6 @@ mod tests {
         );
         assert_eq!(bounded_tap_bag_bytes(Some(0)), 1);
         assert_eq!(bounded_tap_bag_bytes(None), DEFAULT_MAX_TAP_BAG_BYTES);
-        assert!(
-            DEFAULT_MAX_TAP_BAG_BYTES <= MAX_TAP_RESPONSE_BAG_BYTES,
-            "the default must itself fit the budget it is charged against"
-        );
     }
 
     /// A single bag larger than any cap could admit still comes back — trimmed
@@ -1097,6 +1097,8 @@ mod tests {
         );
     }
 
+    /// A bag over the cap is still reported and still flagged — the escape
+    /// hatch is naming a bigger cap, not guessing at half a value.
     #[tokio::test]
     async fn tools_call_tap_honours_a_caller_named_per_bag_cap() {
         let bag_bytes = DEFAULT_MAX_TAP_BAG_BYTES + 4096;
@@ -1162,7 +1164,10 @@ mod tests {
     #[tokio::test]
     async fn tools_call_tap_shapes_bags_and_reports_dropped_count() {
         let big_bag = vec![0xABu8; DEFAULT_MAX_TAP_BAG_BYTES + 512];
-        let small_bag = vec![0x01u8, 0x02, 0x03];
+        // Spans both nibble halves and every digit class, so the hex table is
+        // pinned for case and for the six letters — `010203` alone leaves an
+        // uppercase or transposed table green.
+        let small_bag = vec![0x01u8, 0x02, 0x03, 0xAB, 0xCD, 0xEF];
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
             vec![big_bag.clone(), small_bag.clone()],
             7,
@@ -1202,9 +1207,9 @@ mod tests {
             "the hex is exactly the first DEFAULT_MAX_TAP_BAG_BYTES bytes"
         );
         // Small bag: previewed whole, not truncated.
-        assert_eq!(bags[1]["byte_len"].as_u64().unwrap(), 3);
+        assert_eq!(bags[1]["byte_len"].as_u64().unwrap(), 6);
         assert_eq!(bags[1]["hex_truncated"], false);
-        assert_eq!(bags[1]["hex_preview"], "010203");
+        assert_eq!(bags[1]["hex_preview"], "010203abcdef");
     }
 
     #[tokio::test]
