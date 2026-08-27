@@ -344,6 +344,9 @@ impl MasteringDisplay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msgpack_wire_test_support::{
+        decode_msgpack_named_map_entries, wire_map_entry_named,
+    };
 
     #[test]
     fn hdr_metadata_translation_scales_the_wire_integers() {
@@ -436,19 +439,8 @@ mod tests {
             ..VideoFrame::default()
         };
         let wire_bytes = rmp_serde::to_vec_named(&frame).expect("msgpack serialize");
-        let value: rmpv::Value =
-            rmpv::decode::read_value(&mut wire_bytes.as_slice()).expect("msgpack decode");
-        let rmpv::Value::Map(entries) = value else {
-            panic!("wire value must be a named map, got {value:?}");
-        };
-        let key = |name: &str| {
-            entries
-                .iter()
-                .find(|(k, _)| k.as_str() == Some(name))
-                .unwrap_or_else(|| panic!("wire map missing key {name:?}"))
-                .1
-                .clone()
-        };
+        let entries = decode_msgpack_named_map_entries(&wire_bytes);
+        let key = |name: &str| wire_map_entry_named(&entries, name);
         assert_eq!(key("surface_id").as_str(), Some("42"));
         assert_eq!(key("width").as_u64(), Some(1280));
         assert_eq!(key("height").as_u64(), Some(720));

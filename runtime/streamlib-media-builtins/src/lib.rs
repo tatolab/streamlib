@@ -14,6 +14,8 @@ pub mod audio_block;
 pub mod camera_source;
 #[cfg(target_os = "linux")]
 pub mod display_window;
+#[cfg(test)]
+mod msgpack_wire_test_support;
 pub mod test_pattern_source;
 #[cfg(target_os = "linux")]
 pub mod v4l2_color;

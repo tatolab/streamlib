@@ -5,10 +5,11 @@
 //!
 //! A link carries a self-describing msgpack named map; these types are the
 //! optional Rust cast for it — never declared on a port, never registered
-//! anywhere. The field names ARE the wire contract: a consumer in any
-//! language reads the same keys from the bag dict. The map is open — a
-//! producer may carry extra keys and this cast ignores them, matching the
-//! Python cast's behavior.
+//! anywhere. The keys ARE the wire contract: a consumer in any language reads
+//! the same keys from the bag dict, and the field names spell them — except
+//! `samples`, which this cast holds as `interleaved_sample_bytes`. The map is
+//! open — a producer may carry extra keys and this cast ignores them, matching
+//! the Python cast's behavior.
 //!
 //! Unlike a video frame, an audio block carries its payload inline: the
 //! samples ride the bag as msgpack `bin`, and `dtype` says how to read those
@@ -74,6 +75,9 @@ impl AudioSampleDtype {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msgpack_wire_test_support::{
+        decode_msgpack_named_map_entries, wire_map_entry_named,
+    };
 
     fn interleaved_f32_bytes(scalars: &[f32]) -> Vec<u8> {
         scalars
@@ -87,20 +91,6 @@ mod tests {
             .iter()
             .flat_map(|scalar| scalar.to_le_bytes())
             .collect()
-    }
-
-    fn wire_map_entry(wire_bytes: &[u8], key_name: &str) -> rmpv::Value {
-        let value: rmpv::Value =
-            rmpv::decode::read_value(&mut &wire_bytes[..]).expect("msgpack decode");
-        let rmpv::Value::Map(entries) = value else {
-            panic!("wire value must be a named map, got {value:?}");
-        };
-        entries
-            .iter()
-            .find(|(key, _)| key.as_str() == Some(key_name))
-            .unwrap_or_else(|| panic!("wire map missing key {key_name:?}"))
-            .1
-            .clone()
     }
 
     /// The actual wire is msgpack via `rmp_serde::to_vec_named` (what
@@ -122,23 +112,27 @@ mod tests {
         };
 
         let wire_bytes = rmp_serde::to_vec_named(&block).expect("msgpack serialize");
+        let entries = decode_msgpack_named_map_entries(&wire_bytes);
         assert_eq!(
-            wire_map_entry(&wire_bytes, "samples"),
+            wire_map_entry_named(&entries, "samples"),
             rmpv::Value::Binary(block.interleaved_sample_bytes.clone()),
             "the samples field is a byte buffer, not a sequence of scalars"
         );
         assert_eq!(
-            wire_map_entry(&wire_bytes, "sample_rate").as_u64(),
+            wire_map_entry_named(&entries, "sample_rate").as_u64(),
             Some(48_000)
         );
-        assert_eq!(wire_map_entry(&wire_bytes, "channels").as_u64(), Some(2));
+        assert_eq!(wire_map_entry_named(&entries, "channels").as_u64(), Some(2));
         assert_eq!(
-            wire_map_entry(&wire_bytes, "sample_count").as_u64(),
+            wire_map_entry_named(&entries, "sample_count").as_u64(),
             Some(3)
         );
-        assert_eq!(wire_map_entry(&wire_bytes, "dtype").as_str(), Some("f32"));
         assert_eq!(
-            wire_map_entry(&wire_bytes, "first_sample_timestamp_ns").as_i64(),
+            wire_map_entry_named(&entries, "dtype").as_str(),
+            Some("f32")
+        );
+        assert_eq!(
+            wire_map_entry_named(&entries, "first_sample_timestamp_ns").as_i64(),
             Some(123_456_789)
         );
 
@@ -161,11 +155,15 @@ mod tests {
         };
 
         let wire_bytes = rmp_serde::to_vec_named(&block).expect("msgpack serialize");
+        let entries = decode_msgpack_named_map_entries(&wire_bytes);
         assert_eq!(
-            wire_map_entry(&wire_bytes, "samples"),
+            wire_map_entry_named(&entries, "samples"),
             rmpv::Value::Binary(block.interleaved_sample_bytes.clone())
         );
-        assert_eq!(wire_map_entry(&wire_bytes, "dtype").as_str(), Some("i16"));
+        assert_eq!(
+            wire_map_entry_named(&entries, "dtype").as_str(),
+            Some("i16")
+        );
         assert_eq!(
             block.interleaved_sample_bytes.len(),
             block.sample_count as usize * block.channels as usize * block.dtype.bytes_per_sample(),
