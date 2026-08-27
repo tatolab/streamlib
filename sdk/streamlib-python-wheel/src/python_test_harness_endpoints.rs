@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ReactiveProcessor};
 
-use crate::python_bag_conversion::{msgpack_value_to_python_object, python_object_to_msgpack_value};
+use crate::python_bag_conversion::{
+    msgpack_value_to_python_object, python_object_to_msgpack_value,
+};
 
 /// Which channel an endpoint reads from or writes to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

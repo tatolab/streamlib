@@ -110,9 +110,9 @@ def test_a_bag_carrying_bytes_crosses_both_process_boundaries():
         )
         reading = pipeline.await_bag("readings_to_downstream")
 
-    assert reading["samples"] == payload
-    assert reading["shape"] == [2, 2]
-    assert reading["numpy_type"] == "<f4"
-    assert reading["loudest_sample"] == 1.0
-    assert reading["first_sample_timestamp_ns"] == 123_456_789
-    assert reading["samples_are_a_view_over_the_bag_bytes"]
+        assert reading["samples"] == payload
+        assert reading["shape"] == [2, 2]
+        assert reading["numpy_type"] == "<f4"
+        assert reading["loudest_sample"] == 1.0
+        assert reading["first_sample_timestamp_ns"] == 123_456_789
+        assert reading["samples_are_a_view_over_the_bag_bytes"]

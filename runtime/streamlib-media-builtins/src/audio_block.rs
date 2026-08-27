@@ -76,11 +76,17 @@ mod tests {
     use super::*;
 
     fn interleaved_f32_bytes(scalars: &[f32]) -> Vec<u8> {
-        scalars.iter().flat_map(|scalar| scalar.to_le_bytes()).collect()
+        scalars
+            .iter()
+            .flat_map(|scalar| scalar.to_le_bytes())
+            .collect()
     }
 
     fn interleaved_i16_bytes(scalars: &[i16]) -> Vec<u8> {
-        scalars.iter().flat_map(|scalar| scalar.to_le_bytes()).collect()
+        scalars
+            .iter()
+            .flat_map(|scalar| scalar.to_le_bytes())
+            .collect()
     }
 
     fn wire_map_entry(wire_bytes: &[u8], key_name: &str) -> rmpv::Value {
@@ -107,9 +113,7 @@ mod tests {
     #[test]
     fn audio_block_msgpack_wire_carries_the_samples_as_a_binary_payload() {
         let block = AudioBlock {
-            interleaved_sample_bytes: interleaved_f32_bytes(&[
-                -1.0, -0.5, 0.0, 0.25, 0.5, 1.0,
-            ]),
+            interleaved_sample_bytes: interleaved_f32_bytes(&[-1.0, -0.5, 0.0, 0.25, 0.5, 1.0]),
             sample_rate: 48_000,
             channels: 2,
             sample_count: 3,
@@ -128,7 +132,10 @@ mod tests {
             Some(48_000)
         );
         assert_eq!(wire_map_entry(&wire_bytes, "channels").as_u64(), Some(2));
-        assert_eq!(wire_map_entry(&wire_bytes, "sample_count").as_u64(), Some(3));
+        assert_eq!(
+            wire_map_entry(&wire_bytes, "sample_count").as_u64(),
+            Some(3)
+        );
         assert_eq!(wire_map_entry(&wire_bytes, "dtype").as_str(), Some("f32"));
         assert_eq!(
             wire_map_entry(&wire_bytes, "first_sample_timestamp_ns").as_i64(),
@@ -161,9 +168,7 @@ mod tests {
         assert_eq!(wire_map_entry(&wire_bytes, "dtype").as_str(), Some("i16"));
         assert_eq!(
             block.interleaved_sample_bytes.len(),
-            block.sample_count as usize
-                * block.channels as usize
-                * block.dtype.bytes_per_sample(),
+            block.sample_count as usize * block.channels as usize * block.dtype.bytes_per_sample(),
             "an interleaved block carries sample_count × channels scalars"
         );
 
@@ -177,7 +182,10 @@ mod tests {
     #[test]
     fn audio_block_cast_ignores_unknown_keys() {
         let wire_bytes = wire_bytes_for(vec![
-            ("samples", rmpv::Value::Binary(interleaved_f32_bytes(&[0.5]))),
+            (
+                "samples",
+                rmpv::Value::Binary(interleaved_f32_bytes(&[0.5])),
+            ),
             ("sample_rate", rmpv::Value::from(44_100)),
             ("channels", rmpv::Value::from(1)),
             ("sample_count", rmpv::Value::from(1)),
@@ -188,7 +196,10 @@ mod tests {
 
         let block: AudioBlock = rmp_serde::from_slice(&wire_bytes).expect("open map");
         assert_eq!(block.sample_rate, 44_100);
-        assert_eq!(block.interleaved_sample_bytes, interleaved_f32_bytes(&[0.5]));
+        assert_eq!(
+            block.interleaved_sample_bytes,
+            interleaved_f32_bytes(&[0.5])
+        );
     }
 
     /// `dtype` is metadata with a default, so a producer that omits it is
@@ -196,7 +207,10 @@ mod tests {
     #[test]
     fn a_block_with_no_dtype_on_the_wire_reads_as_f32() {
         let wire_bytes = wire_bytes_for(vec![
-            ("samples", rmpv::Value::Binary(interleaved_f32_bytes(&[1.0]))),
+            (
+                "samples",
+                rmpv::Value::Binary(interleaved_f32_bytes(&[1.0])),
+            ),
             ("sample_rate", rmpv::Value::from(8_000)),
             ("channels", rmpv::Value::from(1)),
             ("sample_count", rmpv::Value::from(1)),
