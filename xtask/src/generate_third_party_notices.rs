@@ -10,11 +10,12 @@
 //! wheel. [`VENDORED_CPP_PROJECTS`] is the roster; this doc does not repeat it,
 //! because a census in prose goes stale the moment the table grows.
 //!
-//! The notice source is a two-shape enum because the two trees differ.
+//! The notice source is an enum because the trees genuinely differ.
 //! `shaderc-sys` extracts its C++ sources into its own build directory, each
 //! with a licence file. The trees `vendor/tatolab-vulkanalia-vma/build.rs`
 //! compiles `wrapper.cpp` against carry no licence file at all — their
-//! copyright line exists only in the comment block heading a header.
+//! copyright line exists only in the comment block heading a header. The
+//! PipeWire/SPA headers are checked in here with their own `COPYING`.
 //!
 //! Some of the shaderc-side texts reach the generated half by accident:
 //! `cargo about` scans a crate's own directory for licence files, and finds the
@@ -56,9 +57,9 @@ const SHADERC_VENDORED_SOURCES_DIR_NAME: &str = "build";
 
 /// Where a vendored C++ project's notice text is read from.
 ///
-/// Two shapes because the two trees genuinely differ, not as a convenience:
-/// `shaderc-sys` ships a licence file per project, and the trees the vulkanalia
-/// VMA fork vendors ship none.
+/// One shape per tree because they genuinely differ, not as a convenience:
+/// `shaderc-sys` ships a licence file per project, the trees the vulkanalia VMA
+/// fork vendors ship none, and `vendor/pipewire-headers/` carries its own.
 enum VendoredCppNoticeSource {
     /// A licence file, reproduced whole.
     ShadercSysLicenseFile {
@@ -68,6 +69,11 @@ enum VendoredCppNoticeSource {
     /// their copyright.
     LeadingCommentBlockOf {
         header_path_relative_to_workspace_root: &'static str,
+    },
+    /// A licence file checked into this repository's own `vendor/` tree,
+    /// reproduced whole.
+    VendoredLicenseFile {
+        path_relative_to_workspace_root: &'static str,
     },
 }
 
@@ -148,6 +154,19 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         license_summary: "Apache-2.0, whose full text is reproduced above",
         notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/Vulkan-Headers/include/vulkan/vulkan_core.h",
+        },
+    },
+    VendoredCppProjectLinkedIntoTheEngine {
+        display_name: "PipeWire",
+        upstream_repository_url: "https://gitlab.freedesktop.org/pipewire/pipewire",
+        license_summary: "MIT",
+        // Headers only — no PipeWire source is compiled and no PipeWire library
+        // is linked. What ships inside the wheel is SPA's `static inline` pod
+        // builders and parsers, compiled into
+        // `runtime/streamlib-engine/src/linux/pipewire_capture_shim.c`, which is
+        // why the terms travel with the binary all the same.
+        notice_source: VendoredCppNoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/pipewire-headers/COPYING",
         },
     },
 ];
@@ -300,7 +319,9 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
          \n\
          - Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: {}\n\
          - Checked into this repository, compiled by \
-         `vendor/tatolab-vulkanalia-vma/build.rs`: {}\n",
+         `vendor/tatolab-vulkanalia-vma/build.rs`: {}\n\
+         - Checked into this repository as headers, compiled into the engine by \
+         `runtime/streamlib-engine/build.rs`: {}\n",
         joined_vendored_cpp_project_display_names(|source| matches!(
             source,
             VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
@@ -308,6 +329,10 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
         joined_vendored_cpp_project_display_names(|source| matches!(
             source,
             VendoredCppNoticeSource::LeadingCommentBlockOf { .. }
+        )),
+        joined_vendored_cpp_project_display_names(|source| matches!(
+            source,
+            VendoredCppNoticeSource::VendoredLicenseFile { .. }
         )),
     )?;
 
@@ -373,6 +398,15 @@ fn read_vendored_cpp_notice(
                     path.display()
                 )
             })?;
+            (path, text)
+        }
+        VendoredCppNoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root,
+        } => {
+            let path = source_trees
+                .workspace_root
+                .join(path_relative_to_workspace_root);
+            let text = read_notice_file(&path, project.display_name)?;
             (path, text)
         }
     };

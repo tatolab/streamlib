@@ -19,7 +19,7 @@ terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 556 crates
+- **MIT License** — 558 crates
 - **Apache License 2.0** — 30 crates
 - **ISC License** — 22 crates
 - **Unicode License v3** — 19 crates
@@ -6703,6 +6703,41 @@ THE SOFTWARE.
 
 Used by:
 
+- [png 0.17.16](https://github.com/image-rs/image-png)
+
+````text
+Copyright (c) 2015 nwin
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [schannel 0.1.29](https://github.com/steffengy/schannel-rs)
 
 ````text
@@ -10447,6 +10482,41 @@ SOFTWARE.
 
 Used by:
 
+- [fdeflate 0.3.7](https://github.com/image-rs/fdeflate)
+
+````text
+MIT License
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [android-activity 0.6.0](https://github.com/rust-mobile/android-activity)
 - [ident_case 1.0.1](https://github.com/TedDriggs/ident_case)
 - [skia-bindings 0.86.1](https://github.com/rust-skia/rust-skia)
@@ -12177,6 +12247,7 @@ walks — and every one of them ships inside the wheel. These sections are appen
 
 - Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: shaderc, glslang, SPIRV-Tools and SPIRV-Headers
 - Checked into this repository, compiled by `vendor/tatolab-vulkanalia-vma/build.rs`: VulkanMemoryAllocator and Vulkan-Headers
+- Checked into this repository as headers, compiled into the engine by `runtime/streamlib-engine/build.rs`: PipeWire
 
 ### shaderc (Apache-2.0)
 
@@ -14160,4 +14231,37 @@ Upstream: <https://github.com/KhronosGroup/Vulkan-Headers>
 Copyright 2015-2025 The Khronos Group Inc.
 
 SPDX-License-Identifier: Apache-2.0
+````
+
+### PipeWire (MIT)
+
+Upstream: <https://gitlab.freedesktop.org/pipewire/pipewire>
+
+````text
+Copyright © 2018 Wim Taymans
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software and associated documentation files (the "Software"),
+to deal in the Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice (including the next
+paragraph) shall be included in all copies or substantial portions of the
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+---
+
+The above is the version of the MIT "Expat" License used by X.org:
+
+    http://cgit.freedesktop.org/xorg/xserver/tree/COPYING
 ````
