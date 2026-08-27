@@ -271,7 +271,7 @@ pub(crate) fn python_object_to_json_value(
     })
 }
 
-fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
+pub(crate) fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if value.is_none() {
         return Ok(Value::Nil);
     }
@@ -378,7 +378,7 @@ fn sequence_to_msgpack_array<'py>(
         .map(Value::Array)
 }
 
-fn msgpack_value_to_python_object<'py>(
+pub(crate) fn msgpack_value_to_python_object<'py>(
     python: Python<'py>,
     value: &Value,
 ) -> PyResult<Bound<'py, PyAny>> {

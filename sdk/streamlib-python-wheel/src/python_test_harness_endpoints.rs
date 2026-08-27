@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ReactiveProcessor};
 
-use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
+use crate::python_bag_conversion::{msgpack_value_to_python_object, python_object_to_msgpack_value};
 
 /// Which channel an endpoint reads from or writes to.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -39,10 +39,14 @@ pub struct TestHarnessChannelConfig {
 
 /// One channel's two queues: what a test fed, and what the processor under
 /// test produced.
+///
+/// Bags are held as the msgpack value the wire carries, which is the only
+/// representation that holds every bag: a byte payload is `bin`, and JSON has
+/// no bytes.
 #[derive(Default)]
 struct TestHarnessChannelQueues {
-    fed_by_the_test: VecDeque<serde_json::Value>,
-    collected_from_the_processor: VecDeque<serde_json::Value>,
+    fed_by_the_test: VecDeque<rmpv::Value>,
+    collected_from_the_processor: VecDeque<rmpv::Value>,
 }
 
 /// Every open channel, and the signal a waiter blocks on.
@@ -77,7 +81,7 @@ fn close_channel(channel: &str) {
 }
 
 /// Queue one bag for the feeder to publish.
-fn push_fed_bag(channel: &str, bag: serde_json::Value) -> bool {
+fn push_fed_bag(channel: &str, bag: rmpv::Value) -> bool {
     let mut open_channels = TEST_HARNESS_CHANNELS.open_channels.lock();
     let Some(queues) = open_channels.get_mut(channel) else {
         return false;
@@ -91,7 +95,7 @@ fn push_fed_bag(channel: &str, bag: serde_json::Value) -> bool {
 
 /// Take the next bag a test fed, if any. A closed channel reads as empty:
 /// the feeder can still be ticking while its pipeline tears down.
-fn take_fed_bag(channel: &str) -> Option<serde_json::Value> {
+fn take_fed_bag(channel: &str) -> Option<rmpv::Value> {
     TEST_HARNESS_CHANNELS
         .open_channels
         .lock()
@@ -101,7 +105,7 @@ fn take_fed_bag(channel: &str) -> Option<serde_json::Value> {
 }
 
 /// Record one bag the processor under test produced.
-fn push_collected_bag(channel: &str, bag: serde_json::Value) {
+fn push_collected_bag(channel: &str, bag: rmpv::Value) {
     let mut open_channels = TEST_HARNESS_CHANNELS.open_channels.lock();
     if let Some(queues) = open_channels.get_mut(channel) {
         queues.collected_from_the_processor.push_back(bag);
@@ -111,7 +115,7 @@ fn push_collected_bag(channel: &str, bag: serde_json::Value) {
 
 /// What a wait for a collected bag ended in.
 enum CollectedBagWaitOutcome {
-    Collected(serde_json::Value),
+    Collected(rmpv::Value),
     /// The deadline passed — the failure a test is looking for.
     TimedOut,
     /// The channel was never opened, or its pipeline already closed it.
@@ -189,15 +193,27 @@ impl ReactiveProcessor for TestBagCollector::Processor {
         _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
     ) -> Result<()> {
         while let Some((raw_bag, _timestamp_ns)) = self.inputs.read_raw("bags_from_upstream")? {
-            let bag: serde_json::Value = rmp_serde::from_slice(&raw_bag).map_err(|decode| {
-                streamlib::sdk::error::Error::Link(format!(
-                    "the test harness could not decode a collected bag: {decode}"
-                ))
-            })?;
-            push_collected_bag(&self.config.channel, bag);
+            push_collected_bag(
+                &self.config.channel,
+                decode_collected_bag_from_wire_bytes(&raw_bag)?,
+            );
         }
         Ok(())
     }
+}
+
+/// Decode one bag the collector read off the wire.
+///
+/// Through `rmpv` rather than `serde_json::Value`, the way the tap path
+/// already does: a byte payload is msgpack `bin`, and JSON's value tree has no
+/// bytes in it at all — its visitor implements no `visit_bytes`, so every bag
+/// carrying bytes failed to decode here with an `invalid_type` error.
+fn decode_collected_bag_from_wire_bytes(raw_bag: &[u8]) -> Result<rmpv::Value> {
+    rmpv::decode::read_value(&mut &raw_bag[..]).map_err(|decode| {
+        streamlib::sdk::error::Error::Link(format!(
+            "the test harness could not decode a collected bag: {decode}"
+        ))
+    })
 }
 
 /// Register the harness endpoints so `rt.add` can resolve them.
@@ -269,7 +285,7 @@ pub(crate) fn close_test_harness_channel(channel: &str) {
 /// Queue one bag for delivery through `channel`'s feeder.
 #[pyfunction]
 pub(crate) fn feed_test_harness_bag(channel: &str, bag: &Bound<'_, PyAny>) -> PyResult<()> {
-    let bag = python_object_to_json_value(bag)?;
+    let bag = python_object_to_msgpack_value(bag)?;
     if push_fed_bag(channel, bag) {
         return Ok(());
     }
@@ -292,12 +308,97 @@ pub(crate) fn await_test_harness_bag<'py>(
     // stall every other thread in the test's interpreter.
     match python.detach(|| take_collected_bag(channel, timeout)) {
         CollectedBagWaitOutcome::Collected(bag) => {
-            json_value_to_python_object(python, &bag).map(Some)
+            msgpack_value_to_python_object(python, &bag).map(Some)
         }
         CollectedBagWaitOutcome::TimedOut => Ok(None),
         CollectedBagWaitOutcome::ChannelNotOpen => Err(PyRuntimeError::new_err(format!(
             "the test harness channel {channel:?} is not open; the pipeline that owned it has \
              been closed"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::{PyBytes, PyDict};
+
+    /// A byte payload is msgpack `bin` on the wire, and the harness has to
+    /// carry it back to the test as `bytes`.
+    ///
+    /// The defect this locks is not audio-specific: `serde_json::Value`'s
+    /// visitor implements no `visit_bytes`, so decoding a collected bag
+    /// through it failed with `invalid_type` for every bag carrying bytes —
+    /// including one a Python processor writes.
+    #[test]
+    fn a_collected_bag_carrying_bytes_reaches_the_test_as_bytes() {
+        Python::initialize();
+        let channel = "collected-bytes-survive-the-harness";
+        assert!(open_channel(channel), "the channel must be ours to close");
+
+        let bag_on_the_wire = rmpv::Value::Map(vec![
+            (
+                rmpv::Value::from("samples"),
+                rmpv::Value::Binary(vec![0x00, 0x80, 0xff]),
+            ),
+            (rmpv::Value::from("sample_rate"), rmpv::Value::from(48_000)),
+        ]);
+        let mut wire_bytes = Vec::new();
+        rmpv::encode::write_value(&mut wire_bytes, &bag_on_the_wire).expect("msgpack encode");
+
+        push_collected_bag(
+            channel,
+            decode_collected_bag_from_wire_bytes(&wire_bytes).expect("a bin payload decodes"),
+        );
+
+        Python::attach(|python| {
+            let collected = await_test_harness_bag(python, channel, 1.0)
+                .expect("the channel is open")
+                .expect("a bag was queued before the wait");
+            let samples = collected
+                .cast::<PyDict>()
+                .expect("a bag is a named map")
+                .get_item("samples")
+                .expect("lookup")
+                .expect("the bag carries its samples");
+            assert_eq!(
+                samples
+                    .cast::<PyBytes>()
+                    .expect("a bin payload reaches Python as bytes")
+                    .as_bytes(),
+                &[0x00, 0x80, 0xff]
+            );
+        });
+        close_channel(channel);
+    }
+
+    /// The same payload in the other direction: what a test feeds reaches the
+    /// feeder as `bin`, so what the feeder publishes is what a processor
+    /// under test reads.
+    #[test]
+    fn a_fed_bag_carrying_bytes_keeps_them_on_the_way_to_the_feeder() {
+        Python::initialize();
+        let channel = "fed-bytes-survive-the-harness";
+        assert!(open_channel(channel), "the channel must be ours to close");
+
+        Python::attach(|python| {
+            let bag = PyDict::new(python);
+            bag.set_item("samples", PyBytes::new(python, &[0x01, 0x02, 0x03]))
+                .expect("set");
+            feed_test_harness_bag(channel, bag.as_any()).expect("the channel is open");
+        });
+
+        let rmpv::Value::Map(entries) = take_fed_bag(channel).expect("a bag was queued") else {
+            panic!("a bag is a named map");
+        };
+        assert_eq!(
+            entries
+                .iter()
+                .find(|(key, _)| key.as_str() == Some("samples"))
+                .expect("the bag carries its samples")
+                .1,
+            rmpv::Value::Binary(vec![0x01, 0x02, 0x03])
+        );
+        close_channel(channel);
     }
 }
