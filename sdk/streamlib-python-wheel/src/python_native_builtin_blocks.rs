@@ -41,6 +41,11 @@ pub(crate) struct PythonCameraSourceBlock;
 #[pyclass(name = "DisplayWindow", module = "streamlib", frozen)]
 pub(crate) struct PythonDisplayWindowBlock;
 
+/// `streamlib.MicrophoneSource` — audio capture on whichever backend the
+/// chain probed, silence where none exists.
+#[pyclass(name = "MicrophoneSource", module = "streamlib", frozen)]
+pub(crate) struct PythonMicrophoneSourceBlock;
+
 /// Resolve a Python object to a native built-in's class import path, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins
@@ -76,6 +81,11 @@ pub(crate) fn native_builtin_class_import_path(
         return Err(PyRuntimeError::new_err(
             "DisplayWindow is Linux-only today; this platform is not supported by the \
              streamlib wheel yet",
+        ));
+    }
+    if processor_class.is(python.get_type::<PythonMicrophoneSourceBlock>()) {
+        return Ok(Some(
+            streamlib_media_builtins::MicrophoneSource::Processor::processor_class_import_path(),
         ));
     }
     Ok(None)
