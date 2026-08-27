@@ -56,7 +56,17 @@ trap 'exit 130' INT TERM
 
 SINK="$("$HERE/virtual_audio_device.sh" start)" || exit 1
 
-"$PYTHON" "$HERE/known_audio_signal.py" generate "$OUTPUT_DIR/known_signal.wav" || exit 1
+# INJECT_BUG plays a deliberately broken signal, so a rig run can prove the
+# gate is live rather than only ever having been observed green.
+INJECT_BUG="${INJECT_BUG:-}"
+if [ -n "$INJECT_BUG" ]; then
+    echo "INJECTING FAULT: $INJECT_BUG — this run is expected to FAIL" >&2
+    "$PYTHON" "$HERE/known_audio_signal.py" generate \
+        "$OUTPUT_DIR/known_signal.wav" --inject "$INJECT_BUG" || exit 1
+else
+    "$PYTHON" "$HERE/known_audio_signal.py" generate \
+        "$OUTPUT_DIR/known_signal.wav" || exit 1
+fi
 
 # `stream.capture.sink` is load-bearing: without it a capture stream aimed at a
 # sink silently attaches to the session's default source instead and records
@@ -75,8 +85,12 @@ sleep "$CAPTURE_LEAD_SECONDS"
 # default sink — and the analysis would pass having never touched the fixture
 # node. Verified rather than trusted, and the evidence is kept.
 pw-link -l 2>/dev/null | grep -A2 "^pw-record" > "$OUTPUT_DIR/capture_link.txt"
+if ! [ -s "$OUTPUT_DIR/capture_link.txt" ]; then
+    echo "ERROR: pw-record is not running — nothing is being captured at all" >&2
+    exit 1
+fi
 if ! grep -q "$SINK" "$OUTPUT_DIR/capture_link.txt"; then
-    echo "ERROR: the recorder did not attach to $SINK — it is capturing something else" >&2
+    echo "ERROR: the recorder attached to something other than $SINK" >&2
     kill "$RECORDER_PID" 2>/dev/null
     exit 1
 fi

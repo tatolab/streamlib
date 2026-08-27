@@ -40,6 +40,13 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
             str(captured), str(Path(self.workspace.name) / "spectrogram.png")
         )
 
+    def signal_silenced(self, milliseconds, at_seconds):
+        """An underrun: the samples are replaced, not removed."""
+        silenced = self.clean.copy()
+        at = int(at_seconds * fixture.SAMPLE_RATE)
+        silenced[at : at + int(milliseconds / 1000.0 * fixture.SAMPLE_RATE)] = 0.0
+        return silenced
+
     def signal_missing(self, milliseconds, at_seconds):
         cut = int(at_seconds * fixture.SAMPLE_RATE)
         lost = int(milliseconds / 1000.0 * fixture.SAMPLE_RATE)
@@ -56,11 +63,18 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
     # ---- the loss the whole signal design exists for ------------------------
 
     def test_a_dropped_block_inside_a_digit_is_caught_and_the_span_named(self):
-        """Identity survives the loss and the fundamental does not move; only
-        the span between two onsets shortens, and by exactly what went missing."""
+        """Identity survives the loss and the fundamental does not move; the
+        span between two onsets shortens by exactly what went missing.
+
+        Not single-axis, and correctly so: samples really did leave, so the
+        signal really is short and the digit really does have a hole where its
+        body should be. What matters is that the span is named, because that is
+        the part a reader acts on.
+        """
         report = self.report_for(self.signal_missing(20.0, at_seconds=1.85))
 
-        self.assertEqual(report["failed"], ["symbol_interval_error_ms"], report)
+        self.assertIn("symbol_interval_error_ms", report["failed"], report)
+        self.assertNotIn("fundamental_hz", report["failed"])
         self.assertEqual(
             report["symbols"],
             fixture.DTMF_DIGITS,
@@ -133,15 +147,45 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
         self.assertIn("fundamental_hz", report["failed"])
         self.assertIn("symbols", report["failed"])
 
-    def test_a_hole_punched_in_the_audio_fails_on_the_gap_count_alone(self):
-        """Placed clear of the window the tone is measured in, so a hole reads
-        as a hole rather than also dragging the amplitude down."""
-        holed = self.clean.copy()
-        hole_at = int(0.32 * fixture.SAMPLE_RATE)
-        holed[hole_at : hole_at + int(0.16 * fixture.SAMPLE_RATE)] = 0.0
-        report = self.report_for(holed)
-        self.assertEqual(report["failed"], ["gap_count"], report)
-        self.assertGreater(report["gap_count"], 0)
+    def test_an_underrun_filled_with_silence_is_caught(self):
+        """The shape a real device produces, and the one the span check cannot
+        see: an xrun does not drop samples, it substitutes silence, so nothing
+        shortens and every landmark stays exactly where it was."""
+        for at_seconds, region in ((0.70, "the tone"), (1.80, "a digit")):
+            with self.subTest(region=region):
+                report = self.report_for(
+                    self.signal_silenced(A_DEVICE_QUANTUM_MS, at_seconds=at_seconds)
+                )
+                self.assertEqual(report["failed"], ["silent_stretch_ms"], report)
+                self.assertAlmostEqual(
+                    report["silent_stretch_ms"], A_DEVICE_QUANTUM_MS, delta=1.0
+                )
+
+    def test_a_capture_that_stops_inside_the_last_symbol_is_caught(self):
+        """The landmark grid ends at the last onset, so the last symbol's own
+        body needs a bound of its own — and a recorder that keeps writing
+        silence leaves the file the right length while the audio is gone."""
+        stops_at = int(2.49 * fixture.SAMPLE_RATE)
+        still_recording = numpy.concatenate(
+            [self.clean[:stops_at], numpy.zeros(int(1.2 * fixture.SAMPLE_RATE))]
+        )
+        self.assertIn(
+            "signal_ended_early", self.report_for(still_recording)["failed"]
+        )
+        self.assertIn(
+            "signal_ended_early", self.report_for(self.clean[:stops_at])["failed"]
+        )
+
+    def test_loss_spread_across_every_span_still_adds_up(self):
+        """Repeated small xruns stay under the per-span bound while the total
+        does not, so the grid is checked against its own length as well."""
+        thinned = self.clean
+        for at_seconds in (0.9, 1.15, 1.35, 1.55, 1.75, 1.95, 2.15):
+            cut = int(at_seconds * fixture.SAMPLE_RATE)
+            lost = int(4.99 / 1000.0 * fixture.SAMPLE_RATE)
+            thinned = numpy.concatenate([thinned[:cut], thinned[cut + lost :]])
+        report = self.report_for(thinned)
+        self.assertIn("cumulative_interval_error_ms", report["failed"], report)
 
     def test_silence_is_refused_rather_than_measured(self):
         report = self.report_for(numpy.zeros_like(self.clean))
