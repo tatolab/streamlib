@@ -32,7 +32,6 @@ pub use audio_device_backend::{
 // the arm it means. The chain's probe takes the first arm that opens, so a test
 // that went through it would exercise whatever audio server the machine running
 // it happens to have.
-pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
 #[cfg(target_os = "linux")]
@@ -41,6 +40,7 @@ pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess}
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };

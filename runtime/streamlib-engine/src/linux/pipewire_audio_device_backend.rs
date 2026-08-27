@@ -34,7 +34,7 @@ const PIPEWIRE_LIBRARY_SONAME: &str = "libpipewire-0.3.so.0";
 /// How much failure text the shim is given room to write.
 const SHIM_FAILURE_TEXT_CAPACITY: usize = 512;
 
-mod shim {
+mod capture_shim {
     use std::ffi::{c_char, c_int, c_void};
 
     /// Mirrors `struct StreamLibPipeWireNegotiatedCaptureFormat`.
@@ -89,14 +89,30 @@ mod shim {
             hand_off: CapturedBlockHandOff,
             hand_off_context: *mut c_void,
         );
-        pub fn streamlib_pipewire_capture_stream_stop_delivering(capture_stream: *mut CaptureStream);
+        pub fn streamlib_pipewire_capture_stream_stop_delivering(
+            capture_stream: *mut CaptureStream,
+        );
         pub fn streamlib_pipewire_capture_stream_close(capture_stream: *mut CaptureStream);
     }
 
-    // The shim calls this on every block; Rust only ever calls it to hold the
-    // derivation in a test, which is why it is declared only there.
+    /// Mirrors `struct StreamLibPipeWireChunkExtent`.
+    #[repr(C)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[cfg(test)]
+    pub struct ChunkExtent {
+        pub offset: u32,
+        pub byte_count: u32,
+    }
+
+    // The shim calls these on every block; Rust only ever calls them to hold
+    // the arithmetic in a test, which is why they are declared only there.
     #[cfg(test)]
     unsafe extern "C" {
+        pub fn streamlib_pipewire_clamped_chunk_extent(
+            chunk_offset: u32,
+            chunk_size: u32,
+            data_maxsize: u32,
+        ) -> ChunkExtent;
         pub fn streamlib_pipewire_first_sample_timestamp_ns(
             cycle_timestamp_ns: i64,
             delay_in_rate_units: i64,
@@ -130,22 +146,42 @@ unsafe impl Sync for PipeWireLibraryEntryPoints {}
 impl PipeWireLibraryEntryPoints {
     /// Open the library and resolve every entry point, or say which step failed
     /// in the words the demotion log line should carry.
-    fn resolve() -> std::result::Result<Self, String> {
-        let library = unsafe { Library::new(PIPEWIRE_LIBRARY_SONAME) }
-            .map_err(|e| format!("{PIPEWIRE_LIBRARY_SONAME} could not be loaded: {e}"))?;
+    fn resolve() -> std::result::Result<Self, PipeWireArmUnavailableReason> {
+        Self::resolve_from(PIPEWIRE_LIBRARY_SONAME)
+    }
 
-        let name_count = unsafe { shim::streamlib_pipewire_entry_point_count() };
-        let names = unsafe { shim::streamlib_pipewire_entry_point_names() };
+    /// The soname is a parameter so that both refusals — the library is not
+    /// there, and the library is there but exports none of this — are reachable
+    /// from a test without a PipeWire-shaped stub on disk.
+    fn resolve_from(
+        library_soname: &str,
+    ) -> std::result::Result<Self, PipeWireArmUnavailableReason> {
+        // SAFETY: `dlopen` of a soname. Loading an audio library can run its
+        // initialisers, which is what the chain's probe-by-opening accepts;
+        // nothing here dereferences anything until `get` succeeds.
+        let library = unsafe { Library::new(library_soname) }.map_err(|e| {
+            PipeWireArmUnavailableReason(format!("{library_soname} could not be loaded: {e}"))
+        })?;
+
+        // SAFETY: both return pointers into the shim's own `static const`
+        // storage, so the array and every name in it are `'static` and
+        // immutable.
+        let name_count = unsafe { capture_shim::streamlib_pipewire_entry_point_count() };
+        let names = unsafe { capture_shim::streamlib_pipewire_entry_point_names() };
         let mut resolved_addresses = Vec::with_capacity(name_count);
         for name_index in 0..name_count {
+            // SAFETY: `name_index < name_count`, and the shim guarantees that
+            // many NUL-terminated names at that address.
             let name = unsafe { CStr::from_ptr(*names.add(name_index)) };
+            // SAFETY: `dlsym` with a NUL-terminated name; the resulting address
+            // is kept alive by the `Library` this struct stores beside it.
             let symbol: libloading::Symbol<'_, unsafe extern "C" fn()> =
                 unsafe { library.get(name.to_bytes_with_nul()) }.map_err(|_| {
-                    format!(
-                        "{PIPEWIRE_LIBRARY_SONAME} exports no {}, so this host's PipeWire is \
-                         older than the 0.3.50 floor this arm binds against",
+                    PipeWireArmUnavailableReason(format!(
+                        "{library_soname} exports no {}, so this host's PipeWire is older \
+                         than the 0.3.50 floor this arm binds against",
                         name.to_string_lossy()
-                    )
+                    ))
                 })?;
             resolved_addresses.push(*symbol as *mut c_void);
         }
@@ -162,26 +198,43 @@ impl PipeWireLibraryEntryPoints {
 }
 
 /// A buffer the shim writes a failure into, read back as an owned message.
-struct ShimFailureText([c_char; SHIM_FAILURE_TEXT_CAPACITY]);
+///
+/// Held as bytes rather than `c_char` so reading it needs no `unsafe` and does
+/// not depend on `c_char`'s platform signedness; the cast happens once, at the
+/// boundary that hands the pointer over.
+struct ShimFailureText([u8; SHIM_FAILURE_TEXT_CAPACITY]);
 
 impl ShimFailureText {
     fn new() -> Self {
         Self([0; SHIM_FAILURE_TEXT_CAPACITY])
     }
 
-    fn as_mut_ptr(&mut self) -> *mut c_char {
-        self.0.as_mut_ptr()
+    /// The pointer and the capacity together, so the two cannot be passed to
+    /// the shim disagreeing about the same buffer.
+    fn as_shim_out_parameters(&mut self) -> (*mut c_char, usize) {
+        (self.0.as_mut_ptr().cast::<c_char>(), self.0.len())
     }
 
-    /// Read as a bounded slice rather than through `CStr::from_ptr`, so the
-    /// borrow is tied to the buffer and a shim that forgot to terminate its
-    /// text cannot walk off the end.
+    /// Read as a bounded slice rather than through `CStr::from_ptr`, so a shim
+    /// that forgot to terminate its text cannot walk off the end.
     fn read(&self) -> String {
-        let bytes: &[u8] =
-            unsafe { std::slice::from_raw_parts(self.0.as_ptr().cast::<u8>(), self.0.len()) };
-        CStr::from_bytes_until_nul(bytes)
+        CStr::from_bytes_until_nul(&self.0)
             .map(|text| text.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "PipeWire reported a failure with no readable text".to_string())
+    }
+}
+
+/// Why the PipeWire arm cannot serve, in the words the demotion log line
+/// carries.
+///
+/// Not a core `Error`: nothing failed that a caller must handle. The chain has
+/// another arm, and this is what a reader needs in order to tell "the library
+/// was absent" from "no daemon answered".
+pub struct PipeWireArmUnavailableReason(String);
+
+impl std::fmt::Display for PipeWireArmUnavailableReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
@@ -197,27 +250,34 @@ impl PipeWireAudioDeviceBackend {
     /// The connection round trip is the point: `libpipewire` present with no
     /// daemon behind it is the ordinary container case, and probing on presence
     /// alone would strand exactly the machines the chain exists to serve.
-    pub fn load_and_connect() -> std::result::Result<Self, String> {
+    pub fn load_and_connect() -> std::result::Result<Self, PipeWireArmUnavailableReason> {
         let entry_points = PipeWireLibraryEntryPoints::resolve()?;
 
         // Process-global, and this runs inside the chain's one-shot probe, so
         // it happens exactly once however many streams are opened later.
-        unsafe { shim::streamlib_pipewire_initialize(entry_points.as_ptr()) };
+        // SAFETY: the table is fully resolved and outlives this call.
+        unsafe { capture_shim::streamlib_pipewire_initialize(entry_points.as_ptr()) };
 
         let mut failure_text = ShimFailureText::new();
+        let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
+        // SAFETY: the table is fully resolved, and the out-buffer's pointer and
+        // capacity come from the buffer itself, which outlives the call.
         let daemon_answered = unsafe {
-            shim::streamlib_pipewire_daemon_answers(
+            capture_shim::streamlib_pipewire_daemon_answers(
                 entry_points.as_ptr(),
-                failure_text.as_mut_ptr(),
-                SHIM_FAILURE_TEXT_CAPACITY,
+                failure_text_ptr,
+                failure_text_capacity,
             )
         } == 0;
         if !daemon_answered {
-            return Err(failure_text.read());
+            return Err(PipeWireArmUnavailableReason(failure_text.read()));
         }
 
+        // SAFETY: `pw_get_library_version` returns a pointer to libpipewire's
+        // own static version string, valid for as long as the library is loaded.
         let library_version = unsafe {
-            let version = shim::streamlib_pipewire_loaded_library_version(entry_points.as_ptr());
+            let version =
+                capture_shim::streamlib_pipewire_loaded_library_version(entry_points.as_ptr());
             if version.is_null() {
                 "unknown".to_string()
             } else {
@@ -262,17 +322,20 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
             })
             .transpose()?;
 
-        let mut negotiated_format = shim::NegotiatedCaptureFormat::default();
+        let mut negotiated_format = capture_shim::NegotiatedCaptureFormat::default();
         let mut failure_text = ShimFailureText::new();
+        let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
+        // SAFETY: the device id, if any, is a live `CString` for the length of
+        // this call; the format and failure out-parameters are owned locals.
         let opened = unsafe {
-            shim::streamlib_pipewire_capture_stream_open(
+            capture_shim::streamlib_pipewire_capture_stream_open(
                 self.entry_points.as_ptr(),
                 device_id
                     .as_ref()
                     .map_or(std::ptr::null(), |device_id| device_id.as_ptr()),
                 &mut negotiated_format,
-                failure_text.as_mut_ptr(),
-                SHIM_FAILURE_TEXT_CAPACITY,
+                failure_text_ptr,
+                failure_text_capacity,
             )
         };
         if opened.is_null() {
@@ -296,11 +359,11 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
 
 /// The seam's format, read out of what PipeWire settled on.
 fn capture_stream_format_of(
-    negotiated: shim::NegotiatedCaptureFormat,
+    negotiated: capture_shim::NegotiatedCaptureFormat,
 ) -> Result<AudioCaptureStreamFormat> {
     let sample_format = match negotiated.sample_format {
-        shim::SAMPLE_FORMAT_F32_LE => AudioCaptureSampleFormat::F32,
-        shim::SAMPLE_FORMAT_I16_LE => AudioCaptureSampleFormat::I16,
+        capture_shim::SAMPLE_FORMAT_F32_LE => AudioCaptureSampleFormat::F32,
+        capture_shim::SAMPLE_FORMAT_I16_LE => AudioCaptureSampleFormat::I16,
         other => {
             return Err(Error::Runtime(format!(
                 "the PipeWire capture shim reported sample format {other}, which names no \
@@ -319,7 +382,7 @@ fn capture_stream_format_of(
 struct PipeWireAudioCaptureStream {
     /// Held so the library outlives every address the shim still holds.
     _entry_points: Arc<PipeWireLibraryEntryPoints>,
-    capture_stream: *mut shim::CaptureStream,
+    capture_stream: *mut capture_shim::CaptureStream,
     capture_stream_format: AudioCaptureStreamFormat,
     /// The hand-off the shim's callback context points at. Owned here so it
     /// outlives every delivery and is freed only once the shim has promised no
@@ -327,8 +390,12 @@ struct PipeWireAudioCaptureStream {
     installed_hand_off: Option<Box<CapturedAudioBlockHandOff>>,
 }
 
-// The stream is only ever touched from the thread that owns it; the shim
-// serializes everything else behind PipeWire's own loop lock.
+// The pointer is exclusively owned by this struct — nothing else holds a copy,
+// and every shim entry point it is passed to takes PipeWire's thread-loop lock
+// before touching anything the loop thread also touches. `pw_thread_loop` is a
+// use-from-any-thread API, so moving that ownership between threads is sound.
+// `Sync` is deliberately not implemented: two `&` references could call
+// `start_delivering` concurrently.
 unsafe impl Send for PipeWireAudioCaptureStream {}
 
 /// What the shim calls on PipeWire's realtime thread.
@@ -342,10 +409,17 @@ unsafe extern "C" fn deliver_captured_block_to_hand_off(
     sample_count: u32,
     first_sample_timestamp_ns: i64,
 ) {
+    // SAFETY: the context is the address of the `Box<CapturedAudioBlockHandOff>`
+    // that `start_delivering_to` installed under the loop lock, and
+    // `stop_delivering` retires it under that same lock before dropping it — so
+    // it is live for the length of this call.
     let hand_off = unsafe { &*hand_off_context.cast::<CapturedAudioBlockHandOff>() };
     let interleaved_sample_bytes = if interleaved_sample_bytes.is_null() {
         &[][..]
     } else {
+        // SAFETY: the shim clamps the daemon's chunk offset and size to the
+        // buffer's own `maxsize` before handing this pair over, so the range
+        // lies inside PipeWire's mapping, which stays valid until this returns.
         unsafe {
             std::slice::from_raw_parts(interleaved_sample_bytes, interleaved_sample_byte_count)
         }
@@ -363,10 +437,14 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
+        // Boxed so C gets a thin, stable address for what is otherwise a fat
+        // pointer. The allocation does not move when the `Box` itself does.
         let hand_off = Box::new(hand_off);
         let hand_off_context = (&raw const *hand_off).cast_mut().cast::<c_void>();
+        // SAFETY: the stream pointer is live, and the context stays valid
+        // because the `Box` is stored on `self` on the next line.
         unsafe {
-            shim::streamlib_pipewire_capture_stream_start_delivering(
+            capture_shim::streamlib_pipewire_capture_stream_start_delivering(
                 self.capture_stream,
                 deliver_captured_block_to_hand_off,
                 hand_off_context,
@@ -380,8 +458,11 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
     }
 
     fn stop_delivering(&mut self) -> Result<()> {
+        // SAFETY: the stream pointer is live. The shim takes the loop lock, so
+        // when it returns no callback can still be reading the context that the
+        // next line drops.
         unsafe {
-            shim::streamlib_pipewire_capture_stream_stop_delivering(self.capture_stream);
+            capture_shim::streamlib_pipewire_capture_stream_stop_delivering(self.capture_stream);
         }
         self.installed_hand_off = None;
         Ok(())
@@ -392,8 +473,10 @@ impl Drop for PipeWireAudioCaptureStream {
     fn drop(&mut self) {
         // Closes and joins PipeWire's loop thread, so the hand-off this then
         // drops is provably no longer reachable from a callback.
+        // SAFETY: the pointer came from the shim's own `open` and is closed
+        // exactly once, here.
         unsafe {
-            shim::streamlib_pipewire_capture_stream_close(self.capture_stream);
+            capture_shim::streamlib_pipewire_capture_stream_close(self.capture_stream);
         }
     }
 }
@@ -410,7 +493,7 @@ mod tests {
 
     fn first_sample_timestamp_ns(cycle_timestamp_ns: i64, delay_in_rate_units: i64) -> i64 {
         unsafe {
-            shim::streamlib_pipewire_first_sample_timestamp_ns(
+            capture_shim::streamlib_pipewire_first_sample_timestamp_ns(
                 cycle_timestamp_ns,
                 delay_in_rate_units,
                 RATE_48K_NUMERATOR,
@@ -471,7 +554,7 @@ mod tests {
     #[test]
     fn an_unsettled_rate_fraction_contributes_no_delay_rather_than_dividing_by_zero() {
         let stamp = unsafe {
-            shim::streamlib_pipewire_first_sample_timestamp_ns(
+            capture_shim::streamlib_pipewire_first_sample_timestamp_ns(
                 1_000_000_000,
                 512,
                 0,
@@ -483,15 +566,63 @@ mod tests {
         assert_eq!(stamp, 1_000_000_000 - QUANTUM_NANOS);
     }
 
+    fn clamped_chunk_extent(offset: u32, size: u32, maxsize: u32) -> capture_shim::ChunkExtent {
+        unsafe { capture_shim::streamlib_pipewire_clamped_chunk_extent(offset, size, maxsize) }
+    }
+
+    /// The ordinary case: a chunk that sits inside its buffer is passed through
+    /// untouched.
+    #[test]
+    fn a_chunk_within_its_buffer_is_left_alone() {
+        assert_eq!(
+            clamped_chunk_extent(0, 8192, 65536),
+            capture_shim::ChunkExtent {
+                offset: 0,
+                byte_count: 8192
+            }
+        );
+    }
+
+    /// `spa_chunk` states the offset is taken modulo `maxsize`, so a wrapped
+    /// offset names a position inside the mapping rather than past its end.
+    #[test]
+    fn an_offset_past_the_mapping_wraps_into_it() {
+        assert_eq!(clamped_chunk_extent(70000, 16, 65536).offset, 4464);
+    }
+
+    /// The failure this exists to prevent: the pair becomes a Rust slice, so a
+    /// size the daemon overstates would be a read past the end of PipeWire's
+    /// mapping — not a bad sample value.
+    ///
+    /// Mental revert: take `chunk->size` at face value and this returns 999 999
+    /// bytes out of a 4 096-byte buffer.
+    #[test]
+    fn a_size_larger_than_the_mapping_is_clamped_to_what_is_actually_there() {
+        assert_eq!(clamped_chunk_extent(0, 999_999, 4096).byte_count, 4096);
+        assert_eq!(clamped_chunk_extent(1024, 999_999, 4096).byte_count, 3072);
+    }
+
+    /// A buffer that maps nothing yields nothing, rather than a modulo by zero.
+    #[test]
+    fn a_buffer_that_maps_nothing_yields_an_empty_extent() {
+        assert_eq!(
+            clamped_chunk_extent(16, 64, 0),
+            capture_shim::ChunkExtent {
+                offset: 0,
+                byte_count: 0
+            }
+        );
+    }
+
     /// The two halves agree on how many entry points there are and on their
     /// order, because only the C side states it. A Rust-side restatement is
     /// what this exists to make impossible.
     #[test]
     fn the_shim_names_every_entry_point_it_expects_rust_to_resolve() {
-        let count = unsafe { shim::streamlib_pipewire_entry_point_count() };
+        let count = unsafe { capture_shim::streamlib_pipewire_entry_point_count() };
         assert!(count > 0, "the shim names no entry points at all");
 
-        let names = unsafe { shim::streamlib_pipewire_entry_point_names() };
+        let names = unsafe { capture_shim::streamlib_pipewire_entry_point_names() };
         for name_index in 0..count {
             let name = unsafe { CStr::from_ptr(*names.add(name_index)) }
                 .to_str()
@@ -503,19 +634,37 @@ mod tests {
         }
     }
 
-    /// The demotion path, held where the words a reader will see are produced:
-    /// a library that is not there names itself, so a container's log says
-    /// which arm was skipped rather than only which arm was chosen.
+    /// The demotion path, driven through the production loader rather than a
+    /// copy of it: a container without libpipewire has to say which library it
+    /// went looking for, or its log names only the arm that was chosen and
+    /// never the one that was skipped.
+    ///
+    /// Mental revert: drop the soname from `resolve_from`'s not-found message
+    /// and this fails, which the previous version of this test did not.
     #[test]
-    fn a_missing_library_is_reported_by_name_rather_than_crashing() {
-        let Err(reason) = (unsafe { Library::new("libpipewire-0.3.so.0.does-not-exist") })
-            .map_err(|e| format!("{PIPEWIRE_LIBRARY_SONAME} could not be loaded: {e}"))
-        else {
+    fn a_missing_library_demotes_and_names_the_library_it_looked_for() {
+        let missing_soname = "libpipewire-0.3.so.0.streamlib-test-no-such-library";
+        let Err(reason) = PipeWireLibraryEntryPoints::resolve_from(missing_soname) else {
             panic!("a library with no such file cannot load");
         };
         assert!(
-            reason.contains(PIPEWIRE_LIBRARY_SONAME),
-            "the demotion reason must name the library: {reason}"
+            reason.to_string().contains(missing_soname),
+            "the demotion reason must name the library it could not load: {reason}"
+        );
+    }
+
+    /// A library that loads but exports none of this is the older-PipeWire
+    /// case, and it has to name the symbol rather than crash on a null address.
+    /// libc stands in for it: it always loads, and it exports no `pw_*`.
+    #[test]
+    fn a_library_missing_an_entry_point_names_the_symbol_rather_than_crashing() {
+        let Err(reason) = PipeWireLibraryEntryPoints::resolve_from("libc.so.6") else {
+            panic!("libc exports no pw_* symbol, so the table cannot resolve against it");
+        };
+        let reason = reason.to_string();
+        assert!(
+            reason.contains("libc.so.6") && reason.contains("pw_"),
+            "the reason must name both the library and the symbol it wanted: {reason}"
         );
     }
 

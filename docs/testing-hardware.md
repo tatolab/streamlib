@@ -155,8 +155,11 @@ system-exclusive resource. Concretely, today:
   `create_test_device()`.
 - Tests in `vulkan/rhi/` that exercise GPU memory, swapchains,
   pipelines, sync primitives.
-- Future: V4L2 camera capture, audio device probes, display
-  swapchains, anything that holds a kernel-level exclusive lock.
+- Audio device probes: anything opening a stream through the audio
+  device seam against a real backend, which needs a reachable audio
+  session rather than a GPU.
+- Future: V4L2 camera capture, display swapchains, anything that holds a
+  kernel-level exclusive lock.
 
 Pure-logic tests in the same file (e.g. cache-path string formatting,
 SPIR-V reflection validators that operate on byte arrays without ever

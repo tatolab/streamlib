@@ -73,6 +73,33 @@ enum StreamLibPipeWireSampleFormat {
     STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE = 1,
 };
 
+/// How many properties [`capture_stream_properties`] declares. Shared so the
+/// array and the function that fills it cannot disagree about its size.
+#define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 4
+
+/// How many buffers one graph cycle may hand over before the rest wait for the
+/// next callback. A capture cycle normally yields exactly one; PipeWire's own
+/// buffer pools are smaller than this.
+#define STREAMLIB_PIPEWIRE_MAX_BUFFERS_PER_CYCLE 16
+
+/// The byte range of a delivered chunk, clamped to what its buffer maps.
+struct StreamLibPipeWireChunkExtent {
+    uint32_t offset;
+    uint32_t byte_count;
+};
+
+/// Clamp a daemon-supplied chunk offset and size to the mapping they index.
+///
+/// `spa_chunk` states the contract itself: the offset "should be taken modulo
+/// the data maxsize" and the size "should be clamped to maxsize". Neither can
+/// be taken on trust, because the pair becomes a Rust slice — an out-of-range
+/// chunk is a read past the end of the mapping, not a bad sample value.
+///
+/// Exposed rather than kept private so a test can hold it without a device.
+struct StreamLibPipeWireChunkExtent streamlib_pipewire_clamped_chunk_extent(uint32_t chunk_offset,
+                                                                           uint32_t chunk_size,
+                                                                           uint32_t data_maxsize);
+
 /// What one capture stream settled on, fixed for the stream's lifetime.
 struct StreamLibPipeWireNegotiatedCaptureFormat {
     uint32_t sample_rate;

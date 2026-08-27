@@ -18,8 +18,7 @@ use std::time::Duration;
 
 use streamlib_engine::core::context::{
     AudioCaptureStreamFormat, AudioCaptureStreamRequest, AudioClockConfig,
-    CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
-    probe_audio_device_backend,
+    CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock, probe_audio_device_backend,
 };
 use streamlib_engine::core::media_clock::MediaClock;
 
@@ -51,8 +50,14 @@ fn monotonic_now_ns() -> i64 {
     MediaClock::now().as_nanos() as i64
 }
 
-/// A capture stream through the chain's probe, or `None` when this machine has
-/// no PipeWire session and the chain therefore demoted.
+/// Blocks from a real device through the chain's probe, or `None` when the
+/// chain demoted past the PipeWire arm.
+///
+/// `None` rather than a panic, so the tier stays well-behaved when the feature
+/// is on but the runner has no audio session — the same shape
+/// `try_vulkan_device()` gives the GPU tier (`docs/testing-hardware.md`). A
+/// machine with no audio is a supported environment; it just cannot answer the
+/// question these tests ask.
 fn observe_blocks_from_a_real_device() -> Option<(AudioCaptureStreamFormat, Vec<ObservedBlock>)> {
     let backend = probe_audio_device_backend();
     if backend.backend_name() != "pipewire" {
@@ -94,6 +99,13 @@ fn observe_blocks_from_a_real_device() -> Option<(AudioCaptureStreamFormat, Vec<
     Some((capture_stream_format, observed))
 }
 
+/// Nanoseconds one block of `sample_count` samples occupies at the stream's
+/// rate — the gap consecutive blocks are expected to be, and the distance a
+/// block's stamp sits before the callback that carried it.
+fn block_duration_ns(capture_stream_format: AudioCaptureStreamFormat, sample_count: u32) -> i64 {
+    i64::from(sample_count) * 1_000_000_000 / i64::from(capture_stream_format.sample_rate)
+}
+
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
@@ -101,10 +113,7 @@ fn observe_blocks_from_a_real_device() -> Option<(AudioCaptureStreamFormat, Vec<
 )]
 fn a_real_device_stamps_its_blocks_before_the_callback_that_carries_them() {
     let Some((capture_stream_format, observed)) = observe_blocks_from_a_real_device() else {
-        panic!(
-            "the audio backend chain did not land on the PipeWire arm, so there is no \
-             device to hold to its own timing on this machine"
-        );
+        return;
     };
 
     assert!(
@@ -113,8 +122,7 @@ fn a_real_device_stamps_its_blocks_before_the_callback_that_carries_them() {
     );
 
     for block in &observed {
-        let block_duration_ns = i64::from(block.sample_count) * 1_000_000_000
-            / i64::from(capture_stream_format.sample_rate);
+        let block_duration_ns = block_duration_ns(capture_stream_format, block.sample_count);
         let stamped_before_delivery_by = block.handed_off_at_ns - block.first_sample_timestamp_ns;
 
         // The assertion a `MediaClock::now()`-at-delivery stamp cannot pass:
@@ -137,18 +145,14 @@ fn a_real_device_stamps_its_blocks_before_the_callback_that_carries_them() {
 )]
 fn a_real_devices_blocks_advance_by_one_block_with_no_gap_across_a_run() {
     let Some((capture_stream_format, observed)) = observe_blocks_from_a_real_device() else {
-        panic!(
-            "the audio backend chain did not land on the PipeWire arm, so there is no \
-             device cadence to measure on this machine"
-        );
+        return;
     };
 
     for pair in observed.windows(2) {
         let [earlier, later] = pair else {
             unreachable!("windows(2) yields pairs");
         };
-        let expected_gap_ns = i64::from(earlier.sample_count) * 1_000_000_000
-            / i64::from(capture_stream_format.sample_rate);
+        let expected_gap_ns = block_duration_ns(capture_stream_format, earlier.sample_count);
         let actual_gap_ns = later.first_sample_timestamp_ns - earlier.first_sample_timestamp_ns;
         assert!(
             (actual_gap_ns - expected_gap_ns).abs() <= CADENCE_TOLERANCE_NS,
@@ -167,7 +171,7 @@ fn a_real_devices_blocks_advance_by_one_block_with_no_gap_across_a_run() {
 fn a_real_devices_stamps_land_in_the_kernel_monotonic_domain() {
     let before_ns = monotonic_now_ns();
     let Some((_, observed)) = observe_blocks_from_a_real_device() else {
-        panic!("the audio backend chain did not land on the PipeWire arm on this machine");
+        return;
     };
     let after_ns = monotonic_now_ns();
 

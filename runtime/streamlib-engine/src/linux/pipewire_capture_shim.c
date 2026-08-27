@@ -3,8 +3,8 @@
 
 #include "pipewire_capture_shim.h"
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <pipewire/keys.h>
@@ -41,8 +41,10 @@ static const char *const kEntryPointNames[] = {
 
 // Rust writes the table as a flat array of `dlsym` results and never names a
 // field, so "one pointer per name, in order" is the whole contract between the
-// two halves. If a future entry point were ever not a plain function pointer
-// this would stop compiling, which is the point.
+// two halves — and `copy_entry_points` memcpy's `sizeof(struct)` bytes out of
+// that array. This is what pins the two to the same length: padding, or a
+// compiler that sized a member differently, would make that read run past the
+// end of what Rust allocated.
 _Static_assert(sizeof(struct StreamLibPipeWireEntryPoints) ==
                    sizeof(kEntryPointNames) / sizeof(kEntryPointNames[0]) * sizeof(void (*)(void)),
                "the entry-point struct must be exactly one function pointer per resolved name");
@@ -75,8 +77,11 @@ struct StreamLibPipeWireCaptureStream {
     bool stream_failed;
     char stream_failure_text[256];
 
-    /// NULL until a caller starts delivering. Read and written only under the
-    /// thread loop's lock, which the process callback already holds.
+    /// NULL until a caller starts delivering.
+    ///
+    /// Read and written only with the thread loop's lock held. That holds for
+    /// the reader because this stream deliberately does not set
+    /// `PW_STREAM_FLAG_RT_PROCESS` — see `connect_capture_stream`.
     StreamLibPipeWireCapturedBlockHandOff hand_off;
     void *hand_off_context;
 };
@@ -94,9 +99,24 @@ static void copy_entry_points(struct StreamLibPipeWireEntryPoints *into,
     memcpy(into, entry_points, sizeof(*into));
 }
 
-static uint32_t bytes_per_scalar_of(uint32_t sample_format)
+/// Bytes one scalar of a wire dtype occupies.
+///
+/// Refuses anything that is not one of the two declared encodings rather than
+/// defaulting to a width, because this multiplies into the frame stride that
+/// slices the delivered buffer: a guessed width reads the wrong bytes instead
+/// of failing.
+static bool bytes_per_scalar_of(uint32_t sample_format, uint32_t *bytes_per_scalar_out)
 {
-    return sample_format == STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE ? 2 : 4;
+    switch (sample_format) {
+    case STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_F32_LE:
+        *bytes_per_scalar_out = 4;
+        return true;
+    case STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE:
+        *bytes_per_scalar_out = 2;
+        return true;
+    default:
+        return false;
+    }
 }
 
 /// SPA's encoding for the scalars, mapped onto the wire's two legal dtypes.
@@ -126,6 +146,19 @@ static int64_t nanoseconds_occupied_by(uint64_t sample_count, uint32_t sample_ra
     return (int64_t)((sample_count * UINT64_C(1000000000)) / (uint64_t)sample_rate);
 }
 
+struct StreamLibPipeWireChunkExtent streamlib_pipewire_clamped_chunk_extent(uint32_t chunk_offset,
+                                                                           uint32_t chunk_size,
+                                                                           uint32_t data_maxsize)
+{
+    struct StreamLibPipeWireChunkExtent extent = {0, 0};
+    if (data_maxsize == 0)
+        return extent;
+    extent.offset = chunk_offset % data_maxsize;
+    uint32_t bytes_after_the_offset = data_maxsize - extent.offset;
+    extent.byte_count = chunk_size < bytes_after_the_offset ? chunk_size : bytes_after_the_offset;
+    return extent;
+}
+
 int64_t streamlib_pipewire_first_sample_timestamp_ns(int64_t cycle_timestamp_ns,
                                                      int64_t delay_in_rate_units,
                                                      uint32_t rate_numerator,
@@ -134,8 +167,8 @@ int64_t streamlib_pipewire_first_sample_timestamp_ns(int64_t cycle_timestamp_ns,
 {
     int64_t delay_ns = 0;
     if (rate_denominator != 0) {
-        delay_ns = (int64_t)((double)delay_in_rate_units * 1e9 * (double)rate_numerator /
-                             (double)rate_denominator);
+        delay_ns = delay_in_rate_units * (int64_t)rate_numerator * INT64_C(1000000000) /
+                   (int64_t)rate_denominator;
     }
     return cycle_timestamp_ns - delay_ns - nanoseconds_occupied_by(sample_count, sample_rate);
 }
@@ -148,6 +181,16 @@ static int64_t first_sample_timestamp_of(const struct pw_time *time, uint32_t sa
                                                         sample_rate);
 }
 
+/// End the stream with a reason, and wake whoever is waiting on negotiation.
+static void fail_the_stream(struct StreamLibPipeWireCaptureStream *capture_stream,
+                            const char *reason)
+{
+    capture_stream->stream_failed = true;
+    snprintf(capture_stream->stream_failure_text, sizeof(capture_stream->stream_failure_text), "%s",
+             reason);
+    capture_stream->entry_points.pw_thread_loop_signal(capture_stream->thread_loop, false);
+}
+
 static void on_stream_state_changed(void *data, enum pw_stream_state old_state,
                                     enum pw_stream_state state, const char *error)
 {
@@ -155,16 +198,15 @@ static void on_stream_state_changed(void *data, enum pw_stream_state old_state,
     (void)old_state;
     if (state != PW_STREAM_STATE_ERROR)
         return;
-    capture_stream->stream_failed = true;
-    snprintf(capture_stream->stream_failure_text, sizeof(capture_stream->stream_failure_text),
-             "%s", error != NULL ? error : "the stream entered its error state");
-    capture_stream->entry_points.pw_thread_loop_signal(capture_stream->thread_loop, false);
+    fail_the_stream(capture_stream, error != NULL ? error : "the stream entered its error state");
 }
 
 static void on_stream_param_changed(void *data, uint32_t id, const struct spa_pod *param)
 {
     struct StreamLibPipeWireCaptureStream *capture_stream = data;
     struct spa_audio_info audio_info;
+    char reason[sizeof(capture_stream->stream_failure_text)];
+    uint32_t sample_format = 0;
 
     if (param == NULL || id != SPA_PARAM_Format)
         return;
@@ -178,28 +220,84 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
     if (spa_format_audio_raw_parse(param, &audio_info.info.raw) < 0)
         return;
 
-    uint32_t sample_format = 0;
     if (!wire_sample_format_of(audio_info.info.raw.format, &sample_format)) {
-        capture_stream->stream_failed = true;
-        snprintf(capture_stream->stream_failure_text,
-                 sizeof(capture_stream->stream_failure_text),
+        snprintf(reason, sizeof(reason),
                  "PipeWire negotiated SPA audio format %u, which is not one of the two "
                  "little-endian encodings an AudioBlock can carry",
                  audio_info.info.raw.format);
-    } else if (audio_info.info.raw.rate == 0 || audio_info.info.raw.channels == 0) {
-        capture_stream->stream_failed = true;
-        snprintf(capture_stream->stream_failure_text,
-                 sizeof(capture_stream->stream_failure_text),
+        fail_the_stream(capture_stream, reason);
+        return;
+    }
+    if (audio_info.info.raw.rate == 0 || audio_info.info.raw.channels == 0) {
+        snprintf(reason, sizeof(reason),
                  "PipeWire negotiated %u Hz and %u channels, and no block duration derives "
                  "from either being zero",
                  audio_info.info.raw.rate, audio_info.info.raw.channels);
-    } else {
-        capture_stream->negotiated_format.sample_rate = audio_info.info.raw.rate;
-        capture_stream->negotiated_format.channels = audio_info.info.raw.channels;
-        capture_stream->negotiated_format.sample_format = sample_format;
-        capture_stream->format_was_negotiated = true;
+        fail_the_stream(capture_stream, reason);
+        return;
     }
+
+    // A renegotiation after `open` returned would leave the caller framing
+    // blocks by a rate and channel count nothing told it about — mis-sized
+    // samples and mis-timed stamps rather than a failure. The seam states the
+    // format is fixed for the stream's lifetime, so a change ends the stream
+    // instead of quietly moving underneath it.
+    if (capture_stream->format_was_negotiated) {
+        if (capture_stream->negotiated_format.sample_rate != audio_info.info.raw.rate ||
+            capture_stream->negotiated_format.channels != audio_info.info.raw.channels ||
+            capture_stream->negotiated_format.sample_format != sample_format) {
+            snprintf(reason, sizeof(reason),
+                     "PipeWire renegotiated this capture stream from %u Hz / %u channels / "
+                     "dtype %u to %u Hz / %u channels / dtype %u, and a stream's format is "
+                     "fixed for its lifetime",
+                     capture_stream->negotiated_format.sample_rate,
+                     capture_stream->negotiated_format.channels,
+                     capture_stream->negotiated_format.sample_format, audio_info.info.raw.rate,
+                     audio_info.info.raw.channels, sample_format);
+            fail_the_stream(capture_stream, reason);
+        }
+        return;
+    }
+
+    capture_stream->negotiated_format.sample_rate = audio_info.info.raw.rate;
+    capture_stream->negotiated_format.channels = audio_info.info.raw.channels;
+    capture_stream->negotiated_format.sample_format = sample_format;
+    capture_stream->format_was_negotiated = true;
     capture_stream->entry_points.pw_thread_loop_signal(capture_stream->thread_loop, false);
+}
+
+/// One dequeued buffer's payload, resolved against its own mapping.
+struct CapturedBufferPayload {
+    struct pw_buffer *buffer;
+    const uint8_t *samples;
+    size_t sample_byte_count;
+    uint32_t sample_count;
+};
+
+/// Whatever `datas[0]` of a dequeued buffer actually maps, with the daemon's
+/// chunk geometry clamped to it and any partial trailing frame dropped.
+static struct CapturedBufferPayload payload_of(struct pw_buffer *buffer, uint32_t bytes_per_frame)
+{
+    struct CapturedBufferPayload payload = {buffer, NULL, 0, 0};
+    struct spa_data *data_plane = &buffer->buffer->datas[0];
+
+    if (data_plane->data == NULL || data_plane->chunk == NULL ||
+        SPA_FLAG_IS_SET(data_plane->chunk->flags, SPA_CHUNK_FLAG_CORRUPTED))
+        return payload;
+
+    // The daemon supplies the offset and the size, and `spa_chunk` states that
+    // the first is taken modulo `maxsize` and the second clamped to it. Neither
+    // is taken at face value here: this pair becomes a Rust slice, so an
+    // out-of-range chunk would be a read past the end of the mapping rather
+    // than a bad sample value.
+    struct StreamLibPipeWireChunkExtent extent = streamlib_pipewire_clamped_chunk_extent(
+        data_plane->chunk->offset, data_plane->chunk->size, data_plane->maxsize);
+    payload.samples = (const uint8_t *)data_plane->data + extent.offset;
+    // A partial trailing frame cannot be described by a per-channel sample
+    // count, so what is handed off is the whole frames only.
+    payload.sample_count = extent.byte_count / bytes_per_frame;
+    payload.sample_byte_count = (size_t)payload.sample_count * bytes_per_frame;
+    return payload;
 }
 
 static void on_stream_process(void *data)
@@ -208,51 +306,53 @@ static void on_stream_process(void *data)
     const struct StreamLibPipeWireEntryPoints *entry_points = &capture_stream->entry_points;
     const struct StreamLibPipeWireNegotiatedCaptureFormat *format =
         &capture_stream->negotiated_format;
-    struct pw_time time;
-    bool time_was_read = false;
-    // A capture cycle normally yields exactly one buffer. When it yields more,
-    // each one after the first continues from where the previous ended rather
-    // than re-reading the cycle's single `now` — otherwise N blocks would claim
-    // one instant, which is the same mistake a timerfd catch-up burst invites.
-    int64_t next_timestamp_ns = 0;
-    bool next_timestamp_is_known = false;
-    uint32_t bytes_per_frame = bytes_per_scalar_of(format->sample_format) * format->channels;
-
+    // A capture cycle normally yields exactly one buffer, and this array is
+    // sized well past that so the ordinary case never takes a second pass.
+    struct CapturedBufferPayload payloads[STREAMLIB_PIPEWIRE_MAX_BUFFERS_PER_CYCLE];
+    uint32_t payload_count = 0;
+    uint64_t samples_in_this_cycle = 0;
+    uint32_t bytes_per_scalar = 0;
     struct pw_buffer *buffer;
-    while ((buffer = entry_points->pw_stream_dequeue_buffer(capture_stream->stream)) != NULL) {
-        struct spa_data *data_plane = &buffer->buffer->datas[0];
-        uint32_t sample_count = 0;
-        const uint8_t *samples = NULL;
-        size_t sample_byte_count = 0;
 
-        if (data_plane->data != NULL && data_plane->chunk != NULL && bytes_per_frame != 0 &&
-            !SPA_FLAG_IS_SET(data_plane->chunk->flags, SPA_CHUNK_FLAG_CORRUPTED)) {
-            sample_byte_count = data_plane->chunk->size;
-            samples = (const uint8_t *)data_plane->data + data_plane->chunk->offset;
-            sample_count = (uint32_t)(sample_byte_count / bytes_per_frame);
-            // A partial trailing frame cannot be described by a per-channel
-            // sample count, so what is handed off is the whole frames only.
-            sample_byte_count = (size_t)sample_count * bytes_per_frame;
-        }
+    // Zero until the format settles, and a stride of zero divides nothing.
+    if (!bytes_per_scalar_of(format->sample_format, &bytes_per_scalar))
+        return;
+    uint32_t bytes_per_frame = bytes_per_scalar * format->channels;
+    if (bytes_per_frame == 0)
+        return;
 
-        if (sample_count > 0 && capture_stream->hand_off != NULL) {
-            if (!time_was_read) {
-                memset(&time, 0, sizeof(time));
-                entry_points->pw_stream_get_time_n(capture_stream->stream, &time, sizeof(time));
-                time_was_read = true;
-            }
-            if (!next_timestamp_is_known) {
-                next_timestamp_ns =
-                    first_sample_timestamp_of(&time, sample_count, format->sample_rate);
-                next_timestamp_is_known = true;
-            }
-            capture_stream->hand_off(capture_stream->hand_off_context, samples, sample_byte_count,
-                                     sample_count, next_timestamp_ns);
-            next_timestamp_ns += nanoseconds_occupied_by(sample_count, format->sample_rate);
-        }
-
-        entry_points->pw_stream_queue_buffer(capture_stream->stream, buffer);
+    // Dequeued before any is handed off, because every buffer a cycle delivers
+    // ends at the same instant — `now - delay` — so the first one's timestamp
+    // is only knowable once the whole cycle's sample count is. Stamping
+    // forwards from the first block instead would put every later block in the
+    // future relative to the moment its samples were actually captured.
+    while (payload_count < STREAMLIB_PIPEWIRE_MAX_BUFFERS_PER_CYCLE &&
+           (buffer = entry_points->pw_stream_dequeue_buffer(capture_stream->stream)) != NULL) {
+        payloads[payload_count] = payload_of(buffer, bytes_per_frame);
+        samples_in_this_cycle += payloads[payload_count].sample_count;
+        payload_count++;
     }
+
+    if (payload_count > 0 && capture_stream->hand_off != NULL && samples_in_this_cycle > 0) {
+        struct pw_time time;
+        memset(&time, 0, sizeof(time));
+        entry_points->pw_stream_get_time_n(capture_stream->stream, &time, sizeof(time));
+
+        int64_t next_timestamp_ns = first_sample_timestamp_of(
+            &time, (uint32_t)samples_in_this_cycle, format->sample_rate);
+        for (uint32_t index = 0; index < payload_count; index++) {
+            if (payloads[index].sample_count == 0)
+                continue;
+            capture_stream->hand_off(capture_stream->hand_off_context, payloads[index].samples,
+                                     payloads[index].sample_byte_count,
+                                     payloads[index].sample_count, next_timestamp_ns);
+            next_timestamp_ns +=
+                nanoseconds_occupied_by(payloads[index].sample_count, format->sample_rate);
+        }
+    }
+
+    for (uint32_t index = 0; index < payload_count; index++)
+        entry_points->pw_stream_queue_buffer(capture_stream->stream, payloads[index].buffer);
 }
 
 // Version 0 rather than `PW_VERSION_STREAM_EVENTS`: it covers every callback
@@ -334,8 +434,13 @@ int streamlib_pipewire_daemon_answers(const void *const *entry_points, char *fai
     return verdict;
 }
 
-/// Free everything the stream holds. The thread loop must already be stopped
-/// or unlocked by the caller — every path here is off the loop thread.
+/// Free everything the stream holds. The caller must not hold the thread loop's
+/// lock — this takes it, and stopping the loop joins its thread.
+///
+/// The one teardown, reached by every failure path in
+/// `streamlib_pipewire_capture_stream_open` as well as by close: a hand-rolled
+/// subset at one exit is how that exit ends up skipping a step the others take.
+/// Tolerates a NULL stream and a loop that was never started.
 static void destroy_capture_stream(struct StreamLibPipeWireCaptureStream *capture_stream)
 {
     if (capture_stream->stream != NULL) {
@@ -356,9 +461,16 @@ static void destroy_capture_stream(struct StreamLibPipeWireCaptureStream *captur
 /// The properties a capture stream announces itself with. `PW_KEY_TARGET_OBJECT`
 /// is only set when a caller named a device: absent, the session routes the
 /// stream to its own default source.
-static uint32_t capture_stream_properties(struct spa_dict_item *items, const char *device_id_or_null)
+///
+/// Takes the array's capacity rather than trusting the caller to have sized it,
+/// because a fifth property added here would otherwise overwrite the caller's
+/// stack silently.
+static uint32_t capture_stream_properties(struct spa_dict_item *items, uint32_t item_capacity,
+                                          const char *device_id_or_null)
 {
     uint32_t count = 0;
+    if (item_capacity < STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES)
+        return 0;
     items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_TYPE, "Audio");
     items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_CATEGORY, "Capture");
     items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_ROLE, "Production");
@@ -367,11 +479,57 @@ static uint32_t capture_stream_properties(struct spa_dict_item *items, const cha
     return count;
 }
 
+/// Connect the stream for capture.
+///
+/// `PW_STREAM_FLAG_RT_PROCESS` is deliberately absent. With it, `process` runs
+/// on PipeWire's realtime data thread, which does not hold the thread loop's
+/// lock — and that lock is the whole of this shim's synchronisation: it is what
+/// makes installing and retiring a hand-off safe against a callback that is
+/// already running. Without the flag, libpipewire dispatches `process` onto the
+/// loop thread, where "all events and callbacks are called with the thread lock
+/// held" is libpipewire's own guarantee. The cost is one loop hop; what it buys
+/// is that the seam's hand-off contract stays "must not block" rather than
+/// becoming "must be realtime-safe", which no caller that copies its samples
+/// out of the borrowed buffer could satisfy.
+///
+/// `PW_STREAM_FLAG_DONT_RECONNECT` is what makes a named device authoritative.
+/// `PW_STREAM_FLAG_AUTOCONNECT` alone asks the session manager to route the
+/// stream, and a target it cannot resolve is not an error to it — it links the
+/// session default instead. Capturing a different device than the one the
+/// caller named is worse than failing, so a named target that does not resolve
+/// has to end the stream. Nothing is set when no device was named: there the
+/// session default is exactly what was asked for.
+static int connect_capture_stream(struct StreamLibPipeWireCaptureStream *capture_stream,
+                                  const char *device_id_or_null, const struct spa_pod **params,
+                                  uint32_t param_count)
+{
+    enum pw_stream_flags flags = PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS;
+    if (device_id_or_null != NULL)
+        flags |= PW_STREAM_FLAG_DONT_RECONNECT;
+    return capture_stream->entry_points.pw_stream_connect(
+        capture_stream->stream, PW_DIRECTION_INPUT, PW_ID_ANY, flags, params, param_count);
+}
+
 struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
     const void *const *entry_points, const char *device_id_or_null,
     struct StreamLibPipeWireNegotiatedCaptureFormat *negotiated_format_out, char *failure_text,
     size_t failure_text_capacity)
 {
+    uint8_t pod_storage[STREAMLIB_PIPEWIRE_POD_BUILDER_CAPACITY];
+    struct spa_pod_builder pod_builder = SPA_POD_BUILDER_INIT(pod_storage, sizeof(pod_storage));
+    struct spa_audio_info_raw requested_format = {
+        .format = STREAMLIB_PIPEWIRE_REQUESTED_SAMPLE_FORMAT,
+    };
+    struct spa_dict_item property_items[STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES];
+    const struct spa_pod *params[1];
+    const struct StreamLibPipeWireEntryPoints *resolved;
+    struct pw_properties *stream_properties;
+    struct spa_dict properties;
+    bool thread_loop_is_locked = false;
+    const char *failure_reason;
+    char connect_failure_reason[128];
+    int connect_result;
+
     struct StreamLibPipeWireCaptureStream *capture_stream = calloc(1, sizeof(*capture_stream));
     if (capture_stream == NULL) {
         copy_failure_text(failure_text, failure_text_capacity,
@@ -379,65 +537,45 @@ struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
         return NULL;
     }
     copy_entry_points(&capture_stream->entry_points, entry_points);
-    const struct StreamLibPipeWireEntryPoints *resolved = &capture_stream->entry_points;
+    resolved = &capture_stream->entry_points;
 
     capture_stream->thread_loop = resolved->pw_thread_loop_new("streamlib-audio-capture", NULL);
     if (capture_stream->thread_loop == NULL) {
-        copy_failure_text(failure_text, failure_text_capacity,
-                          "PipeWire would not create a capture thread loop");
-        free(capture_stream);
-        return NULL;
+        failure_reason = "PipeWire would not create a capture thread loop";
+        goto fail;
     }
 
-    uint8_t pod_storage[STREAMLIB_PIPEWIRE_POD_BUILDER_CAPACITY];
-    struct spa_pod_builder pod_builder =
-        SPA_POD_BUILDER_INIT(pod_storage, sizeof(pod_storage));
-    struct spa_audio_info_raw requested_format = {
-        .format = STREAMLIB_PIPEWIRE_REQUESTED_SAMPLE_FORMAT,
-    };
-    const struct spa_pod *params[1];
     params[0] = spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &requested_format);
-
-    struct spa_dict_item property_items[4];
-    uint32_t property_count = capture_stream_properties(property_items, device_id_or_null);
-    struct spa_dict properties = SPA_DICT_INIT(property_items, property_count);
+    properties = (struct spa_dict)SPA_DICT_INIT(
+        property_items, capture_stream_properties(property_items,
+                                                  STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES,
+                                                  device_id_or_null));
 
     resolved->pw_thread_loop_lock(capture_stream->thread_loop);
+    thread_loop_is_locked = true;
+
     if (resolved->pw_thread_loop_start(capture_stream->thread_loop) < 0) {
-        resolved->pw_thread_loop_unlock(capture_stream->thread_loop);
-        copy_failure_text(failure_text, failure_text_capacity,
-                          "PipeWire's capture thread loop would not start");
-        resolved->pw_thread_loop_destroy(capture_stream->thread_loop);
-        free(capture_stream);
-        return NULL;
+        failure_reason = "PipeWire's capture thread loop would not start";
+        goto fail;
     }
 
     // `pw_stream_new_simple` takes ownership of the properties, including when
     // it fails, so there is no path here that has to free them.
-    struct pw_properties *stream_properties = resolved->pw_properties_new_dict(&properties);
+    stream_properties = resolved->pw_properties_new_dict(&properties);
     capture_stream->stream = resolved->pw_stream_new_simple(
         resolved->pw_thread_loop_get_loop(capture_stream->thread_loop), "streamlib-capture",
         stream_properties, &kCaptureStreamEvents, capture_stream);
     if (capture_stream->stream == NULL) {
-        resolved->pw_thread_loop_unlock(capture_stream->thread_loop);
-        copy_failure_text(failure_text, failure_text_capacity,
-                          "PipeWire would not create a capture stream");
-        destroy_capture_stream(capture_stream);
-        return NULL;
+        failure_reason = "PipeWire would not create a capture stream";
+        goto fail;
     }
 
-    int connect_result = resolved->pw_stream_connect(
-        capture_stream->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
-        PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
-        params, 1);
+    connect_result = connect_capture_stream(capture_stream, device_id_or_null, params, 1);
     if (connect_result < 0) {
-        resolved->pw_thread_loop_unlock(capture_stream->thread_loop);
-        char text[192];
-        snprintf(text, sizeof(text), "PipeWire refused the capture connection (%d)",
-                 connect_result);
-        copy_failure_text(failure_text, failure_text_capacity, text);
-        destroy_capture_stream(capture_stream);
-        return NULL;
+        snprintf(connect_failure_reason, sizeof(connect_failure_reason),
+                 "PipeWire refused the capture connection (%d)", connect_result);
+        failure_reason = connect_failure_reason;
+        goto fail;
     }
 
     // Negotiation is what makes the stream's format knowable, and a caller
@@ -447,34 +585,46 @@ struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
         if (resolved->pw_thread_loop_timed_wait(capture_stream->thread_loop,
                                                 STREAMLIB_PIPEWIRE_NEGOTIATION_TIMEOUT_SECONDS) !=
             0) {
-            capture_stream->stream_failed = true;
             snprintf(capture_stream->stream_failure_text,
                      sizeof(capture_stream->stream_failure_text),
-                     "PipeWire settled no capture format within %d seconds",
-                     STREAMLIB_PIPEWIRE_NEGOTIATION_TIMEOUT_SECONDS);
+                     "PipeWire settled no capture format within %d seconds%s",
+                     STREAMLIB_PIPEWIRE_NEGOTIATION_TIMEOUT_SECONDS,
+                     device_id_or_null != NULL
+                         ? ", which is what a device id naming no node in the session graph "
+                           "looks like"
+                         : "");
+            capture_stream->stream_failed = true;
         }
     }
-    resolved->pw_thread_loop_unlock(capture_stream->thread_loop);
-
     if (capture_stream->stream_failed) {
-        copy_failure_text(failure_text, failure_text_capacity,
-                          capture_stream->stream_failure_text);
-        destroy_capture_stream(capture_stream);
-        return NULL;
+        failure_reason = capture_stream->stream_failure_text;
+        goto fail;
     }
+
+    resolved->pw_thread_loop_unlock(capture_stream->thread_loop);
 
     if (negotiated_format_out != NULL)
         *negotiated_format_out = capture_stream->negotiated_format;
     return capture_stream;
+
+fail:
+    // Copied before the teardown, because the reason may live in the struct the
+    // teardown is about to free.
+    copy_failure_text(failure_text, failure_text_capacity, failure_reason);
+    if (thread_loop_is_locked)
+        resolved->pw_thread_loop_unlock(capture_stream->thread_loop);
+    destroy_capture_stream(capture_stream);
+    return NULL;
 }
 
 void streamlib_pipewire_capture_stream_start_delivering(
     struct StreamLibPipeWireCaptureStream *capture_stream,
     StreamLibPipeWireCapturedBlockHandOff hand_off, void *hand_off_context)
 {
-    // Under the loop lock because the process callback reads both fields, and
-    // a hand-off paired with the previous caller's context is a use-after-free
-    // rather than a lost block.
+    // Under the loop lock because `process` reads both fields holding that same
+    // lock, so the pair is swapped atomically with respect to it — a hand-off
+    // paired with the previous caller's context is a use-after-free rather than
+    // a lost block.
     capture_stream->entry_points.pw_thread_loop_lock(capture_stream->thread_loop);
     capture_stream->hand_off_context = hand_off_context;
     capture_stream->hand_off = hand_off;
@@ -484,9 +634,11 @@ void streamlib_pipewire_capture_stream_start_delivering(
 void streamlib_pipewire_capture_stream_stop_delivering(
     struct StreamLibPipeWireCaptureStream *capture_stream)
 {
-    // Taking the lock is what makes "the hand-off is not called again once
-    // this returns" true: an in-flight callback holds it, so this blocks until
-    // that callback has finished.
+    // Taking the lock is what makes "the hand-off is not called again once this
+    // returns" true: `process` runs on the loop thread holding this same lock,
+    // so an in-flight callback owns it and this blocks until that callback has
+    // finished. It is why `PW_STREAM_FLAG_RT_PROCESS` is not set — see
+    // `connect_capture_stream`.
     capture_stream->entry_points.pw_thread_loop_lock(capture_stream->thread_loop);
     capture_stream->hand_off = NULL;
     capture_stream->hand_off_context = NULL;
