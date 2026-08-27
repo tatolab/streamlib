@@ -214,6 +214,12 @@ required-features = []
 [build-dependencies]
 serde_json = { workspace = true }
 
+# Compiles `src/linux/pipewire_capture_shim.c`. SPA's pod builders and parsers
+# are header-only inline C, so the PipeWire audio arm needs a C toolchain step
+# even though it links no audio library — the same shape
+# `vendor/tatolab-vulkanalia-vma` uses for VMA.
+cc = "1.2"
+
 # Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
 tonic-build = "0.12"

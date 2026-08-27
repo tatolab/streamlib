@@ -4,6 +4,7 @@
 //! Linux-specific implementations.
 
 pub mod audio_clock;
+pub mod pipewire_audio_device_backend;
 pub mod rtkit;
 pub mod surface_share;
 pub mod thread_priority;
