@@ -9,6 +9,9 @@ payloads are transport-framed and `streamlib.AudioBlock` is what says whether a
 decoded block is well formed.
 """
 
+import contextlib
+import io
+import json
 import struct
 import tempfile
 import unittest
@@ -66,6 +69,7 @@ class TappedAudioChannel(unittest.TestCase):
         bags = self.tapped_bags(count=4)
         del bags[2]
         report = self.report_for_bags(bags)
+        self.assertEqual(report["verdict"], "FAIL", report)
         self.assertEqual(
             report["failed"],
             ["block_continuity_error_ms", "cumulative_continuity_error_ms"],
@@ -295,17 +299,86 @@ class TappedAudioChannel(unittest.TestCase):
     def test_a_gap_is_left_as_silence_rather_than_closed_up(self):
         """Blocks are placed by their own timestamps, not concatenated. A gap
         that closes silently is a loss the measurement can no longer see, and
-        the waveform stops being what the device produced."""
-        bags = self.tapped_bags(count=5)
+        the waveform stops being what the device produced.
+
+        Each block carries its own level, because all-zero payloads cannot tell
+        placement apart from concatenation — the length is right either way.
+        """
+        bags = [_block_at_level((index + 1) / 10.0, index) for index in range(5)]
         del bags[2]
         waveform = tap_audio_channel.waveform_from(
             tap_audio_channel.audio_blocks_from_tapped_bags(bags)
         )
+
         self.assertEqual(
             len(waveform),
             5 * SAMPLE_COUNT,
             "the timeline the surviving blocks declare spans all five blocks",
         )
+        self.assertAlmostEqual(
+            float(waveform[2 * SAMPLE_COUNT + 10]),
+            0.0,
+            places=4,
+            msg="the block that never arrived leaves silence where it belonged",
+        )
+        self.assertAlmostEqual(
+            float(waveform[3 * SAMPLE_COUNT + 10]),
+            0.4,
+            places=4,
+            msg="the block after the gap sits at its own instant, not shifted early",
+        )
+
+    def test_a_block_overrunning_the_next_one_still_reassembles(self):
+        """The buffer is sized from the furthest-reaching block, not the last
+        one — otherwise a malformed stream crashes the reassembly instead of
+        being reported."""
+        bags = [
+            _block_at_level(0.5, 0, sample_count=SAMPLE_COUNT * 4),
+            _block_at_level(0.5, 1),
+        ]
+        waveform = tap_audio_channel.waveform_from(
+            tap_audio_channel.audio_blocks_from_tapped_bags(bags)
+        )
+        self.assertEqual(len(waveform), SAMPLE_COUNT * 4)
+
+    def test_blocks_that_overlap_in_time_are_reported(self):
+        """An overlap is as much a break in continuity as a gap: two blocks
+        cannot both have been captured at the same instant."""
+        bags = self.tapped_bags(count=4)
+        bags[3] = _framed_bag(
+            {
+                "samples": b"\x00" * (SAMPLE_COUNT * 4),
+                "sample_rate": SAMPLE_RATE,
+                "channels": 1,
+                "sample_count": SAMPLE_COUNT,
+                "dtype": "f32",
+                "first_sample_timestamp_ns": 1_000_000_000 + BLOCK_DURATION_NS,
+            }
+        )
+        report = self.report_for_bags(bags)
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertIn("block_continuity_error_ms", report["failed"])
+        self.assertLess(report["block_continuity_error_ms"], 0.0)
+
+    def test_the_command_exits_non_zero_and_prints_the_failures(self):
+        """The exit status is what `verify_audio_channel.sh` gates on, and the
+        JSON is what a reader acts on — neither is exercised by calling
+        `report_for` directly."""
+        bags = self.tapped_bags(count=6)
+        del bags[2]
+        tapped_json = Path(self.workspace.name) / "tapped.json"
+        tapped_json.write_text(json.dumps({"bags": bags, "dropped_bags": 0}))
+
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            exit_status = tap_audio_channel.main(
+                ["tap_audio_channel.py", str(tapped_json)]
+            )
+
+        self.assertEqual(exit_status, 1)
+        report = json.loads(printed.getvalue())
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertIn("block_continuity_error_ms", report["failed"])
 
     def test_the_published_samples_reassemble_into_a_measurable_waveform(self):
         """The point of the whole tool: what the processor published goes
@@ -371,6 +444,20 @@ class TappedAudioChannel(unittest.TestCase):
             )["verdict"],
             "FAIL",
         )
+
+
+def _block_at_level(level, index, sample_count=SAMPLE_COUNT):
+    """One block carrying a constant level, so placement is distinguishable."""
+    return _framed_bag(
+        {
+            "samples": numpy.full(sample_count, level, dtype="<f4").tobytes(),
+            "sample_rate": SAMPLE_RATE,
+            "channels": 1,
+            "sample_count": sample_count,
+            "dtype": "f32",
+            "first_sample_timestamp_ns": 1_000_000_000 + index * BLOCK_DURATION_NS,
+        }
+    )
 
 
 def _bags_carrying(signal, dtype="f32", channels=1):
