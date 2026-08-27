@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.10](https://github.com/tatolab/streamlib/compare/v0.18.9...v0.18.10) (2026-08-27)
+
+
+### Features
+
+* **engine:** the audio device seam and the null backend — MicrophoneSource publishes silence anywhere ([#1997](https://github.com/tatolab/streamlib/issues/1997)) ([a9b9ef8](https://github.com/tatolab/streamlib/commit/a9b9ef805cdf4890d6c4f1ac30a4a761f18fc34e))
+
 ## [0.18.9](https://github.com/tatolab/streamlib/compare/v0.18.8...v0.18.9) (2026-08-27)
 
 
