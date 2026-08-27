@@ -12,7 +12,13 @@ order, losing nothing.
 
 import pytest
 
-from single_processor_under_test import ConfiguredScaler, DoublingFilter
+import struct
+
+from single_processor_under_test import (
+    AudioBlockInspector,
+    ConfiguredScaler,
+    DoublingFilter,
+)
 from streamlib.testing import SingleProcessorTestPipeline
 
 pytestmark = [pytest.mark.requires_gpu]
@@ -77,3 +83,36 @@ def test_two_pipelines_at_once_are_refused_by_name():
         with pytest.raises(RuntimeError, match="one at a time"):
             with SingleProcessorTestPipeline(DoublingFilter):
                 pass
+
+
+def test_a_bag_carrying_bytes_crosses_both_process_boundaries():
+    """An audio block, out to a helper process and back.
+
+    The feeder is a native processor in the app process, so what publishes the
+    block is Rust; what reads it is a Python processor in its own child
+    interpreter, casting it with `into=AudioBlock`; and what comes back carries
+    a byte payload of its own, which is the collector's half of the same
+    contract. Every bag on this round trip is msgpack `bin`, which decoded
+    nowhere before this change.
+    """
+    payload = struct.pack("<4f", -1.0, -0.5, 0.0, 0.5)
+    with SingleProcessorTestPipeline(AudioBlockInspector) as pipeline:
+        pipeline.feed(
+            "audio_from_upstream",
+            {
+                "samples": payload,
+                "sample_rate": 48_000,
+                "channels": 2,
+                "sample_count": 2,
+                "dtype": "f32",
+                "first_sample_timestamp_ns": 123_456_789,
+            },
+        )
+        reading = pipeline.await_bag("readings_to_downstream")
+
+    assert reading["samples"] == payload
+    assert reading["shape"] == [2, 2]
+    assert reading["numpy_type"] == "<f4"
+    assert reading["loudest_sample"] == 1.0
+    assert reading["first_sample_timestamp_ns"] == 123_456_789
+    assert reading["samples_are_a_view_over_the_bag_bytes"]
