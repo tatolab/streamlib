@@ -28,6 +28,11 @@ pub use audio_device_backend::{
     AudioCaptureStreamRequest, AudioDeviceBackend, CapturedAudioBlockFromDevice,
     CapturedAudioBlockHandOff, SharedAudioDeviceBackend, probe_audio_device_backend,
 };
+// Exported rather than crate-private so a test about deviceless pacing can open
+// the arm it means. The chain's probe takes the first arm that opens, so a test
+// that went through it would exercise whatever audio server the machine running
+// it happens to have.
+pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
 #[cfg(target_os = "linux")]

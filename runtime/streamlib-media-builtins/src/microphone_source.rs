@@ -390,7 +390,8 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
     use streamlib::sdk::context::{
-        AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
+        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioTickCallback, AudioTickContext,
+        SharedAudioClock, SilentNullAudioDeviceBackend,
     };
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
@@ -465,7 +466,11 @@ mod tests {
         const BLOCKS_NOBODY_DRAINS: usize = 10;
 
         let clock = Arc::new(HandFiredTestAudioClock::new());
-        let mut capture_stream = probe_audio_device_backend()
+        // The null arm by name rather than through the chain's probe: what is
+        // under test is the ring at the device edge, and the probe would hand
+        // back whatever audio server the machine running this happens to have —
+        // a device that paces itself and ignores a hand-fired clock.
+        let mut capture_stream = SilentNullAudioDeviceBackend
             .open_capture_stream(&AudioCaptureStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(&clock) as SharedAudioClock,
