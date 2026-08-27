@@ -22,8 +22,6 @@ def main() -> None:
     device_id = os.environ.get("STREAMLIB_AUDIO_DEVICE_ID")
     config = {"device_id": device_id} if device_id else {}
     microphone = runtime.add(streamlib.MicrophoneSource, config=config)
-    # A channel's data service is created by connect(), so an unwired output
-    # port publishes into nothing and cannot be tapped.
     drain = runtime.add(AudioChannelDrain)
     runtime.connect(microphone.output("audio"), drain.input("audio_from_upstream"))
     runtime.host_control_plane(bind_port=int(os.environ.get("CONTROL_PORT", "9000")))

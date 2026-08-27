@@ -109,6 +109,13 @@ jobs:
       # extension module (the `extension-module` feature is off by default for
       # exactly this), which is why `python3-dev` is in the apt list above.
       # Without this step they run on developer machines only.
+      # The tap controls decode transport-framed bags through the wheel's own
+      # decoder, so unlike the loopback fixture's analysis half they cannot ride
+      # the no-build job — they need the wheel this job just installed.
+      - name: Audio channel tap controls
+        working-directory: runtime/streamlib-engine/tests/fixtures
+        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_tap_audio_channel
+
       - name: Wheel crate unit tests
         run: cargo test --locked -p streamlib-python-wheel --lib
 
@@ -204,4 +211,4 @@ jobs:
       # rig where nobody would see them go stale.
       - name: Audio loopback fixture negative controls
         working-directory: runtime/streamlib-engine/tests/fixtures
-        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_known_audio_signal test_tap_audio_channel
+        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_known_audio_signal

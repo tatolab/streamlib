@@ -11,6 +11,11 @@
 #
 # Usage:
 #   ./verify_audio_channel.sh <processor-display-name> [--url URL] [--count N]
+#                             [--expect-device-stamped]
+#
+# `--expect-device-stamped` requires the transport frame to carry the device's
+# own instant of capture, which a capture built-in publishes and other
+# producers do not — so it is asked for rather than assumed.
 #
 # Assumes a node is already running and hosting its control plane. Exit status
 # is the verdict; stdout is the report JSON, progress is on stderr.
@@ -23,10 +28,12 @@ PROCESSOR="${1:?usage: verify_audio_channel.sh <processor-display-name> [--url U
 shift
 CONTROL_URL="http://127.0.0.1:9000"
 BAG_COUNT=8
+EXPECT_DEVICE_STAMPED=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --url) CONTROL_URL="$2"; shift 2 ;;
         --count) BAG_COUNT="$2"; shift 2 ;;
+        --expect-device-stamped) EXPECT_DEVICE_STAMPED="--expect-device-stamped"; shift ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -64,8 +71,10 @@ if ! "$PYTHON" -m streamlib.cli tap "$CHANNEL" --count "$BAG_COUNT" \
     exit 1
 fi
 
+# shellcheck disable=SC2086  # deliberately unquoted: empty means "not asked for"
 "$PYTHON" "$HERE/tap_audio_channel.py" "$OUTPUT_DIR/tapped.json" \
-    --waveform "$OUTPUT_DIR/published.wav" | tee "$OUTPUT_DIR/report.json"
+    --waveform "$OUTPUT_DIR/published.wav" $EXPECT_DEVICE_STAMPED \
+    | tee "$OUTPUT_DIR/report.json"
 VERDICT=${PIPESTATUS[0]}
 
 echo "artifacts: $OUTPUT_DIR" >&2
