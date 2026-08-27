@@ -195,3 +195,13 @@ jobs:
       - name: Simple-index generator tests
         working-directory: scripts
         run: python3 -m unittest test_build_simple_index
+
+      # The audio loopback fixture's analysis half. numpy-only, so it rides
+      # this job for the same reason — it needs neither the wheel nor a built
+      # engine. The loopback itself needs a PipeWire session and stays
+      # rig-tier, but a fixture that cannot go red is worth nothing, so the
+      # negative controls that prove it can are gated here rather than on the
+      # rig where nobody would see them go stale.
+      - name: Audio loopback fixture negative controls
+        working-directory: runtime/streamlib-engine/tests/fixtures
+        run: $GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python -m unittest test_known_audio_signal
