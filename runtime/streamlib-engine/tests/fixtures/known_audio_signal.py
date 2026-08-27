@@ -16,8 +16,17 @@ onset and the next, and it moves by precisely the audio that went missing —
 which both detects the loss and says where in the signal it happened.
 
 What is guarded is the tone body and each symbol body — roughly five sixths of
-the signal. The gaps between symbols are silent by construction, so an underrun
-inside one substitutes silence for silence and no measurement can see it.
+the signal — for both the sound they carry and the instants they start and end.
+The gaps between symbols are not: they are silent by construction, so an
+underrun inside one substitutes silence for silence and there is nothing to
+detect or to lose.
+
+The honest floor: a hole is caught once it destroys more than a few
+milliseconds of sound inside one body. A hole straddling a body's edge splits
+between that body and the silence beside it, so a one-quantum hole placed
+exactly on a boundary can destroy about half a quantum of real audio and still
+pass — bounded below by the noise a real capture path shows against this same
+reference.
 """
 
 import json
@@ -65,6 +74,16 @@ MAX_SILENT_STRETCH_MS = 6.0
 # Loss spread thinly across every span stays under the per-span bound while
 # still adding up, so the whole grid is checked against its own total.
 MAX_CUMULATIVE_INTERVAL_ERROR_MS = 10.0
+# A hole straddling a body's edge is only partly inside it, so the longest
+# contiguous run under-reports it. Total loud audio missing from a body catches
+# it wherever it lands, and catches a hole split in two that neither half
+# would trip.
+# Real rig captures read 0.0-0.4 ms against a generated reference, so this is
+# roughly seven times the observed noise and still well inside one quantum.
+MAX_MISSING_LOUD_AUDIO_MS = 3.0
+# Its own bound rather than borrowing the silence one: two unrelated meanings
+# on one constant means loosening either quietly loosens the other.
+MAX_SIGNAL_END_SHORTFALL_MS = 6.0
 
 ONSET_SEARCH_HOP_SECONDS = 0.001
 ONSET_ENERGY_WINDOW_SECONDS = 0.005
@@ -145,12 +164,12 @@ def signal_with_injected_fault(samples, fault):
     raise ValueError(f"{fault!r} is not an injectable fault")
 
 
-def write_wav(path, samples):
+def write_wav(path, samples, rate=SAMPLE_RATE):
     scaled = numpy.clip(samples, -1.0, 1.0)
     with wave.open(path, "wb") as out:
         out.setnchannels(1)
         out.setsampwidth(2)
-        out.setframerate(SAMPLE_RATE)
+        out.setframerate(rate)
         out.writeframes((scaled * 32767.0).astype("<i2").tobytes())
 
 
@@ -325,6 +344,61 @@ def longest_silence_where_the_signal_is_loud(samples, rate, decoded):
     return round(1000.0 * longest_run / rate, 1)
 
 
+def known_loud_bodies(decoded):
+    """Where the signal carries sound, as spans measured from its onset."""
+    return [(0.0, REFERENCE_TONE_SECONDS)] + [
+        (onset, onset + DTMF_DIGIT_SECONDS) for _, onset in decoded
+    ]
+
+
+def loud_seconds_in_each_body(samples, rate, bodies):
+    """How much sound each body actually carries.
+
+    Counted sample by sample rather than as a contiguous run, and with no
+    margin excluded — the raised-cosine edges simply contribute less — so a
+    hole is measured wherever inside the body it falls, including across an
+    edge where a run-length measurement only sees the part that landed inside.
+    """
+    return [
+        float(
+            numpy.count_nonzero(
+                numpy.abs(samples[int(start * rate) : int(end * rate)])
+                > SOUND_THRESHOLD
+            )
+        )
+        / rate
+        for start, end in bodies
+    ]
+
+
+def missing_loud_audio(samples, rate, decoded, amplitude):
+    """The body furthest short of the sound it should carry, in milliseconds.
+
+    The reference is measured from a freshly generated signal rather than
+    written down, so it cannot drift away from what `generate_signal` produces
+    — and it is scaled to the amplitude actually captured, because counting
+    samples above a fixed threshold is otherwise sensitive to gain: a quieter
+    capture spends longer under it around every two-tone beat null and would
+    read as missing audio it did not miss.
+    """
+    bodies = known_loud_bodies(decoded)
+    reference = generate_signal() * (
+        max(amplitude, SOUND_THRESHOLD) / REFERENCE_AMPLITUDE
+    )
+    reference_onset = first_sound_at(reference, SAMPLE_RATE)
+    expected = loud_seconds_in_each_body(
+        reference[reference_onset:], SAMPLE_RATE, known_loud_bodies(decoded)
+    )
+    actual = loud_seconds_in_each_body(samples, rate, bodies)
+    deficits = [
+        (round(1000.0 * (want - got), 1), index)
+        for index, (want, got) in enumerate(zip(expected, actual))
+    ]
+    deficit, index = max(deficits, key=lambda pair: pair[0])
+    names = [REFERENCE_TONE_LANDMARK, *DTMF_DIGITS]
+    return deficit, names[index] if index < len(names) else str(index)
+
+
 def seconds_the_signal_occupies_after_its_onset():
     """Where the last digit ends, measured from the tone's onset.
 
@@ -420,6 +494,9 @@ def analyse(captured_path, spectrogram_path):
     timing_error_ms, worst_interval, cumulative_error_ms = worst_landmark_interval(
         decoded
     )
+    missing_loud, emptiest_region = missing_loud_audio(
+        aligned, rate, decoded, tone_metrics["amplitude"]
+    )
     report = {
         **tone_metrics,
         "symbols": "".join(digit for digit, _ in decoded),
@@ -430,6 +507,8 @@ def analyse(captured_path, spectrogram_path):
         "silent_stretch_ms": longest_silence_where_the_signal_is_loud(
             aligned, rate, decoded
         ),
+        "missing_loud_audio_ms": missing_loud,
+        "emptiest_region": emptiest_region,
         "captured_after_onset_seconds": round(len(aligned) / rate, 3),
         "sound_ends_at_seconds": round((last_sound_at(aligned, rate) or 0) / rate, 3),
         "signal_expected_seconds": round(seconds_the_signal_occupies_after_its_onset(), 3),
@@ -446,11 +525,18 @@ def analyse(captured_path, spectrogram_path):
         failures.append("thd_percent")
     if report["symbols"] != DTMF_DIGITS:
         failures.append("symbols")
+    if report["captured_sample_rate"] != SAMPLE_RATE:
+        # Everything else normalises by the file's own header rate, so a path
+        # that genuinely resampled cancels out of every other measurement and
+        # an 8 kHz capture of this signal reads as perfectly healthy.
+        failures.append("captured_sample_rate")
     if report["silent_stretch_ms"] > MAX_SILENT_STRETCH_MS:
         failures.append("silent_stretch_ms")
+    if report["missing_loud_audio_ms"] > MAX_MISSING_LOUD_AUDIO_MS:
+        failures.append("missing_loud_audio_ms")
     if (
         report["sound_ends_at_seconds"]
-        < report["signal_expected_seconds"] - MAX_SILENT_STRETCH_MS / 1000.0
+        < report["signal_expected_seconds"] - MAX_SIGNAL_END_SHORTFALL_MS / 1000.0
     ):
         failures.append("signal_ended_early")
     if timing_error_ms is None or abs(timing_error_ms) > MAX_SYMBOL_INTERVAL_ERROR_MS:

@@ -156,10 +156,44 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
                 report = self.report_for(
                     self.signal_silenced(A_DEVICE_QUANTUM_MS, at_seconds=at_seconds)
                 )
-                self.assertEqual(report["failed"], ["silent_stretch_ms"], report)
+                # Both silence axes, and only those: a hole inside a body is a
+                # contiguous quiet run AND sound the body should have carried.
+                self.assertEqual(
+                    report["failed"],
+                    ["silent_stretch_ms", "missing_loud_audio_ms"],
+                    report,
+                )
                 self.assertAlmostEqual(
                     report["silent_stretch_ms"], A_DEVICE_QUANTUM_MS, delta=1.0
                 )
+
+    def test_a_capture_at_the_wrong_sample_rate_is_refused(self):
+        """Every other measurement normalises by the file's own header rate, so
+        a path that genuinely resampled cancels out of all of them — an 8 kHz
+        capture of this signal reads as perfectly healthy until the rate itself
+        is checked."""
+        captured = Path(self.workspace.name) / "resampled.wav"
+        fixture.write_wav(str(captured), self.clean, rate=44_100)
+        report = fixture.analyse(
+            str(captured), str(Path(self.workspace.name) / "spectrogram.png")
+        )
+        self.assertIn("captured_sample_rate", report["failed"], report)
+        self.assertEqual(report["captured_sample_rate"], 44_100)
+
+    def test_an_underrun_straddling_a_symbol_edge_is_caught(self):
+        """The longest contiguous quiet run only sees the part of a hole that
+        landed inside a body, so a hole on an edge under-reports. Total sound
+        missing from the body catches it wherever it falls."""
+        digit_starts_at = (
+            fixture.LEAD_IN_SILENCE_SECONDS
+            + fixture.REFERENCE_TONE_SECONDS
+            + fixture.DTMF_GAP_SECONDS
+        )
+        report = self.report_for(
+            self.signal_silenced(A_DEVICE_QUANTUM_MS, at_seconds=digit_starts_at - 0.004)
+        )
+        self.assertIn("missing_loud_audio_ms", report["failed"], report)
+        self.assertEqual(report["emptiest_region"], fixture.DTMF_DIGITS[0])
 
     def test_a_capture_that_stops_inside_the_last_symbol_is_caught(self):
         """The landmark grid ends at the last onset, so the last symbol's own
