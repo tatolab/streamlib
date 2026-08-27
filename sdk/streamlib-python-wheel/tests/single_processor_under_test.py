@@ -82,7 +82,10 @@ class AudioBlockInspector:
                 "samples": block.interleaved_sample_bytes,
                 "shape": list(samples.shape),
                 "numpy_type": samples.dtype.str,
-                "loudest_sample": float(numpy.max(numpy.abs(samples))),
+                # Promoted before the magnitude: `numpy.abs` keeps `int16`,
+                # where -32768 has no positive counterpart and comes back
+                # negative.
+                "loudest_sample": float(numpy.max(numpy.abs(samples.astype("<f8")))),
                 "first_sample_timestamp_ns": block.first_sample_timestamp_ns,
                 "samples_are_a_view_over_the_bag_bytes": (
                     viewed.base is block.interleaved_sample_bytes

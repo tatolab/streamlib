@@ -116,6 +116,16 @@ class AudioBlock:
                 "bag is not an audio block: sample_rate/channels/sample_count/"
                 "first_sample_timestamp_ns must be int"
             )
+        # Before the length check, which two negatives would slip through by
+        # cancelling: a payload of four bytes satisfies
+        # `sample_count=-1 × channels=-1 × 4`, and the block would then fail at
+        # `reshape` rather than here. The Rust cast spells these `u32`, where
+        # the case cannot arise at all.
+        if sample_count < 0 or channels < 0:
+            raise ValueError(
+                f"bag is not an audio block: sample_count={sample_count} and "
+                f"channels={channels} must both be non-negative"
+            )
         if dtype not in _NUMPY_TYPE_FOR_DTYPE:
             raise ValueError(
                 f"bag is not an audio block: dtype {dtype!r} is not one this cast "

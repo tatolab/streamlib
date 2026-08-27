@@ -275,3 +275,14 @@ def test_the_numpy_types_are_spelled_little_endian_at_the_source():
     that reader is the spelling itself, so the spelling is what this asserts.
     """
     assert _NUMPY_TYPE_FOR_DTYPE == {"f32": "<f4", "i16": "<i2"}
+
+
+def test_negative_dimensions_are_refused_rather_than_cancelling():
+    """Two negatives multiply back to a length the payload satisfies, so the
+    length check alone would pass them through to `reshape`."""
+    bag = stereo_block_bag([1.0])
+    bag["sample_count"] = -1
+    bag["channels"] = -1
+
+    with pytest.raises(ValueError, match="must both be non-negative"):
+        AudioBlock.from_bag(bag)
