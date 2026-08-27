@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.9](https://github.com/tatolab/streamlib/compare/v0.18.8...v0.18.9) (2026-08-27)
+
+
+### Features
+
+* **engine:** AudioBlock — samples ride the bag as msgpack bin, numpy views them in the helper ([#1995](https://github.com/tatolab/streamlib/issues/1995)) ([ad09da8](https://github.com/tatolab/streamlib/commit/ad09da8e728a5e5b6417b4f1a34e48e7be0edd00))
+
 ## [0.18.8](https://github.com/tatolab/streamlib/compare/v0.18.7...v0.18.8) (2026-08-26)
 
 
