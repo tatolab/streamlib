@@ -566,12 +566,49 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_kernel_monotonic_clock -->
   <!-- verify: cargo run -p xtask -- check-clock-usage -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-13-one-monotonic-clock.md -->
-- **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
-  CPAL → ALSA path is interim); do not build until a research memo settles it. A/V
-  sync model likewise OPEN. The engine's decided audio surface is the clock
-  primitive. Hard constraint for the memo: the backend must be dlopen-at-runtime or
-  live outside the wheel — a linked libasound/libpipewire is not
-  manylinux-portable. [media-io-layering]
+- **DECIDED** — Audio backend: PipeWire-native, reached by runtime dlopen — the
+  MIT-licensed PipeWire/SPA headers are vendored, the header-only SPA layer compiles
+  into the wheel as a small shim, and every `pw_*` symbol binds at runtime — falling
+  back to dlopen'd `libasound`, falling back to a null backend under which audio
+  processors run, produce silence, and discard. The chain is probed automatically per
+  process, no configuration dial, and no audio library ever appears in the wheel's
+  `DT_NEEDED`. CPAL is gone with it: no audio path links an audio library, interim or
+  otherwise. [audio-subsystem]
+- **DECIDED** — A backend device paces the audio path: capture and playback callbacks
+  are the cadence source, and a block's timestamp derives from the backend's own
+  timing (status minus reported delay) in the machine monotonic epoch — never from a
+  free-running timer. The timerfd `AudioClock` remains the SDK clock primitive and
+  paces deviceless graphs only (null backend, tests). [audio-subsystem]
+- **DECIDED** — A/V sync is block-level join-by-timestamp on the one monotonic clock:
+  an `AudioBlock` carries its first sample's timestamp, rate, and sample count, so any
+  sample's instant is derivable and audio joins camera frames by timestamp alone. No
+  sample-accurate cross-modal machinery exists. [audio-subsystem]
+- **DECIDED** — The audio data model is the `AudioBlock` bag: samples ride the link
+  inline as msgpack bin, CPU-resident, interleaved, with sample rate, channel count,
+  dtype, and first-sample timestamp beside them; dtype is metadata with `f32` the
+  default and `i16` legal. Audio touches no surface machinery — no surface ids, no
+  claims, no lifetime contract, no `exchange` — and the `AudioBlock` cast composes a
+  zero-copy view of the samples (numpy in Python). [audio-subsystem]
+- **DECIDED** — An audio input port may declare a window contract — rate, channels,
+  dtype, window size, hop — beside its delivery profile (audio declares `lossless`):
+  the engine resamples, mixes down, and frames natively so `process()` receives
+  exact-size timestamped blocks matching the declaration. Resampling is an always-on
+  engine stage, never a user processor. Feature extraction (mel, MFCC) is not engine
+  surface: the contract ends at windowed raw samples. [audio-subsystem]
+- **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
+  camera and display. Conditioning — AEC, noise suppression, AGC via the statically
+  linked WebRTC Audio Processing Module — is configuration on the built-ins, an
+  engine-internal chain between device and published block, bypassable for
+  microphones whose hardware DSP already conditions. `SpeakerSink` playback cancels
+  immediately and reports played-up-to timestamps — the barge-in door and the AEC
+  reference are one mechanism. [audio-subsystem]
+- **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
+  concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
+  out-of-process in its own helper over the engine's IPC transport, never in the app
+  process; a plugin an app uses is declared project-locally — shipped in or referenced
+  by the app's own project, the shader precedent — never discovered from
+  machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
+  entries, no import-time work). [audio-subsystem]
 
 ## Networking — transport, moq, webrtc
 

@@ -42,9 +42,12 @@ the OS demands it. Camera-to-GPU transport is zero-copy DMA-BUF import when the 
 exports it, with a transparent CPU-upload fallback chosen automatically — no
 configuration dial.
 
-Audio backend stays open with a stated intent: PipeWire-native on Linux, the current
+~~Audio backend stays open with a stated intent: PipeWire-native on Linux, the current
 CPAL-over-ALSA path interim, pending a research memo. The engine's decided audio
-surface is the clock primitive.
+surface is the clock primitive.~~ — Superseded 2026-08-26 by `audio-subsystem.md`: the
+memo was written and the OPEN closed — PipeWire-native via runtime dlopen, dlopen'd
+ALSA fallback, null backend; CPAL is gone; the audio surface grew past the clock
+primitive to the full `[audio-subsystem]` entry set in §Media I/O.
 
 ## Rejected alternatives
 
