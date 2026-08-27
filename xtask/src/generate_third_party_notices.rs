@@ -55,6 +55,44 @@ const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
 /// Where that crate extracts them, relative to its own manifest directory.
 const SHADERC_VENDORED_SOURCES_DIR_NAME: &str = "build";
 
+/// Which bullet of the appendix's roster a project belongs under.
+///
+/// Named separately from the notice source because the two answer different
+/// questions — where the text is read from, and how the code got into the
+/// binary — and because [`Self::ALL`] is what keeps the bullet list and the
+/// check that nothing fell out of it from being two lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VendoredCppNoticeRoster {
+    LinkedThroughShadercSys,
+    CompiledByTheVulkanaliaVmaForksBuildScript,
+    CompiledByTheEnginesBuildScript,
+}
+
+impl VendoredCppNoticeRoster {
+    const ALL: [Self; 3] = [
+        Self::LinkedThroughShadercSys,
+        Self::CompiledByTheVulkanaliaVmaForksBuildScript,
+        Self::CompiledByTheEnginesBuildScript,
+    ];
+
+    /// How the bullet introduces the projects it then names.
+    fn how_the_code_reaches_the_binary(self) -> &'static str {
+        match self {
+            Self::LinkedThroughShadercSys => {
+                "Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`"
+            }
+            Self::CompiledByTheVulkanaliaVmaForksBuildScript => {
+                "Checked into this repository, compiled by \
+                 `vendor/tatolab-vulkanalia-vma/build.rs`"
+            }
+            Self::CompiledByTheEnginesBuildScript => {
+                "Checked into this repository as headers, compiled into the engine by \
+                 `runtime/streamlib-engine/build.rs`"
+            }
+        }
+    }
+}
+
 /// Where a vendored C++ project's notice text is read from.
 ///
 /// One shape per tree because they genuinely differ, not as a convenience:
@@ -75,6 +113,20 @@ enum VendoredCppNoticeSource {
     VendoredLicenseFile {
         path_relative_to_workspace_root: &'static str,
     },
+}
+
+impl VendoredCppNoticeSource {
+    fn roster(&self) -> VendoredCppNoticeRoster {
+        match self {
+            Self::ShadercSysLicenseFile { .. } => VendoredCppNoticeRoster::LinkedThroughShadercSys,
+            Self::LeadingCommentBlockOf { .. } => {
+                VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript
+            }
+            Self::VendoredLicenseFile { .. } => {
+                VendoredCppNoticeRoster::CompiledByTheEnginesBuildScript
+            }
+        }
+    }
 }
 
 /// The two trees the notices are read out of, resolved once per run.
@@ -317,23 +369,8 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
          walks — and every one of them ships inside the wheel. These sections are appended by\n\
          `cargo xtask generate-third-party-notices`.\n\
          \n\
-         - Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`: {}\n\
-         - Checked into this repository, compiled by \
-         `vendor/tatolab-vulkanalia-vma/build.rs`: {}\n\
-         - Checked into this repository as headers, compiled into the engine by \
-         `runtime/streamlib-engine/build.rs`: {}\n",
-        joined_vendored_cpp_project_display_names(|source| matches!(
-            source,
-            VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
-        )),
-        joined_vendored_cpp_project_display_names(|source| matches!(
-            source,
-            VendoredCppNoticeSource::LeadingCommentBlockOf { .. }
-        )),
-        joined_vendored_cpp_project_display_names(|source| matches!(
-            source,
-            VendoredCppNoticeSource::VendoredLicenseFile { .. }
-        )),
+         {}",
+        vendored_cpp_roster_bullets(),
     )?;
 
     for project in VENDORED_CPP_PROJECTS {
@@ -351,14 +388,29 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
     Ok(appendix)
 }
 
-/// The display names of every project whose notice comes from a matching
-/// source, as an English list the surrounding sentence can take.
-fn joined_vendored_cpp_project_display_names(
-    notice_source_matches: impl Fn(&VendoredCppNoticeSource) -> bool,
-) -> String {
+/// One bullet per roster, each naming the projects that reach the binary that
+/// way. Rendered off [`VendoredCppNoticeRoster::ALL`] rather than written out,
+/// so an eighth project cannot land in a table the prose above it never
+/// mentions.
+fn vendored_cpp_roster_bullets() -> String {
+    VendoredCppNoticeRoster::ALL
+        .iter()
+        .map(|roster| {
+            format!(
+                "- {}: {}\n",
+                roster.how_the_code_reaches_the_binary(),
+                joined_vendored_cpp_project_display_names(*roster)
+            )
+        })
+        .collect()
+}
+
+/// The display names of every project in one roster, as an English list the
+/// surrounding sentence can take.
+fn joined_vendored_cpp_project_display_names(roster: VendoredCppNoticeRoster) -> String {
     let names: Vec<&str> = VENDORED_CPP_PROJECTS
         .iter()
-        .filter(|project| notice_source_matches(&project.notice_source))
+        .filter(|project| project.notice_source.roster() == roster)
         .map(|project| project.display_name)
         .collect();
 
@@ -546,6 +598,7 @@ mod tests {
         }
         assert!(appendix.contains("Advanced Micro Devices"));
         assert!(appendix.contains("The Khronos Group Inc"));
+        assert!(appendix.contains("Wim Taymans"));
     }
 
     #[test]
@@ -586,20 +639,7 @@ mod tests {
         let (_fixture, source_trees) = vendored_cpp_source_trees_fixture();
         let appendix = render_vendored_cpp_appendix(&source_trees).expect("render");
 
-        let rosters = [
-            joined_vendored_cpp_project_display_names(|source| {
-                matches!(
-                    source,
-                    VendoredCppNoticeSource::ShadercSysLicenseFile { .. }
-                )
-            }),
-            joined_vendored_cpp_project_display_names(|source| {
-                matches!(
-                    source,
-                    VendoredCppNoticeSource::LeadingCommentBlockOf { .. }
-                )
-            }),
-        ];
+        let rosters = VendoredCppNoticeRoster::ALL.map(joined_vendored_cpp_project_display_names);
         for roster in &rosters {
             assert!(
                 !roster.is_empty(),
