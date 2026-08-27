@@ -77,14 +77,34 @@ enum StreamLibPipeWireSampleFormat {
 /// array and the function that fills it cannot disagree about its size.
 #define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 5
 
-/// Longest device id a caller may name. PipeWire node names are short; this is
-/// generous, and a longer one is captured from as an ordinary target rather
-/// than truncated into a different device's name.
-#define STREAMLIB_PIPEWIRE_MAX_DEVICE_ID_BYTES 256
+/// Longest sink name carved out of a `<sink>.monitor` device id. PipeWire node
+/// names are short; this is generous, and a longer one is refused by name
+/// rather than truncated into a different device's.
+#define STREAMLIB_PIPEWIRE_MAX_MONITORED_SINK_NAME_BYTES 256
 
 /// What a caller appends to a sink's name to mean "capture that sink's
-/// monitor". PulseAudio's spelling, so it is the one a caller already knows.
+/// monitor".
 #define STREAMLIB_PIPEWIRE_MONITOR_DEVICE_ID_SUFFIX ".monitor"
+
+/// One key/value pair of the property dict a capture stream announces itself
+/// with — `struct spa_dict_item` by another name, so a test can read the
+/// composition without the SPA headers.
+struct StreamLibPipeWireStreamProperty {
+    const char *key;
+    const char *value;
+};
+
+/// Compose the properties a capture stream announces itself with, returning how
+/// many of `items` were filled.
+///
+/// Exposed rather than kept private because this is where the monitor decision
+/// is actually made: a `<sink>.monitor` id has to come out as the bare sink name
+/// plus `stream.capture.sink`, and getting that wrong captures the session's
+/// default source — silence that looks like a working pipeline. `sink_name` is
+/// scratch the returned items borrow, so it must outlive them.
+uint32_t streamlib_pipewire_capture_stream_properties(
+    struct StreamLibPipeWireStreamProperty *items, uint32_t item_capacity,
+    const char *device_id_or_null, char *sink_name, size_t sink_name_capacity);
 
 /// The sink name inside a `<sink>.monitor` device id, or 0 when the id does not
 /// name a monitor.

@@ -95,6 +95,15 @@ mod capture_shim {
         pub fn streamlib_pipewire_capture_stream_close(capture_stream: *mut CaptureStream);
     }
 
+    /// Mirrors `struct StreamLibPipeWireStreamProperty`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[cfg(test)]
+    pub struct StreamProperty {
+        pub key: *const c_char,
+        pub value: *const c_char,
+    }
+
     /// Mirrors `struct StreamLibPipeWireChunkExtent`.
     #[repr(C)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +120,13 @@ mod capture_shim {
         pub fn streamlib_pipewire_sink_name_length_of_monitor_device_id(
             device_id: *const c_char,
         ) -> usize;
+        pub fn streamlib_pipewire_capture_stream_properties(
+            items: *mut StreamProperty,
+            item_capacity: u32,
+            device_id_or_null: *const c_char,
+            sink_name: *mut c_char,
+            sink_name_capacity: usize,
+        ) -> u32;
         pub fn streamlib_pipewire_clamped_chunk_extent(
             chunk_offset: u32,
             chunk_size: u32,
@@ -578,6 +594,110 @@ mod tests {
             )
         };
         (length > 0).then(|| device_id.to_string_lossy()[..length].to_string())
+    }
+
+    /// How many properties the shim composes at most; sized from the C side's
+    /// own maximum so a property added there cannot overflow this array.
+    const MAX_STREAM_PROPERTIES: usize = 5;
+
+    /// The key/value pairs the shim would announce a stream with, read back as
+    /// owned strings.
+    fn composed_stream_properties(device_id: Option<&str>) -> Option<Vec<(String, String)>> {
+        let device_id = device_id.map(|id| CString::new(id).expect("a test device id has no NUL"));
+        let mut items = [capture_shim::StreamProperty {
+            key: std::ptr::null(),
+            value: std::ptr::null(),
+        }; MAX_STREAM_PROPERTIES];
+        let mut sink_name = [0u8; 256];
+        let count = unsafe {
+            capture_shim::streamlib_pipewire_capture_stream_properties(
+                items.as_mut_ptr(),
+                MAX_STREAM_PROPERTIES as u32,
+                device_id
+                    .as_ref()
+                    .map_or(std::ptr::null(), |id| id.as_ptr()),
+                sink_name.as_mut_ptr().cast::<c_char>(),
+                sink_name.len(),
+            )
+        };
+        if count == 0 {
+            return None;
+        }
+        Some(
+            items[..count as usize]
+                .iter()
+                .map(|item| unsafe {
+                    (
+                        CStr::from_ptr(item.key).to_string_lossy().into_owned(),
+                        CStr::from_ptr(item.value).to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// The commit's actual behaviour, not just its string parsing: a
+    /// `<sink>.monitor` id has to reach PipeWire as the bare sink name *plus*
+    /// `stream.capture.sink`, because a sink named without that property is
+    /// answered with the session's default source.
+    ///
+    /// Mental revert: drop the `stream.capture.sink` item and this reddens —
+    /// which nothing did before, so the fix was held only by a manual rig run.
+    #[test]
+    fn a_monitor_device_id_asks_pipewire_for_the_sinks_monitor() {
+        let properties = composed_stream_properties(Some("streamlib-fixture-audio-sink.monitor"))
+            .expect("a monitor id composes properties");
+        assert!(
+            properties.contains(&(
+                "target.object".to_string(),
+                "streamlib-fixture-audio-sink".to_string()
+            )),
+            "the target is the sink itself, not the `.monitor` spelling: {properties:?}"
+        );
+        assert!(
+            properties.contains(&("stream.capture.sink".to_string(), "true".to_string())),
+            "without this the stream attaches to the default source: {properties:?}"
+        );
+    }
+
+    /// A plain device id is targeted as itself and gains no capture-sink flag,
+    /// which would otherwise look for a monitor a source does not have.
+    #[test]
+    fn a_plain_device_id_is_targeted_as_an_ordinary_source() {
+        let properties = composed_stream_properties(Some("alsa_input.pci-0000_00_1f.3"))
+            .expect("a plain id composes properties");
+        assert!(properties.contains(&(
+            "target.object".to_string(),
+            "alsa_input.pci-0000_00_1f.3".to_string()
+        )));
+        assert!(
+            !properties
+                .iter()
+                .any(|(key, _)| key == "stream.capture.sink"),
+            "a source has no monitor to capture: {properties:?}"
+        );
+    }
+
+    /// No device named: the session routes the stream to its own default, so
+    /// nothing targets anything.
+    #[test]
+    fn no_device_id_names_no_target_at_all() {
+        let properties = composed_stream_properties(None).expect("the default composes");
+        assert!(!properties.iter().any(|(key, _)| key == "target.object"));
+        assert!(
+            !properties
+                .iter()
+                .any(|(key, _)| key == "stream.capture.sink")
+        );
+    }
+
+    /// A monitor id whose sink name will not fit composes nothing, which the
+    /// caller turns into a named refusal. Falling through to a plain target
+    /// would be the very bug the convention exists to remove.
+    #[test]
+    fn an_over_long_monitor_device_id_composes_nothing_rather_than_a_plain_target() {
+        let over_long = format!("{}.monitor", "s".repeat(400));
+        assert!(composed_stream_properties(Some(&over_long)).is_none());
     }
 
     /// The whole of the monitor convention: a `<sink>.monitor` device id names

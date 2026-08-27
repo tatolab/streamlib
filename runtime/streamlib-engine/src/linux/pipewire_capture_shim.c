@@ -474,42 +474,44 @@ size_t streamlib_pipewire_sink_name_length_of_monitor_device_id(const char *devi
     return length - suffix_length;
 }
 
-/// The properties a capture stream announces itself with. `PW_KEY_TARGET_OBJECT`
-/// is only set when a caller named a device: absent, the session routes the
-/// stream to its own default source.
-///
-/// Takes the array's capacity rather than trusting the caller to have sized it,
-/// because a property added here would otherwise overwrite the caller's stack
-/// silently.
-static uint32_t capture_stream_properties(struct spa_dict_item *items, uint32_t item_capacity,
-                                          const char *device_id_or_null,
-                                          char *sink_name, size_t sink_name_capacity)
+uint32_t streamlib_pipewire_capture_stream_properties(
+    struct StreamLibPipeWireStreamProperty *items, uint32_t item_capacity,
+    const char *device_id_or_null, char *sink_name, size_t sink_name_capacity)
 {
     uint32_t count = 0;
+    // The capacity is checked rather than trusted, because a property added
+    // here would otherwise overwrite the caller's stack silently.
     if (item_capacity < STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES)
         return 0;
-    items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_TYPE, "Audio");
-    items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_CATEGORY, "Capture");
-    items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_ROLE, "Production");
+    items[count++] = (struct StreamLibPipeWireStreamProperty){PW_KEY_MEDIA_TYPE, "Audio"};
+    items[count++] = (struct StreamLibPipeWireStreamProperty){PW_KEY_MEDIA_CATEGORY, "Capture"};
+    items[count++] = (struct StreamLibPipeWireStreamProperty){PW_KEY_MEDIA_ROLE, "Production"};
     if (device_id_or_null == NULL)
         return count;
 
     // A sink's monitor is a capture endpoint the session already routes, and
-    // `stream.capture.sink` is the only way to reach one — targeting a sink
+    // `stream.capture.sink` is the only way to reach one: targeting a sink
     // without it attaches to the default source instead, which is silence that
-    // looks like success. The `.monitor` spelling is PulseAudio's, so it is the
-    // one a caller already knows, and it needs no configuration dial of its own.
-    size_t sink_name_length = streamlib_pipewire_sink_name_length_of_monitor_device_id(
-        device_id_or_null);
-    if (sink_name_length > 0 && sink_name_length < sink_name_capacity) {
+    // looks like success.
+    size_t sink_name_length =
+        streamlib_pipewire_sink_name_length_of_monitor_device_id(device_id_or_null);
+    if (sink_name_length > 0) {
+        // The caller refuses an over-long monitor id before reaching here, so
+        // this cannot fall through to the plain-target path and quietly capture
+        // something else.
+        if (sink_name_length >= sink_name_capacity)
+            return 0;
         memcpy(sink_name, device_id_or_null, sink_name_length);
         sink_name[sink_name_length] = '\0';
-        items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_TARGET_OBJECT, sink_name);
-        items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_STREAM_CAPTURE_SINK, "true");
+        items[count++] =
+            (struct StreamLibPipeWireStreamProperty){PW_KEY_TARGET_OBJECT, sink_name};
+        items[count++] =
+            (struct StreamLibPipeWireStreamProperty){PW_KEY_STREAM_CAPTURE_SINK, "true"};
         return count;
     }
 
-    items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_TARGET_OBJECT, device_id_or_null);
+    items[count++] =
+        (struct StreamLibPipeWireStreamProperty){PW_KEY_TARGET_OBJECT, device_id_or_null};
     return count;
 }
 
@@ -546,9 +548,13 @@ struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
     struct spa_audio_info_raw requested_format = {
         .format = STREAMLIB_PIPEWIRE_REQUESTED_SAMPLE_FORMAT,
     };
+    struct StreamLibPipeWireStreamProperty composed_properties[
+        STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES];
     struct spa_dict_item property_items[STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES];
     // Outlives the dict, which borrows it rather than copying.
-    char monitored_sink_name[STREAMLIB_PIPEWIRE_MAX_DEVICE_ID_BYTES];
+    char monitored_sink_name[STREAMLIB_PIPEWIRE_MAX_MONITORED_SINK_NAME_BYTES];
+    char over_long_monitor_reason[192];
+    uint32_t property_count;
     const struct spa_pod *params[1];
     const struct StreamLibPipeWireEntryPoints *resolved;
     struct pw_properties *stream_properties;
@@ -574,11 +580,26 @@ struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
     }
 
     params[0] = spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &requested_format);
-    properties = (struct spa_dict)SPA_DICT_INIT(
-        property_items,
-        capture_stream_properties(property_items, STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES,
-                                  device_id_or_null, monitored_sink_name,
-                                  sizeof(monitored_sink_name)));
+
+    property_count = streamlib_pipewire_capture_stream_properties(
+        composed_properties, STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES, device_id_or_null,
+        monitored_sink_name, sizeof(monitored_sink_name));
+    if (property_count == 0) {
+        // The only way to compose nothing is a monitor id whose sink name will
+        // not fit. Named rather than demoted to a plain target: that would ask
+        // PipeWire for a source of that name and land on the default one.
+        snprintf(over_long_monitor_reason, sizeof(over_long_monitor_reason),
+                 "the sink named by this monitor device id is longer than the %d bytes a "
+                 "sink name may occupy",
+                 STREAMLIB_PIPEWIRE_MAX_MONITORED_SINK_NAME_BYTES - 1);
+        failure_reason = over_long_monitor_reason;
+        goto fail;
+    }
+    for (uint32_t index = 0; index < property_count; index++) {
+        property_items[index] = SPA_DICT_ITEM_INIT(composed_properties[index].key,
+                                                   composed_properties[index].value);
+    }
+    properties = (struct spa_dict)SPA_DICT_INIT(property_items, property_count);
 
     resolved->pw_thread_loop_lock(capture_stream->thread_loop);
     thread_loop_is_locked = true;

@@ -67,9 +67,9 @@ pub struct MicrophoneSourceConfig {
     /// A name the backend cannot open raises rather than landing on a
     /// different device — a wrong device id is a wiring error.
     ///
-    /// `<sink>.monitor` captures what that sink is playing, the spelling
-    /// PulseAudio uses, which is how a graph records its own output or a test
-    /// closes a loop against a known signal.
+    /// On the PipeWire backend, `<sink>.monitor` captures what that sink is
+    /// playing — how a graph records its own output, or a test closes a loop
+    /// against a known signal.
     #[serde(default)]
     pub device_id: Option<String>,
 }
