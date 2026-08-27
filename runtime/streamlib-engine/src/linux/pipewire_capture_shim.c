@@ -481,24 +481,16 @@ static uint32_t capture_stream_properties(struct spa_dict_item *items, uint32_t 
 
 /// Connect the stream for capture.
 ///
-/// `PW_STREAM_FLAG_RT_PROCESS` is deliberately absent. With it, `process` runs
-/// on PipeWire's realtime data thread, which does not hold the thread loop's
-/// lock — and that lock is the whole of this shim's synchronisation: it is what
-/// makes installing and retiring a hand-off safe against a callback that is
-/// already running. Without the flag, libpipewire dispatches `process` onto the
-/// loop thread, where "all events and callbacks are called with the thread lock
-/// held" is libpipewire's own guarantee. The cost is one loop hop; what it buys
-/// is that the seam's hand-off contract stays "must not block" rather than
-/// becoming "must be realtime-safe", which no caller that copies its samples
-/// out of the borrowed buffer could satisfy.
+/// `PW_STREAM_FLAG_RT_PROCESS` must stay unset. With it, `process` runs on
+/// PipeWire's realtime data thread, which does not hold the thread loop's lock
+/// — and that lock is what makes installing and retiring a hand-off safe
+/// against a callback that is already running.
 ///
-/// `PW_STREAM_FLAG_DONT_RECONNECT` is what makes a named device authoritative.
-/// `PW_STREAM_FLAG_AUTOCONNECT` alone asks the session manager to route the
-/// stream, and a target it cannot resolve is not an error to it — it links the
-/// session default instead. Capturing a different device than the one the
-/// caller named is worse than failing, so a named target that does not resolve
-/// has to end the stream. Nothing is set when no device was named: there the
-/// session default is exactly what was asked for.
+/// `PW_STREAM_FLAG_DONT_RECONNECT` is what makes a named device authoritative:
+/// `PW_STREAM_FLAG_AUTOCONNECT` alone treats a target it cannot resolve as
+/// licence to link the session default instead, and capturing a device other
+/// than the one the caller named is worse than failing. Nothing is set when no
+/// device was named — there the session default is what was asked for.
 static int connect_capture_stream(struct StreamLibPipeWireCaptureStream *capture_stream,
                                   const char *device_id_or_null, const struct spa_pod **params,
                                   uint32_t param_count)

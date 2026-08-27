@@ -110,8 +110,8 @@ struct StreamLibPipeWireNegotiatedCaptureFormat {
 
 /// What the shim calls with each block PipeWire captured.
 ///
-/// Runs on PipeWire's own realtime thread with the stream's loop lock held, so
-/// it must not block and must not re-enter this shim. `interleaved_sample_bytes`
+/// Runs on PipeWire's thread-loop thread with that loop's lock held, so it must
+/// not block and must not re-enter this shim. `interleaved_sample_bytes`
 /// borrows PipeWire's mapped buffer and is invalid the moment this returns.
 typedef void (*StreamLibPipeWireCapturedBlockHandOff)(void *hand_off_context,
                                                       const uint8_t *interleaved_sample_bytes,

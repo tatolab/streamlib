@@ -398,7 +398,8 @@ struct PipeWireAudioCaptureStream {
 // `start_delivering` concurrently.
 unsafe impl Send for PipeWireAudioCaptureStream {}
 
-/// What the shim calls on PipeWire's realtime thread.
+/// What the shim calls on PipeWire's thread-loop thread, with that loop's lock
+/// held.
 ///
 /// Must not unwind: this is a plain `extern "C"` boundary, so a panic here
 /// aborts the process rather than crossing into C.
