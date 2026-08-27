@@ -60,6 +60,10 @@ case "${1:-}" in
             fi
             sleep 0.25
         done
+        # The node was created before this wait began, so giving up without
+        # destroying it would leave one behind in the user's live session —
+        # and `object.linger` means it outlives every process here.
+        "$0" stop >/dev/null 2>&1
         echo "ERROR: the null sink did not appear in the graph" >&2
         exit 1
         ;;
@@ -70,6 +74,13 @@ case "${1:-}" in
             exit 0
         fi
         timeout 10 pw-cli destroy "$id" >/dev/null 2>&1
+        # Confirmed rather than assumed: a sink left behind can be promoted to
+        # the session default and silence the machine, so a cleanup that failed
+        # has to say so rather than report success.
+        if [ -n "$(node_id_of_the_fixture_sink)" ]; then
+            echo "ERROR: $NODE_NAME survived destroy and is still in the graph" >&2
+            exit 1
+        fi
         echo "stopped"
         exit 0
         ;;

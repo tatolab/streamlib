@@ -8,9 +8,12 @@ run tells you which side is broken. numpy is the only dependency, and the
 spectrogram PNG is written by hand rather than through a plotting library.
 
 The signal is a lead-in tone followed by DTMF digits. The tone answers "are
-these samples audio at all" — frequency, amplitude, distortion. The digits
-answer the question a tone cannot: a dropped or reordered block corrupts a
-symbol, and the decode says which one.
+these samples audio at all" — frequency, amplitude, distortion. The digits are
+a timing grid, and the grid is the point: a symbol's *identity* survives a
+partial loss exactly as the tone's frequency does, because clipping part of a
+digit still decodes as that digit. What moves is the interval between one
+onset and the next, and it moves by precisely the audio that went missing —
+which both detects the loss and says where in the signal it happened.
 """
 
 import json
@@ -44,7 +47,26 @@ DTMF_KEYPAD = ("123A", "456B", "789C", "*0#D")
 MAX_FUNDAMENTAL_ERROR_HZ = 1.0
 MAX_AMPLITUDE_ERROR = 0.05
 MAX_THD_PERCENT = 5.0
-MAX_SYMBOL_INTERVAL_ERROR_MS = 25.0
+# One device quantum at 48 kHz is ~10.7 ms, and a single dropped block is the
+# loss this whole signal design exists to catch — so the bound sits below one
+# quantum rather than above it. Onsets are found to ~1 ms, so what this really
+# bounds is the capture path's own jitter.
+MAX_SYMBOL_INTERVAL_ERROR_MS = 5.0
+
+# Onset search: step, the window RMS is taken over, and how much quiet has to
+# precede an edge for it to be a symbol starting rather than noise.
+ONSET_SEARCH_HOP_SECONDS = 0.001
+ONSET_ENERGY_WINDOW_SECONDS = 0.005
+QUIET_BEFORE_A_SYMBOL_SECONDS = 0.030
+# Sound has to persist this long to be the signal starting rather than a click.
+MIN_SUSTAINED_SOUND_SECONDS = 0.020
+SYMBOL_CLASSIFY_WINDOW_SECONDS = 0.060
+SOUND_THRESHOLD = 0.02
+
+# The reference tone's own onset is the first landmark, so the span from it to
+# the first digit is guarded like every span between digits. Named because the
+# report uses it to say where a loss happened.
+REFERENCE_TONE_LANDMARK = "tone"
 
 
 # Long enough to kill the click at a segment edge, short enough that the tone's
@@ -122,9 +144,34 @@ def goertzel_magnitude(samples, frequency, rate):
     return numpy.sqrt(first * first + second * second - coefficient * first * second)
 
 
-def first_sound_at(samples, rate, threshold=0.02):
-    loud = numpy.flatnonzero(numpy.abs(samples) > threshold)
-    return int(loud[0]) if loud.size else None
+def first_sound_at(samples, rate, threshold=SOUND_THRESHOLD):
+    """The instant the signal starts, from sustained energy rather than one sample.
+
+    A single threshold crossing is whatever the capture path clicked on first:
+    one stray pop ahead of the tone would anchor every downstream window to the
+    wrong origin and produce a confident failure on axes unrelated to the cause.
+    """
+    energy, hop = short_time_rms(samples, rate)
+    loud = energy > threshold
+    sustain = max(1, int(MIN_SUSTAINED_SOUND_SECONDS / ONSET_SEARCH_HOP_SECONDS))
+    for frame in range(max(0, len(loud) - sustain + 1)):
+        if loud[frame : frame + sustain].all():
+            return frame * hop
+    return None
+
+
+def short_time_rms(samples, rate):
+    """RMS on a fine grid — the resolution every onset in the report inherits."""
+    hop = max(1, int(ONSET_SEARCH_HOP_SECONDS * rate))
+    window = max(1, int(ONSET_ENERGY_WINDOW_SECONDS * rate))
+    frame_count = max(0, (len(samples) - window) // hop + 1)
+    energy = numpy.array(
+        [
+            numpy.sqrt(numpy.mean(samples[frame * hop : frame * hop + window] ** 2))
+            for frame in range(frame_count)
+        ]
+    )
+    return energy, hop
 
 
 def measure_reference_tone(samples, rate):
@@ -144,46 +191,58 @@ def measure_reference_tone(samples, rate):
         sum(energy_near(fundamental_hz * n) ** 2 for n in range(2, 6))
     )
     fundamental_energy = energy_near(fundamental_hz)
-    raw = samples[int(0.2 * rate) : int(0.8 * rate)]
+    tone_samples = samples[int(0.2 * rate) : int(0.8 * rate)]
     return {
         "fundamental_hz": round(fundamental_hz, 2),
-        "amplitude": round(float(numpy.sqrt(numpy.mean(raw**2)) * numpy.sqrt(2)), 4),
+        "amplitude": round(
+            float(numpy.sqrt(numpy.mean(tone_samples**2)) * numpy.sqrt(2)), 4
+        ),
         "thd_percent": round(
             100.0 * float(harmonics) / max(fundamental_energy, 1e-12), 3
         ),
     }
 
 
-def decode_dtmf(samples, rate):
-    """Classify short windows, then collapse runs into digits.
+def classify_dtmf(window, rate):
+    """The digit a window carries, or None if it is not two tones at once.
 
-    Each digit comes back with the instant it started, which is what turns the
-    symbol stream into a timing grid: identity alone survives a dropped block
-    (clipping 40 ms off a 120 ms digit still decodes to that digit), but every
-    later digit shifts earlier by exactly the audio that went missing.
+    The reference tone rejects itself here: it is one frequency, so neither
+    group has a dominant member and the tone never enters the grid as a digit.
     """
-    window_length = int(0.020 * rate)
+    rows = [goertzel_magnitude(window, hz, rate) for hz in DTMF_ROW_HZ]
+    columns = [goertzel_magnitude(window, hz, rate) for hz in DTMF_COLUMN_HZ]
+    if max(rows) < 2.0 * numpy.median(rows) or max(columns) < 2.0 * numpy.median(
+        columns
+    ):
+        return None
+    return DTMF_KEYPAD[int(numpy.argmax(rows))][int(numpy.argmax(columns))]
+
+
+def decode_dtmf(samples, rate):
+    """Every digit in the signal, each with the instant it started.
+
+    The edge is found first and the digit classified afterwards, rather than
+    classifying on a fixed window grid: a grid quantises every onset to its own
+    width, which would put the smallest detectable loss at several device
+    quanta instead of below one.
+    """
+    energy, hop = short_time_rms(samples, rate)
+    loud = energy > SOUND_THRESHOLD
+    quiet_frames = max(1, int(QUIET_BEFORE_A_SYMBOL_SECONDS / ONSET_SEARCH_HOP_SECONDS))
+    classify_length = int(SYMBOL_CLASSIFY_WINDOW_SECONDS * rate)
+
     decoded = []
-    previous = None
-    for start in range(0, len(samples) - window_length, window_length):
-        window = samples[start : start + window_length]
-        if numpy.sqrt(numpy.mean(window**2)) < 0.02:
-            previous = None
+    frame = quiet_frames
+    while frame < len(loud):
+        if not (loud[frame] and not loud[frame - quiet_frames : frame].any()):
+            frame += 1
             continue
-        rows = [goertzel_magnitude(window, hz, rate) for hz in DTMF_ROW_HZ]
-        columns = [goertzel_magnitude(window, hz, rate) for hz in DTMF_COLUMN_HZ]
-        row, column = int(numpy.argmax(rows)), int(numpy.argmax(columns))
-        # Both a row and a column tone have to dominate their group, or this is
-        # a single-frequency tone (the reference) rather than a digit.
-        if max(rows) < 2.0 * numpy.median(rows) or max(columns) < 2.0 * numpy.median(
-            columns
-        ):
-            previous = None
-            continue
-        digit = DTMF_KEYPAD[row][column]
-        if digit != previous:
-            decoded.append((digit, start / rate))
-        previous = digit
+        onset = frame * hop
+        digit = classify_dtmf(samples[onset : onset + classify_length], rate)
+        if digit is not None:
+            decoded.append((digit, onset / rate))
+        # Past the symbol's own body, so it cannot read as a second edge.
+        frame += quiet_frames
     return decoded
 
 
@@ -219,7 +278,7 @@ def write_spectrogram_png(path, samples, rate):
     ).astype(numpy.uint8)
 
     height, width, _ = rgb.shape
-    raw = b"".join(b"\x00" + rgb[row].tobytes() for row in range(height))
+    png_scanline_bytes = b"".join(b"\x00" + rgb[row].tobytes() for row in range(height))
 
     def chunk(kind, payload):
         return (
@@ -232,8 +291,35 @@ def write_spectrogram_png(path, samples, rate):
     with open(path, "wb") as out:
         out.write(b"\x89PNG\r\n\x1a\n")
         out.write(chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)))
-        out.write(chunk(b"IDAT", zlib.compress(raw, 6)))
+        out.write(chunk(b"IDAT", zlib.compress(png_scanline_bytes, 6)))
         out.write(chunk(b"IEND", b""))
+
+
+def worst_landmark_interval(decoded):
+    """The span that deviates most from what the signal was built with.
+
+    Every landmark is included, starting with the reference tone's own onset,
+    so the whole signal from the tone to the last symbol sits between two
+    landmarks. Measuring spans rather than absolute positions means a constant
+    alignment offset cancels while a real loss does not; audio that goes
+    missing inside a span shortens exactly that one, and the span is named.
+    """
+    landmarks = [(REFERENCE_TONE_LANDMARK, 0.0), *decoded]
+    if len(decoded) != len(DTMF_DIGITS):
+        return None, None
+    digit_period = DTMF_DIGIT_SECONDS + DTMF_GAP_SECONDS
+    expected = [REFERENCE_TONE_SECONDS + DTMF_GAP_SECONDS] + [digit_period] * (
+        len(decoded) - 1
+    )
+    deviations = [
+        (landmarks[i + 1][1] - landmarks[i][1] - expected[i], i)
+        for i in range(len(expected))
+    ]
+    deviation, span_start = max(deviations, key=lambda pair: abs(pair[0]))
+    return (
+        round(1000.0 * deviation, 1),
+        f"{landmarks[span_start][0]}->{landmarks[span_start + 1][0]}",
+    )
 
 
 def analyse(captured_path, spectrogram_path):
@@ -244,27 +330,17 @@ def analyse(captured_path, spectrogram_path):
 
     aligned = samples[onset:]
     tone_metrics = measure_reference_tone(aligned, rate)
-    dtmf_region_start = int((REFERENCE_TONE_SECONDS + DTMF_GAP_SECONDS / 2) * rate)
-    decoded = decode_dtmf(aligned[dtmf_region_start:], rate)
+    decoded = decode_dtmf(aligned, rate)
     write_spectrogram_png(spectrogram_path, aligned, rate)
 
-    # The interval between consecutive digits, not their absolute positions:
-    # audio that went missing between two digits shortens exactly that one
-    # interval, which both detects the loss and says where it happened —
-    # while a constant alignment offset cancels out.
-    digit_period = DTMF_DIGIT_SECONDS + DTMF_GAP_SECONDS
-    timing_error_ms = None
-    worst_interval = None
-    if len(decoded) == len(DTMF_DIGITS):
-        intervals = [
-            (decoded[i + 1][1] - decoded[i][1], i) for i in range(len(decoded) - 1)
-        ]
-        worst, at = max(intervals, key=lambda pair: abs(pair[0] - digit_period))
-        timing_error_ms = round(1000.0 * (worst - digit_period), 1)
-        worst_interval = f"{DTMF_DIGITS[at]}->{DTMF_DIGITS[at + 1]}"
-
-    expected_dtmf_end = dtmf_region_start + int(
-        len(DTMF_DIGITS) * (DTMF_DIGIT_SECONDS + DTMF_GAP_SECONDS) * rate
+    timing_error_ms, worst_interval = worst_landmark_interval(decoded)
+    guarded_end = int(
+        (
+            REFERENCE_TONE_SECONDS
+            + DTMF_GAP_SECONDS
+            + len(DTMF_DIGITS) * (DTMF_DIGIT_SECONDS + DTMF_GAP_SECONDS)
+        )
+        * rate
     )
     report = {
         **tone_metrics,
@@ -272,8 +348,9 @@ def analyse(captured_path, spectrogram_path):
         "symbols_expected": DTMF_DIGITS,
         "symbol_interval_error_ms": timing_error_ms,
         "worst_symbol_interval": worst_interval,
-        "gap_count": count_gaps(aligned, rate, 0, expected_dtmf_end),
+        "gap_count": count_gaps(aligned, rate, 0, guarded_end),
         "captured_seconds": round(len(samples) / rate, 3),
+        "captured_sample_rate": rate,
         "onset_seconds": round(onset / rate, 3),
     }
     failures = []

@@ -22,8 +22,10 @@
 # Usage:
 #   ./e2e_audio_loopback.sh [output_dir]
 #
-# Exit status is the verdict. Artifacts land in output_dir: the signal that was
-# played, what came back, the JSON report, and a spectrogram to read by eye.
+# Exit status is the verdict, and stdout is the report JSON and nothing else,
+# so a caller can pipe it. Progress goes to stderr. Artifacts land in
+# output_dir: the signal that was played, what came back, the JSON report, the
+# link that was actually captured, and a spectrogram to read by eye.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,13 +39,22 @@ CAPTURE_SECONDS=8
 
 mkdir -p "$OUTPUT_DIR"
 
-if ! "$HERE/virtual_audio_device.sh" check; then
+if ! "$HERE/virtual_audio_device.sh" check >&2; then
     echo "SKIP: no virtual audio device available on this machine" >&2
     exit 77
 fi
 
+# Installed BEFORE the node is created, and idempotent — `stop` handles "not
+# running". Installing it after `start` leaves a window in which a failure
+# strands an Audio/Sink in the user's live session, and `object.linger` means
+# it outlives this process; wireplumber can then promote it to the default
+# sink and silence the machine.
+trap '"$HERE/virtual_audio_device.sh" stop >&2' EXIT
+# Without this the shell survives its interrupted children and runs on to the
+# analysis, which can report PASS for a run the user aborted.
+trap 'exit 130' INT TERM
+
 SINK="$("$HERE/virtual_audio_device.sh" start)" || exit 1
-trap '"$HERE/virtual_audio_device.sh" stop >/dev/null 2>&1' EXIT
 
 "$PYTHON" "$HERE/known_audio_signal.py" generate "$OUTPUT_DIR/known_signal.wav" || exit 1
 
@@ -58,6 +69,17 @@ timeout "$CAPTURE_SECONDS" pw-record --target="$SINK" \
 RECORDER_PID=$!
 
 sleep "$CAPTURE_LEAD_SECONDS"
+
+# A PipeWire --target is a hint: an unresolvable one links to the session
+# default instead of failing, so the loopback would still close — through the
+# default sink — and the analysis would pass having never touched the fixture
+# node. Verified rather than trusted, and the evidence is kept.
+pw-link -l 2>/dev/null | grep -A2 "^pw-record" > "$OUTPUT_DIR/capture_link.txt"
+if ! grep -q "$SINK" "$OUTPUT_DIR/capture_link.txt"; then
+    echo "ERROR: the recorder did not attach to $SINK — it is capturing something else" >&2
+    kill "$RECORDER_PID" 2>/dev/null
+    exit 1
+fi
 timeout "$CAPTURE_SECONDS" pw-play --target="$SINK" "$OUTPUT_DIR/known_signal.wav" >/dev/null 2>&1
 sleep 0.5
 kill "$RECORDER_PID" 2>/dev/null
@@ -68,5 +90,5 @@ wait "$RECORDER_PID" 2>/dev/null
     | tee "$OUTPUT_DIR/report.json"
 VERDICT=${PIPESTATUS[0]}
 
-echo "artifacts: $OUTPUT_DIR"
+echo "artifacts: $OUTPUT_DIR" >&2
 exit "$VERDICT"
