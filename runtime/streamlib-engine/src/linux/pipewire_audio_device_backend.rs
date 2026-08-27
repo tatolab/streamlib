@@ -108,6 +108,9 @@ mod capture_shim {
     // the arithmetic in a test, which is why they are declared only there.
     #[cfg(test)]
     unsafe extern "C" {
+        pub fn streamlib_pipewire_sink_name_length_of_monitor_device_id(
+            device_id: *const c_char,
+        ) -> usize;
         pub fn streamlib_pipewire_clamped_chunk_extent(
             chunk_offset: u32,
             chunk_size: u32,
@@ -565,6 +568,47 @@ mod tests {
             )
         };
         assert_eq!(stamp, 1_000_000_000 - QUANTUM_NANOS);
+    }
+
+    fn monitored_sink_name_of(device_id: &str) -> Option<String> {
+        let device_id = CString::new(device_id).expect("a test device id has no NUL");
+        let length = unsafe {
+            capture_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(
+                device_id.as_ptr(),
+            )
+        };
+        (length > 0).then(|| device_id.to_string_lossy()[..length].to_string())
+    }
+
+    /// The whole of the monitor convention: a `<sink>.monitor` device id names
+    /// the sink, and the shim then asks PipeWire for that sink's monitor rather
+    /// than for a source of that name.
+    ///
+    /// Mental revert: return 0 here and the stream targets a sink with no
+    /// `stream.capture.sink`, which PipeWire answers by attaching to the
+    /// session's default source — silence that looks like a working pipeline.
+    #[test]
+    fn a_monitor_device_id_names_the_sink_it_monitors() {
+        assert_eq!(
+            monitored_sink_name_of("streamlib-fixture-audio-sink.monitor").as_deref(),
+            Some("streamlib-fixture-audio-sink")
+        );
+    }
+
+    /// An ordinary source is captured as itself, so the convention cannot
+    /// hijack a device that merely has "monitor" in its name.
+    #[test]
+    fn a_plain_device_id_is_not_read_as_a_monitor() {
+        assert_eq!(monitored_sink_name_of("alsa_input.pci-0000_00_1f.3"), None);
+        assert_eq!(monitored_sink_name_of("my.monitor.device"), None);
+        assert_eq!(monitored_sink_name_of(""), None);
+    }
+
+    /// `.monitor` alone names no sink, so it stays an ordinary target and fails
+    /// as the missing device it is rather than resolving to something.
+    #[test]
+    fn the_suffix_alone_names_no_sink() {
+        assert_eq!(monitored_sink_name_of(".monitor"), None);
     }
 
     fn clamped_chunk_extent(offset: u32, size: u32, maxsize: u32) -> capture_shim::ChunkExtent {

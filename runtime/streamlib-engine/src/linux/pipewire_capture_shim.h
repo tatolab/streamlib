@@ -75,7 +75,24 @@ enum StreamLibPipeWireSampleFormat {
 
 /// How many properties [`capture_stream_properties`] declares. Shared so the
 /// array and the function that fills it cannot disagree about its size.
-#define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 4
+#define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 5
+
+/// Longest device id a caller may name. PipeWire node names are short; this is
+/// generous, and a longer one is captured from as an ordinary target rather
+/// than truncated into a different device's name.
+#define STREAMLIB_PIPEWIRE_MAX_DEVICE_ID_BYTES 256
+
+/// What a caller appends to a sink's name to mean "capture that sink's
+/// monitor". PulseAudio's spelling, so it is the one a caller already knows.
+#define STREAMLIB_PIPEWIRE_MONITOR_DEVICE_ID_SUFFIX ".monitor"
+
+/// The sink name inside a `<sink>.monitor` device id, or 0 when the id does not
+/// name a monitor.
+///
+/// Exposed so a test can hold the parsing without a session: getting it wrong
+/// silently captures the default source, which is silence that looks like a
+/// working pipeline.
+size_t streamlib_pipewire_sink_name_length_of_monitor_device_id(const char *device_id);
 
 /// How many buffers one graph cycle may hand over before the rest wait for the
 /// next callback. A capture cycle normally yields exactly one; PipeWire's own

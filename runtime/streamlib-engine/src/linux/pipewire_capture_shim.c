@@ -458,15 +458,32 @@ static void destroy_capture_stream(struct StreamLibPipeWireCaptureStream *captur
     free(capture_stream);
 }
 
+size_t streamlib_pipewire_sink_name_length_of_monitor_device_id(const char *device_id)
+{
+    if (device_id == NULL)
+        return 0;
+    size_t length = strlen(device_id);
+    size_t suffix_length = strlen(STREAMLIB_PIPEWIRE_MONITOR_DEVICE_ID_SUFFIX);
+    // A device id that is *only* the suffix names no sink, so it is left alone
+    // to fail as the ordinary missing target it is.
+    if (length <= suffix_length)
+        return 0;
+    if (strcmp(device_id + length - suffix_length,
+               STREAMLIB_PIPEWIRE_MONITOR_DEVICE_ID_SUFFIX) != 0)
+        return 0;
+    return length - suffix_length;
+}
+
 /// The properties a capture stream announces itself with. `PW_KEY_TARGET_OBJECT`
 /// is only set when a caller named a device: absent, the session routes the
 /// stream to its own default source.
 ///
 /// Takes the array's capacity rather than trusting the caller to have sized it,
-/// because a fifth property added here would otherwise overwrite the caller's
-/// stack silently.
+/// because a property added here would otherwise overwrite the caller's stack
+/// silently.
 static uint32_t capture_stream_properties(struct spa_dict_item *items, uint32_t item_capacity,
-                                          const char *device_id_or_null)
+                                          const char *device_id_or_null,
+                                          char *sink_name, size_t sink_name_capacity)
 {
     uint32_t count = 0;
     if (item_capacity < STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES)
@@ -474,8 +491,25 @@ static uint32_t capture_stream_properties(struct spa_dict_item *items, uint32_t 
     items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_TYPE, "Audio");
     items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_CATEGORY, "Capture");
     items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_MEDIA_ROLE, "Production");
-    if (device_id_or_null != NULL)
-        items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_TARGET_OBJECT, device_id_or_null);
+    if (device_id_or_null == NULL)
+        return count;
+
+    // A sink's monitor is a capture endpoint the session already routes, and
+    // `stream.capture.sink` is the only way to reach one — targeting a sink
+    // without it attaches to the default source instead, which is silence that
+    // looks like success. The `.monitor` spelling is PulseAudio's, so it is the
+    // one a caller already knows, and it needs no configuration dial of its own.
+    size_t sink_name_length = streamlib_pipewire_sink_name_length_of_monitor_device_id(
+        device_id_or_null);
+    if (sink_name_length > 0 && sink_name_length < sink_name_capacity) {
+        memcpy(sink_name, device_id_or_null, sink_name_length);
+        sink_name[sink_name_length] = '\0';
+        items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_TARGET_OBJECT, sink_name);
+        items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_STREAM_CAPTURE_SINK, "true");
+        return count;
+    }
+
+    items[count++] = SPA_DICT_ITEM_INIT(PW_KEY_TARGET_OBJECT, device_id_or_null);
     return count;
 }
 
@@ -513,6 +547,8 @@ struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
         .format = STREAMLIB_PIPEWIRE_REQUESTED_SAMPLE_FORMAT,
     };
     struct spa_dict_item property_items[STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES];
+    // Outlives the dict, which borrows it rather than copying.
+    char monitored_sink_name[STREAMLIB_PIPEWIRE_MAX_DEVICE_ID_BYTES];
     const struct spa_pod *params[1];
     const struct StreamLibPipeWireEntryPoints *resolved;
     struct pw_properties *stream_properties;
@@ -539,9 +575,10 @@ struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
 
     params[0] = spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &requested_format);
     properties = (struct spa_dict)SPA_DICT_INIT(
-        property_items, capture_stream_properties(property_items,
-                                                  STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES,
-                                                  device_id_or_null));
+        property_items,
+        capture_stream_properties(property_items, STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES,
+                                  device_id_or_null, monitored_sink_name,
+                                  sizeof(monitored_sink_name)));
 
     resolved->pw_thread_loop_lock(capture_stream->thread_loop);
     thread_loop_is_locked = true;
