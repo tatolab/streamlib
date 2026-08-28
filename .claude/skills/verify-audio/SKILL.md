@@ -84,13 +84,29 @@ startup poll is 60 attempts at a call bounded by `CONTROL_VERB_TIMEOUT_SECONDS =
 held by something that accepts and never answers burns the full 30 s per attempt. Check the port is
 free before starting, or pass `--port`.
 
-What it looks like depends on what holds the port, and none of these is `Connection refused`:
+**So check the port is free before you start.** This is the one preflight that prevents an
+unearned green, and it costs nothing:
 
+```bash
+ss -ltn | grep ':9077' || echo "9077 free"
+```
+
+What a busy port looks like depends on what holds it, and none of these is `Connection refused`:
+
+- **A second StreamLib node that declares a `MicrophoneSource`** → **no error at all.** The tap
+  resolves against *that* node's graph, so the channel contract is measured on a different
+  process and the run can exit 0 and report `PASS`. The realistic instance is an orphaned
+  `audio_loopback_node.py` from a killed run — it defaults to 9077 and declares exactly that
+  processor. **This is the dangerous one**: every other failure mode here announces itself.
+- **A second StreamLib node without one** → the query succeeds against the wrong graph and the run
+  dies at `no processor named MicrophoneSource in the running graph`.
 - **A socket that accepts and never answers** → `no control plane reachable at
   http://127.0.0.1:9077 (timed out)`.
 - **A foreign HTTP server** → an HTTP status rather than a refusal, e.g. `answered 404`.
-- **A second StreamLib node** → the query succeeds against the *wrong* graph, so the run dies at
-  `no processor named MicrophoneSource in the running graph`.
+
+**Confirm the run measured its own node before believing a pass.** The tap prints the channel it
+read (`tapping <processor-id>/audio for N bags`); that id must be a processor of the node whose
+`node.log` you have. If they differ, the verdict is about someone else's graph.
 
 **`Connection refused` on 9077 means the opposite — nothing is listening there at all**, so the
 node died or never served. That is a real failure and must never be waved away as a port
@@ -111,14 +127,21 @@ through-engine run prints two: the first is the nested channel tap's directory, 
 loopback's own. Take the last one — that is where `captured.wav`, `spectrogram.png` and `node.log`
 are.
 
-**On a failing run there is no `artifacts:` line at all.** Both fixtures echo it as their final
-statement, after the analyser, so every earlier `exit 1` — including the channel-contract failure,
-which is the most common through-engine failure there is — names no directory. That is exactly the
-run whose `node.log` you need, so find it by age instead:
+**A run that fails *before the analyser* names no directory.** Both fixtures echo `artifacts:` as
+their final statement, so an analyser `FAIL` prints it exactly as a pass does — but every earlier
+`exit 1` skips it: the channel-contract failure, the speaker-format refusal, a node that never
+served. Those are exactly the runs whose `node.log` you need, so recover the directory instead:
 
 ```bash
-ls -dt /tmp/streamlib-audio-loopback-* | head -1
+dirname "$(/bin/ls -t /tmp/streamlib-audio-loopback-*/node.log | head -1)"
 ```
+
+Two traps are why it is spelled that way. `/bin/ls` because `ls` is commonly aliased (to `eza`
+here), and `eza` reads `-t` as `--time=FIELD` rather than sort-by-time, so the plain spelling
+returns an alphabetical answer that can be hours stale — silently, with no error. And it selects
+on `node.log` because the rig-only fixture defaults to the *same* `streamlib-audio-loopback-`
+prefix, so the triage re-run below leaves a newer directory that has a `report.json` and a
+spectrogram but no `node.log` — a convincing decoy.
 
 The rig-only fixture is the only one that takes an output directory as an argument, and it tees a
 `report.json` into it; the nested channel tap writes one into its own directory too. The
@@ -146,15 +169,24 @@ here for the same reason it is in `verify-live`.
 
 The image says *that* audio went missing, not *which way*: a hole and a splice both draw the same
 stripe. The `failed` list is what separates them — a splice moves the symbol intervals, a hole
-does not. So report both, never the picture alone.
+does not. And an amplitude fault draws nothing at all: the spectrogram of a signal at 0.6× looks
+exactly like a healthy one, so a run can fail with a picture that shows no defect. Report both,
+never the picture alone.
 
 ## A failing through-engine run gets the rig fixture before it gets reported
 
 "The rig is broken" and "the rig is fine, the engine broke it" are different answers with
 different owners, and the user should not have to work out which they got.
 
-So on any **non-zero, non-77** exit from `verify_audio_loopback.sh`, run `e2e_audio_loopback.sh`
-before reporting anything, and report the pair:
+So on any **non-zero, non-77** exit from `verify_audio_loopback.sh`, run the rig-only fixture
+before reporting anything, and report the pair. Give it an explicit output directory — left to
+its default it lands on the same `mktemp` prefix as the run you are still diagnosing:
+
+```bash
+PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
+  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/verify-audio-triage
+```
+
 
 - rig-only **passes** → the rig is sound, so the failure is on the StreamLib side of the loop.
   Read `node.log` before calling it a regression — a run that never reached the graph it meant to
@@ -207,6 +239,7 @@ without the label invites it to be read as though it were.
 - Spacing: `symbol_interval_error_ms` <n> (worst `<span>`) · `cumulative_interval_error_ms` <n>
 - Holes: `missing_loud_audio_ms` <n> · `silent_stretch_ms` <n> · `emptiest_region` <region>
 - Channel contract (through-engine only): <verdict + `bags_dropped_by_the_tap`, or "n/a">
+- Tapped channel belonged to this run's own node: yes — `<tapped id>` vs `node.log` | n/a
 
 #### Spectrogram
 
