@@ -11,18 +11,19 @@
 //!
 //! The half that cannot be reached by `dlopen` at all is SPA's `static inline`
 //! pod builders and parsers, which have no shared object behind them:
-//! `pipewire_capture_shim.c` compiles those in and calls libpipewire only
+//! `pipewire_audio_shim.c` compiles those in and calls libpipewire only
 //! through the pointers this module hands it.
 
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::Arc;
 
 use libloading::Library;
 
 use crate::core::context::{
-    AudioCaptureSampleFormat, AudioCaptureStream, AudioCaptureStreamFormat,
-    AudioCaptureStreamRequest, AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason,
-    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
+    AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff,
 };
 use crate::core::{Error, Result};
 
@@ -34,13 +35,13 @@ const PIPEWIRE_LIBRARY_SONAME: &str = "libpipewire-0.3.so.0";
 /// How much failure text the shim is given room to write.
 const SHIM_FAILURE_TEXT_CAPACITY: usize = 512;
 
-mod capture_shim {
+mod audio_shim {
     use std::ffi::{c_char, c_int, c_void};
 
-    /// Mirrors `struct StreamLibPipeWireNegotiatedCaptureFormat`.
+    /// Mirrors `struct StreamLibPipeWireNegotiatedAudioFormat`.
     #[repr(C)]
     #[derive(Debug, Clone, Copy, Default)]
-    pub struct NegotiatedCaptureFormat {
+    pub struct NegotiatedAudioFormat {
         pub sample_rate: u32,
         pub channels: u32,
         pub sample_format: u32,
@@ -51,11 +52,16 @@ mod capture_shim {
     /// `STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE`.
     pub const SAMPLE_FORMAT_I16_LE: u32 = 1;
 
-    /// Mirrors `struct StreamLibPipeWireCaptureStream`, which is opaque here.
+    /// Mirrors `struct StreamLibPipeWireAudioStream`, which is opaque here.
     #[repr(C)]
-    pub struct CaptureStream {
+    pub struct AudioStream {
         _opaque: [u8; 0],
     }
+
+    /// `STREAMLIB_PIPEWIRE_STREAM_DIRECTION_CAPTURE`.
+    pub const STREAM_DIRECTION_CAPTURE: c_int = 0;
+    /// `STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK`.
+    pub const STREAM_DIRECTION_PLAYBACK: c_int = 1;
 
     pub type CapturedBlockHandOff = unsafe extern "C" fn(
         hand_off_context: *mut c_void,
@@ -63,6 +69,13 @@ mod capture_shim {
         interleaved_sample_byte_count: usize,
         sample_count: u32,
         first_sample_timestamp_ns: i64,
+    );
+
+    pub type PlaybackBlockHandOff = unsafe extern "C" fn(
+        hand_off_context: *mut c_void,
+        interleaved_sample_bytes_to_fill: *mut u8,
+        interleaved_sample_byte_count: usize,
+        sample_count: u32,
     );
 
     unsafe extern "C" {
@@ -77,22 +90,26 @@ mod capture_shim {
             failure_text: *mut c_char,
             failure_text_capacity: usize,
         ) -> c_int;
-        pub fn streamlib_pipewire_capture_stream_open(
+        pub fn streamlib_pipewire_audio_stream_open(
             entry_points: *const *mut c_void,
+            direction: c_int,
             device_id_or_null: *const c_char,
-            negotiated_format_out: *mut NegotiatedCaptureFormat,
+            negotiated_format_out: *mut NegotiatedAudioFormat,
             failure_text: *mut c_char,
             failure_text_capacity: usize,
-        ) -> *mut CaptureStream;
+        ) -> *mut AudioStream;
         pub fn streamlib_pipewire_capture_stream_start_delivering(
-            capture_stream: *mut CaptureStream,
+            audio_stream: *mut AudioStream,
             hand_off: CapturedBlockHandOff,
             hand_off_context: *mut c_void,
         );
-        pub fn streamlib_pipewire_capture_stream_stop_delivering(
-            capture_stream: *mut CaptureStream,
+        pub fn streamlib_pipewire_playback_stream_start_requesting(
+            audio_stream: *mut AudioStream,
+            hand_off: PlaybackBlockHandOff,
+            hand_off_context: *mut c_void,
         );
-        pub fn streamlib_pipewire_capture_stream_close(capture_stream: *mut CaptureStream);
+        pub fn streamlib_pipewire_audio_stream_stop_handing_off(audio_stream: *mut AudioStream);
+        pub fn streamlib_pipewire_audio_stream_close(audio_stream: *mut AudioStream);
     }
 
     /// Mirrors `struct StreamLibPipeWireStreamProperty`.
@@ -120,9 +137,10 @@ mod capture_shim {
         pub fn streamlib_pipewire_sink_name_length_of_monitor_device_id(
             device_id: *const c_char,
         ) -> usize;
-        pub fn streamlib_pipewire_capture_stream_properties(
+        pub fn streamlib_pipewire_stream_properties(
             items: *mut StreamProperty,
             item_capacity: u32,
+            direction: c_int,
             device_id_or_null: *const c_char,
             sink_name: *mut c_char,
             sink_name_capacity: usize,
@@ -187,8 +205,8 @@ impl PipeWireLibraryEntryPoints {
         // SAFETY: both return pointers into the shim's own `static const`
         // storage, so the array and every name in it are `'static` and
         // immutable.
-        let name_count = unsafe { capture_shim::streamlib_pipewire_entry_point_count() };
-        let names = unsafe { capture_shim::streamlib_pipewire_entry_point_names() };
+        let name_count = unsafe { audio_shim::streamlib_pipewire_entry_point_count() };
+        let names = unsafe { audio_shim::streamlib_pipewire_entry_point_names() };
         let mut resolved_addresses = Vec::with_capacity(name_count);
         for name_index in 0..name_count {
             // SAFETY: `name_index < name_count`, and the shim guarantees that
@@ -263,14 +281,14 @@ impl PipeWireAudioDeviceBackend {
         // Process-global, and this runs inside the chain's one-shot probe, so
         // it happens exactly once however many streams are opened later.
         // SAFETY: the table is fully resolved and outlives this call.
-        unsafe { capture_shim::streamlib_pipewire_initialize(entry_points.as_ptr()) };
+        unsafe { audio_shim::streamlib_pipewire_initialize(entry_points.as_ptr()) };
 
         let mut failure_text = ShimFailureText::new();
         let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
         // SAFETY: the table is fully resolved, and the out-buffer's pointer and
         // capacity come from the buffer itself, which outlives the call.
         let daemon_answered = unsafe {
-            capture_shim::streamlib_pipewire_daemon_answers(
+            audio_shim::streamlib_pipewire_daemon_answers(
                 entry_points.as_ptr(),
                 failure_text_ptr,
                 failure_text_capacity,
@@ -286,7 +304,7 @@ impl PipeWireAudioDeviceBackend {
         // own static version string, valid for as long as the library is loaded.
         let library_version = unsafe {
             let version =
-                capture_shim::streamlib_pipewire_loaded_library_version(entry_points.as_ptr());
+                audio_shim::streamlib_pipewire_loaded_library_version(entry_points.as_ptr());
             if version.is_null() {
                 "unknown".to_string()
             } else {
@@ -312,8 +330,43 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
 
     fn open_capture_stream(
         &self,
-        request: &AudioCaptureStreamRequest,
+        request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>> {
+        let (opened, capture_stream_format) =
+            self.open_audio_stream(audio_shim::STREAM_DIRECTION_CAPTURE, request)?;
+        Ok(Box::new(PipeWireAudioCaptureStream {
+            opened,
+            capture_stream_format,
+            installed_hand_off: None,
+        }))
+    }
+
+    fn open_playback_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioPlaybackStream>> {
+        let (opened, playback_stream_format) =
+            self.open_audio_stream(audio_shim::STREAM_DIRECTION_PLAYBACK, request)?;
+        Ok(Box::new(PipeWireAudioPlaybackStream {
+            opened,
+            playback_stream_format,
+            installed_hand_off: None,
+        }))
+    }
+}
+
+impl PipeWireAudioDeviceBackend {
+    /// Open one stream in either direction and read back what PipeWire settled
+    /// on.
+    ///
+    /// One function for both because everything here is direction-blind: the
+    /// device id is validated the same way, the shim is asked the same way, and
+    /// a refusal has to name the device the same way.
+    fn open_audio_stream(
+        &self,
+        direction: c_int,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<(OpenedPipeWireAudioStream, AudioStreamFormat)> {
         // The device paces this arm, so the request's deviceless pacing clock
         // is deliberately untouched: a graph whose audio is device-paced never
         // starts the timer, which is what keeps device ticks and timer ticks
@@ -331,14 +384,15 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
             })
             .transpose()?;
 
-        let mut negotiated_format = capture_shim::NegotiatedCaptureFormat::default();
+        let mut negotiated_format = audio_shim::NegotiatedAudioFormat::default();
         let mut failure_text = ShimFailureText::new();
         let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
         // SAFETY: the device id, if any, is a live `CString` for the length of
         // this call; the format and failure out-parameters are owned locals.
         let opened = unsafe {
-            capture_shim::streamlib_pipewire_capture_stream_open(
+            audio_shim::streamlib_pipewire_audio_stream_open(
                 self.entry_points.as_ptr(),
+                direction,
                 device_id
                     .as_ref()
                     .map_or(std::ptr::null(), |device_id| device_id.as_ptr()),
@@ -357,55 +411,79 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
             )));
         }
 
-        Ok(Box::new(PipeWireAudioCaptureStream {
+        let opened = OpenedPipeWireAudioStream {
             _entry_points: Arc::clone(&self.entry_points),
-            capture_stream: opened,
-            capture_stream_format: capture_stream_format_of(negotiated_format)?,
-            installed_hand_off: None,
-        }))
+            audio_stream: opened,
+        };
+        Ok((opened, stream_format_of(negotiated_format)?))
     }
 }
 
 /// The seam's format, read out of what PipeWire settled on.
-fn capture_stream_format_of(
-    negotiated: capture_shim::NegotiatedCaptureFormat,
-) -> Result<AudioCaptureStreamFormat> {
+fn stream_format_of(negotiated: audio_shim::NegotiatedAudioFormat) -> Result<AudioStreamFormat> {
     let sample_format = match negotiated.sample_format {
-        capture_shim::SAMPLE_FORMAT_F32_LE => AudioCaptureSampleFormat::F32,
-        capture_shim::SAMPLE_FORMAT_I16_LE => AudioCaptureSampleFormat::I16,
+        audio_shim::SAMPLE_FORMAT_F32_LE => AudioSampleFormat::F32,
+        audio_shim::SAMPLE_FORMAT_I16_LE => AudioSampleFormat::I16,
         other => {
             return Err(Error::Runtime(format!(
-                "the PipeWire capture shim reported sample format {other}, which names no \
+                "the PipeWire audio shim reported sample format {other}, which names no \
                  encoding an AudioBlock can carry"
             )));
         }
     };
-    Ok(AudioCaptureStreamFormat {
+    Ok(AudioStreamFormat {
         sample_rate: negotiated.sample_rate,
         channels: negotiated.channels,
         sample_format,
     })
 }
 
-/// One PipeWire capture stream, negotiated and connected.
-struct PipeWireAudioCaptureStream {
+/// A shim-owned stream and the library every address in it points into, closed
+/// exactly once when this drops.
+///
+/// Owned by whichever direction's stream holds it, so the close, the library
+/// lifetime and the `Send` claim are stated once rather than per direction.
+struct OpenedPipeWireAudioStream {
     /// Held so the library outlives every address the shim still holds.
     _entry_points: Arc<PipeWireLibraryEntryPoints>,
-    capture_stream: *mut capture_shim::CaptureStream,
-    capture_stream_format: AudioCaptureStreamFormat,
-    /// The hand-off the shim's callback context points at. Owned here so it
-    /// outlives every delivery and is freed only once the shim has promised no
-    /// further callback.
-    installed_hand_off: Option<Box<CapturedAudioBlockHandOff>>,
+    audio_stream: *mut audio_shim::AudioStream,
+}
+
+impl Drop for OpenedPipeWireAudioStream {
+    fn drop(&mut self) {
+        // Closes and joins PipeWire's loop thread, so a hand-off dropped after
+        // this is provably no longer reachable from a callback.
+        // SAFETY: the pointer came from the shim's own `open` and is closed
+        // exactly once, here.
+        unsafe {
+            audio_shim::streamlib_pipewire_audio_stream_close(self.audio_stream);
+        }
+    }
 }
 
 // The pointer is exclusively owned by this struct — nothing else holds a copy,
 // and every shim entry point it is passed to takes PipeWire's thread-loop lock
 // before touching anything the loop thread also touches. `pw_thread_loop` is a
 // use-from-any-thread API, so moving that ownership between threads is sound.
-// `Sync` is deliberately not implemented: two `&` references could call
-// `start_delivering` concurrently.
-unsafe impl Send for PipeWireAudioCaptureStream {}
+// `Sync` is deliberately not implemented: two `&` references could install a
+// hand-off concurrently.
+unsafe impl Send for OpenedPipeWireAudioStream {}
+
+/// One PipeWire capture stream, negotiated and connected.
+struct PipeWireAudioCaptureStream {
+    opened: OpenedPipeWireAudioStream,
+    capture_stream_format: AudioStreamFormat,
+    /// The hand-off the shim's callback context points at. Owned here so it
+    /// outlives every delivery and is freed only once the shim has promised no
+    /// further callback.
+    ///
+    /// **Declared after `opened`, and it must stay that way.** Rust drops
+    /// fields in declaration order, and `opened`'s drop is what closes the
+    /// stream and joins PipeWire's loop thread — so this box is freed only
+    /// once no callback can still hold a pointer into it. Move it above and
+    /// the loop thread reads freed memory, with nothing to say so.
+    installed_hand_off: Option<Box<CapturedAudioBlockHandOff>>,
+}
 
 /// What the shim calls on PipeWire's thread-loop thread, with that loop's lock
 /// held.
@@ -442,7 +520,7 @@ unsafe extern "C" fn deliver_captured_block_to_hand_off(
 }
 
 impl AudioCaptureStream for PipeWireAudioCaptureStream {
-    fn stream_format(&self) -> AudioCaptureStreamFormat {
+    fn stream_format(&self) -> AudioStreamFormat {
         self.capture_stream_format
     }
 
@@ -454,8 +532,8 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
         // SAFETY: the stream pointer is live, and the context stays valid
         // because the `Box` is stored on `self` on the next line.
         unsafe {
-            capture_shim::streamlib_pipewire_capture_stream_start_delivering(
-                self.capture_stream,
+            audio_shim::streamlib_pipewire_capture_stream_start_delivering(
+                self.opened.audio_stream,
                 deliver_captured_block_to_hand_off,
                 hand_off_context,
             );
@@ -472,22 +550,95 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
         // when it returns no callback can still be reading the context that the
         // next line drops.
         unsafe {
-            capture_shim::streamlib_pipewire_capture_stream_stop_delivering(self.capture_stream);
+            audio_shim::streamlib_pipewire_audio_stream_stop_handing_off(self.opened.audio_stream);
         }
         self.installed_hand_off = None;
         Ok(())
     }
 }
 
-impl Drop for PipeWireAudioCaptureStream {
-    fn drop(&mut self) {
-        // Closes and joins PipeWire's loop thread, so the hand-off this then
-        // drops is provably no longer reachable from a callback.
-        // SAFETY: the pointer came from the shim's own `open` and is closed
-        // exactly once, here.
+/// One PipeWire playback stream, negotiated and connected.
+struct PipeWireAudioPlaybackStream {
+    opened: OpenedPipeWireAudioStream,
+    playback_stream_format: AudioStreamFormat,
+    /// The hand-off the shim's callback context points at. Owned here so it
+    /// outlives every request and is freed only once the shim has promised no
+    /// further callback.
+    ///
+    /// **Declared after `opened`, and it must stay that way** — the same
+    /// drop-order requirement its capture sibling carries, for the same
+    /// reason.
+    installed_hand_off: Option<Box<AudioBlockForPlaybackHandOff>>,
+}
+
+/// What the shim calls on PipeWire's thread-loop thread when it needs samples,
+/// with that loop's lock held.
+///
+/// Must not unwind: this is a plain `extern "C"` boundary, so a panic here
+/// aborts the process rather than crossing into C.
+unsafe extern "C" fn fill_requested_block_from_hand_off(
+    hand_off_context: *mut c_void,
+    interleaved_sample_bytes_to_fill: *mut u8,
+    interleaved_sample_byte_count: usize,
+    sample_count: u32,
+) {
+    if interleaved_sample_bytes_to_fill.is_null() {
+        return;
+    }
+    // SAFETY: the context is the address of the `Box<AudioBlockForPlaybackHandOff>`
+    // that `start_requesting_from` installed under the loop lock, and
+    // `stop_requesting` retires it under that same lock before dropping it — so
+    // it is live for the length of this call.
+    let hand_off = unsafe { &*hand_off_context.cast::<AudioBlockForPlaybackHandOff>() };
+    // SAFETY: the shim sized this against the dequeued buffer's own mapping,
+    // which stays valid until this returns, and the loop thread is the only
+    // one writing it.
+    let interleaved_sample_bytes_to_fill = unsafe {
+        std::slice::from_raw_parts_mut(
+            interleaved_sample_bytes_to_fill,
+            interleaved_sample_byte_count,
+        )
+    };
+    hand_off(AudioBlockRequestedByDevice {
+        interleaved_sample_bytes_to_fill,
+        sample_count,
+    });
+}
+
+impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
+    fn stream_format(&self) -> AudioStreamFormat {
+        self.playback_stream_format
+    }
+
+    fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
+        // Boxed so C gets a thin, stable address for what is otherwise a fat
+        // pointer. The allocation does not move when the `Box` itself does.
+        let hand_off = Box::new(hand_off);
+        let hand_off_context = (&raw const *hand_off).cast_mut().cast::<c_void>();
+        // SAFETY: the stream pointer is live, and the context stays valid
+        // because the `Box` is stored on `self` on the next line.
         unsafe {
-            capture_shim::streamlib_pipewire_capture_stream_close(self.capture_stream);
+            audio_shim::streamlib_pipewire_playback_stream_start_requesting(
+                self.opened.audio_stream,
+                fill_requested_block_from_hand_off,
+                hand_off_context,
+            );
         }
+        // Installed before the previous one is dropped, for the same reason the
+        // capture stream does it in this order.
+        self.installed_hand_off = Some(hand_off);
+        Ok(())
+    }
+
+    fn stop_requesting(&mut self) -> Result<()> {
+        // SAFETY: the stream pointer is live. The shim takes the loop lock, so
+        // when it returns no callback can still be reading the context that the
+        // next line drops.
+        unsafe {
+            audio_shim::streamlib_pipewire_audio_stream_stop_handing_off(self.opened.audio_stream);
+        }
+        self.installed_hand_off = None;
+        Ok(())
     }
 }
 
@@ -503,7 +654,7 @@ mod tests {
 
     fn first_sample_timestamp_ns(cycle_timestamp_ns: i64, delay_in_rate_units: i64) -> i64 {
         unsafe {
-            capture_shim::streamlib_pipewire_first_sample_timestamp_ns(
+            audio_shim::streamlib_pipewire_first_sample_timestamp_ns(
                 cycle_timestamp_ns,
                 delay_in_rate_units,
                 RATE_48K_NUMERATOR,
@@ -564,7 +715,7 @@ mod tests {
     #[test]
     fn an_unsettled_rate_fraction_contributes_no_delay_rather_than_dividing_by_zero() {
         let stamp = unsafe {
-            capture_shim::streamlib_pipewire_first_sample_timestamp_ns(
+            audio_shim::streamlib_pipewire_first_sample_timestamp_ns(
                 1_000_000_000,
                 512,
                 0,
@@ -579,9 +730,7 @@ mod tests {
     fn monitored_sink_name_of(device_id: &str) -> Option<String> {
         let device_id = CString::new(device_id).expect("a test device id has no NUL");
         let length = unsafe {
-            capture_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(
-                device_id.as_ptr(),
-            )
+            audio_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(device_id.as_ptr())
         };
         (length > 0).then(|| device_id.to_string_lossy()[..length].to_string())
     }
@@ -594,17 +743,21 @@ mod tests {
 
     /// The key/value pairs the shim would announce a stream with, read back as
     /// owned strings.
-    fn composed_stream_properties(device_id: Option<&str>) -> Option<Vec<(String, String)>> {
+    fn composed_stream_properties(
+        direction: c_int,
+        device_id: Option<&str>,
+    ) -> Option<Vec<(String, String)>> {
         let device_id = device_id.map(|id| CString::new(id).expect("a test device id has no NUL"));
-        let mut items = [capture_shim::StreamProperty {
+        let mut items = [audio_shim::StreamProperty {
             key: std::ptr::null(),
             value: std::ptr::null(),
         }; MAX_STREAM_PROPERTIES];
         let mut sink_name = [0u8; 256];
         let count = unsafe {
-            capture_shim::streamlib_pipewire_capture_stream_properties(
+            audio_shim::streamlib_pipewire_stream_properties(
                 items.as_mut_ptr(),
                 MAX_STREAM_PROPERTIES as u32,
+                direction,
                 device_id
                     .as_ref()
                     .map_or(std::ptr::null(), |id| id.as_ptr()),
@@ -637,8 +790,11 @@ mod tests {
     /// which nothing did before, so the fix was held only by a manual rig run.
     #[test]
     fn a_monitor_device_id_asks_pipewire_for_the_sinks_monitor() {
-        let properties = composed_stream_properties(Some("streamlib-fixture-audio-sink.monitor"))
-            .expect("a monitor id composes properties");
+        let properties = composed_stream_properties(
+            audio_shim::STREAM_DIRECTION_CAPTURE,
+            Some("streamlib-fixture-audio-sink.monitor"),
+        )
+        .expect("a monitor id composes properties");
         assert!(
             properties.contains(&(
                 "target.object".to_string(),
@@ -656,8 +812,11 @@ mod tests {
     /// which would otherwise look for a monitor a source does not have.
     #[test]
     fn a_plain_device_id_is_targeted_as_an_ordinary_source() {
-        let properties = composed_stream_properties(Some("alsa_input.pci-0000_00_1f.3"))
-            .expect("a plain id composes properties");
+        let properties = composed_stream_properties(
+            audio_shim::STREAM_DIRECTION_CAPTURE,
+            Some("alsa_input.pci-0000_00_1f.3"),
+        )
+        .expect("a plain id composes properties");
         assert!(properties.contains(&(
             "target.object".to_string(),
             "alsa_input.pci-0000_00_1f.3".to_string()
@@ -674,7 +833,8 @@ mod tests {
     /// nothing targets anything.
     #[test]
     fn no_device_id_names_no_target_at_all() {
-        let properties = composed_stream_properties(None).expect("the default composes");
+        let properties = composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
+            .expect("the default composes");
         assert!(!properties.iter().any(|(key, _)| key == "target.object"));
         assert!(
             !properties
@@ -689,7 +849,81 @@ mod tests {
     #[test]
     fn an_over_long_monitor_device_id_composes_nothing_rather_than_a_plain_target() {
         let over_long = format!("{}.monitor", "s".repeat(400));
-        assert!(composed_stream_properties(Some(&over_long)).is_none());
+        assert!(
+            composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, Some(&over_long))
+                .is_none()
+        );
+    }
+
+    /// The direction the monitor convention does *not* apply to: a speaker
+    /// pointed at `<sink>.monitor` wants that sink, and asking for its monitor
+    /// would target a capture endpoint nothing can be played into.
+    ///
+    /// Mental revert: share one property composition across both directions and
+    /// a playback stream announces itself as `Capture` with
+    /// `stream.capture.sink` set — which is how audio ends up going nowhere
+    /// while every log line says the stream connected.
+    #[test]
+    fn a_playback_stream_targets_the_sink_itself_and_announces_itself_as_playback() {
+        let properties = composed_stream_properties(
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            Some("streamlib-fixture-audio-sink"),
+        )
+        .expect("a playback target composes properties");
+        assert!(
+            properties.contains(&("media.category".to_string(), "Playback".to_string())),
+            "a playback stream announces the direction it runs in: {properties:?}"
+        );
+        assert!(
+            properties.contains(&(
+                "target.object".to_string(),
+                "streamlib-fixture-audio-sink".to_string()
+            )),
+            "the target is the sink that was named: {properties:?}"
+        );
+        assert!(
+            !properties
+                .iter()
+                .any(|(key, _)| key == "stream.capture.sink"),
+            "nothing is captured on a playback stream: {properties:?}"
+        );
+    }
+
+    /// A `.monitor` suffix is a capture spelling, and a speaker handed one must
+    /// not quietly become a capture stream — it targets what it was given and
+    /// PipeWire refuses the link if that names nothing playable.
+    #[test]
+    fn a_playback_stream_never_takes_the_monitor_path() {
+        let properties = composed_stream_properties(
+            audio_shim::STREAM_DIRECTION_PLAYBACK,
+            Some("streamlib-fixture-audio-sink.monitor"),
+        )
+        .expect("a playback target composes properties");
+        assert!(
+            properties.contains(&(
+                "target.object".to_string(),
+                "streamlib-fixture-audio-sink.monitor".to_string()
+            )),
+            "the id is passed through rather than having a suffix stripped: {properties:?}"
+        );
+        assert!(
+            !properties
+                .iter()
+                .any(|(key, _)| key == "stream.capture.sink"),
+            "nothing is captured on a playback stream: {properties:?}"
+        );
+    }
+
+    /// The capture side keeps saying so, which is what makes the two-value
+    /// property a real distinction rather than a constant.
+    #[test]
+    fn a_capture_stream_announces_itself_as_capture() {
+        let properties = composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
+            .expect("the default composes");
+        assert!(
+            properties.contains(&("media.category".to_string(), "Capture".to_string())),
+            "{properties:?}"
+        );
     }
 
     /// The whole of the monitor convention: a `<sink>.monitor` device id names
@@ -723,8 +957,8 @@ mod tests {
         assert_eq!(monitored_sink_name_of(".monitor"), None);
     }
 
-    fn clamped_chunk_extent(offset: u32, size: u32, maxsize: u32) -> capture_shim::ChunkExtent {
-        unsafe { capture_shim::streamlib_pipewire_clamped_chunk_extent(offset, size, maxsize) }
+    fn clamped_chunk_extent(offset: u32, size: u32, maxsize: u32) -> audio_shim::ChunkExtent {
+        unsafe { audio_shim::streamlib_pipewire_clamped_chunk_extent(offset, size, maxsize) }
     }
 
     /// The ordinary case: a chunk that sits inside its buffer is passed through
@@ -733,7 +967,7 @@ mod tests {
     fn a_chunk_within_its_buffer_is_left_alone() {
         assert_eq!(
             clamped_chunk_extent(0, 8192, 65536),
-            capture_shim::ChunkExtent {
+            audio_shim::ChunkExtent {
                 offset: 0,
                 byte_count: 8192
             }
@@ -764,7 +998,7 @@ mod tests {
     fn a_buffer_that_maps_nothing_yields_an_empty_extent() {
         assert_eq!(
             clamped_chunk_extent(16, 64, 0),
-            capture_shim::ChunkExtent {
+            audio_shim::ChunkExtent {
                 offset: 0,
                 byte_count: 0
             }
@@ -776,10 +1010,10 @@ mod tests {
     /// what this exists to make impossible.
     #[test]
     fn the_shim_names_every_entry_point_it_expects_rust_to_resolve() {
-        let count = unsafe { capture_shim::streamlib_pipewire_entry_point_count() };
+        let count = unsafe { audio_shim::streamlib_pipewire_entry_point_count() };
         assert!(count > 0, "the shim names no entry points at all");
 
-        let names = unsafe { capture_shim::streamlib_pipewire_entry_point_names() };
+        let names = unsafe { audio_shim::streamlib_pipewire_entry_point_names() };
         for name_index in 0..count {
             let name = unsafe { CStr::from_ptr(*names.add(name_index)) }
                 .to_str()

@@ -215,7 +215,7 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         // Headers only — no PipeWire source is compiled and no PipeWire library
         // is linked. What ships inside the wheel is SPA's `static inline` pod
         // builders and parsers, compiled into
-        // `runtime/streamlib-engine/src/linux/pipewire_capture_shim.c`, which is
+        // `runtime/streamlib-engine/src/linux/pipewire_audio_shim.c`, which is
         // why the terms travel with the binary all the same.
         notice_source: VendoredCppNoticeSource::VendoredLicenseFile {
             path_relative_to_workspace_root: "vendor/pipewire-headers/COPYING",

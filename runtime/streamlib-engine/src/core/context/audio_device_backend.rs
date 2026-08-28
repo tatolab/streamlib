@@ -14,37 +14,41 @@ use super::SharedAudioClock;
 use super::silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 use crate::core::Result;
 
-/// How the scalars a capture stream delivers are encoded.
+/// How the scalars an audio stream carries are encoded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AudioCaptureSampleFormat {
+pub enum AudioSampleFormat {
     /// 32-bit little-endian float.
     F32,
     /// 16-bit little-endian signed integer.
     I16,
 }
 
-impl AudioCaptureSampleFormat {
-    /// Bytes one scalar occupies in a delivered payload.
+impl AudioSampleFormat {
+    /// Bytes one scalar occupies in a payload.
     pub fn bytes_per_sample(self) -> usize {
         match self {
-            AudioCaptureSampleFormat::F32 => 4,
-            AudioCaptureSampleFormat::I16 => 2,
+            AudioSampleFormat::F32 => 4,
+            AudioSampleFormat::I16 => 2,
         }
     }
 }
 
-/// What a capture stream delivers, fixed for the stream's lifetime.
+/// What a stream carries in either direction, fixed for its lifetime.
+///
+/// One type for capture and playback because the triple is the same one: a
+/// second, direction-named copy of it would let the two drift, and a block
+/// crossing from a microphone to a speaker is compared against exactly this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AudioCaptureStreamFormat {
+pub struct AudioStreamFormat {
     /// Sample rate in hertz.
     pub sample_rate: u32,
-    /// Channel count every delivered payload is interleaved by.
+    /// Channel count every payload is interleaved by.
     pub channels: u32,
-    /// How to read the scalars in a delivered payload.
-    pub sample_format: AudioCaptureSampleFormat,
+    /// How to read the scalars in a payload.
+    pub sample_format: AudioSampleFormat,
 }
 
-impl AudioCaptureStreamFormat {
+impl AudioStreamFormat {
     /// Bytes a block of `sample_count` per-channel samples occupies once
     /// interleaved.
     pub fn interleaved_byte_count_for(self, sample_count: u32) -> usize {
@@ -57,7 +61,7 @@ impl AudioCaptureStreamFormat {
 #[derive(Debug, Clone, Copy)]
 pub struct CapturedAudioBlockFromDevice<'a> {
     /// Interleaved little-endian scalars, read according to the stream's
-    /// [`AudioCaptureStreamFormat::sample_format`].
+    /// [`AudioStreamFormat::sample_format`].
     pub interleaved_sample_bytes: &'a [u8],
     /// Per-channel sample count: the payload carries `sample_count × channels`
     /// scalars.
@@ -76,8 +80,8 @@ pub struct CapturedAudioBlockFromDevice<'a> {
 /// [`AudioCaptureStream::stop_delivering`] from here deadlocks it.
 pub type CapturedAudioBlockHandOff = Box<dyn Fn(CapturedAudioBlockFromDevice<'_>) + Send + Sync>;
 
-/// What a caller asks a backend to open a capture stream for.
-pub struct AudioCaptureStreamRequest {
+/// What a caller asks a backend to open a stream for, in either direction.
+pub struct AudioDeviceStreamRequest {
     /// Backend-named device. `None` takes the backend's default; a name the
     /// backend cannot open is an error, never a quiet landing on a different
     /// device.
@@ -92,7 +96,7 @@ pub struct AudioCaptureStreamRequest {
 pub trait AudioCaptureStream: Send {
     /// The rate, channel count and scalar encoding of every block this stream
     /// delivers.
-    fn stream_format(&self) -> AudioCaptureStreamFormat;
+    fn stream_format(&self) -> AudioStreamFormat;
 
     /// Begin delivering captured blocks to `hand_off`, replacing any hand-off
     /// an earlier call installed.
@@ -100,6 +104,46 @@ pub trait AudioCaptureStream: Send {
 
     /// Stop delivering. The hand-off is not called again once this returns.
     fn stop_delivering(&mut self) -> Result<()>;
+}
+
+/// One block of samples a device is asking for, borrowed for the length of the
+/// hand-off — the buffer is the device's and is invalid the moment it returns.
+#[derive(Debug)]
+pub struct AudioBlockRequestedByDevice<'a> {
+    /// Interleaved little-endian scalars to write, in the stream's
+    /// [`AudioStreamFormat::sample_format`].
+    ///
+    /// The hand-off fills all of it. A hand-off holding fewer samples than
+    /// this has room for writes silence into the remainder and counts what it
+    /// invented — a device buffer left partly unwritten plays whatever the
+    /// previous cycle put there.
+    pub interleaved_sample_bytes_to_fill: &'a mut [u8],
+    /// Per-channel sample count the buffer has room for: it holds
+    /// `sample_count × channels` scalars.
+    pub sample_count: u32,
+}
+
+/// What a playback stream calls each time its device needs samples.
+///
+/// Runs on the backend's own callback thread, so it must not block, and it
+/// must not re-enter the stream it was installed on: a backend is free to hold
+/// the stream's own lock across this call, so calling back into
+/// [`AudioPlaybackStream::stop_requesting`] from here deadlocks it.
+pub type AudioBlockForPlaybackHandOff = Box<dyn Fn(AudioBlockRequestedByDevice<'_>) + Send + Sync>;
+
+/// A playback stream a backend opened.
+pub trait AudioPlaybackStream: Send {
+    /// The rate, channel count and scalar encoding every block handed to this
+    /// stream must already be in. There is no resampler on this rung, so a
+    /// caller compares rather than converts.
+    fn stream_format(&self) -> AudioStreamFormat;
+
+    /// Begin asking `hand_off` for samples, replacing any hand-off an earlier
+    /// call installed.
+    fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()>;
+
+    /// Stop asking. The hand-off is not called again once this returns.
+    fn stop_requesting(&mut self) -> Result<()>;
 }
 
 /// The audio device seam every audio stream is opened through.
@@ -111,8 +155,15 @@ pub trait AudioDeviceBackend: Send + Sync {
     /// default when none is named.
     fn open_capture_stream(
         &self,
-        request: &AudioCaptureStreamRequest,
+        request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>>;
+
+    /// Open a playback stream against the named device, or the backend's
+    /// default when none is named.
+    fn open_playback_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioPlaybackStream>>;
 }
 
 /// Shared handle to the backend the chain probed.
@@ -271,8 +322,15 @@ mod tests {
 
         fn open_capture_stream(
             &self,
-            _request: &AudioCaptureStreamRequest,
+            _request: &AudioDeviceStreamRequest,
         ) -> Result<Box<dyn AudioCaptureStream>> {
+            unreachable!("the walk only ever opens the arm, never a stream on it")
+        }
+
+        fn open_playback_stream(
+            &self,
+            _request: &AudioDeviceStreamRequest,
+        ) -> Result<Box<dyn AudioPlaybackStream>> {
             unreachable!("the walk only ever opens the arm, never a stream on it")
         }
     }
@@ -392,7 +450,7 @@ mod tests {
 
     #[test]
     fn a_scalars_width_is_the_width_the_wire_dtype_names() {
-        assert_eq!(AudioCaptureSampleFormat::F32.bytes_per_sample(), 4);
-        assert_eq!(AudioCaptureSampleFormat::I16.bytes_per_sample(), 2);
+        assert_eq!(AudioSampleFormat::F32.bytes_per_sample(), 4);
+        assert_eq!(AudioSampleFormat::I16.bytes_per_sample(), 2);
     }
 }

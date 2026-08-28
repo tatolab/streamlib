@@ -90,7 +90,7 @@ fn raw_capture_device_names_in_dev_snd() -> Vec<String> {
 fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend) -> Option<String> {
     use std::sync::Arc;
     use streamlib_engine::core::context::{
-        AudioCaptureStreamRequest, AudioClockConfig, AudioDeviceBackend, SharedAudioClock,
+        AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, SharedAudioClock,
         SoftwareAudioClock,
     };
 
@@ -100,7 +100,7 @@ fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend)
             let deviceless_pacing_clock: SharedAudioClock =
                 Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)));
             backend
-                .open_capture_stream(&AudioCaptureStreamRequest {
+                .open_capture_stream(&AudioDeviceStreamRequest {
                     device_id: Some(device_name.clone()),
                     deviceless_pacing_clock,
                 })
