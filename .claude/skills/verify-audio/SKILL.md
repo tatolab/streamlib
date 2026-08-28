@@ -64,9 +64,10 @@ bypass too.
 PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
   runtime/streamlib-engine/tests/fixtures/verify_audio_loopback.sh
 
-# rig-only
+# rig-only — a fresh directory, because the fixture never clears the one you give it
 PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
-  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/verify-audio-rig
+  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh \
+  "$(mktemp -d -t verify-audio-rig-XXXXXX)"
 ```
 
 **`PYTHON` must be absolute.** The through-engine fixture starts the node from a subshell that
@@ -81,11 +82,10 @@ port it was given. So the node is alive and serving — somewhere else.
 
 **Budget for it: a busy port stalls the run for up to half an hour before it gives up.** The
 startup poll is 60 attempts at a call bounded by `CONTROL_VERB_TIMEOUT_SECONDS = 30.0`, so a port
-held by something that accepts and never answers burns the full 30 s per attempt. Check the port is
-free before starting, or pass `--port`.
+held by something that accepts and never answers burns the full 30 s per attempt.
 
-**So check the port is free before you start.** This is the one preflight that prevents an
-unearned green, and it costs nothing:
+**So check the port is free before you start**, or pass `--port`. This is the one preflight that
+prevents an unearned green, and it costs nothing:
 
 ```bash
 ss -ltn | grep ':9077' || echo "9077 free"
@@ -192,15 +192,22 @@ never the picture alone.
 "The rig is broken" and "the rig is fine, the engine broke it" are different answers with
 different owners, and the user should not have to work out which they got.
 
-So on any **non-zero, non-77** exit from `verify_audio_loopback.sh`, run the rig-only fixture
-before reporting anything, and report the pair. Give it an explicit output directory — left to
-its default it lands on the same `mktemp` prefix as the run you are still diagnosing:
+So on **exit 1** — the fixture's failure status — run the rig-only fixture before reporting
+anything, and report the pair. Exit `2` and `130` are not failures of the thing under test: a bad
+argument and a cancelled run say nothing about the rig or the engine, so they earn no triage and
+no report.
+
+Give it a **fresh** directory each time, and one outside the `streamlib-audio-loopback-*` glob so
+it cannot become the decoy described above. Fresh matters as much as the name: the fixture only
+`mkdir -p`s the directory you hand it and never clears it, so a triage run that skips at the
+device check leaves the *previous* run's `report.json` and spectrogram sitting there — saying
+`PASS`.
 
 ```bash
+TRIAGE_DIR="$(mktemp -d -t verify-audio-triage-XXXXXX)"
 PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
-  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh /tmp/verify-audio-triage
+  runtime/streamlib-engine/tests/fixtures/e2e_audio_loopback.sh "$TRIAGE_DIR"
 ```
-
 
 - rig-only **passes** → the rig is sound, so the failure is on the StreamLib side of the loop.
   Read `node.log` before calling it a regression — a run that never reached the graph it meant to
@@ -242,13 +249,13 @@ without the label invites it to be read as though it were.
     ```
     <exact command with env vars>
     ```
-- **Exit status**: <0 | 1 | 77>
+- **Exit status**: <0 | 1 | 77>  — 2 and 130 are not verification outcomes; do not file a report
 
 #### Measured
 
-- `verdict`: PASS | FAIL
-- `failed`: <the named checks, or "none">
-- Tone: `fundamental_hz` <n> · `amplitude` <n> · `thd_percent` <n>
+- `verdict`: PASS | FAIL | n/a — <no analysis ran: cannot-run, or a failure before the analyser>
+- `failed`: <the named checks, "none", or "n/a — no analysis ran">
+- Tone: `fundamental_hz` <n> · `amplitude` <n> · `thd_percent` <n> — or `n/a`
 - Symbols: `<recovered>` of `<expected>`
 - Spacing: `symbol_interval_error_ms` <n> (worst `<span>`) · `cumulative_interval_error_ms` <n>
 - Holes: `missing_loud_audio_ms` <n> · `silent_stretch_ms` <n> · `emptiest_region` <region>
@@ -257,13 +264,13 @@ without the label invites it to be read as though it were.
 
 #### Spectrogram
 
-- Path: `<artifacts dir>/spectrogram.png`
+- Path: `<artifacts dir>/spectrogram.png` — or `n/a — the run failed before the analyser`
 - **What it shows**: <one or two sentences describing what you actually saw — the tone bar, the
   six symbol stacks, and any vertical stripe or gap. "Looks fine" is not acceptable.>
 
 #### Triage (only when the through-engine run failed)
 
-- Rig-only re-run: PASS | FAIL | SKIP
+- Rig-only re-run: PASS | FAIL | SKIP — exit <n>, artifacts `<dir>`
 - **Therefore**: the failure is on the StreamLib side | the machine's audio is broken |
   uninterpretable
 - What `node.log` said: <the run's own explanation, or "nothing that explains it">
