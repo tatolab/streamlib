@@ -706,6 +706,16 @@ def build_argument_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Bags to collect before returning (default: a small sample).",
     )
+    tap_command.add_argument(
+        "--max-bag-bytes",
+        type=int,
+        metavar="BYTES",
+        help=(
+            "Per-bag ceiling on the bytes returned. A bag over the cap comes "
+            "back flagged and cannot be decoded, so raise this rather than "
+            "accept one (default: high enough to carry any audio block whole)."
+        ),
+    )
     add_control_target_flags(tap_command)
 
     exchange_command = subcommands.add_parser(
@@ -1015,6 +1025,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             tap_arguments: "dict[str, Any]" = {"channel": arguments.channel}
             if arguments.count is not None:
                 tap_arguments["count"] = arguments.count
+            if arguments.max_bag_bytes is not None:
+                tap_arguments["max_bag_bytes"] = arguments.max_bag_bytes
             return call_observation_tool(
                 "tap",
                 requested_url=arguments.requested_url,

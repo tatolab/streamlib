@@ -36,6 +36,11 @@ pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess}
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+// Exported rather than crate-private so a test about deviceless pacing can open
+// the arm it means. The chain's probe takes the first arm that opens, so a test
+// that went through it would exercise whatever audio server the machine running
+// it happens to have.
+pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };

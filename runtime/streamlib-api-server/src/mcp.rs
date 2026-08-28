@@ -70,10 +70,31 @@ const DEFAULT_LOGS_SAMPLE_COUNT: usize = 16;
 /// unbounded collection loop.
 const MAX_SAMPLE_COUNT: usize = 1024;
 
-/// Per-bag hex-preview cap for the `tap` tool: the full byte length is always
-/// reported, but only the first this-many bytes are hex-encoded into the result
-/// so a large encoded bag cannot bloat the JSON-RPC payload.
-const MAX_TAP_BAG_PREVIEW_BYTES: usize = 4096;
+/// Per-bag ceiling on the bytes a `tap` result hex-encodes, when the caller
+/// names none.
+///
+/// Generous rather than frugal, because a trimmed bag is not a smaller answer —
+/// it is no answer: a bag is a msgpack map, so a decoder needs all of it or
+/// none, and every consumer here refuses a truncated one rather than reading
+/// half a value.
+const DEFAULT_MAX_TAP_BAG_BYTES: usize = 1024 * 1024;
+
+/// Total bag bytes one `tap` result encodes, and therefore also the largest
+/// per-bag cap a caller may name — [`bounded_tap_bag_bytes`] clamps to it.
+///
+/// The two are one number rather than two so the bound holds by construction:
+/// were the per-bag cap allowed above this, a single bag could exceed the whole
+/// response budget and nothing would stop it. Hex doubles this on the wire, and
+/// serializing the result holds the encoded text and the JSON body at once,
+/// which is why the figure is modest next to what a channel may carry — a bag
+/// too big for a request/response tool is what `/ws/tap/{channel}` streams
+/// verbatim.
+const MAX_TAP_RESPONSE_BAG_BYTES: usize = 16 * 1024 * 1024;
+
+// The default has to fit the budget it is charged against, or the very first
+// bag of an ordinary call would trip it. Checked by the compiler rather than a
+// test, because it is a fact about two literals.
+const _: () = assert!(DEFAULT_MAX_TAP_BAG_BYTES <= MAX_TAP_RESPONSE_BAG_BYTES);
 
 /// Long-edge ceiling for the image an `exchange` result carries inline, and
 /// the default when a caller names no cap of its own.
@@ -220,12 +241,13 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "tap",
-            "description": "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; a hex preview plus byte length per bag).",
+            "description": "Attach a read-only tap to a channel and collect a bounded sample of raw bags (FrameHeader-framed bytes; the hex plus byte length per bag). Bags arrive whole unless one exceeds `max_bag_bytes`, which is flagged as `hex_truncated`. The whole result is also byte-budgeted: the sample stops at the first bag that would exceed it, so `bags_withheld_at_byte_budget` is 0 or 1 — that one bag was received and discarded, and it accounts for the whole gap between `requested` and `received` when the window had time left.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "channel": { "type": "string", "description": "Channel data-service name, e.g. {source_processor}/{source_output_port}." },
-                    "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." }
+                    "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." },
+                    "max_bag_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TAP_RESPONSE_BAG_BYTES, "description": "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole." }
                 },
                 "required": ["channel"],
                 "additionalProperties": false
@@ -315,12 +337,19 @@ async fn call_tap(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Val
         channel: String,
         #[serde(default)]
         count: Option<usize>,
+        #[serde(default)]
+        max_bag_bytes: Option<usize>,
     }
-    let TapArgs { channel, count } = match serde_json::from_value(arguments) {
+    let TapArgs {
+        channel,
+        count,
+        max_bag_bytes,
+    } = match serde_json::from_value(arguments) {
         Ok(args) => args,
         Err(e) => return tool_error(format!("tap arguments: {e}")),
     };
     let sample = bounded_sample_count(count, DEFAULT_TAP_SAMPLE_COUNT);
+    let max_bag_bytes = bounded_tap_bag_bytes(max_bag_bytes);
 
     let mut subscription = match runtime.tap_async(channel.clone(), Some(sample)).await {
         Ok(subscription) => subscription,
@@ -328,10 +357,23 @@ async fn call_tap(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Val
     };
 
     let mut bags: Vec<Value> = Vec::with_capacity(sample);
+    let mut remaining_response_bytes = MAX_TAP_RESPONSE_BAG_BYTES;
+    let mut bags_withheld_at_byte_budget = 0usize;
     let deadline = tokio::time::Instant::now() + TAP_SAMPLE_WINDOW;
     while bags.len() < sample {
         match tokio::time::timeout_at(deadline, subscription.recv()).await {
-            Ok(Some(bytes)) => bags.push(tap_bag_json(&bytes)),
+            Ok(Some(bytes)) => {
+                let encoded_len = bytes.len().min(max_bag_bytes);
+                if encoded_len > remaining_response_bytes {
+                    // Counted rather than silently eaten: this bag was received
+                    // and is being dropped, so a caller reconciling `requested`
+                    // against `received` is not short by an unexplained one.
+                    bags_withheld_at_byte_budget += 1;
+                    break;
+                }
+                remaining_response_bytes -= encoded_len;
+                bags.push(tap_bag_json(&bytes[..encoded_len], bytes.len()));
+            }
             // Tap exhausted (count reached / forwarder ended), or the bounded
             // sample window elapsed on a quiet channel — return the partial sample.
             Ok(None) | Err(_) => break,
@@ -351,6 +393,8 @@ async fn call_tap(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Val
         "received": bags.len(),
         "window_ms": TAP_SAMPLE_WINDOW.as_millis(),
         "dropped_bags": dropped_bags,
+        "max_bag_bytes": max_bag_bytes,
+        "bags_withheld_at_byte_budget": bags_withheld_at_byte_budget,
         "bags": bags,
     }))
 }
@@ -543,14 +587,29 @@ fn bounded_sample_count(requested: Option<usize>, default: usize) -> usize {
     requested.unwrap_or(default).clamp(1, MAX_SAMPLE_COUNT)
 }
 
-/// Render one raw tap bag as JSON: full byte length plus a bounded hex preview
-/// (raw bags are wire-neutral bytes; decoding is the caller's concern).
-fn tap_bag_json(bytes: &[u8]) -> Value {
-    let preview_len = bytes.len().min(MAX_TAP_BAG_PREVIEW_BYTES);
+/// Clamp a requested per-bag cap into `[1, MAX_TAP_RESPONSE_BAG_BYTES]`,
+/// defaulting when the caller left it unset.
+///
+/// Clamping to the whole-response budget is what makes the first bag unable to
+/// exceed it, so the collection loop needs no special case for one.
+fn bounded_tap_bag_bytes(requested: Option<usize>) -> usize {
+    requested
+        .unwrap_or(DEFAULT_MAX_TAP_BAG_BYTES)
+        .clamp(1, MAX_TAP_RESPONSE_BAG_BYTES)
+}
+
+/// Render one raw tap bag as JSON: the bag's full byte length plus the hex of
+/// however much of it the caller's cap admitted (raw bags are wire-neutral
+/// bytes; decoding is the caller's concern).
+///
+/// Takes the already-clamped slice rather than clamping again, because the
+/// collection loop must charge its budget the same number this encodes — two
+/// sites computing one rule is two sites that can disagree.
+fn tap_bag_json(encoded: &[u8], full_byte_len: usize) -> Value {
     json!({
-        "byte_len": bytes.len(),
-        "hex_preview": hex_encode(&bytes[..preview_len]),
-        "hex_truncated": preview_len < bytes.len(),
+        "byte_len": full_byte_len,
+        "hex_preview": hex_encode(encoded),
+        "hex_truncated": encoded.len() < full_byte_len,
     })
 }
 
@@ -563,12 +622,16 @@ fn event_json(event: &Event) -> Value {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut hex = String::with_capacity(bytes.len() * 2);
+    // A nibble table rather than `write!` per byte: this encodes up to
+    // `MAX_TAP_RESPONSE_BAG_BYTES` on a tokio worker, where `core::fmt`'s
+    // per-byte machinery costs several times what a two-push loop does.
+    const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = Vec::with_capacity(bytes.len() * 2);
     for byte in bytes {
-        let _ = write!(hex, "{byte:02x}");
+        hex.push(HEX_DIGITS[usize::from(byte >> 4)]);
+        hex.push(HEX_DIGITS[usize::from(byte & 0x0f)]);
     }
-    hex
+    String::from_utf8(hex).expect("a hex-digit table only ever yields ASCII")
 }
 
 /// Forwards runtime events into the `logs` tool's bounded collection channel,
@@ -938,10 +1001,173 @@ mod tests {
         assert_eq!(body["error"]["code"], -32601);
     }
 
+    /// One 1024-sample stereo `f32` `AudioBlock`, msgpack-framed — the exact
+    /// size this rig's PipeWire arm publishes.
+    const AUDIO_BLOCK_BAG_BYTES: usize = 8366;
+
+    async fn tap_sample_from(
+        runtime: Arc<ControlPlaneMcpDispatchStubRuntime>,
+        arguments: Value,
+    ) -> Value {
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                "params": { "name": "tap", "arguments": arguments }
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap())
+            .expect("tap result text is JSON")
+    }
+
+    /// A bag is a msgpack map, so a decoder needs all of it or none — which
+    /// makes the default cap load-bearing for every data model that rides its
+    /// payload inline, audio first among them.
+    ///
+    /// Mental revert: set the default cap under 8 366 and this reddens.
+    #[tokio::test]
+    async fn tools_call_tap_carries_a_whole_audio_block_without_being_asked_to() {
+        let audio_bag = vec![0xABu8; AUDIO_BLOCK_BAG_BYTES];
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
+            vec![audio_bag],
+            0,
+        ));
+
+        let sample = tap_sample_from(runtime, json!({ "channel": "mic/audio" })).await;
+
+        let bag = &sample["bags"][0];
+        assert_eq!(
+            bag["byte_len"].as_u64().unwrap(),
+            AUDIO_BLOCK_BAG_BYTES as u64
+        );
+        assert_eq!(
+            bag["hex_truncated"], false,
+            "an audio block must arrive whole with no caller-supplied cap"
+        );
+        assert_eq!(
+            bag["hex_preview"].as_str().unwrap().len(),
+            AUDIO_BLOCK_BAG_BYTES * 2,
+            "the hex is the whole bag, so a consumer can decode it"
+        );
+    }
+
+    /// The bound the response budget's doc claims, held where it was false: a
+    /// caller cannot name a per-bag cap above the whole-response budget, so one
+    /// bag can never exceed it and the loop needs no exemption for the first.
+    ///
+    /// Mental revert: clamp `bounded_tap_bag_bytes` to anything larger and this
+    /// reddens — which is what a 64 MiB ceiling against a 16 MiB budget did.
+    #[test]
+    fn a_per_bag_cap_can_never_be_named_above_the_whole_response_budget() {
+        assert_eq!(
+            bounded_tap_bag_bytes(Some(MAX_TAP_RESPONSE_BAG_BYTES * 4)),
+            MAX_TAP_RESPONSE_BAG_BYTES
+        );
+        assert_eq!(bounded_tap_bag_bytes(Some(0)), 1);
+        assert_eq!(bounded_tap_bag_bytes(None), DEFAULT_MAX_TAP_BAG_BYTES);
+    }
+
+    /// A single bag larger than any cap could admit still comes back — trimmed
+    /// and flagged — rather than the sample being empty. This is the case the
+    /// removed first-bag exemption used to serve, and it now holds because the
+    /// cap cannot exceed the budget rather than because of a special case.
+    #[tokio::test]
+    async fn one_bag_larger_than_the_budget_is_returned_trimmed_rather_than_withheld() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
+            vec![vec![0x5Au8; MAX_TAP_RESPONSE_BAG_BYTES + 4096]],
+            0,
+        ));
+
+        let sample = tap_sample_from(
+            runtime,
+            json!({ "channel": "big/bag", "max_bag_bytes": MAX_TAP_RESPONSE_BAG_BYTES }),
+        )
+        .await;
+
+        assert_eq!(sample["received"], 1, "the sample is not empty");
+        assert_eq!(sample["bags_withheld_at_byte_budget"], 0);
+        assert_eq!(sample["bags"][0]["hex_truncated"], true);
+        assert_eq!(
+            sample["bags"][0]["byte_len"].as_u64().unwrap(),
+            (MAX_TAP_RESPONSE_BAG_BYTES + 4096) as u64,
+            "the bag's true size is reported however much of it was encoded"
+        );
+    }
+
+    /// A bag over the cap is still reported and still flagged — the escape
+    /// hatch is naming a bigger cap, not guessing at half a value.
+    #[tokio::test]
+    async fn tools_call_tap_honours_a_caller_named_per_bag_cap() {
+        let bag_bytes = DEFAULT_MAX_TAP_BAG_BYTES + 4096;
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
+            vec![vec![0xCDu8; bag_bytes]],
+            0,
+        ));
+
+        let trimmed = tap_sample_from(Arc::clone(&runtime), json!({ "channel": "big/bag" })).await;
+        assert_eq!(trimmed["bags"][0]["hex_truncated"], true);
+        assert_eq!(trimmed["max_bag_bytes"], DEFAULT_MAX_TAP_BAG_BYTES);
+
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
+            vec![vec![0xCDu8; bag_bytes]],
+            0,
+        ));
+        let whole = tap_sample_from(
+            runtime,
+            json!({ "channel": "big/bag", "max_bag_bytes": bag_bytes }),
+        )
+        .await;
+        assert_eq!(
+            whole["bags"][0]["hex_truncated"], false,
+            "a caller who names a cap big enough gets the bag whole"
+        );
+    }
+
+    /// `count` times the per-bag cap multiplies to gigabytes at the extremes,
+    /// so the response carries its own budget. It stops the sample rather than
+    /// trimming, because whole bags are the only ones worth returning.
+    #[tokio::test]
+    async fn tools_call_tap_stops_at_its_response_budget_rather_than_trimming() {
+        let one_mib_bag = vec![0xEFu8; DEFAULT_MAX_TAP_BAG_BYTES];
+        let bags_that_exceed_the_budget =
+            MAX_TAP_RESPONSE_BAG_BYTES / DEFAULT_MAX_TAP_BAG_BYTES + 4;
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
+            vec![one_mib_bag; bags_that_exceed_the_budget],
+            0,
+        ));
+
+        let sample = tap_sample_from(
+            runtime,
+            json!({ "channel": "big/bag", "count": bags_that_exceed_the_budget }),
+        )
+        .await;
+
+        assert_eq!(
+            sample["bags_withheld_at_byte_budget"], 1,
+            "the bag the budget refused was received, so it is counted rather \
+             than leaving `received` short for no stated reason"
+        );
+        let bags = sample["bags"].as_array().expect("bags array");
+        assert!(
+            bags.len() < bags_that_exceed_the_budget,
+            "the budget must stop the sample short of what was asked for"
+        );
+        assert!(
+            bags.iter().all(|bag| bag["hex_truncated"] == false),
+            "every bag the budget did admit is whole"
+        );
+    }
+
     #[tokio::test]
     async fn tools_call_tap_shapes_bags_and_reports_dropped_count() {
-        let big_bag = vec![0xABu8; MAX_TAP_BAG_PREVIEW_BYTES + 512];
-        let small_bag = vec![0x01u8, 0x02, 0x03];
+        let big_bag = vec![0xABu8; DEFAULT_MAX_TAP_BAG_BYTES + 512];
+        // Spans both nibble halves and every digit class, so the hex table is
+        // pinned for case and for the six letters — `010203` alone leaves an
+        // uppercase or transposed table green.
+        let small_bag = vec![0x01u8, 0x02, 0x03, 0xAB, 0xCD, 0xEF];
         let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
             vec![big_bag.clone(), small_bag.clone()],
             7,
@@ -968,22 +1194,22 @@ mod tests {
         assert!(sample["window_ms"].as_u64().unwrap() > 0);
 
         let bags = sample["bags"].as_array().expect("bags array");
-        // Big bag: the full byte length is reported, the hex preview is capped at
-        // MAX_TAP_BAG_PREVIEW_BYTES, and truncation is flagged.
+        // Big bag: the full byte length is reported, the hex stops at the
+        // per-bag cap, and truncation is flagged.
         assert_eq!(
             bags[0]["byte_len"].as_u64().unwrap(),
-            (MAX_TAP_BAG_PREVIEW_BYTES + 512) as u64
+            (DEFAULT_MAX_TAP_BAG_BYTES + 512) as u64
         );
         assert_eq!(bags[0]["hex_truncated"], true);
         assert_eq!(
             bags[0]["hex_preview"].as_str().unwrap().len(),
-            MAX_TAP_BAG_PREVIEW_BYTES * 2,
-            "preview is the hex of exactly the first MAX_TAP_BAG_PREVIEW_BYTES bytes"
+            DEFAULT_MAX_TAP_BAG_BYTES * 2,
+            "the hex is exactly the first DEFAULT_MAX_TAP_BAG_BYTES bytes"
         );
         // Small bag: previewed whole, not truncated.
-        assert_eq!(bags[1]["byte_len"].as_u64().unwrap(), 3);
+        assert_eq!(bags[1]["byte_len"].as_u64().unwrap(), 6);
         assert_eq!(bags[1]["hex_truncated"], false);
-        assert_eq!(bags[1]["hex_preview"], "010203");
+        assert_eq!(bags[1]["hex_preview"], "010203abcdef");
     }
 
     #[tokio::test]
@@ -1400,7 +1626,12 @@ mod tests {
             .map(String::as_str)
             .collect();
         argument_names.sort_unstable();
-        assert_eq!(argument_names, ["channel", "count"]);
-        assert_eq!(tap["inputSchema"]["required"], json!(["channel"]));
+        assert_eq!(argument_names, ["channel", "count", "max_bag_bytes"]);
+        assert_eq!(
+            tap["inputSchema"]["required"],
+            json!(["channel"]),
+            "every argument beyond the channel stays optional, so the ordinary \
+             call is still `tap <channel>`"
+        );
     }
 }

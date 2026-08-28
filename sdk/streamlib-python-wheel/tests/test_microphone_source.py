@@ -5,9 +5,18 @@
 
 The marker tests are pure Python. The graph tests boot a real engine, which
 initializes a GPU context, so they carry `requires_gpu` like every other graph
-test here — no audio hardware is involved either way: the backend chain's last
-arm needs no audio library at all, which is what lets this run in a container.
+test here.
+
+Deliberately arm-agnostic: the backend chain picks whichever arm the machine
+running this actually has, and these assertions hold on all of them — the last
+arm needs no audio library at all, so this still runs in a container. What is
+*not* asserted here is that the timestamps are the device's own rather than the
+moment of publication; that needs a real device to be provable at all, and it
+lives in `runtime/streamlib-engine/tests/`
+`pipewire_arm_stamps_blocks_with_the_devices_own_timing.rs`.
 """
+
+import math
 
 import json
 import re
@@ -22,6 +31,12 @@ MICROPHONE_SOURCE_APP = Path(__file__).parent / "microphone_source_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "microphone_source_named_device_app.py"
 
 BLOCKS_SEEN = re.compile(r"MARKER:BLOCKS_SEEN (\[.*\])")
+
+# How far a block's stamp may sit from where its sample count puts it. A device
+# arm's clock is the reference, not the nominal rate, so a few hundred
+# nanoseconds a block is the device rather than a defect; a lost block is a
+# whole quantum, which this is nowhere near.
+DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK = 100_000
 
 
 # ---- marker semantics (no GPU) ---------------------------------------------
@@ -80,9 +95,12 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
         assert reading["samples_are_a_view_over_the_bag_bytes"], (
             "reading a block must add no copy of its payload"
         )
-        assert reading["loudest_sample"] == 0.0, (
-            "the chain resolves to its silent last arm, and silence is zeroed "
-            "scalars — not near-zero ones"
+        # Not an amplitude assertion — a real capture device may be recording
+        # anything, including silence. What this catches is a block framed
+        # against the wrong stride or read past its mapping, which surfaces as
+        # NaN or a wildly out-of-range scalar rather than as a wrong number.
+        assert math.isfinite(reading["loudest_sample"]), (
+            f"the cast produced a non-finite sample: {reading}"
         )
 
     # Checked before the arithmetic below, which a real gap would break: a
@@ -97,24 +115,28 @@ def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
         f"block timestamps are the ordering primitive and must advance: {stamps}"
     )
 
-    # Asserted across the whole span rather than per block. A 512-sample
-    # quantum at 48 kHz is 10 666 666.67 ns, so consecutive integer stamps
-    # alternate between two gaps — what has to hold is that the elapsed time
-    # between the first and last block equals the duration of the samples
-    # between them to within a nanosecond. A stamp taken at publication rather
-    # than at capture misses that by the scheduler's jitter, and a dropped
-    # block the source failed to account for opens a gap it cannot close.
+    # Asserted across the whole span rather than per block: what has to hold is
+    # that the elapsed time between the first and last block equals the duration
+    # of the samples between them, which is what makes a block's timestamp plus
+    # its sample count the next block's expected timestamp.
+    #
+    # The tolerance is per block and generous next to a quantum. A device arm's
+    # stamps come from the device's own clock, which runs a few hundred
+    # nanoseconds a block off its nominal rate — real timing, not error. What
+    # the bound still catches is the failure that matters: a block dropped or
+    # duplicated without being accounted for opens a gap of a whole quantum,
+    # two orders of magnitude above this.
     sample_rate = readings[0]["sample_rate"]
     samples_between_first_and_last = sum(
         reading["sample_count"] for reading in readings[:-1]
     )
+    expected_ns = samples_between_first_and_last * 1_000_000_000 // sample_rate
     elapsed_ns = stamps[-1] - stamps[0]
-    assert (
-        abs(elapsed_ns * sample_rate - samples_between_first_and_last * 1_000_000_000)
-        < sample_rate
-    ), (
-        f"{samples_between_first_and_last} samples at {sample_rate} Hz did not take "
-        f"{elapsed_ns} ns — the timestamps are not the device's own timing"
+    tolerance_ns = DEVICE_CLOCK_TOLERANCE_NS_PER_BLOCK * len(readings)
+    assert abs(elapsed_ns - expected_ns) <= tolerance_ns, (
+        f"{samples_between_first_and_last} samples at {sample_rate} Hz should span "
+        f"{expected_ns} ns but the timestamps span {elapsed_ns} ns — a block went "
+        f"missing, or one claimed an instant it did not cover"
     )
 
 

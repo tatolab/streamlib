@@ -4821,6 +4821,7 @@ dependencies = [
  "ahash",
  "anyhow",
  "anymap2",
+ "cc",
  "core-foundation 0.9.4",
  "core-graphics 0.24.0",
  "criterion",

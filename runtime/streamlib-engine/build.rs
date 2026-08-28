@@ -7,7 +7,8 @@
 //! Vulkan compute, vertex, fragment, and ray-tracing shaders this crate
 //! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
 //! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
-//! `include_bytes!` to consume at compile time.
+//! `include_bytes!` to consume at compile time, and compiles the PipeWire
+//! capture shim against the vendored PipeWire/SPA headers.
 
 fn main() {
     // Link Metal framework on macOS for MP4 writer
@@ -18,6 +19,48 @@ fn main() {
 
     #[cfg(target_os = "linux")]
     compile_shaders();
+
+    // `CARGO_CFG_TARGET_OS` rather than `#[cfg(target_os = ...)]`, which in a
+    // build script names the host that is compiling it. Cross-checking the
+    // Apple path from Linux (`cargo check --target aarch64-apple-darwin`) would
+    // otherwise hand this file's sources to a cross toolchain that is not there.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        compile_pipewire_capture_shim();
+    }
+}
+
+/// Compile the header-only half of the PipeWire audio arm.
+///
+/// SPA's pod builders and parsers are `static inline` C with no shared object
+/// behind them, so `dlopen` cannot reach them and they have to be compiled in.
+/// The shim calls libpipewire only through pointers Rust filled with `dlsym`,
+/// so this adds no `DT_NEEDED` entry — the invariant
+/// `sdk/streamlib-python-wheel/tests/test_wheel_portability.py` enforces.
+fn compile_pipewire_capture_shim() {
+    const SHIM_SOURCE: &str = "src/linux/pipewire_capture_shim.c";
+    const VENDORED_HEADERS: &str = "../../vendor/pipewire-headers/include";
+
+    println!("cargo:rerun-if-changed={SHIM_SOURCE}");
+    println!("cargo:rerun-if-changed=src/linux/pipewire_capture_shim.h");
+    println!("cargo:rerun-if-changed={VENDORED_HEADERS}");
+
+    let mut build = cc::Build::new();
+    // SPA's asserts print and abort on an internal precondition failure. Off
+    // when Rust's own assertions are off, matching how
+    // `vendor/tatolab-vulkanalia-vma/build.rs` treats VMA's.
+    if std::env::var("DEBUG").as_deref() == Ok("false") {
+        build.define("NDEBUG", None);
+    }
+    build
+        .file(SHIM_SOURCE)
+        .include(VENDORED_HEADERS)
+        .include("src/linux")
+        .std("c11")
+        // SPA's headers reach for `strnlen` and friends behind `_GNU_SOURCE`,
+        // which `-std=c11` (rather than `gnu11`) would otherwise hide.
+        .define("_GNU_SOURCE", None)
+        .warnings(true)
+        .compile("streamlib_pipewire_capture_shim");
 }
 
 /// `glslc -O` strips every `OpName`, and a binding with no reflected name

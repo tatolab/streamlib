@@ -122,18 +122,61 @@ static PROBED_AUDIO_DEVICE_BACKEND: OnceLock<SharedAudioDeviceBackend> = OnceLoc
 
 /// Probe the audio backend chain once per process and log the arm it chose.
 ///
-/// The chain has one arm today, and it is the last one: it needs no audio
-/// library at all, so the probe always resolves and no configuration dial
-/// selects an arm.
+/// No configuration dial selects an arm and no environment variable overrides
+/// the probe. The last arm needs no audio library at all, so the chain always
+/// resolves to something and a machine with no audio runs the graph rather than
+/// failing to start.
 pub fn probe_audio_device_backend() -> SharedAudioDeviceBackend {
     Arc::clone(PROBED_AUDIO_DEVICE_BACKEND.get_or_init(|| {
-        let backend: SharedAudioDeviceBackend = Arc::new(SilentNullAudioDeviceBackend);
+        let backend = first_audio_device_backend_arm_that_opens();
         tracing::info!(
             audio_backend = backend.backend_name(),
             "audio device backend chain probed"
         );
         backend
     }))
+}
+
+/// Walk the chain in order and take the first arm that actually opens.
+///
+/// An arm is chosen by opening, not by loading: a library that resolves but
+/// yields no usable connection — `libpipewire` present with no daemon
+/// answering, the ordinary container case — demotes exactly as a missing
+/// library does. Probing on presence alone would strand precisely the machines
+/// the chain exists to serve.
+fn first_audio_device_backend_arm_that_opens() -> SharedAudioDeviceBackend {
+    if let Some(backend) = platform_audio_device_backend_that_opens() {
+        return backend;
+    }
+    Arc::new(SilentNullAudioDeviceBackend)
+}
+
+#[cfg(target_os = "linux")]
+fn platform_audio_device_backend_that_opens() -> Option<SharedAudioDeviceBackend> {
+    use crate::linux::pipewire_audio_device_backend::PipeWireAudioDeviceBackend;
+
+    match PipeWireAudioDeviceBackend::load_and_connect() {
+        Ok(backend) => Some(Arc::new(backend)),
+        Err(reason) => {
+            // Info rather than warn: a machine with no audio server is a
+            // supported environment, and the next arm is the answer rather
+            // than the consolation prize. The reason is what tells a reader
+            // whether the library was absent or the daemon was.
+            tracing::info!(
+                audio_backend = "pipewire",
+                %reason,
+                "audio device backend chain: demoting to the next arm"
+            );
+            None
+        }
+    }
+}
+
+/// The platform floor is Linux; every other target lands on the null backend,
+/// which needs no audio library and captures silence.
+#[cfg(not(target_os = "linux"))]
+fn platform_audio_device_backend_that_opens() -> Option<SharedAudioDeviceBackend> {
+    None
 }
 
 #[cfg(test)]
@@ -147,6 +190,19 @@ mod tests {
         assert!(
             Arc::ptr_eq(&first, &second),
             "the chain is probed once per process, so every caller shares one backend"
+        );
+    }
+
+    /// The chain resolves on any machine, which is what lets the wheel import
+    /// and run in `manylinux_2_28` and in a headless container — neither of
+    /// which carries an audio library at all.
+    #[test]
+    fn the_chain_always_lands_on_an_arm_however_little_audio_the_machine_has() {
+        let backend = probe_audio_device_backend();
+        assert!(
+            ["pipewire", "silent-null"].contains(&backend.backend_name()),
+            "the chain resolved to an arm nothing declares: {}",
+            backend.backend_name()
         );
     }
 

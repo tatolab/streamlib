@@ -18,12 +18,15 @@ from importlib.metadata import distribution
 
 import pytest
 
-# The six C++ projects compiled into the engine from vendored sources. Four
-# arrive through `shaderc-sys` as `libshaderc_combined.a`; VulkanMemoryAllocator
-# and Vulkan-Headers are checked into `vendor/tatolab-vulkanalia-vma/` and
-# compiled by its build script. `cargo about` reads `cargo metadata`, and none
-# of the six is a package in that graph, so tooling cannot find them — they
-# reach the notices only because the generator appends them by hand.
+# The C++ projects compiled into the engine from vendored sources. Four arrive
+# through `shaderc-sys` as `libshaderc_combined.a`; VulkanMemoryAllocator and
+# Vulkan-Headers are checked into `vendor/tatolab-vulkanalia-vma/` and compiled
+# by its build script; PipeWire's SPA layer is checked into
+# `vendor/pipewire-headers/` and compiled by the engine's own build script — no
+# PipeWire library is linked, but its header-only inline code ships in the
+# binary. `cargo about` reads `cargo metadata`, and none of them is a package in
+# that graph, so tooling cannot find them — they reach the notices only because
+# the generator appends them by hand.
 VENDORED_CPP_PROJECT_NAMES = (
     "shaderc",
     "glslang",
@@ -31,6 +34,7 @@ VENDORED_CPP_PROJECT_NAMES = (
     "SPIRV-Headers",
     "VulkanMemoryAllocator",
     "Vulkan-Headers",
+    "PipeWire",
 )
 
 # A thin sample of the Rust closure, one per link shape: the IPC transport, the

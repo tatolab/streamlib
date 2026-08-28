@@ -859,6 +859,33 @@ def test_tap_sends_the_channel_and_count(
     assert arguments == {"channel": "cam/video", "count": 3}
 
 
+def test_tap_forwards_a_named_per_bag_cap(isolated_registry, stub_control_plane, capsys):
+    """A bag over the tool's per-bag cap comes back undecodable, so a caller
+    that raised the cap and had the flag silently dropped would get exactly the
+    failure it was trying to avoid."""
+    server = stub_control_plane()
+    write_registry_entry(isolated_registry, "Ronly", server.url)
+
+    assert cli.main(["tap", "cam/video", "--max-bag-bytes", "4096"]) == 0
+
+    arguments = json.loads(server.recorded_bodies[-1])["params"]["arguments"]
+    assert arguments == {"channel": "cam/video", "max_bag_bytes": 4096}
+
+
+def test_tap_omits_a_per_bag_cap_nobody_named(
+    isolated_registry, stub_control_plane, capsys
+):
+    """Absent means absent: the tool's own default is what applies, and the CLI
+    does not invent one of its own."""
+    server = stub_control_plane()
+    write_registry_entry(isolated_registry, "Ronly", server.url)
+
+    assert cli.main(["tap", "cam/video"]) == 0
+
+    arguments = json.loads(server.recorded_bodies[-1])["params"]["arguments"]
+    assert arguments == {"channel": "cam/video"}
+
+
 def test_a_control_target_with_on_disk_filters_is_refused(
     isolated_registry, stub_control_plane, capsys
 ):
