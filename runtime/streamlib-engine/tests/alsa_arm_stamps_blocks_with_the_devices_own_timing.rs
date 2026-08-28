@@ -28,33 +28,50 @@ use audio_arm_timestamp_contract::{
     assert_the_timestamp_contract_holds_on,
 };
 
-/// The arm, or `None` when this machine has no `libasound` or no capture device
-/// behind it.
+/// The arm, or `None` when this machine has no `libasound` and no capture
+/// hardware at all.
 ///
 /// `None` rather than a panic, so the tier stays well-behaved when the feature
 /// is on but the runner has no sound card — the same shape `try_vulkan_device()`
 /// gives the GPU tier (`docs/testing-hardware.md`). A machine with no audio is
 /// a supported environment; it just cannot answer the question these tests ask.
+///
+/// A machine that *does* have capture hardware is a different case, and it is
+/// asserted rather than skipped: the arm probes `default` alone, so a host whose
+/// `default` is unusable — the ALSA-to-PipeWire plugin with no daemon behind it,
+/// say — declines the arm while `hw:` nodes sit there working. Skipping quietly
+/// would hide exactly the machine this arm exists for.
 fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
-    AlsaAudioDeviceBackend::load_and_open().ok()
+    match AlsaAudioDeviceBackend::load_and_open() {
+        Ok(backend) => Some(backend),
+        Err(reason) => {
+            let raw_capture_devices = raw_capture_device_names_in_dev_snd();
+            assert!(
+                raw_capture_devices.is_empty(),
+                "this machine has capture hardware ({raw_capture_devices:?}) and the ALSA arm \
+                 still declined: {reason}. The arm probes '{DEFAULT_CAPTURE_PCM_NAME}' only, \
+                 so a host whose default PCM cannot be opened lands on the null backend with \
+                 a working device present"
+            );
+            None
+        }
+    }
 }
 
-/// A raw `hw:` capture node, read off `/dev/snd` rather than assumed.
+/// What a caller gets when it names no device — restated here because the tier
+/// asserts against the arm's own probe target.
+const DEFAULT_CAPTURE_PCM_NAME: &str = "default";
+
+/// Every raw capture node the kernel exposes, newest-sorted, opened by nobody.
 ///
 /// The kernel names capture PCMs `pcmC<card>D<device>c`, which is exactly the
-/// `hw:<card>,<device>` spelling ALSA opens — so this is the driver, with no
-/// daemon or compat plugin in the path. `None` when the machine has none, or
-/// when every one of them is already held: `EBUSY` on a card a daemon has open
-/// is expected, not a failure.
-fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend) -> Option<String> {
-    use std::sync::Arc;
-    use streamlib_engine::core::context::{
-        AudioCaptureStreamRequest, AudioClockConfig, AudioDeviceBackend, SharedAudioClock,
-        SoftwareAudioClock,
+/// `hw:<card>,<device>` spelling ALSA opens — so these are drivers, with no
+/// daemon or compat plugin in the path.
+fn raw_capture_device_names_in_dev_snd() -> Vec<String> {
+    let Ok(dev_snd) = std::fs::read_dir("/dev/snd") else {
+        return Vec::new();
     };
-
-    let mut raw_capture_device_names: Vec<String> = std::fs::read_dir("/dev/snd")
-        .ok()?
+    let mut raw_capture_device_names: Vec<String> = dev_snd
         .filter_map(|entry| {
             let name = entry.ok()?.file_name().into_string().ok()?;
             let card_and_device = name.strip_prefix("pcmC")?.strip_suffix('c')?;
@@ -63,17 +80,32 @@ fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend)
         })
         .collect();
     raw_capture_device_names.sort();
+    raw_capture_device_names
+}
 
-    raw_capture_device_names.into_iter().find(|device_name| {
-        let deviceless_pacing_clock: SharedAudioClock =
-            Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)));
-        backend
-            .open_capture_stream(&AudioCaptureStreamRequest {
-                device_id: Some(device_name.clone()),
-                deviceless_pacing_clock,
-            })
-            .is_ok()
-    })
+/// The first raw capture node this machine will actually hand over.
+///
+/// `None` when the machine has none, or when every one of them is already held:
+/// `EBUSY` on a card a daemon has open is expected, not a failure.
+fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend) -> Option<String> {
+    use std::sync::Arc;
+    use streamlib_engine::core::context::{
+        AudioCaptureStreamRequest, AudioClockConfig, AudioDeviceBackend, SharedAudioClock,
+        SoftwareAudioClock,
+    };
+
+    raw_capture_device_names_in_dev_snd()
+        .into_iter()
+        .find(|device_name| {
+            let deviceless_pacing_clock: SharedAudioClock =
+                Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)));
+            backend
+                .open_capture_stream(&AudioCaptureStreamRequest {
+                    device_id: Some(device_name.clone()),
+                    deviceless_pacing_clock,
+                })
+                .is_ok()
+        })
 }
 
 #[test]

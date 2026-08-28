@@ -37,7 +37,7 @@ const HOW_LONG_A_STOPPED_STREAM_IS_WATCHED: Duration = Duration::from_millis(250
 
 /// One block as it was handed over, plus when the hand-off actually ran.
 #[derive(Debug, Clone, Copy)]
-struct ObservedBlock {
+struct ObservedAudioCaptureBlock {
     sample_count: u32,
     first_sample_timestamp_ns: i64,
     /// `CLOCK_MONOTONIC` at the moment the hand-off carrying this block ran —
@@ -71,14 +71,14 @@ fn open_capture_stream_on(
 fn observe_blocks_from(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
-) -> (AudioCaptureStreamFormat, Vec<ObservedBlock>) {
+) -> (AudioCaptureStreamFormat, Vec<ObservedAudioCaptureBlock>) {
     let mut capture_stream = open_capture_stream_on(backend, device_id);
     let capture_stream_format = capture_stream.stream_format();
 
     let (observed_sender, observed_receiver) = mpsc::channel();
     capture_stream
         .start_delivering_to(Box::new(move |block: CapturedAudioBlockFromDevice<'_>| {
-            let _ = observed_sender.send(ObservedBlock {
+            let _ = observed_sender.send(ObservedAudioCaptureBlock {
                 sample_count: block.sample_count,
                 first_sample_timestamp_ns: block.first_sample_timestamp_ns,
                 handed_off_at_ns: monotonic_now_ns(),
@@ -107,7 +107,7 @@ fn block_duration_ns(capture_stream_format: AudioCaptureStreamFormat, sample_cou
 
 fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
     capture_stream_format: AudioCaptureStreamFormat,
-    observed: &[ObservedBlock],
+    observed: &[ObservedAudioCaptureBlock],
 ) {
     assert!(
         capture_stream_format.sample_rate > 0 && capture_stream_format.channels > 0,
@@ -133,7 +133,7 @@ fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
 
 fn assert_blocks_advance_by_one_block_with_no_gap(
     capture_stream_format: AudioCaptureStreamFormat,
-    observed: &[ObservedBlock],
+    observed: &[ObservedAudioCaptureBlock],
 ) {
     for pair in observed.windows(2) {
         let [earlier, later] = pair else {
@@ -151,7 +151,7 @@ fn assert_blocks_advance_by_one_block_with_no_gap(
 }
 
 fn assert_stamps_land_in_the_kernel_monotonic_domain(
-    observed: &[ObservedBlock],
+    observed: &[ObservedAudioCaptureBlock],
     before_ns: i64,
     after_ns: i64,
 ) {
