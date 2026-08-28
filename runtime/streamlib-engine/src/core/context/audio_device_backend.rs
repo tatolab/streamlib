@@ -140,25 +140,23 @@ impl std::fmt::Display for AudioDeviceBackendArmUnavailableReason {
 }
 
 /// What opening one arm of the chain yields.
-pub type AudioDeviceBackendArmOpenOutcome =
+type AudioDeviceBackendArmOpenOutcome =
     std::result::Result<SharedAudioDeviceBackend, AudioDeviceBackendArmUnavailableReason>;
 
 /// One arm of the chain: its name, and the attempt to open it.
 ///
 /// The attempt is held unrun so the chain's *order* can be read — and asserted
-/// — without loading an audio library or touching a device.
-pub struct AudioDeviceBackendArm {
-    /// What the arm calls itself, matching its
-    /// [`AudioDeviceBackend::backend_name`].
-    pub backend_name: &'static str,
-    /// Load the library, reach the device, and hand back the arm — or say why
-    /// it cannot serve.
-    pub open: Box<dyn FnOnce() -> AudioDeviceBackendArmOpenOutcome>,
+/// — without loading an audio library or touching a device. Private to the
+/// walk: nothing outside chooses an arm, because no dial selects a backend.
+struct AudioDeviceBackendArm {
+    backend_name: &'static str,
+    open: Box<dyn FnOnce() -> AudioDeviceBackendArmOpenOutcome>,
 }
 
 impl AudioDeviceBackendArm {
-    /// Name an arm and the attempt that opens it.
-    pub fn named(
+    /// The only way to build one, so an arm's name always comes from the same
+    /// place as the attempt that opens it.
+    fn named(
         backend_name: &'static str,
         open: impl FnOnce() -> AudioDeviceBackendArmOpenOutcome + 'static,
     ) -> Self {
@@ -325,7 +323,8 @@ mod tests {
         assert_eq!(
             arm_names,
             ["pipewire", "alsa"],
-            "the plan decides PipeWire, else ALSA, else null — and the null arm is the              fall-through the walk takes when this list is exhausted, never an entry in it"
+            "the plan decides PipeWire, else ALSA, else null — and the null arm is the \
+             fall-through the walk takes when this list is exhausted, never an entry in it"
         );
     }
 
@@ -362,7 +361,8 @@ mod tests {
             assert_eq!(
                 chosen.backend_name(),
                 ["first", "second", "third"][failing_arm_count],
-                "with the leading {failing_arm_count} arm(s) declining, the chain must land                  on the next one rather than skipping it or stopping short"
+                "with the leading {failing_arm_count} arm(s) declining, the chain must land \
+                 on the next one rather than skipping it or stopping short"
             );
         }
     }

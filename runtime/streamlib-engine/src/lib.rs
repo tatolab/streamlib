@@ -165,12 +165,15 @@ pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 }
 
-/// The ALSA audio arm's own entry point. Exposed so the audio tier can
-/// exercise the arm the chain demotes *to*: the probe takes the first arm that
-/// opens and no dial overrides it, so on any machine carrying an audio daemon
-/// the chain never reaches this one. Production callers go through
-/// [`core::context::probe_audio_device_backend`].
-#[cfg(target_os = "linux")]
+/// The ALSA audio arm's own entry point, for the audio tier only.
+///
+/// The chain's probe takes the first arm that opens and no dial overrides it,
+/// so on a machine carrying an audio daemon the tier could never reach this
+/// arm through [`core::context::probe_audio_device_backend`] — which every
+/// production caller uses. Gated on `hardware-tests` so this is not a way to
+/// select a backend in a shipped build.
+#[cfg(all(target_os = "linux", feature = "hardware-tests"))]
+#[doc(hidden)]
 pub mod linux_alsa_audio_device_backend {
     pub use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;
 }

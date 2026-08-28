@@ -25,8 +25,7 @@ pub use audio_clock::{
 };
 pub use audio_device_backend::{
     AudioCaptureSampleFormat, AudioCaptureStream, AudioCaptureStreamFormat,
-    AudioCaptureStreamRequest, AudioDeviceBackend, AudioDeviceBackendArm,
-    AudioDeviceBackendArmOpenOutcome, AudioDeviceBackendArmUnavailableReason,
+    AudioCaptureStreamRequest, AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason,
     CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff, SharedAudioDeviceBackend,
     probe_audio_device_backend,
 };
