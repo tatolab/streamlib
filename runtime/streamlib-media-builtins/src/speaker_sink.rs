@@ -44,11 +44,17 @@ use crate::processor_thread_join::join_within_grace_or_detach;
 /// 48 kHz / 512-sample quantum.
 const DEVICE_PERIODS_THE_RING_HOLDS: usize = 16;
 
-/// A period at 48 kHz stereo `f32`, used only to size the ring when a stream
-/// reports a rate a period count cannot be derived from. The ring's size is a
-/// buffering choice — a block larger than it is queued in pieces, never
-/// refused — so this floor bounds nothing a graph may publish.
-const A_DEVICE_PERIOD_WORTH_OF_BYTES: usize = 512 * 2 * 4;
+/// The smallest ring worth having, whatever a stream reports — one large
+/// device period, so a ring can always hold at least one.
+///
+/// A floor on the whole ring rather than on the per-period estimate: at every
+/// format the arms actually negotiate the estimate is the larger term and this
+/// never binds, and a floor that quietly won at 48 kHz would be the real size
+/// while reading as a fallback. It exists for a stream reporting a rate no
+/// period count derives from. The ring's size is a buffering choice — a block
+/// larger than it is queued in pieces, never refused — so it bounds nothing a
+/// graph may publish.
+const SMALLEST_USABLE_RING_BYTES: usize = 8 * 1024;
 
 /// How long the drain thread parks when the input has no block to play. Short
 /// against a device quantum, so a block that arrives just after a poll is not
@@ -234,8 +240,8 @@ fn a_device_periods_worth_of_bytes(stream_format: AudioStreamFormat) -> usize {
 
 /// How many bytes of queued samples sit between the graph and the device.
 fn ring_byte_capacity_for(stream_format: AudioStreamFormat) -> usize {
-    a_device_periods_worth_of_bytes(stream_format).max(A_DEVICE_PERIOD_WORTH_OF_BYTES)
-        * DEVICE_PERIODS_THE_RING_HOLDS
+    (a_device_periods_worth_of_bytes(stream_format) * DEVICE_PERIODS_THE_RING_HOLDS)
+        .max(SMALLEST_USABLE_RING_BYTES)
 }
 
 /// The callback the playback stream asks for samples through.
@@ -338,6 +344,12 @@ fn drain_blocks_into_playback(
     );
 
     while is_draining.load(Ordering::Acquire) {
+        // Judged on the idle path too, and this is the case that needs it
+        // most: a producer that stopped entirely underruns the device for as
+        // long as the graph runs, and a check reached only after a successful
+        // hand-off would never speak again once the last block arrived.
+        warn_about_any_new_underruns(samples_awaiting_playback, &mut underrun_reports);
+
         if !inputs.has_data(AUDIO_INPUT_PORT) {
             std::thread::park_timeout(DRAIN_IDLE_PARK_INTERVAL);
             continue;
@@ -391,7 +403,6 @@ fn drain_blocks_into_playback(
             break;
         }
         played_block_counter.fetch_add(1, Ordering::Relaxed);
-        warn_about_any_new_underruns(samples_awaiting_playback, &mut underrun_reports);
     }
 }
 
@@ -562,8 +573,14 @@ mod tests {
         );
     }
 
-    /// What the graph queued is what the device is given, period by period, on
-    /// the arm a container runs.
+    /// What the graph queued is what the device is *given* — read back out of
+    /// the buffer the arm filled, not inferred from a counter that stayed at
+    /// zero.
+    ///
+    /// Mental revert: hand the stream a no-op callback instead of one that
+    /// fills from the ring, and this reddens on the bytes. An assertion on the
+    /// underrun count alone would not have: zero is also what a device that
+    /// never asked reports.
     #[test]
     fn samples_the_graph_queued_reach_the_devices_own_callback() {
         let clock = Arc::new(HandFiredTestAudioClock::new());
@@ -699,6 +716,23 @@ mod tests {
     /// limit on what a graph may publish.
     #[test]
     fn a_stream_reporting_a_tiny_rate_still_gets_a_usable_ring() {
-        assert!(ring_byte_capacity_for(a_stream_format(1, 1)) >= A_DEVICE_PERIOD_WORTH_OF_BYTES);
+        assert_eq!(
+            ring_byte_capacity_for(a_stream_format(1, 1)),
+            SMALLEST_USABLE_RING_BYTES,
+            "a rate no period derives from falls back to the floor"
+        );
+    }
+
+    /// And at the format the arms actually negotiate, the floor does not bind
+    /// — otherwise it would be the ring's real size while reading as a
+    /// fallback nobody expects to reach.
+    #[test]
+    fn at_a_real_format_the_ring_is_sized_by_the_device_period_not_the_floor() {
+        let stream_format = a_stream_format(48_000, 2);
+        assert_eq!(
+            ring_byte_capacity_for(stream_format),
+            a_device_periods_worth_of_bytes(stream_format) * DEVICE_PERIODS_THE_RING_HOLDS
+        );
+        assert!(ring_byte_capacity_for(stream_format) > SMALLEST_USABLE_RING_BYTES);
     }
 }

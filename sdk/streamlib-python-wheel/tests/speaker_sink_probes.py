@@ -35,9 +35,11 @@ class AudioBlockCountingProbe:
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        # Drained even after the report is out: a `lossless` port makes the
-        # producer wait, so a probe that stopped reading would stall the
-        # microphone the speaker is being fed by.
+        # Drained even after the report is out: a probe that stopped reading
+        # would back its own link up behind the microphone the speaker is fed
+        # by, and what a full link costs is dropped blocks rather than a
+        # stalled producer — `PortMailbox::push` evicts its oldest entry
+        # whatever a port's profile says.
         if ctx.inputs.read("audio_from_upstream") is None:
             return
         self.blocks_seen += 1

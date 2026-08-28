@@ -90,6 +90,12 @@ struct StreamLibPipeWireAudioStream {
     void *hand_off_context;
 };
 
+/// How a direction is spelled in text a reader has to act on.
+static const char *stream_direction_word(enum StreamLibPipeWireStreamDirection direction)
+{
+    return direction == STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK ? "playback" : "capture";
+}
+
 static void copy_failure_text(char *failure_text, size_t failure_text_capacity, const char *text)
 {
     if (failure_text == NULL || failure_text_capacity == 0)
@@ -251,9 +257,10 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
             audio_stream->negotiated_format.channels != audio_info.info.raw.channels ||
             audio_stream->negotiated_format.sample_format != sample_format) {
             snprintf(reason, sizeof(reason),
-                     "PipeWire renegotiated this capture stream from %u Hz / %u channels / "
+                     "PipeWire renegotiated this %s stream from %u Hz / %u channels / "
                      "dtype %u to %u Hz / %u channels / dtype %u, and a stream's format is "
                      "fixed for its lifetime",
+                     stream_direction_word(audio_stream->direction),
                      audio_stream->negotiated_format.sample_rate,
                      audio_stream->negotiated_format.channels,
                      audio_stream->negotiated_format.sample_format, audio_info.info.raw.rate,
@@ -647,8 +654,7 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     struct StreamLibPipeWireNegotiatedAudioFormat *negotiated_format_out, char *failure_text,
     size_t failure_text_capacity)
 {
-    const char *direction_word =
-        direction == STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK ? "playback" : "capture";
+    const char *direction_word = stream_direction_word(direction);
     const char *thread_loop_name =
         direction == STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK ? "streamlib-audio-playback"
                                                                   : "streamlib-audio-capture";

@@ -50,8 +50,10 @@ class CapturedAudioWaveformRecorder:
         if block is None:
             return
         if self._written:
-            # Still drained: a `lossless` port makes the producer wait, and a
-            # recorder that stopped reading would stall the microphone.
+            # Still drained: a recorder that stopped reading would back its
+            # link up behind the microphone, and a full link costs dropped
+            # blocks rather than a stalled producer — `PortMailbox::push`
+            # evicts its oldest entry whatever a port's profile says.
             return
 
         self._sample_rate = block.sample_rate

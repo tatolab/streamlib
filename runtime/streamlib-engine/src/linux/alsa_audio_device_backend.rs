@@ -89,8 +89,6 @@ const SND_PCM_TSTAMP_TYPE_MONOTONIC: c_int = 1;
 /// `SND_PCM_STATE_RUNNING`, the fourth variant of `snd_pcm_state_t`.
 const SND_PCM_STATE_RUNNING: c_int = 3;
 
-/// `-EPIPE`: a capture overrun. Recoverable, and the gap it leaves is visible
-/// in the timestamps of the blocks either side of it.
 /// `-EPIPE`. One value, two names: the device overran a capture stream, or
 /// underran a playback one. Both mean audio is missing and the stream needs
 /// putting back together.
@@ -1905,7 +1903,11 @@ mod tests {
         // The two error codes have no name function; they are plain errnos, and
         // comparing them to the C library's own is exact where comparing
         // `snd_strerror` text would depend on the locale.
-        assert_eq!(-ALSA_BROKEN_PIPE, libc::EPIPE, "a capture overrun is EPIPE");
+        assert_eq!(
+            -ALSA_BROKEN_PIPE,
+            libc::EPIPE,
+            "a capture overrun and a playback underrun are both EPIPE"
+        );
         assert_eq!(
             -ALSA_SUSPENDED,
             libc::ESTRPIPE,
