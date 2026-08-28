@@ -16,6 +16,14 @@
 //! are different sizes and neither divides the other. What a callback needs is
 //! a period's worth of the stream in order; where the block boundaries fell is
 //! not something playback can act on.
+//!
+//! Playback does not begin until a few periods are queued. Without that a
+//! device fed by another device runs in lockstep with it and no cushion ever
+//! forms, so every scheduling jitter costs a whole period — measured at four
+//! lost periods in fourteen on a microphone wired to a speaker. The pre-roll is
+//! silence like an underrun is, and is counted separately from one, because a
+//! stream that has not started yet and a stream that fell behind need different
+//! answers.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,6 +36,10 @@ use std::time::Duration;
 struct AudioSamplesAwaitingPlayback {
     interleaved_sample_bytes: VecDeque<u8>,
     playback_has_ended: bool,
+    /// False until enough was queued to start on. The device's own request
+    /// size is what "enough" is measured in, so the cushion is stated in the
+    /// device's periods rather than guessed at from the format.
+    the_cushion_has_filled: bool,
 }
 
 /// What handing samples over produced.
@@ -39,6 +51,15 @@ pub enum AudioSamplesHandOffOutcome {
     PlaybackEnded,
 }
 
+/// Device periods that must be queued before the first one is served.
+///
+/// Two rather than one: one leaves the cushion exactly empty the instant it is
+/// spent, so the very next jitter is an underrun again. Two costs one more
+/// period of latency — about 21 ms at a PipeWire quantum, against a
+/// conversational budget an LLM already dominates — and buys a stream that
+/// survives a late block.
+const DEVICE_PERIODS_QUEUED_BEFORE_PLAYBACK_BEGINS: usize = 2;
+
 /// A bounded, in-order queue of interleaved sample bytes from the graph to a
 /// playback device's callback.
 #[derive(Debug)]
@@ -47,8 +68,12 @@ pub struct AudioSamplesAwaitingPlaybackRing {
     room_was_made_or_playback_ended: Condvar,
     byte_capacity: usize,
     /// How many bytes of silence the device had to be given because the graph
-    /// had none ready.
+    /// fell behind after playback had begun.
     underrun_byte_count: AtomicU64,
+    /// How many bytes of silence the device was given while the cushion was
+    /// still filling. Counted apart from an underrun because it is the cost of
+    /// starting, not a fault.
+    silence_played_before_the_cushion_filled_byte_count: AtomicU64,
 }
 
 impl AudioSamplesAwaitingPlaybackRing {
@@ -60,6 +85,7 @@ impl AudioSamplesAwaitingPlaybackRing {
             room_was_made_or_playback_ended: Condvar::new(),
             byte_capacity: byte_capacity.max(1),
             underrun_byte_count: AtomicU64::new(0),
+            silence_played_before_the_cushion_filled_byte_count: AtomicU64::new(0),
         }
     }
 
@@ -112,8 +138,31 @@ impl AudioSamplesAwaitingPlaybackRing {
     /// cannot fill it zeroes and counts — a period left partly unwritten would
     /// replay whatever the mapping last held, and silence that nothing counted
     /// is a fault nobody can see.
+    ///
+    /// Until the cushion has filled the answer is a whole period of silence,
+    /// counted as the cost of starting rather than as an underrun.
     pub fn fill_one_device_period(&self, interleaved_sample_bytes_to_fill: &mut [u8]) -> usize {
         let mut awaiting = self.lock_samples_awaiting_playback();
+        if !awaiting.the_cushion_has_filled {
+            // Never more than the ring can hold: a cushion larger than the
+            // capacity is one that never fills, and a device that never starts
+            // is worse than one that starts with no cushion.
+            let bytes_to_start_on = (interleaved_sample_bytes_to_fill.len()
+                * DEVICE_PERIODS_QUEUED_BEFORE_PLAYBACK_BEGINS)
+                .min(self.byte_capacity);
+            if awaiting.interleaved_sample_bytes.len() < bytes_to_start_on {
+                drop(awaiting);
+                interleaved_sample_bytes_to_fill.fill(0);
+                self.silence_played_before_the_cushion_filled_byte_count
+                    .fetch_add(
+                        interleaved_sample_bytes_to_fill.len() as u64,
+                        Ordering::Relaxed,
+                    );
+                return interleaved_sample_bytes_to_fill.len();
+            }
+            awaiting.the_cushion_has_filled = true;
+        }
+
         let filled = awaiting
             .interleaved_sample_bytes
             .len()
@@ -144,9 +193,16 @@ impl AudioSamplesAwaitingPlaybackRing {
     }
 
     /// How many bytes of silence the device has been given because the graph
-    /// had none ready.
+    /// fell behind after playback began.
     pub fn underrun_byte_count(&self) -> u64 {
         self.underrun_byte_count.load(Ordering::Relaxed)
+    }
+
+    /// How many bytes of silence the device was given while the cushion was
+    /// still filling — the cost of starting, not a fault.
+    pub fn silence_played_before_the_cushion_filled_byte_count(&self) -> u64 {
+        self.silence_played_before_the_cushion_filled_byte_count
+            .load(Ordering::Relaxed)
     }
 
     /// A poisoned ring is still a well-formed queue — a panicking drain thread
@@ -167,9 +223,34 @@ mod tests {
     const A_POLL_SHORT_ENOUGH_TO_LOOP_IN: Duration = Duration::from_millis(10);
     const A_WAIT_LONG_ENOUGH_TO_BE_WOKEN_FROM: Duration = Duration::from_secs(5);
 
+    /// A ring, already past its pre-roll, so a test about serving is not also a
+    /// test about starting.
+    fn a_playing_ring(
+        byte_capacity: usize,
+        device_period_bytes: usize,
+    ) -> AudioSamplesAwaitingPlaybackRing {
+        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(byte_capacity);
+        let cushion = vec![0u8; device_period_bytes * DEVICE_PERIODS_QUEUED_BEFORE_PLAYBACK_BEGINS];
+        ring.hand_off_for_playback(&cushion, A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let mut period = vec![0u8; device_period_bytes];
+        while !ring.lock_samples_awaiting_playback().the_cushion_has_filled {
+            ring.fill_one_device_period(&mut period);
+        }
+        // Drain whatever the cushion left, so a test starts from an empty queue.
+        while ring
+            .lock_samples_awaiting_playback()
+            .interleaved_sample_bytes
+            .len()
+            > 0
+        {
+            ring.fill_one_device_period(&mut period);
+        }
+        ring
+    }
+
     #[test]
     fn samples_reach_the_device_in_the_order_the_graph_queued_them() {
-        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(64);
+        let ring = a_playing_ring(64, 6);
         assert_eq!(
             ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN),
             AudioSamplesHandOffOutcome::Queued
@@ -190,7 +271,7 @@ mod tests {
     /// across it — a boundary that reset anything would click every block.
     #[test]
     fn a_device_period_is_served_across_block_boundaries() {
-        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(64);
+        let ring = a_playing_ring(64, 4);
         ring.hand_off_for_playback(&[1, 2, 3], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
         ring.hand_off_for_playback(&[4, 5, 6], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
@@ -207,7 +288,7 @@ mod tests {
     /// counted silence, never a wait.
     #[test]
     fn a_device_callback_finding_nothing_queued_is_given_counted_silence() {
-        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(64);
+        let ring = a_playing_ring(64, 8);
         let mut period = [0xAAu8; 8];
 
         let filling_began = Instant::now();
@@ -230,13 +311,76 @@ mod tests {
     /// is there plays, and only the remainder is counted as underrun.
     #[test]
     fn a_partly_served_period_counts_only_the_silence_it_had_to_invent() {
-        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(64);
+        let ring = a_playing_ring(64, 5);
         ring.hand_off_for_playback(&[7, 7, 7], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
         let mut period = [0xAAu8; 5];
         assert_eq!(ring.fill_one_device_period(&mut period), 2);
         assert_eq!(period, [7, 7, 7, 0, 0]);
         assert_eq!(ring.underrun_byte_count(), 2);
+    }
+
+    /// The pre-roll, and why it is not an underrun: a device asks the moment
+    /// its stream connects, and the graph cannot have published anything yet.
+    ///
+    /// Mental revert: serve the first period from a half-filled queue and a
+    /// speaker fed by a microphone runs with no cushion at all, losing a whole
+    /// period to every scheduling jitter — four in fourteen, measured.
+    #[test]
+    fn nothing_is_served_until_a_cushion_of_periods_has_been_queued() {
+        const PERIOD_BYTES: usize = 4;
+        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(64);
+        let mut period = [0xAAu8; PERIOD_BYTES];
+
+        // One period queued is not enough to start on.
+        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        assert_eq!(ring.fill_one_device_period(&mut period), PERIOD_BYTES);
+        assert_eq!(period, [0; PERIOD_BYTES], "the cushion is still filling");
+        assert_eq!(
+            ring.underrun_byte_count(),
+            0,
+            "a stream that has not started is not a stream that fell behind"
+        );
+        assert_eq!(
+            ring.silence_played_before_the_cushion_filled_byte_count(),
+            PERIOD_BYTES as u64,
+            "the cost of starting is counted too — nothing is silent and uncounted"
+        );
+
+        // The second period fills the cushion, so the first one queued plays.
+        ring.hand_off_for_playback(&[5, 6, 7, 8], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        assert_eq!(ring.fill_one_device_period(&mut period), 0);
+        assert_eq!(period, [1, 2, 3, 4]);
+    }
+
+    /// Once playback has begun it does not stop to refill: a stream that
+    /// re-primed after every underrun would answer a single late block with a
+    /// gap several periods long.
+    #[test]
+    fn a_started_stream_does_not_pre_roll_again_after_an_underrun() {
+        let ring = a_playing_ring(64, 4);
+        let mut period = [0u8; 4];
+
+        assert_eq!(ring.fill_one_device_period(&mut period), 4, "starved");
+        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        assert_eq!(
+            ring.fill_one_device_period(&mut period),
+            0,
+            "one period queued is enough to serve once the stream is playing"
+        );
+        assert_eq!(period, [1, 2, 3, 4]);
+    }
+
+    /// A ring too small to hold the whole cushion still starts. A device that
+    /// never starts is worse than one that starts without a cushion.
+    #[test]
+    fn a_ring_smaller_than_the_cushion_still_begins_playing() {
+        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(4);
+        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+
+        let mut period = [0u8; 4];
+        assert_eq!(ring.fill_one_device_period(&mut period), 0);
+        assert_eq!(period, [1, 2, 3, 4]);
     }
 
     /// The backpressure `lossless` names: a full ring holds the drain thread,
@@ -338,7 +482,7 @@ mod tests {
     /// that arrives between blocks must not queue another one.
     #[test]
     fn nothing_is_queued_once_playback_has_ended() {
-        let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(64);
+        let ring = a_playing_ring(64, 3);
         ring.end_playback();
 
         assert_eq!(

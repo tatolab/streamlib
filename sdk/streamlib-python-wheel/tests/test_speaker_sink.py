@@ -26,7 +26,15 @@ from speaker_sink_named_device_app import UNOPENABLE_DEVICE_ID
 SPEAKER_SINK_APP = Path(__file__).parent / "speaker_sink_app.py"
 NAMED_DEVICE_APP = Path(__file__).parent / "speaker_sink_named_device_app.py"
 
-PLAYED_BLOCKS = re.compile(r"\"played_blocks\":\s*(\d+)")
+PLAYED_BLOCKS = re.compile(r"played_blocks=(\d+)")
+UNDERRUN_BYTES = re.compile(r"underrun_bytes=(\d+)")
+PUBLISHED_BLOCKS = re.compile(r"published_blocks=(\d+)")
+
+# Eight device periods of stereo `f32` at the PipeWire arm's 1024-sample
+# quantum. A cold start costs two or three of these and then nothing more; a
+# stream running without a cushion loses one every few blocks, which over the
+# hundred blocks this waits for is an order of magnitude past this.
+UNDERRUN_BYTES_A_COLD_START_MAY_COST = 8 * 1024 * 2 * 4
 
 
 # ---- marker semantics (no GPU) ---------------------------------------------
@@ -76,8 +84,11 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     app.await_output_containing(
         "MARKER:EVERY_PROCESSOR_RUNNING", "the speaker to open its device"
     )
-    # Long enough for many device periods to have been asked for and served.
-    app.await_output_containing("SpeakerSink: playback stream opened", "the open log line")
+    # Blocks really moving on the port the speaker reads, rather than a sleep
+    # guessing that they are.
+    app.await_output_containing(
+        "MARKER:BLOCKS_COUNTED", "enough blocks to judge a playback run by"
+    )
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
@@ -90,10 +101,35 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
         f"there is no resampler on this rung:\n{app.output}"
     )
 
+    assert "SpeakerSink: playback stream opened" in app.output, (
+        f"the speaker never opened a device:\n{app.output}"
+    )
+
     played = PLAYED_BLOCKS.search(app.output)
     assert played is not None, f"no SpeakerSink teardown line:\n{app.output}"
     assert int(played.group(1)) > 0, (
         f"the speaker reached Running but was never given a block:\n{app.output}"
+    )
+
+    # Nothing is lost between the two built-ins: what the microphone published
+    # is what the speaker was handed, over a real `lossless` link.
+    published = PUBLISHED_BLOCKS.search(app.output)
+    assert published is not None, f"no MicrophoneSource teardown line:\n{app.output}"
+    assert int(played.group(1)) == int(published.group(1)), (
+        f"the microphone published {published.group(1)} blocks and the speaker played "
+        f"{played.group(1)}:\n{app.output}"
+    )
+
+    # The pre-roll's whole point. A speaker fed by a microphone runs in lockstep
+    # with it, so without a cushion every scheduling jitter costs a whole period
+    # — four in fourteen, measured before the ring pre-rolled. Bounded rather
+    # than required to be zero: a cold start costs a couple of periods on any
+    # real device, and what this catches is a stream that keeps paying.
+    underrun = UNDERRUN_BYTES.search(app.output)
+    assert underrun is not None, f"no underrun count in the teardown line:\n{app.output}"
+    assert int(underrun.group(1)) <= UNDERRUN_BYTES_A_COLD_START_MAY_COST, (
+        f"the device was given {underrun.group(1)} bytes of silence across "
+        f"{played.group(1)} played blocks — the cushion is not holding:\n{app.output}"
     )
 
 

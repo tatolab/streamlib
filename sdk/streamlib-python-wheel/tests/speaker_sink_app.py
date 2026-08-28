@@ -14,11 +14,17 @@ holds by construction on the null backend — both ends take the pacing clock's
 rate and one channel — and on a session whose default source and default sink
 run the same format, which is the ordinary desktop case. Where they differ the
 refusal names both, which is the behaviour under test rather than a flake.
+
+A probe hangs off the same output the speaker reads, so the test has a marker
+saying enough blocks have really flowed rather than a sleep guessing that they
+have. It is a second consumer of the microphone's port, not a stage between the
+two built-ins — the samples the speaker plays never enter an interpreter.
 """
 
 import threading
 
 import streamlib
+from speaker_sink_probes import AudioBlockCountingProbe
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
@@ -28,6 +34,9 @@ def main() -> None:
     microphone = runtime.add(streamlib.MicrophoneSource)
     speaker = runtime.add(streamlib.SpeakerSink)
     runtime.connect(microphone.output("audio"), speaker.input("audio"))
+
+    probe = runtime.add(AudioBlockCountingProbe)
+    runtime.connect(microphone.output("audio"), probe.input("audio_from_upstream"))
 
     def watch_readiness() -> None:
         try:

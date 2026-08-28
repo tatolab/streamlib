@@ -180,12 +180,15 @@ impl ManualProcessor for SpeakerSink::Processor {
 
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.stop_draining();
+        let samples_awaiting_playback = self.samples_awaiting_playback.as_ref();
         tracing::info!(
             played_blocks = self.played_block_counter.load(Ordering::Relaxed),
-            underrun_bytes = self
-                .samples_awaiting_playback
-                .as_ref()
-                .map_or(0, |ring| ring.underrun_byte_count()),
+            underrun_bytes = samples_awaiting_playback.map_or(0, |ring| ring.underrun_byte_count()),
+            // Reported beside the underruns rather than folded into them: this
+            // is the cost of starting, and a reader comparing two runs needs to
+            // see which of the two moved.
+            silence_before_playback_began_bytes = samples_awaiting_playback.map_or(0, |ring| ring
+                .silence_played_before_the_cushion_filled_byte_count()),
             "SpeakerSink: teardown"
         );
         self.playback_stream = None;
@@ -503,7 +506,7 @@ mod tests {
 
     /// The device edge's whole contract, held where it is claimed: the callback
     /// the sink installs takes what is queued and returns, so a graph that
-    /// stops supplying costs counted silence rather than the device's own
+    /// never supplies costs counted silence rather than the device's own
     /// thread.
     ///
     /// Mental revert: have the callback wait for a block instead of taking what
@@ -547,11 +550,17 @@ mod tests {
              device callback waited on the graph"
         );
         assert_eq!(
-            samples_awaiting_playback.underrun_byte_count(),
+            samples_awaiting_playback.silence_played_before_the_cushion_filled_byte_count(),
             (PERIODS_NOBODY_SUPPLIES
                 * stream_format.interleaved_byte_count_for(TEST_QUANTUM_SAMPLES as u32))
                 as u64,
-            "every byte of silence the device was given is counted"
+            "every byte of silence the device was given is counted, whichever counter it \
+             belongs on"
+        );
+        assert_eq!(
+            samples_awaiting_playback.underrun_byte_count(),
+            0,
+            "a stream whose cushion never filled has not fallen behind — it never started"
         );
     }
 
@@ -578,16 +587,20 @@ mod tests {
             )))
             .expect("start requesting");
 
+        // Enough to fill the cushion the ring starts on and serve a period
+        // after it, so this is about serving rather than about starting.
         let one_period_of_bytes =
             stream_format.interleaved_byte_count_for(TEST_QUANTUM_SAMPLES as u32);
         samples_awaiting_playback
-            .hand_off_for_playback(&vec![0x7Fu8; one_period_of_bytes], Duration::ZERO);
-        clock.fire_one_tick();
+            .hand_off_for_playback(&vec![0x7Fu8; one_period_of_bytes * 3], Duration::ZERO);
+        for _ in 0..3 {
+            clock.fire_one_tick();
+        }
 
         assert_eq!(
             samples_awaiting_playback.underrun_byte_count(),
             0,
-            "a period the graph supplied in full is not an underrun"
+            "periods the graph supplied in full are not underruns"
         );
     }
 
