@@ -157,6 +157,8 @@ struct AudioDeviceBackendArm {
 impl AudioDeviceBackendArm {
     /// The only way to build one, so an arm's name always comes from the same
     /// place as the attempt that opens it.
+    // A platform whose floor is the null backend has no arms to construct.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn named(
         backend_name: &'static str,
         open: impl FnOnce() -> AudioDeviceBackendArmOpenOutcome + 'static,
