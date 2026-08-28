@@ -507,14 +507,19 @@ unsafe impl Send for OpenedPipeWireAudioStream {}
 /// pollable, which is the point: an owner told about a death on the loop thread
 /// could not act on it — the one natural reaction, stopping the stream, takes
 /// the very lock this call is holding.
+///
+/// It allocates, which would be indefensible on the sample path and is fine
+/// here: the shim keeps the first reason and calls this at most once for the
+/// life of a stream.
 unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
     liveness_report_context: *mut c_void,
     reason: *const c_char,
 ) {
-    // SAFETY: the context is the address of the `Box<AudioStreamLivenessReport>`
-    // the stream installed under the loop lock, and `close` retires this
-    // hand-off under that same lock before the box is dropped — so it is live
-    // for the length of this call.
+    // SAFETY: the context is the address of the report *inside* the box the
+    // stream installed under the loop lock — which is why the box is there,
+    // since the struct holding it moves and that heap address does not. `close`
+    // retires this hand-off under that same lock before the box is dropped, so
+    // the report is live for the length of this call.
     let liveness_report = unsafe { &*liveness_report_context.cast::<AudioStreamLivenessReport>() };
     let reason = if reason.is_null() {
         "the PipeWire stream entered its error state".to_string()
