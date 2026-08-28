@@ -398,9 +398,13 @@ static void on_playback_stream_process(void *data)
         return;
 
     struct spa_data *data_plane = &buffer->buffer->datas[0];
-    uint32_t sample_count = 0;
-    if (data_plane->data != NULL && data_plane->chunk != NULL)
-        sample_count = playback_frames_wanted_by(buffer, bytes_per_frame);
+    if (data_plane->chunk == NULL) {
+        entry_points->pw_stream_queue_buffer(audio_stream->stream, buffer);
+        return;
+    }
+
+    uint32_t sample_count =
+        data_plane->data != NULL ? playback_frames_wanted_by(buffer, bytes_per_frame) : 0;
     size_t sample_byte_count = (size_t)sample_count * bytes_per_frame;
 
     if (sample_count > 0) {
@@ -414,10 +418,13 @@ static void on_playback_stream_process(void *data)
             // wiring itself up must not make the device replay an old period.
             memset(data_plane->data, 0, sample_byte_count);
         }
-        data_plane->chunk->offset = 0;
-        data_plane->chunk->stride = (int32_t)bytes_per_frame;
-        data_plane->chunk->size = (uint32_t)sample_byte_count;
     }
+    // Written whatever the count, including zero. A recycled buffer keeps the
+    // chunk the last cycle left on it, so a cycle that produced nothing would
+    // otherwise hand the device the previous period's audio a second time.
+    data_plane->chunk->offset = 0;
+    data_plane->chunk->stride = (int32_t)bytes_per_frame;
+    data_plane->chunk->size = (uint32_t)sample_byte_count;
 
     entry_points->pw_stream_queue_buffer(audio_stream->stream, buffer);
 }
