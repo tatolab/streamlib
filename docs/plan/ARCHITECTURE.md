@@ -242,8 +242,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the runtime does not do. [delivery-profile-vocabulary]
 - **DECIDED** — No loss is silent. A bag dropped at a port is counted by the port that
   dropped it and is readable over the control plane in `graph`, alongside the processor's
-  other metrics. A drop is a normal, reportable event on a realtime link, never an error
-  and never invisible — a run that lost most of its bags must not read as a healthy one.
+  other metrics. Drops are counted per link, never as one blended total, so a future
+  reflection of a link's count to its producer stays possible without recounting. A drop
+  is a normal, reportable event on a realtime link, never an error and never invisible —
+  a run that lost most of its bags must not read as a healthy one.
   [delivery-profile-vocabulary]
 - **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
   unreachable: no profile resolves to it and the overflow policy it was the second half
@@ -266,15 +268,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   encoded frames blindly. The information that makes both possible travels as
   ordinary bag fields the producer writes and the consumer casts, never as a tag in the
   frame header and never as engine-visible type. [delivery-profile-vocabulary]
-- **DECIDED** — The engine reflects a link's drop count back to its producing port, so a
-  producer can react to pressure it cannot otherwise see. Only drops at `ordered` inputs
-  are reflected — a `newest` input passing over bags is the profile working, and must
-  never throttle a producer. Reflection rides the link's own notify path, never the
-  control plane (which is observation-shaped, for external callers), and surfaces as a
-  read-only per-link count the producing processor may poll; there is no callback, no
-  configuration dial, and a producer that ignores it loses nothing but the chance to
-  react. Built with the first encoded-domain link, not before.
-  [delivery-profile-vocabulary]
+- **OPEN** — Reflecting a link's drop count back to its producing port, so a producer
+  can react to pressure it cannot otherwise see: intended, do not build until the first
+  encoded-domain link exists — nothing in the tree reads it before an encoder does.
+  Direction — only drops at `ordered` inputs (a `newest` input passing over bags is the
+  profile working and must never throttle a producer); rides the link's own notify path,
+  never the control plane; a read-only count the producer polls, no callback, no
+  configuration dial. The per-link counting decided above is the only piece today's work
+  must honor. [delivery-profile-vocabulary]
 - **DECIDED** — There is no schema layer: no JTD, no schema registry, no embedded
   schemas, no codegen and no generated type classes, and no schema identity grammar
   anywhere in the engine or the authoring surfaces. [schema-free-ports — SHIPPED

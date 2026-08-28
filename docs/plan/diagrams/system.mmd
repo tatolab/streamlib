@@ -39,7 +39,6 @@ audio rides the bag itself — AudioBlock samples inline, no surface ids,
 windowed to the input port's declared contract;
 every input port declares one read policy — newest or ordered — and nothing else:
 both drop under pressure, every drop is counted at the port and shows in graph,
-ordered-input drop counts reflect back to the producing port,
 and no link ever blocks a producer;
 every stamp reads the one machine-monotonic clock"| helper
   helper -->|"kernels constructed in setup(), dispatched by name and
