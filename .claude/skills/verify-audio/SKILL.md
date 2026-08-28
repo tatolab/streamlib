@@ -73,8 +73,13 @@ PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
 wrong directory and dies there. It defaults to `python3`, which only works if that interpreter can
 already `import streamlib` — the wheel venv is the reliable answer.
 
-**The through-engine fixture hosts its control plane on port 9077** and a second node already on
-that port makes it fail to come up. `--port` moves it.
+**The through-engine fixture hosts its control plane on port 9077, and a busy 9077 does not fail
+the run — it misdirects it.** The API server walks up to ten ports looking for a free one and says
+so only at `INFO` (`Port 9077 in use, bound to 9078 instead`), while the fixture keeps asking the
+port it was given. What you see is `no control plane reachable at http://127.0.0.1:9077
+(Connection refused)` and a channel contract that failed, from a graph that is running perfectly.
+Free the port or pass `--port`; `node.log` in the artifacts directory is where the run says which
+one it took.
 
 ## Reading what came back
 
@@ -118,8 +123,9 @@ different owners, and the user should not have to work out which they got.
 So on any **non-zero, non-77** exit from `verify_audio_loopback.sh`, run `e2e_audio_loopback.sh`
 before reporting anything, and report the pair:
 
-- rig-only **passes** → the rig is sound and the regression is the engine's. This is a finding
-  against the change.
+- rig-only **passes** → the rig is sound, so the failure is on the StreamLib side of the loop.
+  Read `node.log` before calling it a regression: a port collision presents as exactly this, and
+  so does anything else that stopped the fixture reaching a graph that ran fine.
 - rig-only **fails too** → the machine's audio path is broken. Nothing has been proven about the
   engine either way, so say that rather than blaming the change.
 - rig-only **skips (77)** → the through-engine failure is uninterpretable; report cannot-run.
