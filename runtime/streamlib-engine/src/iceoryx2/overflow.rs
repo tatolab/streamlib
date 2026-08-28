@@ -20,16 +20,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Overflow {
-    /// Buffer evicts oldest sample to make room; publisher never blocks.
-    /// The realtime-media default — producer represents real-world
-    /// time advancing and must not be made to wait. Glitches on the
-    /// consumer side beat freezing the whole pipeline.
+    /// Buffer evicts oldest sample to make room; publisher never blocks — a
+    /// producer that represents real-world time advancing must not be made to
+    /// wait, and glitches on the consumer side beat freezing the whole pipeline.
     #[default]
     DropOldest,
-    /// Producer blocks until the consumer drains a slot. Use only when
-    /// every sample must be delivered in order — file writers, muxers,
-    /// loggers — and the consumer's mailbox `buffer_size` is sized for
-    /// the expected hiccup envelope.
+    /// Producer blocks until the consumer drains a slot. Use only where every
+    /// sample must be delivered in order and the consumer's mailbox
+    /// `buffer_size` is sized for the expected hiccup envelope.
     Block,
 }
 

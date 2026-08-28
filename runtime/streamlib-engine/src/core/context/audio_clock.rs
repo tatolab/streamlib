@@ -50,7 +50,11 @@ impl AudioClockConfig {
 /// Context passed to audio clock tick callbacks.
 #[derive(Debug, Clone, Copy)]
 pub struct AudioTickContext {
-    /// Machine monotonic timestamp in nanoseconds, the epoch a frame timestamp carries.
+    /// Machine monotonic timestamp in nanoseconds, the epoch a frame timestamp
+    /// carries. It is the wake time rather than the expiration the tick was
+    /// scheduled for, and a catch-up burst may hand every tick the same one, so
+    /// a block's instant derives from an anchor plus samples already delivered
+    /// — never from one tick's stamp.
     pub timestamp_ns: i64,
     /// Number of samples to produce this tick (per channel).
     pub samples_needed: usize,
