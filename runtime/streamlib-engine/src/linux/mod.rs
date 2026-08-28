@@ -3,6 +3,7 @@
 
 //! Linux-specific implementations.
 
+pub mod alsa_audio_device_backend;
 pub mod audio_clock;
 pub mod pipewire_audio_device_backend;
 pub mod rtkit;

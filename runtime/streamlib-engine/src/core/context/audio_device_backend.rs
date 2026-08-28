@@ -118,6 +118,57 @@ pub trait AudioDeviceBackend: Send + Sync {
 /// Shared handle to the backend the chain probed.
 pub type SharedAudioDeviceBackend = Arc<dyn AudioDeviceBackend>;
 
+/// Why an arm of the chain cannot serve, in the words the demotion log line
+/// carries.
+///
+/// Not a core [`crate::core::Error`]: nothing failed that a caller must handle.
+/// The chain has another arm, and this is what tells a reader whether the
+/// library was absent, the daemon was, or the device was.
+pub struct AudioDeviceBackendArmUnavailableReason(String);
+
+impl AudioDeviceBackendArmUnavailableReason {
+    /// State why this arm cannot serve.
+    pub fn of(reason: impl Into<String>) -> Self {
+        Self(reason.into())
+    }
+}
+
+impl std::fmt::Display for AudioDeviceBackendArmUnavailableReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// What opening one arm of the chain yields.
+pub type AudioDeviceBackendArmOpenOutcome =
+    std::result::Result<SharedAudioDeviceBackend, AudioDeviceBackendArmUnavailableReason>;
+
+/// One arm of the chain: its name, and the attempt to open it.
+///
+/// The attempt is held unrun so the chain's *order* can be read — and asserted
+/// — without loading an audio library or touching a device.
+pub struct AudioDeviceBackendArm {
+    /// What the arm calls itself, matching its
+    /// [`AudioDeviceBackend::backend_name`].
+    pub backend_name: &'static str,
+    /// Load the library, reach the device, and hand back the arm — or say why
+    /// it cannot serve.
+    pub open: Box<dyn FnOnce() -> AudioDeviceBackendArmOpenOutcome>,
+}
+
+impl AudioDeviceBackendArm {
+    /// Name an arm and the attempt that opens it.
+    pub fn named(
+        backend_name: &'static str,
+        open: impl FnOnce() -> AudioDeviceBackendArmOpenOutcome + 'static,
+    ) -> Self {
+        Self {
+            backend_name,
+            open: Box::new(open),
+        }
+    }
+}
+
 static PROBED_AUDIO_DEVICE_BACKEND: OnceLock<SharedAudioDeviceBackend> = OnceLock::new();
 
 /// Probe the audio backend chain once per process and log the arm it chose.
@@ -145,43 +196,99 @@ pub fn probe_audio_device_backend() -> SharedAudioDeviceBackend {
 /// library does. Probing on presence alone would strand precisely the machines
 /// the chain exists to serve.
 fn first_audio_device_backend_arm_that_opens() -> SharedAudioDeviceBackend {
-    if let Some(backend) = platform_audio_device_backend_that_opens() {
-        return backend;
-    }
-    Arc::new(SilentNullAudioDeviceBackend)
+    first_audio_device_backend_arm_that_opens_among(platform_audio_device_backend_arms())
+        .unwrap_or_else(|| Arc::new(SilentNullAudioDeviceBackend))
 }
 
-#[cfg(target_os = "linux")]
-fn platform_audio_device_backend_that_opens() -> Option<SharedAudioDeviceBackend> {
-    use crate::linux::pipewire_audio_device_backend::PipeWireAudioDeviceBackend;
-
-    match PipeWireAudioDeviceBackend::load_and_connect() {
-        Ok(backend) => Some(Arc::new(backend)),
-        Err(reason) => {
-            // Info rather than warn: a machine with no audio server is a
-            // supported environment, and the next arm is the answer rather
-            // than the consolation prize. The reason is what tells a reader
-            // whether the library was absent or the daemon was.
-            tracing::info!(
-                audio_backend = "pipewire",
-                %reason,
-                "audio device backend chain: demoting to the next arm"
-            );
-            None
+/// Take the first arm that opens, logging each demotion with the reason that
+/// caused it.
+///
+/// Separate from the platform arm list so the walk is exercised by arms that
+/// fail on purpose: the order this chain demotes in is the decided behaviour
+/// (`docs/plan/ARCHITECTURE.md` §Media I/O `[audio-subsystem]`), and asserting
+/// it in prose proves nothing.
+fn first_audio_device_backend_arm_that_opens_among(
+    arms: impl IntoIterator<Item = AudioDeviceBackendArm>,
+) -> Option<SharedAudioDeviceBackend> {
+    for arm in arms {
+        match (arm.open)() {
+            Ok(backend) => return Some(backend),
+            Err(reason) => {
+                // Info rather than warn: a machine with no audio server is a
+                // supported environment, and the next arm is the answer rather
+                // than the consolation prize. The reason is what tells a reader
+                // whether the library was absent or the device was.
+                tracing::info!(
+                    audio_backend = arm.backend_name,
+                    %reason,
+                    "audio device backend chain: demoting to the next arm"
+                );
+            }
         }
     }
+    None
+}
+
+/// The chain's real arms, in the order the plan decided: PipeWire, else ALSA,
+/// else — once both have declined — the null backend the walk falls through to.
+#[cfg(target_os = "linux")]
+fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
+    use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;
+    use crate::linux::pipewire_audio_device_backend::PipeWireAudioDeviceBackend;
+
+    vec![
+        AudioDeviceBackendArm::named("pipewire", || {
+            PipeWireAudioDeviceBackend::load_and_connect()
+                .map(|backend| Arc::new(backend) as SharedAudioDeviceBackend)
+        }),
+        AudioDeviceBackendArm::named("alsa", || {
+            AlsaAudioDeviceBackend::load_and_open()
+                .map(|backend| Arc::new(backend) as SharedAudioDeviceBackend)
+        }),
+    ]
 }
 
 /// The platform floor is Linux; every other target lands on the null backend,
 /// which needs no audio library and captures silence.
 #[cfg(not(target_os = "linux"))]
-fn platform_audio_device_backend_that_opens() -> Option<SharedAudioDeviceBackend> {
-    None
+fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
+    Vec::new()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An arm that opens, standing in for a real backend so the walk can be
+    /// driven without an audio library or a device.
+    struct ArmThatOpened(&'static str);
+
+    impl AudioDeviceBackend for ArmThatOpened {
+        fn backend_name(&self) -> &'static str {
+            self.0
+        }
+
+        fn open_capture_stream(
+            &self,
+            _request: &AudioCaptureStreamRequest,
+        ) -> Result<Box<dyn AudioCaptureStream>> {
+            unreachable!("the walk only ever opens the arm, never a stream on it")
+        }
+    }
+
+    fn an_arm_that_opens(backend_name: &'static str) -> AudioDeviceBackendArm {
+        AudioDeviceBackendArm::named(backend_name, move || {
+            Ok(Arc::new(ArmThatOpened(backend_name)) as SharedAudioDeviceBackend)
+        })
+    }
+
+    fn an_arm_that_declines(backend_name: &'static str) -> AudioDeviceBackendArm {
+        AudioDeviceBackendArm::named(backend_name, move || {
+            Err(AudioDeviceBackendArmUnavailableReason::of(format!(
+                "{backend_name} was made to decline by this test"
+            )))
+        })
+    }
 
     #[test]
     fn the_chain_is_probed_once_and_hands_back_the_same_backend_every_time() {
@@ -200,9 +307,83 @@ mod tests {
     fn the_chain_always_lands_on_an_arm_however_little_audio_the_machine_has() {
         let backend = probe_audio_device_backend();
         assert!(
-            ["pipewire", "silent-null"].contains(&backend.backend_name()),
+            ["pipewire", "alsa", "silent-null"].contains(&backend.backend_name()),
             "the chain resolved to an arm nothing declares: {}",
             backend.backend_name()
+        );
+    }
+
+    /// The decided order, read off the list the probe itself walks rather than
+    /// restated beside it — so an arm inserted in the wrong place fails here.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_chain_offers_pipewire_then_alsa_before_falling_through_to_null() {
+        let arm_names: Vec<&str> = platform_audio_device_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(
+            arm_names,
+            ["pipewire", "alsa"],
+            "the plan decides PipeWire, else ALSA, else null — and the null arm is the              fall-through the walk takes when this list is exhausted, never an entry in it"
+        );
+    }
+
+    #[test]
+    fn the_walk_takes_the_first_arm_that_opens_and_asks_no_arm_behind_it() {
+        let chosen = first_audio_device_backend_arm_that_opens_among([
+            an_arm_that_opens("first"),
+            AudioDeviceBackendArm::named("second", || {
+                unreachable!("an arm behind one that opened is never asked")
+            }),
+        ])
+        .expect("an arm opened");
+        assert_eq!(chosen.backend_name(), "first");
+    }
+
+    /// Each arm made to fail in turn: the chain demotes past exactly the arms
+    /// that declined and stops at the first that did not.
+    #[test]
+    fn the_walk_demotes_past_every_arm_that_declines_in_the_order_it_was_given() {
+        for failing_arm_count in 0..3 {
+            let arms: Vec<AudioDeviceBackendArm> = ["first", "second", "third"]
+                .into_iter()
+                .enumerate()
+                .map(|(position, backend_name)| {
+                    if position < failing_arm_count {
+                        an_arm_that_declines(backend_name)
+                    } else {
+                        an_arm_that_opens(backend_name)
+                    }
+                })
+                .collect();
+            let chosen = first_audio_device_backend_arm_that_opens_among(arms)
+                .expect("one arm was left able to open");
+            assert_eq!(
+                chosen.backend_name(),
+                ["first", "second", "third"][failing_arm_count],
+                "with the leading {failing_arm_count} arm(s) declining, the chain must land                  on the next one rather than skipping it or stopping short"
+            );
+        }
+    }
+
+    /// The fall-through the wheel depends on: with every arm declining there is
+    /// still a backend, because `manylinux_2_28` and headless containers carry
+    /// no audio library at all and must run the graph rather than fail to start.
+    #[test]
+    fn a_chain_whose_arms_all_decline_falls_through_to_the_null_backend() {
+        assert!(
+            first_audio_device_backend_arm_that_opens_among([
+                an_arm_that_declines("first"),
+                an_arm_that_declines("second"),
+            ])
+            .is_none(),
+            "no arm opened, so the walk yields nothing and the caller supplies the null arm"
+        );
+        assert_eq!(
+            SilentNullAudioDeviceBackend.backend_name(),
+            "silent-null",
+            "the arm the walk falls through to"
         );
     }
 
