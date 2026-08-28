@@ -22,8 +22,8 @@ use libloading::Library;
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFormat,
+    AudioStreamLivenessReport, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
 };
 use crate::core::{Error, Result};
 
@@ -78,6 +78,9 @@ mod audio_shim {
         sample_count: u32,
     );
 
+    pub type StreamFailureHandOff =
+        unsafe extern "C" fn(hand_off_context: *mut c_void, reason: *const c_char);
+
     unsafe extern "C" {
         pub fn streamlib_pipewire_entry_point_count() -> usize;
         pub fn streamlib_pipewire_entry_point_names() -> *const *const c_char;
@@ -106,6 +109,11 @@ mod audio_shim {
         pub fn streamlib_pipewire_playback_stream_start_requesting(
             audio_stream: *mut AudioStream,
             hand_off: PlaybackBlockHandOff,
+            hand_off_context: *mut c_void,
+        );
+        pub fn streamlib_pipewire_audio_stream_report_failures_to(
+            audio_stream: *mut AudioStream,
+            hand_off: Option<StreamFailureHandOff>,
             hand_off_context: *mut c_void,
         );
         pub fn streamlib_pipewire_audio_stream_stop_handing_off(audio_stream: *mut AudioStream);
@@ -334,11 +342,22 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     ) -> Result<Box<dyn AudioCaptureStream>> {
         let (opened, capture_stream_format) =
             self.open_audio_stream(audio_shim::STREAM_DIRECTION_CAPTURE, request)?;
-        Ok(Box::new(PipeWireAudioCaptureStream {
+        let capture_stream = PipeWireAudioCaptureStream {
             opened,
             capture_stream_format,
             installed_hand_off: None,
-        }))
+            liveness_report: Box::new(AudioStreamLivenessReport::of_a_stream_that_has_not_failed()),
+        };
+        // SAFETY: the stream is live, and the report it points at is owned by
+        // the struct being returned, whose drop order frees it only after the
+        // close that retires this hand-off.
+        unsafe {
+            report_failures_of(
+                capture_stream.opened.audio_stream,
+                &capture_stream.liveness_report,
+            );
+        }
+        Ok(Box::new(capture_stream))
     }
 
     fn open_playback_stream(
@@ -347,11 +366,20 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     ) -> Result<Box<dyn AudioPlaybackStream>> {
         let (opened, playback_stream_format) =
             self.open_audio_stream(audio_shim::STREAM_DIRECTION_PLAYBACK, request)?;
-        Ok(Box::new(PipeWireAudioPlaybackStream {
+        let playback_stream = PipeWireAudioPlaybackStream {
             opened,
             playback_stream_format,
             installed_hand_off: None,
-        }))
+            liveness_report: Box::new(AudioStreamLivenessReport::of_a_stream_that_has_not_failed()),
+        };
+        // SAFETY: as for the capture stream above.
+        unsafe {
+            report_failures_of(
+                playback_stream.opened.audio_stream,
+                &playback_stream.liveness_report,
+            );
+        }
+        Ok(Box::new(playback_stream))
     }
 }
 
@@ -469,6 +497,65 @@ impl Drop for OpenedPipeWireAudioStream {
 // hand-off concurrently.
 unsafe impl Send for OpenedPipeWireAudioStream {}
 
+/// What the shim calls on PipeWire's thread-loop thread, with that loop's lock
+/// held, when a stream it already opened enters its error state.
+///
+/// Must not unwind: this is a plain `extern "C"` boundary, so a panic here
+/// aborts the process rather than crossing into C.
+///
+/// Recording is all it does. The push stops at this function and the seam stays
+/// pollable, which is the point: an owner told about a death on the loop thread
+/// could not act on it — the one natural reaction, stopping the stream, takes
+/// the very lock this call is holding.
+unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
+    liveness_report_context: *mut c_void,
+    reason: *const c_char,
+) {
+    // SAFETY: the context is the address of the `Box<AudioStreamLivenessReport>`
+    // the stream installed under the loop lock, and `close` retires this
+    // hand-off under that same lock before the box is dropped — so it is live
+    // for the length of this call.
+    let liveness_report = unsafe { &*liveness_report_context.cast::<AudioStreamLivenessReport>() };
+    let reason = if reason.is_null() {
+        "the PipeWire stream entered its error state".to_string()
+    } else {
+        // SAFETY: the shim hands over its own NUL-terminated failure text,
+        // which stays valid until this returns.
+        unsafe { CStr::from_ptr(reason) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(format!(
+        "the PipeWire stream stopped serving its device: {reason}"
+    )));
+}
+
+/// Point the shim's failure hand-off at a stream's own report.
+///
+/// Done at open rather than at the first delivery: a stream that dies while its
+/// owner has it stopped has still died, and an owner that stops and looks has
+/// to find that out.
+///
+/// # Safety
+///
+/// `audio_stream` must be live, and `liveness_report` must outlive it — which
+/// is what the drop order on both stream structs guarantees.
+unsafe fn report_failures_of(
+    audio_stream: *mut audio_shim::AudioStream,
+    liveness_report: &AudioStreamLivenessReport,
+) {
+    let liveness_report_context = (&raw const *liveness_report).cast_mut().cast::<c_void>();
+    // SAFETY: the caller's contract, and the shim takes the loop lock around
+    // the install.
+    unsafe {
+        audio_shim::streamlib_pipewire_audio_stream_report_failures_to(
+            audio_stream,
+            Some(record_a_stream_failure_in_the_liveness_report),
+            liveness_report_context,
+        );
+    }
+}
+
 /// One PipeWire capture stream, negotiated and connected.
 struct PipeWireAudioCaptureStream {
     opened: OpenedPipeWireAudioStream,
@@ -483,6 +570,10 @@ struct PipeWireAudioCaptureStream {
     /// once no callback can still hold a pointer into it. Move it above and
     /// the loop thread reads freed memory, with nothing to say so.
     installed_hand_off: Option<Box<CapturedAudioBlockHandOff>>,
+    /// What the shim's failure hand-off points at, boxed for a stable address
+    /// and declared after `opened` for the same reason `installed_hand_off`
+    /// is.
+    liveness_report: Box<AudioStreamLivenessReport>,
 }
 
 /// What the shim calls on PipeWire's thread-loop thread, with that loop's lock
@@ -522,6 +613,10 @@ unsafe extern "C" fn deliver_captured_block_to_hand_off(
 impl AudioCaptureStream for PipeWireAudioCaptureStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.capture_stream_format
+    }
+
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        (*self.liveness_report).clone()
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
@@ -569,6 +664,9 @@ struct PipeWireAudioPlaybackStream {
     /// drop-order requirement its capture sibling carries, for the same
     /// reason.
     installed_hand_off: Option<Box<AudioBlockForPlaybackHandOff>>,
+    /// What the shim's failure hand-off points at, under the same drop-order
+    /// requirement.
+    liveness_report: Box<AudioStreamLivenessReport>,
 }
 
 /// What the shim calls on PipeWire's thread-loop thread when it needs samples,
@@ -608,6 +706,10 @@ unsafe extern "C" fn fill_requested_block_from_hand_off(
 impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.playback_stream_format
+    }
+
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        (*self.liveness_report).clone()
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {

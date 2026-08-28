@@ -28,8 +28,8 @@ use libloading::Library;
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFormat,
+    AudioStreamLivenessReport, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
 };
 use crate::core::execution::ThreadPriority;
 use crate::core::media_clock::MediaClock;
@@ -477,6 +477,7 @@ impl AlsaAudioDeviceBackend {
             period_sample_count: negotiated.period_sample_count,
             device_name: pcm_name.to_string(),
             capture_is_running: false,
+            liveness_report: AudioStreamLivenessReport::of_a_stream_that_has_not_failed(),
             delivery: None,
         })
     }
@@ -503,6 +504,7 @@ impl AlsaAudioDeviceBackend {
             playback_stream_format: negotiated.stream_format,
             period_sample_count: negotiated.period_sample_count,
             device_name: pcm_name.to_string(),
+            liveness_report: AudioStreamLivenessReport::of_a_stream_that_has_not_failed(),
             playback: None,
         })
     }
@@ -575,6 +577,18 @@ impl AlsaStreamDirection {
         match self {
             AlsaStreamDirection::Capture => PREFERRED_CAPTURE_CHANNELS,
             AlsaStreamDirection::Playback => PREFERRED_PLAYBACK_CHANNELS,
+        }
+    }
+
+    /// What a device in this direction stops doing when it stalls.
+    ///
+    /// The wait is the same call in both directions and a stalled one means
+    /// the opposite thing either side of it: a capture device has released no
+    /// samples, a playback device has taken none.
+    fn what_a_stalled_device_stopped_doing(self) -> &'static str {
+        match self {
+            AlsaStreamDirection::Capture => "delivered",
+            AlsaStreamDirection::Playback => "took",
         }
     }
 
@@ -939,12 +953,18 @@ struct AlsaAudioPlaybackStream {
     period_sample_count: u32,
     /// What the caller named, or `default` — for error text a reader can act on.
     device_name: String,
+    /// Minted with the stream, for the reason its capture sibling states.
+    liveness_report: AudioStreamLivenessReport,
     playback: Option<PlaybackWriterThread>,
 }
 
 impl AudioPlaybackStream for AlsaAudioPlaybackStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.playback_stream_format
+    }
+
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        self.liveness_report.clone()
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
@@ -965,6 +985,7 @@ impl AudioPlaybackStream for AlsaAudioPlaybackStream {
             period_sample_count: self.period_sample_count,
             device_name: self.device_name.clone(),
             stop_requested: Arc::clone(&stop_requested),
+            liveness_report: self.liveness_report.clone(),
             hand_off,
         })?;
         self.playback = Some(PlaybackWriterThread {
@@ -1021,6 +1042,83 @@ impl Drop for AlsaAudioPlaybackStream {
     }
 }
 
+/// Why an ALSA device thread stopped running its stream.
+///
+/// Returned from the transfer loop rather than logged where it happens, so the
+/// one judgement that matters — whether the stream failed or was told to stop
+/// — is made in a single place for both directions, and can be held by a test
+/// on a machine with no `libasound` at all.
+enum AlsaDeviceThreadExit {
+    /// `stop_delivering` / `stop_requesting` set the flag.
+    TheStopThatWasAskedFor,
+    /// The device released no period for long enough that it has stopped
+    /// rather than slowed.
+    TheDeviceWentQuiet { consecutive_silent_waits: u32 },
+    /// libasound refused while the stream was being driven.
+    TheDeviceRefused(Error),
+    /// A transfer broke and `snd_pcm_recover` could not put it back together.
+    TheStreamCouldNotBeRecovered,
+}
+
+impl AlsaDeviceThreadExit {
+    /// Why the stream stopped serving its device, or `None` when it stopped
+    /// because its owner said so.
+    ///
+    /// The deliberate stop is the case the whole seam turns on: an owner that
+    /// saw its own stop reported back as a failure would have no way to tell a
+    /// dead microphone from one it switched off.
+    fn failure_that_ended_the_stream(
+        &self,
+        direction: AlsaStreamDirection,
+    ) -> Option<AudioStreamFailureReason> {
+        let direction_word = direction.as_word();
+        match self {
+            AlsaDeviceThreadExit::TheStopThatWasAskedFor => None,
+            AlsaDeviceThreadExit::TheDeviceWentQuiet {
+                consecutive_silent_waits,
+            } => Some(AudioStreamFailureReason::of(format!(
+                "the ALSA {direction_word} device {} nothing for {consecutive_silent_waits} \
+                 consecutive waits",
+                direction.what_a_stalled_device_stopped_doing(),
+            ))),
+            AlsaDeviceThreadExit::TheDeviceRefused(refusal) => {
+                Some(AudioStreamFailureReason::of(format!(
+                    "the ALSA {direction_word} device refused while it was running: {refusal}"
+                )))
+            }
+            AlsaDeviceThreadExit::TheStreamCouldNotBeRecovered => {
+                Some(AudioStreamFailureReason::of(format!(
+                    "the ALSA {direction_word} stream broke and could not be recovered"
+                )))
+            }
+        }
+    }
+}
+
+/// Log why a device thread stopped and record it where the stream's owner can
+/// read it.
+///
+/// Both, rather than either: the log is for whoever is watching the run, and
+/// the report is for the code that has to act — an owner that can only read
+/// logs cannot retry, fail, or say anything to its own consumers.
+fn record_an_alsa_device_thread_exit(
+    exit: &AlsaDeviceThreadExit,
+    direction: AlsaStreamDirection,
+    device_name: &str,
+    liveness_report: &AudioStreamLivenessReport,
+) {
+    let Some(reason) = exit.failure_that_ended_the_stream(direction) else {
+        return;
+    };
+    tracing::error!(
+        device = %device_name,
+        %reason,
+        "ALSA {} stopping",
+        direction.as_word()
+    );
+    liveness_report.record_the_failure_that_ended_the_stream(reason);
+}
+
 /// Everything the writer thread owns, handed over in one move.
 struct PlaybackWriterThreadInputs {
     opened_pcm: Arc<OpenedAlsaPcm>,
@@ -1028,6 +1126,7 @@ struct PlaybackWriterThreadInputs {
     period_sample_count: u32,
     device_name: String,
     stop_requested: Arc<AtomicBool>,
+    liveness_report: AudioStreamLivenessReport,
     hand_off: AudioBlockForPlaybackHandOff,
 }
 
@@ -1049,6 +1148,7 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
         period_sample_count,
         device_name,
         stop_requested,
+        liveness_report,
         hand_off,
     } = inputs;
     let entry_points = &opened_pcm.entry_points;
@@ -1068,7 +1168,12 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
         vec![0u8; playback_stream_format.interleaved_byte_count_for(period_sample_count)];
     let mut consecutive_silent_waits = 0;
 
-    while !stop_requested.load(Ordering::Acquire) {
+    // Labelled because the write loop below it has to leave both: a stream
+    // recovery could not put back together has nothing left to write into.
+    let exit = 'writing: loop {
+        if stop_requested.load(Ordering::Acquire) {
+            break AlsaDeviceThreadExit::TheStopThatWasAskedFor;
+        }
         // A prepared playback stream has its whole buffer free, so the first
         // wait returns at once and the device starts on the first write the
         // start threshold sees.
@@ -1082,20 +1187,13 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
             Ok(DevicePeriodReadiness::NothingYet) => {
                 consecutive_silent_waits += 1;
                 if consecutive_silent_waits >= CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
-                    tracing::error!(
-                        device = %device_name,
-                        "ALSA playback writer stopping: the device took nothing for {} \
-                         consecutive waits",
-                        consecutive_silent_waits
-                    );
-                    return;
+                    break AlsaDeviceThreadExit::TheDeviceWentQuiet {
+                        consecutive_silent_waits,
+                    };
                 }
                 continue;
             }
-            Err(refusal) => {
-                tracing::error!(device = %device_name, %refusal, "ALSA playback writer stopping");
-                return;
-            }
+            Err(refusal) => break AlsaDeviceThreadExit::TheDeviceRefused(refusal),
         }
 
         hand_off(AudioBlockRequestedByDevice {
@@ -1136,7 +1234,7 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
                     AlsaStreamDirection::Playback,
                 ) == AlsaTransferRecovery::StreamIsUnusable
                 {
-                    return;
+                    break 'writing AlsaDeviceThreadExit::TheStreamCouldNotBeRecovered;
                 }
                 // Recovery reset the stream, so the rest of this period has
                 // nowhere to go — it is part of the gap the recovery already
@@ -1153,7 +1251,14 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
             }
             frames_taken_by_the_device += written;
         }
-    }
+    };
+
+    record_an_alsa_device_thread_exit(
+        &exit,
+        AlsaStreamDirection::Playback,
+        &device_name,
+        &liveness_report,
+    );
 }
 
 /// The reader thread and the flag that stops it.
@@ -1175,12 +1280,20 @@ struct AlsaAudioCaptureStream {
     /// `EBUSY` — a refusal whose text sends a reader hunting for another
     /// process holding the card.
     capture_is_running: bool,
+    /// Minted with the stream rather than with a delivery, so an owner that
+    /// took it at open reads the same answer after a stop as during a run —
+    /// and the reason a reader died outlives the reader.
+    liveness_report: AudioStreamLivenessReport,
     delivery: Option<CaptureDeliveryThread>,
 }
 
 impl AudioCaptureStream for AlsaAudioCaptureStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.capture_stream_format
+    }
+
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        self.liveness_report.clone()
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
@@ -1198,6 +1311,7 @@ impl AudioCaptureStream for AlsaAudioCaptureStream {
             period_sample_count: self.period_sample_count,
             device_name: self.device_name.clone(),
             stop_requested: Arc::clone(&stop_requested),
+            liveness_report: self.liveness_report.clone(),
             hand_off,
         })?;
         self.delivery = Some(CaptureDeliveryThread {
@@ -1361,6 +1475,7 @@ struct CaptureReaderThreadInputs {
     period_sample_count: u32,
     device_name: String,
     stop_requested: Arc<AtomicBool>,
+    liveness_report: AudioStreamLivenessReport,
     hand_off: CapturedAudioBlockHandOff,
 }
 
@@ -1383,6 +1498,7 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
         period_sample_count,
         device_name,
         stop_requested,
+        liveness_report,
         hand_off,
     } = inputs;
     let entry_points = &opened_pcm.entry_points;
@@ -1402,7 +1518,10 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
         vec![0u8; capture_stream_format.interleaved_byte_count_for(period_sample_count)];
     let mut consecutive_silent_waits = 0;
 
-    while !stop_requested.load(Ordering::Acquire) {
+    let exit = loop {
+        if stop_requested.load(Ordering::Acquire) {
+            break AlsaDeviceThreadExit::TheStopThatWasAskedFor;
+        }
         match read_status_of_a_readable_period(
             entry_points,
             opened_pcm.pcm,
@@ -1413,20 +1532,13 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
             Ok(DevicePeriodReadiness::NothingYet) => {
                 consecutive_silent_waits += 1;
                 if consecutive_silent_waits >= CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
-                    tracing::error!(
-                        device = %device_name,
-                        "ALSA capture reader stopping: the device delivered nothing for \
-                         {} consecutive waits",
-                        consecutive_silent_waits
-                    );
-                    return;
+                    break AlsaDeviceThreadExit::TheDeviceWentQuiet {
+                        consecutive_silent_waits,
+                    };
                 }
                 continue;
             }
-            Err(refusal) => {
-                tracing::error!(device = %device_name, %refusal, "ALSA capture reader stopping");
-                return;
-            }
+            Err(refusal) => break AlsaDeviceThreadExit::TheDeviceRefused(refusal),
         }
 
         // SAFETY: the status was just filled, and the out-parameter is an
@@ -1462,7 +1574,7 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
                 AlsaStreamDirection::Capture,
             ) == AlsaTransferRecovery::StreamIsUnusable
             {
-                return;
+                break AlsaDeviceThreadExit::TheStreamCouldNotBeRecovered;
             }
             continue;
         }
@@ -1479,7 +1591,14 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
             sample_count,
             first_sample_timestamp_ns,
         });
-    }
+    };
+
+    record_an_alsa_device_thread_exit(
+        &exit,
+        AlsaStreamDirection::Capture,
+        &device_name,
+        &liveness_report,
+    );
 }
 
 /// Whether a wait produced a whole period the device is ready to transfer —

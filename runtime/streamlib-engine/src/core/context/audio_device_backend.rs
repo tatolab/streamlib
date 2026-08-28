@@ -10,6 +10,8 @@
 
 use std::sync::{Arc, OnceLock};
 
+use parking_lot::Mutex;
+
 use super::SharedAudioClock;
 use super::silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 use crate::core::Result;
@@ -92,11 +94,90 @@ pub struct AudioDeviceStreamRequest {
     pub deviceless_pacing_clock: SharedAudioClock,
 }
 
+/// Why a stream stopped serving its device without being asked to.
+///
+/// Text rather than a core [`crate::core::Error`]: it is read repeatedly off a
+/// [`AudioStreamLivenessReport`] long after the thread that produced it is
+/// gone, and `Error` is not `Clone`. What an owner does with it is decide —
+/// log it, fail, retry — and every one of those needs the reason to survive
+/// being read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioStreamFailureReason(String);
+
+impl AudioStreamFailureReason {
+    /// State why a stream stopped serving its device.
+    pub fn of(reason: impl Into<String>) -> Self {
+        Self(reason.into())
+    }
+}
+
+impl std::fmt::Display for AudioStreamFailureReason {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Whether a stream is still serving its device, and why it stopped if it is
+/// not.
+///
+/// Handed out and cloned rather than answered off the stream itself, because
+/// the thread that would act on the answer is never the one holding the
+/// stream: a source owns its stream on the processor and does its work on a
+/// publishing thread, so it hands that thread a report instead of the stream.
+///
+/// A device that dies is otherwise indistinguishable from one that went quiet
+/// — a finished reader thread looks exactly like a running one, and stopping
+/// the stream still succeeds — so without this an owner has no way to notice,
+/// retry, or fail.
+#[derive(Clone)]
+pub struct AudioStreamLivenessReport {
+    failure_that_ended_the_stream: Arc<Mutex<Option<AudioStreamFailureReason>>>,
+}
+
+impl AudioStreamLivenessReport {
+    /// A report for a stream that is serving its device.
+    ///
+    /// Also what an arm whose streams cannot die on their own holds for the
+    /// whole of their lives — the null backend has no device to lose.
+    pub fn of_a_stream_that_has_not_failed() -> Self {
+        Self {
+            failure_that_ended_the_stream: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Why the stream stopped serving its device on its own, or `None` while
+    /// it is still serving it.
+    ///
+    /// A stream its owner stopped deliberately answers `None`: being told to
+    /// stop is not a failure, and reporting it as one would make the signal
+    /// useless at exactly the moment an owner reads it.
+    pub fn failure_that_ended_the_stream(&self) -> Option<AudioStreamFailureReason> {
+        self.failure_that_ended_the_stream.lock().clone()
+    }
+
+    /// Record why the stream stopped serving its device.
+    ///
+    /// The first reason recorded is the one kept: what killed a stream is what
+    /// an owner has to act on, and whatever the teardown behind it reported is
+    /// a consequence of the first.
+    pub fn record_the_failure_that_ended_the_stream(&self, reason: AudioStreamFailureReason) {
+        self.failure_that_ended_the_stream.lock().get_or_insert(reason);
+    }
+}
+
 /// A capture stream a backend opened.
 pub trait AudioCaptureStream: Send {
     /// The rate, channel count and scalar encoding of every block this stream
     /// delivers.
     fn stream_format(&self) -> AudioStreamFormat;
+
+    /// Whether this stream is still capturing, readable from whatever thread
+    /// the owner does its work on.
+    ///
+    /// The report belongs to the stream and outlives any one delivery, so an
+    /// owner that took it at open reads the same answer after a stop as
+    /// during a run.
+    fn liveness_report(&self) -> AudioStreamLivenessReport;
 
     /// Begin delivering captured blocks to `hand_off`, replacing any hand-off
     /// an earlier call installed.
@@ -137,6 +218,11 @@ pub trait AudioPlaybackStream: Send {
     /// stream must already be in. There is no resampler on this rung, so a
     /// caller compares rather than converts.
     fn stream_format(&self) -> AudioStreamFormat;
+
+    /// Whether this stream is still playing, readable from whatever thread the
+    /// owner does its work on — the capture seam's report, in the direction a
+    /// sink cares about.
+    fn liveness_report(&self) -> AudioStreamLivenessReport;
 
     /// Begin asking `hand_off` for samples, replacing any hand-off an earlier
     /// call installed.
@@ -452,5 +538,57 @@ mod tests {
     fn a_scalars_width_is_the_width_the_wire_dtype_names() {
         assert_eq!(AudioSampleFormat::F32.bytes_per_sample(), 4);
         assert_eq!(AudioSampleFormat::I16.bytes_per_sample(), 2);
+    }
+
+    #[test]
+    fn a_stream_nothing_has_gone_wrong_with_reports_no_failure() {
+        assert!(
+            AudioStreamLivenessReport::of_a_stream_that_has_not_failed()
+                .failure_that_ended_the_stream()
+                .is_none(),
+            "a report that answered a failure before one happened would fire on every \
+             healthy stream, which is worth no more than the silence it replaces"
+        );
+    }
+
+    /// The whole point of the shape: the thread that records the failure is
+    /// never the thread that reads it.
+    #[test]
+    fn a_failure_recorded_through_one_clone_is_read_through_another() {
+        let report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        let report_the_reader_thread_holds = report.clone();
+
+        report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+            "the device delivered nothing for 25 consecutive waits",
+        ));
+
+        assert_eq!(
+            report_the_reader_thread_holds
+                .failure_that_ended_the_stream()
+                .map(|reason| reason.to_string()),
+            Some("the device delivered nothing for 25 consecutive waits".to_string())
+        );
+    }
+
+    /// A dying stream reports more than once — the read that failed, then the
+    /// teardown behind it — and the first is the one that says what happened.
+    #[test]
+    fn the_first_reason_recorded_is_the_one_the_owner_reads() {
+        let report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+
+        report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+            "what actually killed the stream",
+        ));
+        report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+            "a consequence of the first",
+        ));
+
+        assert_eq!(
+            report
+                .failure_that_ended_the_stream()
+                .map(|reason| reason.to_string()),
+            Some("what actually killed the stream".to_string()),
+            "the reason kept has to be the cause, not the last thing the teardown said"
+        );
     }
 }

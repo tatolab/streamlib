@@ -200,6 +200,15 @@ int64_t streamlib_pipewire_first_sample_timestamp_ns(int64_t cycle_timestamp_ns,
                                                      uint32_t rate_denominator,
                                                      uint32_t sample_count, uint32_t sample_rate);
 
+/// What the shim calls once if a stream fails after it has been opened.
+///
+/// Runs on PipeWire's thread-loop thread with that loop's lock held, so it must
+/// not block and must not re-enter this shim. `reason` is the shim's own text
+/// and is invalid the moment this returns. A failure *during* negotiation is
+/// reported through `open`'s return instead — this only ever fires for a stream
+/// a caller already holds.
+typedef void (*StreamLibPipeWireStreamFailureHandOff)(void *hand_off_context, const char *reason);
+
 /// One opened stream in either direction, owned by the shim.
 struct StreamLibPipeWireAudioStream;
 
@@ -253,6 +262,18 @@ void streamlib_pipewire_capture_stream_start_delivering(
 void streamlib_pipewire_playback_stream_start_requesting(
     struct StreamLibPipeWireAudioStream *audio_stream,
     StreamLibPipeWirePlaybackBlockHandOff hand_off, void *hand_off_context);
+
+/// Install what to call if the stream stops serving its device on its own,
+/// replacing any earlier one; NULL retires it.
+///
+/// Separate from the sample hand-offs and installed for the stream's whole
+/// life, not per delivery: a stream that fails while its owner has it stopped
+/// has still failed, and the owner has to be able to find that out. A stream
+/// that already failed before this was installed hands off immediately, so the
+/// answer cannot depend on the order the caller wired itself up in.
+void streamlib_pipewire_audio_stream_report_failures_to(
+    struct StreamLibPipeWireAudioStream *audio_stream,
+    StreamLibPipeWireStreamFailureHandOff hand_off, void *hand_off_context);
 
 /// Stop handing off, in either direction. The hand-off is not called again once
 /// this returns.

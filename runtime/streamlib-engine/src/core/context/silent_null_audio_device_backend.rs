@@ -17,7 +17,8 @@ use parking_lot::Mutex;
 use super::audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff,
 };
 use super::{AudioTickContext, SharedAudioClock};
 use crate::core::{Error, Result};
@@ -158,6 +159,15 @@ impl AudioCaptureStream for SilentNullAudioCaptureStream {
         self.capture_stream_format
     }
 
+    /// A stream paced by a timer against no device has nothing that can stop
+    /// serving it, so this answers "still live" for the whole of its life.
+    /// That is the arm's part of the seam's contract rather than an omission:
+    /// an owner writes one piece of code and it means the same thing in a
+    /// container as it does on a workstation.
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        AudioStreamLivenessReport::of_a_stream_that_has_not_failed()
+    }
+
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
         {
             let mut pacing = self.pacing.lock();
@@ -281,6 +291,15 @@ impl SilentNullAudioPlaybackStream {
 impl AudioPlaybackStream for SilentNullAudioPlaybackStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.playback_stream_format
+    }
+
+    /// A stream paced by a timer against no device has nothing that can stop
+    /// serving it, so this answers "still live" for the whole of its life.
+    /// That is the arm's part of the seam's contract rather than an omission:
+    /// an owner writes one piece of code and it means the same thing in a
+    /// container as it does on a workstation.
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        AudioStreamLivenessReport::of_a_stream_that_has_not_failed()
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {

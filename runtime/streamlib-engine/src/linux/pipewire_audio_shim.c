@@ -88,6 +88,12 @@ struct StreamLibPipeWireAudioStream {
     StreamLibPipeWireCapturedBlockHandOff captured_block_hand_off;
     StreamLibPipeWirePlaybackBlockHandOff playback_block_hand_off;
     void *hand_off_context;
+
+    /// Where a failure goes once a caller holds the stream. NULL until one is
+    /// installed, and read and written only with the thread loop's lock held,
+    /// like the two above.
+    StreamLibPipeWireStreamFailureHandOff stream_failure_hand_off;
+    void *stream_failure_hand_off_context;
 };
 
 /// How a direction is spelled in text a reader has to act on.
@@ -191,14 +197,25 @@ static int64_t first_sample_timestamp_of(const struct pw_time *time, uint32_t sa
                                                         sample_rate);
 }
 
-/// End the stream with a reason, and wake whoever is waiting on negotiation.
+/// End the stream with a reason, wake whoever is waiting on negotiation, and
+/// tell whoever asked to be told.
+///
+/// The first reason is the one kept. A stream on its way down reports more than
+/// once — what broke, then what the teardown behind it made of that — and the
+/// first is the one naming the cause.
 static void fail_the_stream(struct StreamLibPipeWireAudioStream *audio_stream,
                             const char *reason)
 {
+    if (audio_stream->stream_failed)
+        return;
     audio_stream->stream_failed = true;
     snprintf(audio_stream->stream_failure_text, sizeof(audio_stream->stream_failure_text), "%s",
              reason);
     audio_stream->entry_points.pw_thread_loop_signal(audio_stream->thread_loop, false);
+    if (audio_stream->stream_failure_hand_off != NULL) {
+        audio_stream->stream_failure_hand_off(audio_stream->stream_failure_hand_off_context,
+                                              audio_stream->stream_failure_text);
+    }
 }
 
 static void on_stream_state_changed(void *data, enum pw_stream_state old_state,
@@ -827,6 +844,21 @@ void streamlib_pipewire_playback_stream_start_requesting(
     install_hand_off(audio_stream, NULL, hand_off, hand_off_context);
 }
 
+void streamlib_pipewire_audio_stream_report_failures_to(
+    struct StreamLibPipeWireAudioStream *audio_stream,
+    StreamLibPipeWireStreamFailureHandOff hand_off, void *hand_off_context)
+{
+    audio_stream->entry_points.pw_thread_loop_lock(audio_stream->thread_loop);
+    audio_stream->stream_failure_hand_off_context = hand_off_context;
+    audio_stream->stream_failure_hand_off = hand_off;
+    // A stream that failed between opening and this call recorded its reason
+    // with nobody installed to hear it, so it is handed over now instead. The
+    // caller's answer must not depend on how fast it wired itself up.
+    if (hand_off != NULL && audio_stream->stream_failed)
+        hand_off(hand_off_context, audio_stream->stream_failure_text);
+    audio_stream->entry_points.pw_thread_loop_unlock(audio_stream->thread_loop);
+}
+
 void streamlib_pipewire_audio_stream_stop_handing_off(
     struct StreamLibPipeWireAudioStream *audio_stream)
 {
@@ -843,5 +875,8 @@ void streamlib_pipewire_audio_stream_close(struct StreamLibPipeWireAudioStream *
     if (audio_stream == NULL)
         return;
     streamlib_pipewire_audio_stream_stop_handing_off(audio_stream);
+    // Retired under the loop lock for the same reason the sample hand-offs are:
+    // the caller frees what the context points at once this returns.
+    streamlib_pipewire_audio_stream_report_failures_to(audio_stream, NULL, NULL);
     destroy_audio_stream(audio_stream);
 }
