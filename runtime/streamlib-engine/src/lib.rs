@@ -169,10 +169,12 @@ pub mod linux_surface_share {
 ///
 /// The chain's probe takes the first arm that opens and no dial overrides it,
 /// so on a machine carrying an audio daemon the tier could never reach this
-/// arm through [`core::context::probe_audio_device_backend`] — which every
-/// production caller uses. Gated on `hardware-tests` so this is not a way to
-/// select a backend in a shipped build.
-#[cfg(all(target_os = "linux", feature = "hardware-tests"))]
+/// arm through [`core::context::probe_audio_device_backend`] — which is what
+/// every production caller uses, and naming this type selects nothing: the
+/// runtime still asks the chain. `doc(hidden)` rather than feature-gated so
+/// the tier file is typechecked in an ordinary build and its tests report as
+/// `ignored` the way every other tier-2 test does.
+#[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod linux_alsa_audio_device_backend {
     pub use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;

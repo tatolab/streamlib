@@ -37,15 +37,15 @@ const HOW_LONG_A_STOPPED_STREAM_IS_WATCHED: Duration = Duration::from_millis(250
 
 /// One block as it was handed over, plus when the hand-off actually ran.
 #[derive(Debug, Clone, Copy)]
-pub struct ObservedBlock {
-    pub sample_count: u32,
-    pub first_sample_timestamp_ns: i64,
+struct ObservedBlock {
+    sample_count: u32,
+    first_sample_timestamp_ns: i64,
     /// `CLOCK_MONOTONIC` at the moment the hand-off carrying this block ran —
     /// the value a stamp-at-delivery implementation would have used.
-    pub handed_off_at_ns: i64,
+    handed_off_at_ns: i64,
 }
 
-pub fn monotonic_now_ns() -> i64 {
+fn monotonic_now_ns() -> i64 {
     MediaClock::now().as_nanos() as i64
 }
 
@@ -55,7 +55,7 @@ fn an_unused_deviceless_pacing_clock() -> SharedAudioClock {
     Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)))
 }
 
-pub fn open_capture_stream_on(
+fn open_capture_stream_on(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) -> Box<dyn AudioCaptureStream> {
@@ -68,7 +68,7 @@ pub fn open_capture_stream_on(
 }
 
 /// Collect blocks from a real device, then stop.
-pub fn observe_blocks_from(
+fn observe_blocks_from(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) -> (AudioCaptureStreamFormat, Vec<ObservedBlock>) {
@@ -105,7 +105,7 @@ fn block_duration_ns(capture_stream_format: AudioCaptureStreamFormat, sample_cou
     i64::from(sample_count) * 1_000_000_000 / i64::from(capture_stream_format.sample_rate)
 }
 
-pub fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
+fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
     capture_stream_format: AudioCaptureStreamFormat,
     observed: &[ObservedBlock],
 ) {
@@ -131,7 +131,7 @@ pub fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
     }
 }
 
-pub fn assert_blocks_advance_by_one_block_with_no_gap(
+fn assert_blocks_advance_by_one_block_with_no_gap(
     capture_stream_format: AudioCaptureStreamFormat,
     observed: &[ObservedBlock],
 ) {
@@ -150,7 +150,7 @@ pub fn assert_blocks_advance_by_one_block_with_no_gap(
     }
 }
 
-pub fn assert_stamps_land_in_the_kernel_monotonic_domain(
+fn assert_stamps_land_in_the_kernel_monotonic_domain(
     observed: &[ObservedBlock],
     before_ns: i64,
     after_ns: i64,
@@ -168,6 +168,27 @@ pub fn assert_stamps_land_in_the_kernel_monotonic_domain(
             block.first_sample_timestamp_ns
         );
     }
+}
+
+/// Every timestamp claim the seam makes, over whichever device path an arm
+/// hands in.
+///
+/// The composition is the contract as much as the individual assertions are —
+/// a fourth claim belongs here, once, not in each arm's file.
+pub fn assert_the_timestamp_contract_holds_on(
+    backend: &dyn AudioDeviceBackend,
+    device_id: Option<String>,
+) {
+    let before_ns = monotonic_now_ns();
+    let (capture_stream_format, observed) = observe_blocks_from(backend, device_id);
+    let after_ns = monotonic_now_ns();
+
+    assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
+        capture_stream_format,
+        &observed,
+    );
+    assert_blocks_advance_by_one_block_with_no_gap(capture_stream_format, &observed);
+    assert_stamps_land_in_the_kernel_monotonic_domain(&observed, before_ns, after_ns);
 }
 
 /// The two clauses `AudioCaptureStream` states about delivery: a stopped

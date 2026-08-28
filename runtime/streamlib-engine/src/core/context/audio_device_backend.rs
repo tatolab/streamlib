@@ -124,6 +124,7 @@ pub type SharedAudioDeviceBackend = Arc<dyn AudioDeviceBackend>;
 /// Not a core [`crate::core::Error`]: nothing failed that a caller must handle.
 /// The chain has another arm, and this is what tells a reader whether the
 /// library was absent, the daemon was, or the device was.
+#[derive(Debug)]
 pub struct AudioDeviceBackendArmUnavailableReason(String);
 
 impl AudioDeviceBackendArmUnavailableReason {

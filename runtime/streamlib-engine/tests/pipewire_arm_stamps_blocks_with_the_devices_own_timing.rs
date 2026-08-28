@@ -10,16 +10,12 @@
 //!
 //! Audio tier — needs a reachable PipeWire session with a capture endpoint.
 
-use streamlib_engine::core::context::{
-    AudioCaptureStreamFormat, SharedAudioDeviceBackend, probe_audio_device_backend,
-};
+use streamlib_engine::core::context::{SharedAudioDeviceBackend, probe_audio_device_backend};
 
 mod audio_arm_timestamp_contract;
 use audio_arm_timestamp_contract::{
-    ObservedBlock, assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
-    assert_blocks_advance_by_one_block_with_no_gap,
-    assert_blocks_are_stamped_before_the_hand_off_that_carries_them,
-    assert_stamps_land_in_the_kernel_monotonic_domain, monotonic_now_ns, observe_blocks_from,
+    assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
+    assert_the_timestamp_contract_holds_on,
 };
 
 /// The arm, or `None` when the chain demoted past it.
@@ -43,18 +39,7 @@ fn a_real_session_stamps_its_blocks_with_the_devices_own_timing() {
     let Some(backend) = pipewire_arm() else {
         return;
     };
-
-    let before_ns = monotonic_now_ns();
-    let (capture_stream_format, observed): (AudioCaptureStreamFormat, Vec<ObservedBlock>) =
-        observe_blocks_from(backend.as_ref(), None);
-    let after_ns = monotonic_now_ns();
-
-    assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
-        capture_stream_format,
-        &observed,
-    );
-    assert_blocks_advance_by_one_block_with_no_gap(capture_stream_format, &observed);
-    assert_stamps_land_in_the_kernel_monotonic_domain(&observed, before_ns, after_ns);
+    assert_the_timestamp_contract_holds_on(backend.as_ref(), None);
 }
 
 /// The two delivery clauses `AudioCaptureStream` states, on the arm a desktop

@@ -18,18 +18,15 @@
 //!
 //! Audio tier — needs `/dev/snd` and a capture device ALSA can open.
 
-#![cfg(all(target_os = "linux", feature = "hardware-tests"))]
+#![cfg(target_os = "linux")]
 
 use streamlib_engine::linux_alsa_audio_device_backend::AlsaAudioDeviceBackend;
 
 mod audio_arm_timestamp_contract;
 use audio_arm_timestamp_contract::{
-    ObservedBlock, assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
-    assert_blocks_advance_by_one_block_with_no_gap,
-    assert_blocks_are_stamped_before_the_hand_off_that_carries_them,
-    assert_stamps_land_in_the_kernel_monotonic_domain, monotonic_now_ns, observe_blocks_from,
+    assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
+    assert_the_timestamp_contract_holds_on,
 };
-use streamlib_engine::core::context::AudioCaptureStreamFormat;
 
 /// The arm, or `None` when this machine has no `libasound` or no capture device
 /// behind it.
@@ -79,25 +76,11 @@ fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend)
     })
 }
 
-/// The tier's three timestamp claims over whichever device path was handed in.
-fn assert_the_timestamp_contract_holds_on(
-    backend: &AlsaAudioDeviceBackend,
-    device_id: Option<String>,
-) {
-    let before_ns = monotonic_now_ns();
-    let (capture_stream_format, observed): (AudioCaptureStreamFormat, Vec<ObservedBlock>) =
-        observe_blocks_from(backend, device_id);
-    let after_ns = monotonic_now_ns();
-
-    assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
-        capture_stream_format,
-        &observed,
-    );
-    assert_blocks_advance_by_one_block_with_no_gap(capture_stream_format, &observed);
-    assert_stamps_land_in_the_kernel_monotonic_domain(&observed, before_ns, after_ns);
-}
-
 #[test]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+)]
 fn the_default_device_stamps_its_blocks_with_the_devices_own_timing() {
     let Some(backend) = alsa_arm() else {
         return;
@@ -110,6 +93,10 @@ fn the_default_device_stamps_its_blocks_with_the_devices_own_timing() {
 /// to PipeWire's ALSA plugin, which synthesizes its timestamps — so that path
 /// alone cannot prove this.
 #[test]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+)]
 fn a_raw_hardware_device_stamps_its_blocks_with_the_drivers_own_timing() {
     let Some(backend) = alsa_arm() else {
         return;
@@ -124,6 +111,10 @@ fn a_raw_hardware_device_stamps_its_blocks_with_the_drivers_own_timing() {
 /// behind them — and the restart path, where a stream that left its PCM
 /// running would surface as `EBUSY`.
 #[test]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+)]
 fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
     let Some(backend) = alsa_arm() else {
         return;

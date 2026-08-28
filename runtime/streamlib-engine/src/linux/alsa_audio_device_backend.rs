@@ -80,6 +80,9 @@ const SND_PCM_TSTAMP_ENABLE: c_int = 1;
 /// (`defaults.pcm.tstamp_type`).
 const SND_PCM_TSTAMP_TYPE_MONOTONIC: c_int = 1;
 
+/// `SND_PCM_STATE_RUNNING`, the fourth variant of `snd_pcm_state_t`.
+const SND_PCM_STATE_RUNNING: c_int = 3;
+
 /// `-EPIPE`: a capture overrun. Recoverable, and the gap it leaves is visible
 /// in the timestamps of the blocks either side of it.
 const ALSA_OVERRUN: c_int = -32;
@@ -114,6 +117,12 @@ const CAPTURE_WAIT_TIMEOUT_MS: c_int = 200;
 /// `snd_pcm_wait` returning this many times in a row with no data is a device
 /// that stopped rather than a slow one.
 const CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP: u32 = 25;
+
+/// How many waits the timestamp proof gets. One period answers it, so this is
+/// only slack for a busy machine — and it is a separate budget because the
+/// chain's probe runs it, where the reader loop's much longer patience would
+/// stall graph construction behind a device that opens and never delivers.
+const CONSECUTIVE_SILENT_WAITS_BEFORE_A_DEVICE_CANNOT_BE_TIMED: u32 = 3;
 
 /// Declares the entry-point table and resolves it, from one list.
 ///
@@ -180,6 +189,7 @@ alsa_library_entry_points! {
     fn snd_pcm_wait(*mut c_void, c_int) -> c_int;
     fn snd_pcm_readi(*mut c_void, *mut c_void, SndPcmUframes) -> SndPcmSframes;
     fn snd_pcm_recover(*mut c_void, c_int, c_int) -> c_int;
+    fn snd_pcm_state(*mut c_void) -> c_int;
 
     fn snd_pcm_hw_params_malloc(*mut *mut c_void) -> c_int;
     fn snd_pcm_hw_params_free(*mut c_void);
@@ -242,7 +252,11 @@ impl AlsaLibraryEntryPoints {
 
     /// Turn a libasound return code into the core error a caller handles,
     /// carrying what was being attempted.
-    fn refuse(&self, attempted: &str, error_code: c_int) -> Error {
+    ///
+    /// `Arguments` rather than `&str` so the description formats only when
+    /// there is a failure to describe: the reader thread checks a return code
+    /// once per period, and it asked for realtime scheduling.
+    fn refuse(&self, attempted: std::fmt::Arguments<'_>, error_code: c_int) -> Error {
         Error::Runtime(format!(
             "ALSA refused {attempted}: {}",
             self.error_text(error_code)
@@ -251,7 +265,11 @@ impl AlsaLibraryEntryPoints {
 
     /// Every libasound entry point reports failure as a negative return code,
     /// so this is the one place that reading happens.
-    fn refuse_a_negative_return_code(&self, attempted: &str, return_code: c_int) -> Result<()> {
+    fn refuse_a_negative_return_code(
+        &self,
+        attempted: std::fmt::Arguments<'_>,
+        return_code: c_int,
+    ) -> Result<()> {
         if return_code < 0 {
             return Err(self.refuse(attempted, return_code));
         }
@@ -315,7 +333,7 @@ impl AlsaAllocatedObject {
         let allocated = unsafe { allocate(&mut pointer) };
         if allocated < 0 || pointer.is_null() {
             return Err(entry_points.refuse(
-                &format!("allocating {allocated_object_description}"),
+                format_args!("allocating {allocated_object_description}"),
                 allocated,
             ));
         }
@@ -454,7 +472,9 @@ impl OpenedAlsaCapturePcm {
             )
         };
         if opened < 0 || pcm.is_null() {
-            return Err(entry_points.refuse(&format!("opening capture PCM '{pcm_name}'"), opened));
+            return Err(
+                entry_points.refuse(format_args!("opening capture PCM '{pcm_name}'"), opened)
+            );
         }
         Ok(Self {
             entry_points: Arc::clone(entry_points),
@@ -499,21 +519,24 @@ fn negotiate_capture_stream(
     // the parameter object is a live libasound allocation; every out-parameter
     // is an owned local outliving its call.
     entry_points.refuse_a_negative_return_code(
-        &format!("reading the parameter space of '{pcm_name}'"),
+        format_args!("reading the parameter space of '{pcm_name}'"),
         unsafe { (entry_points.snd_pcm_hw_params_any)(pcm, hardware_parameters.pointer()) },
     )?;
-    entry_points.refuse_a_negative_return_code("interleaved read/write access", unsafe {
-        (entry_points.snd_pcm_hw_params_set_access)(
-            pcm,
-            hardware_parameters.pointer(),
-            SND_PCM_ACCESS_RW_INTERLEAVED,
-        )
-    })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("interleaved read/write access"),
+        unsafe {
+            (entry_points.snd_pcm_hw_params_set_access)(
+                pcm,
+                hardware_parameters.pointer(),
+                SND_PCM_ACCESS_RW_INTERLEAVED,
+            )
+        },
+    )?;
 
     let sample_format = negotiate_sample_format(entry_points, pcm, hardware_parameters.pointer())?;
 
     let mut channels = PREFERRED_CAPTURE_CHANNELS;
-    entry_points.refuse_a_negative_return_code("a channel count", unsafe {
+    entry_points.refuse_a_negative_return_code(format_args!("a channel count"), unsafe {
         (entry_points.snd_pcm_hw_params_set_channels_near)(
             pcm,
             hardware_parameters.pointer(),
@@ -522,7 +545,7 @@ fn negotiate_capture_stream(
     })?;
 
     let mut sample_rate = PREFERRED_CAPTURE_SAMPLE_RATE;
-    entry_points.refuse_a_negative_return_code("a sample rate", unsafe {
+    entry_points.refuse_a_negative_return_code(format_args!("a sample rate"), unsafe {
         (entry_points.snd_pcm_hw_params_set_rate_near)(
             pcm,
             hardware_parameters.pointer(),
@@ -532,7 +555,7 @@ fn negotiate_capture_stream(
     })?;
 
     let mut period_sample_count = PREFERRED_CAPTURE_PERIOD_SAMPLE_COUNT;
-    entry_points.refuse_a_negative_return_code("a period size", unsafe {
+    entry_points.refuse_a_negative_return_code(format_args!("a period size"), unsafe {
         (entry_points.snd_pcm_hw_params_set_period_size_near)(
             pcm,
             hardware_parameters.pointer(),
@@ -543,7 +566,7 @@ fn negotiate_capture_stream(
 
     let mut device_buffer_sample_count =
         period_sample_count.saturating_mul(CAPTURE_PERIODS_PER_DEVICE_BUFFER);
-    entry_points.refuse_a_negative_return_code("a device buffer size", unsafe {
+    entry_points.refuse_a_negative_return_code(format_args!("a device buffer size"), unsafe {
         (entry_points.snd_pcm_hw_params_set_buffer_size_near)(
             pcm,
             hardware_parameters.pointer(),
@@ -552,7 +575,7 @@ fn negotiate_capture_stream(
     })?;
 
     entry_points.refuse_a_negative_return_code(
-        &format!("the negotiated hardware parameters for '{pcm_name}'"),
+        format_args!("the negotiated hardware parameters for '{pcm_name}'"),
         unsafe { (entry_points.snd_pcm_hw_params)(pcm, hardware_parameters.pointer()) },
     )?;
 
@@ -560,28 +583,37 @@ fn negotiate_capture_stream(
     // to land somewhere else, and what the stream reports has to be what the
     // device is actually doing.
     let mut settled_channels = 0;
-    entry_points.refuse_a_negative_return_code("reading back the channel count", unsafe {
-        (entry_points.snd_pcm_hw_params_get_channels)(
-            hardware_parameters.pointer(),
-            &mut settled_channels,
-        )
-    })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("reading back the channel count"),
+        unsafe {
+            (entry_points.snd_pcm_hw_params_get_channels)(
+                hardware_parameters.pointer(),
+                &mut settled_channels,
+            )
+        },
+    )?;
     let mut settled_sample_rate = 0;
-    entry_points.refuse_a_negative_return_code("reading back the sample rate", unsafe {
-        (entry_points.snd_pcm_hw_params_get_rate)(
-            hardware_parameters.pointer(),
-            &mut settled_sample_rate,
-            std::ptr::null_mut(),
-        )
-    })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("reading back the sample rate"),
+        unsafe {
+            (entry_points.snd_pcm_hw_params_get_rate)(
+                hardware_parameters.pointer(),
+                &mut settled_sample_rate,
+                std::ptr::null_mut(),
+            )
+        },
+    )?;
     let mut settled_period_sample_count = 0;
-    entry_points.refuse_a_negative_return_code("reading back the period size", unsafe {
-        (entry_points.snd_pcm_hw_params_get_period_size)(
-            hardware_parameters.pointer(),
-            &mut settled_period_sample_count,
-            std::ptr::null_mut(),
-        )
-    })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("reading back the period size"),
+        unsafe {
+            (entry_points.snd_pcm_hw_params_get_period_size)(
+                hardware_parameters.pointer(),
+                &mut settled_period_sample_count,
+                std::ptr::null_mut(),
+            )
+        },
+    )?;
     if settled_sample_rate == 0 || settled_channels == 0 || settled_period_sample_count == 0 {
         return Err(Error::Runtime(format!(
             "ALSA settled '{pcm_name}' on {settled_sample_rate} Hz, {settled_channels} \
@@ -651,18 +683,21 @@ fn negotiate_timestamp_contract(
     // parameters are applied, and the parameter object is a live libasound
     // allocation; every out-parameter is an owned local outliving its call.
     entry_points.refuse_a_negative_return_code(
-        &format!("reading the software parameters of '{pcm_name}'"),
+        format_args!("reading the software parameters of '{pcm_name}'"),
         unsafe { (entry_points.snd_pcm_sw_params_current)(pcm, software_parameters.pointer()) },
     )?;
-    entry_points.refuse_a_negative_return_code("timestamping on the capture stream", unsafe {
-        (entry_points.snd_pcm_sw_params_set_tstamp_mode)(
-            pcm,
-            software_parameters.pointer(),
-            SND_PCM_TSTAMP_ENABLE,
-        )
-    })?;
     entry_points.refuse_a_negative_return_code(
-        "monotonic timestamps on the capture stream",
+        format_args!("timestamping on the capture stream"),
+        unsafe {
+            (entry_points.snd_pcm_sw_params_set_tstamp_mode)(
+                pcm,
+                software_parameters.pointer(),
+                SND_PCM_TSTAMP_ENABLE,
+            )
+        },
+    )?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("monotonic timestamps on the capture stream"),
         unsafe {
             (entry_points.snd_pcm_sw_params_set_tstamp_type)(
                 pcm,
@@ -675,37 +710,46 @@ fn negotiate_timestamp_contract(
     // Wake the reader once a whole period is readable, which is what makes
     // "status minus reported delay" name the first sample of the block about to
     // be read rather than a sample still being captured.
-    entry_points.refuse_a_negative_return_code("a one-period wake threshold", unsafe {
-        (entry_points.snd_pcm_sw_params_set_avail_min)(
-            pcm,
-            software_parameters.pointer(),
-            period_sample_count,
-        )
-    })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("a one-period wake threshold"),
+        unsafe {
+            (entry_points.snd_pcm_sw_params_set_avail_min)(
+                pcm,
+                software_parameters.pointer(),
+                period_sample_count,
+            )
+        },
+    )?;
 
     // The stream's `boundary` is ALSA's own "unreachable frame count", and a
     // start threshold of it is the API's way to spell "never start implicitly".
     // A capture stream starts when `snd_pcm_start` says so, so that the
     // monotonic bracket taken around the start is a real bracket.
     let mut never_start_implicitly = 0;
-    entry_points.refuse_a_negative_return_code("reading the stream's frame boundary", unsafe {
-        (entry_points.snd_pcm_sw_params_get_boundary)(
-            software_parameters.pointer(),
-            &mut never_start_implicitly,
-        )
-    })?;
-    entry_points.refuse_a_negative_return_code("an explicit start threshold", unsafe {
-        (entry_points.snd_pcm_sw_params_set_start_threshold)(
-            pcm,
-            software_parameters.pointer(),
-            never_start_implicitly,
-        )
-    })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("reading the stream's frame boundary"),
+        unsafe {
+            (entry_points.snd_pcm_sw_params_get_boundary)(
+                software_parameters.pointer(),
+                &mut never_start_implicitly,
+            )
+        },
+    )?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("an explicit start threshold"),
+        unsafe {
+            (entry_points.snd_pcm_sw_params_set_start_threshold)(
+                pcm,
+                software_parameters.pointer(),
+                never_start_implicitly,
+            )
+        },
+    )?;
 
-    entry_points
-        .refuse_a_negative_return_code(&format!("the timestamp contract on '{pcm_name}'"), unsafe {
-            (entry_points.snd_pcm_sw_params)(pcm, software_parameters.pointer())
-        })
+    entry_points.refuse_a_negative_return_code(
+        format_args!("the timestamp contract on '{pcm_name}'"),
+        unsafe { (entry_points.snd_pcm_sw_params)(pcm, software_parameters.pointer()) },
+    )
 }
 
 /// The reader thread and the flag that stops it.
@@ -760,20 +804,26 @@ impl AudioCaptureStream for AlsaAudioCaptureStream {
     }
 
     fn stop_delivering(&mut self) -> Result<()> {
+        let mut reader_panicked = false;
         if let Some(delivery) = self.delivery.take() {
             delivery.stop_requested.store(true, Ordering::Release);
             // Joining is what the trait's "the hand-off is not called again
             // once this returns" means here: the reader owns the hand-off and
             // drops it as it ends, so nothing can still be inside it
             // afterwards.
-            if delivery.reader_thread.join().is_err() {
-                return Err(Error::Runtime(format!(
-                    "the ALSA capture reader for '{}' panicked",
-                    self.device_name
-                )));
-            }
+            reader_panicked = delivery.reader_thread.join().is_err();
         }
-        self.stop_capture()
+        // The device is wound back before the panic is reported, so a reader
+        // that died does not also leave a running PCM for the next start to
+        // trip over.
+        let stopped = self.stop_capture();
+        if reader_panicked {
+            return Err(Error::Runtime(format!(
+                "the ALSA capture reader for '{}' panicked",
+                self.device_name
+            )));
+        }
+        stopped
     }
 }
 
@@ -800,7 +850,7 @@ impl AlsaAudioCaptureStream {
         // SAFETY: any reader thread has been joined, so this is the only thread
         // holding the handle.
         entry_points.refuse_a_negative_return_code(
-            &format!("stopping capture on '{}'", self.device_name),
+            format_args!("stopping capture on '{}'", self.device_name),
             unsafe { (entry_points.snd_pcm_drop)(self.opened_pcm.pcm) },
         )
     }
@@ -827,7 +877,7 @@ impl AlsaAudioCaptureStream {
         started_at_ns: i64,
     ) -> Result<()> {
         let entry_points = &self.opened_pcm.entry_points;
-        for _ in 0..CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
+        for _ in 0..CONSECUTIVE_SILENT_WAITS_BEFORE_A_DEVICE_CANNOT_BE_TIMED {
             if read_status_of_a_readable_period(
                 entry_points,
                 self.opened_pcm.pcm,
@@ -881,7 +931,7 @@ fn prepare_and_start_capture(
     // SAFETY: `pcm` is an open, fully negotiated capture handle, held by
     // whichever single thread is driving it at this point.
     entry_points.refuse_a_negative_return_code(
-        &format!("preparing capture on '{device_name}'"),
+        format_args!("preparing capture on '{device_name}'"),
         unsafe { (entry_points.snd_pcm_prepare)(pcm) },
     )?;
 
@@ -889,10 +939,10 @@ fn prepare_and_start_capture(
     // bracket the timestamp check reads against a real bracket.
     let started_at_ns = monotonic_now_ns();
     // SAFETY: as above.
-    entry_points
-        .refuse_a_negative_return_code(&format!("starting capture on '{device_name}'"), unsafe {
-            (entry_points.snd_pcm_start)(pcm)
-        })?;
+    entry_points.refuse_a_negative_return_code(
+        format_args!("starting capture on '{device_name}'"),
+        unsafe { (entry_points.snd_pcm_start)(pcm) },
+    )?;
     Ok(started_at_ns)
 }
 
@@ -1050,16 +1100,17 @@ fn read_status_of_a_readable_period(
         if recover_from_a_read_failure(entry_points, pcm, device_name, waited)
             == CaptureReadRecovery::StreamIsUnusable
         {
-            return Err(
-                entry_points.refuse(&format!("waiting for samples from '{device_name}'"), waited)
-            );
+            return Err(entry_points.refuse(
+                format_args!("waiting for samples from '{device_name}'"),
+                waited,
+            ));
         }
         return Ok(PeriodReadiness::NothingYet);
     }
 
     // SAFETY: `pcm` is open and the status is a live libasound allocation.
     entry_points.refuse_a_negative_return_code(
-        &format!("reading the device status of '{device_name}'"),
+        format_args!("reading the device status of '{device_name}'"),
         unsafe { (entry_points.snd_pcm_status)(pcm, device_status.pointer()) },
     )?;
     Ok(PeriodReadiness::Readable)
@@ -1095,10 +1146,16 @@ fn recover_from_a_read_failure(
         );
         return CaptureReadRecovery::StreamIsUnusable;
     }
-    // `snd_pcm_recover` only prepares, and this arm disables ALSA's implicit
-    // start — so without this the reader would wait forever on a stream that
-    // never runs again.
-    if let Err(refusal) = prepare_and_start_capture(entry_points, pcm, device_name) {
+    // Which state recovery left the stream in depends on what broke it, so the
+    // stream is asked rather than assumed. `snd_pcm_prepare` against a running
+    // PCM is `EBUSY` on a raw device — and silently fine through the PipeWire
+    // ALSA plugin, which is why only a rig with real hardware would ever show
+    // it.
+    // SAFETY: `pcm` is an open capture handle held by this thread alone.
+    let state_recovery_left = unsafe { (entry_points.snd_pcm_state)(pcm) };
+    if a_recovered_stream_still_has_to_be_started(state_recovery_left)
+        && let Err(refusal) = prepare_and_start_capture(entry_points, pcm, device_name)
+    {
         tracing::error!(
             device = %device_name,
             %refusal,
@@ -1115,6 +1172,17 @@ fn recover_from_a_read_failure(
         );
     }
     CaptureReadRecovery::ReadingMayContinue
+}
+
+/// Whether a stream `snd_pcm_recover` handed back still has to be started.
+///
+/// Recovery does not mean the same thing for every failure: an overrun comes
+/// back `PREPARED` and must be started again, because this arm disables ALSA's
+/// implicit start — but an interrupted wait, and a suspend whose resume
+/// succeeded, come back still `RUNNING`, where preparing is `EBUSY` and the
+/// stream needs nothing.
+fn a_recovered_stream_still_has_to_be_started(state_recovery_left: c_int) -> bool {
+    state_recovery_left != SND_PCM_STATE_RUNNING
 }
 
 /// The device's own timing for its most recent hardware pointer update, in
@@ -1320,6 +1388,36 @@ mod tests {
             refuse_a_stamp_of(A_MONOTONIC_START_NS + PERIOD_NANOS + 1).is_err(),
             "a device cannot have captured a sample after the status that reported it"
         );
+    }
+
+    /// `snd_pcm_recover` does not mean one thing. Reverting this to an
+    /// unconditional restart is what a first reading of "recover only prepares"
+    /// gives you, and it kills capture on the first interrupted wait —
+    /// `snd_pcm_prepare` against a running PCM is `EBUSY` on a raw device, and
+    /// silently fine through the PipeWire ALSA plugin, so only a rig with real
+    /// hardware would ever show it.
+    #[test]
+    fn only_a_stream_recovery_left_stopped_is_started_again() {
+        const SND_PCM_STATE_PREPARED: c_int = 2;
+        const SND_PCM_STATE_XRUN: c_int = 4;
+        const SND_PCM_STATE_SETUP: c_int = 1;
+
+        assert!(
+            !a_recovered_stream_still_has_to_be_started(SND_PCM_STATE_RUNNING),
+            "an interrupted wait, and a suspend whose resume succeeded, come back running — \
+             preparing one of those is EBUSY"
+        );
+        for state_recovery_left in [
+            SND_PCM_STATE_PREPARED,
+            SND_PCM_STATE_XRUN,
+            SND_PCM_STATE_SETUP,
+        ] {
+            assert!(
+                a_recovered_stream_still_has_to_be_started(state_recovery_left),
+                "a stream left in state {state_recovery_left} delivers nothing until it is \
+                 started, and this arm disables ALSA's implicit start"
+            );
+        }
     }
 
     /// A stream that has not settled reports neither a rate nor a delay, and no
