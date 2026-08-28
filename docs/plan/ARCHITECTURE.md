@@ -456,7 +456,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ dlopen-audio-backend-and-audio-blocks)
+## Media I/O — camera, display, audio — IN-FLIGHT
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -570,30 +570,186 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   MIT-licensed PipeWire/SPA headers are vendored, the header-only SPA layer compiles
   into the wheel as a small shim, and every `pw_*` symbol binds at runtime — falling
   back to dlopen'd `libasound`, falling back to a null backend under which audio
-  processors run, produce silence, and discard. The chain is probed automatically per
-  process, no configuration dial, and no audio library ever appears in the wheel's
-  `DT_NEEDED`. CPAL is gone with it: no audio path links an audio library, interim or
-  otherwise. [audio-subsystem]
+  processors run, produce silence, and discard. The chain is probed once per process
+  and logged once, no configuration dial and no environment override, and no audio
+  library ever appears in the wheel's `DT_NEEDED`. **An arm is chosen by opening, not
+  by loading**: a library that resolves but yields no usable connection — `libpipewire`
+  present with no daemon answering, the common container case — demotes to the next arm
+  exactly as a missing library does, because probing on presence alone would strand
+  precisely the machines the chain exists to serve. A caller-named `device_id` is the
+  one case that does not demote: it raises at `setup()`, since a wrong device id is a
+  wiring error and silently landing on a different device is worse than failing. CPAL
+  is gone with it: no audio path links an audio library, interim or otherwise.
+  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1990, #1991]
+  <!-- verify: cargo test -p streamlib-engine --lib the_chain_is_probed_once_and_hands_back_the_same_backend_every_time -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_walk_demotes_past_every_arm_that_declines_in_the_order_it_was_given -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_linux_chain_offers_pipewire_then_alsa_before_falling_through_to_null -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
+- **DECIDED** — The audio device seam is an engine primitive beside the audio clock,
+  not built-in-private code: `AudioDeviceBackend` opening `AudioCaptureStream` and
+  `AudioPlaybackStream`, living in `core/context/` with its Linux implementations under
+  `linux/`, exactly where the audio clock's two halves already sit. `MicrophoneSource`
+  and `SpeakerSink` are written against it and reach no engine guts — the layering wall
+  above, applied to a fourth device class. There is no second audio device path: the
+  built-ins, the null backend and every test open streams through this one seam. A
+  stream carries a liveness report its owner reads, so a publishing or draining thread
+  whose device died comes back and says why rather than only telling the log.
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #2012]
+  <!-- verify: cargo test -p streamlib-engine --test silent_null_arm_captures_without_ever_dying -->
+  <!-- verify: cargo test -p streamlib-engine --test silent_null_arm_plays_what_it_is_given -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_publishing_thread_whose_device_died_comes_back_and_says_why -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_drain_thread_whose_device_died_comes_back_and_says_why -->
+- **DECIDED** — Every audio symbol binds at runtime and the wheel's `DT_NEEDED` set does
+  not grow: `libpipewire-0.3.so.0` and `libasound.so.2` resolve through `libloading`,
+  the pattern the DRM modifier probe already uses for `libEGL.so.1` — a library held
+  beside typed function pointers, a missing library demoting to the next arm and a
+  missing symbol named rather than crashing. The versioned soname is the dlopen target,
+  not a stylistic echo: a machine ships `libpipewire-0.3.so.0` with no dev symlink.
+  Nothing links `cpal`, `pipewire-rs`, or any pkg-config audio crate — each puts an
+  audio library straight into `DT_NEEDED` and fails the portability gate by
+  construction. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
+  <!-- verify: cargo test -p streamlib-engine --lib a_missing_library_demotes_and_names_the_library_it_looked_for -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_loader_names_the_symbol_a_wrong_library_does_not_export -->
+- **DECIDED** — SPA's header-only layer compiles into the wheel as a shim that calls
+  nothing. PipeWire's pod builders and parsers are inline C with no shared object, so a
+  small `cc`-compiled shim owns them and every `pw_*` entry point it needs arrives as a
+  function pointer Rust filled by `dlsym` — the shim itself references no external
+  symbol. This is the vendored VMA build verbatim in shape: compiled with its static and
+  dynamic Vulkan function lookups both off so it calls only pointers Rust hands it, and
+  adding no `DT_NEEDED` entry beyond the C++ runtime.
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
+  <!-- verify: cargo test -p streamlib-engine --lib the_shim_names_every_entry_point_it_expects_rust_to_resolve -->
+- **DECIDED** — The headers are vendored, not taken from the build machine.
+  `manylinux_2_28` carries no PipeWire development package, so a system-header build is
+  not reproducible where the wheel is actually built — the same reasoning that pins the
+  GLSL compiler to build-from-source rather than linking whatever sits on the builder.
+  MIT-licensed PipeWire and SPA headers land under `vendor/`, untouched and
+  unreformatted, and the licence obligations are met by the machinery that already
+  reproduces every vendored C/C++ project's own licence text out of the tree. `LICENSE`,
+  `LICENSES/` and `docs/license/` are not edited; the shim is our code and carries the
+  BUSL header. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
+- **DECIDED** — The portability gate is the design's pass/fail, unchanged and
+  unweakened: the shipped `_engine.abi3.so` names the same five host libraries after
+  audio as before. No name is added to the permitted-host-library list — an audio
+  library appearing there is the failure this design exists to prevent, not a fix for
+  it. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
 - **DECIDED** — A backend device paces the audio path: capture and playback callbacks
   are the cadence source, and a block's timestamp derives from the backend's own
   timing (status minus reported delay) in the machine monotonic epoch — never from a
   free-running timer. The timerfd `AudioClock` remains the SDK clock primitive and
-  paces deviceless graphs only (null backend, tests). A graph's audio path has
-  exactly one cadence source: device ticks and timer ticks never interleave.
-  [audio-subsystem]
+  paces deviceless graphs only (null backend, tests), so it starts when something needs
+  it and a device-paced graph never starts it at all — which is what makes "exactly one
+  cadence source" true in the tree rather than merely stated: device ticks and timer
+  ticks cannot interleave if the timer is not running.
+  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1990, #1991]
+  <!-- verify: cargo test -p streamlib-engine --test audio_clock_paces_only_what_needs_it -->
+  <!-- verify: cargo test -p streamlib-engine --test pipewire_arm_stamps_blocks_with_the_devices_own_timing -->
+  <!-- verify: cargo test -p streamlib-engine --test alsa_arm_stamps_blocks_with_the_devices_own_timing -->
 - **DECIDED** — A/V sync is block-level join-by-timestamp on the one monotonic clock:
   an `AudioBlock` carries its first sample's timestamp, rate, and sample count, so any
   sample's instant is derivable and audio joins camera frames by timestamp alone. No
-  sample-accurate cross-modal machinery exists. [audio-subsystem]
+  sample-accurate cross-modal machinery exists.
+  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1988, #1990, #1991]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_published_block_carries_the_streams_format_and_the_devices_timestamp -->
+- **DECIDED** — The device stamps the block and the engine never re-stamps it. A
+  capture block's timestamp is the backend's own timing for its first sample —
+  `pw_time`-derived status minus reported delay on the PipeWire arm,
+  `snd_pcm_status_get_htstamp` on the ALSA arm with the monotonic timestamp type set
+  explicitly so the stamp cannot arrive on `CLOCK_REALTIME` — and it is published
+  through the timestamped write, never the implicit one, whose `MediaClock::now()`
+  would stamp the moment of publication rather than the instant of capture. Both the
+  bag field and the frame header therefore carry the same device-derived value, in the
+  same epoch a video frame's timestamp carries, which is the whole of block-level A/V
+  sync: joining audio to camera frames is subtracting two integers.
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
+  <!-- verify: cargo test -p streamlib-engine --lib a_blocks_stamp_sits_one_period_before_a_status_reporting_one_unread_period -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_stamp_from_the_wrong_clock_is_refused_and_a_monotonic_one_is_not -->
+- **DECIDED** — A device callback never blocks, and the loss is counted at the edge.
+  Audio's input ports declare `lossless`, which resolves to a blocking overflow policy —
+  correct for the consumer, and fatal if a device callback ever waited on it. So a
+  bounded ring sits between the callback and the publish: the callback only ever hands
+  off, a source-owned thread drains the ring into the timestamped write, and when a
+  stalled consumer fills the ring the source drops the oldest block at the device edge
+  and increments its own counter. The loss is explicit in both directions — the counter
+  is logged the way `CameraSource` logs its own, and the gap is derivable from the
+  timestamps and sample counts of the blocks either side of it. Nothing is silently
+  interpolated and no sample is invented.
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib the_device_callback_hands_off_into_the_ring_and_the_loss_lands_there -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib the_device_callback_takes_what_is_queued_and_never_waits_for_the_graph -->
+- **DECIDED** — The null backend runs the graph and produces silence: under it
+  `MicrophoneSource` publishes silent blocks and `SpeakerSink` discards what it
+  receives, both paced by the timerfd clock — so a pipeline authored on a workstation
+  runs unchanged in a headless container and a test needs no audio hardware. A device
+  that was *named* and cannot be opened is the opposite case and raises at `setup()`,
+  the way `CameraSource` raises on a missing `/dev/video*`: a machine with no audio is a
+  supported environment, a wrong device id is a wiring error.
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989]
+  <!-- verify: cargo test -p streamlib-engine --lib every_block_carries_a_full_quantum_of_silence -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_named_device_is_refused_by_name_rather_than_opened_as_something_else -->
 - **DECIDED** — The audio data model is the `AudioBlock` bag: samples ride the link
   inline as msgpack bin, CPU-resident, interleaved, with sample rate, channel count,
-  dtype, and first-sample timestamp beside them; dtype is metadata with `f32` the
-  default and `i16` legal. The sample count counts per-channel samples — an
-  interleaved block of `channels` channels carries `sample_count × channels`
-  scalars — so duration and the next block's expected timestamp derive from count
-  and rate alone. Audio touches no surface machinery — no surface ids, no
-  claims, no lifetime contract, no `exchange` — and the `AudioBlock` cast composes a
-  zero-copy view of the samples (numpy in Python). [audio-subsystem]
+  dtype, and first-sample timestamp beside them. It is the wire contract and the field
+  names are the contract — the same shape `VideoFrame` states for video: an optional
+  cast over a self-describing msgpack named map, declared on no port, registered
+  nowhere, ignoring keys it does not read. The keys are `samples`, `sample_rate`,
+  `channels`, `sample_count`, `dtype`, `first_sample_timestamp_ns`. `dtype` is metadata
+  with `f32` the default and `i16` legal, and `samples` is little-endian — a wire
+  statement rather than an assumption, since it is the property a bag decoded by a tap,
+  a CLI, or another language depends on. The sample count counts per-channel samples —
+  an interleaved block of `channels` channels carries `sample_count × channels`
+  scalars — so duration and the next block's expected timestamp derive from count and
+  rate alone. Audio touches no surface machinery — no surface ids, no claims, no
+  lifetime contract, no `exchange`.
+  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib audio_block_msgpack_wire_carries_the_samples_as_a_binary_payload -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib audio_block_cast_ignores_unknown_keys -->
+- **DECIDED** — `samples` is msgpack `bin`, so the field is a byte buffer and `dtype`
+  says how to read it — never a typed vector. A `Vec<f32>` field would serialize as a
+  msgpack **array** — five bytes per sample, and a shape Python's own `bytes` → `bin`
+  path does not agree with. So the field carries interleaved little-endian scalars as
+  bytes, and one field spelling serves `f32` and `i16` alike. The wire-key test asserts
+  the binary type for both, which is the one test that can catch an array-for-`bin`
+  mistake. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib an_i16_block_carries_its_samples_as_a_binary_payload_too -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_payload_crosses_the_wire_as_bytes -->
+- **DECIDED** — The Python cast is pure Python and composes nothing surface-shaped. It
+  lives beside `video_frame.py`, is read with `ctx.inputs.read("audio", into=AudioBlock)`,
+  and owes no `.pyi` entry — pyright checks it from source, as it does `VideoFrame`. It
+  must not compose the claimed-surface access class: that class demands a surface-id
+  field and takes claims in its constructor, and audio has no surface, no claim and no
+  lifetime contract. Its `samples` property maps the declared `dtype` to an explicit
+  little-endian numpy type, never the platform-native spelling — the wire is
+  little-endian by contract, not by luck — and returns a `frombuffer` view reshaped to
+  `(sample_count, channels)`, with numpy imported lazily so the wheel still declares no
+  numpy dependency. A payload whose length is not `sample_count × channels × itemsize`
+  is refused by name at the cast rather than reshaped into a plausible-looking wrong
+  answer. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_an_audio_block_takes_no_surface_and_holds_no_claim -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_numpy_types_are_spelled_little_endian_at_the_source -->
+- **DECIDED** — "Zero-copy" is a claim about the cast, and is stated as exactly that.
+  Between shared memory and `process()` the payload is copied four times — out of the
+  iceoryx2 sample, a header-strip memmove, the msgpack decode into an owned value, and
+  into a Python `bytes` — and audio removes none of them; they are the helper hop every
+  bag pays. What the cast guarantees is that it adds no fifth: the numpy array is a view
+  over that `bytes`, and `torch.from_numpy` over it is a view again. At audio's sizes
+  this is the right trade and the reason audio touches no surface machinery at all — a
+  512-sample stereo `f32` block is 4 096 bytes against a 16 MiB per-link ceiling for a
+  helper-placed processor. No doc, test name, or log line may describe the path as
+  zero-copy from the device.
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_the_samples_are_a_numpy_view_over_the_bag_bytes -->
+- **DECIDED** — The wheel's own test harness must be able to decode a bag carrying
+  bytes, so the defect that stopped it is fixed at the engine layer rather than
+  bandaided in audio: the collector `await_bag` is built on decoded bags through a JSON
+  value whose visitor implements no `visit_bytes`, so every `bin` payload failed with a
+  type error. It decodes through `rmpv` instead, the way the tap path already does. This is
+  not audio-specific — any bag carrying bytes hits it, including one a Python processor
+  writes today. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_a_block_read_off_the_wire_casts_to_an_audio_block -->
 - **DECIDED** — An audio input port may declare a window contract — rate, channels,
   dtype, window size, hop — beside its delivery profile (audio declares `lossless`):
   the engine resamples, mixes down, and frames natively so `process()` receives
@@ -601,15 +757,31 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   engine stage, never a user processor. Feature extraction (mel, MFCC) is not engine
   surface: the contract ends at windowed raw samples. [audio-subsystem]
 - **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
-  camera and display. Conditioning — AEC, noise suppression, AGC via the statically
-  linked WebRTC Audio Processing Module — is configuration on the built-ins, an
-  engine-internal chain between device and published block, bypassable for
+  camera and display: native built-ins in the engine tree, registered with the other
+  media built-ins and surfaced to Python as marker classes beside `CameraSource`,
+  configured the one way a built-in is configured
+  (`rt.add(MicrophoneSource, config={"device_id": "..."})`). Both are `execution =
+  manual`, the mode `CameraSource` uses for a device that paces itself, with
+  `scheduling = realtime` — an audio device callback is the deadline that priority
+  exists for. The declaration names that deadline; it does not apply a priority here,
+  because the engine skips thread-priority application for every `manual` processor by
+  design — real work runs on OS-managed callback threads, which is exactly right for
+  audio, where the deadline belongs to the backend's own callback thread and not to the
+  source's publishing thread. Conditioning — AEC, noise suppression, AGC via the
+  statically linked WebRTC Audio Processing Module — is configuration on the built-ins,
+  an engine-internal chain between device and published block, bypassable for
   microphones whose hardware DSP already conditions. `SpeakerSink` playback cancels
   immediately and reports played-up-to timestamps — the barge-in door and the AEC
   reference are one mechanism. A device callback never blocks on a slow consumer:
   at capacity `MicrophoneSource` drops at the device edge and the loss is
   explicit — the timestamp gap is derivable from the blocks around it and the
-  source counts what it dropped — never silent. [audio-subsystem]
+  source counts what it dropped — never silent.
+  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992 for
+  the two built-ins, their execution mode and the drop-at-the-edge clause; conditioning
+  and immediate cancel are a later rung]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
   concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
   out-of-process in its own helper over the engine's IPC transport, never in the app
