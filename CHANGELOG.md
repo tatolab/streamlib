@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.13](https://github.com/tatolab/streamlib/compare/v0.18.12...v0.18.13) (2026-08-28)
+
+
+### Features
+
+* **engine:** the PipeWire arm — dlopen'd libpipewire, a vendored SPA shim, and the device's own timestamps ([#2008](https://github.com/tatolab/streamlib/issues/2008)) ([a70e5f4](https://github.com/tatolab/streamlib/commit/a70e5f4b2c9475acb496b207ff4de3a422cde9bf))
+
 ## [0.18.12](https://github.com/tatolab/streamlib/compare/v0.18.11...v0.18.12) (2026-08-27)
 
 
