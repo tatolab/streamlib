@@ -13,8 +13,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use streamlib_engine::core::context::{
-    AudioCaptureStream, AudioStreamFormat, AudioDeviceStreamRequest, AudioClockConfig,
-    AudioDeviceBackend, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
+    AudioCaptureStream, AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest,
+    AudioStreamFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
 };
 use streamlib_engine::core::media_clock::MediaClock;
 

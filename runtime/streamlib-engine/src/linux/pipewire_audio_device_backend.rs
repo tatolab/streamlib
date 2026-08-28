@@ -544,9 +544,7 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
         // when it returns no callback can still be reading the context that the
         // next line drops.
         unsafe {
-            audio_shim::streamlib_pipewire_audio_stream_stop_handing_off(
-                self.opened.audio_stream,
-            );
+            audio_shim::streamlib_pipewire_audio_stream_stop_handing_off(self.opened.audio_stream);
         }
         self.installed_hand_off = None;
         Ok(())
@@ -627,9 +625,7 @@ impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
         // when it returns no callback can still be reading the context that the
         // next line drops.
         unsafe {
-            audio_shim::streamlib_pipewire_audio_stream_stop_handing_off(
-                self.opened.audio_stream,
-            );
+            audio_shim::streamlib_pipewire_audio_stream_stop_handing_off(self.opened.audio_stream);
         }
         self.installed_hand_off = None;
         Ok(())
@@ -724,9 +720,7 @@ mod tests {
     fn monitored_sink_name_of(device_id: &str) -> Option<String> {
         let device_id = CString::new(device_id).expect("a test device id has no NUL");
         let length = unsafe {
-            audio_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(
-                device_id.as_ptr(),
-            )
+            audio_shim::streamlib_pipewire_sink_name_length_of_monitor_device_id(device_id.as_ptr())
         };
         (length > 0).then(|| device_id.to_string_lossy()[..length].to_string())
     }
@@ -829,9 +823,8 @@ mod tests {
     /// nothing targets anything.
     #[test]
     fn no_device_id_names_no_target_at_all() {
-        let properties =
-            composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
-                .expect("the default composes");
+        let properties = composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
+            .expect("the default composes");
         assert!(!properties.iter().any(|(key, _)| key == "target.object"));
         assert!(
             !properties
@@ -915,9 +908,8 @@ mod tests {
     /// property a real distinction rather than a constant.
     #[test]
     fn a_capture_stream_announces_itself_as_capture() {
-        let properties =
-            composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
-                .expect("the default composes");
+        let properties = composed_stream_properties(audio_shim::STREAM_DIRECTION_CAPTURE, None)
+            .expect("the default composes");
         assert!(
             properties.contains(&("media.category".to_string(), "Capture".to_string())),
             "{properties:?}"

@@ -458,11 +458,8 @@ impl AlsaAudioDeviceBackend {
 
     /// Open and negotiate one capture stream, before any delivery starts.
     fn open_alsa_capture_stream(&self, pcm_name: &str) -> Result<AlsaAudioCaptureStream> {
-        let opened_pcm = OpenedAlsaPcm::open(
-            &self.entry_points,
-            pcm_name,
-            AlsaStreamDirection::Capture,
-        )?;
+        let opened_pcm =
+            OpenedAlsaPcm::open(&self.entry_points, pcm_name, AlsaStreamDirection::Capture)?;
         let negotiated = negotiate_hardware_parameters(
             &self.entry_points,
             opened_pcm.pcm,
@@ -488,11 +485,8 @@ impl AlsaAudioDeviceBackend {
 
     /// Open and negotiate one playback stream, before any sample is written.
     fn open_alsa_playback_stream(&self, pcm_name: &str) -> Result<AlsaAudioPlaybackStream> {
-        let opened_pcm = OpenedAlsaPcm::open(
-            &self.entry_points,
-            pcm_name,
-            AlsaStreamDirection::Playback,
-        )?;
+        let opened_pcm =
+            OpenedAlsaPcm::open(&self.entry_points, pcm_name, AlsaStreamDirection::Playback)?;
         let negotiated = negotiate_hardware_parameters(
             &self.entry_points,
             opened_pcm.pcm,
@@ -1099,7 +1093,9 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
         let written = unsafe {
             (entry_points.snd_pcm_writei)(
                 opened_pcm.pcm,
-                one_period_interleaved_sample_bytes.as_ptr().cast::<c_void>(),
+                one_period_interleaved_sample_bytes
+                    .as_ptr()
+                    .cast::<c_void>(),
                 SndPcmUframes::from(period_sample_count),
             )
         };

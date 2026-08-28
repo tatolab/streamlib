@@ -90,7 +90,7 @@ fn raw_capture_device_names_in_dev_snd() -> Vec<String> {
 fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend) -> Option<String> {
     use std::sync::Arc;
     use streamlib_engine::core::context::{
-        AudioDeviceStreamRequest, AudioClockConfig, AudioDeviceBackend, SharedAudioClock,
+        AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, SharedAudioClock,
         SoftwareAudioClock,
     };
 

@@ -19,7 +19,7 @@ use serial_test::serial;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::context::{
-    AudioCaptureStream, AudioDeviceStreamRequest, AudioDeviceBackend, SilentNullAudioDeviceBackend,
+    AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, SilentNullAudioDeviceBackend,
 };
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};

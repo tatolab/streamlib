@@ -129,8 +129,7 @@ pub struct AudioBlockRequestedByDevice<'a> {
 /// must not re-enter the stream it was installed on: a backend is free to hold
 /// the stream's own lock across this call, so calling back into
 /// [`AudioPlaybackStream::stop_requesting`] from here deadlocks it.
-pub type AudioBlockForPlaybackHandOff =
-    Box<dyn Fn(AudioBlockRequestedByDevice<'_>) + Send + Sync>;
+pub type AudioBlockForPlaybackHandOff = Box<dyn Fn(AudioBlockRequestedByDevice<'_>) + Send + Sync>;
 
 /// A playback stream a backend opened.
 pub trait AudioPlaybackStream: Send {

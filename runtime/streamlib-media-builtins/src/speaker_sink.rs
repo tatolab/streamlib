@@ -135,9 +135,10 @@ impl ManualProcessor for SpeakerSink::Processor {
         };
         let stream_format = playback_stream.stream_format();
 
-        let samples_awaiting_playback = Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
-            ring_byte_capacity_for(stream_format),
-        ));
+        let samples_awaiting_playback =
+            Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
+                ring_byte_capacity_for(stream_format),
+            ));
         playback_stream.start_requesting_from(device_callback_filling_from(Arc::clone(
             &samples_awaiting_playback,
         )))?;
@@ -242,7 +243,8 @@ fn device_callback_filling_from(
     samples_awaiting_playback: Arc<AudioSamplesAwaitingPlaybackRing>,
 ) -> AudioBlockForPlaybackHandOff {
     Box::new(move |requested: AudioBlockRequestedByDevice<'_>| {
-        samples_awaiting_playback.fill_one_device_period(requested.interleaved_sample_bytes_to_fill);
+        samples_awaiting_playback
+            .fill_one_device_period(requested.interleaved_sample_bytes_to_fill);
     })
 }
 
@@ -321,9 +323,8 @@ fn drain_blocks_into_playback(
     played_block_counter: &AtomicU64,
     stream_format: AudioStreamFormat,
 ) {
-    let mut read_failures = ConsecutiveFailureReportSchedule::reporting_every(
-        FAILED_READS_BETWEEN_REPORTS,
-    );
+    let mut read_failures =
+        ConsecutiveFailureReportSchedule::reporting_every(FAILED_READS_BETWEEN_REPORTS);
     let mut refused_blocks =
         ConsecutiveFailureReportSchedule::reporting_every(REFUSED_BLOCKS_BETWEEN_REPORTS);
     let mut warn_at_underrun_byte_count = 1u64;
@@ -524,11 +525,10 @@ mod tests {
             .expect("the null backend opens its default device on any machine");
         let stream_format = playback_stream.stream_format();
 
-        let samples_awaiting_playback = Arc::new(
-            AudioSamplesAwaitingPlaybackRing::with_byte_capacity(ring_byte_capacity_for(
-                stream_format,
-            )),
-        );
+        let samples_awaiting_playback =
+            Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
+                ring_byte_capacity_for(stream_format),
+            ));
         playback_stream
             .start_requesting_from(device_callback_filling_from(Arc::clone(
                 &samples_awaiting_playback,
@@ -568,11 +568,10 @@ mod tests {
             .expect("the null backend opens its default device on any machine");
         let stream_format = playback_stream.stream_format();
 
-        let samples_awaiting_playback = Arc::new(
-            AudioSamplesAwaitingPlaybackRing::with_byte_capacity(ring_byte_capacity_for(
-                stream_format,
-            )),
-        );
+        let samples_awaiting_playback =
+            Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
+                ring_byte_capacity_for(stream_format),
+            ));
         playback_stream
             .start_requesting_from(device_callback_filling_from(Arc::clone(
                 &samples_awaiting_playback,
@@ -654,9 +653,8 @@ mod tests {
     fn a_block_whose_payload_contradicts_its_header_is_refused_naming_both_lengths() {
         let mut block = a_block(48_000, 2, AudioSampleDtype::F32);
         block.interleaved_sample_bytes.truncate(4);
-        let refusal =
-            samples_of_a_block_the_device_can_play(&block, a_stream_format(48_000, 2))
-                .expect_err("a truncated payload cannot describe 4 stereo samples");
+        let refusal = samples_of_a_block_the_device_can_play(&block, a_stream_format(48_000, 2))
+            .expect_err("a truncated payload cannot describe 4 stereo samples");
         assert!(
             refusal.contains('4') && refusal.contains("32"),
             "the refusal must name what arrived and what was described: {refusal}"

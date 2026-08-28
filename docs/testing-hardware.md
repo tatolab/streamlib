@@ -158,7 +158,8 @@ system-exclusive resource. Concretely, today:
 - Audio device probes: anything opening a stream through the audio
   device seam against a real backend, which needs an audio device rather
   than a GPU — a reachable session for the PipeWire arm, `/dev/snd` and an
-  openable capture PCM for the ALSA arm.
+  openable PCM for the ALSA arm. Capture and playback are separate
+  endpoints, and a test naming one says which in its ignore reason.
 - Future: V4L2 camera capture, display swapchains, anything that holds a
   kernel-level exclusive lock.
 
