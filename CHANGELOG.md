@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.15](https://github.com/tatolab/streamlib/compare/v0.18.14...v0.18.15) (2026-08-28)
+
+
+### Features
+
+* **engine:** SpeakerSink — playback on every arm, proved by a known-signal loopback ([#2013](https://github.com/tatolab/streamlib/issues/2013)) ([541c9ea](https://github.com/tatolab/streamlib/commit/541c9eaae1522e637b8b1dafa81c147ff5d6eae4))
+
 ## [0.18.14](https://github.com/tatolab/streamlib/compare/v0.18.13...v0.18.14) (2026-08-28)
 
 
