@@ -156,8 +156,9 @@ system-exclusive resource. Concretely, today:
 - Tests in `vulkan/rhi/` that exercise GPU memory, swapchains,
   pipelines, sync primitives.
 - Audio device probes: anything opening a stream through the audio
-  device seam against a real backend, which needs a reachable audio
-  session rather than a GPU.
+  device seam against a real backend, which needs an audio device rather
+  than a GPU — a reachable session for the PipeWire arm, `/dev/snd` and an
+  openable capture PCM for the ALSA arm.
 - Future: V4L2 camera capture, display swapchains, anything that holds a
   kernel-level exclusive lock.
 

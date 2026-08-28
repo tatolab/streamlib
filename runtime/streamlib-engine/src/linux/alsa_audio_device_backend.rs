@@ -1090,7 +1090,10 @@ unsafe fn read_htimestamp_ns(
     // SAFETY: the caller guarantees a filled status, and the out-parameter is an
     // owned local.
     unsafe { (entry_points.snd_pcm_status_get_htstamp)(status.pointer(), &mut device_stamp) };
-    i64::from(device_stamp.tv_sec) * 1_000_000_000 + i64::from(device_stamp.tv_nsec)
+    device_stamp
+        .tv_sec
+        .saturating_mul(1_000_000_000)
+        .saturating_add(device_stamp.tv_nsec)
 }
 
 /// When the first sample of the block about to be read was captured.
