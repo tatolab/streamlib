@@ -184,7 +184,10 @@ without the label invites it to be read as though it were.
 #### Triage (only when the through-engine run failed)
 
 - Rig-only re-run: PASS | FAIL | SKIP
-- **Therefore**: the engine regressed | the machine's audio is broken | uninterpretable
+- **Therefore**: the failure is on the StreamLib side | the machine's audio is broken |
+  uninterpretable
+- What `node.log` said: <the run's own explanation, or "nothing that explains it">
+
 
 #### Outcome
 
