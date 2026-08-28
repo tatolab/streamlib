@@ -161,7 +161,9 @@ impl AudioStreamLivenessReport {
     /// an owner has to act on, and whatever the teardown behind it reported is
     /// a consequence of the first.
     pub fn record_the_failure_that_ended_the_stream(&self, reason: AudioStreamFailureReason) {
-        self.failure_that_ended_the_stream.lock().get_or_insert(reason);
+        self.failure_that_ended_the_stream
+            .lock()
+            .get_or_insert(reason);
     }
 }
 

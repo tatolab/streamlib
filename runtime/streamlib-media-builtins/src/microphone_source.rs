@@ -63,8 +63,7 @@ const AUDIO_OUTPUT_PORT: &str = "audio";
 
 /// What a capture device that stopped means for this source, said once when it
 /// happens.
-const WHAT_A_STOPPED_CAPTURE_DEVICE_MEANS: &str =
-    "MicrophoneSource: the capture device stopped serving this processor, so no further      blocks will be captured. What was already captured is published, and the run's audio      ends there.";
+const WHAT_A_STOPPED_CAPTURE_DEVICE_MEANS: &str = "MicrophoneSource: the capture device stopped serving this processor, so no further      blocks will be captured. What was already captured is published, and the run's audio      ends there.";
 
 /// Bound on the wait for the publishing thread to exit. A consumer whose port
 /// declares `lossless` can hold that thread inside `write` for as long as it

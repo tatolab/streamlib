@@ -42,8 +42,7 @@ use crate::processor_thread_join::join_within_grace_or_detach;
 
 /// What a playback device that stopped means for this sink, said once when it
 /// happens.
-const WHAT_A_STOPPED_PLAYBACK_DEVICE_MEANS: &str =
-    "SpeakerSink: the playback device stopped serving this processor, so nothing further      will be played. Blocks still arriving on the input port are read and discarded by the      link's own ring, not queued for a device that is gone.";
+const WHAT_A_STOPPED_PLAYBACK_DEVICE_MEANS: &str = "SpeakerSink: the playback device stopped serving this processor, so nothing further      will be played. Blocks still arriving on the input port are read and discarded by the      link's own ring, not queued for a device that is gone.";
 
 /// Device periods the ring holds before the drain thread waits for room.
 /// Matches the ring depth a sample-stream link itself carries

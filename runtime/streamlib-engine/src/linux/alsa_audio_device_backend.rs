@@ -1081,11 +1081,9 @@ impl AlsaDeviceThreadExit {
                  consecutive waits",
                 direction.what_a_stalled_device_stopped_doing(),
             ))),
-            AlsaDeviceThreadExit::TheDeviceRefused(refusal) => {
-                Some(AudioStreamFailureReason::of(format!(
-                    "the ALSA {direction_word} device refused while it was running: {refusal}"
-                )))
-            }
+            AlsaDeviceThreadExit::TheDeviceRefused(refusal) => Some(AudioStreamFailureReason::of(
+                format!("the ALSA {direction_word} device refused while it was running: {refusal}"),
+            )),
             AlsaDeviceThreadExit::TheStreamCouldNotBeRecovered => {
                 Some(AudioStreamFailureReason::of(format!(
                     "the ALSA {direction_word} stream broke and could not be recovered"
@@ -1887,12 +1885,7 @@ mod tests {
             for direction in [AlsaStreamDirection::Capture, AlsaStreamDirection::Playback] {
                 let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
 
-                record_an_alsa_device_thread_exit(
-                    &exit,
-                    direction,
-                    "hw:0,0",
-                    &liveness_report,
-                );
+                record_an_alsa_device_thread_exit(&exit, direction, "hw:0,0", &liveness_report);
 
                 let reason = liveness_report
                     .failure_that_ended_the_stream()

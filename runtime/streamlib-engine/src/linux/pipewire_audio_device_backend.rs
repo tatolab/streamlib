@@ -530,9 +530,9 @@ unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
             .to_string_lossy()
             .into_owned()
     };
-    liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(format!(
-        "the PipeWire stream stopped serving its device: {reason}"
-    )));
+    liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+        format!("the PipeWire stream stopped serving its device: {reason}"),
+    ));
 }
 
 /// Point the shim's failure hand-off at a stream's own report.
