@@ -10,6 +10,7 @@
 //! pool, texture cache, present target — never private engine guts.
 
 pub mod audio_block;
+pub(crate) mod audio_device_serving_state;
 pub(crate) mod audio_samples_awaiting_playback_ring;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
@@ -18,6 +19,8 @@ pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
 #[cfg(target_os = "linux")]
 pub mod display_window;
+#[cfg(test)]
+mod emitted_log_line_test_support;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;

@@ -17,14 +17,17 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     AudioCaptureStream, AudioDeviceStreamRequest, AudioSampleFormat, AudioStreamFormat,
-    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff, RuntimeContextFullAccess,
-    probe_audio_device_backend,
+    AudioStreamLivenessReport, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    RuntimeContextFullAccess, probe_audio_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
 use streamlib::sdk::processors::ManualProcessor;
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
+use crate::audio_device_serving_state::{
+    AudioDeviceServingState, ask_whether_the_device_is_still_serving,
+};
 use crate::captured_audio_block_hand_off_ring::{
     CapturedAudioBlockAwaitingPublish, CapturedAudioBlockHandOffRing,
     NextCapturedAudioBlockToPublish,
@@ -58,6 +61,11 @@ const FAILED_WRITES_BETWEEN_REPORTS: u64 = 300;
 /// The one port a captured block is published on.
 const AUDIO_OUTPUT_PORT: &str = "audio";
 
+/// What a capture device that stopped means for this source, said once when it
+/// happens.
+const WHAT_A_STOPPED_CAPTURE_DEVICE_MEANS: &str =
+    "MicrophoneSource: the capture device stopped serving this processor, so no further      blocks will be captured. What was already captured is published, and the run's audio      ends there.";
+
 /// Bound on the wait for the publishing thread to exit. A consumer whose port
 /// declares `lossless` can hold that thread inside `write` for as long as it
 /// likes; detaching keeps the runtime's shutdown chain moving.
@@ -86,6 +94,10 @@ pub struct MicrophoneSourceConfig {
 )]
 pub struct MicrophoneSource {
     capture_stream: Option<Box<dyn AudioCaptureStream>>,
+    /// Taken at open and kept beside the stream rather than read off it: the
+    /// publishing thread is what has to notice a device that stopped, and it
+    /// never holds the stream.
+    capture_stream_liveness_report: Option<AudioStreamLivenessReport>,
     hand_off_ring: Option<Arc<CapturedAudioBlockHandOffRing>>,
     /// Minted per publishing thread, so a thread that had to be detached can
     /// never be revived by a later `start()` into an endless spin.
@@ -110,6 +122,7 @@ impl ManualProcessor for MicrophoneSource::Processor {
             sample_format = ?stream_format.sample_format,
             "MicrophoneSource: capture stream opened"
         );
+        self.capture_stream_liveness_report = Some(capture_stream.liveness_report());
         self.capture_stream = Some(capture_stream);
         Ok(())
     }
@@ -121,6 +134,7 @@ impl ManualProcessor for MicrophoneSource::Processor {
             ));
         };
         let stream_format = capture_stream.stream_format();
+        let capture_stream_liveness_report = capture_stream.liveness_report();
 
         let hand_off_ring = Arc::new(CapturedAudioBlockHandOffRing::with_capacity(
             MAX_CAPTURED_BLOCKS_AWAITING_PUBLISH,
@@ -140,6 +154,7 @@ impl ManualProcessor for MicrophoneSource::Processor {
                 publish_captured_blocks(
                     &hand_off_ring_for_publishing,
                     &is_publishing_in_the_thread,
+                    &capture_stream_liveness_report,
                     &published_block_counter,
                     &outputs,
                     stream_format,
@@ -170,6 +185,14 @@ impl ManualProcessor for MicrophoneSource::Processor {
                 .hand_off_ring
                 .as_ref()
                 .map_or(0, |ring| ring.dropped_block_count()),
+            // Beside the counts rather than only in the line that fired when
+            // it happened: a run that ended early and a run that ended are the
+            // same handful of numbers otherwise.
+            capture_device_failure = self
+                .capture_stream_liveness_report
+                .as_ref()
+                .and_then(|report| report.failure_that_ended_the_stream())
+                .map_or_else(|| "none".to_string(), |reason| reason.to_string()),
             "MicrophoneSource: teardown"
         );
         self.capture_stream = None;
@@ -222,6 +245,7 @@ fn device_callback_handing_off_into(
 fn publish_captured_blocks(
     hand_off_ring: &CapturedAudioBlockHandOffRing,
     is_publishing: &AtomicBool,
+    capture_stream_liveness_report: &AudioStreamLivenessReport,
     published_block_counter: &AtomicU64,
     outputs: &OutputWriter,
     stream_format: AudioStreamFormat,
@@ -231,6 +255,17 @@ fn publish_captured_blocks(
     let mut write_failures =
         ConsecutiveFailureReportSchedule::reporting_every(FAILED_WRITES_BETWEEN_REPORTS);
     while is_publishing.load(Ordering::Acquire) {
+        // Asked before the wait, so a device that died is noticed within one
+        // poll interval rather than never: the ring of a dead device stays
+        // empty, and waiting on it is indistinguishable from waiting on a
+        // microphone in a silent room.
+        if ask_whether_the_device_is_still_serving(
+            capture_stream_liveness_report,
+            WHAT_A_STOPPED_CAPTURE_DEVICE_MEANS,
+        ) == AudioDeviceServingState::StoppedServing
+        {
+            break;
+        }
         match hand_off_ring.wait_for_next_block_to_publish(PUBLISH_WAIT_POLL_INTERVAL) {
             NextCapturedAudioBlockToPublish::Block(captured) => {
                 publish_one_captured_block(
@@ -249,7 +284,8 @@ fn publish_captured_blocks(
 
     // Stopping is not a discard: what the device captured before the stop is
     // already accounted for in the timestamps, so dropping it here would open
-    // a gap nothing counted.
+    // a gap nothing counted. A device that died rather than being stopped
+    // leaves the same ring, and the same reasoning covers it.
     while let NextCapturedAudioBlockToPublish::Block(captured) =
         hand_off_ring.wait_for_next_block_to_publish(Duration::ZERO)
     {
@@ -362,9 +398,11 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
     use streamlib::sdk::context::{
-        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioTickCallback, AudioTickContext,
-        SharedAudioClock, SilentNullAudioDeviceBackend,
+        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioStreamFailureReason,
+        AudioTickCallback, AudioTickContext, SharedAudioClock, SilentNullAudioDeviceBackend,
     };
+
+    use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLines};
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
     const TEST_QUANTUM_SAMPLES: usize = 512;
@@ -557,37 +595,6 @@ mod tests {
         );
     }
 
-    /// Counts the lines a body actually emitted and at what level, so a test
-    /// can hold the log rate itself rather than a predicate the log site is
-    /// free to ignore — and can tell the two failure paths apart.
-    #[derive(Default)]
-    struct EmittedLines {
-        warnings: AtomicU64,
-        errors: AtomicU64,
-    }
-
-    struct CountingTracingSubscriber(Arc<EmittedLines>);
-
-    impl tracing::Subscriber for CountingTracingSubscriber {
-        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-        fn event(&self, event: &tracing::Event<'_>) {
-            let counter = match *event.metadata().level() {
-                tracing::Level::ERROR => &self.0.errors,
-                _ => &self.0.warnings,
-            };
-            counter.fetch_add(1, Ordering::Relaxed);
-        }
-        fn enter(&self, _: &tracing::span::Id) {}
-        fn exit(&self, _: &tracing::span::Id) {}
-    }
-
     fn a_captured_block() -> CapturedAudioBlockAwaitingPublish {
         CapturedAudioBlockAwaitingPublish {
             interleaved_sample_bytes: vec![0u8; 8],
@@ -662,5 +669,94 @@ mod tests {
         let config: MicrophoneSourceConfig =
             serde_json::from_str("{}").expect("an empty config object deserializes");
         assert_eq!(config, MicrophoneSourceConfig { device_id: None });
+    }
+
+    /// The defect the seam exists to remove, held at the one place this
+    /// processor could ever notice it: the publishing thread comes back from a
+    /// device that died instead of waiting out the run, and says why.
+    ///
+    /// Mental revert: drop the liveness check from the loop and this hangs for
+    /// the full `PUBLISH_WAIT_POLL_INTERVAL` on every turn, forever, exactly as
+    /// a source holding a dead microphone does today — publishing nothing,
+    /// reporting nothing, and looking healthy from every angle.
+    #[test]
+    fn a_publishing_thread_whose_device_died_comes_back_and_says_why() {
+        let hand_off_ring = CapturedAudioBlockHandOffRing::with_capacity(4);
+        let is_publishing = AtomicBool::new(true);
+        let published_block_counter = AtomicU64::new(0);
+        let unwired_outputs = OutputWriter::empty();
+
+        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+            "the ALSA capture device delivered nothing for 25 consecutive waits",
+        ));
+
+        let lines = Arc::new(EmittedLines::default());
+        let publishing_began = Instant::now();
+        tracing::subscriber::with_default(CountingTracingSubscriber(Arc::clone(&lines)), || {
+            publish_captured_blocks(
+                &hand_off_ring,
+                &is_publishing,
+                &liveness_report,
+                &published_block_counter,
+                &unwired_outputs,
+                a_stream_format(),
+            );
+        });
+        let publishing_took = publishing_began.elapsed();
+
+        assert!(
+            publishing_took < PUBLISH_WAIT_POLL_INTERVAL,
+            "the publishing thread took {publishing_took:?} to notice a device that had \
+             already died — it waited on the ring instead of asking"
+        );
+        assert!(
+            is_publishing.load(Ordering::Acquire),
+            "the loop left on the device's account, not because it was told to stop — the \
+             two have to stay distinguishable"
+        );
+        assert_eq!(
+            lines.errors.load(Ordering::Relaxed),
+            1,
+            "a device that stopped is said once, at error: silence is the defect and a line \
+             per turn is the other one"
+        );
+    }
+
+    /// The other half, and the one that keeps the first honest: a source whose
+    /// device is fine is not talked out of its own loop.
+    #[test]
+    fn a_publishing_thread_whose_device_is_healthy_keeps_publishing() {
+        let hand_off_ring = Arc::new(CapturedAudioBlockHandOffRing::with_capacity(4));
+        let is_publishing = Arc::new(AtomicBool::new(true));
+        let published_block_counter = Arc::new(AtomicU64::new(0));
+        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+
+        let publishing = std::thread::spawn({
+            let hand_off_ring = Arc::clone(&hand_off_ring);
+            let is_publishing = Arc::clone(&is_publishing);
+            let published_block_counter = Arc::clone(&published_block_counter);
+            let liveness_report = liveness_report.clone();
+            move || {
+                publish_captured_blocks(
+                    &hand_off_ring,
+                    &is_publishing,
+                    &liveness_report,
+                    &published_block_counter,
+                    &OutputWriter::empty(),
+                    a_stream_format(),
+                );
+            }
+        });
+
+        std::thread::sleep(PUBLISH_WAIT_POLL_INTERVAL * 3);
+        assert!(
+            !publishing.is_finished(),
+            "a healthy device was reported as dead, which makes the signal worth nothing"
+        );
+
+        is_publishing.store(false, Ordering::Release);
+        hand_off_ring.end_hand_off();
+        publishing.join().expect("the publishing thread ends");
     }
 }
