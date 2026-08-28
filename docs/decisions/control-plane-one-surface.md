@@ -45,8 +45,10 @@ Auth and remote-access posture remain OPEN — nothing here decides a security m
 - **A discovery daemon or well-known port** — files in the per-user runtime directory
   need no daemon, survive nothing they shouldn't, and prune safely on double-dead
   evidence.
-- **A lossless tap** — a parked tap consumer on a lossless channel back-pressures the
-  source processor; verbatim-but-droppable is the deliberate trade.
+- **A lossless tap** — a parked tap consumer on a blocking channel back-pressures the
+  source processor; verbatim-but-droppable is the deliberate trade. (The hazard itself
+  retired with producer-blocking, 2026-08-28 — `delivery-profile-vocabulary.md`. The trade
+  stands on its own: a tap must not gate production throughput.)
 
 ## Consequences
 

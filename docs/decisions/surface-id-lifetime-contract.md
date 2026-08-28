@@ -89,8 +89,11 @@ consumer-driven wait would put a Python child's speed inside the camera's loop.
   them makes an unopted-in Python consumer set a realtime source's cadence, and
   needs the N-consumer timeline model `adapter-timeline-single-writer.md` explicitly
   defers (the in-process display consumes the same ring and signals nothing).
-  Bounded-block-then-drop delivery exists as `lossless` — a per-port, app-authored
-  choice, which engine-level GPU backpressure is not.
+  > ~~Bounded-block-then-drop delivery exists as `lossless` — a per-port,
+  > app-authored choice, which engine-level GPU backpressure is not.~~ — Superseded
+  > 2026-08-28 by `delivery-profile-vocabulary.md`: no delivery profile blocks a
+  > producer. The rejection stands and is stronger — no port-local choice makes an
+  > unopted-in consumer set a realtime source's cadence.
 - **Deepening the ring.** Depth widens a race it cannot close and turns a reliable
   reproduction into a load-dependent one.
 - **Per-frame texture allocation/registration.** Documented anti-pattern; leaks an

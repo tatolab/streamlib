@@ -225,12 +225,57 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   raising at read); in Rust the read target's `Deserialize` impl is the validation,
   always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_read_into_target.py -->
-- **DECIDED** — Channel policy (delivery profile, ring depth, overflow) is declared
-  port-locally at the consuming input port. Every input port declares its delivery
-  profile explicitly — there is no default and nothing left to infer one from, so an
-  input port without one is a wiring error. [schema-free-ports — SHIPPED #1811]
+- **DECIDED** — The delivery profile is the whole of channel policy: one word, declared
+  port-locally at the consuming input port. Every input port declares its delivery profile explicitly — there is no default
+  and nothing left to infer one from, so an input port without one is a wiring error.
+  Ring depth and overflow policy are engine-chosen and are not authorable: no port
+  declares a depth, a leak policy, or a queue element, and there is no second surface
+  that tunes one. [schema-free-ports — SHIPPED #1811; delivery-profile-vocabulary]
   <!-- verify: cargo test -p streamlib-engine missing_declaration_is_a_wiring_error_naming_the_port -->
   <!-- verify: sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_an_input_port_without_a_delivery_profile_is_refused -->
+- **DECIDED** — The delivery profile names a read policy and nothing else. There are
+  exactly two: `newest` — the consumer drains to the most recent bag, older ones are
+  passed over — and `ordered` — the consumer receives bags in publication order. Both
+  drop under sustained pressure. Neither promises delivery, because on a link whose head
+  is a device that will not wait, no port-local declaration can: backpressure only
+  relocates the loss to the device edge. `lossless` is retired — the word promised what
+  the runtime does not do. [delivery-profile-vocabulary]
+- **DECIDED** — No loss is silent. A bag dropped at a port is counted by the port that
+  dropped it and is readable over the control plane in `graph`, alongside the processor's
+  other metrics. Drops are counted per link, never as one blended total, so a future
+  reflection of a link's count to its producer stays possible without recounting. A drop
+  is a normal, reportable event on a realtime link, never an error and never invisible —
+  a run that lost most of its bags must not read as a healthy one.
+  [delivery-profile-vocabulary]
+- **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
+  unreachable: no profile resolves to it and the overflow policy it was the second half
+  of goes with it. A processor publishing to a slow consumer loses bags at that
+  consumer's port, where the loss is counted; it is never parked. The capability was never engineered
+  — the engine never chose the blocking semantics it would have had, and a parked
+  producer cannot observe shutdown — and keeping it cost the tree two standing
+  workarounds. Counted drops land before or with the deletion, so the alternative to
+  silent loss exists the moment blocking stops being one.
+  [delivery-profile-vocabulary]
+- **DECIDED** — Loss-handling knowledge lives at the link's endpoints, never in the
+  engine. The engine's whole role is to count a drop at the port that dropped it and
+  surface it; it never inspects a payload, never knows a bag holds a reference frame, and
+  never acquires a drop rule that depends on content. A producer that can make loss
+  cheaper reacts at the source — an encoder under downstream pressure declines to encode
+  raw frames and resumes at its next sync point, which is where loss belongs and costs
+  least. A consumer on an encoded stream must bound loss — this is a requirement, not an
+  option: a consumer that sees a gap discards until the producer's next sync point, and
+  never commits or forwards a stream it knows is broken. No consumer drops or passes on
+  encoded frames blindly. The information that makes both possible travels as
+  ordinary bag fields the producer writes and the consumer casts, never as a tag in the
+  frame header and never as engine-visible type. [delivery-profile-vocabulary]
+- **OPEN** — Reflecting a link's drop count back to its producing port, so a producer
+  can react to pressure it cannot otherwise see: intended, do not build until the first
+  encoded-domain link exists — nothing in the tree reads it before an encoder does.
+  Direction — only drops at `ordered` inputs (a `newest` input passing over bags is the
+  profile working and must never throttle a producer); rides the link's own notify path,
+  never the control plane; a read-only count the producer polls, no callback, no
+  configuration dial. The per-link counting decided above is the only piece today's work
+  must honor. [delivery-profile-vocabulary]
 - **DECIDED** — There is no schema layer: no JTD, no schema registry, no embedded
   schemas, no codegen and no generated type classes, and no schema identity grammar
   anywhere in the engine or the authoring surfaces. [schema-free-ports — SHIPPED
@@ -667,8 +712,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine --lib a_blocks_stamp_sits_one_period_before_a_status_reporting_one_unread_period -->
   <!-- verify: cargo test -p streamlib-engine --lib a_stamp_from_the_wrong_clock_is_refused_and_a_monotonic_one_is_not -->
 - **DECIDED** — A device callback never blocks, and the loss is counted at the edge.
-  Audio's input ports declare `lossless`, which resolves to a blocking overflow policy —
-  correct for the consumer, and fatal if a device callback ever waited on it. So a
+  Audio's input ports declare `ordered` — order matters for samples, and nothing on the
+  link may make the device wait. So a
   bounded ring sits between the callback and the publish: the callback only ever hands
   off, a source-owned thread drains the ring into the timestamped write, and when a
   stalled consumer fills the ring the source drops the oldest block at the device edge
@@ -751,7 +796,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   writes today. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_a_block_read_off_the_wire_casts_to_an_audio_block -->
 - **DECIDED** — An audio input port may declare a window contract — rate, channels,
-  dtype, window size, hop — beside its delivery profile (audio declares `lossless`):
+  dtype, window size, hop — beside its delivery profile (audio declares `ordered`):
   the engine resamples, mixes down, and frames natively so `process()` receives
   exact-size timestamped blocks matching the declaration. Resampling is an always-on
   engine stage, never a user processor. Feature extraction (mel, MFCC) is not engine
