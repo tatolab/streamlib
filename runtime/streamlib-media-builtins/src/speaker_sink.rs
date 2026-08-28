@@ -472,7 +472,7 @@ mod tests {
         SilentNullAudioDeviceBackend,
     };
 
-    use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLines};
+    use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLogLineCounts};
     use crate::worker_thread_test_support::a_thread_that_finishes_within;
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
@@ -809,7 +809,7 @@ mod tests {
             "the PipeWire stream stopped serving its device: node destroyed",
         ));
 
-        let lines = Arc::new(EmittedLines::default());
+        let lines = Arc::new(EmittedLogLineCounts::default());
         let draining = std::thread::spawn({
             let samples_awaiting_playback = Arc::clone(&samples_awaiting_playback);
             let is_draining = Arc::clone(&is_draining);

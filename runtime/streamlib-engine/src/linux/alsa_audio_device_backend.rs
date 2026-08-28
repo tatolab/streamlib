@@ -1100,6 +1100,25 @@ impl AlsaDeviceThreadExit {
     }
 }
 
+/// What a run of silent waits long enough to give up on actually means.
+///
+/// A wait blocks for up to `DEVICE_WAIT_TIMEOUT_MS`, so a stop can be requested
+/// after the loop last read the flag and before the silence reaches its limit.
+/// The stop outranks the silence: an owner that asked to stop and was told its
+/// device had failed could no longer tell a dead microphone from one it
+/// switched off, which is the single distinction this seam exists to make.
+fn exit_for_a_device_that_delivered_nothing(
+    stop_was_requested: bool,
+    consecutive_silent_waits: u32,
+) -> AlsaDeviceThreadExit {
+    if stop_was_requested {
+        return AlsaDeviceThreadExit::StopThatWasAskedFor;
+    }
+    AlsaDeviceThreadExit::DeviceWentQuiet {
+        consecutive_silent_waits,
+    }
+}
+
 /// Log why a device thread stopped and record it where the stream's owner can
 /// read it.
 ///
@@ -1194,9 +1213,10 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
             Ok(DevicePeriodReadiness::NothingYet) => {
                 consecutive_silent_waits += 1;
                 if consecutive_silent_waits >= CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
-                    break AlsaDeviceThreadExit::DeviceWentQuiet {
+                    break exit_for_a_device_that_delivered_nothing(
+                        stop_requested.load(Ordering::Acquire),
                         consecutive_silent_waits,
-                    };
+                    );
                 }
                 continue;
             }
@@ -1541,9 +1561,10 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
             Ok(DevicePeriodReadiness::NothingYet) => {
                 consecutive_silent_waits += 1;
                 if consecutive_silent_waits >= CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
-                    break AlsaDeviceThreadExit::DeviceWentQuiet {
+                    break exit_for_a_device_that_delivered_nothing(
+                        stop_requested.load(Ordering::Acquire),
                         consecutive_silent_waits,
-                    };
+                    );
                 }
                 continue;
             }
@@ -1840,6 +1861,36 @@ fn monotonic_now_ns() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The clause the whole seam turns on, at the one place it can be lost: a
+    /// stop requested during the final wait is not the device failing.
+    ///
+    /// Mental revert: read the flag before the wait only, and a graph shutting
+    /// down while its microphone happens to be quiet reports a device failure
+    /// that never happened.
+    #[test]
+    fn a_stop_arriving_during_the_last_silent_wait_outranks_the_silence() {
+        assert!(
+            matches!(
+                exit_for_a_device_that_delivered_nothing(
+                    true,
+                    CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP
+                ),
+                AlsaDeviceThreadExit::StopThatWasAskedFor
+            ),
+            "a stop the owner asked for was reported as the device going quiet"
+        );
+        assert!(
+            matches!(
+                exit_for_a_device_that_delivered_nothing(
+                    false,
+                    CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP
+                ),
+                AlsaDeviceThreadExit::DeviceWentQuiet { .. }
+            ),
+            "a device that really did go quiet has to still be reported as one"
+        );
+    }
 
     /// A stop the owner asked for is not a failure, and this is the assertion
     /// that keeps it that way: reported as one, the signal would fire on every

@@ -12,18 +12,18 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// How many lines were emitted at each level a built-in uses, so a test can
+/// How many lines a built-in emitted at each level it uses, so a test can
 /// hold the log rate itself rather than a predicate the log site is free to
 /// ignore — and can tell the two failure paths apart.
 #[derive(Default)]
-pub(crate) struct EmittedLines {
+pub(crate) struct EmittedLogLineCounts {
     pub(crate) warnings: AtomicU64,
     pub(crate) errors: AtomicU64,
 }
 
 /// A subscriber that counts lines and keeps none, installed for the length of
 /// one `tracing::subscriber::with_default` block.
-pub(crate) struct CountingTracingSubscriber(pub(crate) Arc<EmittedLines>);
+pub(crate) struct CountingTracingSubscriber(pub(crate) Arc<EmittedLogLineCounts>);
 
 impl tracing::Subscriber for CountingTracingSubscriber {
     fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {

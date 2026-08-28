@@ -405,7 +405,7 @@ mod tests {
         SilentNullAudioDeviceBackend,
     };
 
-    use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLines};
+    use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLogLineCounts};
     use crate::worker_thread_test_support::a_thread_that_finishes_within;
 
     /// Generous next to the loop's own 100 ms poll, so a busy machine cannot
@@ -631,7 +631,7 @@ mod tests {
         let published_block_counter = AtomicU64::new(0);
         let mut write_failures =
             ConsecutiveFailureReportSchedule::reporting_every(FAILED_WRITES_BETWEEN_REPORTS);
-        let lines = Arc::new(EmittedLines::default());
+        let lines = Arc::new(EmittedLogLineCounts::default());
 
         tracing::subscriber::with_default(CountingTracingSubscriber(Arc::clone(&lines)), || {
             for _ in 0..1000 {
@@ -698,7 +698,7 @@ mod tests {
             "the ALSA capture device delivered nothing for 25 consecutive waits",
         ));
 
-        let lines = Arc::new(EmittedLines::default());
+        let lines = Arc::new(EmittedLogLineCounts::default());
         let publishing = std::thread::spawn({
             let hand_off_ring = Arc::clone(&hand_off_ring);
             let is_publishing = Arc::clone(&is_publishing);
