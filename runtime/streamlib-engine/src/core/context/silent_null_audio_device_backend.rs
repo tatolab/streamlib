@@ -17,7 +17,8 @@ use parking_lot::Mutex;
 use super::audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff,
 };
 use super::{AudioTickContext, SharedAudioClock};
 use crate::core::{Error, Result};
@@ -117,6 +118,7 @@ struct SilentNullAudioCaptureStreamPacing {
 struct SilentNullAudioCaptureStream {
     pacing_clock: SharedAudioClock,
     capture_stream_format: AudioStreamFormat,
+    liveness_report: AudioStreamLivenessReport,
     pacing: Arc<Mutex<SilentNullAudioCaptureStreamPacing>>,
 }
 
@@ -148,6 +150,7 @@ impl SilentNullAudioCaptureStream {
         Self {
             pacing_clock,
             capture_stream_format,
+            liveness_report: AudioStreamLivenessReport::of_a_stream_that_cannot_fail(),
             pacing,
         }
     }
@@ -156,6 +159,19 @@ impl SilentNullAudioCaptureStream {
 impl AudioCaptureStream for SilentNullAudioCaptureStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.capture_stream_format
+    }
+
+    /// A stream paced by a timer against no device has nothing that can stop
+    /// serving it, so this answers "still live" for the whole of its life.
+    /// That is the arm's part of the seam's contract rather than an omission:
+    /// an owner writes one piece of code and it means the same thing in a
+    /// container as it does on a workstation.
+    ///
+    /// Cloned from a field rather than minted per call, like every other arm:
+    /// two callers have to be looking at one report, and satisfying that by
+    /// having nothing to report would make it true by luck.
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        self.liveness_report.clone()
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
@@ -244,6 +260,7 @@ struct SilentNullAudioPlaybackStreamPacing {
 struct SilentNullAudioPlaybackStream {
     pacing_clock: SharedAudioClock,
     playback_stream_format: AudioStreamFormat,
+    liveness_report: AudioStreamLivenessReport,
     pacing: Arc<Mutex<SilentNullAudioPlaybackStreamPacing>>,
 }
 
@@ -273,6 +290,7 @@ impl SilentNullAudioPlaybackStream {
         Self {
             pacing_clock,
             playback_stream_format,
+            liveness_report: AudioStreamLivenessReport::of_a_stream_that_cannot_fail(),
             pacing,
         }
     }
@@ -281,6 +299,19 @@ impl SilentNullAudioPlaybackStream {
 impl AudioPlaybackStream for SilentNullAudioPlaybackStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.playback_stream_format
+    }
+
+    /// A stream paced by a timer against no device has nothing that can stop
+    /// serving it, so this answers "still live" for the whole of its life.
+    /// That is the arm's part of the seam's contract rather than an omission:
+    /// an owner writes one piece of code and it means the same thing in a
+    /// container as it does on a workstation.
+    ///
+    /// Cloned from a field rather than minted per call, like every other arm:
+    /// two callers have to be looking at one report, and satisfying that by
+    /// having nothing to report would make it true by luck.
+    fn liveness_report(&self) -> AudioStreamLivenessReport {
+        self.liveness_report.clone()
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {

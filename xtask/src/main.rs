@@ -309,6 +309,29 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits",
                 "core::context::audio_device_backend",
                 "core::context::silent_null_audio_device_backend",
+                "linux::alsa_audio_device_backend::tests::a_thread_that_stopped_because_it_was_told_to_reports_no_failure",
+                "linux::alsa_audio_device_backend::tests::every_way_a_thread_dies_early_reaches_the_owner_naming_what_happened",
+                "linux::alsa_audio_device_backend::tests::a_stalled_device_is_described_by_what_that_direction_stopped_doing",
+                "linux::alsa_audio_device_backend::tests::a_stop_arriving_during_the_last_silent_wait_outranks_the_silence",
+                "linux::pipewire_audio_device_backend::tests::a_failure_the_shim_reports_lands_in_the_report_the_owner_holds",
+                "linux::pipewire_audio_device_backend::tests::a_failure_the_daemon_did_not_explain_is_still_reported_as_one",
+            ],
+        ),
+        // The deviceless arm's integration binaries, which the workflow runs
+        // beside the slice. `attribute_macro_test` aside, these are the only
+        // engine integration tests CI runs at all.
+        (
+            "the deviceless audio arm's integration binaries",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "silent_null_arm_plays_what_it_is_given",
+                "--test",
+                "silent_null_arm_captures_without_ever_dying",
             ],
         ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.

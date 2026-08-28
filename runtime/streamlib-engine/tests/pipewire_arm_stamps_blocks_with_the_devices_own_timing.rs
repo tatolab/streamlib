@@ -14,6 +14,7 @@ use streamlib_engine::core::context::{SharedAudioDeviceBackend, probe_audio_devi
 
 mod audio_arm_timestamp_contract;
 use audio_arm_timestamp_contract::{
+    assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one,
     assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off,
     assert_the_timestamp_contract_holds_on,
 };
@@ -54,4 +55,21 @@ fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
         return;
     };
     assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(backend.as_ref(), None);
+}
+
+/// A device that is delivering has not failed, and neither has one its owner
+/// stopped.
+#[test]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+)]
+fn a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one() {
+    let Some(backend) = pipewire_arm() else {
+        return;
+    };
+    assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one(
+        backend.as_ref(),
+        None,
+    );
 }

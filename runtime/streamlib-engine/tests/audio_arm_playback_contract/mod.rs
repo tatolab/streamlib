@@ -181,3 +181,50 @@ pub fn assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
 
     playback_stream.stop_requesting().expect("stop");
 }
+
+/// The seam's liveness claim in the playback direction, asserted the same two
+/// ways for the same reason its capture sibling states.
+pub fn assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(
+    backend: &dyn AudioDeviceBackend,
+    device_id: Option<String>,
+) {
+    let mut playback_stream = open_playback_stream_on(backend, device_id);
+    let liveness_report = playback_stream.liveness_report();
+    assert!(
+        liveness_report.failure_that_ended_the_stream().is_none(),
+        "a stream that has not started playing has not failed either"
+    );
+
+    let (observed_sender, observed_receiver) = mpsc::channel();
+    playback_stream
+        .start_requesting_from(Box::new(
+            move |requested: AudioBlockRequestedByDevice<'_>| {
+                requested.interleaved_sample_bytes_to_fill.fill(0);
+                let _ = observed_sender.send(());
+            },
+        ))
+        .expect("requesting starts");
+
+    for _ in 0..PERIODS_TO_OBSERVE {
+        observed_receiver
+            .recv_timeout(PLAYBACK_DEADLINE)
+            .expect("an open playback stream asks for samples");
+        assert_eq!(
+            liveness_report
+                .failure_that_ended_the_stream()
+                .map(|reason| reason.to_string()),
+            None,
+            "a stream that is asking for samples reported a failure, so the signal says \
+             nothing about whether a device is alive"
+        );
+    }
+
+    playback_stream.stop_requesting().expect("stop");
+    assert_eq!(
+        liveness_report
+            .failure_that_ended_the_stream()
+            .map(|reason| reason.to_string()),
+        None,
+        "stopping a stream deliberately was reported as the device failing"
+    );
+}

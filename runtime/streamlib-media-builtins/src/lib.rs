@@ -18,6 +18,8 @@ pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
 #[cfg(target_os = "linux")]
 pub mod display_window;
+#[cfg(test)]
+mod emitted_log_line_test_support;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
@@ -27,6 +29,8 @@ pub mod test_pattern_source;
 #[cfg(target_os = "linux")]
 pub mod v4l2_color;
 pub mod video_frame;
+#[cfg(test)]
+mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 #[cfg(target_os = "linux")]
