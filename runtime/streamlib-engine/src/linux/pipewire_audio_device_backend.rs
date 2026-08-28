@@ -21,8 +21,8 @@ use libloading::Library;
 
 use crate::core::context::{
     AudioCaptureSampleFormat, AudioCaptureStream, AudioCaptureStreamFormat,
-    AudioCaptureStreamRequest, AudioDeviceBackend, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff,
+    AudioCaptureStreamRequest, AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason,
+    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
 };
 use crate::core::{Error, Result};
 
@@ -165,7 +165,7 @@ unsafe impl Sync for PipeWireLibraryEntryPoints {}
 impl PipeWireLibraryEntryPoints {
     /// Open the library and resolve every entry point, or say which step failed
     /// in the words the demotion log line should carry.
-    fn resolve() -> std::result::Result<Self, PipeWireArmUnavailableReason> {
+    fn resolve() -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
         Self::resolve_from(PIPEWIRE_LIBRARY_SONAME)
     }
 
@@ -174,12 +174,14 @@ impl PipeWireLibraryEntryPoints {
     /// from a test without a PipeWire-shaped stub on disk.
     fn resolve_from(
         library_soname: &str,
-    ) -> std::result::Result<Self, PipeWireArmUnavailableReason> {
+    ) -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
         // SAFETY: `dlopen` of a soname. Loading an audio library can run its
         // initialisers, which is what the chain's probe-by-opening accepts;
         // nothing here dereferences anything until `get` succeeds.
         let library = unsafe { Library::new(library_soname) }.map_err(|e| {
-            PipeWireArmUnavailableReason(format!("{library_soname} could not be loaded: {e}"))
+            AudioDeviceBackendArmUnavailableReason::of(format!(
+                "{library_soname} could not be loaded: {e}"
+            ))
         })?;
 
         // SAFETY: both return pointers into the shim's own `static const`
@@ -196,7 +198,7 @@ impl PipeWireLibraryEntryPoints {
             // is kept alive by the `Library` this struct stores beside it.
             let symbol: libloading::Symbol<'_, unsafe extern "C" fn()> =
                 unsafe { library.get(name.to_bytes_with_nul()) }.map_err(|_| {
-                    PipeWireArmUnavailableReason(format!(
+                    AudioDeviceBackendArmUnavailableReason::of(format!(
                         "{library_soname} exports no {}, so this host's PipeWire is older \
                          than the 0.3.50 floor this arm binds against",
                         name.to_string_lossy()
@@ -243,20 +245,6 @@ impl ShimFailureText {
     }
 }
 
-/// Why the PipeWire arm cannot serve, in the words the demotion log line
-/// carries.
-///
-/// Not a core `Error`: nothing failed that a caller must handle. The chain has
-/// another arm, and this is what a reader needs in order to tell "the library
-/// was absent" from "no daemon answered".
-pub struct PipeWireArmUnavailableReason(String);
-
-impl std::fmt::Display for PipeWireArmUnavailableReason {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
 /// Audio over a PipeWire session, with libpipewire bound at runtime.
 pub struct PipeWireAudioDeviceBackend {
     entry_points: Arc<PipeWireLibraryEntryPoints>,
@@ -269,7 +257,7 @@ impl PipeWireAudioDeviceBackend {
     /// The connection round trip is the point: `libpipewire` present with no
     /// daemon behind it is the ordinary container case, and probing on presence
     /// alone would strand exactly the machines the chain exists to serve.
-    pub fn load_and_connect() -> std::result::Result<Self, PipeWireArmUnavailableReason> {
+    pub fn load_and_connect() -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
         let entry_points = PipeWireLibraryEntryPoints::resolve()?;
 
         // Process-global, and this runs inside the chain's one-shot probe, so
@@ -289,7 +277,9 @@ impl PipeWireAudioDeviceBackend {
             )
         } == 0;
         if !daemon_answered {
-            return Err(PipeWireArmUnavailableReason(failure_text.read()));
+            return Err(AudioDeviceBackendArmUnavailableReason::of(
+                failure_text.read(),
+            ));
         }
 
         // SAFETY: `pw_get_library_version` returns a pointer to libpipewire's
