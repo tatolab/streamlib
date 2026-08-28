@@ -15,11 +15,13 @@ pub(crate) mod audio_samples_awaiting_playback_ring;
 pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
 pub(crate) mod consecutive_failure_report_schedule;
+pub(crate) mod cumulative_count_report_threshold;
 #[cfg(target_os = "linux")]
 pub mod display_window;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
+pub(crate) mod processor_thread_join;
 pub mod speaker_sink;
 pub mod test_pattern_source;
 #[cfg(target_os = "linux")]

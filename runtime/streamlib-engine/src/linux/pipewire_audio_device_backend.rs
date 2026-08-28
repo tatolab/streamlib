@@ -476,6 +476,12 @@ struct PipeWireAudioCaptureStream {
     /// The hand-off the shim's callback context points at. Owned here so it
     /// outlives every delivery and is freed only once the shim has promised no
     /// further callback.
+    ///
+    /// **Declared after `opened`, and it must stay that way.** Rust drops
+    /// fields in declaration order, and `opened`'s drop is what closes the
+    /// stream and joins PipeWire's loop thread — so this box is freed only
+    /// once no callback can still hold a pointer into it. Move it above and
+    /// the loop thread reads freed memory, with nothing to say so.
     installed_hand_off: Option<Box<CapturedAudioBlockHandOff>>,
 }
 
@@ -558,6 +564,10 @@ struct PipeWireAudioPlaybackStream {
     /// The hand-off the shim's callback context points at. Owned here so it
     /// outlives every request and is freed only once the shim has promised no
     /// further callback.
+    ///
+    /// **Declared after `opened`, and it must stay that way** — the same
+    /// drop-order requirement its capture sibling carries, for the same
+    /// reason.
     installed_hand_off: Option<Box<AudioBlockForPlaybackHandOff>>,
 }
 

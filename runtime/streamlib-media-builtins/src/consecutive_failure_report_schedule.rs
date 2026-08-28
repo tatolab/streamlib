@@ -29,17 +29,18 @@ impl ConsecutiveFailureReportSchedule {
         }
     }
 
-    /// Fold one attempt into the run, and say whether this one is the one to
-    /// report.
+    /// End the current run of failures.
     ///
-    /// The reset lives here rather than at the caller's success path so that
-    /// the whole rule — a success ends a run, a failure extends it, and only
-    /// some failures are spoken about — is one testable thing.
-    pub fn note_attempt_and_say_whether_to_report(&mut self, succeeded: bool) -> bool {
-        if succeeded {
-            self.consecutive_failures = 0;
-            return false;
-        }
+    /// Named rather than folded into a boolean parameter on the failure path:
+    /// `note_attempt(true)` at a call site says nothing about which of the two
+    /// things it means, and this is read far more often than it is written.
+    pub fn note_success(&mut self) {
+        self.consecutive_failures = 0;
+    }
+
+    /// Extend the run of failures, and say whether this one is the one to
+    /// report.
+    pub fn note_failure_and_say_whether_to_report(&mut self) -> bool {
         self.consecutive_failures += 1;
         self.consecutive_failures == 1
             || self
@@ -71,7 +72,7 @@ mod tests {
     fn a_thousand_failures_are_reported_a_handful_of_times() {
         let mut schedule = a_schedule();
         let reported = (0..1000)
-            .filter(|_| schedule.note_attempt_and_say_whether_to_report(false))
+            .filter(|_| schedule.note_failure_and_say_whether_to_report())
             .count();
         assert_eq!(
             reported, 4,
@@ -86,17 +87,17 @@ mod tests {
     fn a_success_ends_the_run_and_the_next_failure_is_reported_again() {
         let mut schedule = a_schedule();
 
-        assert!(schedule.note_attempt_and_say_whether_to_report(false));
+        assert!(schedule.note_failure_and_say_whether_to_report());
         for _ in 0..50 {
-            schedule.note_attempt_and_say_whether_to_report(false);
+            schedule.note_failure_and_say_whether_to_report();
         }
         assert_eq!(schedule.consecutive_failures(), 51);
 
-        assert!(!schedule.note_attempt_and_say_whether_to_report(true));
+        schedule.note_success();
         assert_eq!(schedule.consecutive_failures(), 0, "a success ends the run");
 
         assert!(
-            schedule.note_attempt_and_say_whether_to_report(false),
+            schedule.note_failure_and_say_whether_to_report(),
             "the first failure of a new run is reported"
         );
     }
@@ -104,7 +105,7 @@ mod tests {
     #[test]
     fn nothing_has_failed_yet_so_there_is_nothing_to_report() {
         let mut schedule = a_schedule();
-        assert!(!schedule.note_attempt_and_say_whether_to_report(true));
+        schedule.note_success();
         assert_eq!(schedule.consecutive_failures(), 0);
     }
 
@@ -113,9 +114,9 @@ mod tests {
     #[test]
     fn a_period_of_zero_still_reports_periodically_rather_than_every_time() {
         let mut schedule = ConsecutiveFailureReportSchedule::reporting_every(0);
-        assert!(schedule.note_attempt_and_say_whether_to_report(false));
+        assert!(schedule.note_failure_and_say_whether_to_report());
         assert!(
-            schedule.note_attempt_and_say_whether_to_report(false),
+            schedule.note_failure_and_say_whether_to_report(),
             "every failure is a multiple of one, which is the floor a zero lands on"
         );
     }

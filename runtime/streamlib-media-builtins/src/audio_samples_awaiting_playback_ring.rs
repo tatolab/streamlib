@@ -37,7 +37,7 @@ use std::time::Duration;
 
 /// What the drain thread and the device callback share under one lock, so the
 /// drain's wait and the end of playback cannot race.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AudioSamplesAwaitingPlayback {
     interleaved_sample_bytes: VecDeque<u8>,
     playback_has_ended: bool,
@@ -48,6 +48,11 @@ struct AudioSamplesAwaitingPlayback {
 }
 
 /// What handing samples over produced.
+///
+/// `#[must_use]` because dropping it is a silent bug: a drain loop that ignores
+/// `PlaybackEnded` keeps reading its port and queueing into a ring nothing will
+/// ever take from again.
+#[must_use]
 #[derive(Debug, PartialEq, Eq)]
 pub enum AudioSamplesHandOffOutcome {
     /// Every byte is queued, in order, for the device to take.
@@ -85,10 +90,21 @@ impl AudioSamplesAwaitingPlaybackRing {
     /// A ring holding at most `byte_capacity` bytes of queued samples. A
     /// capacity of zero could never accept a sample, so one is the floor.
     pub fn with_byte_capacity(byte_capacity: usize) -> Self {
+        let byte_capacity = byte_capacity.max(1);
         Self {
-            samples_awaiting_playback: Mutex::new(AudioSamplesAwaitingPlayback::default()),
+            // Allocated up front rather than grown: every doubling would
+            // otherwise happen inside the lock the device callback contends
+            // on, and the growth window is exactly the first seconds of
+            // playback — the window the cushion exists to protect. The bound
+            // is enforced either way, so this reserves nothing the ring would
+            // not reach.
+            samples_awaiting_playback: Mutex::new(AudioSamplesAwaitingPlayback {
+                interleaved_sample_bytes: VecDeque::with_capacity(byte_capacity),
+                playback_has_ended: false,
+                the_cushion_has_filled: false,
+            }),
             room_was_made_or_playback_ended: Condvar::new(),
-            byte_capacity: byte_capacity.max(1),
+            byte_capacity,
             underrun_byte_count: AtomicU64::new(0),
             silence_played_before_the_cushion_filled_byte_count: AtomicU64::new(0),
         }
@@ -172,12 +188,20 @@ impl AudioSamplesAwaitingPlaybackRing {
             .interleaved_sample_bytes
             .len()
             .min(interleaved_sample_bytes_to_fill.len());
-        for byte in interleaved_sample_bytes_to_fill[..filled].iter_mut() {
-            *byte = awaiting
-                .interleaved_sample_bytes
-                .pop_front()
-                .expect("the queue holds at least this many bytes");
+        // Copied as the one or two contiguous runs a `VecDeque` actually is,
+        // rather than popped a byte at a time: the lock is held for a memcpy
+        // instead of eight thousand bounds-checked pops, and the drain thread
+        // is blocked on that same lock. `drain` of a front range advances the
+        // head, so it moves no element either.
+        {
+            let (oldest_run, newer_run) = awaiting.interleaved_sample_bytes.as_slices();
+            let from_oldest = oldest_run.len().min(filled);
+            interleaved_sample_bytes_to_fill[..from_oldest]
+                .copy_from_slice(&oldest_run[..from_oldest]);
+            interleaved_sample_bytes_to_fill[from_oldest..filled]
+                .copy_from_slice(&newer_run[..filled - from_oldest]);
         }
+        awaiting.interleaved_sample_bytes.drain(..filled);
         drop(awaiting);
         self.room_was_made_or_playback_ended.notify_one();
 
@@ -236,17 +260,16 @@ mod tests {
     ) -> AudioSamplesAwaitingPlaybackRing {
         let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(byte_capacity);
         let cushion = vec![0u8; device_period_bytes * DEVICE_PERIODS_QUEUED_BEFORE_PLAYBACK_BEGINS];
-        ring.hand_off_for_playback(&cushion, A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&cushion, A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
         let mut period = vec![0u8; device_period_bytes];
         while !ring.lock_samples_awaiting_playback().the_cushion_has_filled {
             ring.fill_one_device_period(&mut period);
         }
         // Drain whatever the cushion left, so a test starts from an empty queue.
-        while ring
+        while !ring
             .lock_samples_awaiting_playback()
             .interleaved_sample_bytes
-            .len()
-            > 0
+            .is_empty()
         {
             ring.fill_one_device_period(&mut period);
         }
@@ -277,8 +300,8 @@ mod tests {
     #[test]
     fn a_device_period_is_served_across_block_boundaries() {
         let ring = a_playing_ring(64, 4);
-        ring.hand_off_for_playback(&[1, 2, 3], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
-        ring.hand_off_for_playback(&[4, 5, 6], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[1, 2, 3], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[4, 5, 6], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
         let mut first_period = [0u8; 4];
         ring.fill_one_device_period(&mut first_period);
@@ -317,7 +340,7 @@ mod tests {
     #[test]
     fn a_partly_served_period_counts_only_the_silence_it_had_to_invent() {
         let ring = a_playing_ring(64, 5);
-        ring.hand_off_for_playback(&[7, 7, 7], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[7, 7, 7], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
         let mut period = [0xAAu8; 5];
         assert_eq!(ring.fill_one_device_period(&mut period), 2);
@@ -338,7 +361,7 @@ mod tests {
         let mut period = [0xAAu8; PERIOD_BYTES];
 
         // One period queued is not enough to start on.
-        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
         assert_eq!(ring.fill_one_device_period(&mut period), PERIOD_BYTES);
         assert_eq!(period, [0; PERIOD_BYTES], "the cushion is still filling");
         assert_eq!(
@@ -353,7 +376,7 @@ mod tests {
         );
 
         // The second period fills the cushion, so the first one queued plays.
-        ring.hand_off_for_playback(&[5, 6, 7, 8], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[5, 6, 7, 8], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
         assert_eq!(ring.fill_one_device_period(&mut period), 0);
         assert_eq!(period, [1, 2, 3, 4]);
     }
@@ -367,7 +390,7 @@ mod tests {
         let mut period = [0u8; 4];
 
         assert_eq!(ring.fill_one_device_period(&mut period), 4, "starved");
-        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
         assert_eq!(
             ring.fill_one_device_period(&mut period),
             0,
@@ -381,7 +404,7 @@ mod tests {
     #[test]
     fn a_ring_smaller_than_the_cushion_still_begins_playing() {
         let ring = AudioSamplesAwaitingPlaybackRing::with_byte_capacity(4);
-        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
         let mut period = [0u8; 4];
         assert_eq!(ring.fill_one_device_period(&mut period), 0);
@@ -395,7 +418,7 @@ mod tests {
     #[test]
     fn a_full_ring_holds_the_graph_rather_than_dropping_what_it_could_not_take() {
         let ring = Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(4));
-        ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[1, 2, 3, 4], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
         let handing_off = {
             let ring = Arc::clone(&ring);
@@ -460,7 +483,7 @@ mod tests {
     #[test]
     fn ending_playback_releases_a_drain_thread_waiting_for_room() {
         let ring = Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(2));
-        ring.hand_off_for_playback(&[1, 2], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
+        let _ = ring.hand_off_for_playback(&[1, 2], A_POLL_SHORT_ENOUGH_TO_LOOP_IN);
 
         let handing_off = {
             let ring = Arc::clone(&ring);

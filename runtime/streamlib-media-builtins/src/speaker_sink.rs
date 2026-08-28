@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
@@ -34,6 +34,8 @@ use crate::audio_samples_awaiting_playback_ring::{
     AudioSamplesAwaitingPlaybackRing, AudioSamplesHandOffOutcome,
 };
 use crate::consecutive_failure_report_schedule::ConsecutiveFailureReportSchedule;
+use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
+use crate::processor_thread_join::join_within_grace_or_detach;
 
 /// Device periods the ring holds before the drain thread waits for room.
 /// Matches the ring depth a sample-stream link itself carries
@@ -211,30 +213,29 @@ impl SpeakerSink::Processor {
             samples_awaiting_playback.end_playback();
         }
 
-        let Some(handle) = self.drain_thread_handle.take() else {
-            return;
-        };
-        let deadline = Instant::now() + DRAIN_THREAD_EXIT_GRACE;
-        while !handle.is_finished() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if handle.is_finished() {
-            let _ = handle.join();
-        } else {
-            tracing::warn!(
-                "SpeakerSink: drain thread did not exit within {:?}, detaching",
-                DRAIN_THREAD_EXIT_GRACE
+        if let Some(handle) = self.drain_thread_handle.take() {
+            join_within_grace_or_detach(
+                handle,
+                DRAIN_THREAD_EXIT_GRACE,
+                "SpeakerSink: the drain thread",
             );
         }
     }
 }
 
+/// Ten milliseconds of this format, in bytes — the device period this assumes
+/// where it has not yet been told one.
+///
+/// Written once because two callers depend on it moving together: the ring's
+/// size and the interval between underrun reports are both stated in periods.
+fn a_device_periods_worth_of_bytes(stream_format: AudioStreamFormat) -> usize {
+    stream_format.interleaved_byte_count_for(stream_format.sample_rate / 100)
+}
+
 /// How many bytes of queued samples sit between the graph and the device.
 fn ring_byte_capacity_for(stream_format: AudioStreamFormat) -> usize {
-    let device_period_bytes = stream_format
-        .interleaved_byte_count_for(stream_format.sample_rate / 100)
-        .max(A_DEVICE_PERIOD_WORTH_OF_BYTES);
-    device_period_bytes * DEVICE_PERIODS_THE_RING_HOLDS
+    a_device_periods_worth_of_bytes(stream_format).max(A_DEVICE_PERIOD_WORTH_OF_BYTES)
+        * DEVICE_PERIODS_THE_RING_HOLDS
 }
 
 /// The callback the playback stream asks for samples through.
@@ -331,11 +332,10 @@ fn drain_blocks_into_playback(
         ConsecutiveFailureReportSchedule::reporting_every(FAILED_READS_BETWEEN_REPORTS);
     let mut refused_blocks =
         ConsecutiveFailureReportSchedule::reporting_every(REFUSED_BLOCKS_BETWEEN_REPORTS);
-    let mut warn_at_underrun_byte_count = 1u64;
-    let underrun_bytes_between_warnings = stream_format
-        .interleaved_byte_count_for(stream_format.sample_rate / 100)
-        .max(1) as u64
-        * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS;
+    let mut underrun_reports = CumulativeCountReportThreshold::reporting_every(
+        a_device_periods_worth_of_bytes(stream_format).max(1) as u64
+            * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS,
+    );
 
     while is_draining.load(Ordering::Acquire) {
         if !inputs.has_data(AUDIO_INPUT_PORT) {
@@ -344,7 +344,7 @@ fn drain_blocks_into_playback(
         }
         let block: AudioBlock = match inputs.read(AUDIO_INPUT_PORT) {
             Ok(block) => {
-                read_failures.note_attempt_and_say_whether_to_report(true);
+                read_failures.note_success();
                 block
             }
             Err(e) => {
@@ -352,7 +352,7 @@ fn drain_blocks_into_playback(
                 // a payload that would not deserialize as an `AudioBlock`, or
                 // one another reader took first. The error says which; this
                 // must not guess.
-                if read_failures.note_attempt_and_say_whether_to_report(false) {
+                if read_failures.note_failure_and_say_whether_to_report() {
                     tracing::error!(
                         consecutive_failures = read_failures.consecutive_failures(),
                         error = %e,
@@ -365,11 +365,11 @@ fn drain_blocks_into_playback(
 
         let samples = match samples_of_a_block_the_device_can_play(&block, stream_format) {
             Ok(samples) => {
-                refused_blocks.note_attempt_and_say_whether_to_report(true);
+                refused_blocks.note_success();
                 samples
             }
             Err(refusal) => {
-                if refused_blocks.note_attempt_and_say_whether_to_report(false) {
+                if refused_blocks.note_failure_and_say_whether_to_report() {
                     tracing::error!(
                         refused_blocks = refused_blocks.consecutive_failures(),
                         "SpeakerSink: {refusal}"
@@ -391,21 +391,16 @@ fn drain_blocks_into_playback(
             break;
         }
         played_block_counter.fetch_add(1, Ordering::Relaxed);
-        warn_about_any_new_underruns(
-            samples_awaiting_playback,
-            &mut warn_at_underrun_byte_count,
-            underrun_bytes_between_warnings,
-        );
+        warn_about_any_new_underruns(samples_awaiting_playback, &mut underrun_reports);
     }
 }
 
 fn warn_about_any_new_underruns(
     samples_awaiting_playback: &AudioSamplesAwaitingPlaybackRing,
-    warn_at_underrun_byte_count: &mut u64,
-    underrun_bytes_between_warnings: u64,
+    underrun_reports: &mut CumulativeCountReportThreshold,
 ) {
     let underrun_byte_count = samples_awaiting_playback.underrun_byte_count();
-    if underrun_byte_count < *warn_at_underrun_byte_count {
+    if !underrun_reports.count_is_worth_reporting(underrun_byte_count) {
         return;
     }
     tracing::warn!(
@@ -413,13 +408,13 @@ fn warn_about_any_new_underruns(
         "SpeakerSink: the device was given silence because the graph had no samples ready. \
          The count is how much, and it is never filled without being counted."
     );
-    *warn_at_underrun_byte_count = underrun_byte_count + underrun_bytes_between_warnings;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
+    use std::time::Instant;
     use streamlib::sdk::context::{
         AudioClock, AudioClockConfig, AudioDeviceBackend, AudioTickCallback, AudioTickContext,
         SharedAudioClock, SilentNullAudioDeviceBackend,
@@ -594,7 +589,7 @@ mod tests {
         // after it, so this is about serving rather than about starting.
         let one_period_of_bytes =
             stream_format.interleaved_byte_count_for(TEST_QUANTUM_SAMPLES as u32);
-        samples_awaiting_playback
+        let _ = samples_awaiting_playback
             .hand_off_for_playback(&vec![0x7Fu8; one_period_of_bytes * 3], Duration::ZERO);
         for _ in 0..3 {
             clock.fire_one_tick();

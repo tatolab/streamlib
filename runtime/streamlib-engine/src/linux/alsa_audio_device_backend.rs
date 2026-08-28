@@ -579,6 +579,24 @@ impl AlsaStreamDirection {
             AlsaStreamDirection::Playback => PREFERRED_PLAYBACK_CHANNELS,
         }
     }
+
+    /// Where a reader can see the audio a break swallowed.
+    ///
+    /// The evidence differs by direction and the recovery is shared, so the
+    /// sentence travels with the direction: a capture stream publishes stamped
+    /// blocks whose gap is arithmetic, and a playback stream publishes nothing
+    /// at all — what it has is the count of silence the device was handed
+    /// instead.
+    fn where_the_missing_audio_shows_up(self) -> &'static str {
+        match self {
+            AlsaStreamDirection::Capture => {
+                "the gap is derivable from the timestamps of the blocks either side of it"
+            }
+            AlsaStreamDirection::Playback => {
+                "the speaker counts the silence the device was given in its place"
+            }
+        }
+    }
 }
 
 impl AudioDeviceBackend for AlsaAudioDeviceBackend {
@@ -1087,30 +1105,55 @@ fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
             sample_count: period_sample_count,
         });
 
-        // SAFETY: the buffer holds exactly a period at the negotiated format,
-        // and `pcm` is open and prepared; only this thread touches it. Blocking
-        // mode, so this returns once the device has taken every frame.
-        let written = unsafe {
-            (entry_points.snd_pcm_writei)(
-                opened_pcm.pcm,
-                one_period_interleaved_sample_bytes
-                    .as_ptr()
-                    .cast::<c_void>(),
-                SndPcmUframes::from(period_sample_count),
-            )
-        };
-        if written < 0 {
-            let error_code = c_int::try_from(written).unwrap_or(c_int::MIN);
-            if recover_from_a_transfer_failure(
-                entry_points,
-                opened_pcm.pcm,
-                &device_name,
-                error_code,
-                AlsaStreamDirection::Playback,
-            ) == AlsaTransferRecovery::StreamIsUnusable
-            {
-                return;
+        // Looped rather than written once. `snd_pcm_writei` may take fewer
+        // frames than it was offered even in blocking mode — a signal, or an
+        // underrun mid-write — and the samples it did not take are already out
+        // of the ring. Writing the remainder is what keeps this period from
+        // vanishing uncounted, which is the one thing this rung promises about
+        // a sample.
+        let mut frames_taken_by_the_device = 0u32;
+        while frames_taken_by_the_device < period_sample_count {
+            let offset_bytes =
+                playback_stream_format.interleaved_byte_count_for(frames_taken_by_the_device);
+            // SAFETY: the buffer holds exactly a period at the negotiated
+            // format and `offset_bytes` is inside it, so the pointer and the
+            // remaining frame count describe the same range; `pcm` is open and
+            // prepared, and only this thread touches it.
+            let written = unsafe {
+                (entry_points.snd_pcm_writei)(
+                    opened_pcm.pcm,
+                    one_period_interleaved_sample_bytes[offset_bytes..]
+                        .as_ptr()
+                        .cast::<c_void>(),
+                    SndPcmUframes::from(period_sample_count - frames_taken_by_the_device),
+                )
+            };
+            if written < 0 {
+                let error_code = c_int::try_from(written).unwrap_or(c_int::MIN);
+                if recover_from_a_transfer_failure(
+                    entry_points,
+                    opened_pcm.pcm,
+                    &device_name,
+                    error_code,
+                    AlsaStreamDirection::Playback,
+                ) == AlsaTransferRecovery::StreamIsUnusable
+                {
+                    return;
+                }
+                // Recovery reset the stream, so the rest of this period has
+                // nowhere to go — it is part of the gap the recovery already
+                // reported, not a second silent loss.
+                break;
             }
+            let Ok(written) = u32::try_from(written) else {
+                break;
+            };
+            if written == 0 {
+                // A device taking nothing while reporting success would spin
+                // this loop forever; the next wait is where it gets judged.
+                break;
+            }
+            frames_taken_by_the_device += written;
         }
     }
 }
@@ -1570,10 +1613,10 @@ fn recover_from_a_transfer_failure(
     if error_code == ALSA_BROKEN_PIPE || error_code == ALSA_SUSPENDED {
         tracing::warn!(
             device = %device_name,
-            "ALSA {} recovered from {} — the audio it covers is missing, and the gap is \
-             derivable from the timestamps of the blocks either side of it",
+            "ALSA {} recovered from {} — the audio it covers is missing, and {}",
             direction.as_word(),
-            entry_points.error_text(error_code)
+            entry_points.error_text(error_code),
+            direction.where_the_missing_audio_shows_up()
         );
     }
     AlsaTransferRecovery::TransferMayContinue

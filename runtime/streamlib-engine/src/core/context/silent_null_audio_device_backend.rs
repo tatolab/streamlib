@@ -305,10 +305,6 @@ fn ask_for_one_block_and_discard_it(
     tick: AudioTickContext,
 ) {
     let mut pacing = pacing.lock();
-    if pacing.hand_off.is_none() {
-        return;
-    }
-
     let sample_count = tick.samples_needed as u32;
     let quantum_byte_count = playback_stream_format.interleaved_byte_count_for(sample_count);
     if pacing.samples_asked_for_and_discarded.len() < quantum_byte_count {
@@ -317,13 +313,16 @@ fn ask_for_one_block_and_discard_it(
             .resize(quantum_byte_count, 0);
     }
 
+    // Destructured before the hand-off is tested, so "there is one" is what the
+    // binding says rather than something asserted a few lines later — a
+    // `panic!` on the audio clock's own thread is not a diagnosis anyone wants.
     let SilentNullAudioPlaybackStreamPacing {
         hand_off,
         samples_asked_for_and_discarded,
     } = &mut *pacing;
-    let hand_off = hand_off
-        .as_ref()
-        .expect("the hand-off was present at the top of this lock scope");
+    let Some(hand_off) = hand_off.as_ref() else {
+        return;
+    };
     hand_off(AudioBlockRequestedByDevice {
         interleaved_sample_bytes_to_fill: &mut samples_asked_for_and_discarded
             [..quantum_byte_count],

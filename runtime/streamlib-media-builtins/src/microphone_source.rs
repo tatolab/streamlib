@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
@@ -30,6 +30,8 @@ use crate::captured_audio_block_hand_off_ring::{
     NextCapturedAudioBlockToPublish,
 };
 use crate::consecutive_failure_report_schedule::ConsecutiveFailureReportSchedule;
+use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
+use crate::processor_thread_join::join_within_grace_or_detach;
 
 /// Blocks the hand-off ring holds before it starts dropping the oldest.
 /// Matches the ring depth a sample-stream link itself carries
@@ -189,19 +191,11 @@ impl MicrophoneSource::Processor {
             hand_off_ring.end_hand_off();
         }
 
-        let Some(handle) = self.publish_thread_handle.take() else {
-            return;
-        };
-        let deadline = Instant::now() + PUBLISH_THREAD_EXIT_GRACE;
-        while !handle.is_finished() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        if handle.is_finished() {
-            let _ = handle.join();
-        } else {
-            tracing::warn!(
-                "MicrophoneSource: publishing thread did not exit within {:?}, detaching",
-                PUBLISH_THREAD_EXIT_GRACE
+        if let Some(handle) = self.publish_thread_handle.take() {
+            join_within_grace_or_detach(
+                handle,
+                PUBLISH_THREAD_EXIT_GRACE,
+                "MicrophoneSource: the publishing thread",
             );
         }
     }
@@ -232,7 +226,8 @@ fn publish_captured_blocks(
     outputs: &OutputWriter,
     stream_format: AudioStreamFormat,
 ) {
-    let mut warn_at_dropped_block_count = 1u64;
+    let mut dropped_block_reports =
+        CumulativeCountReportThreshold::reporting_every(DROPPED_BLOCKS_BETWEEN_WARNINGS);
     let mut write_failures =
         ConsecutiveFailureReportSchedule::reporting_every(FAILED_WRITES_BETWEEN_REPORTS);
     while is_publishing.load(Ordering::Acquire) {
@@ -245,7 +240,7 @@ fn publish_captured_blocks(
                     &mut write_failures,
                     stream_format,
                 );
-                warn_about_any_new_drops(hand_off_ring, &mut warn_at_dropped_block_count);
+                warn_about_any_new_drops(hand_off_ring, &mut dropped_block_reports);
             }
             NextCapturedAudioBlockToPublish::WaitTimedOut => {}
             NextCapturedAudioBlockToPublish::HandOffEnded => break,
@@ -266,7 +261,7 @@ fn publish_captured_blocks(
             stream_format,
         );
     }
-    warn_about_any_new_drops(hand_off_ring, &mut warn_at_dropped_block_count);
+    warn_about_any_new_drops(hand_off_ring, &mut dropped_block_reports);
 }
 
 fn publish_one_captured_block(
@@ -280,7 +275,7 @@ fn publish_one_captured_block(
     // into a port with no link is thousands of allocations a second on the
     // publishing thread for a value nothing can receive.
     if !outputs.has_port(AUDIO_OUTPUT_PORT) {
-        if write_failures.note_attempt_and_say_whether_to_report(false) {
+        if write_failures.note_failure_and_say_whether_to_report() {
             // A warning rather than an error: connect() is a runtime operation,
             // so an output with no link yet is a state the engine permits
             // rather than a defect. What makes it worth saying at all is that
@@ -307,7 +302,7 @@ fn publish_one_captured_block(
         // consumer, a serialize failure. The error says which; this must not
         // guess, because naming the wrong cause sends a reader after a link
         // that is already there.
-        if write_failures.note_attempt_and_say_whether_to_report(false) {
+        if write_failures.note_failure_and_say_whether_to_report() {
             tracing::error!(
                 consecutive_failures = write_failures.consecutive_failures(),
                 error = %e,
@@ -316,16 +311,16 @@ fn publish_one_captured_block(
         }
         return;
     }
-    write_failures.note_attempt_and_say_whether_to_report(true);
+    write_failures.note_success();
     published_block_counter.fetch_add(1, Ordering::Relaxed);
 }
 
 fn warn_about_any_new_drops(
     hand_off_ring: &CapturedAudioBlockHandOffRing,
-    warn_at_dropped_block_count: &mut u64,
+    dropped_block_reports: &mut CumulativeCountReportThreshold,
 ) {
     let dropped_block_count = hand_off_ring.dropped_block_count();
-    if dropped_block_count < *warn_at_dropped_block_count {
+    if !dropped_block_reports.count_is_worth_reporting(dropped_block_count) {
         return;
     }
     tracing::warn!(
@@ -334,7 +329,6 @@ fn warn_about_any_new_drops(
          up. The gap is derivable from the timestamps and sample counts of the blocks \
          either side of it."
     );
-    *warn_at_dropped_block_count = dropped_block_count + DROPPED_BLOCKS_BETWEEN_WARNINGS;
 }
 
 /// How a captured stream's scalar encoding is spelled on the wire.
@@ -366,6 +360,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::time::Instant;
     use streamlib::sdk::context::{
         AudioClock, AudioClockConfig, AudioDeviceBackend, AudioTickCallback, AudioTickContext,
         SharedAudioClock, SilentNullAudioDeviceBackend,
