@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.16](https://github.com/tatolab/streamlib/compare/v0.18.15...v0.18.16) (2026-08-28)
+
+
+### Features
+
+* **engine:** an audio stream that dies tells its owner, not just the log ([#2018](https://github.com/tatolab/streamlib/issues/2018)) ([a7b6c1a](https://github.com/tatolab/streamlib/commit/a7b6c1a4aaffae611bc3d6192027a726146dcb2d))
+
 ## [0.18.15](https://github.com/tatolab/streamlib/compare/v0.18.14...v0.18.15) (2026-08-28)
 
 
