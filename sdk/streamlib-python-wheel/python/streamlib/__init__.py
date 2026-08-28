@@ -34,6 +34,7 @@ from ._engine import CameraSource as CameraSource
 from ._engine import DisplayWindow as DisplayWindow
 from ._engine import MicrophoneSource as MicrophoneSource
 from ._engine import Runtime as _NativeRuntime
+from ._engine import SpeakerSink as SpeakerSink
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
 from ._engine import TestPatternSource as TestPatternSource
@@ -90,6 +91,7 @@ __all__ = [
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
+    "SpeakerSink",
     "TestPatternSource",
     "VideoFrame",
     "clock",

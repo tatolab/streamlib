@@ -46,6 +46,11 @@ pub(crate) struct PythonDisplayWindowBlock;
 #[pyclass(name = "MicrophoneSource", module = "streamlib", frozen)]
 pub(crate) struct PythonMicrophoneSourceBlock;
 
+/// `streamlib.SpeakerSink` — audio playback on whichever backend the chain
+/// probed, discarding where none exists.
+#[pyclass(name = "SpeakerSink", module = "streamlib", frozen)]
+pub(crate) struct PythonSpeakerSinkBlock;
+
 /// Resolve a Python object to a native built-in's class import path, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins
@@ -86,6 +91,11 @@ pub(crate) fn native_builtin_class_import_path(
     if processor_class.is(python.get_type::<PythonMicrophoneSourceBlock>()) {
         return Ok(Some(
             streamlib_media_builtins::MicrophoneSource::Processor::processor_class_import_path(),
+        ));
+    }
+    if processor_class.is(python.get_type::<PythonSpeakerSinkBlock>()) {
+        return Ok(Some(
+            streamlib_media_builtins::SpeakerSink::Processor::processor_class_import_path(),
         ));
     }
     Ok(None)

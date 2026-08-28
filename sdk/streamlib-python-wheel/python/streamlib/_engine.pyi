@@ -52,6 +52,7 @@ __all__ = [
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
+    "SpeakerSink",
     "TestPatternSource",
     "TestBagCollector",
     "TestBagFeeder",
@@ -106,6 +107,28 @@ class MicrophoneSource:
     cannot open raises rather than landing on a different device.
 
     Blocks arrive on the `audio` output as bags `streamlib.AudioBlock` casts.
+    """
+
+@final
+class SpeakerSink:
+    """Native built-in block: plays timestamped blocks of interleaved samples.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(SpeakerSink, config={"device_id": "..."})`); it is never
+    instantiated and its device callback never enters the interpreter.
+
+    The backend chain is probed once per process with no configuration dial;
+    where no audio backend exists at all the samples are discarded, so a
+    pipeline authored on a workstation runs unchanged in a headless container.
+    Omitting `device_id` takes the backend's default device; naming one the
+    backend cannot open raises rather than landing on a different device.
+
+    Blocks to play arrive on the `audio` input as bags in the
+    `streamlib.AudioBlock` shape. The device's rate, channel count and dtype
+    are what it plays: a block declaring anything else is refused by name
+    rather than resampled, because no resampler exists yet. The device is
+    never left waiting on the graph — a period the graph had no samples for is
+    silence, and the count of it is reported.
     """
 
 @final
