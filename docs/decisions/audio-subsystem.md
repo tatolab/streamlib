@@ -71,9 +71,15 @@ framework re-solves this privately (openWakeWord buffers internally, Pipecat chu
 transports); none puts window/hop in the port contract. Declaring rate / channels /
 dtype / window / hop on the input port — engine-inserted resample, mixdown, framing —
 is the game-engine abstraction the owner asked for and composes with the decided
-port-local channel-policy grammar; the existing `lossless` delivery profile covers
-audio's no-silent-drops requirement (drops corrupt ASR silently; `latest` is wrong for
-audio). Feature extraction stays out because every model ships its own extractor tuned
+port-local channel-policy grammar.
+
+> ~~the existing `lossless` delivery profile covers audio's no-silent-drops requirement
+> (drops corrupt ASR silently; `latest` is wrong for audio).~~ — Superseded 2026-08-28 by
+> `delivery-profile-vocabulary.md`. `lossless` never delivered that guarantee and is
+> retired; audio declares `ordered`, and the no-silent-drops requirement is met by
+> counting every drop and surfacing it, not by a profile that promises none.
+
+Order still matters for audio and `newest` is still wrong for it. Feature extraction stays out because every model ships its own extractor tuned
 to its training statistics (Whisper's `(log_mel+4)/4`, AST's AudioSet mean/std) — a
 generic mel block would be subtly wrong for each.
 

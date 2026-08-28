@@ -64,9 +64,16 @@ itself.
 **Link**: one wired connection, output port → input port, carrying bags. _Avoid_:
 "edge", "connection", "pipe".
 
-**Delivery profile**: the consuming input port's policy for which bags it receives —
-`latest`, `every_sample`, or `lossless`. Declared explicitly on every input port; there
-is no default. _Avoid_: "QoS", "channel mode".
+**Delivery profile**: the consuming input port's read policy — `newest` (drain to the
+most recent bag) or `ordered` (receive bags in publication order). Declared explicitly on
+every input port; there is no default. Names a read policy only: both drop under
+pressure, and depth and overflow are engine-chosen. _Avoid_: "QoS", "channel mode",
+"queue"; and never a word implying guaranteed delivery — `lossless` and `every_sample`
+are retired for exactly that (see [[delivery-profile-vocabulary]]).
+
+**Dropped bag**: a bag a port discarded under pressure, counted by that port and reported
+in `graph`. Distinct from a **tap's** `dropped_bags`, which counts what the tap's own
+reserved subscriber slot missed — different subject, and the two are never summed.
 
 **Monotonic clock**: the machine's boot-relative clock (`CLOCK_MONOTONIC` /
 `mach_absolute_time`) — the epoch of every data-plane timestamp and of the V4L2 and ALSA
