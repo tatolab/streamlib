@@ -29,7 +29,8 @@ so their reports are directly comparable.
   the signal into the same null sink and `MicrophoneSource` captures it back off that sink's
   monitor, so both ends are StreamLib. It also runs the block-level channel contract on the
   microphone's own port on the way through (cadence, timestamp continuity, a frame the engine did
-  not re-stamp), and fails on that before it ever measures the signal.
+  not re-stamp), and fails on that before it ever measures the signal. `--count` is how many bags
+  that intermediate tap collects, not anything about the signal; `--port` moves the control plane.
 
 **Through-engine is the default.** It is the question a PR usually has. Run rig-only alone only
 when the engine will not build, or when you are checking the machine rather than the change.
@@ -73,18 +74,33 @@ PYTHON="$PWD/sdk/streamlib-python-wheel/.venv/bin/python" \
 wrong directory and dies there. It defaults to `python3`, which only works if that interpreter can
 already `import streamlib` — the wheel venv is the reliable answer.
 
-**The through-engine fixture hosts its control plane on port 9077, and a busy 9077 does not fail
-the run — it misdirects it.** The API server walks up to ten ports looking for a free one and says
+**The through-engine fixture hosts its control plane on port 9077, and a busy 9077 misdirects the
+run rather than failing it.** The API server walks up to ten ports looking for a free one and says
 so only at `INFO` (`Port 9077 in use, bound to 9078 instead`), while the fixture keeps asking the
-port it was given. What you see is `no control plane reachable at http://127.0.0.1:9077
-(Connection refused)` and a channel contract that failed, from a graph that is running perfectly.
-Free the port or pass `--port`; `node.log` in the artifacts directory is where the run says which
-one it took.
+port it was given. So the node is alive and serving — somewhere else.
+
+**Budget for it: a busy port stalls the run for up to half an hour before it gives up.** The
+startup poll is 60 attempts at a call bounded by `CONTROL_VERB_TIMEOUT_SECONDS = 30.0`, so a port
+held by something that accepts and never answers burns the full 30 s per attempt. Check the port is
+free before starting, or pass `--port`.
+
+What it looks like depends on what holds the port, and none of these is `Connection refused`:
+
+- **A socket that accepts and never answers** → `no control plane reachable at
+  http://127.0.0.1:9077 (timed out)`.
+- **A foreign HTTP server** → an HTTP status rather than a refusal, e.g. `answered 404`.
+- **A second StreamLib node** → the query succeeds against the *wrong* graph, so the run dies at
+  `no processor named MicrophoneSource in the running graph`.
+
+**`Connection refused` on 9077 means the opposite — nothing is listening there at all**, so the
+node died or never served. That is a real failure and must never be waved away as a port
+collision. `node.log` is where the run says which port it took, and whether it got that far.
 
 ## Reading what came back
 
-**Exit status is the verdict** and needs no parsing: `0` pass, `1` fail, `77` cannot-run, `2` bad
-arguments, `130` interrupted.
+**Exit status is the verdict** and needs no parsing: `0` pass, `1` fail, `77` cannot-run, `130`
+interrupted. The through-engine fixture adds `2` for a bad argument; the rig-only one has no
+argument parser, so it takes its output directory positionally and cannot report that.
 
 **stdout is the report JSON and nothing else**, so it pipes. Progress goes to stderr — and on a
 through-engine run the *channel* report JSON goes to stderr as well, because that verdict is an
@@ -93,8 +109,21 @@ intermediate one. Don't mistake it for the signal report on stdout.
 **Artifacts land in a `mktemp` directory named on the last `artifacts: <dir>` line of stderr.** A
 through-engine run prints two: the first is the nested channel tap's directory, the last is the
 loopback's own. Take the last one — that is where `captured.wav`, `spectrogram.png` and `node.log`
-are. Only the rig-only fixture takes an output directory as an argument and tees a `report.json`
-into it; the through-engine one keeps its report on stdout alone, so capture it yourself.
+are.
+
+**On a failing run there is no `artifacts:` line at all.** Both fixtures echo it as their final
+statement, after the analyser, so every earlier `exit 1` — including the channel-contract failure,
+which is the most common through-engine failure there is — names no directory. That is exactly the
+run whose `node.log` you need, so find it by age instead:
+
+```bash
+ls -dt /tmp/streamlib-audio-loopback-* | head -1
+```
+
+The rig-only fixture is the only one that takes an output directory as an argument, and it tees a
+`report.json` into it; the nested channel tap writes one into its own directory too. The
+through-engine fixture's own signal report is the one that exists on stdout alone — capture it
+yourself.
 
 The fields that matter when reading a failure — the analyser has already judged them, so these are
 for saying *what* broke, not *whether*:
@@ -115,6 +144,10 @@ symbol stacks; a dropped block shows as a vertical broadband stripe cutting thro
 which is the splice. Describing it is what tells a reviewer you looked — "looks fine" is banned
 here for the same reason it is in `verify-live`.
 
+The image says *that* audio went missing, not *which way*: a hole and a splice both draw the same
+stripe. The `failed` list is what separates them — a splice moves the symbol intervals, a hole
+does not. So report both, never the picture alone.
+
 ## A failing through-engine run gets the rig fixture before it gets reported
 
 "The rig is broken" and "the rig is fine, the engine broke it" are different answers with
@@ -124,8 +157,8 @@ So on any **non-zero, non-77** exit from `verify_audio_loopback.sh`, run `e2e_au
 before reporting anything, and report the pair:
 
 - rig-only **passes** → the rig is sound, so the failure is on the StreamLib side of the loop.
-  Read `node.log` before calling it a regression: a port collision presents as exactly this, and
-  so does anything else that stopped the fixture reaching a graph that ran fine.
+  Read `node.log` before calling it a regression — a run that never reached the graph it meant to
+  measure fails here too, and the port section above is how to tell the two apart.
 - rig-only **fails too** → the machine's audio path is broken. Nothing has been proven about the
   engine either way, so say that rather than blaming the change.
 - rig-only **skips (77)** → the through-engine failure is uninterpretable; report cannot-run.
@@ -187,7 +220,6 @@ without the label invites it to be read as though it were.
 - **Therefore**: the failure is on the StreamLib side | the machine's audio is broken |
   uninterpretable
 - What `node.log` said: <the run's own explanation, or "nothing that explains it">
-
 
 #### Outcome
 
