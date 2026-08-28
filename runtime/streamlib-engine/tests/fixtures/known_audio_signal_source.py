@@ -14,12 +14,16 @@ discovered because there is no resampler on this rung and `SpeakerSink` refuses
 what its device cannot play — so a mismatch has to be a named failure in the
 run's log, not something this quietly adapts to.
 
-Published faster than real time on purpose. The speaker's ring fills, the drain
-thread waits for room, its `lossless` input stops being read, and this
-processor's own write blocks — so the device paces the whole chain and the
-signal reaches it gapless. Publishing at wall-clock cadence instead would leave
-every scheduling hiccup as a hole in the audio, which is exactly what the
-analysis is built to catch.
+Paced to stay a bounded lead ahead of the monotonic clock rather than published
+as fast as the loop runs. A lead is what absorbs a scheduling hiccup, and the
+bound is what keeps the producer from racing: a burst larger than the consumer's
+mailbox is lost there — `PortMailbox::push` drops its oldest to make room, which
+a port's `lossless` profile does not prevent — and the lost audio is a hole the
+analysis would then report as this fixture's failure rather than the transport's.
+
+The lead is monotonic by construction: it compares the duration of what has been
+published against elapsed monotonic time, so it never reads a wall clock and
+never sleeps.
 """
 
 import numpy
@@ -37,6 +41,11 @@ DTYPE = "f32"
 # re-slices whatever arrives into device periods, so a block is only a unit of
 # publishing.
 SAMPLES_PER_BLOCK = SAMPLE_RATE // 100
+
+# How far ahead of real time the publishing runs. Enough that a late `process()`
+# call costs the speaker nothing, and well inside the sixteen-block mailbox the
+# consumer's port carries, so no block is dropped between the two.
+PUBLISHING_LEAD_NS = 100_000_000
 
 # Silence after the signal, so the capture has an unambiguous tail to end on
 # rather than the loop's next lead-in.
@@ -65,11 +74,18 @@ class KnownAudioSignalSource:
         self._samples_published = 0
         self._first_sample_timestamp_ns = None
 
+    def _is_far_enough_ahead(self) -> bool:
+        published_ns = self._samples_published * 1_000_000_000 // SAMPLE_RATE
+        elapsed_ns = monotonic_now_ns() - self._first_sample_timestamp_ns
+        return published_ns - elapsed_ns > PUBLISHING_LEAD_NS
+
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         if self._samples_published >= len(self._signal):
             return
         if self._first_sample_timestamp_ns is None:
             self._first_sample_timestamp_ns = monotonic_now_ns()
+        elif self._is_far_enough_ahead():
+            return
 
         at = self._samples_published
         block = self._signal[at : at + SAMPLES_PER_BLOCK]

@@ -21,10 +21,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 
-# The signal occupies ~2.8 s and the source publishes a second of silence after
-# it. At the PipeWire arm's ~21 ms quantum that is roughly 180 blocks, so this
-# covers the whole signal with room for the capture to have started late.
-BAG_COUNT=260
+# What the block-level tap asks for. Bounded by the control plane's own 500 ms
+# sample window in practice, which is why the signal itself is measured off the
+# waveform the node writes rather than off the tap.
+BAG_COUNT=64
 CONTROL_PORT="${CONTROL_PORT:-9077}"
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -56,10 +56,12 @@ trap 'exit 130' INT TERM
 
 SINK="$("$HERE/virtual_audio_device.sh" start)" || exit 1
 
+CAPTURED_WAVEFORM="$OUTPUT_DIR/captured.wav"
 echo "starting the loopback node against $SINK" >&2
 (
     cd "$HERE" || exit 1
     STREAMLIB_AUDIO_SINK="$SINK" CONTROL_PORT="$CONTROL_PORT" \
+        STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
         "$PYTHON" audio_loopback_node.py
 ) >"$OUTPUT_DIR/node.log" 2>&1 &
 NODE_PID=$!
@@ -87,12 +89,38 @@ if grep -q "cannot be played on a device running at" "$OUTPUT_DIR/node.log"; the
     exit 1
 fi
 
-# The mic's own port, tapped: what comes back is what the sink's monitor
-# carried, which is what the speaker put there.
-"$HERE/verify_audio_channel.sh" MicrophoneSource \
+# First verdict: the block-level contract on the microphone's own port —
+# cadence, timestamp continuity, and a frame the engine did not re-stamp.
+if ! "$HERE/verify_audio_channel.sh" MicrophoneSource \
     --url "$CONTROL_URL" --count "$BAG_COUNT" --port audio \
-    --expect-frame-not-restamped
+    --expect-frame-not-restamped >&2; then
+    echo "ERROR: the microphone's channel failed its block-level contract" >&2
+    exit 1
+fi
+
+# Second verdict, and the one this fixture exists for: the signal itself. The
+# node writes what it captured once it has the whole thing.
+echo "waiting for the node to write what it captured" >&2
+for _ in $(seq 120); do
+    if grep -q "MARKER:WAVEFORM_WRITTEN" "$OUTPUT_DIR/node.log"; then
+        break
+    fi
+    if ! kill -0 "$NODE_PID" 2>/dev/null; then
+        echo "ERROR: the loopback node exited before writing its capture" >&2
+        tail -40 "$OUTPUT_DIR/node.log" >&2
+        exit 1
+    fi
+    sleep 0.5
+done
+if ! [ -s "$CAPTURED_WAVEFORM" ]; then
+    echo "ERROR: the node never wrote a capture to measure" >&2
+    tail -40 "$OUTPUT_DIR/node.log" >&2
+    exit 1
+fi
+
+"$PYTHON" "$HERE/known_audio_signal.py" analyse \
+    "$CAPTURED_WAVEFORM" "$OUTPUT_DIR/spectrogram.png"
 VERDICT=$?
 
-echo "node log: $OUTPUT_DIR/node.log" >&2
+echo "artifacts: $OUTPUT_DIR" >&2
 exit "$VERDICT"

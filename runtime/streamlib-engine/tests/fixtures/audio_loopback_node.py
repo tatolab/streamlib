@@ -11,16 +11,18 @@ The engine carries the audio in both directions: a Python processor publishes
 no StreamLib at all — so when this run fails and that one passes, the rig is
 sound and the engine is not.
 
-What consumes the microphone is a stub that discards: a channel's data service
-is created by `connect()`, so an unwired output port has nothing to tap. The
-tap reads what the *source* published, independently of what the consumer does
-with it.
+What consumes the microphone writes the capture out as one waveform, because
+that is the only way to measure the whole signal: `streamlib tap` collects
+inside a bounded 500 ms window, and the signal runs for nearly three seconds.
+The recorder is an ordinary consumer reading the microphone's port over a real
+link, so the tap still sees the same channel and can judge the block-level
+contract on it.
 """
 
 import os
 
 import streamlib
-from audio_channel_drain import AudioChannelDrain
+from captured_audio_waveform_recorder import CapturedAudioWaveformRecorder
 from known_audio_signal_source import KnownAudioSignalSource
 
 
@@ -37,8 +39,8 @@ def main() -> None:
     microphone = runtime.add(
         streamlib.MicrophoneSource, config={"device_id": f"{sink}.monitor"}
     )
-    drain = runtime.add(AudioChannelDrain)
-    runtime.connect(microphone.output("audio"), drain.input("audio_from_upstream"))
+    recorder = runtime.add(CapturedAudioWaveformRecorder)
+    runtime.connect(microphone.output("audio"), recorder.input("audio_from_upstream"))
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication.
