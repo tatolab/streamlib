@@ -102,7 +102,6 @@ pub use core::{
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
-    DEFAULT_SYNC_TOLERANCE_MS,
     Error,
     GlContext,
     GlTextureBinding,
@@ -128,13 +127,11 @@ pub use core::{
     TexturePoolDescriptor,
     TextureUsages,
     TimeContext,
-    are_synchronized,
     gl_constants,
     // Port marker traits and helpers for compile-time safe connections
     input,
     media_clock::MediaClock,
     output,
-    timestamp_delta_ms,
 };
 
 // GPU Backends - Metal and Vulkan
@@ -288,7 +285,6 @@ pub mod sdk {
     pub use crate::core::prelude;
     pub use crate::core::rhi;
     pub use crate::core::runtime;
-    pub use crate::core::sync;
     pub use crate::core::texture;
     pub use crate::core::utils;
 

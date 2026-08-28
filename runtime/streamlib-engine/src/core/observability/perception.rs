@@ -37,19 +37,6 @@ pub struct SampledFrame {
     pub timestamp_ns: i64,
 }
 
-/// A sampled audio buffer for AI perception.
-#[derive(Debug, Clone)]
-pub struct SampledAudio {
-    /// Audio samples (f32 interleaved).
-    pub samples: Vec<f32>,
-    /// Sample rate in Hz.
-    pub sample_rate: u32,
-    /// Number of channels.
-    pub channels: u32,
-    /// Duration in milliseconds.
-    pub duration_ms: u32,
-}
-
 /// Current status of a processor.
 #[derive(Debug, Clone)]
 pub struct ProcessorStatus {
@@ -67,9 +54,6 @@ pub struct ProcessorStatus {
 pub trait AgentPerception: Send + Sync {
     /// Sample a video frame from a processor's output.
     fn sample_video(&self, id: &ProcessorId, config: SampleConfig) -> Option<SampledFrame>;
-
-    /// Sample audio from a processor's output.
-    fn sample_audio(&self, id: &ProcessorId, duration_ms: u32) -> Option<SampledAudio>;
 
     /// Get current status of a processor.
     fn processor_status(&self, id: &ProcessorId) -> Option<ProcessorStatus>;

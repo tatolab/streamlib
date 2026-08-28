@@ -40,7 +40,6 @@ pub mod processors;
 pub mod pubsub;
 pub mod rhi;
 pub mod runtime;
-pub mod sync;
 pub mod texture;
 pub mod utils;
 // Linux-only: winit is a Linux-target engine dependency, and the window seam
@@ -60,7 +59,6 @@ pub use graph_snapshot::*;
 pub use processors::*;
 pub use rhi::{GlContext, GlTextureBinding, NativeTextureHandle, RhiBackend, gl_constants};
 pub use runtime::*;
-pub use sync::*;
 pub use texture::*;
 pub use utils::*;
 
