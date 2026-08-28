@@ -66,9 +66,10 @@ const REFUSED_BLOCKS_BETWEEN_REPORTS: u64 = 300;
 /// Failed reads between reports, on the same reasoning.
 const FAILED_READS_BETWEEN_REPORTS: u64 = 300;
 
-/// Underrun reports, in device periods of silence. A run of underruns says the
-/// graph is not keeping up, and saying so once per period would bury the reason.
-const UNDERRUN_BYTES_BETWEEN_WARNINGS_MULTIPLIER: u64 = 300;
+/// Ten-millisecond periods of silence between underrun warnings — roughly
+/// three seconds. A graph that is not keeping up underruns at device cadence,
+/// and saying so once per period would bury the reason under the symptom.
+const SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS: u64 = 300;
 
 /// The one port a block to play arrives on.
 const AUDIO_INPUT_PORT: &str = "audio";
@@ -334,7 +335,7 @@ fn drain_blocks_into_playback(
     let underrun_bytes_between_warnings = stream_format
         .interleaved_byte_count_for(stream_format.sample_rate / 100)
         .max(1) as u64
-        * UNDERRUN_BYTES_BETWEEN_WARNINGS_MULTIPLIER;
+        * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS;
 
     while is_draining.load(Ordering::Acquire) {
         if !inputs.has_data(AUDIO_INPUT_PORT) {
