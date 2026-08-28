@@ -481,7 +481,11 @@ fn negotiate_capture_stream(
 
     let mut channels = PREFERRED_CAPTURE_CHANNELS;
     let channels_set = unsafe {
-        (entry_points.snd_pcm_hw_params_set_channels_near)(pcm, hardware_parameters.pointer(), &mut channels)
+        (entry_points.snd_pcm_hw_params_set_channels_near)(
+            pcm,
+            hardware_parameters.pointer(),
+            &mut channels,
+        )
     };
     if channels_set < 0 {
         return Err(entry_points.refuse("a channel count", channels_set));
@@ -1245,7 +1249,7 @@ mod tests {
                 started_at_ns,
                 read_back_at_ns
             ),
-            "a CLOCK_REALTIME stamp is five decades outside any uptime bracket"
+            "a wall-clock stamp is five decades outside any uptime bracket"
         );
         assert!(
             !a_device_stamp_lands_in_the_monotonic_bracket(
