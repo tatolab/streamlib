@@ -818,6 +818,9 @@ impl AudioCaptureStream for AlsaAudioCaptureStream {
         // trip over.
         let stopped = self.stop_capture();
         if reader_panicked {
+            if let Err(refusal) = stopped {
+                tracing::warn!(device = %self.device_name, %refusal, "ALSA capture did not stop");
+            }
             return Err(Error::Runtime(format!(
                 "the ALSA capture reader for '{}' panicked",
                 self.device_name
@@ -1387,6 +1390,81 @@ mod tests {
         assert!(
             refuse_a_stamp_of(A_MONOTONIC_START_NS + PERIOD_NANOS + 1).is_err(),
             "a device cannot have captured a sample after the status that reported it"
+        );
+    }
+
+    /// Ask libasound to spell back every ABI constant this arm hard-codes.
+    ///
+    /// The values are the arm's only claim about a library it never links, and
+    /// a wrong one is silent: `SND_PCM_STATE_RUNNING` off by two restores the
+    /// recovery defect with every other test still green, because those tests
+    /// are written in terms of the constant rather than the value. libasound
+    /// names its own enumerators, so they are checked against the library that
+    /// defines them rather than against a header someone read once.
+    #[test]
+    fn libasound_spells_back_every_abi_constant_this_arm_hard_codes() {
+        // SAFETY: `dlopen` of a soname; nothing is dereferenced unless it opens.
+        let Ok(library) = (unsafe { Library::new(ALSA_LIBRARY_SONAME) }) else {
+            // A machine with no ALSA cannot answer the question. The chain is
+            // built for exactly that machine, so it is not a failure.
+            return;
+        };
+
+        for (naming_entry_point, enumerator, expected_name) in [
+            (
+                &b"snd_pcm_stream_name\0"[..],
+                SND_PCM_STREAM_CAPTURE,
+                "CAPTURE",
+            ),
+            (
+                b"snd_pcm_access_name\0",
+                SND_PCM_ACCESS_RW_INTERLEAVED,
+                "RW_INTERLEAVED",
+            ),
+            (b"snd_pcm_format_name\0", SND_PCM_FORMAT_S16_LE, "S16_LE"),
+            (
+                b"snd_pcm_format_name\0",
+                SND_PCM_FORMAT_FLOAT_LE,
+                "FLOAT_LE",
+            ),
+            (
+                b"snd_pcm_tstamp_mode_name\0",
+                SND_PCM_TSTAMP_ENABLE,
+                "ENABLE",
+            ),
+            (
+                b"snd_pcm_tstamp_type_name\0",
+                SND_PCM_TSTAMP_TYPE_MONOTONIC,
+                "MONOTONIC",
+            ),
+            (b"snd_pcm_state_name\0", SND_PCM_STATE_RUNNING, "RUNNING"),
+        ] {
+            // SAFETY: every one of these is an `ALSA_0.9` entry point taking one
+            // enumerator and returning a pointer into libasound's own static
+            // name table, valid while the library is loaded.
+            let named = unsafe {
+                let name_of: libloading::Symbol<'_, unsafe extern "C" fn(c_int) -> *const c_char> =
+                    library
+                        .get(naming_entry_point)
+                        .expect("libasound names its own enumerators");
+                let named = name_of(enumerator);
+                assert!(!named.is_null(), "libasound named nothing for {enumerator}");
+                CStr::from_ptr(named).to_string_lossy().into_owned()
+            };
+            assert_eq!(
+                named, expected_name,
+                "this arm calls {enumerator} {expected_name}, and libasound calls it {named}"
+            );
+        }
+
+        // The two error codes have no name function; they are plain errnos, and
+        // comparing them to the C library's own is exact where comparing
+        // `snd_strerror` text would depend on the locale.
+        assert_eq!(-ALSA_OVERRUN, libc::EPIPE, "a capture overrun is EPIPE");
+        assert_eq!(
+            -ALSA_SUSPENDED,
+            libc::ESTRPIPE,
+            "a suspended stream is ESTRPIPE"
         );
     }
 
