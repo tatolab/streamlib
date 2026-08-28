@@ -94,7 +94,6 @@ pub mod sdk {
 
     #[cfg(target_os = "linux")]
     pub use streamlib_engine::core::processor_owned_window;
-    pub use streamlib_engine::core::sync;
     pub use streamlib_engine::core::texture;
     #[cfg(target_os = "linux")]
     pub use streamlib_engine::core::window_event_pump;
