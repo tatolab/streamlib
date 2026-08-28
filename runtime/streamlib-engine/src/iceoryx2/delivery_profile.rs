@@ -37,12 +37,12 @@ pub enum DeliveryProfile {
     /// stale sample has no value once a fresher one exists.
     Latest,
     /// FIFO with a bounded backlog: read next in order, evict + count the
-    /// oldest under sustained overrun, deeper ring. Sample streams — audio,
-    /// encoded frames — where order matters but the producer must never block.
+    /// oldest under sustained overrun, deeper ring. Sample streams — encoded
+    /// frames — where order matters but the producer must never block.
     EverySample,
     /// Lossless FIFO: read next in order, the producer blocks rather than
-    /// drop, deeper ring. File writers, muxers, loggers where every sample
-    /// must be delivered.
+    /// drop, deeper ring. Audio, file writers, muxers, loggers where every
+    /// sample must be delivered.
     ///
     /// What this configures is the *publisher's* policy, and that is as far as
     /// it reaches today: the consumer's host mailbox
