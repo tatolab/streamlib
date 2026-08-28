@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.14](https://github.com/tatolab/streamlib/compare/v0.18.13...v0.18.14) (2026-08-28)
+
+
+### Features
+
+* **engine:** the ALSA arm — dlopen'd libasound with monotonic timestamps, and the chain demotes in order ([#2010](https://github.com/tatolab/streamlib/issues/2010)) ([b935d89](https://github.com/tatolab/streamlib/commit/b935d89b4d1d56718d1c7d8c89624b01b55e353e))
+
 ## [0.18.13](https://github.com/tatolab/streamlib/compare/v0.18.12...v0.18.13) (2026-08-28)
 
 
