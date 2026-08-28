@@ -1832,6 +1832,102 @@ fn monotonic_now_ns() -> i64 {
 mod tests {
     use super::*;
 
+    /// A stop the owner asked for is not a failure, and this is the assertion
+    /// that keeps it that way: reported as one, the signal would fire on every
+    /// clean teardown and an owner could no longer tell a dead microphone from
+    /// one it switched off.
+    #[test]
+    fn a_thread_that_stopped_because_it_was_told_to_reports_no_failure() {
+        for direction in [AlsaStreamDirection::Capture, AlsaStreamDirection::Playback] {
+            let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+
+            record_an_alsa_device_thread_exit(
+                &AlsaDeviceThreadExit::TheStopThatWasAskedFor,
+                direction,
+                "default",
+                &liveness_report,
+            );
+
+            assert!(
+                liveness_report.failure_that_ended_the_stream().is_none(),
+                "a deliberate stop was reported as a {} failure",
+                direction.as_word()
+            );
+        }
+    }
+
+    /// Every way a transfer thread can end early, in both directions: each one
+    /// leaves the owner a reason it can act on rather than only a log line.
+    ///
+    /// Driven through the exit value rather than through a device, which is
+    /// what makes the three reachable at all — two of them need hardware that
+    /// has begun failing, and the third needs a `snd_pcm_recover` that cannot.
+    #[test]
+    fn every_way_a_thread_dies_early_reaches_the_owner_naming_what_happened() {
+        let exits_and_what_they_must_say = [
+            (
+                AlsaDeviceThreadExit::TheDeviceWentQuiet {
+                    consecutive_silent_waits: CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP,
+                },
+                "consecutive waits",
+            ),
+            (
+                AlsaDeviceThreadExit::TheDeviceRefused(Error::Runtime(
+                    "snd_pcm_status refused".to_string(),
+                )),
+                "snd_pcm_status refused",
+            ),
+            (
+                AlsaDeviceThreadExit::TheStreamCouldNotBeRecovered,
+                "could not be recovered",
+            ),
+        ];
+
+        for (exit, what_the_reason_must_say) in exits_and_what_they_must_say {
+            for direction in [AlsaStreamDirection::Capture, AlsaStreamDirection::Playback] {
+                let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+
+                record_an_alsa_device_thread_exit(
+                    &exit,
+                    direction,
+                    "hw:0,0",
+                    &liveness_report,
+                );
+
+                let reason = liveness_report
+                    .failure_that_ended_the_stream()
+                    .expect("a thread that ended early has to leave its owner a reason")
+                    .to_string();
+                assert!(
+                    reason.contains(what_the_reason_must_say),
+                    "a {} stream's reason has to name what happened, not just that something \
+                     did: {reason}",
+                    direction.as_word()
+                );
+                assert!(
+                    reason.contains(direction.as_word()),
+                    "the reason has to name the direction it came from, because a graph runs \
+                     both against the same device: {reason}"
+                );
+            }
+        }
+    }
+
+    /// The stalled-device reason says the opposite thing either side of the
+    /// seam, and the wait that produced it is the same call — so a reader
+    /// looking at a `took nothing` line knows it is the speaker.
+    #[test]
+    fn a_stalled_device_is_described_by_what_that_direction_stopped_doing() {
+        assert_eq!(
+            AlsaStreamDirection::Capture.what_a_stalled_device_stopped_doing(),
+            "delivered"
+        );
+        assert_eq!(
+            AlsaStreamDirection::Playback.what_a_stalled_device_stopped_doing(),
+            "took"
+        );
+    }
+
     const SAMPLE_RATE_48K: u32 = 48_000;
     /// 512 samples at 48 kHz.
     const PERIOD_NANOS: i64 = 10_666_666;

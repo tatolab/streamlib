@@ -797,6 +797,62 @@ mod tests {
         );
     }
 
+    /// The shim's half of the death path, held without a daemon: the state
+    /// change lands on the loop thread, and what it leaves behind is a reason
+    /// the stream's owner can read from its own thread.
+    ///
+    /// Mental revert: drop the record and this arm is back to a stream that
+    /// entered its error state, said so once in a log, and went on looking
+    /// healthy to everything holding it.
+    #[test]
+    fn a_failure_the_shim_reports_lands_in_the_report_the_owner_holds() {
+        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        let reason_the_daemon_gave = CString::new("node destroyed").expect("no interior NUL");
+
+        // SAFETY: the context is the address of a live report, and the reason
+        // is a NUL-terminated string that outlives the call — exactly what the
+        // shim hands over on the loop thread.
+        unsafe {
+            record_a_stream_failure_in_the_liveness_report(
+                (&raw const liveness_report).cast_mut().cast::<c_void>(),
+                reason_the_daemon_gave.as_ptr(),
+            );
+        }
+
+        let reason = liveness_report
+            .failure_that_ended_the_stream()
+            .expect("a stream that entered its error state has to leave its owner a reason")
+            .to_string();
+        assert!(
+            reason.contains("node destroyed") && reason.contains("PipeWire"),
+            "the reason has to carry both the daemon's own words and which arm they came \
+             from: {reason}"
+        );
+    }
+
+    /// `pw_stream_events::state_changed` may hand over a NULL error, and a
+    /// stream that failed for reasons the daemon did not spell still has to be
+    /// reported as failed — silence here would be the bug this change exists
+    /// to remove.
+    #[test]
+    fn a_failure_the_daemon_did_not_explain_is_still_reported_as_one() {
+        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+
+        // SAFETY: as above, with the NULL reason libpipewire is allowed to
+        // pass.
+        unsafe {
+            record_a_stream_failure_in_the_liveness_report(
+                (&raw const liveness_report).cast_mut().cast::<c_void>(),
+                std::ptr::null(),
+            );
+        }
+
+        assert!(
+            liveness_report.failure_that_ended_the_stream().is_some(),
+            "a stream that failed without a message is still a stream that failed"
+        );
+    }
+
     /// Consecutive cycles are one block apart, which is what makes
     /// `first_sample_timestamp_ns + sample_count / sample_rate` the next
     /// block's expected stamp — the property a consumer joins on.

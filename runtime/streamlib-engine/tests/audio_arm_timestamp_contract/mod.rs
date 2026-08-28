@@ -241,3 +241,56 @@ pub fn assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(
 
     capture_stream.stop_delivering().expect("stop");
 }
+
+/// The seam's liveness claim, over whichever device path an arm hands in.
+///
+/// Two halves, and the first is what keeps the second honest: a signal wired to
+/// fire always would satisfy "a dead device is reported" while telling an owner
+/// nothing. So a healthy stream is watched producing blocks and asked, and a
+/// stream its owner stopped is asked again — a deliberate stop is not a
+/// failure, and an owner that could not tell the two apart is back where it
+/// started.
+pub fn assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one(
+    backend: &dyn AudioDeviceBackend,
+    device_id: Option<String>,
+) {
+    let mut capture_stream = open_capture_stream_on(backend, device_id);
+    let liveness_report = capture_stream.liveness_report();
+    assert!(
+        liveness_report.failure_that_ended_the_stream().is_none(),
+        "a stream that has not started delivering has not failed either"
+    );
+
+    let (observed_sender, observed_receiver) = mpsc::channel();
+    capture_stream
+        .start_delivering_to(Box::new(move |block: CapturedAudioBlockFromDevice<'_>| {
+            let _ = observed_sender.send(block.sample_count);
+        }))
+        .expect("delivery starts");
+
+    for _ in 0..BLOCKS_TO_OBSERVE {
+        observed_receiver
+            .recv_timeout(CAPTURE_DEADLINE)
+            .expect("an open capture stream delivers blocks");
+        assert_eq!(
+            liveness_report
+                .failure_that_ended_the_stream()
+                .map(|reason| reason.to_string()),
+            None,
+            "a stream that is delivering blocks reported a failure, so the signal says \
+             nothing about whether a device is alive"
+        );
+    }
+
+    capture_stream.stop_delivering().expect("stop");
+    // Read after the thread that would have recorded one has been joined, which
+    // is what makes this the deliberate-stop assertion rather than a race with
+    // it.
+    assert_eq!(
+        liveness_report
+            .failure_that_ended_the_stream()
+            .map(|reason| reason.to_string()),
+        None,
+        "stopping a stream deliberately was reported as the device failing"
+    );
+}

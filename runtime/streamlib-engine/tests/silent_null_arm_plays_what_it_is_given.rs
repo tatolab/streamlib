@@ -18,6 +18,7 @@ use streamlib_engine::core::context::SilentNullAudioDeviceBackend;
 
 mod audio_arm_playback_contract;
 use audio_arm_playback_contract::{
+    assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one,
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off,
     assert_the_device_asks_for_whole_periods_of_its_own_format,
 };
@@ -30,6 +31,17 @@ fn the_deviceless_arm_asks_for_whole_periods_of_the_format_it_reports() {
 #[test]
 fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
+        &SilentNullAudioDeviceBackend,
+        None,
+    );
+}
+
+/// The arm whose streams cannot die, asked whether they have: a graph running
+/// in a container has to be able to ask the same question a graph on a
+/// workstation asks, and get the answer that arm's design promises.
+#[test]
+fn a_deviceless_playback_stream_never_reports_a_failure() {
+    assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(
         &SilentNullAudioDeviceBackend,
         None,
     );
