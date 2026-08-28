@@ -17,6 +17,7 @@ Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, t
 4. **Only camera / display / GPU-compute / GPU-texture, no codec?** → **camera-display-only** (faster, isolates the path).
 5. **Frame-ordering / timestamp / drop-sensitive?** → **v4l2loopback motion** (a `testsrc2` source with a visible per-frame counter, so a drop/repeat shows by eye).
 6. **Color-path change?** → the **PSNR fixture rigs** (below), with at least one negative-injection mode to prove the gate isn't vacuous.
+7. **Audio — capture, playback, the device seam, an audio built-in?** → not this skill. The **audio loopback rigs** (below) measure a known signal rather than pixels, and `/verify-audio` drives them.
 
 When unsure, default to the more demanding scenario (encode/decode also exercises camera + display). Current run commands live in the fixture scripts under the engine's `tests/fixtures/` — read them for the exact invocation (they drift; don't cache them here).
 
@@ -66,6 +67,13 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 - **`e2e_fixture_psnr_jpeg.sh <out>`** — GPU JPEG decode, same shape and same injection modes.
 
 **PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout).
+
+## Audio loopback rigs
+Two fixture rigs guard the audio path, measuring a known signal — tone frequency / amplitude / distortion, plus a DTMF symbol grid whose *spacing* is what a dropped block moves. Both gate on `virtual_audio_device.sh check` and **exit 77** (`SKIP: no virtual audio device available on this machine`) where no PipeWire session is reachable; 77 is cannot-run and is never reported as a pass:
+- **`e2e_audio_loopback.sh <out>`** — `pw-play` into a null sink, `pw-record` off its monitor, no StreamLib in the path, so it answers "is the rig sound" when the engine won't build. Negative modes: `INJECT_BUG=silence` (30 ms of the tone body zeroed), `drop` (30 ms excised, shifting everything after), `gain` (0.6× amplitude).
+- **`verify_audio_loopback.sh [--count N] [--port PORT]`** — the same loop with `SpeakerSink` playing and `MicrophoneSource` capturing, so both ends are StreamLib; it runs the block-level channel contract on the microphone's port first. No injection mode — corrupting what the *engine* carries is a different fixture's job.
+
+Drive these through **`/verify-audio`**, which owns the workflow: it picks the mode, re-runs the rig-only fixture when the through-engine one fails (so "the engine broke it" is never read as "the rig is broken"), and reports the numbers with the spectrogram.
 
 ## Modes
 - **SELF-RUN (primary — rig available).** Run the pipeline yourself, no owner in the path. Probe the rig first (device nodes, `$DISPLAY`, `/dev/dri/*`) and only self-run when it is present.
