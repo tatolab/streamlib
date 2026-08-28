@@ -96,8 +96,11 @@ What a busy port looks like depends on what holds it, and none of these is `Conn
 - **A second StreamLib node that declares a `MicrophoneSource`** → **no error at all.** The tap
   resolves against *that* node's graph, so the channel contract is measured on a different
   process and the run can exit 0 and report `PASS`. The realistic instance is an orphaned
-  `audio_loopback_node.py` from a killed run — it defaults to 9077 and declares exactly that
-  processor. **This is the dangerous one**: every other failure mode here announces itself.
+  `audio_loopback_node.py` from a killed run. Its own default is 9000 — 9077 is this fixture's
+  (`verify_audio_loopback.sh`), which exports it into the node — so an orphan of a *previous run
+  of this same fixture* sits on exactly the port the next one wants, declaring exactly the
+  processor it looks for. **This is the dangerous one**: every other failure mode here announces
+  itself.
 - **A second StreamLib node without one** → the query succeeds against the wrong graph and the run
   dies at `no processor named MicrophoneSource in the running graph`.
 - **A socket that accepts and never answers** → `no control plane reachable at
@@ -105,8 +108,15 @@ What a busy port looks like depends on what holds it, and none of these is `Conn
 - **A foreign HTTP server** → an HTTP status rather than a refusal, e.g. `answered 404`.
 
 **Confirm the run measured its own node before believing a pass.** The tap prints the channel it
-read (`tapping <processor-id>/audio for N bags`); that id must be a processor of the node whose
-`node.log` you have. If they differ, the verdict is about someone else's graph.
+read (`tapping <processor-id>/audio for N bags`); that id must belong to the node whose `node.log`
+you have, or the verdict is about someone else's graph:
+
+```bash
+grep -i "<tapped-processor-id>" "<artifacts-dir>/node.log"
+```
+
+`-i` is not optional. The tap lowercases the id and `node.log` does not, so the exact-case
+spelling returns zero hits on a perfectly healthy run — a false collision alarm every time.
 
 **`Connection refused` on 9077 means the opposite — nothing is listening there at all**, so the
 node died or never served. That is a real failure and must never be waved away as a port
@@ -127,21 +137,25 @@ through-engine run prints two: the first is the nested channel tap's directory, 
 loopback's own. Take the last one — that is where `captured.wav`, `spectrogram.png` and `node.log`
 are.
 
-**A run that fails *before the analyser* names no directory.** Both fixtures echo `artifacts:` as
-their final statement, so an analyser `FAIL` prints it exactly as a pass does — but every earlier
-`exit 1` skips it: the channel-contract failure, the speaker-format refusal, a node that never
-served. Those are exactly the runs whose `node.log` you need, so recover the directory instead:
+**On any non-zero exit, recover the directory rather than trusting the last `artifacts:` line.**
+An analyser `FAIL` prints that line exactly as a pass does, so far so good. But a *channel*
+contract that fails its analysis prints exactly one `artifacts:` line — the nested tap's — and
+"take the last one" then lands you in a `streamlib-audio-channel-` directory with no `node.log`,
+no `captured.wav` and no spectrogram. Anything that fails earlier still (channel resolution, the
+tap itself, the speaker-format refusal, a node that never served) prints none at all. Those are
+exactly the runs whose `node.log` you need:
 
 ```bash
 dirname "$(/bin/ls -t /tmp/streamlib-audio-loopback-*/node.log | head -1)"
 ```
 
 Two traps are why it is spelled that way. `/bin/ls` because `ls` is commonly aliased (to `eza`
-here), and `eza` reads `-t` as `--time=FIELD` rather than sort-by-time, so the plain spelling
-returns an alphabetical answer that can be hours stale — silently, with no error. And it selects
-on `node.log` because the rig-only fixture defaults to the *same* `streamlib-audio-loopback-`
-prefix, so the triage re-run below leaves a newer directory that has a `report.json` and a
-spectrogram but no `node.log` — a convincing decoy.
+here), and `eza` reads `-t` as `--time=FIELD` — it swallows the first match as that flag's value
+and lists the rest alphabetically, exit 0, no error, an answer that can be hours stale. And it
+selects on `node.log` because the rig-only fixture defaults to the *same*
+`streamlib-audio-loopback-` prefix, so any rig-only run left to its default leaves a directory
+carrying a `report.json` and a spectrogram but no `node.log` — a convincing decoy. That is why
+the triage step below is given an explicit directory.
 
 The rig-only fixture is the only one that takes an output directory as an argument, and it tees a
 `report.json` into it; the nested channel tap writes one into its own directory too. The
