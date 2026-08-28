@@ -379,10 +379,12 @@ fn drain_blocks_into_playback(
             }
         };
 
-        // The wait here is the backpressure the port's `lossless` profile
-        // promises: a drain thread held for room is a drain thread not reading
-        // its mailbox, so the producer blocks rather than anything being
-        // dropped.
+        // The wait here is the backpressure the port's `lossless` profile asks
+        // for: a drain thread held for room is a drain thread not reading its
+        // mailbox. What that buys today is bounded queueing rather than the
+        // guarantee the profile names — `PortMailbox::push` drops its oldest
+        // entry whenever it is full, whatever the profile says — so a producer
+        // that outruns this loop still loses blocks upstream of it.
         if samples_awaiting_playback.hand_off_for_playback(samples, ROOM_WAIT_POLL_INTERVAL)
             == AudioSamplesHandOffOutcome::PlaybackEnded
         {
