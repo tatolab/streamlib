@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use streamlib_engine::core::context::{
-    AudioCaptureStream, AudioCaptureStreamFormat, AudioCaptureStreamRequest, AudioClockConfig,
+    AudioCaptureStream, AudioStreamFormat, AudioDeviceStreamRequest, AudioClockConfig,
     AudioDeviceBackend, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
 };
 use streamlib_engine::core::media_clock::MediaClock;
@@ -60,7 +60,7 @@ fn open_capture_stream_on(
     device_id: Option<String>,
 ) -> Box<dyn AudioCaptureStream> {
     backend
-        .open_capture_stream(&AudioCaptureStreamRequest {
+        .open_capture_stream(&AudioDeviceStreamRequest {
             device_id,
             deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
         })
@@ -71,7 +71,7 @@ fn open_capture_stream_on(
 fn observe_blocks_from(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
-) -> (AudioCaptureStreamFormat, Vec<ObservedAudioCaptureBlock>) {
+) -> (AudioStreamFormat, Vec<ObservedAudioCaptureBlock>) {
     let mut capture_stream = open_capture_stream_on(backend, device_id);
     let capture_stream_format = capture_stream.stream_format();
 
@@ -101,12 +101,12 @@ fn observe_blocks_from(
 /// Nanoseconds one block of `sample_count` samples occupies at the stream's
 /// rate — the gap consecutive blocks are expected to be, and the distance a
 /// block's stamp sits before the hand-off that carried it.
-fn block_duration_ns(capture_stream_format: AudioCaptureStreamFormat, sample_count: u32) -> i64 {
+fn block_duration_ns(capture_stream_format: AudioStreamFormat, sample_count: u32) -> i64 {
     i64::from(sample_count) * 1_000_000_000 / i64::from(capture_stream_format.sample_rate)
 }
 
 fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
-    capture_stream_format: AudioCaptureStreamFormat,
+    capture_stream_format: AudioStreamFormat,
     observed: &[ObservedAudioCaptureBlock],
 ) {
     assert!(
@@ -132,7 +132,7 @@ fn assert_blocks_are_stamped_before_the_hand_off_that_carries_them(
 }
 
 fn assert_blocks_advance_by_one_block_with_no_gap(
-    capture_stream_format: AudioCaptureStreamFormat,
+    capture_stream_format: AudioStreamFormat,
     observed: &[ObservedAudioCaptureBlock],
 ) {
     for pair in observed.windows(2) {

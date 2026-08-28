@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
-    AudioCaptureSampleFormat, AudioCaptureStream, AudioCaptureStreamFormat,
-    AudioCaptureStreamRequest, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioSampleFormat, AudioCaptureStream, AudioStreamFormat,
+    AudioDeviceStreamRequest, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     RuntimeContextFullAccess, probe_audio_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
@@ -94,7 +94,7 @@ pub struct MicrophoneSource {
 impl ManualProcessor for MicrophoneSource::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let backend = probe_audio_device_backend();
-        let capture_stream = backend.open_capture_stream(&AudioCaptureStreamRequest {
+        let capture_stream = backend.open_capture_stream(&AudioDeviceStreamRequest {
             device_id: self.config.device_id.clone(),
             deviceless_pacing_clock: Arc::clone(ctx.audio_clock()),
         })?;
@@ -229,7 +229,7 @@ fn publish_captured_blocks(
     is_publishing: &AtomicBool,
     published_block_counter: &AtomicU64,
     outputs: &OutputWriter,
-    stream_format: AudioCaptureStreamFormat,
+    stream_format: AudioStreamFormat,
 ) {
     let mut warn_at_dropped_block_count = 1u64;
     let mut consecutive_write_failures = 0u64;
@@ -301,7 +301,7 @@ fn publish_one_captured_block(
     outputs: &OutputWriter,
     published_block_counter: &AtomicU64,
     consecutive_write_failures: &mut u64,
-    stream_format: AudioCaptureStreamFormat,
+    stream_format: AudioStreamFormat,
 ) {
     // Asked before the block is built, because serializing a device quantum
     // into a port with no link is thousands of allocations a second on the
@@ -365,10 +365,10 @@ fn warn_about_any_new_drops(
 }
 
 /// How a captured stream's scalar encoding is spelled on the wire.
-fn wire_dtype_for(sample_format: AudioCaptureSampleFormat) -> AudioSampleDtype {
+fn wire_dtype_for(sample_format: AudioSampleFormat) -> AudioSampleDtype {
     match sample_format {
-        AudioCaptureSampleFormat::F32 => AudioSampleDtype::F32,
-        AudioCaptureSampleFormat::I16 => AudioSampleDtype::I16,
+        AudioSampleFormat::F32 => AudioSampleDtype::F32,
+        AudioSampleFormat::I16 => AudioSampleDtype::I16,
     }
 }
 
@@ -376,7 +376,7 @@ fn wire_dtype_for(sample_format: AudioCaptureSampleFormat) -> AudioSampleDtype {
 /// samples, and the device's own timestamp rides through untouched.
 fn audio_block_captured_as(
     captured: CapturedAudioBlockAwaitingPublish,
-    stream_format: AudioCaptureStreamFormat,
+    stream_format: AudioStreamFormat,
 ) -> AudioBlock {
     AudioBlock {
         interleaved_sample_bytes: captured.interleaved_sample_bytes,
@@ -475,7 +475,7 @@ mod tests {
         // back whatever audio server the machine running this happens to have —
         // a device that paces itself and ignores a hand-fired clock.
         let mut capture_stream = SilentNullAudioDeviceBackend
-            .open_capture_stream(&AudioCaptureStreamRequest {
+            .open_capture_stream(&AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: Arc::clone(&clock) as SharedAudioClock,
             })
@@ -532,11 +532,11 @@ mod tests {
     #[test]
     fn a_captured_streams_scalar_encoding_maps_onto_the_wires_dtype() {
         assert_eq!(
-            wire_dtype_for(AudioCaptureSampleFormat::F32),
+            wire_dtype_for(AudioSampleFormat::F32),
             AudioSampleDtype::F32
         );
         assert_eq!(
-            wire_dtype_for(AudioCaptureSampleFormat::I16),
+            wire_dtype_for(AudioSampleFormat::I16),
             AudioSampleDtype::I16
         );
     }
@@ -555,10 +555,10 @@ mod tests {
     fn a_published_block_carries_the_streams_format_and_the_devices_timestamp() {
         let block = audio_block_captured_as(
             captured_block(vec![0u8; 16]),
-            AudioCaptureStreamFormat {
+            AudioStreamFormat {
                 sample_rate: 48_000,
                 channels: 2,
-                sample_format: AudioCaptureSampleFormat::F32,
+                sample_format: AudioSampleFormat::F32,
             },
         );
         assert_eq!(block.sample_rate, 48_000);
@@ -576,10 +576,10 @@ mod tests {
     fn a_stream_capturing_i16_publishes_blocks_that_say_so() {
         let block = audio_block_captured_as(
             captured_block(vec![0u8; 4]),
-            AudioCaptureStreamFormat {
+            AudioStreamFormat {
                 sample_rate: 16_000,
                 channels: 1,
-                sample_format: AudioCaptureSampleFormat::I16,
+                sample_format: AudioSampleFormat::I16,
             },
         );
         assert_eq!(block.dtype, AudioSampleDtype::I16);
@@ -628,11 +628,11 @@ mod tests {
         }
     }
 
-    fn a_stream_format() -> AudioCaptureStreamFormat {
-        AudioCaptureStreamFormat {
+    fn a_stream_format() -> AudioStreamFormat {
+        AudioStreamFormat {
             sample_rate: 48_000,
             channels: 1,
-            sample_format: AudioCaptureSampleFormat::F32,
+            sample_format: AudioSampleFormat::F32,
         }
     }
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 //
-// The compiled half of the PipeWire capture arm.
+// The compiled half of the PipeWire audio arm, in both directions.
 //
 // SPA's pod builders and parsers are `static inline` C with no shared object
 // behind them, so they cannot be reached by `dlopen` at all — they have to be
@@ -10,8 +10,8 @@
 // `dlsym`. It references no external symbol of its own beyond libc, which is
 // what keeps `libpipewire-0.3.so.0` out of the wheel's `DT_NEEDED` set.
 
-#ifndef STREAMLIB_PIPEWIRE_CAPTURE_SHIM_H
-#define STREAMLIB_PIPEWIRE_CAPTURE_SHIM_H
+#ifndef STREAMLIB_PIPEWIRE_AUDIO_SHIM_H
+#define STREAMLIB_PIPEWIRE_AUDIO_SHIM_H
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -65,16 +65,24 @@ extern "C" {
     ENTRY_POINT(pw_stream_get_time_n, int,                                                         \
                 (struct pw_stream * stream, struct pw_time *time, size_t size))
 
-/// How the scalars a negotiated capture stream delivers are encoded. The
-/// values are the discriminants `AudioCaptureSampleFormat` is reconstructed
-/// from on the Rust side.
+/// Which way samples travel on a stream. Carried rather than split into two
+/// open paths: the direction decides one libpipewire constant and two property
+/// values, and everything else about opening a stream is the same.
+enum StreamLibPipeWireStreamDirection {
+    STREAMLIB_PIPEWIRE_STREAM_DIRECTION_CAPTURE = 0,
+    STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK = 1,
+};
+
+/// How the scalars a negotiated stream carries are encoded. The values are the
+/// discriminants `AudioSampleFormat` is reconstructed from on the Rust side.
 enum StreamLibPipeWireSampleFormat {
     STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_F32_LE = 0,
     STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE = 1,
 };
 
-/// How many properties [`capture_stream_properties`] declares. Shared so the
-/// array and the function that fills it cannot disagree about its size.
+/// How many properties [`streamlib_pipewire_stream_properties`] declares.
+/// Shared so the array and the function that fills it cannot disagree about
+/// its size.
 #define STREAMLIB_PIPEWIRE_MAX_STREAM_PROPERTIES 5
 
 /// Longest sink name carved out of a `<sink>.monitor` device id. PipeWire node
@@ -86,25 +94,29 @@ enum StreamLibPipeWireSampleFormat {
 /// monitor".
 #define STREAMLIB_PIPEWIRE_MONITOR_DEVICE_ID_SUFFIX ".monitor"
 
-/// One key/value pair of the property dict a capture stream announces itself
-/// with — `struct spa_dict_item` by another name, so a test can read the
-/// composition without the SPA headers.
+/// One key/value pair of the property dict a stream announces itself with —
+/// `struct spa_dict_item` by another name, so a test can read the composition
+/// without the SPA headers.
 struct StreamLibPipeWireStreamProperty {
     const char *key;
     const char *value;
 };
 
-/// Compose the properties a capture stream announces itself with, returning how
-/// many of `items` were filled.
+/// Compose the properties a stream announces itself with, returning how many of
+/// `items` were filled.
 ///
 /// Exposed rather than kept private because this is where the monitor decision
-/// is actually made: a `<sink>.monitor` id has to come out as the bare sink name
-/// plus `stream.capture.sink`, and getting that wrong captures the session's
-/// default source — silence that looks like a working pipeline. `sink_name` is
-/// scratch the returned items borrow, so it must outlive them.
-uint32_t streamlib_pipewire_capture_stream_properties(
-    struct StreamLibPipeWireStreamProperty *items, uint32_t item_capacity,
-    const char *device_id_or_null, char *sink_name, size_t sink_name_capacity);
+/// is actually made: on a capture stream a `<sink>.monitor` id has to come out
+/// as the bare sink name plus `stream.capture.sink`, and getting that wrong
+/// captures the session's default source — silence that looks like a working
+/// pipeline. A playback stream has no monitor case: it targets the sink it was
+/// named. `sink_name` is scratch the returned items borrow, so it must outlive
+/// them.
+uint32_t streamlib_pipewire_stream_properties(struct StreamLibPipeWireStreamProperty *items,
+                                              uint32_t item_capacity,
+                                              enum StreamLibPipeWireStreamDirection direction,
+                                              const char *device_id_or_null, char *sink_name,
+                                              size_t sink_name_capacity);
 
 /// The sink name inside a `<sink>.monitor` device id, or 0 when the id does not
 /// name a monitor.
@@ -137,8 +149,8 @@ struct StreamLibPipeWireChunkExtent streamlib_pipewire_clamped_chunk_extent(uint
                                                                            uint32_t chunk_size,
                                                                            uint32_t data_maxsize);
 
-/// What one capture stream settled on, fixed for the stream's lifetime.
-struct StreamLibPipeWireNegotiatedCaptureFormat {
+/// What one stream settled on, fixed for its lifetime.
+struct StreamLibPipeWireNegotiatedAudioFormat {
     uint32_t sample_rate;
     uint32_t channels;
     /// One of [`enum StreamLibPipeWireSampleFormat`].
@@ -155,6 +167,18 @@ typedef void (*StreamLibPipeWireCapturedBlockHandOff)(void *hand_off_context,
                                                       size_t interleaved_sample_byte_count,
                                                       uint32_t sample_count,
                                                       int64_t first_sample_timestamp_ns);
+
+/// What the shim calls each time PipeWire needs samples to play.
+///
+/// Runs on PipeWire's thread-loop thread with that loop's lock held, so it must
+/// not block and must not re-enter this shim. It fills the whole buffer:
+/// `interleaved_sample_bytes_to_fill` is PipeWire's mapped buffer, invalid the
+/// moment this returns, and whatever it leaves unwritten is whatever the
+/// previous cycle put there.
+typedef void (*StreamLibPipeWirePlaybackBlockHandOff)(void *hand_off_context,
+                                                      uint8_t *interleaved_sample_bytes_to_fill,
+                                                      size_t interleaved_sample_byte_count,
+                                                      uint32_t sample_count);
 
 /// The monotonic instant the first sample of a block arriving in one graph
 /// cycle was captured.
@@ -176,8 +200,8 @@ int64_t streamlib_pipewire_first_sample_timestamp_ns(int64_t cycle_timestamp_ns,
                                                      uint32_t rate_denominator,
                                                      uint32_t sample_count, uint32_t sample_rate);
 
-/// One opened capture stream, owned by the shim.
-struct StreamLibPipeWireCaptureStream;
+/// One opened stream in either direction, owned by the shim.
+struct StreamLibPipeWireAudioStream;
 
 /// How many entry points [`streamlib_pipewire_entry_point_names`] returns.
 size_t streamlib_pipewire_entry_point_count(void);
@@ -205,34 +229,41 @@ const char *streamlib_pipewire_loaded_library_version(const void *const *entry_p
 int streamlib_pipewire_daemon_answers(const void *const *entry_points, char *failure_text,
                                       size_t failure_text_capacity);
 
-/// Open and negotiate a capture stream, blocking until PipeWire settles the
-/// format or the attempt fails.
+/// Open and negotiate a stream in `direction`, blocking until PipeWire settles
+/// the format or the attempt fails.
 ///
 /// `device_id_or_null` names a PipeWire target object; NULL takes the session's
-/// default source. Returns NULL with `failure_text` filled on failure. Blocks
-/// arriving before `streamlib_pipewire_capture_stream_start_delivering` are
-/// dequeued and recycled rather than held, so the graph's buffers keep
-/// circulating while a caller is still wiring itself up.
-struct StreamLibPipeWireCaptureStream *streamlib_pipewire_capture_stream_open(
-    const void *const *entry_points, const char *device_id_or_null,
-    struct StreamLibPipeWireNegotiatedCaptureFormat *negotiated_format_out, char *failure_text,
+/// default endpoint for that direction. Returns NULL with `failure_text` filled
+/// on failure. Buffers arriving before a hand-off is installed are recycled
+/// rather than held — an empty period on a playback stream, a discarded block
+/// on a capture one — so the graph's buffers keep circulating while a caller is
+/// still wiring itself up.
+struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
+    const void *const *entry_points, enum StreamLibPipeWireStreamDirection direction,
+    const char *device_id_or_null,
+    struct StreamLibPipeWireNegotiatedAudioFormat *negotiated_format_out, char *failure_text,
     size_t failure_text_capacity);
 
 /// Begin handing captured blocks to `hand_off`, replacing any earlier one.
 void streamlib_pipewire_capture_stream_start_delivering(
-    struct StreamLibPipeWireCaptureStream *capture_stream,
+    struct StreamLibPipeWireAudioStream *audio_stream,
     StreamLibPipeWireCapturedBlockHandOff hand_off, void *hand_off_context);
 
-/// Stop handing off. The hand-off is not called again once this returns.
-void streamlib_pipewire_capture_stream_stop_delivering(
-    struct StreamLibPipeWireCaptureStream *capture_stream);
+/// Begin asking `hand_off` for samples to play, replacing any earlier one.
+void streamlib_pipewire_playback_stream_start_requesting(
+    struct StreamLibPipeWireAudioStream *audio_stream,
+    StreamLibPipeWirePlaybackBlockHandOff hand_off, void *hand_off_context);
+
+/// Stop handing off, in either direction. The hand-off is not called again once
+/// this returns.
+void streamlib_pipewire_audio_stream_stop_handing_off(
+    struct StreamLibPipeWireAudioStream *audio_stream);
 
 /// Disconnect, tear down and free the stream. Safe on NULL.
-void streamlib_pipewire_capture_stream_close(
-    struct StreamLibPipeWireCaptureStream *capture_stream);
+void streamlib_pipewire_audio_stream_close(struct StreamLibPipeWireAudioStream *audio_stream);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* STREAMLIB_PIPEWIRE_CAPTURE_SHIM_H */
+#endif /* STREAMLIB_PIPEWIRE_AUDIO_SHIM_H */

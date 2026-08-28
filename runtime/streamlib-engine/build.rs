@@ -8,7 +8,7 @@
 //! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
 //! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
 //! `include_bytes!` to consume at compile time, and compiles the PipeWire
-//! capture shim against the vendored PipeWire/SPA headers.
+//! audio shim against the vendored PipeWire/SPA headers.
 
 fn main() {
     // Link Metal framework on macOS for MP4 writer
@@ -25,7 +25,7 @@ fn main() {
     // Apple path from Linux (`cargo check --target aarch64-apple-darwin`) would
     // otherwise hand this file's sources to a cross toolchain that is not there.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        compile_pipewire_capture_shim();
+        compile_pipewire_audio_shim();
     }
 }
 
@@ -36,12 +36,12 @@ fn main() {
 /// The shim calls libpipewire only through pointers Rust filled with `dlsym`,
 /// so this adds no `DT_NEEDED` entry — the invariant
 /// `sdk/streamlib-python-wheel/tests/test_wheel_portability.py` enforces.
-fn compile_pipewire_capture_shim() {
-    const SHIM_SOURCE: &str = "src/linux/pipewire_capture_shim.c";
+fn compile_pipewire_audio_shim() {
+    const SHIM_SOURCE: &str = "src/linux/pipewire_audio_shim.c";
     const VENDORED_HEADERS: &str = "../../vendor/pipewire-headers/include";
 
     println!("cargo:rerun-if-changed={SHIM_SOURCE}");
-    println!("cargo:rerun-if-changed=src/linux/pipewire_capture_shim.h");
+    println!("cargo:rerun-if-changed=src/linux/pipewire_audio_shim.h");
     println!("cargo:rerun-if-changed={VENDORED_HEADERS}");
 
     let mut build = cc::Build::new();
@@ -60,7 +60,7 @@ fn compile_pipewire_capture_shim() {
         // which `-std=c11` (rather than `gnu11`) would otherwise hide.
         .define("_GNU_SOURCE", None)
         .warnings(true)
-        .compile("streamlib_pipewire_capture_shim");
+        .compile("streamlib_pipewire_audio_shim");
 }
 
 /// `glslc -O` strips every `OpName`, and a binding with no reflected name

@@ -13,8 +13,10 @@
 //! ALSA offers no usable callback: `snd_async_add_pcm_handler` delivers on
 //! `SIGIO`, where almost nothing is legal to call. So this arm owns a reader
 //! thread that waits for a period, reads the device's own timing out of
-//! `snd_pcm_status`, and hands the block off — the cadence is still the
-//! device's.
+//! `snd_pcm_status`, and hands the block off — and, for playback, a writer
+//! thread that waits for a period of room and asks for one. The cadence is
+//! still the device's in both directions: the wait is what the device
+//! releases.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::sync::Arc;
@@ -24,9 +26,10 @@ use std::thread::JoinHandle;
 use libloading::Library;
 
 use crate::core::context::{
-    AudioCaptureSampleFormat, AudioCaptureStream, AudioCaptureStreamFormat,
-    AudioCaptureStreamRequest, AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason,
-    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
+    AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff,
 };
 use crate::core::execution::ThreadPriority;
 use crate::core::media_clock::MediaClock;
@@ -38,19 +41,22 @@ use crate::linux::thread_priority::apply_thread_priority;
 /// not have.
 const ALSA_LIBRARY_SONAME: &str = "libasound.so.2";
 
-/// The PCM name opened when no caller names a device.
+/// The PCM name opened when no caller names a device, in either direction.
 ///
 /// `default` and never a raw `hw:` node: raw hardware access bypasses any
 /// daemon holding the card and returns `EBUSY` (measured on the rig). A caller
 /// that names `hw:0,0` gets exactly that, because a named device is a wiring
 /// statement.
-const DEFAULT_CAPTURE_PCM_NAME: &str = "default";
+const DEFAULT_PCM_NAME: &str = "default";
 
 /// `snd_pcm_uframes_t` — `unsigned long`, per `<alsa/pcm.h>`.
 type SndPcmUframes = c_ulong;
 
 /// `snd_pcm_sframes_t` — `signed long`, per `<alsa/pcm.h>`.
 type SndPcmSframes = c_long;
+
+/// `SND_PCM_STREAM_PLAYBACK`, the first variant of `snd_pcm_stream_t`.
+const SND_PCM_STREAM_PLAYBACK: c_int = 0;
 
 /// `SND_PCM_STREAM_CAPTURE`, the second variant of `snd_pcm_stream_t`.
 const SND_PCM_STREAM_CAPTURE: c_int = 1;
@@ -85,37 +91,49 @@ const SND_PCM_STATE_RUNNING: c_int = 3;
 
 /// `-EPIPE`: a capture overrun. Recoverable, and the gap it leaves is visible
 /// in the timestamps of the blocks either side of it.
-const ALSA_OVERRUN: c_int = -32;
+/// `-EPIPE`. One value, two names: the device overran a capture stream, or
+/// underran a playback one. Both mean audio is missing and the stream needs
+/// putting back together.
+const ALSA_BROKEN_PIPE: c_int = -32;
 
 /// `-ESTRPIPE`: the stream was suspended (system sleep). `snd_pcm_recover`
 /// handles it too.
 const ALSA_SUSPENDED: c_int = -86;
 
-/// Preferred capture rate. ALSA hands back a range rather than negotiating one
-/// the way PipeWire does, so the arm has to state a preference — 48 kHz is what
-/// every modern device does natively and what the deviceless clock defaults to.
-/// `_near` means the device's own answer is what the stream reports.
-const PREFERRED_CAPTURE_SAMPLE_RATE: c_uint = 48_000;
+/// Preferred rate, in either direction. ALSA hands back a range rather than
+/// negotiating one the way PipeWire does, so the arm has to state a preference
+/// — 48 kHz is what every modern device does natively and what the deviceless
+/// clock defaults to. `_near` means the device's own answer is what the stream
+/// reports.
+const PREFERRED_SAMPLE_RATE: c_uint = 48_000;
 
-/// Preferred channel count. Mono is what a capture endpoint is usually asked
-/// for and what the null arm produces; `_near` lets a stereo-only device say so.
+/// Preferred capture channel count. Mono is what a capture endpoint is usually
+/// asked for and what the null arm produces; `_near` lets a stereo-only device
+/// say so.
 const PREFERRED_CAPTURE_CHANNELS: c_uint = 1;
+
+/// Preferred playback channel count. Stereo rather than the capture side's
+/// mono because that is what a sink almost always is; `_near` lets a mono-only
+/// device say so. The two preferences differ because the devices do, and there
+/// is no resampler on this rung to reconcile them — a speaker refuses a block
+/// whose channel count it cannot play, naming both.
+const PREFERRED_PLAYBACK_CHANNELS: c_uint = 2;
 
 /// Preferred period, ~10.7 ms at 48 kHz — a block small enough to be a useful
 /// latency unit and large enough that a wake per period is not a busy loop.
-const PREFERRED_CAPTURE_PERIOD_SAMPLE_COUNT: SndPcmUframes = 512;
+const PREFERRED_PERIOD_SAMPLE_COUNT: SndPcmUframes = 512;
 
 /// Periods held in the device buffer. Four is the usual floor for surviving a
-/// scheduling hiccup without an overrun.
-const CAPTURE_PERIODS_PER_DEVICE_BUFFER: SndPcmUframes = 4;
+/// scheduling hiccup without a break in the stream.
+const PERIODS_PER_DEVICE_BUFFER: SndPcmUframes = 4;
 
-/// How long the reader thread waits for a period before looking at the stop
+/// How long a transfer thread waits for the device before looking at the stop
 /// flag again. Long enough that it is not a poll loop, short enough that
-/// `stop_delivering` joins promptly.
-const CAPTURE_WAIT_TIMEOUT_MS: c_int = 200;
+/// stopping joins promptly.
+const DEVICE_WAIT_TIMEOUT_MS: c_int = 200;
 
-/// `snd_pcm_wait` returning this many times in a row with no data is a device
-/// that stopped rather than a slow one.
+/// `snd_pcm_wait` returning this many times in a row without releasing the
+/// device is a device that stopped rather than a slow one.
 const CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP: u32 = 25;
 
 /// How many waits the timestamp proof gets. One period answers it, so this is
@@ -188,6 +206,7 @@ alsa_library_entry_points! {
     fn snd_pcm_drop(*mut c_void) -> c_int;
     fn snd_pcm_wait(*mut c_void, c_int) -> c_int;
     fn snd_pcm_readi(*mut c_void, *mut c_void, SndPcmUframes) -> SndPcmSframes;
+    fn snd_pcm_writei(*mut c_void, *const c_void, SndPcmUframes) -> SndPcmSframes;
     fn snd_pcm_recover(*mut c_void, c_int, c_int) -> c_int;
     fn snd_pcm_state(*mut c_void) -> c_int;
 
@@ -363,13 +382,14 @@ impl Drop for AlsaAllocatedObject {
 // its `free` live in, so moving it between threads cannot outlive either.
 unsafe impl Send for AlsaAllocatedObject {}
 
-/// An open capture PCM, closed exactly once when the last holder drops.
-struct OpenedAlsaCapturePcm {
+/// An open PCM in either direction, closed exactly once when the last holder
+/// drops.
+struct OpenedAlsaPcm {
     entry_points: Arc<AlsaLibraryEntryPoints>,
     pcm: *mut c_void,
 }
 
-impl Drop for OpenedAlsaCapturePcm {
+impl Drop for OpenedAlsaPcm {
     fn drop(&mut self) {
         // SAFETY: the pointer came from `snd_pcm_open` and is closed once.
         unsafe { (self.entry_points.snd_pcm_close)(self.pcm) };
@@ -377,12 +397,12 @@ impl Drop for OpenedAlsaCapturePcm {
 }
 
 // A PCM handle is not internally synchronised, so this is a claim about the
-// callers rather than about libasound: the stream makes its own ALSA calls
-// before it spawns the reader thread and after it has joined it, and `Drop`
-// stops delivery before it drops this — so exactly one thread is ever inside
+// callers rather than about libasound: a stream makes its own ALSA calls before
+// it spawns its transfer thread and after it has joined it, and `Drop` stops
+// the transfer before it drops this — so exactly one thread is ever inside
 // libasound with this handle.
-unsafe impl Send for OpenedAlsaCapturePcm {}
-unsafe impl Sync for OpenedAlsaCapturePcm {}
+unsafe impl Send for OpenedAlsaPcm {}
+unsafe impl Sync for OpenedAlsaPcm {}
 
 /// Audio over ALSA, with libasound bound at runtime.
 pub struct AlsaAudioDeviceBackend {
@@ -407,12 +427,12 @@ impl AlsaAudioDeviceBackend {
         // Opened, timed, and closed again: holding a device across the probe
         // would claim a card nothing is capturing from yet.
         let probe_outcome = backend
-            .open_alsa_capture_stream(DEFAULT_CAPTURE_PCM_NAME)
+            .open_alsa_capture_stream(DEFAULT_PCM_NAME)
             .and_then(|mut probe| probe.prove_the_device_can_be_timed());
         if let Err(refusal) = probe_outcome {
             return Err(AudioDeviceBackendArmUnavailableReason::of(format!(
                 "{ALSA_LIBRARY_SONAME} loaded but no capture device answered on \
-                 '{DEFAULT_CAPTURE_PCM_NAME}': {refusal}"
+                 '{DEFAULT_PCM_NAME}': {refusal}"
             )));
         }
 
@@ -438,23 +458,70 @@ impl AlsaAudioDeviceBackend {
 
     /// Open and negotiate one capture stream, before any delivery starts.
     fn open_alsa_capture_stream(&self, pcm_name: &str) -> Result<AlsaAudioCaptureStream> {
-        let opened_pcm = OpenedAlsaCapturePcm::open(&self.entry_points, pcm_name)?;
-        let negotiated_capture_stream =
-            negotiate_capture_stream(&self.entry_points, opened_pcm.pcm, pcm_name)?;
+        let opened_pcm = OpenedAlsaPcm::open(
+            &self.entry_points,
+            pcm_name,
+            AlsaStreamDirection::Capture,
+        )?;
+        let negotiated = negotiate_hardware_parameters(
+            &self.entry_points,
+            opened_pcm.pcm,
+            pcm_name,
+            AlsaStreamDirection::Capture,
+        )?;
+        negotiate_capture_timestamp_contract(
+            &self.entry_points,
+            opened_pcm.pcm,
+            SndPcmUframes::from(negotiated.period_sample_count),
+            pcm_name,
+        )?;
 
         Ok(AlsaAudioCaptureStream {
             opened_pcm: Arc::new(opened_pcm),
-            capture_stream_format: negotiated_capture_stream.capture_stream_format,
-            period_sample_count: negotiated_capture_stream.period_sample_count,
+            capture_stream_format: negotiated.stream_format,
+            period_sample_count: negotiated.period_sample_count,
             device_name: pcm_name.to_string(),
             capture_is_running: false,
             delivery: None,
         })
     }
+
+    /// Open and negotiate one playback stream, before any sample is written.
+    fn open_alsa_playback_stream(&self, pcm_name: &str) -> Result<AlsaAudioPlaybackStream> {
+        let opened_pcm = OpenedAlsaPcm::open(
+            &self.entry_points,
+            pcm_name,
+            AlsaStreamDirection::Playback,
+        )?;
+        let negotiated = negotiate_hardware_parameters(
+            &self.entry_points,
+            opened_pcm.pcm,
+            pcm_name,
+            AlsaStreamDirection::Playback,
+        )?;
+        negotiate_playback_start_contract(
+            &self.entry_points,
+            opened_pcm.pcm,
+            SndPcmUframes::from(negotiated.period_sample_count),
+            pcm_name,
+        )?;
+
+        Ok(AlsaAudioPlaybackStream {
+            opened_pcm: Arc::new(opened_pcm),
+            playback_stream_format: negotiated.stream_format,
+            period_sample_count: negotiated.period_sample_count,
+            device_name: pcm_name.to_string(),
+            playback: None,
+        })
+    }
 }
 
-impl OpenedAlsaCapturePcm {
-    fn open(entry_points: &Arc<AlsaLibraryEntryPoints>, pcm_name: &str) -> Result<Self> {
+impl OpenedAlsaPcm {
+    fn open(
+        entry_points: &Arc<AlsaLibraryEntryPoints>,
+        pcm_name: &str,
+        direction: AlsaStreamDirection,
+    ) -> Result<Self> {
         let pcm_name_for_c = CString::new(pcm_name).map_err(|_| {
             Error::Configuration(format!(
                 "audio device id '{pcm_name}' contains a NUL byte and cannot name an ALSA PCM"
@@ -467,19 +534,56 @@ impl OpenedAlsaCapturePcm {
             (entry_points.snd_pcm_open)(
                 &mut pcm,
                 pcm_name_for_c.as_ptr(),
-                SND_PCM_STREAM_CAPTURE,
+                direction.snd_pcm_stream(),
                 SND_PCM_OPEN_MODE_BLOCKING,
             )
         };
         if opened < 0 || pcm.is_null() {
-            return Err(
-                entry_points.refuse(format_args!("opening capture PCM '{pcm_name}'"), opened)
-            );
+            return Err(entry_points.refuse(
+                format_args!("opening {} PCM '{pcm_name}'", direction.as_word()),
+                opened,
+            ));
         }
         Ok(Self {
             entry_points: Arc::clone(entry_points),
             pcm,
         })
+    }
+}
+
+/// Which way samples travel on a PCM.
+///
+/// Carried rather than duplicated into two open paths: the direction decides
+/// one libasound constant and one word of error text, and everything else
+/// about opening a PCM is the same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlsaStreamDirection {
+    Capture,
+    Playback,
+}
+
+impl AlsaStreamDirection {
+    fn snd_pcm_stream(self) -> c_int {
+        match self {
+            AlsaStreamDirection::Capture => SND_PCM_STREAM_CAPTURE,
+            AlsaStreamDirection::Playback => SND_PCM_STREAM_PLAYBACK,
+        }
+    }
+
+    /// How the direction is spelled in error text a reader has to act on.
+    fn as_word(self) -> &'static str {
+        match self {
+            AlsaStreamDirection::Capture => "capture",
+            AlsaStreamDirection::Playback => "playback",
+        }
+    }
+
+    /// The channel count this direction asks a device for.
+    fn preferred_channels(self) -> c_uint {
+        match self {
+            AlsaStreamDirection::Capture => PREFERRED_CAPTURE_CHANNELS,
+            AlsaStreamDirection::Playback => PREFERRED_PLAYBACK_CHANNELS,
+        }
     }
 }
 
@@ -490,29 +594,38 @@ impl AudioDeviceBackend for AlsaAudioDeviceBackend {
 
     fn open_capture_stream(
         &self,
-        request: &AudioCaptureStreamRequest,
+        request: &AudioDeviceStreamRequest,
     ) -> Result<Box<dyn AudioCaptureStream>> {
-        let pcm_name = request
-            .device_id
-            .as_deref()
-            .unwrap_or(DEFAULT_CAPTURE_PCM_NAME);
+        let pcm_name = request.device_id.as_deref().unwrap_or(DEFAULT_PCM_NAME);
         Ok(Box::new(self.open_alsa_capture_stream(pcm_name)?))
+    }
+
+    fn open_playback_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioPlaybackStream>> {
+        let pcm_name = request.device_id.as_deref().unwrap_or(DEFAULT_PCM_NAME);
+        Ok(Box::new(self.open_alsa_playback_stream(pcm_name)?))
     }
 }
 
-/// What the hardware and software parameter passes settled on.
-struct NegotiatedCaptureStream {
-    capture_stream_format: AudioCaptureStreamFormat,
+/// What the hardware parameter pass settled on.
+struct NegotiatedAlsaStream {
+    stream_format: AudioStreamFormat,
     period_sample_count: u32,
 }
 
-/// Settle the hardware parameters, then the software ones — the second pass is
-/// where the timestamp contract is stated.
-fn negotiate_capture_stream(
+/// Settle the hardware parameters both directions share.
+///
+/// The software pass is the caller's, because it is the half that differs: a
+/// capture stream states the timestamp contract there and a playback stream
+/// states when the device starts.
+fn negotiate_hardware_parameters(
     entry_points: &Arc<AlsaLibraryEntryPoints>,
     pcm: *mut c_void,
     pcm_name: &str,
-) -> Result<NegotiatedCaptureStream> {
+    direction: AlsaStreamDirection,
+) -> Result<NegotiatedAlsaStream> {
     let hardware_parameters = AlsaAllocatedObject::hardware_parameters(entry_points)?;
 
     // SAFETY (every call in this function): `pcm` is an open capture handle and
@@ -535,7 +648,7 @@ fn negotiate_capture_stream(
 
     let sample_format = negotiate_sample_format(entry_points, pcm, hardware_parameters.pointer())?;
 
-    let mut channels = PREFERRED_CAPTURE_CHANNELS;
+    let mut channels = direction.preferred_channels();
     entry_points.refuse_a_negative_return_code(format_args!("a channel count"), unsafe {
         (entry_points.snd_pcm_hw_params_set_channels_near)(
             pcm,
@@ -544,7 +657,7 @@ fn negotiate_capture_stream(
         )
     })?;
 
-    let mut sample_rate = PREFERRED_CAPTURE_SAMPLE_RATE;
+    let mut sample_rate = PREFERRED_SAMPLE_RATE;
     entry_points.refuse_a_negative_return_code(format_args!("a sample rate"), unsafe {
         (entry_points.snd_pcm_hw_params_set_rate_near)(
             pcm,
@@ -554,7 +667,7 @@ fn negotiate_capture_stream(
         )
     })?;
 
-    let mut period_sample_count = PREFERRED_CAPTURE_PERIOD_SAMPLE_COUNT;
+    let mut period_sample_count = PREFERRED_PERIOD_SAMPLE_COUNT;
     entry_points.refuse_a_negative_return_code(format_args!("a period size"), unsafe {
         (entry_points.snd_pcm_hw_params_set_period_size_near)(
             pcm,
@@ -565,7 +678,7 @@ fn negotiate_capture_stream(
     })?;
 
     let mut device_buffer_sample_count =
-        period_sample_count.saturating_mul(CAPTURE_PERIODS_PER_DEVICE_BUFFER);
+        period_sample_count.saturating_mul(PERIODS_PER_DEVICE_BUFFER);
     entry_points.refuse_a_negative_return_code(format_args!("a device buffer size"), unsafe {
         (entry_points.snd_pcm_hw_params_set_buffer_size_near)(
             pcm,
@@ -622,10 +735,8 @@ fn negotiate_capture_stream(
         )));
     }
 
-    negotiate_timestamp_contract(entry_points, pcm, settled_period_sample_count, pcm_name)?;
-
-    Ok(NegotiatedCaptureStream {
-        capture_stream_format: AudioCaptureStreamFormat {
+    Ok(NegotiatedAlsaStream {
+        stream_format: AudioStreamFormat {
             sample_rate: settled_sample_rate,
             channels: settled_channels,
             sample_format,
@@ -645,10 +756,10 @@ fn negotiate_sample_format(
     entry_points: &AlsaLibraryEntryPoints,
     pcm: *mut c_void,
     hardware_parameters: *mut c_void,
-) -> Result<AudioCaptureSampleFormat> {
+) -> Result<AudioSampleFormat> {
     for (alsa_format, sample_format) in [
-        (SND_PCM_FORMAT_FLOAT_LE, AudioCaptureSampleFormat::F32),
-        (SND_PCM_FORMAT_S16_LE, AudioCaptureSampleFormat::I16),
+        (SND_PCM_FORMAT_FLOAT_LE, AudioSampleFormat::F32),
+        (SND_PCM_FORMAT_S16_LE, AudioSampleFormat::I16),
     ] {
         // SAFETY: `pcm` is an open capture handle and `hardware_parameters` a
         // live libasound allocation.
@@ -666,12 +777,12 @@ fn negotiate_sample_format(
     ))
 }
 
-/// State the timestamp contract on the stream before it runs.
+/// State the timestamp contract on a capture stream before it runs.
 ///
 /// This is the whole reason the arm can be trusted for A/V join: without the
 /// tstamp *mode* `snd_pcm_status` reports no time at all, and without the
 /// tstamp *type* it reports one on the wrong clock.
-fn negotiate_timestamp_contract(
+fn negotiate_capture_timestamp_contract(
     entry_points: &Arc<AlsaLibraryEntryPoints>,
     pcm: *mut c_void,
     period_sample_count: SndPcmUframes,
@@ -752,6 +863,262 @@ fn negotiate_timestamp_contract(
     )
 }
 
+/// State when a playback stream starts, before a sample is written.
+///
+/// The start threshold is the whole of it: at one period the device begins
+/// playing as soon as the first period is queued, which is why the writer
+/// thread never calls `snd_pcm_start` — and why recovery must not either,
+/// since starting a prepared stream whose buffer is empty underruns it on the
+/// spot.
+fn negotiate_playback_start_contract(
+    entry_points: &Arc<AlsaLibraryEntryPoints>,
+    pcm: *mut c_void,
+    period_sample_count: SndPcmUframes,
+    pcm_name: &str,
+) -> Result<()> {
+    let software_parameters = AlsaAllocatedObject::software_parameters(entry_points)?;
+
+    // SAFETY (every call here): `pcm` is an open playback handle whose hardware
+    // parameters are applied, and the parameter object is a live libasound
+    // allocation; every out-parameter is an owned local outliving its call.
+    entry_points.refuse_a_negative_return_code(
+        format_args!("reading the software parameters of '{pcm_name}'"),
+        unsafe { (entry_points.snd_pcm_sw_params_current)(pcm, software_parameters.pointer()) },
+    )?;
+
+    // Wake the writer once a whole period of room is free, so it assembles one
+    // period per wake rather than dribbling frames in.
+    entry_points.refuse_a_negative_return_code(
+        format_args!("a one-period wake threshold"),
+        unsafe {
+            (entry_points.snd_pcm_sw_params_set_avail_min)(
+                pcm,
+                software_parameters.pointer(),
+                period_sample_count,
+            )
+        },
+    )?;
+
+    entry_points.refuse_a_negative_return_code(
+        format_args!("a one-period start threshold"),
+        unsafe {
+            (entry_points.snd_pcm_sw_params_set_start_threshold)(
+                pcm,
+                software_parameters.pointer(),
+                period_sample_count,
+            )
+        },
+    )?;
+
+    entry_points.refuse_a_negative_return_code(
+        format_args!("the playback start contract on '{pcm_name}'"),
+        unsafe { (entry_points.snd_pcm_sw_params)(pcm, software_parameters.pointer()) },
+    )
+}
+
+/// The writer thread and the flag that stops it.
+struct PlaybackWriterThread {
+    stop_requested: Arc<AtomicBool>,
+    writer_thread: JoinHandle<()>,
+}
+
+/// One ALSA playback stream, negotiated and ready to run.
+struct AlsaAudioPlaybackStream {
+    opened_pcm: Arc<OpenedAlsaPcm>,
+    playback_stream_format: AudioStreamFormat,
+    period_sample_count: u32,
+    /// What the caller named, or `default` — for error text a reader can act on.
+    device_name: String,
+    playback: Option<PlaybackWriterThread>,
+}
+
+impl AudioPlaybackStream for AlsaAudioPlaybackStream {
+    fn stream_format(&self) -> AudioStreamFormat {
+        self.playback_stream_format
+    }
+
+    fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
+        self.stop_requesting()?;
+
+        let entry_points = &self.opened_pcm.entry_points;
+        // SAFETY: any writer thread has been joined, so this is the only thread
+        // holding the handle.
+        entry_points.refuse_a_negative_return_code(
+            format_args!("preparing playback on '{}'", self.device_name),
+            unsafe { (entry_points.snd_pcm_prepare)(self.opened_pcm.pcm) },
+        )?;
+
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let writer_thread = spawn_playback_writer_thread(PlaybackWriterThreadInputs {
+            opened_pcm: Arc::clone(&self.opened_pcm),
+            playback_stream_format: self.playback_stream_format,
+            period_sample_count: self.period_sample_count,
+            device_name: self.device_name.clone(),
+            stop_requested: Arc::clone(&stop_requested),
+            hand_off,
+        })?;
+        self.playback = Some(PlaybackWriterThread {
+            stop_requested,
+            writer_thread,
+        });
+        Ok(())
+    }
+
+    fn stop_requesting(&mut self) -> Result<()> {
+        let Some(playback) = self.playback.take() else {
+            return Ok(());
+        };
+        playback.stop_requested.store(true, Ordering::Release);
+        // Joining is what the trait's "the hand-off is not called again once
+        // this returns" means here: the writer owns the hand-off and drops it
+        // as it ends, so nothing can still be inside it afterwards.
+        let writer_panicked = playback.writer_thread.join().is_err();
+
+        // Dropped rather than drained: a stop is a stop, and draining would
+        // hold the runtime's shutdown chain for whatever the device still has
+        // buffered. The device is wound back before the panic is reported, so
+        // a writer that died does not also leave a running PCM for the next
+        // start to trip over.
+        let entry_points = &self.opened_pcm.entry_points;
+        // SAFETY: the writer thread has been joined, so this is the only thread
+        // holding the handle.
+        let stopped = entry_points.refuse_a_negative_return_code(
+            format_args!("stopping playback on '{}'", self.device_name),
+            unsafe { (entry_points.snd_pcm_drop)(self.opened_pcm.pcm) },
+        );
+        if writer_panicked {
+            if let Err(refusal) = stopped {
+                tracing::warn!(device = %self.device_name, %refusal, "ALSA playback did not stop");
+            }
+            return Err(Error::Runtime(format!(
+                "the ALSA playback writer for '{}' panicked",
+                self.device_name
+            )));
+        }
+        stopped
+    }
+}
+
+impl Drop for AlsaAudioPlaybackStream {
+    fn drop(&mut self) {
+        if let Err(refusal) = self.stop_requesting() {
+            tracing::warn!(
+                device = %self.device_name,
+                %refusal,
+                "ALSA playback stream did not stop cleanly on drop"
+            );
+        }
+    }
+}
+
+/// Everything the writer thread owns, handed over in one move.
+struct PlaybackWriterThreadInputs {
+    opened_pcm: Arc<OpenedAlsaPcm>,
+    playback_stream_format: AudioStreamFormat,
+    period_sample_count: u32,
+    device_name: String,
+    stop_requested: Arc<AtomicBool>,
+    hand_off: AudioBlockForPlaybackHandOff,
+}
+
+fn spawn_playback_writer_thread(inputs: PlaybackWriterThreadInputs) -> Result<JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name(format!("streamlib-alsa-playback-{}", inputs.device_name))
+        .spawn(move || run_playback_writer_thread(inputs))
+        .map_err(|e| {
+            Error::Runtime(format!(
+                "the ALSA playback writer thread could not start: {e}"
+            ))
+        })
+}
+
+fn run_playback_writer_thread(inputs: PlaybackWriterThreadInputs) {
+    let PlaybackWriterThreadInputs {
+        opened_pcm,
+        playback_stream_format,
+        period_sample_count,
+        device_name,
+        stop_requested,
+        hand_off,
+    } = inputs;
+    let entry_points = &opened_pcm.entry_points;
+
+    // A PipeWire client is granted realtime by the daemon; an ALSA client has
+    // to ask. Failure is logged and the thread continues on `SCHED_OTHER`,
+    // which is what a container without rtkit gets.
+    if let Err(refusal) = apply_thread_priority(ThreadPriority::RealTime) {
+        tracing::debug!(
+            device = %device_name,
+            %refusal,
+            "ALSA playback writer stays best-effort: realtime scheduling was refused"
+        );
+    }
+
+    let mut one_period_interleaved_sample_bytes =
+        vec![0u8; playback_stream_format.interleaved_byte_count_for(period_sample_count)];
+    let mut consecutive_silent_waits = 0;
+
+    while !stop_requested.load(Ordering::Acquire) {
+        // A prepared playback stream has its whole buffer free, so the first
+        // wait returns at once and the device starts on the first write the
+        // start threshold sees.
+        match wait_for_the_device_to_release_a_period(
+            entry_points,
+            opened_pcm.pcm,
+            &device_name,
+            AlsaStreamDirection::Playback,
+        ) {
+            Ok(DevicePeriodReadiness::Ready) => consecutive_silent_waits = 0,
+            Ok(DevicePeriodReadiness::NothingYet) => {
+                consecutive_silent_waits += 1;
+                if consecutive_silent_waits >= CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
+                    tracing::error!(
+                        device = %device_name,
+                        "ALSA playback writer stopping: the device took nothing for {} \
+                         consecutive waits",
+                        consecutive_silent_waits
+                    );
+                    return;
+                }
+                continue;
+            }
+            Err(refusal) => {
+                tracing::error!(device = %device_name, %refusal, "ALSA playback writer stopping");
+                return;
+            }
+        }
+
+        hand_off(AudioBlockRequestedByDevice {
+            interleaved_sample_bytes_to_fill: &mut one_period_interleaved_sample_bytes,
+            sample_count: period_sample_count,
+        });
+
+        // SAFETY: the buffer holds exactly a period at the negotiated format,
+        // and `pcm` is open and prepared; only this thread touches it. Blocking
+        // mode, so this returns once the device has taken every frame.
+        let written = unsafe {
+            (entry_points.snd_pcm_writei)(
+                opened_pcm.pcm,
+                one_period_interleaved_sample_bytes.as_ptr().cast::<c_void>(),
+                SndPcmUframes::from(period_sample_count),
+            )
+        };
+        if written < 0 {
+            let error_code = c_int::try_from(written).unwrap_or(c_int::MIN);
+            if recover_from_a_transfer_failure(
+                entry_points,
+                opened_pcm.pcm,
+                &device_name,
+                error_code,
+                AlsaStreamDirection::Playback,
+            ) == AlsaTransferRecovery::StreamIsUnusable
+            {
+                return;
+            }
+        }
+    }
+}
+
 /// The reader thread and the flag that stops it.
 struct CaptureDeliveryThread {
     stop_requested: Arc<AtomicBool>,
@@ -760,8 +1127,8 @@ struct CaptureDeliveryThread {
 
 /// One ALSA capture stream, negotiated and ready to run.
 struct AlsaAudioCaptureStream {
-    opened_pcm: Arc<OpenedAlsaCapturePcm>,
-    capture_stream_format: AudioCaptureStreamFormat,
+    opened_pcm: Arc<OpenedAlsaPcm>,
+    capture_stream_format: AudioStreamFormat,
     period_sample_count: u32,
     /// What the caller named, or `default` — for error text a reader can act on.
     device_name: String,
@@ -775,7 +1142,7 @@ struct AlsaAudioCaptureStream {
 }
 
 impl AudioCaptureStream for AlsaAudioCaptureStream {
-    fn stream_format(&self) -> AudioCaptureStreamFormat {
+    fn stream_format(&self) -> AudioStreamFormat {
         self.capture_stream_format
     }
 
@@ -886,7 +1253,7 @@ impl AlsaAudioCaptureStream {
                 self.opened_pcm.pcm,
                 device_status,
                 &self.device_name,
-            )? == PeriodReadiness::NothingYet
+            )? == DevicePeriodReadiness::NothingYet
             {
                 continue;
             }
@@ -951,9 +1318,9 @@ fn prepare_and_start_capture(
 
 /// Everything the reader thread owns, handed over in one move.
 struct CaptureReaderThreadInputs {
-    opened_pcm: Arc<OpenedAlsaCapturePcm>,
+    opened_pcm: Arc<OpenedAlsaPcm>,
     device_status: AlsaAllocatedObject,
-    capture_stream_format: AudioCaptureStreamFormat,
+    capture_stream_format: AudioStreamFormat,
     period_sample_count: u32,
     device_name: String,
     stop_requested: Arc<AtomicBool>,
@@ -1005,8 +1372,8 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
             &device_status,
             &device_name,
         ) {
-            Ok(PeriodReadiness::Readable) => consecutive_silent_waits = 0,
-            Ok(PeriodReadiness::NothingYet) => {
+            Ok(DevicePeriodReadiness::Ready) => consecutive_silent_waits = 0,
+            Ok(DevicePeriodReadiness::NothingYet) => {
                 consecutive_silent_waits += 1;
                 if consecutive_silent_waits >= CONSECUTIVE_SILENT_WAITS_BEFORE_GIVING_UP {
                     tracing::error!(
@@ -1050,8 +1417,13 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
         };
         if read < 0 {
             let error_code = c_int::try_from(read).unwrap_or(c_int::MIN);
-            if recover_from_a_read_failure(entry_points, opened_pcm.pcm, &device_name, error_code)
-                == CaptureReadRecovery::StreamIsUnusable
+            if recover_from_a_transfer_failure(
+                entry_points,
+                opened_pcm.pcm,
+                &device_name,
+                error_code,
+                AlsaStreamDirection::Capture,
+            ) == AlsaTransferRecovery::StreamIsUnusable
             {
                 return;
             }
@@ -1073,11 +1445,43 @@ fn run_capture_reader_thread(inputs: CaptureReaderThreadInputs) {
     }
 }
 
-/// Whether a wait produced a whole readable period.
+/// Whether a wait produced a whole period the device is ready to transfer —
+/// samples to read on a capture stream, room to write on a playback one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PeriodReadiness {
-    Readable,
+enum DevicePeriodReadiness {
+    Ready,
     NothingYet,
+}
+
+/// Wait for the device to release a period in whichever direction it runs.
+///
+/// The wait is the cadence on this arm — `snd_pcm_wait` returns when the device
+/// says so, not when a timer does — which is what makes an ALSA stream
+/// device-paced despite the arm owning the thread.
+fn wait_for_the_device_to_release_a_period(
+    entry_points: &AlsaLibraryEntryPoints,
+    pcm: *mut c_void,
+    device_name: &str,
+    direction: AlsaStreamDirection,
+) -> Result<DevicePeriodReadiness> {
+    // SAFETY: `pcm` is an open, started handle held by this thread alone;
+    // `snd_pcm_wait` polls it and returns without touching anything else.
+    let waited = unsafe { (entry_points.snd_pcm_wait)(pcm, DEVICE_WAIT_TIMEOUT_MS) };
+    if waited == 0 {
+        return Ok(DevicePeriodReadiness::NothingYet);
+    }
+    if waited < 0 {
+        if recover_from_a_transfer_failure(entry_points, pcm, device_name, waited, direction)
+            == AlsaTransferRecovery::StreamIsUnusable
+        {
+            return Err(entry_points.refuse(
+                format_args!("waiting on '{device_name}' for {}", direction.as_word()),
+                waited,
+            ));
+        }
+        return Ok(DevicePeriodReadiness::NothingYet);
+    }
+    Ok(DevicePeriodReadiness::Ready)
 }
 
 /// Wait for a period, then fill `status` with the device's own account of where
@@ -1092,23 +1496,15 @@ fn read_status_of_a_readable_period(
     pcm: *mut c_void,
     device_status: &AlsaAllocatedObject,
     device_name: &str,
-) -> Result<PeriodReadiness> {
-    // SAFETY: `pcm` is an open, started capture handle held by this thread
-    // alone; `snd_pcm_wait` polls it and returns without touching anything else.
-    let waited = unsafe { (entry_points.snd_pcm_wait)(pcm, CAPTURE_WAIT_TIMEOUT_MS) };
-    if waited == 0 {
-        return Ok(PeriodReadiness::NothingYet);
-    }
-    if waited < 0 {
-        if recover_from_a_read_failure(entry_points, pcm, device_name, waited)
-            == CaptureReadRecovery::StreamIsUnusable
-        {
-            return Err(entry_points.refuse(
-                format_args!("waiting for samples from '{device_name}'"),
-                waited,
-            ));
-        }
-        return Ok(PeriodReadiness::NothingYet);
+) -> Result<DevicePeriodReadiness> {
+    if wait_for_the_device_to_release_a_period(
+        entry_points,
+        pcm,
+        device_name,
+        AlsaStreamDirection::Capture,
+    )? == DevicePeriodReadiness::NothingYet
+    {
+        return Ok(DevicePeriodReadiness::NothingYet);
     }
 
     // SAFETY: `pcm` is open and the status is a live libasound allocation.
@@ -1116,47 +1512,56 @@ fn read_status_of_a_readable_period(
         format_args!("reading the device status of '{device_name}'"),
         unsafe { (entry_points.snd_pcm_status)(pcm, device_status.pointer()) },
     )?;
-    Ok(PeriodReadiness::Readable)
+    Ok(DevicePeriodReadiness::Ready)
 }
 
-/// Whether a stream survived a failed read.
+/// Whether a stream survived a failed transfer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CaptureReadRecovery {
-    ReadingMayContinue,
+enum AlsaTransferRecovery {
+    TransferMayContinue,
     StreamIsUnusable,
 }
 
-/// Ask libasound to put a broken stream back together and start it running
-/// again, and say whether reading may continue.
+/// Ask libasound to put a broken stream back together, and say whether the
+/// transfer may continue.
 ///
-/// An overrun leaves a gap, and the gap is left visible rather than papered
-/// over: the timestamps and sample counts of the blocks either side of it say
-/// exactly how much audio went missing.
-fn recover_from_a_read_failure(
+/// A break leaves a gap, and the gap is left visible rather than papered over:
+/// on capture the timestamps and sample counts either side of it say exactly
+/// how much audio went missing, and on playback the count of what the device
+/// had to be given instead does.
+///
+/// One function for both directions because everything but the restart is the
+/// same, and the restart is the one thing that must *not* be: a capture stream
+/// this arm started by hand has to be started again, and starting a prepared
+/// playback stream whose buffer is empty underruns it on the spot.
+fn recover_from_a_transfer_failure(
     entry_points: &AlsaLibraryEntryPoints,
     pcm: *mut c_void,
     device_name: &str,
     error_code: c_int,
-) -> CaptureReadRecovery {
-    // SAFETY: `pcm` is an open capture handle held by this thread alone.
+    direction: AlsaStreamDirection,
+) -> AlsaTransferRecovery {
+    // SAFETY: `pcm` is an open handle held by this thread alone.
     let recovered = unsafe { (entry_points.snd_pcm_recover)(pcm, error_code, 1) };
     if recovered < 0 {
         tracing::error!(
             device = %device_name,
-            "ALSA capture could not recover from {}: {}",
+            "ALSA {} could not recover from {}: {}",
+            direction.as_word(),
             entry_points.error_text(error_code),
             entry_points.error_text(recovered)
         );
-        return CaptureReadRecovery::StreamIsUnusable;
+        return AlsaTransferRecovery::StreamIsUnusable;
     }
     // Which state recovery left the stream in depends on what broke it, so the
     // stream is asked rather than assumed. `snd_pcm_prepare` against a running
     // PCM is `EBUSY` on a raw device — and silently fine through the PipeWire
     // ALSA plugin, which is why only a rig with real hardware would ever show
     // it.
-    // SAFETY: `pcm` is an open capture handle held by this thread alone.
+    // SAFETY: `pcm` is an open handle held by this thread alone.
     let state_recovery_left = unsafe { (entry_points.snd_pcm_state)(pcm) };
-    if a_recovered_stream_still_has_to_be_started(state_recovery_left)
+    if direction == AlsaStreamDirection::Capture
+        && a_recovered_stream_still_has_to_be_started(state_recovery_left)
         && let Err(refusal) = prepare_and_start_capture(entry_points, pcm, device_name)
     {
         tracing::error!(
@@ -1164,17 +1569,18 @@ fn recover_from_a_read_failure(
             %refusal,
             "ALSA capture recovered but could not be restarted"
         );
-        return CaptureReadRecovery::StreamIsUnusable;
+        return AlsaTransferRecovery::StreamIsUnusable;
     }
-    if error_code == ALSA_OVERRUN || error_code == ALSA_SUSPENDED {
+    if error_code == ALSA_BROKEN_PIPE || error_code == ALSA_SUSPENDED {
         tracing::warn!(
             device = %device_name,
-            "ALSA capture recovered from {} — the audio it covers is missing, and the gap \
-             is derivable from the timestamps of the blocks either side of it",
+            "ALSA {} recovered from {} — the audio it covers is missing, and the gap is \
+             derivable from the timestamps of the blocks either side of it",
+            direction.as_word(),
             entry_points.error_text(error_code)
         );
     }
-    CaptureReadRecovery::ReadingMayContinue
+    AlsaTransferRecovery::TransferMayContinue
 }
 
 /// Whether a stream `snd_pcm_recover` handed back still has to be started.
@@ -1460,7 +1866,7 @@ mod tests {
         // The two error codes have no name function; they are plain errnos, and
         // comparing them to the C library's own is exact where comparing
         // `snd_strerror` text would depend on the locale.
-        assert_eq!(-ALSA_OVERRUN, libc::EPIPE, "a capture overrun is EPIPE");
+        assert_eq!(-ALSA_BROKEN_PIPE, libc::EPIPE, "a capture overrun is EPIPE");
         assert_eq!(
             -ALSA_SUSPENDED,
             libc::ESTRPIPE,

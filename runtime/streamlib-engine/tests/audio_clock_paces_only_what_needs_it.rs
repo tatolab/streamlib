@@ -19,7 +19,7 @@ use serial_test::serial;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::context::{
-    AudioCaptureStream, AudioCaptureStreamRequest, AudioDeviceBackend, SilentNullAudioDeviceBackend,
+    AudioCaptureStream, AudioDeviceStreamRequest, AudioDeviceBackend, SilentNullAudioDeviceBackend,
 };
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
@@ -63,7 +63,7 @@ impl streamlib_engine::ManualProcessor for ProcessorThatPacesOnTheAudioClock::Pr
         // happens to have — a device-paced arm ignores the clock by design,
         // which is the very thing that makes one cadence source true.
         self.capture_stream = Some(SilentNullAudioDeviceBackend.open_capture_stream(
-            &AudioCaptureStreamRequest {
+            &AudioDeviceStreamRequest {
                 device_id: None,
                 deviceless_pacing_clock: std::sync::Arc::clone(ctx.audio_clock()),
             },
