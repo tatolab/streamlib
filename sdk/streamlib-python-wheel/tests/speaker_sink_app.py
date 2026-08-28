@@ -46,6 +46,10 @@ def main() -> None:
             print("MARKER:EVERY_PROCESSOR_RUNNING", flush=True)
         except RuntimeError as refusal:
             print(f"MARKER:NOT_EVERY_PROCESSOR_RUNNING {refusal}", flush=True)
+            # Shut down rather than leave `run()` holding the main thread: a
+            # speaker that refused the microphone's format will never reach
+            # Running, so waiting for it is waiting for nothing.
+            runtime.shutdown()
 
     threading.Thread(target=watch_readiness, daemon=True).start()
     runtime.run()

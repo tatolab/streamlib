@@ -82,9 +82,28 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     Added with no `config`, so this is also the added-without-config proof.
     """
     app = start_app_under_test(SPEAKER_SINK_APP)
-    app.await_output_containing(
-        "MARKER:EVERY_PROCESSOR_RUNNING", "the speaker to open its device"
-    )
+    # Whichever of the two readiness markers arrives — the app emits exactly
+    # one, and waiting for the good one alone would wait out the harness
+    # timeout on the very machine the skip below exists for.
+    app.await_output_containing("PROCESSOR_RUNNING", "the speaker to open its device")
+
+    # A format mismatch between this machine's default source and default sink
+    # is a property of the machine, not a defect: the two built-ins ask their
+    # devices for different channel counts by construction, and with no
+    # resampler on this rung the refusal is the designed answer. Skipped rather
+    # than failed, because the question this test asks cannot be answered on
+    # such a pair — and skipped rather than passed, because a refused run
+    # played nothing and every assertion below would be measuring an empty
+    # graph.
+    if "MARKER:NOT_EVERY_PROCESSOR_RUNNING" in app.output:
+        app.await_marker("CLEAN_EXIT")
+        app.await_clean_exit()
+        refusal = REFUSED_FORMAT.search(app.output)
+        pytest.skip(
+            "this machine's default source and default sink disagree on format, and "
+            f"there is no resampler on this rung: {refusal.group(0) if refusal else app.output}"
+        )
+
     # Blocks really moving on the port the speaker reads, rather than a sleep
     # guessing that they are.
     app.await_output_containing(
@@ -93,20 +112,6 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
-
-    # A format mismatch between this machine's default source and default sink
-    # is a property of the machine, not a defect: the two built-ins ask their
-    # devices for different channel counts by construction, and with no
-    # resampler on this rung the refusal is the designed answer. Skipped rather
-    # than failed, because the question this test asks cannot be answered on
-    # such a pair — and skipped rather than passed, because a refused run
-    # played nothing and everything below would be measuring an empty graph.
-    refusal = REFUSED_FORMAT.search(app.output)
-    if refusal is not None:
-        pytest.skip(
-            "this machine's default source and default sink disagree on format, and "
-            f"there is no resampler on this rung: {refusal.group(0)}"
-        )
 
     assert "SpeakerSink: playback stream opened" in app.output, (
         f"the speaker never opened a device:\n{app.output}"

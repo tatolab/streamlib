@@ -14,6 +14,11 @@
 
 #![cfg(target_os = "linux")]
 
+use std::sync::Arc;
+
+use streamlib_engine::core::context::{
+    AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, SoftwareAudioClock,
+};
 use streamlib_engine::linux_alsa_audio_device_backend::AlsaAudioDeviceBackend;
 
 mod audio_arm_playback_contract;
@@ -22,15 +27,28 @@ use audio_arm_playback_contract::{
     assert_the_device_asks_for_whole_periods_of_its_own_format,
 };
 
-/// The arm, or `None` when this machine has no `libasound` and no audio
-/// hardware at all.
+/// The arm, or `None` when this machine cannot play audio through it.
 ///
 /// The arm's own probe opens a *capture* device, because that is what the chain
-/// demotes on. A host with a capture device and no playback device is not a
-/// shape this skips over quietly — it fails when the playback stream is opened,
-/// which is the honest answer for a machine that cannot play audio.
+/// demotes on — so a capture-only host passes it and then panics inside the
+/// shared suite's `expect`. Playback is probed here instead, and a host that
+/// has none skips: it genuinely cannot answer the question these tests ask,
+/// and an `expect` that aborts is not a more honest answer than saying so.
+/// A failure *after* the suite has a stream is left to propagate, which is
+/// where a real defect shows up.
 fn alsa_arm() -> Option<AlsaAudioDeviceBackend> {
-    AlsaAudioDeviceBackend::load_and_open().ok()
+    let backend = AlsaAudioDeviceBackend::load_and_open().ok()?;
+    // Opened and dropped: holding it across the probe would claim a device the
+    // suite is about to open for itself.
+    backend
+        .open_playback_stream(&AudioDeviceStreamRequest {
+            device_id: None,
+            deviceless_pacing_clock: Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(
+                48_000, 512,
+            ))),
+        })
+        .ok()?;
+    Some(backend)
 }
 
 #[test]

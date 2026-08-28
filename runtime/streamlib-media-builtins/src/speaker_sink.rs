@@ -371,6 +371,11 @@ fn drain_blocks_into_playback(
                         "SpeakerSink: failed to read an audio block"
                     );
                 }
+                // Parked like an empty port rather than retried at once: a
+                // producer publishing frames this cannot decode would
+                // otherwise spin this thread at full tilt against a device
+                // that only needs it every quantum.
+                std::thread::park_timeout(DRAIN_IDLE_PARK_INTERVAL);
                 continue;
             }
         };

@@ -133,7 +133,12 @@ pub fn assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
             let first_request_count = Arc::clone(&first_request_count);
             move |requested: AudioBlockRequestedByDevice<'_>| {
                 requested.interleaved_sample_bytes_to_fill.fill(0);
-                first_request_count.fetch_add(1, Ordering::Relaxed);
+                // Release, not Relaxed: the assertions below read this with
+                // Acquire to decide whether a callback ran after the stop, and
+                // a Relaxed increment pairs with nothing — the load could
+                // observe the pre-stop count and pass over exactly the
+                // violation it is watching for.
+                first_request_count.fetch_add(1, Ordering::Release);
                 let _ = first_sender.send(());
             }
         }))
