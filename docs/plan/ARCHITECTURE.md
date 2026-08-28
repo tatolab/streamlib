@@ -225,8 +225,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   raising at read); in Rust the read target's `Deserialize` impl is the validation,
   always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_read_into_target.py -->
-- **DECIDED** — Channel policy is one word declared port-locally at the consuming input
-  port. Every input port declares its delivery profile explicitly — there is no default
+- **DECIDED** — The delivery profile is the whole of channel policy: one word, declared
+  port-locally at the consuming input port. Every input port declares its delivery profile explicitly — there is no default
   and nothing left to infer one from, so an input port without one is a wiring error.
   Ring depth and overflow policy are engine-chosen and are not authorable: no port
   declares a depth, a leak policy, or a queue element, and there is no second surface
@@ -250,7 +250,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
   unreachable: no profile resolves to it and the overflow policy it was the second half
   of goes with it. A processor publishing to a slow consumer loses bags at that
-  consumer's port and is told so; it is never parked. The capability was never engineered
+  consumer's port, where the loss is counted; it is never parked. The capability was never engineered
   — the engine never chose the blocking semantics it would have had, and a parked
   producer cannot observe shutdown — and keeping it cost the tree two standing
   workarounds. Counted drops land before or with the deletion, so the alternative to

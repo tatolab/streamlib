@@ -93,7 +93,8 @@ Lite, HA Voice PE) condition in hardware before the host sees audio. `SpeakerSin
 immediate cancel + played-up-to timestamps serve barge-in (~200 ms human turn-gap
 target) and feed the AEC reference — one mechanism. Soft realtime is the calibrated
 target: capture sits at ~3% of a conversational budget (LLM inference dominates), so
-the invariants are zero dropped samples and AEC alignment, not sub-5 ms heroics.
+the invariants are no silent drops (every drop counted and surfaced, per
+`delivery-profile-vocabulary.md`) and AEC alignment, not sub-5 ms heroics.
 
 **Audio plugins: OPEN with direction, strict admission test.** No surveyed physical-AI
 or voice system hosts audio plugins; the DSP they need ships as permissive libraries

@@ -26,8 +26,10 @@ depth, a leak policy, or a queue element, and no second surface tunes one.
 It did not work, and the shape of the failure is not a bug to fix at the margin.
 
 `Lossless` resolved to `Overflow::Block`, which sets iceoryx2's service-level
-`enable_safe_overflow = false` — the publisher blocks when the subscriber's shared-memory
-ring fills. That ring never fills. `InputMailboxesInner::receive_pending` drains it
+`enable_safe_overflow = false` — leaving full-buffer handling to the publisher's
+`unable_to_deliver_strategy`, an upstream default the engine never set, which may block
+or may error (see §Producer blocking below). Even that never engages, because the
+subscriber's shared-memory ring never fills. `InputMailboxesInner::receive_pending` drains it
 **completely** into a host-side `PortMailbox` on every call, and the reactive runner calls
 it between every `process()` invocation. `PortMailbox::push` then evicts its oldest entry
 unconditionally, whatever profile the port declared.
