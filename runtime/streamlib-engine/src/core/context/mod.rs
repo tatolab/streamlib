@@ -26,9 +26,9 @@ pub use audio_clock::{
 pub use audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFormat,
-    AudioStreamLivenessReport, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
-    SharedAudioDeviceBackend, probe_audio_device_backend,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFailureRecorder,
+    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff, SharedAudioDeviceBackend, probe_audio_device_backend,
 };
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;

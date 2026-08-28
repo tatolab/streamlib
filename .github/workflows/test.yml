@@ -144,7 +144,24 @@ jobs:
             core::compiler::compiler_ops::subprocess_escalate::tests::parse_texture_usages \
             core::compiler::compiler_ops::subprocess_escalate::tests::the_implied_copy_bits \
             core::context::audio_device_backend \
-            core::context::silent_null_audio_device_backend
+            core::context::silent_null_audio_device_backend \
+            linux::alsa_audio_device_backend::tests::a_thread_that_stopped_because_it_was_told_to_reports_no_failure \
+            linux::alsa_audio_device_backend::tests::every_way_a_thread_dies_early_reaches_the_owner_naming_what_happened \
+            linux::alsa_audio_device_backend::tests::a_stalled_device_is_described_by_what_that_direction_stopped_doing \
+            linux::pipewire_audio_device_backend::tests::a_failure_the_shim_reports_lands_in_the_report_the_owner_holds \
+            linux::pipewire_audio_device_backend::tests::a_failure_the_daemon_did_not_explain_is_still_reported_as_one
+          # The two arms' own liveness tests are named one by one rather than
+          # by module: their modules also hold tests that dlopen libasound and
+          # walk a real PCM, which this runner has no `/dev/snd` for. These
+          # five touch neither — they drive a thread's exit value and the
+          # shim's failure trampoline directly.
+          # The deviceless arm's two integration binaries. Both assert the
+          # seam's contract on the one arm that needs no hardware, which is
+          # what their module docs claim and what nothing else in CI covers:
+          # every other arm of the audio suite is rig-gated.
+          cargo test --locked -p streamlib-engine \
+            --test silent_null_arm_plays_what_it_is_given \
+            --test silent_null_arm_captures_without_ever_dying
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU

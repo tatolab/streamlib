@@ -14,6 +14,7 @@
 //! `pipewire_audio_shim.c` compiles those in and calls libpipewire only
 //! through the pointers this module hands it.
 
+use std::borrow::Cow;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::Arc;
 
@@ -22,8 +23,9 @@ use libloading::Library;
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFormat,
-    AudioStreamLivenessReport, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFailureRecorder,
+    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
+    CapturedAudioBlockHandOff,
 };
 use crate::core::{Error, Result};
 
@@ -342,19 +344,22 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     ) -> Result<Box<dyn AudioCaptureStream>> {
         let (opened, capture_stream_format) =
             self.open_audio_stream(audio_shim::STREAM_DIRECTION_CAPTURE, request)?;
+        let (failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
         let capture_stream = PipeWireAudioCaptureStream {
             opened,
             capture_stream_format,
             installed_hand_off: None,
-            liveness_report: Box::new(AudioStreamLivenessReport::of_a_stream_that_has_not_failed()),
+            failure_recorder: Box::new(failure_recorder),
+            liveness_report,
         };
-        // SAFETY: the stream is live, and the report it points at is owned by
+        // SAFETY: the stream is live, and the recorder it points at is owned by
         // the struct being returned, whose drop order frees it only after the
         // close that retires this hand-off.
         unsafe {
-            report_failures_of(
+            install_the_shims_failure_hand_off_pointing_at(
                 capture_stream.opened.audio_stream,
-                &capture_stream.liveness_report,
+                &capture_stream.failure_recorder,
             );
         }
         Ok(Box::new(capture_stream))
@@ -366,17 +371,20 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
     ) -> Result<Box<dyn AudioPlaybackStream>> {
         let (opened, playback_stream_format) =
             self.open_audio_stream(audio_shim::STREAM_DIRECTION_PLAYBACK, request)?;
+        let (failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
         let playback_stream = PipeWireAudioPlaybackStream {
             opened,
             playback_stream_format,
             installed_hand_off: None,
-            liveness_report: Box::new(AudioStreamLivenessReport::of_a_stream_that_has_not_failed()),
+            failure_recorder: Box::new(failure_recorder),
+            liveness_report,
         };
         // SAFETY: as for the capture stream above.
         unsafe {
-            report_failures_of(
+            install_the_shims_failure_hand_off_pointing_at(
                 playback_stream.opened.audio_stream,
-                &playback_stream.liveness_report,
+                &playback_stream.failure_recorder,
             );
         }
         Ok(Box::new(playback_stream))
@@ -512,30 +520,29 @@ unsafe impl Send for OpenedPipeWireAudioStream {}
 /// here: the shim keeps the first reason and calls this at most once for the
 /// life of a stream.
 unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
-    liveness_report_context: *mut c_void,
+    failure_recorder_context: *mut c_void,
     reason: *const c_char,
 ) {
-    // SAFETY: the context is the address of the report *inside* the box the
+    // SAFETY: the context is the address of the recorder *inside* the box the
     // stream installed under the loop lock — which is why the box is there,
     // since the struct holding it moves and that heap address does not. `close`
     // retires this hand-off under that same lock before the box is dropped, so
-    // the report is live for the length of this call.
-    let liveness_report = unsafe { &*liveness_report_context.cast::<AudioStreamLivenessReport>() };
-    let reason = if reason.is_null() {
-        "the PipeWire stream entered its error state".to_string()
+    // the recorder is live for the length of this call.
+    let failure_recorder =
+        unsafe { &*failure_recorder_context.cast::<AudioStreamFailureRecorder>() };
+    let reason: Cow<'_, str> = if reason.is_null() {
+        Cow::Borrowed("the PipeWire stream entered its error state")
     } else {
         // SAFETY: the shim hands over its own NUL-terminated failure text,
         // which stays valid until this returns.
-        unsafe { CStr::from_ptr(reason) }
-            .to_string_lossy()
-            .into_owned()
+        unsafe { CStr::from_ptr(reason) }.to_string_lossy()
     };
-    liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+    failure_recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
         format!("the PipeWire stream stopped serving its device: {reason}"),
     ));
 }
 
-/// Point the shim's failure hand-off at a stream's own report.
+/// Install the shim's failure hand-off, pointing it at a stream's own recorder.
 ///
 /// Done at open rather than at the first delivery: a stream that dies while its
 /// owner has it stopped has still died, and an owner that stops and looks has
@@ -543,20 +550,20 @@ unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
 ///
 /// # Safety
 ///
-/// `audio_stream` must be live, and `liveness_report` must outlive it — which
+/// `audio_stream` must be live, and `failure_recorder` must outlive it — which
 /// is what the drop order on both stream structs guarantees.
-unsafe fn report_failures_of(
+unsafe fn install_the_shims_failure_hand_off_pointing_at(
     audio_stream: *mut audio_shim::AudioStream,
-    liveness_report: &AudioStreamLivenessReport,
+    failure_recorder: &AudioStreamFailureRecorder,
 ) {
-    let liveness_report_context = (&raw const *liveness_report).cast_mut().cast::<c_void>();
+    let failure_recorder_context = (&raw const *failure_recorder).cast_mut().cast::<c_void>();
     // SAFETY: the caller's contract, and the shim takes the loop lock around
     // the install.
     unsafe {
         audio_shim::streamlib_pipewire_audio_stream_report_failures_to(
             audio_stream,
             Some(record_a_stream_failure_in_the_liveness_report),
-            liveness_report_context,
+            failure_recorder_context,
         );
     }
 }
@@ -578,7 +585,10 @@ struct PipeWireAudioCaptureStream {
     /// What the shim's failure hand-off points at, boxed for a stable address
     /// and declared after `opened` for the same reason `installed_hand_off`
     /// is.
-    liveness_report: Box<AudioStreamLivenessReport>,
+    failure_recorder: Box<AudioStreamFailureRecorder>,
+    /// The read half handed to whoever owns the stream. Not boxed: nothing in
+    /// C points at it.
+    liveness_report: AudioStreamLivenessReport,
 }
 
 /// What the shim calls on PipeWire's thread-loop thread, with that loop's lock
@@ -621,7 +631,7 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
     }
 
     fn liveness_report(&self) -> AudioStreamLivenessReport {
-        (*self.liveness_report).clone()
+        self.liveness_report.clone()
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
@@ -670,8 +680,9 @@ struct PipeWireAudioPlaybackStream {
     /// reason.
     installed_hand_off: Option<Box<AudioBlockForPlaybackHandOff>>,
     /// What the shim's failure hand-off points at, under the same drop-order
-    /// requirement.
-    liveness_report: Box<AudioStreamLivenessReport>,
+    /// requirement, beside the read half its owner is handed.
+    failure_recorder: Box<AudioStreamFailureRecorder>,
+    liveness_report: AudioStreamLivenessReport,
 }
 
 /// What the shim calls on PipeWire's thread-loop thread when it needs samples,
@@ -714,7 +725,7 @@ impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
     }
 
     fn liveness_report(&self) -> AudioStreamLivenessReport {
-        (*self.liveness_report).clone()
+        self.liveness_report.clone()
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
@@ -811,7 +822,8 @@ mod tests {
     /// healthy to everything holding it.
     #[test]
     fn a_failure_the_shim_reports_lands_in_the_report_the_owner_holds() {
-        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        let (failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
         let reason_the_daemon_gave = CString::new("node destroyed").expect("no interior NUL");
 
         // SAFETY: the context is the address of a live report, and the reason
@@ -819,7 +831,7 @@ mod tests {
         // shim hands over on the loop thread.
         unsafe {
             record_a_stream_failure_in_the_liveness_report(
-                (&raw const liveness_report).cast_mut().cast::<c_void>(),
+                (&raw const failure_recorder).cast_mut().cast::<c_void>(),
                 reason_the_daemon_gave.as_ptr(),
             );
         }
@@ -841,13 +853,14 @@ mod tests {
     /// to remove.
     #[test]
     fn a_failure_the_daemon_did_not_explain_is_still_reported_as_one() {
-        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        let (failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
 
         // SAFETY: as above, with the NULL reason libpipewire is allowed to
         // pass.
         unsafe {
             record_a_stream_failure_in_the_liveness_report(
-                (&raw const liveness_report).cast_mut().cast::<c_void>(),
+                (&raw const failure_recorder).cast_mut().cast::<c_void>(),
                 std::ptr::null(),
             );
         }

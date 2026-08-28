@@ -25,9 +25,6 @@ use streamlib::sdk::iceoryx2::OutputWriter;
 use streamlib::sdk::processors::ManualProcessor;
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
-use crate::audio_device_serving_state::{
-    AudioDeviceServingState, ask_whether_the_device_is_still_serving,
-};
 use crate::captured_audio_block_hand_off_ring::{
     CapturedAudioBlockAwaitingPublish, CapturedAudioBlockHandOffRing,
     NextCapturedAudioBlockToPublish,
@@ -60,10 +57,6 @@ const FAILED_WRITES_BETWEEN_REPORTS: u64 = 300;
 
 /// The one port a captured block is published on.
 const AUDIO_OUTPUT_PORT: &str = "audio";
-
-/// What a capture device that stopped means for this source, said once when it
-/// happens.
-const WHAT_A_STOPPED_CAPTURE_DEVICE_MEANS: &str = "MicrophoneSource: the capture device stopped serving this processor, so no further      blocks will be captured. What was already captured is published, and the run's audio      ends there.";
 
 /// Bound on the wait for the publishing thread to exit. A consumer whose port
 /// declares `lossless` can hold that thread inside `write` for as long as it
@@ -133,7 +126,16 @@ impl ManualProcessor for MicrophoneSource::Processor {
             ));
         };
         let stream_format = capture_stream.stream_format();
-        let capture_stream_liveness_report = capture_stream.liveness_report();
+        // The one `setup` stored, not a second one off the stream: on every arm
+        // these are the same report, and depending on that is how it stays
+        // true.
+        let Some(capture_stream_liveness_report) = self.capture_stream_liveness_report.clone()
+        else {
+            return Err(Error::Configuration(
+                "MicrophoneSource: no capture stream liveness report. setup() must run first."
+                    .into(),
+            ));
+        };
 
         let hand_off_ring = Arc::new(CapturedAudioBlockHandOffRing::with_capacity(
             MAX_CAPTURED_BLOCKS_AWAITING_PUBLISH,
@@ -187,11 +189,10 @@ impl ManualProcessor for MicrophoneSource::Processor {
             // Beside the counts rather than only in the line that fired when
             // it happened: a run that ended early and a run that ended are the
             // same handful of numbers otherwise.
-            capture_device_failure = self
+            capture_device_failure = ?self
                 .capture_stream_liveness_report
                 .as_ref()
-                .and_then(|report| report.failure_that_ended_the_stream())
-                .map_or_else(|| "none".to_string(), |reason| reason.to_string()),
+                .and_then(|report| report.failure_that_ended_the_stream()),
             "MicrophoneSource: teardown"
         );
         self.capture_stream = None;
@@ -258,11 +259,13 @@ fn publish_captured_blocks(
         // poll interval rather than never: the ring of a dead device stays
         // empty, and waiting on it is indistinguishable from waiting on a
         // microphone in a silent room.
-        if ask_whether_the_device_is_still_serving(
-            capture_stream_liveness_report,
-            WHAT_A_STOPPED_CAPTURE_DEVICE_MEANS,
-        ) == AudioDeviceServingState::StoppedServing
-        {
+        if let Some(reason) = capture_stream_liveness_report.failure_that_ended_the_stream() {
+            tracing::error!(
+                %reason,
+                "MicrophoneSource: the capture device stopped serving this processor, so no \
+                 further blocks will be captured. What was already captured is published, \
+                 and the run's audio ends there."
+            );
             break;
         }
         match hand_off_ring.wait_for_next_block_to_publish(PUBLISH_WAIT_POLL_INTERVAL) {
@@ -398,10 +401,16 @@ mod tests {
     use std::time::Instant;
     use streamlib::sdk::context::{
         AudioClock, AudioClockConfig, AudioDeviceBackend, AudioStreamFailureReason,
-        AudioTickCallback, AudioTickContext, SharedAudioClock, SilentNullAudioDeviceBackend,
+        AudioStreamFailureRecorder, AudioTickCallback, AudioTickContext, SharedAudioClock,
+        SilentNullAudioDeviceBackend,
     };
 
     use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLines};
+    use crate::worker_thread_test_support::a_thread_that_finishes_within;
+
+    /// Generous next to the loop's own 100 ms poll, so a busy machine cannot
+    /// fail this and a loop that never asks cannot pass it.
+    const HOW_LONG_A_DEAD_DEVICE_MAY_GO_UNNOTICED: Duration = Duration::from_secs(2);
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
     const TEST_QUANTUM_SAMPLES: usize = 512;
@@ -674,41 +683,50 @@ mod tests {
     /// processor could ever notice it: the publishing thread comes back from a
     /// device that died instead of waiting out the run, and says why.
     ///
-    /// Mental revert: drop the liveness check from the loop and this hangs for
-    /// the full `PUBLISH_WAIT_POLL_INTERVAL` on every turn, forever, exactly as
-    /// a source holding a dead microphone does today — publishing nothing,
-    /// reporting nothing, and looking healthy from every angle.
+    /// Run on a thread and watched, rather than called inline: on a mental
+    /// revert this loop does not return at all, and an inline call would hang
+    /// `cargo test` where this fails it.
     #[test]
     fn a_publishing_thread_whose_device_died_comes_back_and_says_why() {
-        let hand_off_ring = CapturedAudioBlockHandOffRing::with_capacity(4);
-        let is_publishing = AtomicBool::new(true);
-        let published_block_counter = AtomicU64::new(0);
-        let unwired_outputs = OutputWriter::empty();
+        let hand_off_ring = Arc::new(CapturedAudioBlockHandOffRing::with_capacity(4));
+        let is_publishing = Arc::new(AtomicBool::new(true));
+        let published_block_counter = Arc::new(AtomicU64::new(0));
 
-        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
-        liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+        let (failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
+        failure_recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
             "the ALSA capture device delivered nothing for 25 consecutive waits",
         ));
 
         let lines = Arc::new(EmittedLines::default());
-        let publishing_began = Instant::now();
-        tracing::subscriber::with_default(CountingTracingSubscriber(Arc::clone(&lines)), || {
-            publish_captured_blocks(
-                &hand_off_ring,
-                &is_publishing,
-                &liveness_report,
-                &published_block_counter,
-                &unwired_outputs,
-                a_stream_format(),
-            );
+        let publishing = std::thread::spawn({
+            let hand_off_ring = Arc::clone(&hand_off_ring);
+            let is_publishing = Arc::clone(&is_publishing);
+            let published_block_counter = Arc::clone(&published_block_counter);
+            let lines = Arc::clone(&lines);
+            move || {
+                // Installed inside the thread because the subscriber is
+                // thread-local, and the loop under test runs here.
+                tracing::subscriber::with_default(CountingTracingSubscriber(lines), || {
+                    publish_captured_blocks(
+                        &hand_off_ring,
+                        &is_publishing,
+                        &liveness_report,
+                        &published_block_counter,
+                        &OutputWriter::empty(),
+                        a_stream_format(),
+                    );
+                });
+            }
         });
-        let publishing_took = publishing_began.elapsed();
 
         assert!(
-            publishing_took < PUBLISH_WAIT_POLL_INTERVAL,
-            "the publishing thread took {publishing_took:?} to notice a device that had \
-             already died — it waited on the ring instead of asking"
+            a_thread_that_finishes_within(&publishing, HOW_LONG_A_DEAD_DEVICE_MAY_GO_UNNOTICED),
+            "the publishing thread did not notice a device that had already died — it \
+             waited on the ring instead of asking"
         );
+        publishing.join().expect("the publishing thread ends");
+
         assert!(
             is_publishing.load(Ordering::Acquire),
             "the loop left on the device's account, not because it was told to stop — the \
@@ -729,7 +747,8 @@ mod tests {
         let hand_off_ring = Arc::new(CapturedAudioBlockHandOffRing::with_capacity(4));
         let is_publishing = Arc::new(AtomicBool::new(true));
         let published_block_counter = Arc::new(AtomicU64::new(0));
-        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        let (_failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
 
         let publishing = std::thread::spawn({
             let hand_off_ring = Arc::clone(&hand_off_ring);

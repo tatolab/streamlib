@@ -10,7 +10,6 @@
 //! pool, texture cache, present target — never private engine guts.
 
 pub mod audio_block;
-pub(crate) mod audio_device_serving_state;
 pub(crate) mod audio_samples_awaiting_playback_ring;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
@@ -30,6 +29,8 @@ pub mod test_pattern_source;
 #[cfg(target_os = "linux")]
 pub mod v4l2_color;
 pub mod video_frame;
+#[cfg(test)]
+mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 #[cfg(target_os = "linux")]

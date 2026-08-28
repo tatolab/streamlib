@@ -30,19 +30,12 @@ use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processors::ManualProcessor;
 
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
-use crate::audio_device_serving_state::{
-    AudioDeviceServingState, ask_whether_the_device_is_still_serving,
-};
 use crate::audio_samples_awaiting_playback_ring::{
     AudioSamplesAwaitingPlaybackRing, AudioSamplesHandOffOutcome,
 };
 use crate::consecutive_failure_report_schedule::ConsecutiveFailureReportSchedule;
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::processor_thread_join::join_within_grace_or_detach;
-
-/// What a playback device that stopped means for this sink, said once when it
-/// happens.
-const WHAT_A_STOPPED_PLAYBACK_DEVICE_MEANS: &str = "SpeakerSink: the playback device stopped serving this processor, so nothing further      will be played. Blocks still arriving on the input port are read and discarded by the      link's own ring, not queued for a device that is gone.";
 
 /// Device periods the ring holds before the drain thread waits for room.
 /// Matches the ring depth a sample-stream link itself carries
@@ -155,7 +148,15 @@ impl ManualProcessor for SpeakerSink::Processor {
             ));
         };
         let stream_format = playback_stream.stream_format();
-        let playback_stream_liveness_report = playback_stream.liveness_report();
+        // The one `setup` stored, not a second one off the stream: on every arm
+        // these are the same report, and depending on that is how it stays
+        // true.
+        let Some(playback_stream_liveness_report) = self.playback_stream_liveness_report.clone()
+        else {
+            return Err(Error::Configuration(
+                "SpeakerSink: no playback stream liveness report. setup() must run first.".into(),
+            ));
+        };
 
         let samples_awaiting_playback =
             Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
@@ -215,11 +216,10 @@ impl ManualProcessor for SpeakerSink::Processor {
             // Beside the counts rather than only in the line that fired when
             // it happened: a run that ended early and a run that ended are the
             // same handful of numbers otherwise.
-            playback_device_failure = self
+            playback_device_failure = ?self
                 .playback_stream_liveness_report
                 .as_ref()
-                .and_then(|report| report.failure_that_ended_the_stream())
-                .map_or_else(|| "none".to_string(), |reason| reason.to_string()),
+                .and_then(|report| report.failure_that_ended_the_stream()),
             "SpeakerSink: teardown"
         );
         self.playback_stream = None;
@@ -370,11 +370,13 @@ fn drain_blocks_into_playback(
         // Asked ahead of the underrun check, because a device that stopped
         // underruns for the rest of the run: the underrun line would be the
         // loudest thing in the log and the one that says the least.
-        if ask_whether_the_device_is_still_serving(
-            playback_stream_liveness_report,
-            WHAT_A_STOPPED_PLAYBACK_DEVICE_MEANS,
-        ) == AudioDeviceServingState::StoppedServing
-        {
+        if let Some(reason) = playback_stream_liveness_report.failure_that_ended_the_stream() {
+            tracing::error!(
+                %reason,
+                "SpeakerSink: the playback device stopped serving this processor, so nothing \
+                 further will be played. Blocks still arriving on the input port are dropped \
+                 by the link's own ring rather than queued for a device that is gone."
+            );
             break;
         }
         // Judged on the idle path too, and this is the case that needs it
@@ -466,10 +468,12 @@ mod tests {
     use std::time::Instant;
     use streamlib::sdk::context::{
         AudioClock, AudioClockConfig, AudioDeviceBackend, AudioStreamFailureReason,
-        AudioTickCallback, AudioTickContext, SharedAudioClock, SilentNullAudioDeviceBackend,
+        AudioStreamFailureRecorder, AudioTickCallback, AudioTickContext, SharedAudioClock,
+        SilentNullAudioDeviceBackend,
     };
 
     use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLines};
+    use crate::worker_thread_test_support::a_thread_that_finishes_within;
 
     const TEST_SAMPLE_RATE: u32 = 48_000;
     const TEST_QUANTUM_SAMPLES: usize = 512;
@@ -477,6 +481,10 @@ mod tests {
     /// Many idle turns of the drain loop, so a thread that only notices its
     /// device on some later condition has had every chance to.
     const HOW_LONG_A_DRAIN_THREAD_IS_WATCHED: Duration = Duration::from_millis(50);
+
+    /// Generous next to the loop's own 1 ms park, so a busy machine cannot
+    /// fail this and a loop that never asks cannot pass it.
+    const HOW_LONG_A_DEAD_DEVICE_MAY_GO_UNNOTICED: Duration = Duration::from_secs(2);
 
     /// An [`AudioClock`] whose ticks the test fires by hand, so what is under
     /// test is the wiring rather than how promptly a timer thread woke.
@@ -784,41 +792,52 @@ mod tests {
     /// device that died instead of feeding a ring nothing will ever play, and
     /// says why once.
     ///
-    /// Mental revert: drop the liveness check from the loop and this parks on
-    /// a 1 ms interval for the rest of the run, warning about underruns that
-    /// are the consequence rather than the cause — the loudest line in the log
-    /// and the one that says the least.
+    /// Run on a thread and watched, rather than called inline: on a mental
+    /// revert this loop parks on a 1 ms interval for the rest of the run, and
+    /// an inline call would hang `cargo test` where this fails it.
     #[test]
     fn a_drain_thread_whose_device_died_comes_back_and_says_why() {
-        let samples_awaiting_playback =
-            AudioSamplesAwaitingPlaybackRing::with_byte_capacity(SMALLEST_USABLE_RING_BYTES);
-        let is_draining = AtomicBool::new(true);
-        let played_block_counter = AtomicU64::new(0);
+        let samples_awaiting_playback = Arc::new(
+            AudioSamplesAwaitingPlaybackRing::with_byte_capacity(SMALLEST_USABLE_RING_BYTES),
+        );
+        let is_draining = Arc::new(AtomicBool::new(true));
+        let played_block_counter = Arc::new(AtomicU64::new(0));
 
-        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
-        liveness_report.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+        let (failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
+        failure_recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
             "the PipeWire stream stopped serving its device: node destroyed",
         ));
 
         let lines = Arc::new(EmittedLines::default());
-        let draining_began = Instant::now();
-        tracing::subscriber::with_default(CountingTracingSubscriber(Arc::clone(&lines)), || {
-            drain_blocks_into_playback(
-                &InputMailboxes::empty(),
-                &samples_awaiting_playback,
-                &is_draining,
-                &liveness_report,
-                &played_block_counter,
-                a_stream_format(48_000, 2),
-            );
+        let draining = std::thread::spawn({
+            let samples_awaiting_playback = Arc::clone(&samples_awaiting_playback);
+            let is_draining = Arc::clone(&is_draining);
+            let played_block_counter = Arc::clone(&played_block_counter);
+            let lines = Arc::clone(&lines);
+            move || {
+                // Installed inside the thread because the subscriber is
+                // thread-local, and the loop under test runs here.
+                tracing::subscriber::with_default(CountingTracingSubscriber(lines), || {
+                    drain_blocks_into_playback(
+                        &InputMailboxes::empty(),
+                        &samples_awaiting_playback,
+                        &is_draining,
+                        &liveness_report,
+                        &played_block_counter,
+                        a_stream_format(48_000, 2),
+                    );
+                });
+            }
         });
-        let draining_took = draining_began.elapsed();
 
         assert!(
-            draining_took < HOW_LONG_A_DRAIN_THREAD_IS_WATCHED,
-            "the drain thread took {draining_took:?} to notice a device that had already \
-             died — it went on parking against a device that is gone"
+            a_thread_that_finishes_within(&draining, HOW_LONG_A_DEAD_DEVICE_MAY_GO_UNNOTICED),
+            "the drain thread did not notice a device that had already died — it went on \
+             parking against a device that is gone"
         );
+        draining.join().expect("the drain thread ends");
+
         assert!(
             is_draining.load(Ordering::Acquire),
             "the loop left on the device's account, not because it was told to stop — the \
@@ -846,7 +865,8 @@ mod tests {
         );
         let is_draining = Arc::new(AtomicBool::new(true));
         let played_block_counter = Arc::new(AtomicU64::new(0));
-        let liveness_report = AudioStreamLivenessReport::of_a_stream_that_has_not_failed();
+        let (_failure_recorder, liveness_report) =
+            AudioStreamFailureRecorder::recording_into_a_new_report();
 
         let draining = std::thread::spawn({
             let samples_awaiting_playback = Arc::clone(&samples_awaiting_playback);

@@ -118,6 +118,7 @@ struct SilentNullAudioCaptureStreamPacing {
 struct SilentNullAudioCaptureStream {
     pacing_clock: SharedAudioClock,
     capture_stream_format: AudioStreamFormat,
+    liveness_report: AudioStreamLivenessReport,
     pacing: Arc<Mutex<SilentNullAudioCaptureStreamPacing>>,
 }
 
@@ -149,6 +150,7 @@ impl SilentNullAudioCaptureStream {
         Self {
             pacing_clock,
             capture_stream_format,
+            liveness_report: AudioStreamLivenessReport::of_a_stream_that_cannot_fail(),
             pacing,
         }
     }
@@ -164,8 +166,12 @@ impl AudioCaptureStream for SilentNullAudioCaptureStream {
     /// That is the arm's part of the seam's contract rather than an omission:
     /// an owner writes one piece of code and it means the same thing in a
     /// container as it does on a workstation.
+    ///
+    /// Cloned from a field rather than minted per call, like every other arm:
+    /// two callers have to be looking at one report, and satisfying that by
+    /// having nothing to report would make it true by luck.
     fn liveness_report(&self) -> AudioStreamLivenessReport {
-        AudioStreamLivenessReport::of_a_stream_that_has_not_failed()
+        self.liveness_report.clone()
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
@@ -254,6 +260,7 @@ struct SilentNullAudioPlaybackStreamPacing {
 struct SilentNullAudioPlaybackStream {
     pacing_clock: SharedAudioClock,
     playback_stream_format: AudioStreamFormat,
+    liveness_report: AudioStreamLivenessReport,
     pacing: Arc<Mutex<SilentNullAudioPlaybackStreamPacing>>,
 }
 
@@ -283,6 +290,7 @@ impl SilentNullAudioPlaybackStream {
         Self {
             pacing_clock,
             playback_stream_format,
+            liveness_report: AudioStreamLivenessReport::of_a_stream_that_cannot_fail(),
             pacing,
         }
     }
@@ -298,8 +306,12 @@ impl AudioPlaybackStream for SilentNullAudioPlaybackStream {
     /// That is the arm's part of the seam's contract rather than an omission:
     /// an owner writes one piece of code and it means the same thing in a
     /// container as it does on a workstation.
+    ///
+    /// Cloned from a field rather than minted per call, like every other arm:
+    /// two callers have to be looking at one report, and satisfying that by
+    /// having nothing to report would make it true by luck.
     fn liveness_report(&self) -> AudioStreamLivenessReport {
-        AudioStreamLivenessReport::of_a_stream_that_has_not_failed()
+        self.liveness_report.clone()
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
