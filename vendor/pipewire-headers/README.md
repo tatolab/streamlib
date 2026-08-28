@@ -14,7 +14,7 @@ artifact is compiled against has to travel with the repository.
 
 SPA's pod builders and parsers are `static inline` C with no shared object
 behind them, so they are a build-time dependency no amount of `dlopen` can
-remove. `runtime/streamlib-engine/src/linux/pipewire_capture_shim.c` is what
+remove. `runtime/streamlib-engine/src/linux/pipewire_audio_shim.c` is what
 compiles them in, and it calls PipeWire only through function pointers the Rust
 side filled with `dlsym`.
 

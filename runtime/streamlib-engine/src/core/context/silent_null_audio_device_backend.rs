@@ -610,6 +610,151 @@ mod tests {
         );
     }
 
+    /// One request as the stream made it, copied so an assertion can outlive
+    /// the borrow the hand-off gets.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RequestedBlockRecord {
+        interleaved_sample_byte_count: usize,
+        sample_count: u32,
+    }
+
+    type RequestedBlockLog = Arc<Mutex<Vec<RequestedBlockRecord>>>;
+
+    fn recording_playback_hand_off() -> (RequestedBlockLog, AudioBlockForPlaybackHandOff) {
+        let requested: RequestedBlockLog = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&requested);
+        let hand_off: AudioBlockForPlaybackHandOff =
+            Box::new(move |block: AudioBlockRequestedByDevice<'_>| {
+                recorder.lock().push(RequestedBlockRecord {
+                    interleaved_sample_byte_count: block.interleaved_sample_bytes_to_fill.len(),
+                    sample_count: block.sample_count,
+                });
+                // Written into rather than ignored, so a stream that handed
+                // over a buffer it does not own would fault here.
+                block.interleaved_sample_bytes_to_fill.fill(0x7F);
+            });
+        (requested, hand_off)
+    }
+
+    fn open_playback_stream_on(
+        clock: &Arc<HandFiredTestAudioClock>,
+    ) -> Box<dyn AudioPlaybackStream> {
+        SilentNullAudioDeviceBackend
+            .open_playback_stream(&AudioDeviceStreamRequest {
+                device_id: None,
+                deviceless_pacing_clock: Arc::clone(clock) as SharedAudioClock,
+            })
+            .expect("the null backend opens its default device on any machine")
+    }
+
+    /// Both directions carry one format here, which is what lets a microphone
+    /// wired to a speaker run on this arm at all: a speaker refuses a block
+    /// whose format it cannot play, and on a machine with no audio the two ends
+    /// must not disagree.
+    #[test]
+    fn a_playback_stream_carries_the_same_format_a_capture_stream_does() {
+        let clock = test_clock();
+        let capture_stream = open_capture_stream_on(&clock);
+        let playback_stream = open_playback_stream_on(&clock);
+        assert_eq!(
+            playback_stream.stream_format(),
+            capture_stream.stream_format()
+        );
+    }
+
+    #[test]
+    fn a_named_playback_device_is_refused_by_name_rather_than_opened_as_something_else() {
+        let clock = test_clock();
+        let Err(refusal) =
+            SilentNullAudioDeviceBackend.open_playback_stream(&AudioDeviceStreamRequest {
+                device_id: Some("alsa_output.pci-0000_00_1f.3".to_string()),
+                deviceless_pacing_clock: clock as SharedAudioClock,
+            })
+        else {
+            panic!("a named device cannot exist on a backend with no devices");
+        };
+        assert!(
+            refusal.to_string().contains("alsa_output.pci-0000_00_1f.3"),
+            "the refusal must name the device that was asked for: {refusal}"
+        );
+    }
+
+    /// The narrowed clock role on the playback side too: nothing starts the
+    /// timer until something actually paces on it.
+    #[test]
+    fn opening_a_playback_stream_leaves_the_clock_stopped_and_requesting_starts_it() {
+        let clock = test_clock();
+        let mut stream = open_playback_stream_on(&clock);
+        assert!(
+            !clock.is_running(),
+            "opening a stream must not start the clock"
+        );
+
+        let (_requested, hand_off) = recording_playback_hand_off();
+        stream
+            .start_requesting_from(hand_off)
+            .expect("requesting starts the clock");
+        assert!(clock.is_running());
+    }
+
+    /// A whole quantum is asked for every tick, in the stream's own format —
+    /// the property a caller sizes a period against.
+    #[test]
+    fn every_tick_asks_for_a_full_quantum_in_the_streams_format() {
+        let clock = test_clock();
+        let mut stream = open_playback_stream_on(&clock);
+        let stream_format = stream.stream_format();
+        let (requested, hand_off) = recording_playback_hand_off();
+        stream.start_requesting_from(hand_off).expect("start");
+
+        clock.fire_one_tick_stamped(1_000_000_000);
+
+        let requested = requested.lock();
+        let [block] = requested.as_slice() else {
+            panic!("one tick asks for exactly one block, got {requested:?}");
+        };
+        assert_eq!(block.sample_count, TEST_QUANTUM_SAMPLES as u32);
+        assert_eq!(
+            block.interleaved_sample_byte_count,
+            stream_format.interleaved_byte_count_for(TEST_QUANTUM_SAMPLES as u32)
+        );
+    }
+
+    #[test]
+    fn a_stopped_playback_stream_asks_for_nothing_more() {
+        let clock = test_clock();
+        let mut stream = open_playback_stream_on(&clock);
+        let (requested, hand_off) = recording_playback_hand_off();
+        stream.start_requesting_from(hand_off).expect("start");
+
+        clock.fire_one_tick_stamped(1_000_000_000);
+        stream.stop_requesting().expect("stop");
+        clock.fire_one_tick_stamped(2_000_000_000);
+
+        assert_eq!(
+            requested.lock().len(),
+            1,
+            "the hand-off must not be called again once stop_requesting returned"
+        );
+    }
+
+    /// An `AudioClock` never unregisters a callback, so the one a dropped
+    /// playback stream left behind has to go inert on its own.
+    #[test]
+    fn a_dropped_playback_stream_leaves_an_inert_callback_behind() {
+        let clock = test_clock();
+        let (requested, hand_off) = recording_playback_hand_off();
+        {
+            let mut stream = open_playback_stream_on(&clock);
+            stream.start_requesting_from(hand_off).expect("start");
+            clock.fire_one_tick_stamped(1_000_000_000);
+        }
+
+        clock.fire_one_tick_stamped(2_000_000_000);
+
+        assert_eq!(requested.lock().len(), 1);
+    }
+
     /// An `AudioClock` never unregisters a callback, so the one a dropped
     /// stream left behind has to go inert on its own.
     #[test]
