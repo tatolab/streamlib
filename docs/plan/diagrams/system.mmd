@@ -35,8 +35,10 @@ bare DLPack reads, scoped writes publishing at the block edge;
 the CPU door maps pixels in the child — the surface's own coherent
 mapping, or its host-visible staging over a texture backing;
 pixel bytes never ride the escalate socket;
-audio rides the bag itself — AudioBlock samples inline, no surface ids,
-windowed to the input port's declared contract;
+audio rides the bag itself — AudioBlock samples inline, no surface ids;
+a windowed input port is resampled, channel-converted and framed at this read
+seam, and reports ready only when a full window can be emitted — a gap flushes
+the accumulator and the resampler's filter rather than interpolating across it;
 every input port declares one read policy — newest or ordered — and no other delivery setting:
 both drop under pressure, and no link ever blocks a producer;
 a drop is counted at the port that lost it, but only an app-process destination's
@@ -54,7 +56,9 @@ the engine runs its native present loop, latest-wins"| engine
 playback streams, an engine primitive beside the audio clock;
 the built-ins, the null backend and every test open through it,
 and a stream that dies reports to its owner;
-the device stamps the block and the engine never re-stamps it"| engine
+the device stamps the block and the engine never re-stamps it;
+SpeakerSink declares audio_window = match_device and settles it at setup()
+from the format the device opened, so the stage converts and the sink plays"| engine
   engine --> rhi
   engine --> interop
   ctl -->|"one RuntimeOperations handle, never engine internals;

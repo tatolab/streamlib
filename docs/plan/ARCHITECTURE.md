@@ -206,20 +206,29 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
-## Processor model & scheduling — IN-FLIGHT (→ audio-port-window-contract)
+## Processor model & scheduling — IN-FLIGHT
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
   type declaration, connect never inspects or compares types and never warns, no read
   path examines a tag, and the frame header carries no schema ident. Consuming is a
   cast at read time; a mismatch surfaces as a decode failure at the consuming
-  processor. [schema-free-ports — SHIPPED #1814]
+  processor. One carve-out, and only one: declaring an audio window contract **is** that
+  port's opt-in to the engine reading its bags as `AudioBlock`, so the engine inspects a
+  payload on exactly the ports that asked it to and nowhere else. A link into a port with
+  no contract is unchanged in every respect — still pure plumbing, `connect` still
+  compares nothing, and the frame header still carries no schema ident.
+  [schema-free-ports — SHIPPED #1814; the carve-out — audio-port-window-contract, SHIPPED
+  #2033]
   <!-- verify: cargo test -p streamlib-ipc-types frame_header_size_matches_constant -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_bag_carrying_extra_keys_is_read_rather_than_refused -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
-- **DECIDED** — A port declares three things and nothing else: name, description, and
-  — on an input — delivery profile. Type information belongs to the authoring language
-  and never reaches the engine: in Python the port method's return annotation is the
-  declaration, read by humans and type checkers only, with `ctx.inputs.read(port)`
+- **DECIDED** — A port declares three things, plus an optional window contract on an
+  audio input, and nothing else: name, description, and — on an input — delivery profile,
+  beside which an audio input may declare the window contract §Media I/O states. Type
+  information belongs to the authoring language and never reaches the engine: in Python
+  the port method's return annotation is the declaration, read by humans and type
+  checkers only, with `ctx.inputs.read(port)`
   yielding the bag as a mapping and `read(port, into=T)` the opt-in strictness dial
   (a TypedDict casts for free, a dataclass or pydantic model constructs and validates,
   raising at read); in Rust the read target's `Deserialize` impl is the validation,
@@ -291,8 +300,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-delivery-profile-vocabulary.md -->
 - **DECIDED** — Loss-handling knowledge lives at the link's endpoints, never in the
   engine. The engine's whole role is to count a drop at the port that dropped it and
-  surface it; it never inspects a payload, never knows a bag holds a reference frame, and
-  never acquires a drop rule that depends on content. A producer that can make loss
+  surface it; it never inspects a payload — save on a port whose window contract is
+  exactly that opt-in — never knows a bag holds a reference frame, and never acquires a
+  drop rule that depends on content. The carve-out buys no drop rule either: the windowing
+  stage reads samples, never a frame's role in a stream, and a windowed port drops on the
+  same counted-mailbox terms as every other port. A producer that can make loss
   cheaper reacts at the source — an encoder under downstream pressure declines to encode
   raw frames and resumes at its next sync point, which is where loss belongs and costs
   least. A consumer on an encoded stream must bound loss — this is a requirement, not an
@@ -318,9 +330,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   #1841]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
-  profile, and direction; no port carries a type in `graph`, `tap`, or any snapshot.
-  [schema-free-ports — SHIPPED #1816]
+  profile, direction, and — on an audio input that declared one — its window contract; no
+  port carries a type in `graph`, `tap`, or any snapshot. A port that declared nothing
+  renders no `audio_window` key at all rather than a null. A `match_device` port renders
+  the five values its device settled — machine-dependent because the device format is,
+  which is truer than a static lie — and renders the sentinel itself while nothing has
+  settled it. [schema-free-ports — SHIPPED #1816; the fifth key —
+  audio-port-window-contract, SHIPPED #2032, #2034]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_a_declared_port_carries_no_type_key_under_any_spelling -->
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_a_port_declaring_no_contract_carries_no_audio_window_key -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_settled_contract_reaches_graph_on_the_port_that_settled_it -->
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
@@ -536,7 +555,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ audio-port-window-contract)
+## Media I/O — camera, display, audio — IN-FLIGHT
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -830,12 +849,161 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   not audio-specific — any bag carrying bytes hits it, including one a Python processor
   writes today. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1988]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_block_cast.py::test_a_block_read_off_the_wire_casts_to_an_audio_block -->
-- **DECIDED** — An audio input port may declare a window contract — rate, channels,
-  dtype, window size, hop — beside its delivery profile (audio declares `ordered`):
-  the engine resamples, mixes down, and frames natively so `process()` receives
-  exact-size timestamped blocks matching the declaration. Resampling is an always-on
-  engine stage, never a user processor. Feature extraction (mel, MFCC) is not engine
-  surface: the contract ends at windowed raw samples. [audio-subsystem]
+- **DECIDED** — An audio input port may declare a window contract — sample rate,
+  channels, dtype, window size, hop — beside its delivery profile: the engine resamples,
+  converts channels, and frames natively so `process()` receives exact-size timestamped
+  blocks matching the declaration. Resampling is an always-on engine stage, never a user
+  processor. Feature extraction (mel, MFCC) is not engine surface: the contract ends at
+  windowed raw samples. The contract rides the three carriers `delivery_profile` already
+  rides — `ProcessorPortSchema`, `PortDescriptor`, `PortInfo` — as one optional struct
+  rather than five loose fields, spelled the same in both languages
+  (`AudioWindowContract(...)` in Python, `audio_window(...)` in the Rust grammar).
+  `sample_rate`, `channels` and `dtype` reuse the device vocabulary `AudioStreamFormat`
+  and `AudioSampleFormat` already state, never a parallel spelling; `dtype` takes the two
+  `AudioBlock` legalises, `f32` and `i16`. `window_size` counts per-channel samples — the
+  unit `AudioBlock.sample_count` already uses — so an emitted window carries
+  `window_size × channels` scalars, and `hop` defaults to `window_size`: contiguous,
+  non-overlapping windows, with a hop below it a legal rolling window. A port with no
+  contract is unchanged in every respect; this is opt-in, and an output port declares no
+  contract at all — only a consumer states what it needs.
+  [audio-subsystem; audio-port-window-contract — SHIPPED #2032]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_an_audio_input_declares_its_window_contract -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_an_omitted_hop_defaults_to_the_window_size -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_an_output_port_takes_no_window_contract -->
+  <!-- verify: cargo test -p streamlib-engine --test attribute_macro_test the_descriptor_carries_the_window_contract_its_port_declared -->
+- **DECIDED** — The contract is all-or-nothing and every way of getting it wrong is
+  refused by name, at the earliest seam that can see it. There is no partial form — a
+  half-declared contract leaves the stage guessing at exactly the values a model asserts
+  on. Refused at declaration in both languages: a missing field, an unknown field, an
+  unknown `dtype`, a hop above `window_size` (which would silently discard samples between
+  windows), any numeric field at zero or below, a second contract on one port, and a
+  contract on an output. A window contract requires `delivery_profile = "ordered"` and is
+  refused beside a skipping profile naming both knobs — `newest` passes over bags by
+  design, so an accumulator needing contiguous samples would flush on nearly every read
+  and, for a window wider than one device quantum, might never emit at all. Refused at
+  wire time: a second inbound link into a windowed port, naming the port and both links —
+  fan-in legally interleaves N producers' blocks in one mailbox, and two sample streams
+  interleaved into one accumulator is plausible-looking wrong audio. Refused at the stage:
+  an N→M channel pair with neither side 1, naming both counts, because the source count
+  arrives with the bags and declaration cannot see it. Channel conversion runs both
+  directions by fixed rule — N→1 averages, 1→N duplicates — since the rung's flagship case
+  is an up-conversion.
+  [audio-port-window-contract — SHIPPED #2032, #2033]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_a_hop_above_the_window_size_is_refused_naming_both_numbers -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_a_partial_contract_is_refused_naming_the_missing_fields -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_both_links -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_channel_pair_with_neither_side_at_one_is_refused_naming_both_counts -->
+- **DECIDED** — One stage, at the one read seam every reader already shares. It sits in
+  `read_raw_bounded`, which an app-process Rust processor reaches through the parent's
+  mailboxes and a helper-placed Python processor through its own — one implementation
+  serving both, with no new IPC hop and no parent↔child contract to design, which matters
+  because every Python processor is helper-placed and a Python consumer is who this
+  contract exists for. The contract reaches a helper child over the same parent→child
+  wiring envelope that already carries `read_mode`. The order of operations is fixed:
+  decode to f32 → channel-convert → resample → frame → encode to the declared dtype, with
+  internal arithmetic in f32 always and an `i16` contract encoded back saturating rather
+  than wrapping. The stage owns its own decode of the six `AudioBlock` wire keys and
+  re-encodes each emitted window as an ordinary `AudioBlock` bag, so `read(into=AudioBlock)`
+  and Rust's `read::<AudioBlock>` work unchanged. A bag the stage cannot read is refused by
+  name at the read — an unknown `dtype`, a payload whose length is not
+  `sample_count × channels × itemsize`, a bag with no `AudioBlock` keys at all — never
+  reshaped into a plausible wrong answer, and the refusal names the port.
+  [audio-port-window-contract — SHIPPED #2033]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_contract_saturates_at_both_endpoints_rather_than_wrapping -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_window_stage.py::test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared -->
+- **DECIDED** — Readiness on a windowed port means a full window, not an arrived bag.
+  Windowing is N-in → M-out — one 1024-sample quantum satisfies two 512-sample windows, a
+  one-second rolling window needs about forty-seven of them — so the stage owns a per-port
+  accumulator between the mailbox and the reader, and a windowed port reports data only
+  when a full window can be emitted. A reactive `process()` is never dispatched with
+  nothing to read, in the helper loop and the app-process runner alike; the drain loop
+  dispatches once per ready window, so one 1024-sample quantum against a 512/512 contract
+  dispatches twice and a ready window never sits latent waiting for the next bag. A stream
+  that simply stops leaves under one window of samples parked in the accumulator, delivered
+  to nothing — designed, not a defect: an exact-size contract has no partial form to hand
+  over. [audio-port-window-contract — SHIPPED #2033]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::one_1024_sample_quantum_against_a_512_512_contract_yields_exactly_two_windows -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_stream_that_stops_mid_window_hands_over_nothing_rather_than_a_short_block -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_audio_window_stage.py::test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows -->
+- **DECIDED** — The stage derives a stamp; it never reads a clock. One device stamp anchors
+  each contiguous run — taken from the first block after start or after a flush — and every
+  window's `first_sample_timestamp_ns` is that anchor plus the emitted-sample offset in
+  integer rational arithmetic (`anchor + emitted × 1_000_000_000 / out_rate`, widened),
+  minus the resampler's reported group delay. Never an accumulated per-sample delta, which
+  drifts at 44.1 kHz-family rates; never re-anchored per block, whose status-derived stamps
+  jitter below sample exactness. The device stamps the block and the engine never re-stamps
+  it survives intact: deriving offsets from a device stamp is not re-stamping, and
+  block-level A/V sync stays subtraction.
+  [audio-port-window-contract — SHIPPED #2033]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_accumulator::stamp_arithmetic_tests::a_frame_index_past_a_u64_multiplys_reach_is_still_stamped_exactly -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::the_first_window_carries_the_anchor_stamp_rather_than_one_a_group_delay_later -->
+- **DECIDED** — No sample is invented to bridge a gap; the stage flushes rather than
+  interpolates. A discontinuity — a block's stamp missing its expected position by more
+  than half a source quantum, a tolerance because status-derived device stamps jitter
+  below sample exactness — flushes the accumulator **and the resampler's own filter
+  state**, then re-anchors on the next block's stamp. The filter reset is load-bearing,
+  not hygiene: a polyphase resampler holds a filter's length of pre-gap samples, and
+  emitting through it after the gap blends audio across the loss — exactly the
+  interpolation the drop-at-the-edge clause bans. The same doctrine settles priming at
+  stream start and after every flush: filter output produced before the filter has filled
+  is zero-padding, not audio, so it is discarded — an emitted sample always derives from
+  real input — and the group-delay subtraction aligns the first emitted stamp with the
+  real input sample it derives from. The gap stays derivable from the stamps either side.
+  [audio-port-window-contract — SHIPPED #2033]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::the_first_window_after_a_gap_carries_no_energy_from_before_it -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::no_window_spans_a_gap_in_the_source_stream -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_stamp_jittering_inside_half_a_quantum_does_not_flush_the_run -->
+- **DECIDED** — Counting is unchanged and the accumulator is not a second drop site. Bags
+  stay in the counted mailbox until `read` consumes them into the stage; the accumulator
+  holds only the already-consumed resampled remainder, under one window's worth, and never
+  evicts. Readiness is computed jointly — queued bags' sample counts plus the remainder —
+  never by draining the mailbox at `has_data`, because an eager drain would starve the
+  per-link counters exactly where loss happens and grow the accumulator unboundedly under
+  a stalled consumer. That forces the depth question open: the profile's depth is a floor
+  no contract undercuts, and the engine sizes a windowed port's mailbox up from its
+  contract (`ceil(window / quantum) + margin`) — still engine-chosen, still not authorable;
+  the contract is a declaration, not a depth dial. Overflow past that depth is a counted
+  mailbox eviction, same counter, same `graph` surface. A discontinuity flush discards the
+  remainder — under one window of samples, not a bag, not counted as one — logged with the
+  port and the sample count, so a bag evicted at a windowed port costs its own samples plus
+  the flush of the remainder behind it: a stated, bounded loss shape beside the
+  no-loss-is-silent clause in §Processor model.
+  [audio-port-window-contract — SHIPPED #2033]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::the_profiles_depth_is_a_floor_no_contract_undercuts -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_single_evicted_block_displaces_the_stamps_enough_to_flush -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_full_mailbox_that_still_cannot_make_a_window_says_so_once -->
+- **DECIDED** — The resampler is `rubato` — pure Rust, MIT, adding no `DT_NEEDED` entry —
+  and the portability gate stays the pass/fail: the shipped `_engine.abi3.so` names the
+  same five host libraries with the resampler in as without it. Its three adapter
+  obligations are the stage's to meet: fixed input-chunk sizes, planar rather than
+  interleaved buffers (de-interleave after the channel convert), and the group-delay and
+  reset seams the stamp and flush clauses bind. Hand-rolling a polyphase resampler was
+  rejected: a maintenance burden and no capability.
+  [audio-port-window-contract — SHIPPED #2033]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+- **DECIDED** — A port whose target format is not knowable at declaration declares the
+  sentinel `audio_window = match_device`, and the contract resolves at `setup()` — where
+  the typestate is Full, the same phase in which a processor requests a window — from the
+  format the device stream just opened. Only a processor that opens a device stream can
+  satisfy the sentinel: the `setup()` setter is the engine-internal mechanism, never public
+  surface, and it is deliberately not exported to Python — the parity disposition, named:
+  a Python processor's window is its model's compile-time knowledge, and it holds no
+  machine-varying device format to resolve, so a `match_device` port on a helper-placed
+  destination is refused at wire time. An unsettled sentinel reaching the stage is refused
+  naming the resolution mechanism, and a device format the stage could not honour is
+  refused too. A bare public setter was rejected: it would put a dynamic-contract API on
+  the declaration surface where any processor could reach it, and leave the declaration
+  site silent about a resolution the reader needs to know happens.
+  [audio-port-window-contract — SHIPPED #2034]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::a_device_stream_format_resolves_to_the_contract_that_plays_on_it -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::an_unsettled_sentinel_is_refused_naming_the_resolution_mechanism -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_match_device_contract_wires_awaiting_its_device_rather_than_refusing -->
 - **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
   camera and display: native built-ins in the engine tree, registered with the other
   media built-ins and surfaced to Python as marker classes beside `CameraSource`,
@@ -855,13 +1023,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   reference are one mechanism. A device callback never blocks on a slow consumer:
   at capacity `MicrophoneSource` drops at the device edge and the loss is
   explicit — the timestamp gap is derivable from the blocks around it and the
-  source counts what it dropped — never silent.
+  source counts what it dropped — never silent. `SpeakerSink` matches its device rather
+  than refusing what it cannot play: its input declares `audio_window = match_device`
+  with window = hop = one device period — it wants format conversion, not framing, and
+  under all-or-nothing that is how a converter is spelled — so the stage converts and the
+  sink plays. It has no refusal of a block whose rate, channels or dtype the device cannot
+  take, because the mic-to-speaker mismatch the two built-ins have by construction
+  (capture prefers mono, playback prefers stereo) is the plainest case the window contract
+  exists to fix.
   [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1992 for
-  the two built-ins, their execution mode and the drop-at-the-edge clause; conditioning
+  the two built-ins, their execution mode and the drop-at-the-edge clause;
+  audio-port-window-contract — SHIPPED #2034 for the `match_device` clause; conditioning
   and immediate cancel are a later rung]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test speaker_sink_matches_its_device a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-audio-port-window-contract.md -->
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
   concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
   out-of-process in its own helper over the engine's IPC transport, never in the app
