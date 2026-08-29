@@ -196,7 +196,7 @@ def input(
                 f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
                 f"is declared port-locally at the consuming input port"
             )
-        marker = {
+        marker: "dict[str, Any]" = {
             "name": port_name,
             "description": description,
             "delivery_profile": delivery_profile,
