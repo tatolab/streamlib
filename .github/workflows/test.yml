@@ -202,7 +202,57 @@ jobs:
             core::json_schema::port_rendering_tests::a_contract_bearing_port_renders_its_contract_beside_the_four \
             core::json_schema::port_rendering_tests::a_port_declaring_the_sentinel_renders_it_as_a_whole_contract \
             core::json_schema::port_rendering_tests::a_declared_contract_survives_the_descriptor_to_port_info_hop \
-            core::json_schema::port_rendering_tests::a_contract_bearing_descriptor_renders_its_contract_too
+            core::json_schema::port_rendering_tests::a_contract_bearing_descriptor_renders_its_contract_too \
+          # The audio window contract's read-side stage. The only gate it
+          # has: the stage's exactness, its overlap, the flush that resets the
+          # resampler's filter state, its refusals, and the readiness floor
+          # that must never claim a window a read cannot then produce. The
+          # `iceoryx2::input` and `open_iceoryx2_service_op` entries carry the
+          # same contract at the seam and at wire time — the input ones open
+          # real iceoryx2 services, which need /dev/shm and nothing else. The
+          # end-to-end half through a helper-placed Python consumer is
+          # rig-gated like every other graph test in the wheel.
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_block_written_by_the_stage_reads_back_as_the_block_it_wrote \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_decoded_block_borrows_its_payload_out_of_the_frame_body_rather_than_copying_it \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_absent_dtype_reads_as_f32_the_way_the_wire_contract_says \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_bag_carrying_extra_keys_is_read_rather_than_refused \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_unknown_dtype_is_refused_naming_the_value_and_the_legal_ones \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_payload_that_disagrees_with_the_count_is_refused_naming_both_lengths \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_bag_with_no_audio_block_keys_is_refused_rather_than_reshaped \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_contract_saturates_at_both_endpoints_rather_than_wrapping \
+            iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_scalar_survives_the_decode_and_encode_round_trip_unchanged \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::a_declared_contract_resolves_to_the_five_values_it_declared \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::an_unresolved_sentinel_is_a_wiring_error_naming_the_resolution_mechanism \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::a_declaration_the_stage_could_not_honour_is_refused_naming_the_port \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::a_window_shorter_than_the_profiles_depth_leaves_the_profiles_depth_alone \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta \
+            iceoryx2::audio_window::audio_window_stage_tests::a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart \
+            iceoryx2::audio_window::audio_window_stage_tests::the_first_window_carries_the_anchor_stamp_rather_than_one_a_group_delay_later \
+            iceoryx2::audio_window::audio_window_stage_tests::a_hop_of_160_against_a_window_of_512_overlaps_by_352_samples \
+            iceoryx2::audio_window::audio_window_stage_tests::one_1024_sample_quantum_against_a_512_512_contract_yields_exactly_two_windows \
+            iceoryx2::audio_window::audio_window_stage_tests::a_stream_that_stops_mid_window_hands_over_nothing_rather_than_a_short_block \
+            iceoryx2::audio_window::audio_window_stage_tests::the_first_window_after_a_gap_carries_no_energy_from_before_it \
+            iceoryx2::audio_window::audio_window_stage_tests::no_window_spans_a_gap_in_the_source_stream \
+            iceoryx2::audio_window::audio_window_stage_tests::a_stamp_jittering_inside_half_a_quantum_does_not_flush_the_run \
+            iceoryx2::audio_window::audio_window_stage_tests::a_stereo_source_reaching_a_mono_contract_is_averaged_across_its_channels \
+            iceoryx2::audio_window::audio_window_stage_tests::a_mono_source_reaching_a_stereo_contract_is_duplicated_across_its_channels \
+            iceoryx2::audio_window::audio_window_stage_tests::a_channel_pair_with_neither_side_at_one_is_refused_naming_both_counts \
+            iceoryx2::audio_window::audio_window_stage_tests::a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped \
+            iceoryx2::audio_window::audio_window_stage_tests::an_i16_contract_emits_windows_whose_scalars_are_written_as_i16 \
+            iceoryx2::audio_window::audio_window_stage_tests::the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce \
+            iceoryx2::audio_window::audio_window_stage_tests::the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to \
+            iceoryx2::input::tests::a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted \
+            iceoryx2::input::tests::one_1024_sample_quantum_reads_out_of_a_512_512_port_exactly_twice \
+            iceoryx2::input::tests::a_contract_less_port_still_reads_the_bag_the_producer_published_byte_for_byte \
+            iceoryx2::input::tests::a_windowed_ports_per_link_drop_counts_match_an_unwindowed_ports_under_the_same_overrun \
+            iceoryx2::input::tests::a_long_windows_mailbox_is_sized_from_its_contract_rather_than_the_profiles_depth \
+            iceoryx2::input::tests::a_bag_the_stage_cannot_read_is_refused_at_the_read_naming_the_port \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_windowed_destinations_contract_resolves_at_wire_time \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_declaring_no_contract_resolves_to_none \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::an_unresolved_match_device_contract_is_a_wiring_error_naming_the_mechanism \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_both_links \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_one_inbound_link_a_windowed_port_takes_is_not_refused \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These
