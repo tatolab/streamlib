@@ -17,10 +17,10 @@ states the mechanism as "engine-inserted resample, mixdown, framing". Its
 rejected-alternatives list already rules out solving an adjacent problem with a spliced
 graph block (`:135-137`). Nothing below decides past it.
 
-**Precondition.** The window-contract entry (`ARCHITECTURE.md:798-803`) is **DECIDED**
+**Precondition.** The window-contract entry (`ARCHITECTURE.md:833-838`) is **DECIDED**
 under `[audio-subsystem]`, unbuilt — three code sites say so in as many words
 (`core/context/audio_device_backend.rs:266`, `linux/alsa_audio_device_backend.rs:117`,
-`linux/pipewire_audio_shim.c:53-54`). §Processor model's port entries (`:222-244`) are
+`linux/pipewire_audio_shim.c:53-54`). §Processor model's port entries (`:219-296`) are
 DECIDED too, and two of their absolutes contradict it head-on. That collision is
 `[NEEDS DECISION] 1` below; this delta does not resolve it.
 
@@ -53,6 +53,20 @@ Field semantics, resolved from the tree rather than invented:
   `AudioStreamFormat` and `AudioSampleFormat` (`core/context/audio_device_backend.rs:19-57`)
   — never a parallel spelling. `dtype` takes the two `AudioBlock` already legalises,
   `f32` and `i16`.
+- Channel conversion runs both directions, by fixed rule: N→1 averages, 1→N duplicates,
+  and any other N→M is refused at the stage naming both counts. "Mixdown" alone would
+  exclude the rung's own flagship case — a mono capture feeding a sink whose device
+  resolved stereo is an up-conversion.
+- A window contract requires `delivery_profile = "ordered"`, refused at declaration in
+  both languages naming both knobs — the same shape as the hop refusal. `newest` resolves
+  to skip-to-latest (`iceoryx2/read_mode.rs`, `mailbox.rs` `pop_latest`), which passes
+  over bags by design; an accumulator needing contiguous samples would flush on nearly
+  every read and, for a window wider than one device quantum, might never emit at all.
+  The ADR already says `newest` is wrong for audio.
+- A windowed port accepts exactly one inbound link, refused at wire time naming the
+  port and both links. Fan-in legally interleaves N producers' blocks in one mailbox
+  today (`input.rs:270-288`); two sample streams interleaved into one accumulator is
+  plausible-looking wrong audio, the outcome this file already names as the worst one.
 - `window_size` counts **per-channel** samples, the unit `AudioBlock.sample_count` already
   uses, so an emitted window carries `window_size × channels` scalars.
 - `hop` defaults to `window_size`: contiguous, non-overlapping windows. A hop below
@@ -83,23 +97,53 @@ mailbox and the reader, and four consequences follow:
 - **Readiness means a full window, not an arrived bag.** `has_data` and
   `any_port_has_data` (`input.rs:499-520`) drive the reactive scheduler, and the DECIDED
   entry promises `process()` receives exact-size blocks. A windowed port therefore reports
-  data only when its accumulator can yield one. Read off the plan, not chosen: a reactive
+  data only when a full window can be emitted. Read off the plan, not chosen: a reactive
   `process()` that woke and found nothing would contradict the entry implementing it.
-- **The order of operations is fixed**: dtype-decode → mixdown → resample → frame.
-  Resampling after mixdown converts one channel's worth of samples rather than N, and
-  framing last is the only order that can emit an exact window.
-- **The stage derives a stamp; it never reads a clock.** An emitted window's
-  `first_sample_timestamp_ns` is its source block's stamp plus the per-sample offset of
-  the window's first sample, computed at the output rate. `ARCHITECTURE.md:745-752` — the
+  The gate lands in two dispatch sites, not one: the helper loop already gates every
+  dispatch on readiness (`_helper.py:615`), but the app-process reactive runner calls
+  `process()` unconditionally on every listener wake and consults `any_port_has_data`
+  only to continue draining (`core/execution/thread_runner.rs:283-307`) — it gains the
+  same gate. The drain loop then dispatches once per ready window, so one 1024-sample
+  quantum against a 512/512 contract dispatches twice and a ready window never sits
+  latent waiting for the next bag.
+- **The order of operations is fixed**: decode to f32 → channel-convert → resample →
+  frame → encode to the declared dtype. Internal arithmetic is f32 always — the
+  resampler speaks nothing else — with an `i16` contract encoded back saturating, never
+  wrapping. Resampling after channel conversion converts one channel's worth of samples
+  rather than N, and framing before the encode is the only order that can emit an exact
+  window.
+- **The stage derives a stamp; it never reads a clock.** One device stamp anchors each
+  contiguous run — taken from the first block after start or after a flush — and every
+  window's `first_sample_timestamp_ns` is that anchor plus the emitted-sample offset in
+  integer rational arithmetic (`anchor + emitted × 1_000_000_000 / out_rate`, widened),
+  minus the resampler's reported group delay. Never an accumulated per-sample delta,
+  which drifts at 44.1 kHz-family rates; never re-anchored per block, whose
+  status-derived stamps jitter below sample exactness. `ARCHITECTURE.md:736` — the
   device stamps the block and the engine never re-stamps it — survives intact, because
-  deriving an offset from a device stamp is not re-stamping. Block-level A/V sync stays
-  subtraction.
-- **No sample is invented to bridge a gap.** The drop-at-the-edge entry (`:756-758`)
+  deriving offsets from a device stamp is not re-stamping. Block-level A/V sync stays
+  subtraction, and the exactly-32-ms validation below holds within a contiguous run,
+  which is what its test asserts.
+- **No sample is invented to bridge a gap.** The drop-at-the-edge entry (`:749-751`)
   states that nothing is silently interpolated, and a resampler is exactly the machinery
-  that could quietly repeal it. A discontinuity — a timestamp gap wider than the samples
-  in hand account for — **flushes the accumulator** and starts a new window at the next
-  block's own stamp. The gap stays derivable from the stamps either side, as that entry
-  requires.
+  that could quietly repeal it. A discontinuity — a block's stamp missing its expected
+  position (previous stamp + `sample_count / rate`) by more than half a source quantum,
+  a tolerance because status-derived device stamps jitter below sample exactness —
+  **flushes the accumulator and the resampler's own filter state**, then re-anchors on
+  the next block's stamp. The filter reset is load-bearing, not hygiene: a polyphase
+  resampler holds a filter's length of pre-gap samples, and emitting through it after
+  the gap blends audio across the loss — the interpolation the entry bans. The gap
+  stays derivable from the stamps either side, as that entry requires.
+
+**Three wiring facts the tickets should not have to rediscover.** The `AudioBlock`
+cast lives in `streamlib-media-builtins`, which depends on the engine — so the stage
+owns its own decode of the six wire keys and re-encodes each emitted window as an
+ordinary `AudioBlock` bag, which is also what keeps `read(into=AudioBlock)` and Rust's
+`read::<AudioBlock>` working unchanged. The contract reaches a helper child over the
+same parent→child wiring envelope that already carries `read_mode`
+(`python_processor_link_data_access.rs:115-128`), or the child's stage windows nothing.
+And a stream that simply stops leaves under one window of samples parked in the
+accumulator, delivered to nothing — designed, not a defect: an exact-size contract has
+no partial form to hand over.
 
 **A bag the stage cannot read is refused by name at the read** — a `dtype` it does not
 know, a payload whose length is not `sample_count × channels × itemsize`, a bag with no
@@ -107,14 +151,30 @@ know, a payload whose length is not `sample_count × channels × itemsize`, a ba
 (`test_audio_block_cast.py`). Never reshaped into a plausible wrong answer, and the
 refusal names the port.
 
-**Counting is unchanged and the accumulator is not a second drop site.** A windowed
-port's drops are still the mailbox's, counted per inbound link exactly as shipped in
-#2023. The accumulator holds partial windows and never evicts. A discontinuity flush
-discards a partial window, which is not a bag and is not counted as one — it is logged,
-with the port named.
+**Counting is unchanged and the accumulator is not a second drop site — which pins the
+ingestion discipline.** Bags stay in the counted mailbox until `read` consumes them into
+the stage; the accumulator holds only the already-consumed resampled remainder, under one
+window's worth, and never evicts. Readiness is computed jointly — queued bags' sample
+counts plus the remainder — not by draining the mailbox at `has_data`, because an eager
+drain would starve the #2023 per-link counters (`mailbox.rs:79-87`) exactly where loss
+happens and grow the accumulator unboundedly under a stalled consumer. What forces the
+depth question into the open: `ORDERED_DEPTH` is 16 (`delivery_profile.rs:57`) and a
+one-second rolling window at a 1024-sample quantum needs ~47 queued blocks, so the
+engine sizes a windowed port's mailbox from its contract
+(`ceil(window / quantum) + margin`) — still engine-chosen, still not authorable; the
+contract is a declaration, not a depth dial. Overflow past that depth is a counted
+mailbox eviction, same counter, same `graph` surface. A discontinuity flush discards
+the remainder — under one window of samples, not a bag, not counted as one — logged
+with the port and the sample count; a bag evicted at a windowed port therefore costs
+its own samples plus the flush of the remainder behind it, which belongs beside the
+plan's OPEN no-loss-is-silent entry (`:267-277`) as a stated, bounded loss shape.
 
-**The resampler is `rubato`** — pure Rust, MIT, adding no `DT_NEEDED` entry, which
+**The resampler is `rubato`** — a new dependency (no resampler crate exists anywhere in
+`Cargo.lock`), pure Rust, MIT, adding no `DT_NEEDED` entry, which
 `test_wheel_portability.py` enforces regardless of what anyone believes about a crate.
+Three adapter obligations ride it: fixed input-chunk sizes (`input_frames_next`), planar
+rather than interleaved buffers (de-interleave after the channel convert), and the
+group-delay / reset seams the stamp and flush bullets above already bind.
 **Stated as an assumption rather than brought as a decision**: choosing a library inside a
 ticket is pattern choice, not architecture (owner, 2026-08-13), so unless you say
 otherwise the ticket takes `rubato` and proves the portability gate stays green. The
@@ -126,17 +186,17 @@ no capability.
 Two DECIDED entries in §Processor model contradict the DECIDED window-contract entry in
 §Media I/O. This is not ambiguity to interpret — the plan states both, and one must yield.
 
-> `:222-224` — "A port declares three things and nothing else: name, description, and —
+> `:219-221` — "A port declares three things and nothing else: name, description, and —
 > on an input — delivery profile."
-> `:238-240` — "Port rendering in the control plane is name, description, delivery
+> `:320-322` — "Port rendering in the control plane is name, description, delivery
 > profile, and direction."
 > `:211-216` — "The engine has no type layer … no read path examines a tag."
-> `:288-290` — "The engine's whole role is to count a drop at the port that dropped it and
+> `:292-294` — "The engine's whole role is to count a drop at the port that dropped it and
 > surface it; it never inspects a payload."
 
 versus
 
-> `:798-800` — "An audio input port may declare a window contract — rate, channels, dtype,
+> `:833-835` — "An audio input port may declare a window contract — rate, channels, dtype,
 > window size, hop — beside its delivery profile … the engine resamples, mixes down, and
 > frames natively."
 
@@ -194,14 +254,23 @@ declared: it comes from `playback_stream.stream_format()` after `setup()` opens 
   The rung ships without solving its most obvious case.
 - **(b) A built-in may resolve its contract at `setup()`, where the typestate is Full.**
   The declaration surface gains a runtime setter reachable only from `setup()` — the same
-  phase in which a processor requests a window (`:589-591`) — and `SpeakerSink` sets it
+  phase in which a processor requests a window (`:591`) — and `SpeakerSink` sets it
   from the format it just opened. `refuse_a_block_the_device_cannot_play` then deletes:
-  the stage converts, and the sink plays. *Recommended*, because (a) leaves the plan's own
-  motivating case unsolved, and because `setup()`-time resource resolution is a shape the
-  processor model already has rather than a new one.
+  the stage converts, and the sink plays.
   Cost, stated plainly: a port's rendered contract in `graph` becomes machine-dependent
   for such a port, and this is a new capability on the declaration surface — which is
   precisely why it is here and not assumed.
+- **(c) — (b) spelled as a declaration sentinel.** The port's declaration itself carries
+  `audio_window = match_device`; only a processor that opens a device stream can satisfy
+  it, the `setup()` setter is the engine-internal mechanism rather than public surface,
+  and it is deliberately not exported to Python — the parity disposition, named: a
+  Python processor's window is its model's compile-time knowledge, and it holds no
+  machine-varying device format to resolve. `graph` renders the resolved values, which
+  is truer than a static lie about a machine-dependent format. `SpeakerSink` declares
+  window = hop = one device period — it wants format conversion, not framing, and under
+  all-or-nothing that is how a converter is spelled. *Recommended over the bare setter*:
+  the declaration site stays legible, and the new capability is bounded to the one
+  processor class that can honestly claim it.
 
 ## REMOVED:
 
@@ -222,7 +291,7 @@ gate bullets, since the gate's grammar wants artifacts rather than prose.
   `/propose-change`. It shares no code with this one: conditioning sits between device and
   published block inside a built-in, the windower sits at a consuming port.
 - **Feature extraction** — mel, MFCC and friends stay out, permanently. The contract ends
-  at windowed raw samples (`ARCHITECTURE.md:802-803`, `audio-subsystem.md:133`).
+  at windowed raw samples (`ARCHITECTURE.md:837-838`, `audio-subsystem.md:133`).
 - **Output-side window contracts** — an output port declares no contract; a producer
   publishes what it has. Only a consumer states what it needs.
 - **Video** — no framing, no rate conversion, no contract on a video port.
@@ -231,8 +300,10 @@ gate bullets, since the gate's grammar wants artifacts rather than prose.
 ## Validation
 
 - **The declaration round-trips**: a contract declared in Python and one declared in Rust
-  produce the same `ProcessorPortSchema`, and a hop above `window_size` is refused at
-  declaration in both languages naming both numbers.
+  produce the same `ProcessorPortSchema`; a hop above `window_size`, a contract beside
+  `delivery_profile = "newest"`, and an N→M channel pair with neither side 1 are each
+  refused at declaration in both languages naming the numbers or knobs; a second inbound
+  link into a windowed port is refused at wire time.
 - **The stage is exact**: a 48 kHz stereo `f32` source into a port declaring
   16 kHz / 1 / `f32` / 512 / 512 yields blocks of exactly 512 per-channel samples, at
   16 kHz, mono, with stamps advancing by exactly 32 ms — asserted on a known signal, not
@@ -241,8 +312,9 @@ gate bullets, since the gate's grammar wants artifacts rather than prose.
   contents overlap by 352 samples, proven by comparing sample values across consecutive
   windows rather than by counting.
 - **Readiness is a full window**: a reactive processor on a windowed port is never
-  dispatched with nothing to read — the accumulator holding a partial window reports no
-  data.
+  dispatched with nothing to read — in the app-process runner and the helper loop both —
+  and one 1024-sample quantum against a 512/512 contract dispatches `process()` exactly
+  twice.
 - **A discontinuity flushes rather than interpolates**: a gap in the input stream produces
   no window spanning it, and the window after the gap carries its own first sample's stamp.
 - **Nothing else moved**: a port with no contract reads byte-identical bags before and
