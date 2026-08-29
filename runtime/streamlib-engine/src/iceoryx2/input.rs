@@ -31,7 +31,9 @@ use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
 use super::audio_window::{
-    AudioWindowAccumulator, ResolvedAudioWindowContract, queued_audio_window_frame_measure,
+    AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream,
+    DeviceMatchedAudioWindowContractsByInputPort, ResolvedAudioWindowContract,
+    queued_audio_window_frame_measure,
 };
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::PortMailbox;
@@ -240,15 +242,21 @@ impl PortReadiness {
         if port_config.staged_oversized.is_some() {
             return PortReadiness::AFrameIsWaiting;
         }
-        match &port_config.audio_window_stage {
-            None => {
+        match &port_config.audio_windowing {
+            PortAudioWindowing::NotWindowed => {
                 if port_config.mailbox.is_empty() {
                     PortReadiness::NothingIsWaiting
                 } else {
                     PortReadiness::AFrameIsWaiting
                 }
             }
-            Some(stage) => PortReadiness::AWindowedPort {
+            // A port whose contract is not settled hands a reader nothing at
+            // all — never the raw bags a settled one would have windowed. That
+            // is the contract's whole promise applied to its own start-up:
+            // `process()` receives exact-size blocks, and a device-shaped
+            // window has no exact size until the device says what it is.
+            PortAudioWindowing::AwaitingItsDeviceStreamFormat => PortReadiness::NothingIsWaiting,
+            PortAudioWindowing::Windowed(stage) => PortReadiness::AWindowedPort {
                 stage: Arc::clone(stage),
                 queued_output_frame_equivalents: port_config.mailbox.queued_frame_measure_total(),
                 the_mailbox_is_full: port_config.mailbox.len() >= port_config.mailbox.capacity(),
@@ -289,9 +297,64 @@ struct PortConfig {
     /// that lets a PowerOfTwo-grown oversized payload reach the reader without
     /// dropping it.
     staged_oversized: Option<BagBodyForTheReader>,
-    /// The window contract's read-side stage, on a port that declared one.
-    /// `None` on every other port, which is unchanged in every respect.
-    audio_window_stage: Option<SharedAudioWindowStage>,
+    /// How this port windows what arrives on it.
+    audio_windowing: PortAudioWindowing,
+}
+
+/// How one port windows what arrives on it.
+///
+/// `Clone` bumps the stage's `Arc`, which is what lets a read carry the
+/// windowing out of the `ports` lock and run a resampler pass with that mutex
+/// released.
+#[derive(Clone)]
+enum PortAudioWindowing {
+    /// The port declared no window contract. Unchanged in every respect: bags
+    /// reach the reader exactly as they were published.
+    NotWindowed,
+    /// The port declared `audio_window = match_device` and nothing has settled
+    /// it yet.
+    ///
+    /// The port exists and its mailbox counts, because the wiring path runs
+    /// before any processor reaches `setup()` and a bag arriving in between
+    /// must land somewhere countable. What it will not do is hand a reader
+    /// anything: it has no contract to window by, and the raw bags underneath
+    /// are exactly what the contract exists to stop reaching `process()`.
+    AwaitingItsDeviceStreamFormat,
+    /// The port windows through this stage.
+    Windowed(SharedAudioWindowStage),
+}
+
+
+
+/// One windowed port's mailbox, stage and read mode, built from the contract
+/// that drives them.
+///
+/// Written once because two callers must produce exactly the same port: the
+/// wiring path, for a contract already settled when the link is wired, and the
+/// settle, for one that arrives at `setup()`.
+fn windowed_port_config(
+    port: &str,
+    read_mode: ReadMode,
+    contract: ResolvedAudioWindowContract,
+) -> PortConfig {
+    // Shared by the mailbox's measure, which writes every arriving bag's rate
+    // into it, and the stage, which reads it so its readiness floor is exact
+    // before it has consumed anything.
+    let latest_queued_source_sample_rate = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    PortConfig {
+        mailbox: PortMailbox::new_measuring(
+            contract.windowed_port_mailbox_depth(),
+            Some(queued_audio_window_frame_measure(
+                contract,
+                Arc::clone(&latest_queued_source_sample_rate),
+            )),
+        ),
+        read_mode,
+        staged_oversized: None,
+        audio_windowing: PortAudioWindowing::Windowed(Arc::new(parking_lot::Mutex::new(
+            AudioWindowAccumulator::new(port, contract, latest_queued_source_sample_rate),
+        ))),
+    }
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -306,6 +369,7 @@ pub struct InputMailboxesInner {
     subscribers: SendableChannelSubscribers,
     listener: SendableListener,
     dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
+    device_matched_audio_window_contracts: Arc<DeviceMatchedAudioWindowContractsByInputPort>,
 }
 
 impl InputMailboxesInner {
@@ -316,6 +380,9 @@ impl InputMailboxesInner {
             subscribers: SendableChannelSubscribers::new(),
             listener: SendableListener::new(),
             dropped_bag_counts: Arc::new(DroppedBagCountsByInboundLink::default()),
+            device_matched_audio_window_contracts: Arc::new(
+                DeviceMatchedAudioWindowContractsByInputPort::default(),
+            ),
         }
     }
 
@@ -339,7 +406,36 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
                 staged_oversized: None,
-                audio_window_stage: None,
+                audio_windowing: PortAudioWindowing::NotWindowed,
+            },
+        );
+    }
+
+    /// Add a mailbox for a port whose window contract is `match_device` and is
+    /// not settled yet.
+    ///
+    /// The compiler wires every link before it releases any processor into
+    /// `setup()`, so this is what a `match_device` port looks like for the
+    /// whole of that gap: countable, and readable by nobody. A bag arriving
+    /// here is queued and, on overrun, evicted and counted against its own
+    /// inbound link, exactly as at any other port. The depth is the profile's
+    /// rather than a contract's, because there is no contract to size it from
+    /// yet; the settle re-sizes it and carries anything queued across.
+    pub fn add_port_awaiting_its_device_stream_format(&self, port: &str, read_mode: ReadMode) {
+        let depth = crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH;
+        tracing::debug!(
+            port = port,
+            buffer_size = depth,
+            read_mode = ?read_mode,
+            "InputMailboxes: add_port_awaiting_its_device_stream_format"
+        );
+        self.ports.lock().insert(
+            port.to_string(),
+            PortConfig {
+                mailbox: PortMailbox::new(depth),
+                read_mode,
+                staged_oversized: None,
+                audio_windowing: PortAudioWindowing::AwaitingItsDeviceStreamFormat,
             },
         );
     }
@@ -357,14 +453,9 @@ impl InputMailboxesInner {
         read_mode: ReadMode,
         contract: ResolvedAudioWindowContract,
     ) {
-        let depth = contract.windowed_port_mailbox_depth();
-        // Shared by the mailbox's measure, which writes every arriving bag's
-        // rate into it, and the stage, which reads it so its readiness floor is
-        // exact before it has consumed anything.
-        let latest_queued_source_sample_rate = Arc::new(std::sync::atomic::AtomicU32::new(0));
         tracing::debug!(
             port = port,
-            buffer_size = depth,
+            buffer_size = contract.windowed_port_mailbox_depth(),
             read_mode = ?read_mode,
             sample_rate = contract.sample_rate,
             channels = contract.channels,
@@ -372,23 +463,87 @@ impl InputMailboxesInner {
             hop = contract.hop,
             "InputMailboxes: add_windowed_port"
         );
-        self.ports.lock().insert(
-            port.to_string(),
-            PortConfig {
-                mailbox: PortMailbox::new_measuring(
-                    depth,
-                    Some(queued_audio_window_frame_measure(
-                        contract,
-                        Arc::clone(&latest_queued_source_sample_rate),
-                    )),
-                ),
-                read_mode,
-                staged_oversized: None,
-                audio_window_stage: Some(Arc::new(parking_lot::Mutex::new(
-                    AudioWindowAccumulator::new(port, contract, latest_queued_source_sample_rate),
-                ))),
-            },
+        self.ports
+            .lock()
+            .insert(port.to_string(), windowed_port_config(port, read_mode, contract));
+    }
+
+    /// Settle a `match_device` port's contract from the format of the device
+    /// stream its own processor just opened, installing the stage that honours
+    /// it.
+    ///
+    /// Called from `setup()`, where the capability typestate is Full — the same
+    /// phase in which a processor requests a window. Only a processor that
+    /// opens a device stream can reach a format to settle one with; nothing
+    /// else can produce the argument.
+    ///
+    /// The settled values outlive the port itself, so a link wired later —
+    /// after `setup()` already ran — finds them rather than a sentinel, and
+    /// `graph` renders what the device gave rather than what the declaration
+    /// asked for.
+    pub fn settle_a_ports_device_matched_audio_window_contract(
+        &self,
+        port: &str,
+        matching: &AudioWindowContractMatchingADeviceStream,
+    ) -> Result<()> {
+        let contract = ResolvedAudioWindowContract::from_a_device_stream_format(matching)
+            .map_err(|refusal| {
+                Error::Configuration(format!(
+                    "input port '{port}' resolving `audio_window = match_device` from its \
+                     device stream produced {refusal}"
+                ))
+            })?;
+        self.device_matched_audio_window_contracts
+            .settle_for_input_port(port, contract);
+
+        let mut ports = self.ports.lock();
+        if let Some(existing) = ports.get(port) {
+            let settled = windowed_port_config(port, existing.read_mode, contract);
+            // Anything that arrived while the contract was unsettled moves into
+            // the mailbox the contract sized, rather than being dropped where
+            // no counter would see it.
+            existing.mailbox.hand_every_queued_frame_over_to(&settled.mailbox);
+            ports.insert(port.to_string(), settled);
+        }
+
+        tracing::info!(
+            port = port,
+            sample_rate = contract.sample_rate,
+            channels = contract.channels,
+            window_size = contract.window_size,
+            hop = contract.hop,
+            "InputMailboxes: `audio_window = match_device` settled from the device stream"
         );
+        Ok(())
+    }
+
+    /// This processor's settled `match_device` contracts, shared with the graph
+    /// node so `graph` renders the resolved values off the port that resolved
+    /// them.
+    pub fn device_matched_audio_window_contracts(
+        &self,
+    ) -> Arc<DeviceMatchedAudioWindowContractsByInputPort> {
+        Arc::clone(&self.device_matched_audio_window_contracts)
+    }
+
+    /// The input ports still holding an unsettled `match_device` sentinel,
+    /// named.
+    ///
+    /// Asked once, after `setup()` returns: by then the only processor that
+    /// could have settled one has had its chance, so a port still here belongs
+    /// to a processor that opens no device stream and is a wiring error.
+    pub fn input_ports_still_awaiting_their_device_stream_format(&self) -> Vec<String> {
+        self.ports
+            .lock()
+            .iter()
+            .filter(|(_, config)| {
+                matches!(
+                    config.audio_windowing,
+                    PortAudioWindowing::AwaitingItsDeviceStreamFormat
+                )
+            })
+            .map(|(port, _)| port.clone())
+            .collect()
     }
 
     /// Whether any channel subscriber has been configured yet.
@@ -564,14 +719,14 @@ impl InputMailboxesInner {
     pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
-        let (staged, audio_window_stage) = {
+        let (staged, audio_windowing) = {
             let mut ports = self.ports.lock();
             let port_config = ports
                 .get_mut(port)
                 .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
             (
                 port_config.staged_oversized.take(),
-                port_config.audio_window_stage.clone(),
+                port_config.audio_windowing.clone(),
             )
         };
 
@@ -580,9 +735,16 @@ impl InputMailboxesInner {
         // resampler pass is not port-map work.
         let candidate = match staged {
             Some(staged) => Some(staged),
-            None => match audio_window_stage {
-                None => self.pop_one_bag_off_the_mailbox(port)?,
-                Some(stage) => self.next_window_out_of_the_stage(port, &stage)?,
+            None => match audio_windowing {
+                PortAudioWindowing::NotWindowed => self.pop_one_bag_off_the_mailbox(port)?,
+                // Nothing, and deliberately not the bag underneath: a port
+                // whose contract is unsettled has no exact size to cut one to,
+                // and `setup()` has not yet had its chance to say what the
+                // device's is.
+                PortAudioWindowing::AwaitingItsDeviceStreamFormat => None,
+                PortAudioWindowing::Windowed(stage) => {
+                    self.next_window_out_of_the_stage(port, &stage)?
+                }
             },
         };
         let Some(candidate) = candidate else {
@@ -902,6 +1064,38 @@ impl InputMailboxes {
             Some(inner) => inner.has_data(port),
             None => false,
         }
+    }
+
+    /// Settle this processor's own input port declaring
+    /// `audio_window = match_device`, from the format of the device stream it
+    /// just opened.
+    ///
+    /// The `RuntimeContextFullAccess` is the gate rather than a value this
+    /// reads: the Full capability typestate exists only in `setup()` and
+    /// `teardown()`, which is where the plan puts a processor's resource
+    /// requests, and taking it here is what keeps a dynamic contract off the
+    /// `process()` surface. There is no Python spelling of this and no control
+    /// -plane verb for it — only a processor that opens a device stream holds
+    /// the format to settle one with.
+    ///
+    /// Refuses a handle that was never given its inner — a processor with no
+    /// iceoryx2 input resources at all, which cannot have the port this names.
+    /// An input port that simply has no link is not that: its contract settles
+    /// and waits, and the port materialises resolved when a link is wired.
+    pub fn settle_a_ports_device_matched_audio_window_contract(
+        &self,
+        _full_access_gate: &crate::core::context::RuntimeContextFullAccess<'_>,
+        port: &str,
+        matching: &AudioWindowContractMatchingADeviceStream,
+    ) -> Result<()> {
+        let Some(inner) = self.host_inner() else {
+            return Err(Error::Configuration(format!(
+                "input port '{port}' declares `audio_window = match_device` but this \
+                 processor's inputs are not wired, so there is nothing to settle the \
+                 contract on. Connect the port, or drop the contract from it"
+            )));
+        };
+        inner.settle_a_ports_device_matched_audio_window_contract(port, matching)
     }
 }
 

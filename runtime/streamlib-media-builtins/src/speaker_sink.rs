@@ -22,14 +22,14 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFormat, AudioStreamLivenessReport,
-    RuntimeContextFullAccess, probe_audio_device_backend,
+    AudioPlaybackStream, AudioStreamFormat, AudioStreamLivenessReport, RuntimeContextFullAccess,
+    probe_audio_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::InputMailboxes;
+use streamlib::sdk::iceoryx2::{AudioWindowContractMatchingADeviceStream, InputMailboxes};
 use streamlib::sdk::processors::ManualProcessor;
 
-use crate::audio_block::{AudioBlock, AudioSampleDtype};
+use crate::audio_block::AudioBlock;
 use crate::audio_samples_awaiting_playback_ring::{
     AudioSamplesAwaitingPlaybackRing, AudioSamplesHandOffOutcome,
 };
@@ -66,12 +66,9 @@ const DRAIN_IDLE_PARK_INTERVAL: Duration = Duration::from_millis(1);
 /// bounds a wait that nothing woke.
 const ROOM_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Refused blocks between reports once the first has been logged. A misconfigured
-/// graph refuses every block — roughly 94 a second at the default quantum — and
-/// the first line already says what the next thousand would.
-const REFUSED_BLOCKS_BETWEEN_REPORTS: u64 = 300;
-
-/// Failed reads between reports, on the same reasoning.
+/// Failed reads between reports. A graph publishing frames this cannot decode
+/// fails every read — roughly 94 a second at the default quantum — and the
+/// first line already says what the next thousand would.
 const FAILED_READS_BETWEEN_REPORTS: u64 = 300;
 
 /// Ten-millisecond periods of silence between underrun warnings — roughly
@@ -103,6 +100,7 @@ pub struct SpeakerSinkConfig {
     input(
         "audio",
         delivery_profile = "ordered",
+        audio_window = match_device,
         description = "Timestamped blocks of interleaved samples to play"
     ),
 )]
@@ -136,6 +134,27 @@ impl ManualProcessor for SpeakerSink::Processor {
             sample_format = ?stream_format.sample_format,
             "SpeakerSink: playback stream opened"
         );
+        // The port declared `audio_window = match_device`, and this is the
+        // format it was waiting for: from here the read-side stage resamples,
+        // converts channels and re-encodes every block into what this device
+        // opened at, so a mono-preferring microphone drives a stereo-preferring
+        // speaker with nothing between them. Window and hop are one device
+        // period because the sink wants format conversion, not framing — under
+        // an all-or-nothing contract that is how a converter is spelled.
+        self.inputs.settle_a_ports_device_matched_audio_window_contract(
+            ctx,
+            AUDIO_INPUT_PORT,
+            &AudioWindowContractMatchingADeviceStream {
+                device_stream_format: stream_format,
+                window_size_in_per_channel_samples: a_device_periods_worth_of_per_channel_samples(
+                    stream_format,
+                ),
+                hop_in_per_channel_samples: a_device_periods_worth_of_per_channel_samples(
+                    stream_format,
+                ),
+            },
+        )?;
+
         self.playback_stream_liveness_report = Some(playback_stream.liveness_report());
         self.playback_stream = Some(playback_stream);
         Ok(())
@@ -251,13 +270,22 @@ impl SpeakerSink::Processor {
     }
 }
 
-/// Ten milliseconds of this format, in bytes — the device period this assumes
-/// where it has not yet been told one.
+/// Ten milliseconds of this format in per-channel samples — the device period
+/// this assumes where it has not yet been told one.
 ///
-/// Written once because two callers depend on it moving together: the ring's
-/// size and the interval between underrun reports are both stated in periods.
+/// Written once because three callers depend on it moving together: the ring's
+/// size, the interval between underrun reports, and the window the port's
+/// `match_device` contract settles to are all stated in periods. Floored at one
+/// sample so a stream reporting an absurd rate still settles a contract the
+/// stage can honour rather than one refused for a zero window.
+fn a_device_periods_worth_of_per_channel_samples(stream_format: AudioStreamFormat) -> u32 {
+    (stream_format.sample_rate / 100).max(1)
+}
+
+/// One device period of this format, in bytes.
 fn a_device_periods_worth_of_bytes(stream_format: AudioStreamFormat) -> usize {
-    stream_format.interleaved_byte_count_for(stream_format.sample_rate / 100)
+    stream_format
+        .interleaved_byte_count_for(a_device_periods_worth_of_per_channel_samples(stream_format))
 }
 
 /// How many bytes of queued samples sit between the graph and the device.
@@ -281,74 +309,6 @@ fn device_callback_filling_from(
     })
 }
 
-/// How a wire dtype is spelled as a stream's scalar encoding.
-fn stream_sample_format_for(dtype: AudioSampleDtype) -> AudioSampleFormat {
-    match dtype {
-        AudioSampleDtype::F32 => AudioSampleFormat::F32,
-        AudioSampleDtype::I16 => AudioSampleFormat::I16,
-    }
-}
-
-/// Why the device cannot play a block as it stands, in the words the refusal
-/// carries.
-///
-/// A `Result<(), String>` rather than a bare bool because a refusal that does
-/// not name both the block's format and the device's sends a reader to the
-/// wrong end of the graph — and there is no resampler on this rung, so the
-/// wiring is the only thing that can be fixed.
-fn refuse_a_block_the_device_cannot_play(
-    block: &AudioBlock,
-    stream_format: AudioStreamFormat,
-) -> std::result::Result<(), String> {
-    let block_sample_format = stream_sample_format_for(block.dtype);
-    if block.sample_rate == stream_format.sample_rate
-        && block.channels == stream_format.channels
-        && block_sample_format == stream_format.sample_format
-    {
-        return Ok(());
-    }
-    Err(format!(
-        "a block of {} Hz / {} channels / {:?} cannot be played on a device running at {} Hz \
-         / {} channels / {:?}. There is no resampler on this rung, so the block is refused \
-         rather than adapted — silently playing it would be indistinguishable from working \
-         code. Publish blocks in the device's format, or name a device that matches.",
-        block.sample_rate,
-        block.channels,
-        block_sample_format,
-        stream_format.sample_rate,
-        stream_format.channels,
-        stream_format.sample_format,
-    ))
-}
-
-/// The bytes of one block, refused rather than adapted when the device cannot
-/// play them as they stand.
-///
-/// Also refuses a block whose payload is not `sample_count × channels × width`:
-/// playing it would push every later sample out of phase by the shortfall,
-/// which sounds like a device fault rather than a producer one.
-fn samples_of_a_block_the_device_can_play(
-    block: &AudioBlock,
-    stream_format: AudioStreamFormat,
-) -> std::result::Result<&[u8], String> {
-    refuse_a_block_the_device_cannot_play(block, stream_format)?;
-
-    let expected_byte_count = stream_format.interleaved_byte_count_for(block.sample_count);
-    if block.interleaved_sample_bytes.len() != expected_byte_count {
-        return Err(format!(
-            "a block declaring {} samples of {} channels at {:?} carries {} bytes where {} \
-             describes it — the payload and the header disagree, and playing either reading \
-             would put every later sample out of phase",
-            block.sample_count,
-            block.channels,
-            block.dtype,
-            block.interleaved_sample_bytes.len(),
-            expected_byte_count,
-        ));
-    }
-    Ok(&block.interleaved_sample_bytes)
-}
-
 fn drain_blocks_into_playback(
     inputs: &InputMailboxes,
     samples_awaiting_playback: &AudioSamplesAwaitingPlaybackRing,
@@ -359,8 +319,6 @@ fn drain_blocks_into_playback(
 ) {
     let mut read_failures =
         ConsecutiveFailureReportSchedule::reporting_every(FAILED_READS_BETWEEN_REPORTS);
-    let mut refused_blocks =
-        ConsecutiveFailureReportSchedule::reporting_every(REFUSED_BLOCKS_BETWEEN_REPORTS);
     let mut underrun_reports = CumulativeCountReportThreshold::reporting_every(
         a_device_periods_worth_of_bytes(stream_format).max(1) as u64
             * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS,
@@ -415,21 +373,13 @@ fn drain_blocks_into_playback(
             }
         };
 
-        let samples = match samples_of_a_block_the_device_can_play(&block, stream_format) {
-            Ok(samples) => {
-                refused_blocks.note_success();
-                samples
-            }
-            Err(refusal) => {
-                if refused_blocks.note_failure_and_say_whether_to_report() {
-                    tracing::error!(
-                        refused_blocks = refused_blocks.consecutive_failures(),
-                        "SpeakerSink: {refusal}"
-                    );
-                }
-                continue;
-            }
-        };
+        // Handed to the device as it stands, with nothing checked on the way:
+        // the port declared `audio_window = match_device` and its read-side
+        // stage emits windows already in this device's rate, channel count and
+        // scalar encoding — and refuses a bag it cannot read, by name, at the
+        // read above. A second check here would be the same refusal spelled
+        // twice, and one of the two spellings would eventually be wrong.
+        let samples = block.interleaved_sample_bytes.as_slice();
 
         // The wait is this sink pacing itself against its own ring — the
         // device-stall envelope — not backpressure any profile asks for. A
@@ -466,9 +416,9 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
     use streamlib::sdk::context::{
-        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioStreamFailureReason,
-        AudioStreamFailureRecorder, AudioTickCallback, AudioTickContext, SharedAudioClock,
-        SilentNullAudioDeviceBackend,
+        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioSampleFormat,
+        AudioStreamFailureReason, AudioStreamFailureRecorder, AudioTickCallback, AudioTickContext,
+        SharedAudioClock, SilentNullAudioDeviceBackend,
     };
 
     use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLogLineCounts};
@@ -544,23 +494,6 @@ mod tests {
             sample_rate,
             channels,
             sample_format: AudioSampleFormat::F32,
-        }
-    }
-
-    fn a_block(sample_rate: u32, channels: u32, dtype: AudioSampleDtype) -> AudioBlock {
-        const SAMPLE_COUNT: u32 = 4;
-        AudioBlock {
-            interleaved_sample_bytes: vec![
-                0u8;
-                SAMPLE_COUNT as usize
-                    * channels as usize
-                    * dtype.bytes_per_sample()
-            ],
-            sample_rate,
-            channels,
-            sample_count: SAMPLE_COUNT,
-            dtype,
-            first_sample_timestamp_ns: 0,
         }
     }
 
@@ -667,76 +600,6 @@ mod tests {
             samples_awaiting_playback.underrun_byte_count(),
             0,
             "periods the graph supplied in full are not underruns"
-        );
-    }
-
-    /// The refusal the whole rung turns on: no resampler exists yet, so a block
-    /// the device cannot play is named rather than adapted.
-    ///
-    /// Mental revert: accept a mismatched rate and the device plays it at the
-    /// wrong speed — audible, but indistinguishable from a device fault, and
-    /// exactly the wiring error the next rung's port window contract removes.
-    #[test]
-    fn a_block_at_the_wrong_rate_is_refused_naming_both_rates() {
-        let refusal = refuse_a_block_the_device_cannot_play(
-            &a_block(16_000, 1, AudioSampleDtype::F32),
-            a_stream_format(48_000, 1),
-        )
-        .expect_err("16 kHz cannot be played on a 48 kHz device");
-        assert!(
-            refusal.contains("16000") && refusal.contains("48000"),
-            "the refusal must name what it got and what the device wants: {refusal}"
-        );
-    }
-
-    #[test]
-    fn a_block_with_the_wrong_channel_count_is_refused_naming_both_counts() {
-        let refusal = refuse_a_block_the_device_cannot_play(
-            &a_block(48_000, 1, AudioSampleDtype::F32),
-            a_stream_format(48_000, 2),
-        )
-        .expect_err("a mono block cannot be played as a stereo one");
-        assert!(
-            refusal.contains("1 channels") && refusal.contains("2 channels"),
-            "the refusal must name both channel counts: {refusal}"
-        );
-    }
-
-    /// A dtype mismatch reads every scalar at the wrong width, so it is the
-    /// mismatch that produces noise rather than a wrong speed.
-    #[test]
-    fn a_block_in_the_wrong_dtype_is_refused_rather_than_reinterpreted() {
-        let refusal = refuse_a_block_the_device_cannot_play(
-            &a_block(48_000, 2, AudioSampleDtype::I16),
-            a_stream_format(48_000, 2),
-        )
-        .expect_err("i16 scalars cannot be handed to an f32 device");
-        assert!(
-            refusal.contains("I16") && refusal.contains("F32"),
-            "the refusal must name both encodings: {refusal}"
-        );
-    }
-
-    #[test]
-    fn a_block_the_device_can_play_is_handed_over_whole() {
-        let block = a_block(48_000, 2, AudioSampleDtype::F32);
-        let samples = samples_of_a_block_the_device_can_play(&block, a_stream_format(48_000, 2))
-            .expect("a matching block plays");
-        assert_eq!(samples.len(), block.interleaved_sample_bytes.len());
-    }
-
-    /// A header that disagrees with its payload would push every later sample
-    /// out of phase by the shortfall, which sounds like a device fault rather
-    /// than the producer bug it is.
-    #[test]
-    fn a_block_whose_payload_contradicts_its_header_is_refused_naming_both_lengths() {
-        let mut block = a_block(48_000, 2, AudioSampleDtype::F32);
-        block.interleaved_sample_bytes.truncate(4);
-        let refusal = samples_of_a_block_the_device_can_play(&block, a_stream_format(48_000, 2))
-            .expect_err("a truncated payload cannot describe 4 stereo samples");
-        assert!(
-            refusal.contains('4') && refusal.contains("32"),
-            "the refusal must name what arrived and what was described: {refusal}"
         );
     }
 

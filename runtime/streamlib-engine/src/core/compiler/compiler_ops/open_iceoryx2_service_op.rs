@@ -20,15 +20,17 @@ use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
-    LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics, SubprocessHandleComponent,
+    DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
+    GraphNodeWithComponents, LinkState, LinkStateComponent, LinkUniqueId,
+    ProcessorInstanceComponent, ProcessorMetrics, SubprocessHandleComponent,
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService,
-    Iceoryx2Service, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, ResolvedAudioWindowContract,
-    audio_window_contract_for_input_port, delivery_profile_for_input_port,
-    effective_channel_ceiling_bytes,
+    AudioWindowingOfAnInputPort, ChannelEgressConfig, ChannelTrustTier,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService, Iceoryx2Service,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, audio_windowing_declared_by_input_port,
+    delivery_profile_for_input_port, effective_channel_ceiling_bytes,
+    refuse_an_unsettled_match_device_sentinel,
 };
 
 /// Open an iceoryx2 channel for a `connect()` link in the graph.
@@ -68,12 +70,14 @@ pub fn open_iceoryx2_service(
     let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
     let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
 
-    // A windowed destination is resolved and refused before any service is
-    // opened: a contract whose sentinel nothing resolved, or a second link into
-    // a port that windows, must not leave half-wired iceoryx2 ports behind.
-    let dest_audio_window_contract =
-        audio_window_contract_for_input_port_of(graph, &dest_proc_id, &dest_port)?;
-    if let Some(contract) = dest_audio_window_contract {
+    // A windowed destination is read and refused before any service is opened:
+    // a second link into a port that windows must not leave half-wired iceoryx2
+    // ports behind. A `match_device` sentinel is not refused here — the
+    // compiler wires every link before it releases any processor into `setup()`,
+    // which is where the only format that can settle one comes from.
+    let dest_audio_windowing =
+        audio_windowing_declared_by_input_port_of(graph, &dest_proc_id, &dest_port)?;
+    if dest_audio_windowing.is_some() {
         refuse_a_second_inbound_link_into_a_windowed_port(
             graph,
             &dest_proc_id,
@@ -83,10 +87,7 @@ pub fn open_iceoryx2_service(
         tracing::debug!(
             dest = %dest_proc_id,
             port = %dest_port,
-            sample_rate = contract.sample_rate,
-            channels = contract.channels,
-            window_size = contract.window_size,
-            hop = contract.hop,
+            windowing = ?dest_audio_windowing,
             "Destination input port declares a window contract; its reads run through the stage"
         );
     }
@@ -196,7 +197,7 @@ pub fn open_iceoryx2_service(
             max_subscribers,
             max_notifiers,
             link_id,
-            dest_audio_window_contract,
+            dest_audio_windowing,
         )?;
     } else {
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
@@ -210,7 +211,7 @@ pub fn open_iceoryx2_service(
             max_queued_messages,
             &service,
             notify_service.as_ref(),
-            dest_audio_window_contract,
+            dest_audio_windowing,
         )?;
     }
 
@@ -552,16 +553,16 @@ fn channel_delivery_profile(
     Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Newest))
 }
 
-/// The window contract this destination's input port declares, if it declares
+/// The window declaration this destination's input port carries, if it carries
 /// one.
 ///
 /// Reads the destination's registered class, the same way the delivery profile
 /// is read: the declaration is the whole answer and nothing is inferred.
-fn audio_window_contract_for_input_port_of(
+fn audio_windowing_declared_by_input_port_of(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
-) -> Result<Option<ResolvedAudioWindowContract>> {
+) -> Result<Option<AudioWindowingOfAnInputPort>> {
     let Some(dest_type) = graph
         .traversal_mut()
         .v(dest_proc_id)
@@ -570,7 +571,7 @@ fn audio_window_contract_for_input_port_of(
     else {
         return Ok(None);
     };
-    audio_window_contract_for_input_port(&dest_type, dest_port)
+    audio_windowing_declared_by_input_port(&dest_type, dest_port)
 }
 
 /// Refuse a second inbound link into a port that windows, naming the port and
@@ -776,7 +777,7 @@ fn wire_rust_dest(
     depth: usize,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
-    audio_window_contract: Option<ResolvedAudioWindowContract>,
+    audio_windowing: Option<AudioWindowingOfAnInputPort>,
 ) -> Result<()> {
     let dest_guard = dest_processor.lock();
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
@@ -784,9 +785,26 @@ fn wire_rust_dest(
     };
 
     if !input_inner.has_port(dest_port) {
-        match audio_window_contract {
-            Some(contract) => input_inner.add_windowed_port(dest_port, drain_order, contract),
+        // A sentinel this processor already settled — a link wired after its
+        // `setup()` ran — windows from the settled values, not from the
+        // declaration that asked for them.
+        let settled_from_its_device = input_inner
+            .device_matched_audio_window_contracts()
+            .settled_for_input_port(dest_port);
+        match audio_windowing {
             None => input_inner.add_port(dest_port, depth, drain_order),
+            Some(AudioWindowingOfAnInputPort::Resolved(contract)) => {
+                input_inner.add_windowed_port(dest_port, drain_order, contract)
+            }
+            Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat) => {
+                match settled_from_its_device {
+                    Some(contract) => {
+                        input_inner.add_windowed_port(dest_port, drain_order, contract)
+                    }
+                    None => input_inner
+                        .add_port_awaiting_its_device_stream_format(dest_port, drain_order),
+                }
+            }
         }
     }
 
@@ -805,6 +823,11 @@ fn wire_rust_dest(
         }
     }
     publish_dropped_bag_counts_on_destination_node(graph, dest_proc_id, &input_inner);
+    publish_device_matched_audio_window_contracts_on_destination_node(
+        graph,
+        dest_proc_id,
+        &input_inner,
+    );
     Ok(())
 }
 
@@ -833,6 +856,30 @@ fn publish_dropped_bag_counts_on_destination_node(
         dropped_bag_counts_by_inbound_link: input_inner.dropped_bag_counts_by_inbound_link(),
         ..Default::default()
     });
+}
+
+/// Share the destination's settled `match_device` contracts onto its graph
+/// node, so `graph` renders a port's resolved values off the port that resolved
+/// them.
+///
+/// Same shape and same reason as the dropped-bag counts beside it: one shared
+/// object, inserted with the destination's first inbound link, read live rather
+/// than copied at wiring time — which matters more here than there, because at
+/// wiring time there is nothing to copy yet.
+fn publish_device_matched_audio_window_contracts_on_destination_node(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    input_inner: &Arc<crate::iceoryx2::InputMailboxesInner>,
+) {
+    let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
+        return;
+    };
+    if node.has::<DeviceMatchedAudioWindowContractsComponent>() {
+        return;
+    }
+    node.insert_component_without_rendering_it(DeviceMatchedAudioWindowContractsComponent(
+        input_inner.device_matched_audio_window_contracts(),
+    ));
 }
 
 /// Record this link's source-side wiring on a processor whose transport lives
@@ -904,7 +951,7 @@ fn wire_subprocess_dest(
     max_subscribers: usize,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
-    audio_window_contract: Option<ResolvedAudioWindowContract>,
+    audio_windowing: Option<AudioWindowingOfAnInputPort>,
 ) -> Result<()> {
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
@@ -924,17 +971,36 @@ fn wire_subprocess_dest(
         "notify_max_notifiers": notify_max_notifiers,
     });
     // The window contract rides the envelope beside `read_mode`, or the child's
-    // own stage windows nothing. The five values go over resolved — a sentinel
-    // resolves in the parent, where the device stream is — so the child reads
-    // one shape and never a sentinel it could not settle.
-    if let Some(contract) = audio_window_contract {
-        entry["audio_window"] =
-            serde_json::to_value(contract.as_declared_values()).map_err(|render_failure| {
-                Error::Configuration(format!(
-                    "the window contract on input port '{dest_port}' could not be rendered \
-                     onto the helper wiring envelope: {render_failure}"
-                ))
-            })?;
+    // own stage windows nothing. The five values go over resolved, so the child
+    // reads one shape and never a sentinel it could not settle — and a helper
+    // can never settle one: the format comes from a device stream a processor
+    // opens in the app process, and nothing crosses to say so. A sentinel on a
+    // helper-placed port is therefore refused here, where the destination's
+    // placement is known.
+    match audio_windowing {
+        None => {}
+        Some(AudioWindowingOfAnInputPort::Resolved(contract)) => {
+            entry["audio_window"] =
+                serde_json::to_value(contract.as_declared_values()).map_err(|render_failure| {
+                    Error::Configuration(format!(
+                        "the window contract on input port '{dest_port}' could not be rendered \
+                         onto the helper wiring envelope: {render_failure}"
+                    ))
+                })?;
+        }
+        Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat) => {
+            let dest_type = graph
+                .traversal_mut()
+                .v(dest_proc_id)
+                .first()
+                .map(|node| node.processor_type().clone())
+                .ok_or_else(|| {
+                    Error::ProcessorNotFound(format!("Processor '{dest_proc_id}' not found"))
+                })?;
+            return Err(refuse_an_unsettled_match_device_sentinel(
+                &dest_type, dest_port,
+            ));
+        }
     }
 
     let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
@@ -1807,11 +1873,17 @@ mod tests {
         let mut graph = Graph::new();
         let dest_id = add_mock_windowed_audio_consumer(&mut graph);
 
-        let contract =
-            audio_window_contract_for_input_port_of(&mut graph, &dest_id.as_str().into(), "audio")
-                .expect("a declared contract resolves")
-                .expect("the port declares one");
+        let windowing = audio_windowing_declared_by_input_port_of(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "audio",
+        )
+        .expect("a declared contract resolves")
+        .expect("the port declares one");
 
+        let AudioWindowingOfAnInputPort::Resolved(contract) = windowing else {
+            panic!("a port stating five values resolves to them at wire time");
+        };
         assert_eq!(contract.sample_rate, 16_000);
         assert_eq!(contract.channels, 1);
         assert_eq!(contract.window_size, 512);
@@ -1824,29 +1896,34 @@ mod tests {
         let mut graph = Graph::new();
         let dest_id = add_mock_reactive_input_only(&mut graph);
 
-        let contract =
-            audio_window_contract_for_input_port_of(&mut graph, &dest_id.as_str().into(), "in1")
+        let windowing =
+            audio_windowing_declared_by_input_port_of(&mut graph, &dest_id.as_str().into(), "in1")
                 .expect("resolution succeeds");
-        assert!(contract.is_none());
+        assert!(windowing.is_none());
     }
 
-    /// `match_device` resolves at `setup()` from the device stream the
-    /// declaring processor opened. Nothing resolves it on this rung, so every
-    /// one is a wiring error that says where it would have been settled.
+    /// `match_device` settles at `setup()` from the device stream the declaring
+    /// processor opened — and the compiler wires every link before it releases
+    /// any processor into `setup()`. So wire time is not where a sentinel is
+    /// judged: the port is wired awaiting its device, and the refusal belongs
+    /// where nothing can settle it (a helper-placed destination) or where
+    /// nothing did (after `setup()` returned).
     #[test]
-    fn an_unresolved_match_device_contract_is_a_wiring_error_naming_the_mechanism() {
+    fn a_match_device_contract_wires_awaiting_its_device_rather_than_refusing() {
         let mut graph = Graph::new();
         let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
 
-        let refusal =
-            audio_window_contract_for_input_port_of(&mut graph, &dest_id.as_str().into(), "audio")
-                .expect_err("nothing has resolved the sentinel");
-        let rendered = refusal.to_string();
-        assert!(
-            rendered.contains("match_device")
-                && rendered.contains("setup()")
-                && rendered.contains("audio"),
-            "the refusal must name the sentinel, where it resolves, and the port; got {rendered}"
+        let windowing = audio_windowing_declared_by_input_port_of(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "audio",
+        )
+        .expect("a sentinel is not a wiring error by itself")
+        .expect("the port declares one");
+
+        assert_eq!(
+            windowing,
+            AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat
         );
     }
 

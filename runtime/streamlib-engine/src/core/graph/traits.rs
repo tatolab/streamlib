@@ -36,6 +36,19 @@ pub trait GraphNodeWithComponents: GraphWeight {
         }));
     }
 
+    /// Insert a component that the control plane reads through something other
+    /// than a `components` key of its own, replacing any existing component of
+    /// the same type.
+    ///
+    /// [`Self::insert`] registers a serializer alongside every component, which
+    /// is right for the ones `graph` renders as themselves. A component whose
+    /// content already reaches a reader somewhere else — the settled
+    /// `match_device` contracts, which render on the ports that settled them —
+    /// would otherwise appear twice, and two renderings of one fact is one
+    /// rendering too many to keep in agreement.
+    fn insert_component_without_rendering_it<C: Component>(&mut self, component: C) {
+        self.components_mut().insert(component);
+    }
     /// Get an immutable reference to a component.
     fn get<C: Component>(&self) -> Option<&C> {
         self.components().get::<C>()

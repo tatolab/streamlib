@@ -152,12 +152,13 @@ fn spawn_dedicated_thread(
 
     // Create processor instance now (with lock) since factory needs node
     // reference.
-    let processor_arc = {
+    let (processor_arc, processor_type) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
-        Arc::new(Mutex::new(factory.create(node)?))
+        let processor_type = node.processor_type().clone();
+        (Arc::new(Mutex::new(factory.create(node)?)), processor_type)
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
@@ -366,6 +367,20 @@ fn spawn_dedicated_thread(
                     return;
                 }
 
+                // `setup()` is where a `match_device` window contract settles,
+                // and the only processor that could settle one has now had its
+                // chance. A port still holding the sentinel belongs to a
+                // processor that opens no device stream — a wiring error, and
+                // one that must surface here rather than as a port that
+                // silently hands its reader nothing for the rest of the run.
+                if let Err(e) =
+                    refuse_a_port_setup_left_awaiting_its_device_stream_format(&guard, &processor_type)
+                {
+                    tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
+                    state_arc.transition_to(ProcessorState::Error);
+                    return;
+                }
+
                 tracing::info!("[{}] Setup completed successfully", proc_id_clone);
             }
 
@@ -406,6 +421,35 @@ fn spawn_dedicated_thread(
     }
 
     Ok(())
+}
+
+/// Refuse a processor whose `setup()` returned with an input port still
+/// holding an unsettled `audio_window = match_device` sentinel.
+///
+/// The refusal is the wiring path's own, in its own words: the only difference
+/// is where it can be raised. A helper-placed destination is refused at wire
+/// time, because a child can never settle one; an app-process processor cannot
+/// be judged until it has run the hook that would have.
+fn refuse_a_port_setup_left_awaiting_its_device_stream_format(
+    processor: &crate::core::processors::ProcessorInstance,
+    processor_type: &streamlib_processor_schema::ProcessorClassImportPath,
+) -> Result<()> {
+    let Some(input_inner) = processor.iceoryx2_input_mailboxes_inner() else {
+        return Ok(());
+    };
+    // Sorted so a processor with several unsettled ports names the same one on
+    // every run — a refusal that reshuffles reads as two different defects.
+    let Some(port) = input_inner
+        .input_ports_still_awaiting_their_device_stream_format()
+        .into_iter()
+        .min()
+    else {
+        return Ok(());
+    };
+    Err(crate::iceoryx2::refuse_an_unsettled_match_device_sentinel(
+        processor_type,
+        &port,
+    ))
 }
 
 /// The trust-axis moat at the FullAccess minting seam: yield a

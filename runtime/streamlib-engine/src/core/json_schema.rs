@@ -245,8 +245,31 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
             display_name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
-            ports: ProcessorNodePortsOutput::from(&node.ports),
+            ports: ProcessorNodePortsOutput::of_this_node(node),
             components: node.serialize_components(),
+        }
+    }
+}
+
+impl ProcessorNodePortsOutput {
+    /// This node's ports, with any `match_device` contract its own device
+    /// stream has settled rendered as the five values it settled to.
+    ///
+    /// A port declaring the sentinel renders it until its processor's `setup()`
+    /// opens a device, and the resolved values from then on: machine-dependent
+    /// because the device format is, which is truer than a static lie.
+    fn of_this_node(node: &crate::core::graph::ProcessorNode) -> Self {
+        let settled = node
+            .get::<crate::core::graph::DeviceMatchedAudioWindowContractsComponent>()
+            .map(|component| &component.0);
+        Self {
+            inputs: node
+                .ports
+                .inputs
+                .iter()
+                .map(|port| PortInfoOutput::rendered_over_any_settled_contract(port, settled))
+                .collect(),
+            outputs: node.ports.outputs.iter().map(PortInfoOutput::from).collect(),
         }
     }
 }
@@ -257,6 +280,31 @@ impl From<&crate::core::graph::ProcessorNodePorts> for ProcessorNodePortsOutput 
             inputs: ports.inputs.iter().map(PortInfoOutput::from).collect(),
             outputs: ports.outputs.iter().map(PortInfoOutput::from).collect(),
         }
+    }
+}
+
+impl PortInfoOutput {
+    /// One input port, with a `match_device` declaration replaced by whatever
+    /// its own device stream settled it to.
+    fn rendered_over_any_settled_contract(
+        port: &crate::core::graph::PortInfo,
+        settled: Option<&std::sync::Arc<crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>>,
+    ) -> Self {
+        let mut rendered = PortInfoOutput::from(port);
+        if !matches!(
+            rendered.audio_window,
+            Some(crate::core::descriptors::AudioWindowContract::MatchDevice {})
+        ) {
+            return rendered;
+        }
+        if let Some(values) = settled
+            .and_then(|contracts| contracts.settled_declaration_for_input_port(&port.name))
+        {
+            rendered.audio_window = Some(crate::core::descriptors::AudioWindowContract::Declaration(
+                values,
+            ));
+        }
+        rendered
     }
 }
 

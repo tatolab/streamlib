@@ -201,6 +201,30 @@ impl PortMailbox {
     pub fn drain(&self) -> impl Iterator<Item = Vec<u8>> + '_ {
         std::iter::from_fn(move || self.pop())
     }
+
+    /// Hand every queued frame over to the mailbox replacing this one, oldest
+    /// first, each re-measured by the replacement's own measure.
+    ///
+    /// A port whose window contract settles at `setup()` is re-sized from that
+    /// contract, and `ArrayQueue` has a fixed capacity — so the replacement is
+    /// a new queue and the frames already in flight have to move into it. They
+    /// move rather than being dropped because a bag lost here would be lost
+    /// where nothing counts it: eviction is charged to the link a frame arrived
+    /// on, and a frame discarded by the swap arrived on a link that is still
+    /// wired and still delivering. Each frame keeps the inbound link it came in
+    /// on, so a later eviction is still charged to the right one, and any that
+    /// overrun the replacement's depth are evicted and counted by it exactly as
+    /// a burst would be.
+    pub fn hand_every_queued_frame_over_to(&self, replacement: &PortMailbox) {
+        while let Some(frame) = self.queue.pop() {
+            self.take_out_of_the_total(&frame);
+            let measure = replacement.measure_of(&frame.payload);
+            replacement.push_frame(PortMailboxQueuedFrame {
+                measure,
+                ..frame
+            });
+        }
+    }
 }
 
 #[cfg(test)]

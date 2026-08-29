@@ -25,6 +25,7 @@
 
 mod audio_block_bag_wire_codec;
 mod audio_window_accumulator;
+mod device_matched_audio_window_contracts;
 mod resolved_audio_window_contract;
 
 #[cfg(test)]
@@ -34,8 +35,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 pub(crate) use audio_window_accumulator::AudioWindowAccumulator;
+pub use device_matched_audio_window_contracts::{
+    AudioWindowContractMatchingADeviceStream, DeviceMatchedAudioWindowContractsByInputPort,
+};
 pub use resolved_audio_window_contract::ResolvedAudioWindowContract;
-pub(crate) use resolved_audio_window_contract::audio_window_contract_for_input_port;
+pub(crate) use resolved_audio_window_contract::{
+    AudioWindowingOfAnInputPort, audio_windowing_declared_by_input_port,
+    refuse_an_unsettled_match_device_sentinel,
+};
 
 use audio_block_bag_wire_codec::read_an_audio_block_off_the_wire;
 
