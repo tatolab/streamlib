@@ -12,7 +12,13 @@ that crossed the wiring envelope.
 
 import json
 
-from streamlib import AudioBlock, AudioWindowContract, input, log, processor
+from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    AudioBlock,
+    AudioWindowContract,
+    input,
+    log,
+    processor,
+)
 
 CONTIGUOUS_RESULT_MARKER = "MARKER:WINDOWS_SEEN "
 ROLLING_RESULT_MARKER = "MARKER:ROLLING_WINDOWS_SEEN "

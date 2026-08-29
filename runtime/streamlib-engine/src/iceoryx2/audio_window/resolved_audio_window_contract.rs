@@ -36,20 +36,36 @@ pub struct ResolvedAudioWindowContract {
     pub(crate) hop: u32,
 }
 
-/// The source quantum the engine assumes when sizing a windowed port's
-/// mailbox: 128 samples at 48 kHz, about 2.7 ms.
+/// The shortest source block the mailbox depth is sized to cover — an eighth of
+/// a millisecond.
 ///
-/// A wire-time depth cannot read the real quantum — the producer's block size
-/// arrives with the bags, not with the declaration. Sized well under the
-/// engine's own preferred period of 512 rather than at it, because being wrong
-/// in the two directions costs differently: too generous costs queue slots,
-/// which hold a pointer each until bags actually arrive, while too mean is a
-/// port that can fill its mailbox without ever filling a window and then
-/// delivers nothing at all. 128 covers the quanta a PipeWire graph is
-/// ordinarily configured with. Past that the stage says so rather than
-/// stalling silently — see the warning it raises when a full mailbox still
-/// cannot make one window.
-const ASSUMED_SOURCE_QUANTUM_NANOSECONDS: u64 = 128 * 1_000_000_000 / 48_000;
+/// A wire-time depth cannot read the real block size: it arrives with the bags,
+/// not with the declaration. What it must not do is assume a *sample count*,
+/// because a count is not a duration — 128 samples is 2.7 ms at 48 kHz and
+/// 0.67 ms at 192 kHz, and the mailbox has to span a window's worth of time
+/// whichever rate the source runs at. So the assumption is stated as the
+/// duration it actually is: 0.125 ms covers 24 samples at 192 kHz and 6 at
+/// 48 kHz, below any device configuration in practice.
+///
+/// Sizing generously is close to free, which is why the bound sits well under
+/// what a device really delivers. Depth costs queue slots, tens of bytes each,
+/// held whether or not a bag ever arrives; the audio itself is bounded by the
+/// window's duration rather than by the slot count, because a source with
+/// shorter blocks fills more slots with proportionally smaller payloads. Being
+/// too mean costs incomparably more: a port that fills its mailbox without ever
+/// filling a window delivers nothing at all and evicts everything behind it.
+const SHORTEST_SOURCE_BLOCK_THE_DEPTH_COVERS_NANOSECONDS: u64 = 125_000;
+
+/// The most slots one windowed port may hold, whatever it declares.
+///
+/// At [`SHORTEST_SOURCE_BLOCK_THE_DEPTH_COVERS_NANOSECONDS`] this spans a
+/// little over a second, so every window up to that length is covered even from
+/// the shortest blocks, and a longer one is covered from the block sizes a
+/// device really delivers. Past that the stage says so rather than stalling
+/// silently — see the warning it raises when a full mailbox still cannot make
+/// one window. The cap exists so a single declaration cannot ask the engine for
+/// unbounded memory.
+const MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS: usize = 8_192;
 
 /// Extra queued blocks beyond the window's own worth, so a burst that arrives
 /// while the reader is mid-window does not evict the samples the window still
@@ -138,10 +154,12 @@ impl ResolvedAudioWindowContract {
     pub(crate) fn windowed_port_mailbox_depth(&self) -> usize {
         let window_nanoseconds =
             u64::from(self.window_size) * 1_000_000_000 / u64::from(self.sample_rate);
-        let quanta_per_window = window_nanoseconds.div_ceil(ASSUMED_SOURCE_QUANTUM_NANOSECONDS);
-        let derived = usize::try_from(quanta_per_window)
-            .unwrap_or(usize::MAX - WINDOWED_PORT_MAILBOX_DEPTH_MARGIN)
-            .saturating_add(WINDOWED_PORT_MAILBOX_DEPTH_MARGIN);
+        let blocks_per_window =
+            window_nanoseconds.div_ceil(SHORTEST_SOURCE_BLOCK_THE_DEPTH_COVERS_NANOSECONDS);
+        let derived = usize::try_from(blocks_per_window)
+            .unwrap_or(MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS)
+            .saturating_add(WINDOWED_PORT_MAILBOX_DEPTH_MARGIN)
+            .min(MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS);
         derived.max(DeliveryProfile::ORDERED_DEPTH)
     }
 
@@ -295,8 +313,8 @@ mod tests {
 
             let window_nanoseconds =
                 u64::from(window_size) * 1_000_000_000 / u64::from(sample_rate);
-            let depth_nanoseconds =
-                contract.windowed_port_mailbox_depth() as u64 * ASSUMED_SOURCE_QUANTUM_NANOSECONDS;
+            let depth_nanoseconds = contract.windowed_port_mailbox_depth() as u64
+                * SHORTEST_SOURCE_BLOCK_THE_DEPTH_COVERS_NANOSECONDS;
             assert!(
                 depth_nanoseconds >= window_nanoseconds,
                 "a {window_size}-sample window at {sample_rate} Hz spans {window_nanoseconds} ns \
