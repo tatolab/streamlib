@@ -103,11 +103,10 @@ impl Iceoryx2Node {
     /// [`DeliveryProfile`](crate::iceoryx2::DeliveryProfile), resolved via
     /// [`crate::iceoryx2::delivery_profile_for_input_port`].
     ///
-    /// `enable_safe_overflow` derives from that same profile's overflow policy.
-    /// Both surviving profiles resolve to `Overflow::DropOldest`, so it is
-    /// `true` on every service the engine opens: the subscriber buffer
-    /// auto-evicts the oldest sample on overflow and the publisher's `send()`
-    /// never blocks. `false` is reachable only by calling this directly.
+    /// `enable_safe_overflow` derives from that same profile's overflow
+    /// policy: `true` (`Overflow::DropOldest`) auto-evicts the oldest sample
+    /// from the subscriber buffer on overflow, so the publisher's `send()`
+    /// never blocks.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
