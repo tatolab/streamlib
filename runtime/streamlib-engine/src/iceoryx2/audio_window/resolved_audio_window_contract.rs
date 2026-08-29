@@ -287,11 +287,8 @@ mod tests {
     }
 
     fn resolve(contract: &AudioWindowContract) -> Result<ResolvedAudioWindowContract> {
-        match ResolvedAudioWindowContract::read_declaration(
-            contract,
-            &a_processor_type(),
-            "audio",
-        )? {
+        match ResolvedAudioWindowContract::read_declaration(contract, &a_processor_type(), "audio")?
+        {
             AudioWindowingOfAnInputPort::Resolved(resolved) => Ok(resolved),
             AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat => {
                 panic!("this declaration states its five values")

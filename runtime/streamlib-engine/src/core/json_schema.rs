@@ -269,7 +269,12 @@ impl ProcessorNodePortsOutput {
                 .iter()
                 .map(|port| PortInfoOutput::rendered_over_any_settled_contract(port, settled))
                 .collect(),
-            outputs: node.ports.outputs.iter().map(PortInfoOutput::from).collect(),
+            outputs: node
+                .ports
+                .outputs
+                .iter()
+                .map(PortInfoOutput::from)
+                .collect(),
         }
     }
 }
@@ -288,7 +293,9 @@ impl PortInfoOutput {
     /// its own device stream settled it to.
     fn rendered_over_any_settled_contract(
         port: &crate::core::graph::PortInfo,
-        settled: Option<&std::sync::Arc<crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>>,
+        settled: Option<
+            &std::sync::Arc<crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>,
+        >,
     ) -> Self {
         let mut rendered = PortInfoOutput::from(port);
         if !matches!(
@@ -297,12 +304,12 @@ impl PortInfoOutput {
         ) {
             return rendered;
         }
-        if let Some(values) = settled
-            .and_then(|contracts| contracts.settled_declaration_for_input_port(&port.name))
+        if let Some(values) =
+            settled.and_then(|contracts| contracts.settled_declaration_for_input_port(&port.name))
         {
-            rendered.audio_window = Some(crate::core::descriptors::AudioWindowContract::Declaration(
-                values,
-            ));
+            rendered.audio_window = Some(
+                crate::core::descriptors::AudioWindowContract::Declaration(values),
+            );
         }
         rendered
     }
@@ -605,8 +612,9 @@ mod port_rendering_tests {
             Vec::new(),
         );
 
-        let contracts =
-            std::sync::Arc::new(crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort::default());
+        let contracts = std::sync::Arc::new(
+            crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort::default(),
+        );
         if let Some(contract) = settled {
             contracts.settle_for_input_port("audio", contract);
         }
@@ -616,7 +624,10 @@ mod port_rendering_tests {
         node
     }
 
-    fn a_playback_stream_of(sample_rate: u32, channels: u32) -> crate::core::context::AudioStreamFormat {
+    fn a_playback_stream_of(
+        sample_rate: u32,
+        channels: u32,
+    ) -> crate::core::context::AudioStreamFormat {
         crate::core::context::AudioStreamFormat {
             sample_rate,
             channels,
@@ -638,11 +649,10 @@ mod port_rendering_tests {
         )
         .expect("a device format settles a contract");
 
-        let rendered =
-            serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(Some(
-                settled,
-            ))))
-            .unwrap();
+        let rendered = serde_json::to_value(ProcessorNodeOutput::from(
+            &a_node_declaring_the_sentinel(Some(settled)),
+        ))
+        .unwrap();
 
         assert_eq!(
             rendered["ports"]["inputs"][0]["audio_window"],
@@ -662,9 +672,10 @@ mod port_rendering_tests {
     /// the static lie the resolved rendering exists instead of.
     #[test]
     fn an_unsettled_match_device_port_still_renders_the_sentinel() {
-        let rendered =
-            serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(None)))
-                .unwrap();
+        let rendered = serde_json::to_value(ProcessorNodeOutput::from(
+            &a_node_declaring_the_sentinel(None),
+        ))
+        .unwrap();
 
         assert_eq!(
             rendered["ports"]["inputs"][0]["audio_window"],
@@ -677,9 +688,10 @@ mod port_rendering_tests {
     /// copy of the same fact to keep in agreement.
     #[test]
     fn the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own() {
-        let rendered =
-            serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(None)))
-                .unwrap();
+        let rendered = serde_json::to_value(ProcessorNodeOutput::from(
+            &a_node_declaring_the_sentinel(None),
+        ))
+        .unwrap();
 
         assert!(
             rendered["components"]

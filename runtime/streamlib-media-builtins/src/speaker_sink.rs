@@ -141,19 +141,17 @@ impl ManualProcessor for SpeakerSink::Processor {
         // speaker with nothing between them. Window and hop are one device
         // period because the sink wants format conversion, not framing — under
         // an all-or-nothing contract that is how a converter is spelled.
-        self.inputs.settle_a_ports_device_matched_audio_window_contract(
-            ctx,
-            AUDIO_INPUT_PORT,
-            &AudioWindowContractMatchingADeviceStream {
-                device_stream_format: stream_format,
-                window_size_in_per_channel_samples: a_device_periods_worth_of_per_channel_samples(
-                    stream_format,
-                ),
-                hop_in_per_channel_samples: a_device_periods_worth_of_per_channel_samples(
-                    stream_format,
-                ),
-            },
-        )?;
+        let one_device_period = a_device_periods_worth_of_per_channel_samples(stream_format);
+        self.inputs
+            .settle_a_ports_device_matched_audio_window_contract(
+                ctx,
+                AUDIO_INPUT_PORT,
+                &AudioWindowContractMatchingADeviceStream {
+                    device_stream_format: stream_format,
+                    window_size_in_per_channel_samples: one_device_period,
+                    hop_in_per_channel_samples: one_device_period,
+                },
+            )?;
 
         self.playback_stream_liveness_report = Some(playback_stream.liveness_report());
         self.playback_stream = Some(playback_stream);

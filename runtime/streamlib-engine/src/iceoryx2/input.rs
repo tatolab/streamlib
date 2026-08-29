@@ -324,8 +324,6 @@ enum PortAudioWindowing {
     Windowed(SharedAudioWindowStage),
 }
 
-
-
 /// One windowed port's mailbox, stage and read mode, built from the contract
 /// that drives them.
 ///
@@ -463,9 +461,10 @@ impl InputMailboxesInner {
             hop = contract.hop,
             "InputMailboxes: add_windowed_port"
         );
-        self.ports
-            .lock()
-            .insert(port.to_string(), windowed_port_config(port, read_mode, contract));
+        self.ports.lock().insert(
+            port.to_string(),
+            windowed_port_config(port, read_mode, contract),
+        );
     }
 
     /// Settle a `match_device` port's contract from the format of the device
@@ -486,13 +485,14 @@ impl InputMailboxesInner {
         port: &str,
         matching: &AudioWindowContractMatchingADeviceStream,
     ) -> Result<()> {
-        let contract = ResolvedAudioWindowContract::from_a_device_stream_format(matching)
-            .map_err(|refusal| {
+        let contract = ResolvedAudioWindowContract::from_a_device_stream_format(matching).map_err(
+            |refusal| {
                 Error::Configuration(format!(
                     "input port '{port}' resolving `audio_window = match_device` from its \
                      device stream produced {refusal}"
                 ))
-            })?;
+            },
+        )?;
         self.device_matched_audio_window_contracts
             .settle_for_input_port(port, contract);
 
@@ -502,7 +502,9 @@ impl InputMailboxesInner {
             // Anything that arrived while the contract was unsettled moves into
             // the mailbox the contract sized, rather than being dropped where
             // no counter would see it.
-            existing.mailbox.hand_every_queued_frame_over_to(&settled.mailbox);
+            existing
+                .mailbox
+                .hand_every_queued_frame_over_to(&settled.mailbox);
             ports.insert(port.to_string(), settled);
         }
 

@@ -219,10 +219,7 @@ impl PortMailbox {
         while let Some(frame) = self.queue.pop() {
             self.take_out_of_the_total(&frame);
             let measure = replacement.measure_of(&frame.payload);
-            replacement.push_frame(PortMailboxQueuedFrame {
-                measure,
-                ..frame
-            });
+            replacement.push_frame(PortMailboxQueuedFrame { measure, ..frame });
         }
     }
 }

@@ -373,9 +373,10 @@ fn spawn_dedicated_thread(
                 // processor that opens no device stream — a wiring error, and
                 // one that must surface here rather than as a port that
                 // silently hands its reader nothing for the rest of the run.
-                if let Err(e) =
-                    refuse_a_port_setup_left_awaiting_its_device_stream_format(&guard, &processor_type)
-                {
+                if let Err(e) = refuse_a_port_setup_left_awaiting_its_device_stream_format(
+                    &guard,
+                    &processor_type,
+                ) {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
                     state_arc.transition_to(ProcessorState::Error);
                     return;

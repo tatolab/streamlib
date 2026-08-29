@@ -105,7 +105,11 @@ mod tests {
         let contracts = DeviceMatchedAudioWindowContractsByInputPort::default();
 
         assert!(contracts.settled_for_input_port("audio").is_none());
-        assert!(contracts.settled_declaration_for_input_port("audio").is_none());
+        assert!(
+            contracts
+                .settled_declaration_for_input_port("audio")
+                .is_none()
+        );
     }
 
     #[test]
