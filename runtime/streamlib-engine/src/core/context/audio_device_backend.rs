@@ -263,8 +263,9 @@ pub type AudioBlockForPlaybackHandOff = Box<dyn Fn(AudioBlockRequestedByDevice<'
 /// A playback stream a backend opened.
 pub trait AudioPlaybackStream: Send {
     /// The rate, channel count and scalar encoding every block handed to this
-    /// stream must already be in. There is no resampler on this rung, so a
-    /// caller compares rather than converts.
+    /// stream must already be in. Conversion belongs to the read-side window
+    /// stage at a consuming port, not to a backend: a stream reports what it
+    /// opened and a caller matches it.
     fn stream_format(&self) -> AudioStreamFormat;
 
     /// Whether this stream is still playing, readable from whatever thread the

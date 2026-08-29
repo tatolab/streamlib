@@ -386,6 +386,11 @@ def wire_link_data_access(
             input_link["max_subscribers"],
             input_link["notify_max_notifiers"],
             input_link["link_id"],
+            # Absent on every port that declares no window contract, which is
+            # unchanged in every respect. Present, it is the five values already
+            # resolved: a `match_device` sentinel settles in the parent, which is
+            # where the device stream is.
+            input_link.get("audio_window"),
         )
     for output_link in port_wiring.get("outputs", []):
         link_data_access.wire_output_link(

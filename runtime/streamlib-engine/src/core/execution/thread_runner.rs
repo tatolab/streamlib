@@ -174,8 +174,12 @@ fn run_reactive_mode(
     // indefinitely — idle CPU is truly zero until one of those fds fires.
     //
     // Processors with no Rust-side listener fd (subprocess host, audio-only,
-    // etc.) fall through to the channel-poll sleep loop so process() still
-    // ticks at NO_WAITER_FALLBACK_SLEEP cadence — same shape they had before.
+    // etc.) fall through to the channel-poll sleep loop, waking at
+    // NO_WAITER_FALLBACK_SLEEP cadence. Waking is not dispatching: the loop
+    // below gates every `process()` on a read having something to return, so a
+    // processor whose ports are empty — or not wired yet — wakes on that
+    // cadence and goes back to sleep. That is the same rule the helper loop
+    // has always applied to every Python processor.
     let listener_fd = {
         let guard = processor.lock();
         guard
@@ -280,6 +284,19 @@ fn run_reactive_mode(
         // drain (sustained back-pressure) doesn't starve the runner's
         // shutdown signaling — without it, the outer loop's
         // shutdown_rx.try_recv at the top never fires.
+        //
+        // The first dispatch is gated on readiness like every later one. A
+        // wake is not evidence that a read would return anything: an audio
+        // input port declaring a window contract reports data only when a full
+        // window can be emitted, so a bag that does not complete one wakes this
+        // loop and must not dispatch. The helper loop already gates every
+        // dispatch this way; this is the app-process half of the same rule.
+        // A processor with no mailboxes to ask has nothing to gate on, and
+        // gating on an absent answer would stop it running at all.
+        if !ports_would_return_something(processor).unwrap_or(true) {
+            continue;
+        }
+
         loop {
             {
                 let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
@@ -294,18 +311,27 @@ fn run_reactive_mode(
                 return;
             }
 
-            let more_pending = {
-                let guard = processor.lock();
-                match guard.iceoryx2_input_mailboxes_inner() {
-                    Some(inner) => inner.any_port_has_data(),
-                    None => false,
-                }
-            };
-            if !more_pending {
+            // A processor with no mailboxes drains in one dispatch, which is
+            // the single-`process()` shape this loop's doc describes.
+            if !ports_would_return_something(processor).unwrap_or(false) {
                 break;
             }
         }
     }
+}
+
+/// Whether any of this processor's input ports would hand a reader something.
+///
+/// `None` when there are no mailboxes to ask — a processor that declared no
+/// input ports, or whose handle is not wired yet. The two callers want opposite
+/// defaults for that case and each says which, rather than this picking one:
+/// the pre-dispatch gate must not silence a processor it cannot ask, and the
+/// drain loop must not spin on one.
+fn ports_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> Option<bool> {
+    let guard = processor.lock();
+    guard
+        .iceoryx2_input_mailboxes_inner()
+        .map(|inner| inner.any_port_has_data())
 }
 
 /// Clear the pending events on this processor's listener, so its fd goes
@@ -609,6 +635,140 @@ mod tests {
             "eventfd write failed: n={n}, err={}",
             std::io::Error::last_os_error()
         );
+    }
+
+    /// The rule the window contract turns on: a reactive processor is never
+    /// dispatched with nothing to read. A bag that does not complete a window
+    /// wakes the runner and must not make it call `process()`.
+    ///
+    /// Fail-without-fix: drop the `if !ports_would_return_something(...)` guard
+    /// above the drain loop and this goes green while the contract is broken —
+    /// which is why the gate is asserted here rather than only through
+    /// `has_data`.
+    #[test]
+    fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner() {
+        use crate::core::test_support::MockWindowedAudioConsumerProcessor;
+
+        let mut instance = ProcessorInstance::new(Box::new(
+            <MockWindowedAudioConsumerProcessor::Processor as crate::core::GeneratedProcessor>
+                ::from_config(Default::default())
+                .expect("the mock constructs from its default config"),
+        ));
+        instance
+            .install_iceoryx2_resources()
+            .expect("the mock accepts its iceoryx2 resources");
+        let mailboxes = instance
+            .iceoryx2_input_mailboxes_inner()
+            .expect("a windowed mock holds input mailboxes");
+        mailboxes.add_windowed_port(
+            "audio",
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+            windowed_mock_contract(),
+        );
+        let processor = Arc::new(Mutex::new(instance));
+
+        assert_eq!(
+            ports_would_return_something(&processor),
+            Some(false),
+            "an empty windowed port must not dispatch"
+        );
+
+        // A third of the declared 512-sample window.
+        mailboxes.route(one_mono_audio_frame_for("audio", 160, 0));
+        assert_eq!(
+            ports_would_return_something(&processor),
+            Some(false),
+            "160 of 512 samples is not a window, and dispatching here would hand \
+             `process()` an empty read"
+        );
+
+        for block in 1..4i64 {
+            mailboxes.route(one_mono_audio_frame_for(
+                "audio",
+                160,
+                block * 160 * 1_000_000_000 / 16_000,
+            ));
+        }
+        assert_eq!(
+            ports_would_return_something(&processor),
+            Some(true),
+            "640 samples completes a window, and a ready window must not sit latent"
+        );
+    }
+
+    /// A processor the runner cannot ask is dispatched rather than silenced —
+    /// the pre-dispatch gate's default, which is the opposite of the drain
+    /// loop's and is why the helper hands back an `Option` instead of picking.
+    #[test]
+    fn a_processor_with_no_input_mailboxes_is_not_gated_at_all() {
+        use crate::core::test_support::MockOutputOnlyProcessor;
+
+        let instance = ProcessorInstance::new(Box::new(
+            <MockOutputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
+                Default::default(),
+            )
+            .expect("the mock constructs from its default config"),
+        ));
+        let processor = Arc::new(Mutex::new(instance));
+
+        assert_eq!(
+            ports_would_return_something(&processor),
+            None,
+            "there is nothing to gate on, and the two callers each say what that means"
+        );
+    }
+
+    fn windowed_mock_contract() -> crate::iceoryx2::ResolvedAudioWindowContract {
+        crate::iceoryx2::ResolvedAudioWindowContract::from_declared_values(
+            &crate::core::descriptors::AudioWindowContractDeclaredValues {
+                sample_rate: 16_000,
+                channels: 1,
+                dtype: "f32".to_string(),
+                window_size: 512,
+                hop: 512,
+            },
+        )
+        .expect("the mock's own declaration resolves")
+    }
+
+    /// One wire frame stamped for `port`, carrying `frames` mono 16 kHz samples
+    /// — the shape `InputMailboxesInner::route` injects.
+    fn one_mono_audio_frame_for(
+        port: &str,
+        frames: usize,
+        first_sample_timestamp_ns: i64,
+    ) -> Vec<u8> {
+        use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
+
+        #[derive(serde::Serialize)]
+        struct AudioBlockBag<'a> {
+            #[serde(rename = "samples", with = "serde_bytes")]
+            interleaved_sample_bytes: &'a [u8],
+            sample_rate: u32,
+            channels: u32,
+            sample_count: u32,
+            dtype: &'a str,
+            first_sample_timestamp_ns: i64,
+        }
+        let payload: Vec<u8> = (0..frames)
+            .flat_map(|index| (index as f32 / frames as f32).to_le_bytes())
+            .collect();
+        let body = rmp_serde::to_vec_named(&AudioBlockBag {
+            interleaved_sample_bytes: &payload,
+            sample_rate: 16_000,
+            channels: 1,
+            sample_count: frames as u32,
+            dtype: "f32",
+            first_sample_timestamp_ns,
+        })
+        .expect("an audio block bag encodes");
+
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
+        FrameHeader::new(port, first_sample_timestamp_ns, body.len() as u32)
+            .expect("port fits PortKey")
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        frame[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        frame
     }
 
     /// Every reactive tick that is not an fd wake still has to drain, because

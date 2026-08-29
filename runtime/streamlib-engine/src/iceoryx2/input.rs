@@ -30,11 +30,35 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
+use super::audio_window::{
+    AudioWindowAccumulator, ResolvedAudioWindowContract, queued_audio_window_frame_measure,
+};
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
+
+/// One windowed port's stage, shared out of the `ports` map so the resample,
+/// mixdown and framing work runs with that mutex released.
+type SharedAudioWindowStage = Arc<parking_lot::Mutex<AudioWindowAccumulator>>;
+
+/// One bag body ready to hand a reader, and the instant it is stamped with.
+///
+/// The two stamps are not the same thing and the type is what keeps them
+/// straight: on a port with no contract it is the frame header's, which marks
+/// when the bag was published; on a windowed port it is the one the stage
+/// derived from the device's own stamp, which marks an instant inside the
+/// source block the window came from.
+pub(super) struct BagBodyForTheReader {
+    pub(super) body: Vec<u8>,
+    pub(super) first_sample_or_publish_timestamp_ns: i64,
+}
+
+/// The one spelling of "this port was never configured".
+fn unknown_input_port(port: &str) -> Error {
+    Error::Link(format!("Unknown input port: {port}"))
+}
 
 /// One channel subscriber bound to the local input port it feeds.
 ///
@@ -192,6 +216,62 @@ pub enum BoundedReadOutcome {
     },
 }
 
+/// What one port would hand a reader, read off its state under the `ports`
+/// lock and judged with that lock released.
+enum PortReadiness {
+    /// A frame is queued, or one was staged by a bounded read that could not
+    /// fit it — either way the next read returns something.
+    AFrameIsWaiting,
+    /// Nothing is waiting.
+    NothingIsWaiting,
+    /// A windowed port: the stage answers, jointly over the remainder it holds
+    /// and what the bags still in the mailbox are worth.
+    AWindowedPort {
+        stage: SharedAudioWindowStage,
+        queued_output_frame_equivalents: u64,
+        /// A windowed port that cannot form a window out of a mailbox with no
+        /// room left is stalled; the stage says so once.
+        the_mailbox_is_full: bool,
+    },
+}
+
+impl PortReadiness {
+    fn of(port_config: &PortConfig) -> Self {
+        if port_config.staged_oversized.is_some() {
+            return PortReadiness::AFrameIsWaiting;
+        }
+        match &port_config.audio_window_stage {
+            None => {
+                if port_config.mailbox.is_empty() {
+                    PortReadiness::NothingIsWaiting
+                } else {
+                    PortReadiness::AFrameIsWaiting
+                }
+            }
+            Some(stage) => PortReadiness::AWindowedPort {
+                stage: Arc::clone(stage),
+                queued_output_frame_equivalents: port_config.mailbox.queued_frame_measure_total(),
+                the_mailbox_is_full: port_config.mailbox.len() >= port_config.mailbox.capacity(),
+            },
+        }
+    }
+
+    fn a_read_would_return_something(&self) -> bool {
+        match self {
+            PortReadiness::AFrameIsWaiting => true,
+            PortReadiness::NothingIsWaiting => false,
+            PortReadiness::AWindowedPort {
+                stage,
+                queued_output_frame_equivalents,
+                the_mailbox_is_full,
+            } => stage.lock().a_full_window_would_be_ready_after(
+                *queued_output_frame_equivalents,
+                *the_mailbox_is_full,
+            ),
+        }
+    }
+}
+
 /// Per-port configuration: mailbox and read mode.
 ///
 /// Interior mutability: the host-side wiring path discovers
@@ -208,7 +288,10 @@ struct PortConfig {
     /// on the next call once the caller resizes — the grow-and-retry contract
     /// that lets a PowerOfTwo-grown oversized payload reach the reader without
     /// dropping it.
-    staged_oversized: Option<(Vec<u8>, i64)>,
+    staged_oversized: Option<BagBodyForTheReader>,
+    /// The window contract's read-side stage, on a port that declared one.
+    /// `None` on every other port, which is unchanged in every respect.
+    audio_window_stage: Option<SharedAudioWindowStage>,
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -256,6 +339,54 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
                 staged_oversized: None,
+                audio_window_stage: None,
+            },
+        );
+    }
+
+    /// Add a mailbox for a port that declared a window contract, with the
+    /// stage that honours it.
+    ///
+    /// The depth is the contract's rather than the delivery profile's: a
+    /// window is a span of queued blocks, and `ORDERED_DEPTH` cannot hold a
+    /// one-second rolling window's worth. Still engine-chosen, still not
+    /// authorable — the contract is a declaration, not a depth dial.
+    pub fn add_windowed_port(
+        &self,
+        port: &str,
+        read_mode: ReadMode,
+        contract: ResolvedAudioWindowContract,
+    ) {
+        let depth = contract.windowed_port_mailbox_depth();
+        // Shared by the mailbox's measure, which writes every arriving bag's
+        // rate into it, and the stage, which reads it so its readiness floor is
+        // exact before it has consumed anything.
+        let latest_queued_source_sample_rate = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        tracing::debug!(
+            port = port,
+            buffer_size = depth,
+            read_mode = ?read_mode,
+            sample_rate = contract.sample_rate,
+            channels = contract.channels,
+            window_size = contract.window_size,
+            hop = contract.hop,
+            "InputMailboxes: add_windowed_port"
+        );
+        self.ports.lock().insert(
+            port.to_string(),
+            PortConfig {
+                mailbox: PortMailbox::new_measuring(
+                    depth,
+                    Some(queued_audio_window_frame_measure(
+                        contract,
+                        Arc::clone(&latest_queued_source_sample_rate),
+                    )),
+                ),
+                read_mode,
+                staged_oversized: None,
+                audio_window_stage: Some(Arc::new(parking_lot::Mutex::new(
+                    AudioWindowAccumulator::new(port, contract, latest_queued_source_sample_rate),
+                ))),
             },
         );
     }
@@ -433,51 +564,103 @@ impl InputMailboxesInner {
     pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
+        let (staged, audio_window_stage) = {
+            let mut ports = self.ports.lock();
+            let port_config = ports
+                .get_mut(port)
+                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            (
+                port_config.staged_oversized.take(),
+                port_config.audio_window_stage.clone(),
+            )
+        };
+
+        // The stage's decode, channel convert, resample and framing all run
+        // here, with the `ports` mutex released — it guards the port map, and a
+        // resampler pass is not port-map work.
+        let candidate = match staged {
+            Some(staged) => Some(staged),
+            None => match audio_window_stage {
+                None => self.pop_one_bag_off_the_mailbox(port)?,
+                Some(stage) => self.next_window_out_of_the_stage(port, &stage)?,
+            },
+        };
+        let Some(candidate) = candidate else {
+            return Ok(BoundedReadOutcome::Empty);
+        };
+
+        if candidate.body.len() <= out_cap {
+            return Ok(BoundedReadOutcome::Frame {
+                data: candidate.body,
+                timestamp_ns: candidate.first_sample_or_publish_timestamp_ns,
+            });
+        }
+
+        let required_bytes = candidate.body.len();
         let mut ports = self.ports.lock();
         let port_config = ports
             .get_mut(port)
-            .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            .ok_or_else(|| unknown_input_port(port))?;
+        port_config.staged_oversized = Some(candidate);
+        Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
+    }
 
-        let candidate: (Vec<u8>, i64) = if let Some(staged) = port_config.staged_oversized.take() {
-            staged
-        } else {
-            let raw = match port_config.read_mode {
+    /// Pop the next queued frame for `port` per its read mode and strip its
+    /// header, or `None` when the mailbox is empty.
+    fn pop_one_bag_off_the_mailbox(&self, port: &str) -> Result<Option<BagBodyForTheReader>> {
+        let raw = {
+            let ports = self.ports.lock();
+            let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
+            match port_config.read_mode {
                 ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
-            };
-            match raw {
-                None => return Ok(BoundedReadOutcome::Empty),
-                Some(mut frame_bytes_from_wire) => {
-                    let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
-                    let stamped_payload_bytes = header.len as usize;
-                    let available_payload_bytes = frame_bytes_from_wire.len() - FRAME_HEADER_SIZE;
-                    if stamped_payload_bytes > available_payload_bytes {
-                        return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
-                            port: port.to_string(),
-                            stamped_payload_bytes,
-                            available_payload_bytes,
-                        });
-                    }
-                    frame_bytes_from_wire.copy_within(
-                        FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
-                        0,
-                    );
-                    frame_bytes_from_wire.truncate(stamped_payload_bytes);
-                    let payload_bytes = frame_bytes_from_wire;
-                    (payload_bytes, header.timestamp_ns)
-                }
             }
         };
+        let Some(mut frame_bytes_from_wire) = raw else {
+            return Ok(None);
+        };
 
-        if candidate.0.len() <= out_cap {
-            Ok(BoundedReadOutcome::Frame {
-                data: candidate.0,
-                timestamp_ns: candidate.1,
-            })
-        } else {
-            let required_bytes = candidate.0.len();
-            port_config.staged_oversized = Some(candidate);
-            Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
+        let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
+        let stamped_payload_bytes = header.len as usize;
+        let available_payload_bytes = frame_bytes_from_wire.len() - FRAME_HEADER_SIZE;
+        if stamped_payload_bytes > available_payload_bytes {
+            return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
+                port: port.to_string(),
+                stamped_payload_bytes,
+                available_payload_bytes,
+            });
+        }
+        frame_bytes_from_wire.copy_within(
+            FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
+            0,
+        );
+        frame_bytes_from_wire.truncate(stamped_payload_bytes);
+        Ok(Some(BagBodyForTheReader {
+            body: frame_bytes_from_wire,
+            first_sample_or_publish_timestamp_ns: header.timestamp_ns,
+        }))
+    }
+
+    /// The next full window from a windowed port's stage, feeding it consumed
+    /// bags until it can emit one or the mailbox runs dry.
+    ///
+    /// The emitted window carries the timestamp the stage derived from the
+    /// device's own stamp on the source block, not the wire frame's — the
+    /// frame header stamps when a bag was published, and a window's first
+    /// sample is an instant inside the block it came from.
+    fn next_window_out_of_the_stage(
+        &self,
+        port: &str,
+        stage: &SharedAudioWindowStage,
+    ) -> Result<Option<BagBodyForTheReader>> {
+        loop {
+            if let Some(window) = stage.lock().next_ready_window()? {
+                return Ok(Some(window));
+            }
+            let Some(bag) = self.pop_one_bag_off_the_mailbox(port)? else {
+                return Ok(None);
+            };
+            stage.lock().accept(&bag.body)?;
         }
     }
 
@@ -498,13 +681,16 @@ impl InputMailboxesInner {
 
     /// Check if a port has any payloads available. This first
     /// receives any pending data from the iceoryx2 Subscriber.
+    ///
+    /// On a port declaring a window contract this means a full window, not an
+    /// arrived bag: the contract promises `process()` exact-size blocks, so a
+    /// reactive processor that woke and found nothing would contradict it.
     pub fn has_data(&self, port: &str) -> bool {
         self.receive_pending();
-        self.ports
-            .lock()
-            .get(port)
-            .map(|p| !p.mailbox.is_empty())
-            .unwrap_or(false)
+        let Some(readiness) = self.readiness_of_one_port(port) else {
+            return false;
+        };
+        readiness.a_read_would_return_something()
     }
 
     /// True iff any configured input port has at least one queued
@@ -519,7 +705,37 @@ impl InputMailboxesInner {
     /// queue depth itself rather than trusting one wake = one event.
     pub fn any_port_has_data(&self) -> bool {
         self.receive_pending();
-        self.ports.lock().values().any(|p| !p.mailbox.is_empty())
+        self.any_ports_read_would_return_something()
+    }
+
+    /// What one port would hand a reader, gathered under the `ports` lock so
+    /// the judgement itself is made with that lock released.
+    fn readiness_of_one_port(&self, port: &str) -> Option<PortReadiness> {
+        self.ports.lock().get(port).map(PortReadiness::of)
+    }
+
+    /// Whether any port would hand a reader something.
+    ///
+    /// Answers under the lock for every port that needs no judging, and
+    /// collects only the windowed ones — normally none — so a processor with no
+    /// window contract pays no allocation on a path the reactive runner walks
+    /// once per wake and once per drain iteration.
+    fn any_ports_read_would_return_something(&self) -> bool {
+        let windowed: Vec<PortReadiness> = {
+            let ports = self.ports.lock();
+            let mut windowed = Vec::new();
+            for readiness in ports.values().map(PortReadiness::of) {
+                match readiness {
+                    PortReadiness::AFrameIsWaiting => return true,
+                    PortReadiness::NothingIsWaiting => {}
+                    windowed_port => windowed.push(windowed_port),
+                }
+            }
+            windowed
+        };
+        windowed
+            .iter()
+            .any(|readiness| readiness.a_read_would_return_something())
     }
 
     /// Drain all raw frame slices from the given port's mailbox.
@@ -765,6 +981,20 @@ mod tests {
         iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
         Subscriber<ipc::Service, [u8], ()>,
     ) {
+        open_channel_for_one_link_loaning(node, tag, buffered_frames, 4096)
+    }
+
+    /// The same, with the publisher's loan sized explicitly — an audio block of
+    /// a thousand `f32` samples outgrows the 4 KiB the frame tests want.
+    fn open_channel_for_one_link_loaning(
+        node: &iceoryx2::node::Node<ipc::Service>,
+        tag: &str,
+        buffered_frames: usize,
+        loan_bytes: usize,
+    ) -> (
+        iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
+        Subscriber<ipc::Service, [u8], ()>,
+    ) {
         let pubsub = node
             .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
             .publish_subscribe::<[u8]>()
@@ -775,7 +1005,7 @@ mod tests {
             .unwrap();
         let publisher = pubsub
             .publisher_builder()
-            .initial_max_slice_len(4096)
+            .initial_max_slice_len(loan_bytes)
             .create()
             .unwrap();
         let subscriber = pubsub.subscriber_builder().create().unwrap();
@@ -1010,6 +1240,349 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // The audio window contract at the read seam, through real iceoryx2
+    // services. These need /dev/shm and nothing else — no GPU, no audio device.
+    // =========================================================================
+
+    fn a_512_512_contract_at(sample_rate: u32, channels: u32) -> ResolvedAudioWindowContract {
+        ResolvedAudioWindowContract::from_declared_values(
+            &crate::core::descriptors::AudioWindowContractDeclaredValues {
+                sample_rate,
+                channels,
+                dtype: "f32".to_string(),
+                window_size: 512,
+                hop: 512,
+            },
+        )
+        .expect("a contract the stage can honour")
+    }
+
+    /// A 48 kHz source into a 16 kHz port takes the resampling arm, where the
+    /// readiness floor has to know the source rate to give back the right
+    /// priming — and the only place it can learn one before consuming a bag is
+    /// the mailbox's own measure.
+    ///
+    /// The identity arm cannot catch a measure that reports no rate: with the
+    /// rates equal there is no filter and no priming to give back.
+    #[test]
+    fn a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) =
+            open_channel_for_one_link_loaning(&node, "window/resampled", 32, 16_384);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        // 160-frame quanta, so the queue crosses one window's worth in steps
+        // smaller than the priming and chunk slack. A floor that cannot see
+        // that slack says yes somewhere in that gap and the read then produces
+        // nothing — the exact shape the contract exists to rule out, and one a
+        // coarser quantum steps straight over.
+        const SOURCE_FRAMES_PER_BLOCK: u64 = 160;
+
+        let mut windows = 0;
+        for block in 0..24u64 {
+            publish_one_frame(
+                &publisher,
+                "mic_out",
+                &mono_audio_block_body(
+                    SOURCE_FRAMES_PER_BLOCK as usize,
+                    48_000,
+                    (block * SOURCE_FRAMES_PER_BLOCK * 1_000_000_000 / 48_000) as i64,
+                ),
+            );
+            while mailboxes.any_port_has_data() {
+                assert!(
+                    mailboxes.read_raw("in").expect("reads").is_some(),
+                    "the gate promised a window at 48 kHz into a 16 kHz port; the read \
+                     must produce one"
+                );
+                windows += 1;
+            }
+        }
+
+        assert!(
+            windows >= 2,
+            "24 blocks of 160 frames at 48 kHz is 1280 frames at 16 kHz, so at least \
+             two 512-sample windows; got {windows}"
+        );
+    }
+
+    /// One audio-block bag body carrying `frames` per-channel mono samples at
+    /// `sample_rate`, the shape a microphone publishes.
+    fn mono_audio_block_body(
+        frames: usize,
+        sample_rate: u32,
+        first_sample_timestamp_ns: i64,
+    ) -> Vec<u8> {
+        #[derive(serde::Serialize)]
+        struct AudioBlockBag<'a> {
+            #[serde(rename = "samples", with = "serde_bytes")]
+            interleaved_sample_bytes: &'a [u8],
+            sample_rate: u32,
+            channels: u32,
+            sample_count: u32,
+            dtype: &'a str,
+            first_sample_timestamp_ns: i64,
+        }
+        let payload: Vec<u8> = (0..frames)
+            .flat_map(|index| (index as f32 / frames as f32).to_le_bytes())
+            .collect();
+        rmp_serde::to_vec_named(&AudioBlockBag {
+            interleaved_sample_bytes: &payload,
+            sample_rate,
+            channels: 1,
+            sample_count: frames as u32,
+            dtype: "f32",
+            first_sample_timestamp_ns,
+        })
+        .expect("an audio block bag encodes")
+    }
+
+    /// A windowed port reports data only when a full window can be emitted, so
+    /// a reactive processor is never dispatched with nothing to read.
+    #[test]
+    fn a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/readiness", 8);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        // A third of a window is not a window.
+        publish_one_frame(
+            &publisher,
+            "mic_out",
+            &mono_audio_block_body(160, 16_000, 0),
+        );
+        assert!(
+            !mailboxes.has_data("in"),
+            "160 of 512 samples is not a window, and a wake here would dispatch a \
+             process() with nothing to read"
+        );
+        assert!(!mailboxes.any_port_has_data());
+
+        // Enough to complete one.
+        for block in 1..4u64 {
+            publish_one_frame(
+                &publisher,
+                "mic_out",
+                &mono_audio_block_body(160, 16_000, (block * 160 * 1_000_000_000 / 16_000) as i64),
+            );
+        }
+        assert!(
+            mailboxes.has_data("in"),
+            "640 samples completes a 512 window"
+        );
+        assert!(mailboxes.any_port_has_data());
+
+        let (window, _) = mailboxes
+            .read_raw("in")
+            .expect("a window reads")
+            .expect("the gate said a window was ready");
+        assert!(!window.is_empty());
+    }
+
+    /// One 1024-sample quantum against a 512/512 contract satisfies exactly two
+    /// windows — the count the reactive drain loop dispatches `process()`.
+    #[test]
+    fn one_1024_sample_quantum_reads_out_of_a_512_512_port_exactly_twice() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) =
+            open_channel_for_one_link_loaning(&node, "window/quantum", 4, 16_384);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        publish_one_frame(
+            &publisher,
+            "mic_out",
+            &mono_audio_block_body(1024, 16_000, 0),
+        );
+
+        let mut windows = 0;
+        while mailboxes.any_port_has_data() {
+            assert!(
+                mailboxes.read_raw("in").expect("reads").is_some(),
+                "the gate promised a window; the read must produce one"
+            );
+            windows += 1;
+            assert!(
+                windows <= 4,
+                "a 1024-sample quantum cannot fill more windows"
+            );
+        }
+        assert_eq!(windows, 2);
+    }
+
+    /// A port with no contract is unchanged in every respect: the bytes a
+    /// reader gets back are the bytes the producer published.
+    #[test]
+    fn a_contract_less_port_still_reads_the_bag_the_producer_published_byte_for_byte() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) =
+            open_channel_for_one_link_loaning(&node, "window/untouched", 4, 16_384);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        let published = mono_audio_block_body(1024, 16_000, 77);
+        publish_one_frame(&publisher, "mic_out", &published);
+
+        assert!(
+            mailboxes.has_data("in"),
+            "an arrived bag is data on an unwindowed port"
+        );
+        let (read_back, _) = mailboxes.read_raw("in").expect("reads").expect("a bag");
+        assert_eq!(read_back, published);
+    }
+
+    /// The accumulator is not a second drop site: bags stay in the counted
+    /// mailbox until a read takes one, so a windowed port under overrun counts
+    /// exactly what an unwindowed one does.
+    #[test]
+    fn a_windowed_ports_per_link_drop_counts_match_an_unwindowed_ports_under_the_same_overrun() {
+        let contract = a_512_512_contract_at(16_000, 1);
+        let depth = contract.windowed_port_mailbox_depth();
+        let published_bags = depth + 7;
+
+        fn losses_under_overrun(
+            tag: &str,
+            depth: usize,
+            published_bags: usize,
+            contract: Option<ResolvedAudioWindowContract>,
+        ) -> u64 {
+            let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+            let (publisher, subscriber) = open_channel_for_one_link(&node, tag, 4);
+            let mailboxes = InputMailboxesInner::new();
+            match contract {
+                Some(contract) => {
+                    mailboxes.add_windowed_port("in", ReadMode::ReadNextInOrder, contract)
+                }
+                None => mailboxes.add_port("in", depth, ReadMode::ReadNextInOrder),
+            }
+            mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+            for block in 0..published_bags {
+                publish_one_frame(
+                    &publisher,
+                    "mic_out",
+                    &mono_audio_block_body(160, 16_000, (block as i64) * 10_000_000),
+                );
+                // One at a time so the subscriber ring never overflows and every
+                // loss lands at the mailbox, where it is counted.
+                mailboxes.receive_pending();
+            }
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link()
+                .values()
+                .sum()
+        }
+
+        let windowed =
+            losses_under_overrun("window/counted", depth, published_bags, Some(contract));
+        let unwindowed = losses_under_overrun("window/uncounted", depth, published_bags, None);
+
+        assert_eq!(
+            windowed, 7,
+            "a mailbox {depth} deep loses the {published_bags} minus {depth}"
+        );
+        assert_eq!(
+            windowed, unwindowed,
+            "windowing must not add or hide a loss the counters do not see"
+        );
+    }
+
+    /// A window wider than the delivery profile's depth sizes its own mailbox,
+    /// because `ORDERED_DEPTH` cannot hold a one-second rolling window's quanta.
+    #[test]
+    fn a_long_windows_mailbox_is_sized_from_its_contract_rather_than_the_profiles_depth() {
+        let one_second_rolling = ResolvedAudioWindowContract::from_declared_values(
+            &crate::core::descriptors::AudioWindowContractDeclaredValues {
+                sample_rate: 16_000,
+                channels: 1,
+                dtype: "f32".to_string(),
+                window_size: 16_000,
+                hop: 160,
+            },
+        )
+        .expect("a one-second rolling window is legal");
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/depth", 4);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port("in", ReadMode::ReadNextInOrder, one_second_rolling);
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        // Deeper than ORDERED_DEPTH: publishing that many must lose nothing.
+        for block in 0..(crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH + 8) {
+            publish_one_frame(
+                &publisher,
+                "mic_out",
+                &mono_audio_block_body(160, 16_000, (block as i64) * 10_000_000),
+            );
+            mailboxes.receive_pending();
+        }
+
+        let lost: u64 = mailboxes
+            .dropped_bag_counts_by_inbound_link()
+            .dropped_bag_count_snapshot_by_inbound_link()
+            .values()
+            .sum();
+        assert_eq!(
+            lost, 0,
+            "a one-second window's port must hold more than the profile's 16 blocks"
+        );
+    }
+
+    /// A bag the stage cannot read is refused by name at the read, naming the
+    /// port — never reshaped into a plausible wrong answer.
+    #[test]
+    fn a_bag_the_stage_cannot_read_is_refused_at_the_read_naming_the_port() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/refusal", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        let not_an_audio_block =
+            rmp_serde::to_vec_named(&std::collections::BTreeMap::from([("width", 1920)]))
+                .expect("encodes");
+        publish_one_frame(&publisher, "mic_out", &not_an_audio_block);
+        mailboxes.receive_pending();
+
+        let refusal = mailboxes
+            .read_raw("in")
+            .expect_err("a bag with no audio-block keys is refused");
+        let rendered = refusal.to_string();
+        assert!(
+            rendered.contains("'in'") && rendered.contains("audio block"),
+            "the refusal must name the port and what it could not read; got {rendered}"
+        );
+    }
+
     /// The negative half: a consumer that keeps up loses nothing, and its
     /// wired links say so with a zero rather than by going missing. A counter
     /// that only appears once a link has lost something is indistinguishable
@@ -1187,6 +1760,16 @@ mod tests {
             }
         }
 
+        // A staged frame is data waiting. Before the readiness gate consulted
+        // it, a grow-and-retry frame with an empty mailbox behind it reported
+        // no data — so the reactive drain loop stopped and the frame sat until
+        // some later bag happened to wake the port.
+        assert!(
+            inner.has_data("in"),
+            "a frame staged by a bounded read is still waiting for its retry"
+        );
+        assert!(inner.any_port_has_data());
+
         // Retry with a large-enough buffer: the SAME frame is re-delivered.
         match inner
             .read_raw_bounded("in", body.len())
@@ -1200,6 +1783,7 @@ mod tests {
         }
 
         // The staged frame was consumed exactly once — the mailbox is now empty.
+        assert!(!inner.has_data("in"));
         assert!(matches!(
             inner
                 .read_raw_bounded("in", body.len())

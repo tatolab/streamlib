@@ -3,6 +3,7 @@
 
 //! iceoryx2-based IPC communication layer for cross-process processor communication.
 
+mod audio_window;
 mod channel_ceiling;
 mod channel_name;
 #[cfg(test)]
@@ -16,6 +17,8 @@ mod output;
 mod payload;
 mod read_mode;
 
+pub use audio_window::ResolvedAudioWindowContract;
+pub(crate) use audio_window::audio_window_contract_for_input_port;
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_ceiling_bytes,
@@ -28,7 +31,7 @@ pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub use dropped_bag_counters::DroppedBagCountsByInboundLink;
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
-pub use mailbox::PortMailbox;
+pub use mailbox::{PortMailbox, PortMailboxQueuedFrameMeasure};
 pub use node::{
     ChannelTapSubscribeError, Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService,
     Iceoryx2Service,
