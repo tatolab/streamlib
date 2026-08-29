@@ -39,7 +39,7 @@ use crate::processor_thread_join::join_within_grace_or_detach;
 
 /// Device periods the ring holds before the drain thread waits for room.
 /// Matches the ring depth a sample-stream link itself carries
-/// (`DeliveryProfile::STREAM_DEPTH`), so the buffering either side of the
+/// (`DeliveryProfile::ORDERED_DEPTH`), so the buffering either side of the
 /// device edge is the same order of magnitude — roughly 170 ms at the default
 /// 48 kHz / 512-sample quantum.
 const DEVICE_PERIODS_THE_RING_HOLDS: usize = 16;
@@ -431,13 +431,11 @@ fn drain_blocks_into_playback(
             }
         };
 
-        // The wait here is the backpressure the port's `lossless` profile asks
-        // for: a drain thread held for room is a drain thread not reading its
-        // mailbox. What that buys today is bounded queueing rather than the
-        // guarantee the profile names — `PortMailbox::push_frame_from_inbound_link`
-        // evicts its oldest entry whenever it is full, whatever the profile says
-        // — so a producer that outruns this loop still loses blocks upstream of
-        // it, counted there against the link they arrived on.
+        // The wait is this sink pacing itself against its own ring — the
+        // device-stall envelope — not backpressure any profile asks for. A
+        // drain thread held here is not reading its mailbox, so a producer
+        // outrunning this loop loses blocks at the port, counted there against
+        // the link they arrived on.
         if samples_awaiting_playback.hand_off_for_playback(samples, ROOM_WAIT_POLL_INTERVAL)
             == AudioSamplesHandOffOutcome::PlaybackEnded
         {

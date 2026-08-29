@@ -35,7 +35,7 @@ use crate::processor_thread_join::join_within_grace_or_detach;
 
 /// Blocks the hand-off ring holds before it starts dropping the oldest.
 /// Matches the ring depth a sample-stream link itself carries
-/// (`DeliveryProfile::STREAM_DEPTH`), so the buffering either side of the
+/// (`DeliveryProfile::ORDERED_DEPTH`), so the buffering either side of the
 /// publish is the same order of magnitude — roughly 170 ms at the default
 /// 48 kHz / 512-sample quantum.
 const MAX_CAPTURED_BLOCKS_AWAITING_PUBLISH: usize = 16;
@@ -58,9 +58,9 @@ const FAILED_WRITES_BETWEEN_REPORTS: u64 = 300;
 /// The one port a captured block is published on.
 const AUDIO_OUTPUT_PORT: &str = "audio";
 
-/// Bound on the wait for the publishing thread to exit. A consumer whose port
-/// declares `lossless` can hold that thread inside `write` for as long as it
-/// likes; detaching keeps the runtime's shutdown chain moving.
+/// Bound on the wait for the publishing thread to exit. Detaching past it
+/// keeps the runtime's shutdown chain moving rather than trading a wedged
+/// thread for a wedged shutdown.
 const PUBLISH_THREAD_EXIT_GRACE: Duration = Duration::from_secs(2);
 
 /// Configuration for [`MicrophoneSource`].

@@ -382,7 +382,7 @@ pub(crate) struct ChannelSizing {
     pub(crate) max_subscribers: usize,
     /// Ring depth (`subscriber_max_buffer_size`) — the agreed delivery profile's depth.
     pub(crate) max_queued_messages: usize,
-    /// Overflow policy — `true` drops-oldest (realtime), `false` back-pressures (lossless).
+    /// Overflow policy — `true` drops-oldest, which every profile resolves to.
     pub(crate) enable_safe_overflow: bool,
     /// The agreed delivery profile's consumer drain order.
     pub(crate) drain_order: crate::iceoryx2::ReadMode,

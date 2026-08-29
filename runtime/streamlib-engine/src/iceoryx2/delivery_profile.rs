@@ -37,9 +37,9 @@ pub enum DeliveryProfile {
     /// over. Shallow ring. State snapshots — video frames, control state —
     /// where a stale bag has no value once a fresher one exists.
     Newest,
-    /// The consumer receives bags in publication order, evicting + counting
-    /// the oldest under sustained overrun. Deeper ring. Sample streams —
-    /// audio blocks, encoded frames — where order carries meaning.
+    /// The consumer receives bags in publication order, evicting the oldest
+    /// under sustained overrun. Deeper ring. Sample streams — audio blocks,
+    /// encoded frames — where order carries meaning.
     Ordered,
 }
 
@@ -59,7 +59,7 @@ impl DeliveryProfile {
     /// Ring depth for [`DeliveryProfile::Newest`].
     pub const NEWEST_DEPTH: usize = 4;
     /// Ring depth for [`DeliveryProfile::Ordered`].
-    pub const STREAM_DEPTH: usize = 16;
+    pub const ORDERED_DEPTH: usize = 16;
 
     /// Expand this profile into its fixed (drain order, overflow, depth) triple.
     pub fn resolve(self) -> DeliveryResolution {
@@ -72,7 +72,7 @@ impl DeliveryProfile {
             DeliveryProfile::Ordered => DeliveryResolution {
                 drain_order: ReadMode::ReadNextInOrder,
                 overflow: Overflow::DropOldest,
-                depth: Self::STREAM_DEPTH,
+                depth: Self::ORDERED_DEPTH,
             },
         }
     }
@@ -145,34 +145,35 @@ mod tests {
 
     #[test]
     fn newest_resolves_to_skip_drop_shallow() {
-        let r = DeliveryProfile::Newest.resolve();
-        assert_eq!(r.drain_order, ReadMode::SkipToLatest);
-        assert_eq!(r.overflow, Overflow::DropOldest);
-        assert_eq!(r.depth, 4);
-        assert!(r.overflow.enable_safe_overflow());
+        let resolution = DeliveryProfile::Newest.resolve();
+        assert_eq!(resolution.drain_order, ReadMode::SkipToLatest);
+        assert_eq!(resolution.overflow, Overflow::DropOldest);
+        assert_eq!(resolution.depth, 4);
+        assert!(resolution.overflow.enable_safe_overflow());
     }
 
     #[test]
     fn ordered_resolves_to_fifo_drop_deep() {
-        let r = DeliveryProfile::Ordered.resolve();
-        assert_eq!(r.drain_order, ReadMode::ReadNextInOrder);
-        assert_eq!(r.overflow, Overflow::DropOldest);
-        assert_eq!(r.depth, 16);
-        assert!(r.overflow.enable_safe_overflow());
+        let resolution = DeliveryProfile::Ordered.resolve();
+        assert_eq!(resolution.drain_order, ReadMode::ReadNextInOrder);
+        assert_eq!(resolution.overflow, Overflow::DropOldest);
+        assert_eq!(resolution.depth, 16);
+        assert!(resolution.overflow.enable_safe_overflow());
     }
 
-    /// Neither surviving profile reaches producer-blocking. The word that did
-    /// is gone, so the only way back to a parked producer is a new resolution
-    /// arm, which this asserts nobody added.
+    /// No declarable profile reaches producer-blocking. Driven from the
+    /// declaration constant rather than a literal so a profile added there is
+    /// covered here without anyone remembering to widen this.
     #[test]
-    fn no_profile_resolves_to_a_blocking_producer() {
-        for profile in [DeliveryProfile::Newest, DeliveryProfile::Ordered] {
-            let resolution = profile.resolve();
+    fn no_declarable_profile_resolves_to_a_blocking_producer() {
+        for declared_value in DELIVERY_PROFILE_DECLARATION_VALUES {
+            let resolution = DeliveryProfile::from_manifest_str(declared_value)
+                .expect("every legal declaration value parses")
+                .resolve();
             assert_eq!(
                 resolution.overflow,
                 Overflow::DropOldest,
-                "'{}' must drop rather than park its producer",
-                profile.as_manifest_str()
+                "'{declared_value}' must drop rather than park its producer"
             );
             assert!(resolution.overflow.enable_safe_overflow());
         }
@@ -194,13 +195,16 @@ mod tests {
         assert!(err.contains("'newest'") && err.contains("'ordered'"), "{err}");
     }
 
+    /// The parser and the declaration constant agree in both directions: every
+    /// legal value parses, and every parsed profile renders back the same
+    /// spelling. A value in the constant that the parser rejects would make
+    /// every error message list a word the engine refuses.
     #[test]
-    fn manifest_str_roundtrips() {
-        for p in [DeliveryProfile::Newest, DeliveryProfile::Ordered] {
-            assert_eq!(
-                DeliveryProfile::from_manifest_str(p.as_manifest_str()).unwrap(),
-                p
-            );
+    fn manifest_str_roundtrips_through_the_declaration_constant() {
+        for declared_value in DELIVERY_PROFILE_DECLARATION_VALUES {
+            let profile = DeliveryProfile::from_manifest_str(declared_value)
+                .expect("every legal declaration value parses");
+            assert_eq!(profile.as_manifest_str(), declared_value);
         }
     }
 
