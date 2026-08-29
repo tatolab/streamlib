@@ -321,8 +321,9 @@ fn run_reactive_mode(
 
 /// Whether dispatching `process()` now would find something to read.
 ///
-/// True for a processor with no input mailboxes at all — a manual source drives
-/// itself and reads nothing, so gating it on its inputs would stop it running.
+/// True for a processor with no input mailboxes to ask — one that declared no
+/// input ports, or whose handle is not wired yet. There is nothing to gate on
+/// there, and gating on an absent answer would stop it running at all.
 fn a_read_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> bool {
     let guard = processor.lock();
     match guard.iceoryx2_input_mailboxes_inner() {

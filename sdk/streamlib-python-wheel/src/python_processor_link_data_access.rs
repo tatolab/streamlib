@@ -487,6 +487,8 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    // No window contract: this port reads the bags it is sent.
+                    None,
                 )
                 .unwrap();
             source
@@ -521,6 +523,115 @@ mod tests {
                     .extract::<i64>()
                     .unwrap(),
                 7
+            );
+        });
+    }
+
+    /// The window contract crosses the parent→child envelope and the child's
+    /// own stage honours it: a 48 kHz stereo source published on the wired
+    /// output reaches the wired input as exactly-512-sample 16 kHz mono
+    /// windows, in this process, through the same engine code the parent's
+    /// mailboxes run.
+    ///
+    /// The wheel crate's own test target is the only place this is provable
+    /// without a device: everything above it is either a Python-level refusal
+    /// or a rig-gated graph.
+    #[test]
+    fn a_windowed_input_link_hands_the_child_windows_rather_than_the_bags_it_was_sent() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (channel, notify) = unique_channel_names("windowed");
+            let source = helper_plane(python);
+            let destination = helper_plane(python);
+
+            let contract = PyDict::new(python);
+            contract.set_item("sample_rate", 16_000i64).unwrap();
+            contract.set_item("channels", 1i64).unwrap();
+            contract.set_item("dtype", "f32").unwrap();
+            contract.set_item("window_size", 512i64).unwrap();
+            contract.set_item("hop", 512i64).unwrap();
+
+            destination
+                .wire_input_link(
+                    python,
+                    "audio_from_upstream",
+                    &channel,
+                    &notify,
+                    "read_next_in_order",
+                    8,
+                    2,
+                    1,
+                    "link-1",
+                    Some(contract.as_any()),
+                )
+                .unwrap();
+            source
+                .wire_output_link(
+                    python,
+                    "audio",
+                    &channel,
+                    &notify,
+                    16_384,
+                    1 << 20,
+                    8,
+                    2,
+                    1,
+                    "link-1",
+                )
+                .unwrap();
+
+            const SOURCE_FRAMES_PER_BLOCK: usize = 512;
+            const SOURCE_RATE: i64 = 48_000;
+            for block in 0..8i64 {
+                let payload: Vec<u8> = (0..SOURCE_FRAMES_PER_BLOCK * 2)
+                    .flat_map(|scalar| (scalar as f32 / 1024.0).to_le_bytes())
+                    .collect();
+                let bag = PyDict::new(python);
+                bag.set_item("samples", pyo3::types::PyBytes::new(python, &payload))
+                    .unwrap();
+                bag.set_item("sample_rate", SOURCE_RATE).unwrap();
+                bag.set_item("channels", 2i64).unwrap();
+                bag.set_item("sample_count", SOURCE_FRAMES_PER_BLOCK as i64)
+                    .unwrap();
+                bag.set_item("dtype", "f32").unwrap();
+                bag.set_item(
+                    "first_sample_timestamp_ns",
+                    block * SOURCE_FRAMES_PER_BLOCK as i64 * 1_000_000_000 / SOURCE_RATE,
+                )
+                .unwrap();
+                source
+                    .write_to_output_port(python, "audio", bag.as_any(), None)
+                    .unwrap();
+            }
+
+            let window = destination
+                .read_from_input_port(python, "audio_from_upstream", None)
+                .unwrap()
+                .expect("the windowed input received nothing");
+            assert_eq!(
+                window
+                    .get_item("sample_count")
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
+                512,
+                "the child's stage owes exactly what the contract declared"
+            );
+            assert_eq!(
+                window
+                    .get_item("sample_rate")
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
+                16_000
+            );
+            assert_eq!(
+                window
+                    .get_item("channels")
+                    .unwrap()
+                    .extract::<i64>()
+                    .unwrap(),
+                1
             );
         });
     }
@@ -614,6 +725,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                 )
                 .unwrap_err();
             assert!(
