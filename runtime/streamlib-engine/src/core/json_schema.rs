@@ -258,6 +258,11 @@ impl ProcessorNodePortsOutput {
     /// A port declaring the sentinel renders it until its processor's `setup()`
     /// opens a device, and the resolved values from then on: machine-dependent
     /// because the device format is, which is truer than a static lie.
+    ///
+    /// Takes the node rather than its ports, and is the only way they are
+    /// rendered: the settled values live beside the ports rather than in them,
+    /// so a renderer handed the ports alone could only ever produce the
+    /// sentinel — and would look like the right call to reach for.
     fn of_this_node(node: &crate::core::graph::ProcessorNode) -> Self {
         let settled = node
             .get::<crate::core::graph::DeviceMatchedAudioWindowContractsComponent>()
@@ -275,15 +280,6 @@ impl ProcessorNodePortsOutput {
                 .iter()
                 .map(PortInfoOutput::from)
                 .collect(),
-        }
-    }
-}
-
-impl From<&crate::core::graph::ProcessorNodePorts> for ProcessorNodePortsOutput {
-    fn from(ports: &crate::core::graph::ProcessorNodePorts) -> Self {
-        Self {
-            inputs: ports.inputs.iter().map(PortInfoOutput::from).collect(),
-            outputs: ports.outputs.iter().map(PortInfoOutput::from).collect(),
         }
     }
 }
