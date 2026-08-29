@@ -54,34 +54,45 @@ stream can satisfy it.
 """
 
 
-@dataclasses.dataclass(frozen=True)
 class AudioWindowContract:
     """The rate, channels, dtype, window size and hop an audio input port wants.
 
     Declared beside `delivery_profile` on an `@input`, which must be
     `"ordered"`. `window_size` counts per-channel samples — the unit
     `AudioBlock.sample_count` uses — so one window carries
-    `window_size * channels` scalars. An omitted `hop` resolves to
-    `window_size` at construction, so the attribute always holds the real hop:
-    contiguous, non-overlapping windows by default, a rolling window below
-    that.
+    `window_size * channels` scalars. `hop` may be omitted and then resolves to
+    `window_size`: contiguous, non-overlapping windows by default, a rolling
+    window below that. The attribute always holds the resolved hop, never
+    `None`, which is why the constructor takes the omittable spelling and the
+    attribute does not.
 
     All-or-nothing: there is no partial form, because a half-declared contract
     would leave the engine guessing at exactly the values a model asserts on.
     """
 
+    __slots__ = ("sample_rate", "channels", "dtype", "window_size", "hop")
+
     sample_rate: int
     channels: int
     dtype: str
     window_size: int
-    hop: Optional[int] = None
+    hop: int
 
-    def __post_init__(self) -> None:
-        resolved_hop = self.window_size if self.hop is None else self.hop
-        object.__setattr__(self, "hop", resolved_hop)
-
-        for field_name in ("sample_rate", "channels", "window_size", "hop"):
-            value = getattr(self, field_name)
+    def __init__(
+        self,
+        sample_rate: int,
+        channels: int,
+        dtype: str,
+        window_size: int,
+        hop: Optional[int] = None,
+    ) -> None:
+        resolved_hop = window_size if hop is None else hop
+        for field_name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("window_size", window_size),
+            ("hop", resolved_hop),
+        ):
             if not isinstance(value, int) or isinstance(value, bool):
                 raise TypeError(
                     f"AudioWindowContract field {field_name!r} must be an int; got "
@@ -90,23 +101,58 @@ class AudioWindowContract:
             if value <= 0:
                 raise ValueError(
                     f"AudioWindowContract field {field_name!r} is {value} — every numeric "
-                    f"field is strictly positive. A zero hop makes no framing progress and "
-                    f"a zero sample_rate resamples to nothing"
+                    f"field is strictly positive"
                 )
 
-        if self.dtype not in _AUDIO_WINDOW_DTYPES:
+        if dtype not in _AUDIO_WINDOW_DTYPES:
             raise ValueError(
-                f"AudioWindowContract field 'dtype' is {self.dtype!r} — must be one of "
+                f"AudioWindowContract field 'dtype' is {dtype!r} — must be one of "
                 f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two an AudioBlock legalises"
             )
 
-        if resolved_hop > self.window_size:
+        if resolved_hop > window_size:
             raise ValueError(
                 f"AudioWindowContract declares hop {resolved_hop} above window_size "
-                f"{self.window_size} — a hop above the window silently discards the samples "
+                f"{window_size} — a hop above the window silently discards the samples "
                 f"between windows. A hop below it is a rolling window and is legal; omitting "
                 f"it makes windows contiguous"
             )
+
+        for field_name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("dtype", dtype),
+            ("window_size", window_size),
+            ("hop", resolved_hop),
+        ):
+            object.__setattr__(self, field_name, value)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise dataclasses.FrozenInstanceError(
+            f"AudioWindowContract is frozen; cannot assign to {name!r}"
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise dataclasses.FrozenInstanceError(
+            f"AudioWindowContract is frozen; cannot delete {name!r}"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AudioWindowContract):
+            return NotImplemented
+        return self._as_declaration() == other._as_declaration()
+
+    def __hash__(self) -> int:
+        return hash(
+            (self.sample_rate, self.channels, self.dtype, self.window_size, self.hop)
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"AudioWindowContract(sample_rate={self.sample_rate}, "
+            f"channels={self.channels}, dtype={self.dtype!r}, "
+            f"window_size={self.window_size}, hop={self.hop})"
+        )
 
     def _as_declaration(self) -> "dict[str, Any]":
         """The wire shape the native half reads — identical to Rust's rendering."""

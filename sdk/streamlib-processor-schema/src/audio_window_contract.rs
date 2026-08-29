@@ -18,9 +18,9 @@ use serde::{Deserialize, Serialize};
 /// The values an `audio_window` declaration's `dtype` may take — the two
 /// `AudioBlock` legalises.
 ///
-/// The single Rust-side list: the `#[processor]` grammar and the wheel's
-/// declaration bridge both render their refusals from this, so a third dtype
-/// cannot leave one of them lying.
+/// The single Rust-side list: [`AudioWindowContractDeclaredValues::refuse_if_unhonourable`]
+/// renders its refusal from it, and that is the one validator both the
+/// `#[processor]` grammar and the wheel's declaration bridge call.
 pub const AUDIO_WINDOW_DTYPE_DECLARATION_VALUES: [&str; 2] = ["f32", "i16"];
 
 /// A window contract on an audio input port: either the five values the port
@@ -39,6 +39,11 @@ pub enum AudioWindowContract {
     /// `audio_window = match_device`: the five values resolve at `setup()`
     /// from the format of the device stream the declaring processor opened.
     /// Only a processor that opens one can satisfy it.
+    ///
+    /// The empty braces are load-bearing. Under an internally-tagged enum a
+    /// *unit* variant accepts and silently discards sibling keys, so
+    /// `{"resolved_from": "match_device", "window_size": 512}` would read back
+    /// as a bare sentinel; an empty struct variant refuses it.
     #[serde(rename = "match_device")]
     MatchDevice {},
 }
@@ -69,10 +74,11 @@ impl AudioWindowContractDeclaredValues {
     /// Refuse a declaration the read-side stage could not honour, naming the
     /// field and the value.
     ///
-    /// The one validator every Rust entry path shares — the `#[processor]`
+    /// The one validator both Rust entry paths call — the `#[processor]`
     /// grammar and the wheel's bridge from a Python declaration — so a
-    /// contract that reaches a `PortDescriptor` has passed exactly these
-    /// checks whichever language declared it.
+    /// declaration is refused in the same terms whichever language wrote it.
+    /// Deserializing a contract or building one through the public fields
+    /// runs no check; the two authoring surfaces are what this guards.
     pub fn refuse_if_unhonourable(&self) -> Result<(), String> {
         for (field_name, value) in [
             ("sample_rate", self.sample_rate),
@@ -83,8 +89,7 @@ impl AudioWindowContractDeclaredValues {
             if value == 0 {
                 return Err(format!(
                     "`audio_window` field `{field_name}` is {value} — every numeric field \
-                     is strictly positive. A zero `hop` makes no framing progress and a \
-                     zero `sample_rate` resamples to nothing"
+                     is strictly positive"
                 ));
             }
         }
@@ -94,7 +99,7 @@ impl AudioWindowContractDeclaredValues {
                 "`audio_window` field `dtype` is `\"{}\"` — expected one of {}, the two an \
                  audio block legalises",
                 self.dtype,
-                render_audio_window_dtype_declaration_values(),
+                render_declaration_values(&AUDIO_WINDOW_DTYPE_DECLARATION_VALUES),
             ));
         }
 
@@ -111,9 +116,13 @@ impl AudioWindowContractDeclaredValues {
     }
 }
 
-/// The legal `dtype` values as a quoted, comma-joined list.
-pub fn render_audio_window_dtype_declaration_values() -> String {
-    AUDIO_WINDOW_DTYPE_DECLARATION_VALUES
+/// A declaration vocabulary as a quoted, comma-joined list, for the refusal
+/// that offers it.
+///
+/// Shared by every such list — the delivery profiles and the window dtypes —
+/// so one spelling of "here are the legal values" serves all of them.
+pub fn render_declaration_values(values: &[&str]) -> String {
+    values
         .iter()
         .map(|value| format!("`\"{value}\"`"))
         .collect::<Vec<_>>()

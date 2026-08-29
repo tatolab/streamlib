@@ -8,7 +8,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling};
+use crate::{
+    AudioWindowContract, ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling,
+};
 
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,7 +40,7 @@ pub struct PortDescriptor {
     /// from the device. `None` on a port that declares none and on every
     /// output port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio_window: Option<crate::AudioWindowContract>,
+    pub audio_window: Option<AudioWindowContract>,
 }
 
 impl PortDescriptor {
@@ -70,7 +72,7 @@ impl PortDescriptor {
 
     /// Builder-style override for the window contract. Meaningful only on an
     /// audio input port; an output port declares none.
-    pub fn with_audio_window_contract(mut self, audio_window: crate::AudioWindowContract) -> Self {
+    pub fn with_audio_window_contract(mut self, audio_window: AudioWindowContract) -> Self {
         self.audio_window = Some(audio_window);
         self
     }

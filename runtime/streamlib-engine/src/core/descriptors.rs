@@ -13,7 +13,7 @@ pub use streamlib_processor_schema::descriptors::{
     ProcessorRuntime,
 };
 pub use streamlib_processor_schema::{
-    AudioWindowContract, AudioWindowContractDeclaredValues, ProcessorClassImportPath,
-    ProcessorClassShortName, ProcessorScheduling,
+    AUDIO_WINDOW_DTYPE_DECLARATION_VALUES, AudioWindowContract, AudioWindowContractDeclaredValues,
+    ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling,
     refuse_audio_window_beside_a_skipping_delivery_profile,
 };

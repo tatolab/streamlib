@@ -567,46 +567,6 @@ fn generate_from_config_from_schema(
 /// `config_schema_id` is the descriptor-metadata id string emitted into
 /// `with_config_schema(...)`, declared (or synthesized from the config type)
 /// by the `#[processor(...)]` attribute. `None` when the processor declares
-/// Emit the `audio_window` a port declared, reconstructing the contract in the
-/// generated descriptor.
-///
-/// The values are already validated by the grammar, so this only has to render
-/// them — a contract that gets this far is one the read-side stage can honour.
-fn audio_window_contract_tokens(
-    audio_window: Option<&streamlib_processor_schema::AudioWindowContract>,
-) -> TokenStream {
-    use streamlib_processor_schema::AudioWindowContract;
-
-    match audio_window {
-        None => quote! { ::std::option::Option::None },
-        Some(AudioWindowContract::MatchDevice {}) => quote! {
-            ::std::option::Option::Some(
-                __streamlib_sdk::descriptors::AudioWindowContract::MatchDevice {},
-            )
-        },
-        Some(AudioWindowContract::Declaration(values)) => {
-            let sample_rate = values.sample_rate;
-            let channels = values.channels;
-            let dtype = &values.dtype;
-            let window_size = values.window_size;
-            let hop = values.hop;
-            quote! {
-                ::std::option::Option::Some(
-                    __streamlib_sdk::descriptors::AudioWindowContract::Declaration(
-                        __streamlib_sdk::descriptors::AudioWindowContractDeclaredValues {
-                            sample_rate: #sample_rate,
-                            channels: #channels,
-                            dtype: #dtype.to_string(),
-                            window_size: #window_size,
-                            hop: #hop,
-                        },
-                    ),
-                )
-            }
-        }
-    }
-}
-
 /// no config.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
@@ -647,6 +607,7 @@ fn generate_descriptor_from_schema(
         .map(|p| {
             let port_name = &p.name;
             let port_desc = p.description.as_deref().unwrap_or("");
+            let no_audio_window_tokens = audio_window_contract_tokens(None);
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -654,7 +615,7 @@ fn generate_descriptor_from_schema(
                     required: true,
                     is_iceoryx2: true,
                     delivery_profile: ::std::option::Option::None,
-                    audio_window: ::std::option::Option::None,
+                    audio_window: #no_audio_window_tokens,
                 })
             }
         })
@@ -812,6 +773,46 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
         #set_resources_impl
         #outputs_inner_impl
         #inputs_inner_impl
+    }
+}
+
+/// Emit the `audio_window` a port declared, reconstructing the contract in the
+/// generated descriptor.
+///
+/// The values are already validated by the grammar, so this only has to render
+/// them — a contract that gets this far is one the read-side stage can honour.
+fn audio_window_contract_tokens(
+    audio_window: Option<&streamlib_processor_schema::AudioWindowContract>,
+) -> TokenStream {
+    use streamlib_processor_schema::AudioWindowContract;
+
+    match audio_window {
+        None => quote! { ::std::option::Option::None },
+        Some(AudioWindowContract::MatchDevice {}) => quote! {
+            ::std::option::Option::Some(
+                __streamlib_sdk::descriptors::AudioWindowContract::MatchDevice {},
+            )
+        },
+        Some(AudioWindowContract::Declaration(values)) => {
+            let sample_rate = values.sample_rate;
+            let channels = values.channels;
+            let dtype = &values.dtype;
+            let window_size = values.window_size;
+            let hop = values.hop;
+            quote! {
+                ::std::option::Option::Some(
+                    __streamlib_sdk::descriptors::AudioWindowContract::Declaration(
+                        __streamlib_sdk::descriptors::AudioWindowContractDeclaredValues {
+                            sample_rate: #sample_rate,
+                            channels: #channels,
+                            dtype: #dtype.to_string(),
+                            window_size: #window_size,
+                            hop: #hop,
+                        },
+                    ),
+                )
+            }
+        }
     }
 }
 

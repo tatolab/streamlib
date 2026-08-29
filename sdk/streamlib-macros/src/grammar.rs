@@ -30,7 +30,7 @@ use streamlib_processor_schema::{
     AudioWindowContract, AudioWindowContractDeclaredValues, DELIVERY_PROFILE_DECLARATION_VALUES,
     ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
     RuntimeConfig, RuntimeOptions, ThreadPriority,
-    refuse_audio_window_beside_a_skipping_delivery_profile,
+    refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -345,8 +345,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
     let mut description = None;
     let mut delivery_profile = None;
-    let mut audio_window: Option<AudioWindowContract> = None;
-    let mut audio_window_key_span = None;
+    let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -371,8 +370,10 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
                     ),
                 ));
             }
-            audio_window = Some(parse_audio_window_contract(&content, &name, key_span)?);
-            audio_window_key_span = Some(key_span);
+            audio_window = Some((
+                key_span,
+                parse_audio_window_contract(&content, &name, key_span)?,
+            ));
             continue;
         }
 
@@ -411,21 +412,18 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         ));
     }
 
-    if audio_window.is_some() {
+    // Checked after the loop rather than at the key, so a contract declared
+    // before its profile is refused the same as one declared after.
+    if let Some((key_span, _)) = &audio_window {
         refuse_audio_window_beside_a_skipping_delivery_profile(delivery_profile.as_deref())
-            .map_err(|refusal| {
-                syn::Error::new(
-                    audio_window_key_span.unwrap_or_else(|| name_lit.span()),
-                    format!("port `{name}`: {refusal}"),
-                )
-            })?;
+            .map_err(|refusal| syn::Error::new(*key_span, format!("port `{name}`: {refusal}")))?;
     }
 
     Ok(ParsedPort {
         name,
         description,
         delivery_profile,
-        audio_window,
+        audio_window: audio_window.map(|(_, contract)| contract),
     })
 }
 
@@ -482,10 +480,10 @@ fn parse_audio_window_contract(
         let field: Ident = body.parse()?;
         body.parse::<Token![=]>()?;
         match field.to_string().as_str() {
-            "sample_rate" => sample_rate = Some(parse_audio_window_count(&body)?),
-            "channels" => channels = Some(parse_audio_window_count(&body)?),
-            "window_size" => window_size = Some(parse_audio_window_count(&body)?),
-            "hop" => hop = Some(parse_audio_window_count(&body)?),
+            "sample_rate" => sample_rate = Some(parse_audio_window_numeric_field(&body)?),
+            "channels" => channels = Some(parse_audio_window_numeric_field(&body)?),
+            "window_size" => window_size = Some(parse_audio_window_numeric_field(&body)?),
+            "hop" => hop = Some(parse_audio_window_numeric_field(&body)?),
             "dtype" => {
                 let lit: LitStr = body.parse()?;
                 dtype = Some(lit.value());
@@ -507,37 +505,38 @@ fn parse_audio_window_contract(
         body.parse::<Token![,]>()?;
     }
 
-    let missing: Vec<&str> = [
+    // One refutable pattern rather than a presence table plus four unwraps:
+    // the compiler owns the correspondence, so a sixth required field cannot
+    // turn an author's error message into a proc-macro panic.
+    let absent_required_fields = [
         ("sample_rate", sample_rate.is_none()),
         ("channels", channels.is_none()),
         ("dtype", dtype.is_none()),
         ("window_size", window_size.is_none()),
-    ]
-    .into_iter()
-    .filter_map(|(field, absent)| absent.then_some(field))
-    .collect();
-    if !missing.is_empty() {
+    ];
+    let (Some(sample_rate), Some(channels), Some(dtype), Some(window_size)) =
+        (sample_rate, channels, dtype, window_size)
+    else {
+        let missing = absent_required_fields
+            .into_iter()
+            .filter_map(|(field, absent)| absent.then_some(format!("`{field}`")))
+            .collect::<Vec<_>>()
+            .join(", ");
         return Err(syn::Error::new(
             key_span,
             format!(
-                "port `{port_name}` declares a partial `audio_window` — missing {}. The \
-                 contract is all-or-nothing, because a half-declared one leaves the engine \
-                 guessing at exactly the values a model asserts on. `hop` is the one \
-                 omittable field and defaults to `window_size`",
-                missing
-                    .iter()
-                    .map(|field| format!("`{field}`"))
-                    .collect::<Vec<_>>()
-                    .join(", "),
+                "port `{port_name}` declares a partial `audio_window` — missing {missing}. \
+                 The contract is all-or-nothing, because a half-declared one leaves the \
+                 engine guessing at exactly the values a model asserts on. `hop` is the one \
+                 omittable field and defaults to `window_size`"
             ),
         ));
-    }
+    };
 
-    let window_size = window_size.expect("window_size is checked present above");
     let values = AudioWindowContractDeclaredValues {
-        sample_rate: sample_rate.expect("sample_rate is checked present above"),
-        channels: channels.expect("channels is checked present above"),
-        dtype: dtype.expect("dtype is checked present above"),
+        sample_rate,
+        channels,
+        dtype,
         window_size,
         hop: hop.unwrap_or(window_size),
     };
@@ -548,11 +547,11 @@ fn parse_audio_window_contract(
     Ok(AudioWindowContract::Declaration(values))
 }
 
-/// Parse one `audio_window` numeric value, refusing a negative literal by name.
+/// Parse one `audio_window` numeric field, refusing a negative literal by name.
 ///
 /// The fields are unsigned, so a `-1` would otherwise reach the author as
 /// syn's bare `expected integer literal` with nothing to act on.
-fn parse_audio_window_count(body: ParseStream<'_>) -> syn::Result<u32> {
+fn parse_audio_window_numeric_field(body: ParseStream<'_>) -> syn::Result<u32> {
     if body.peek(Token![-]) {
         let minus = body.parse::<Token![-]>()?;
         let lit: LitInt = body.parse()?;
@@ -590,11 +589,7 @@ fn reject_audio_window_on_output(
 
 /// The legal `delivery_profile` values as a quoted, comma-joined list.
 fn render_delivery_profile_values() -> String {
-    DELIVERY_PROFILE_DECLARATION_VALUES
-        .iter()
-        .map(|value| format!("`\"{value}\"`"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    render_declaration_values(&DELIVERY_PROFILE_DECLARATION_VALUES)
 }
 
 /// Reject the pre-#1816 positional port schema — `"@org/package/Type"` or the
@@ -1111,6 +1106,25 @@ mod tests {
         assert!(
             msg.contains("audio_window") && msg.contains("newest") && msg.contains("ordered"),
             "the refusal must name both knobs; got {msg}"
+        );
+    }
+
+    /// The profile refusal is checked after the whole port body, so it cannot
+    /// depend on which key the author happened to write first.
+    #[test]
+    fn a_contract_declared_before_its_profile_is_refused_the_same() {
+        let msg = parse_err(quote! {
+            execution = reactive,
+            input(
+                "audio",
+                audio_window(sample_rate = 16_000, channels = 1, dtype = "f32", window_size = 512),
+                delivery_profile = "newest"
+            ),
+        });
+
+        assert!(
+            msg.contains("audio_window") && msg.contains("ordered"),
+            "key order must not change the refusal; got {msg}"
         );
     }
 
