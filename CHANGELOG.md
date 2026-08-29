@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.19](https://github.com/tatolab/streamlib/compare/v0.18.18...v0.18.19) (2026-08-29)
+
+
+### Features
+
+* **engine:** the windowing stage — exact blocks at the read seam, in the contract's format ([#2037](https://github.com/tatolab/streamlib/issues/2037)) ([e2429dc](https://github.com/tatolab/streamlib/commit/e2429dcdaccbfae230081b54c53be762d0aeec9d))
+
 ## [0.18.18](https://github.com/tatolab/streamlib/compare/v0.18.17...v0.18.18) (2026-08-29)
 
 
