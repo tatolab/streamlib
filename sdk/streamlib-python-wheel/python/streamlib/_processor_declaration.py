@@ -77,8 +77,8 @@ class AudioWindowContract:
     hop: Optional[int] = None
 
     def __post_init__(self) -> None:
-        if self.hop is None:
-            object.__setattr__(self, "hop", self.window_size)
+        resolved_hop = self.window_size if self.hop is None else self.hop
+        object.__setattr__(self, "hop", resolved_hop)
 
         for field_name in ("sample_rate", "channels", "window_size", "hop"):
             value = getattr(self, field_name)
@@ -100,9 +100,9 @@ class AudioWindowContract:
                 f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two an AudioBlock legalises"
             )
 
-        if self.hop is not None and self.hop > self.window_size:
+        if resolved_hop > self.window_size:
             raise ValueError(
-                f"AudioWindowContract declares hop {self.hop} above window_size "
+                f"AudioWindowContract declares hop {resolved_hop} above window_size "
                 f"{self.window_size} — a hop above the window silently discards the samples "
                 f"between windows. A hop below it is a rolling window and is legal; omitting "
                 f"it makes windows contiguous"
