@@ -73,6 +73,10 @@ Field semantics, resolved from the tree rather than invented:
 - `hop` defaults to `window_size`: contiguous, non-overlapping windows. A hop below
   `window_size` is a rolling window and is legal. A hop above it would silently discard
   samples between windows and is refused at declaration, naming both numbers.
+- Every numeric field is strictly positive, refused at declaration naming the field and
+  the value — a zero `hop` makes no framing progress, a zero `sample_rate` resamples to
+  nothing, and Python's declaration path would otherwise carry either straight to the
+  engine.
 - The contract is all-or-nothing. There is no partial form, because a half-declared
   contract leaves the stage guessing at exactly the values a model asserts on — and a
   guess that is usually right is the worst outcome available.
@@ -132,8 +136,12 @@ mailbox and the reader, and four consequences follow:
   **flushes the accumulator and the resampler's own filter state**, then re-anchors on
   the next block's stamp. The filter reset is load-bearing, not hygiene: a polyphase
   resampler holds a filter's length of pre-gap samples, and emitting through it after
-  the gap blends audio across the loss — the interpolation the entry bans. The gap
-  stays derivable from the stamps either side, as that entry requires.
+  the gap blends audio across the loss — the interpolation the entry bans. The same
+  doctrine settles the priming question at stream start and after every flush: filter
+  output produced before the filter has filled is zero-padding, not audio, so it is
+  discarded — an emitted sample always derives from real input — and the group-delay
+  subtraction then aligns the first emitted stamp with the real input sample it derives
+  from. The gap stays derivable from the stamps either side, as that entry requires.
 
 **Three wiring facts the tickets should not have to rediscover.** The `AudioBlock`
 cast lives in `streamlib-media-builtins`, which depends on the engine — so the stage
@@ -285,9 +293,11 @@ gate bullets, since the gate's grammar wants artifacts rather than prose.
 ## Validation
 
 - **The declaration round-trips**: a contract declared in Python and one declared in Rust
-  produce the same `ProcessorPortSchema`; a hop above `window_size`, a contract beside
-  `delivery_profile = "newest"`, and an N→M channel pair with neither side 1 are each
-  refused at declaration in both languages naming the numbers or knobs; a second inbound
+  produce the same `ProcessorPortSchema`; a hop above `window_size`, a zero or negative
+  value in any numeric field, and a contract beside `delivery_profile = "newest"` are
+  each refused at declaration in both languages naming the numbers or knobs. An N→M
+  channel pair with neither side 1 is refused at the stage naming both counts — the
+  source count arrives with the bags, so declaration cannot see it; a second inbound
   link into a windowed port is refused at wire time.
 - **The stage is exact**: a 48 kHz stereo `f32` source into a port declaring
   16 kHz / 1 / `f32` / 512 / 512 yields blocks of exactly 512 per-channel samples, at
@@ -301,7 +311,9 @@ gate bullets, since the gate's grammar wants artifacts rather than prose.
   and one 1024-sample quantum against a 512/512 contract dispatches `process()` exactly
   twice.
 - **A discontinuity flushes rather than interpolates**: a gap in the input stream produces
-  no window spanning it, and the window after the gap carries its own first sample's stamp.
+  no window spanning it, the window after the gap carries its own first sample's stamp,
+  and that first post-gap window contains no pre-gap energy — proven on a known signal
+  against the pinned `rubato`, which is the assertion that catches a missed filter reset.
 - **Nothing else moved**: a port with no contract reads byte-identical bags before and
   after, and the per-link drop counts on a windowed port match an unwindowed one under the
   same overrun.
