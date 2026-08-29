@@ -157,6 +157,15 @@ jobs:
           # Named one by one rather than by module prefix: a prefix would
           # enrol whatever that module holds next, which is how a device test
           # joins this list without anyone deciding to add it.
+          # The audio window contract's read-side stage. The only gate it
+          # has: the stage's exactness, its overlap, the flush that resets the
+          # resampler's filter state, its refusals, and the readiness floor
+          # that must never claim a window a read cannot then produce. The
+          # `iceoryx2::input` and `open_iceoryx2_service_op` entries carry the
+          # same contract at the seam and at wire time — the input ones open
+          # real iceoryx2 services, which need /dev/shm and nothing else. The
+          # end-to-end half through a helper-placed Python consumer is
+          # rig-gated like every other graph test in the wheel.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -203,15 +212,6 @@ jobs:
             core::json_schema::port_rendering_tests::a_port_declaring_the_sentinel_renders_it_as_a_whole_contract \
             core::json_schema::port_rendering_tests::a_declared_contract_survives_the_descriptor_to_port_info_hop \
             core::json_schema::port_rendering_tests::a_contract_bearing_descriptor_renders_its_contract_too \
-          # The audio window contract's read-side stage. The only gate it
-          # has: the stage's exactness, its overlap, the flush that resets the
-          # resampler's filter state, its refusals, and the readiness floor
-          # that must never claim a window a read cannot then produce. The
-          # `iceoryx2::input` and `open_iceoryx2_service_op` entries carry the
-          # same contract at the seam and at wire time — the input ones open
-          # real iceoryx2 services, which need /dev/shm and nothing else. The
-          # end-to-end half through a helper-placed Python consumer is
-          # rig-gated like every other graph test in the wheel.
             iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_block_written_by_the_stage_reads_back_as_the_block_it_wrote \
             iceoryx2::audio_window::audio_block_bag_wire_codec::tests::a_decoded_block_borrows_its_payload_out_of_the_frame_body_rather_than_copying_it \
             iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_absent_dtype_reads_as_f32_the_way_the_wire_contract_says \
