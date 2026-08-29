@@ -1942,7 +1942,7 @@ mod tests {
             .to_string();
         graph
             .traversal_mut()
-            .e(&LinkUniqueId::from(departed.as_str()))
+            .e(LinkUniqueId::from(departed.as_str()))
             .first_mut()
             .expect("the departing link is in the graph")
             .insert(LinkStateComponent(LinkState::Disconnected));
