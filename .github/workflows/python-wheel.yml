@@ -109,8 +109,17 @@ jobs:
       # extension module (the `extension-module` feature is off by default for
       # exactly this), which is why `python3-dev` is in the apt list above.
       # Without this step they run on developer machines only.
+      # `--test-threads=1` because these tests are not independent: every one of
+      # them embeds the *same* CPython interpreter and takes the *same* GIL, so
+      # the harness's default parallelism has them racing inside one runtime.
+      # What that surfaces as is an import race — a thread reaching
+      # `typing.ClassVar` while another is still importing `typing` fails with
+      # "partially initialized module", which is what turned `main` red on
+      # e2429dcd after nine green runs. Serial is the honest shape for an
+      # embedded interpreter and costs nothing measurable: the whole suite is
+      # ~2s either way.
       - name: Wheel crate unit tests
-        run: cargo test --locked -p streamlib-python-wheel --lib
+        run: cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
 
       # The tap controls decode transport-framed bags through the wheel's own
       # decoder, so unlike the loopback fixture's analysis half they cannot ride
