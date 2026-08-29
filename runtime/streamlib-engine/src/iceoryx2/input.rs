@@ -398,12 +398,10 @@ impl InputMailboxesInner {
                             // the reading processor, not a receive-time drop) and
                             // reshapes the mailbox's raw-wire-frame element
                             // contract (`route`, `drain`, [`PortMailbox`]).
-                            port_config
-                                .mailbox
-                                .push_frame_from_inbound_link(
-                                    slice.to_vec(),
-                                    &bound.dropped_bag_counter,
-                                );
+                            port_config.mailbox.push_frame_from_inbound_link(
+                                slice.to_vec(),
+                                &bound.dropped_bag_counter,
+                            );
                         } else {
                             tracing::warn!(
                                 port = %bound.local_port,

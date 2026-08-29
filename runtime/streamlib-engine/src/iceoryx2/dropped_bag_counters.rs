@@ -125,7 +125,9 @@ mod tests {
             .record_one_dropped_bag();
 
         assert_eq!(
-            counts.counter_for_inbound_link("L-shared").dropped_bag_count(),
+            counts
+                .counter_for_inbound_link("L-shared")
+                .dropped_bag_count(),
             2,
             "the second ask must reach the same counter, not mint a fresh one"
         );
