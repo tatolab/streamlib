@@ -388,6 +388,62 @@ fn no_window_spans_a_gap_in_the_source_stream() {
     }
 }
 
+/// The tightest gap there is, and the one the mailbox itself creates: a single
+/// evicted bag. The change file says a bag evicted at a windowed port costs its
+/// own samples plus the flush of the remainder behind it — and nothing hooks
+/// the eviction to do that, because the displacement the eviction leaves in the
+/// stamps is what the flush is driven by. One quantum of displacement against a
+/// half-quantum tolerance is the narrowest case that must still trip it.
+#[test]
+fn a_single_evicted_block_displaces_the_stamps_enough_to_flush() {
+    let contract = contract(16_000, 1, "f32", 512, 512);
+    let mut stage = stage_on(contract);
+
+    let mut windows = Vec::new();
+    for block_index in 0..8u64 {
+        // Block 4 never arrives — the mailbox evicted it under overrun.
+        if block_index == 4 {
+            continue;
+        }
+        let first_frame = block_index * 512;
+        stage
+            .accept(&source_block(
+                &interleaved_sine(first_frame, 512, 1, 16_000, 300.0),
+                16_000,
+                1,
+                nanoseconds_for(first_frame, 16_000),
+            ))
+            .expect("accepted");
+        windows.extend(drain_every_ready_window(&mut stage));
+    }
+
+    // Seven blocks of 512 arrived, so eight windows would mean a window was
+    // built across the hole.
+    assert_eq!(
+        windows.len(),
+        7,
+        "each arriving block fills one window, and the evicted one fills none"
+    );
+    let stamp_of_the_evicted_block = nanoseconds_for(4 * 512, 16_000);
+    assert!(
+        !windows
+            .iter()
+            .any(|window| window.first_sample_timestamp_ns == stamp_of_the_evicted_block),
+        "no window may claim the instant the evicted block covered"
+    );
+    // The run re-anchors after the hole rather than carrying the old anchor
+    // across it, so the stamps step by a window everywhere except across it.
+    let steps: Vec<i64> = windows
+        .windows(2)
+        .map(|pair| pair[1].first_sample_timestamp_ns - pair[0].first_sample_timestamp_ns)
+        .collect();
+    assert_eq!(
+        steps.iter().filter(|step| **step != 32_000_000).count(),
+        1,
+        "exactly one step spans the hole; the rest are one window apart — got {steps:?}"
+    );
+}
+
 /// A stamp jittering inside half a source quantum is the device being exact to
 /// the block rather than to the sample, and must not flush a healthy run.
 ///

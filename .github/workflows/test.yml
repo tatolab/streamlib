@@ -215,6 +215,7 @@ jobs:
             iceoryx2::audio_window::audio_window_accumulator::stamp_arithmetic_tests::a_frame_index_past_a_u64_multiplys_reach_is_still_stamped_exactly \
             iceoryx2::audio_window::audio_window_accumulator::stamp_arithmetic_tests::the_widening_changes_no_answer_a_window_sized_run_produces \
             iceoryx2::audio_window::audio_window_stage_tests::a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more \
+            iceoryx2::audio_window::audio_window_stage_tests::a_single_evicted_block_displaces_the_stamps_enough_to_flush \
             iceoryx2::audio_window::audio_window_stage_tests::a_full_mailbox_that_still_cannot_make_a_window_says_so_once \
             iceoryx2::audio_window::resolved_audio_window_contract::tests::the_profiles_depth_is_a_floor_no_contract_undercuts \
             iceoryx2::audio_window::resolved_audio_window_contract::tests::every_windows_depth_holds_a_windows_worth_of_the_assumed_quantum \
