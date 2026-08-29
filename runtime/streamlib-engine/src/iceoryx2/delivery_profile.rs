@@ -190,7 +190,10 @@ mod tests {
         // Case is part of the value: the declaration surface is lowercase, so
         // a capitalised spelling is a typo like any other.
         let err = DeliveryProfile::from_manifest_str("Newest").unwrap_err();
-        assert!(err.contains("'newest'") && err.contains("'ordered'"), "{err}");
+        assert!(
+            err.contains("'newest'") && err.contains("'ordered'"),
+            "{err}"
+        );
     }
 
     /// The parser and the declaration constant agree in both directions: every
