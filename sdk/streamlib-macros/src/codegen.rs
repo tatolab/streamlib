@@ -567,6 +567,46 @@ fn generate_from_config_from_schema(
 /// `config_schema_id` is the descriptor-metadata id string emitted into
 /// `with_config_schema(...)`, declared (or synthesized from the config type)
 /// by the `#[processor(...)]` attribute. `None` when the processor declares
+/// Emit the `audio_window` a port declared, reconstructing the contract in the
+/// generated descriptor.
+///
+/// The values are already validated by the grammar, so this only has to render
+/// them — a contract that gets this far is one the read-side stage can honour.
+fn audio_window_contract_tokens(
+    audio_window: Option<&streamlib_processor_schema::AudioWindowContract>,
+) -> TokenStream {
+    use streamlib_processor_schema::AudioWindowContract;
+
+    match audio_window {
+        None => quote! { ::std::option::Option::None },
+        Some(AudioWindowContract::MatchDevice {}) => quote! {
+            ::std::option::Option::Some(
+                __streamlib_sdk::descriptors::AudioWindowContract::MatchDevice {},
+            )
+        },
+        Some(AudioWindowContract::Declaration(values)) => {
+            let sample_rate = values.sample_rate;
+            let channels = values.channels;
+            let dtype = &values.dtype;
+            let window_size = values.window_size;
+            let hop = values.hop;
+            quote! {
+                ::std::option::Option::Some(
+                    __streamlib_sdk::descriptors::AudioWindowContract::Declaration(
+                        __streamlib_sdk::descriptors::AudioWindowContractDeclaredValues {
+                            sample_rate: #sample_rate,
+                            channels: #channels,
+                            dtype: #dtype.to_string(),
+                            window_size: #window_size,
+                            hop: #hop,
+                        },
+                    ),
+                )
+            }
+        }
+    }
+}
+
 /// no config.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
@@ -586,6 +626,7 @@ fn generate_descriptor_from_schema(
                 Some(value) => quote! { ::std::option::Option::Some(#value.to_string()) },
                 None => quote! { ::std::option::Option::None },
             };
+            let audio_window_tokens = audio_window_contract_tokens(p.audio_window.as_ref());
             quote! {
                 .with_input(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -593,6 +634,7 @@ fn generate_descriptor_from_schema(
                     required: true,
                     is_iceoryx2: true,
                     delivery_profile: #delivery_profile_tokens,
+                    audio_window: #audio_window_tokens,
                 })
             }
         })
@@ -612,6 +654,7 @@ fn generate_descriptor_from_schema(
                     required: true,
                     is_iceoryx2: true,
                     delivery_profile: ::std::option::Option::None,
+                    audio_window: ::std::option::Option::None,
                 })
             }
         })
@@ -978,6 +1021,7 @@ mod processor_struct_emit_tests {
             name: name.to_string(),
             description: None,
             delivery_profile: None,
+            audio_window: None,
         };
         ProcessorSchema {
             inputs: vec![port("video_in")],
