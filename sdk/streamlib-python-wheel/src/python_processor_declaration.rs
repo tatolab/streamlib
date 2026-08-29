@@ -229,11 +229,7 @@ fn read_audio_window_contract(
 
 /// Read one strictly-positive `audio_window` count, refusing a negative
 /// integer by name rather than as an extraction failure.
-fn read_dict_count(
-    declaration: &Bound<'_, PyDict>,
-    key: &str,
-    port_name: &str,
-) -> PyResult<u32> {
+fn read_dict_count(declaration: &Bound<'_, PyDict>, key: &str, port_name: &str) -> PyResult<u32> {
     let value = declaration.get_item(key)?.ok_or_else(|| {
         PyValueError::new_err(format!(
             "input port {port_name:?}: audio_window is missing {key:?} — the contract is \
@@ -383,9 +379,7 @@ class BlurProcessor:
                         .get_item("AudioConsumer")
                         .unwrap()
                         .expect("the class bound");
-                    refusal_message(PythonProcessorDeclaration::read_from_class(
-                        &declared_class,
-                    ))
+                    refusal_message(PythonProcessorDeclaration::read_from_class(&declared_class))
                 }
                 Err(refused_at_decoration) => refused_at_decoration.to_string(),
             }
@@ -441,8 +435,7 @@ class BlurProcessor:
 
         assert_eq!(python_ports.len(), 1);
         assert_eq!(
-            python_ports[0].audio_window,
-            rust_descriptor.inputs[0].audio_window,
+            python_ports[0].audio_window, rust_descriptor.inputs[0].audio_window,
             "the two authoring surfaces must produce one contract"
         );
         assert_eq!(
@@ -538,9 +531,8 @@ class AudioConsumer:
 ";
             let declared_class = class_from_source(python, source, "AudioConsumer");
 
-            let refusal = refusal_message(PythonProcessorDeclaration::read_from_class(
-                &declared_class,
-            ));
+            let refusal =
+                refusal_message(PythonProcessorDeclaration::read_from_class(&declared_class));
             assert!(
                 refusal.contains("4096") && refusal.contains("512"),
                 "the refusal must name both numbers; got {refusal}"
@@ -578,9 +570,8 @@ class AudioConsumer:
 ";
             let declared_class = class_from_source(python, source, "AudioConsumer");
 
-            let refusal = refusal_message(PythonProcessorDeclaration::read_from_class(
-                &declared_class,
-            ));
+            let refusal =
+                refusal_message(PythonProcessorDeclaration::read_from_class(&declared_class));
             assert!(
                 refusal.contains("sample_rate") && refusal.contains("-1"),
                 "the refusal must name the field and the value; got {refusal}"

@@ -541,9 +541,9 @@ fn parse_audio_window_contract(
         window_size,
         hop: hop.unwrap_or(window_size),
     };
-    values.refuse_if_unhonourable().map_err(|refusal| {
-        syn::Error::new(key_span, format!("port `{port_name}`: {refusal}"))
-    })?;
+    values
+        .refuse_if_unhonourable()
+        .map_err(|refusal| syn::Error::new(key_span, format!("port `{port_name}`: {refusal}")))?;
 
     Ok(AudioWindowContract::Declaration(values))
 }
@@ -975,7 +975,6 @@ mod tests {
             assert!(msg.contains(key), "the list must offer `{key}`; got: {msg}");
         }
     }
-
 
     fn declared_contract(parsed: &ParsedProcessorAttr) -> &AudioWindowContractDeclaredValues {
         match parsed.inputs[0]
