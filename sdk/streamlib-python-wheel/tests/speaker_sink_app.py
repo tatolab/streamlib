@@ -8,29 +8,68 @@ proof for the playback built-in: the config travels to the engine as JSON and
 every field of a built-in's config struct carries a serde default, so `{}`
 deserializes and `null` does not.
 
-The two ends must agree on rate, channels and dtype, because there is no
-resampler on this rung and `SpeakerSink` refuses what it cannot play. That
-holds by construction on the null backend — both ends take the pacing clock's
-rate and one channel — and on a session whose default source and default sink
-run the same format, which is the ordinary desktop case. Where they differ the
-refusal names both, which is the behaviour under test rather than a flake.
+The two ends need not agree on rate, channels or dtype, and on a stock machine
+they do not: the ALSA arm asks a capture device for mono and a playback device
+for stereo. `SpeakerSink`'s input port declares `audio_window = match_device`,
+so the engine converts every block into whatever format the speaker's own
+device opened at — which is the thing under test here.
 
 A probe hangs off the same output the speaker reads, so the test has a marker
 saying enough blocks have really flowed rather than a sleep guessing that they
 have. It is a second consumer of the microphone's port, not a stage between the
 two built-ins — the samples the speaker plays never enter an interpreter.
+
+The control plane is hosted so the run can be asked what the sentinel settled
+to. `graph` renders the resolved five values on the speaker's own port, and on
+a real device those values are this machine's — which is the point of resolving
+them from the device rather than writing them down.
 """
 
+import json
+import os
 import threading
 
 import streamlib
 from speaker_sink_probes import AudioBlockCountingProbe
+from streamlib._control_plane_client import call_tool
+from streamlib._node_registry import live_nodes
 
 READINESS_TIMEOUT_SECONDS = 20.0
 
 
+def _this_processes_control_url() -> str:
+    """This run's own control plane, found by pid.
+
+    By pid rather than by "the only live node": another test's app may be up at
+    the same time, and this must never read that one's graph.
+    """
+    for node in live_nodes():
+        if node.pid == os.getpid():
+            return node.control_url
+    raise RuntimeError("this run published no node registry entry")
+
+
+def _report_the_speakers_settled_window_contract() -> None:
+    """Print what `graph` renders for the speaker's `audio` port."""
+    graph = json.loads(call_tool(_this_processes_control_url(), "graph", {}))
+    for node in graph["nodes"]:
+        # By the display name the marker class defaults to, because a marker
+        # class exposes no import path to Python — and this app adds exactly one
+        # speaker, so the default is unambiguous.
+        if node["display_name"] != "SpeakerSink":
+            continue
+        audio = next(port for port in node["ports"]["inputs"] if port["name"] == "audio")
+        print(
+            f"MARKER:SPEAKER_AUDIO_WINDOW {json.dumps(audio.get('audio_window'))}",
+            flush=True,
+        )
+        return
+    print("MARKER:SPEAKER_AUDIO_WINDOW null", flush=True)
+
+
 def main() -> None:
     runtime = streamlib.Runtime()
+    runtime.host_control_plane()
     microphone = runtime.add(streamlib.MicrophoneSource)
     speaker = runtime.add(streamlib.SpeakerSink)
     runtime.connect(microphone.output("audio"), speaker.input("audio"))
@@ -44,11 +83,12 @@ def main() -> None:
                 timeout=READINESS_TIMEOUT_SECONDS
             )
             print("MARKER:EVERY_PROCESSOR_RUNNING", flush=True)
+            _report_the_speakers_settled_window_contract()
         except RuntimeError as refusal:
             print(f"MARKER:NOT_EVERY_PROCESSOR_RUNNING {refusal}", flush=True)
             # Shut down rather than leave `run()` holding the main thread: a
-            # speaker that refused the microphone's format will never reach
-            # Running, so waiting for it is waiting for nothing.
+            # processor that failed setup never reaches Running, so waiting for
+            # it is waiting for nothing.
             runtime.shutdown()
 
     threading.Thread(target=watch_readiness, daemon=True).start()

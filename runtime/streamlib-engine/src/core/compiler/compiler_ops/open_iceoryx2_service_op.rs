@@ -1927,6 +1927,97 @@ mod tests {
         );
     }
 
+    /// The whole loop the sentinel needs, at the seam that has to close it: an
+    /// app-process destination declaring `match_device` is wired awaiting its
+    /// device, its node is given the shared settled contracts, and once its own
+    /// `setup()` settles one `graph` renders those values on the port that
+    /// settled them.
+    ///
+    /// Mentally revert the publish and the node keeps rendering the sentinel
+    /// for the whole run — a port whose `graph` entry is a declaration nobody
+    /// can act on rather than the format it is actually converting to.
+    #[test]
+    fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
+        use crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor;
+
+        let mut graph = Graph::new();
+        let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        let (dest, _, dest_input) = attach_mock_instance::<
+            MockDeviceMatchedAudioConsumerProcessor::Processor,
+        >(&mut graph, &dest_unique_id.to_string());
+        let dest_input = dest_input.expect("a windowed consumer holds input mailboxes");
+
+        let (channel, _) = open_test_link_services("match-device-graph", false);
+        wire_rust_dest(
+            &mut graph,
+            &dest_unique_id,
+            &dest,
+            "audio",
+            &"L-match-device".into(),
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+            crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
+            &channel,
+            None,
+            Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat),
+        )
+        .expect("a sentinel wires rather than refusing");
+
+        assert_eq!(
+            dest_input.input_ports_still_awaiting_their_device_stream_format(),
+            vec!["audio".to_string()],
+            "the wiring runs before setup(), so the port waits rather than windowing"
+        );
+        assert_eq!(
+            rendered_audio_window_of(&mut graph, &dest_unique_id),
+            serde_json::json!({ "resolved_from": "match_device" }),
+            "nothing has opened a device yet, and a guess in its place would be a lie"
+        );
+
+        dest_input
+            .settle_a_ports_device_matched_audio_window_contract(
+                "audio",
+                &crate::iceoryx2::AudioWindowContractMatchingADeviceStream {
+                    device_stream_format: crate::core::context::AudioStreamFormat {
+                        sample_rate: 44_100,
+                        channels: 2,
+                        sample_format: crate::core::context::AudioSampleFormat::F32,
+                    },
+                    window_size_in_per_channel_samples: 441,
+                    hop_in_per_channel_samples: 441,
+                },
+            )
+            .expect("the processor's own setup() settles it");
+
+        assert_eq!(
+            rendered_audio_window_of(&mut graph, &dest_unique_id),
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 44_100,
+                "channels": 2,
+                "dtype": "f32",
+                "window_size": 441,
+                "hop": 441,
+            }),
+            "graph renders what the device gave, live, off the port that settled it"
+        );
+    }
+
+    /// One node's `"audio"` input port as `graph` renders its window contract.
+    fn rendered_audio_window_of(
+        graph: &mut Graph,
+        proc_id: &ProcessorUniqueId,
+    ) -> serde_json::Value {
+        let node = graph
+            .traversal_mut()
+            .v(proc_id)
+            .first()
+            .expect("the node must be in the graph");
+        serde_json::to_value(crate::core::json_schema::ProcessorNodeOutput::from(node))
+            .expect("a node renders")["ports"]["inputs"][0]["audio_window"]
+            .clone()
+    }
+
     /// A `match_device` port on a helper-placed destination is refused where it
     /// is wired, not left to wait.
     ///
