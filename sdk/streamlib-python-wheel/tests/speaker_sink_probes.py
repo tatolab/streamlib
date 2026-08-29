@@ -29,8 +29,9 @@ class AudioBlockCountingProbe:
     def __init__(self) -> None:
         self.blocks_seen = 0
 
-    # The plan's profile for audio: order matters and no sample may be dropped
-    # on the consumer side.
+    # The plan's profile for audio: order carries meaning, so blocks arrive in
+    # the order they were published rather than skipping to the freshest. It
+    # promises nothing about how many arrive.
     @input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 

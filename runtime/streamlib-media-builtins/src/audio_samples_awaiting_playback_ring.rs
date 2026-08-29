@@ -112,9 +112,9 @@ impl AudioSamplesAwaitingPlaybackRing {
     ///
     /// Waiting rather than dropping is what keeps playback continuous: this
     /// ring holds only its own caller, never the graph. Bytes are queued in
-    /// pieces as room appears,
-    /// which changes nothing about what is played — samples are a stream, and
-    /// where one block ended is not something a device acts on.
+    /// pieces as room appears, which changes nothing about what is played —
+    /// samples are a stream, and where one block ended is not something a
+    /// device acts on.
     ///
     /// `room_wait_poll_interval` only bounds how long a wait sits before it
     /// re-reads the state; ending playback is what releases a caller for good.

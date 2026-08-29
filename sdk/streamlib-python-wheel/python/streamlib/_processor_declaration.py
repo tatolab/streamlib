@@ -49,8 +49,8 @@ def input(
     carries no type — the method's return annotation is the declaration, read
     by humans and type checkers only. `delivery_profile` is required and names
     a read policy: `"newest"` drains to the most recent bag, `"ordered"`
-    receives them in publication order. Both drop under sustained pressure,
-    and every drop is counted at the port and readable in `graph`. The
+    receives them in publication order. Neither promises delivery — both drop
+    under sustained pressure, and no link ever blocks a producer. The
     decorated method is a declaration only: bags are read with
     `ctx.inputs.read(port_name)`.
     """

@@ -104,9 +104,10 @@ impl Iceoryx2Node {
     /// [`crate::iceoryx2::delivery_profile_for_input_port`].
     ///
     /// `enable_safe_overflow` derives from that same profile's overflow
-    /// policy: `true` (`Overflow::DropOldest`) auto-evicts the oldest sample
+    /// policy. `true` (`Overflow::DropOldest`) auto-evicts the oldest sample
     /// from the subscriber buffer on overflow, so the publisher's `send()`
-    /// never blocks.
+    /// never blocks; `false` back-pressures the publisher instead. No profile
+    /// resolves to `false` — the tap is the one caller that passes it.
     pub fn open_or_create_service(
         &self,
         service_name: &str,

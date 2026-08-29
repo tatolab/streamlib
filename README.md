@@ -278,9 +278,7 @@ so is required — there is no default to inherit by accident:
 ```
 
 A profile names a read policy and nothing more. Neither promises delivery: both drop under
-sustained pressure, and no link ever blocks a producer. What they do promise is that no loss is
-silent — a dropped bag is counted at the port that dropped it, per link, and shows up in
-`streamlib graph` beside the processor's other metrics.
+sustained pressure, and no link ever blocks a producer.
 
 What crosses a link is a self-describing named map. No schema registry, no negotiation, no
 versions, no code-generation step, and nothing in the engine ever compares one stage's types
