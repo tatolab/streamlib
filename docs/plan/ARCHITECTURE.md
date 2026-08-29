@@ -206,7 +206,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
-## Processor model & scheduling — IN-FLIGHT (→ delivery-profile-vocabulary)
+## Processor model & scheduling — IN-FLIGHT
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -230,7 +230,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   and nothing left to infer one from, so an input port without one is a wiring error.
   Ring depth and overflow policy are engine-chosen and are not authorable: no port
   declares a depth, a leak policy, or a queue element, and there is no second surface
-  that tunes one. [schema-free-ports — SHIPPED #1811; delivery-profile-vocabulary]
+  that tunes one. [schema-free-ports — SHIPPED #1811; delivery-profile-vocabulary —
+  SHIPPED #2024, #2025]
   <!-- verify: cargo test -p streamlib-engine missing_declaration_is_a_wiring_error_naming_the_port -->
   <!-- verify: sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_an_input_port_without_a_delivery_profile_is_refused -->
 - **DECIDED** — The delivery profile names a read policy and nothing else. There are
@@ -239,23 +240,55 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   drop under sustained pressure. Neither promises delivery, because on a link whose head
   is a device that will not wait, no port-local declaration can: backpressure only
   relocates the loss to the device edge. `lossless` is retired — the word promised what
-  the runtime does not do. [delivery-profile-vocabulary]
+  the runtime does not do. [delivery-profile-vocabulary — SHIPPED #2024]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::delivery_profile::tests::port_declaration_resolution::unknown_declared_value_is_rejected_with_the_legal_values -->
 - **DECIDED** — No loss is silent. A bag dropped at a port is counted by the port that
   dropped it and is readable over the control plane in `graph`, alongside the processor's
   other metrics. Drops are counted per link, never as one blended total, so a future
-  reflection of a link's count to its producer stays possible without recounting. A drop
-  is a normal, reportable event on a realtime link, never an error and never invisible —
-  a run that lost most of its bags must not read as a healthy one.
+  reflection of a link's count to its producer stays possible without recounting. A count
+  is cumulative for the life of one wiring, not of the link id: disconnect takes it with
+  the link and reconnecting the same id starts from zero, because a count outliving its
+  link would name something `graph` no longer has. A drop is a normal, reportable event
+  on a realtime link, never an error and never invisible — a run that lost most of its
+  bags must not read as a healthy one. A `newest` port
+  passing over bags to reach the most recent is the profile working, not loss at the
+  port, and is deliberately uncounted. **The clause states the intent, not yet the
+  tree**: what shipped counts the mailbox eviction at an app-process destination and
+  renders it under that node's `metrics` key. Two paths still lose a bag without
+  counting it anywhere a reader can reach, and they are OPEN directly below; until they
+  close, a `graph` that reports no drops is not yet proof that none happened.
+  [delivery-profile-vocabulary — SHIPPED #2023 for the app-process half]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::mailbox::tests::an_eviction_is_counted_against_the_link_whose_bag_was_lost -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::mailbox::tests::passing_over_bags_to_reach_the_newest_is_not_a_drop_at_the_port -->
+- **OPEN** — Counting the two losses no port mailbox ever sees, so "no loss is silent"
+  becomes true of the tree and not only of its app-process half. (a) A helper-placed
+  destination — which is every Python processor — evicts and counts inside its own child
+  process, and its graph node deliberately renders no `metrics` key at all rather than a
+  zero the parent cannot stand behind, so a Python processor's losses reach no reader.
+  (b) A bag the iceoryx2 subscriber ring overwrites under `enable_safe_overflow` never
+  reaches a mailbox and so is counted nowhere at all, whichever process the destination
+  runs in. Both need an owner decision before building: (a) is a reporting hop from the
+  child to its node in the parent, (b) needs a count taken where the overwrite happens.
+  Until then the gap is recorded here, never papered over with a zero.
   [delivery-profile-vocabulary]
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero -->
 - **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
   unreachable: no profile resolves to it and the overflow policy it was the second half
   of goes with it. A processor publishing to a slow consumer loses bags at that
-  consumer's port, where the loss is counted; it is never parked. The capability was never engineered
-  — the engine never chose the blocking semantics it would have had, and a parked
+  consumer's port, counted as the entry above states; it is never parked. The capability
+  was never engineered — the engine never chose the blocking semantics it would have had,
+  and a parked
   producer cannot observe shutdown — and keeping it cost the tree two standing
   workarounds. Counted drops land before or with the deletion, so the alternative to
   silent loss exists the moment blocking stops being one.
-  [delivery-profile-vocabulary]
+  [delivery-profile-vocabulary — SHIPPED #2025]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-delivery-profile-vocabulary.md -->
 - **DECIDED** — Loss-handling knowledge lives at the link's endpoints, never in the
   engine. The engine's whole role is to count a drop at the port that dropped it and
   surface it; it never inspects a payload, never knows a bag holds a reference frame, and
@@ -267,7 +300,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   never commits or forwards a stream it knows is broken. No consumer drops or passes on
   encoded frames blindly. The information that makes both possible travels as
   ordinary bag fields the producer writes and the consumer casts, never as a tag in the
-  frame header and never as engine-visible type. [delivery-profile-vocabulary]
+  frame header and never as engine-visible type. [delivery-profile-vocabulary — a
+  standing constraint on the endpoints; no code was owed, and nothing in the tree
+  carries an encoded stream yet]
 - **OPEN** — Reflecting a link's drop count back to its producing port, so a producer
   can react to pressure it cannot otherwise see: intended, do not build until the first
   encoded-domain link exists — nothing in the tree reads it before an encoder does.
