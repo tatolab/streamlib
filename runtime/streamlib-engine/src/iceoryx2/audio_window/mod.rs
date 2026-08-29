@@ -11,6 +11,16 @@
 //! same code into the wheel. One implementation serving both, with no new IPC
 //! hop and no parent↔child contract to design.
 //!
+//! The stage sits in the port's mailbox rather than in any runner, so it is
+//! execution-mode agnostic: a window is exact whoever reads it, and `has_data`
+//! reports a full window on every mode. What differs is only dispatch. A
+//! reactive processor is gated on readiness — being woken with nothing to read
+//! is the shape this contract exists to rule out. A `continuous` one ticks on
+//! its own timer and a `manual` one drives itself, so both may call `read` when
+//! no window is ready yet and get `None`; that is those modes' own semantics,
+//! not something the contract changes, and the blocks they do receive are the
+//! declared size like everyone else's.
+//!
 //! [`InputMailboxesInner::read_raw_bounded`]: crate::iceoryx2::InputMailboxesInner::read_raw_bounded
 
 mod audio_block_bag_wire_codec;
