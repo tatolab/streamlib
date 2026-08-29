@@ -177,6 +177,24 @@ pub enum Error {
         available_payload_bytes: usize,
     },
 
+    #[error(
+        "a bag on input port '{port}' cannot be read as an audio block, which its \
+         `audio_window` contract makes the engine's job to do: {refusal}"
+    )]
+    AudioWindowStageCannotReadTheBag { port: String, refusal: String },
+
+    #[error(
+        "input port '{port}' declares an `audio_window` contract of {contract_channels} \
+         channels and received a block of {source_channels} — the stage converts N to 1 by \
+         averaging and 1 to N by duplicating, and refuses every other pair rather than \
+         inventing a mix"
+    )]
+    AudioWindowStageChannelConversionRefused {
+        port: String,
+        source_channels: u32,
+        contract_channels: u32,
+    },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

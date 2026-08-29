@@ -280,6 +280,17 @@ fn run_reactive_mode(
         // drain (sustained back-pressure) doesn't starve the runner's
         // shutdown signaling — without it, the outer loop's
         // shutdown_rx.try_recv at the top never fires.
+        //
+        // The first dispatch is gated on readiness like every later one. A
+        // wake is not evidence that a read would return anything: an audio
+        // input port declaring a window contract reports data only when a full
+        // window can be emitted, so a bag that does not complete one wakes this
+        // loop and must not dispatch. The helper loop already gates every
+        // dispatch this way; this is the app-process half of the same rule.
+        if !a_read_would_return_something(processor) {
+            continue;
+        }
+
         loop {
             {
                 let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
@@ -305,6 +316,18 @@ fn run_reactive_mode(
                 break;
             }
         }
+    }
+}
+
+/// Whether dispatching `process()` now would find something to read.
+///
+/// True for a processor with no input mailboxes at all — a manual source drives
+/// itself and reads nothing, so gating it on its inputs would stop it running.
+fn a_read_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> bool {
+    let guard = processor.lock();
+    match guard.iceoryx2_input_mailboxes_inner() {
+        Some(inner) => inner.any_port_has_data(),
+        None => true,
     }
 }
 

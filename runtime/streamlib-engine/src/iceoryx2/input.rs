@@ -30,11 +30,18 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
+use super::audio_window::{
+    AudioWindowAccumulator, ResolvedAudioWindowContract, queued_audio_window_frame_measure,
+};
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
+
+/// One windowed port's stage, shared out of the `ports` map so the resample,
+/// mixdown and framing work runs with that mutex released.
+type SharedAudioWindowStage = Arc<parking_lot::Mutex<AudioWindowAccumulator>>;
 
 /// One channel subscriber bound to the local input port it feeds.
 ///
@@ -192,6 +199,56 @@ pub enum BoundedReadOutcome {
     },
 }
 
+/// What one port would hand a reader, read off its state under the `ports`
+/// lock and judged with that lock released.
+enum PortReadiness {
+    /// A frame is queued, or one was staged by a bounded read that could not
+    /// fit it — either way the next read returns something.
+    AFrameIsWaiting,
+    /// Nothing is waiting.
+    NothingIsWaiting,
+    /// A windowed port: the stage answers, jointly over the remainder it holds
+    /// and what the bags still in the mailbox are worth.
+    AWindowedPort {
+        stage: SharedAudioWindowStage,
+        queued_output_frame_equivalents: u64,
+    },
+}
+
+impl PortReadiness {
+    fn of(port_config: &PortConfig) -> Self {
+        if port_config.staged_oversized.is_some() {
+            return PortReadiness::AFrameIsWaiting;
+        }
+        match &port_config.audio_window_stage {
+            None => {
+                if port_config.mailbox.is_empty() {
+                    PortReadiness::NothingIsWaiting
+                } else {
+                    PortReadiness::AFrameIsWaiting
+                }
+            }
+            Some(stage) => PortReadiness::AWindowedPort {
+                stage: Arc::clone(stage),
+                queued_output_frame_equivalents: port_config.mailbox.queued_frame_measure_total(),
+            },
+        }
+    }
+
+    fn a_read_would_return_something(&self) -> bool {
+        match self {
+            PortReadiness::AFrameIsWaiting => true,
+            PortReadiness::NothingIsWaiting => false,
+            PortReadiness::AWindowedPort {
+                stage,
+                queued_output_frame_equivalents,
+            } => stage
+                .lock()
+                .a_full_window_would_be_ready_after(*queued_output_frame_equivalents),
+        }
+    }
+}
+
 /// Per-port configuration: mailbox and read mode.
 ///
 /// Interior mutability: the host-side wiring path discovers
@@ -209,6 +266,9 @@ struct PortConfig {
     /// that lets a PowerOfTwo-grown oversized payload reach the reader without
     /// dropping it.
     staged_oversized: Option<(Vec<u8>, i64)>,
+    /// The window contract's read-side stage, on a port that declared one.
+    /// `None` on every other port, which is unchanged in every respect.
+    audio_window_stage: Option<SharedAudioWindowStage>,
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -256,6 +316,47 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
                 staged_oversized: None,
+                audio_window_stage: None,
+            },
+        );
+    }
+
+    /// Add a mailbox for a port that declared a window contract, with the
+    /// stage that honours it.
+    ///
+    /// The depth is the contract's rather than the delivery profile's: a
+    /// window is a span of queued blocks, and `ORDERED_DEPTH` cannot hold a
+    /// one-second rolling window's worth. Still engine-chosen, still not
+    /// authorable — the contract is a declaration, not a depth dial.
+    pub fn add_windowed_port(
+        &self,
+        port: &str,
+        read_mode: ReadMode,
+        contract: ResolvedAudioWindowContract,
+    ) {
+        let depth = contract.windowed_port_mailbox_depth();
+        tracing::debug!(
+            port = port,
+            buffer_size = depth,
+            read_mode = ?read_mode,
+            sample_rate = contract.sample_rate,
+            channels = contract.channels,
+            window_size = contract.window_size,
+            hop = contract.hop,
+            "InputMailboxes: add_windowed_port"
+        );
+        self.ports.lock().insert(
+            port.to_string(),
+            PortConfig {
+                mailbox: PortMailbox::new_measuring(
+                    depth,
+                    Some(queued_audio_window_frame_measure(contract)),
+                ),
+                read_mode,
+                staged_oversized: None,
+                audio_window_stage: Some(Arc::new(parking_lot::Mutex::new(
+                    AudioWindowAccumulator::new(port, contract),
+                ))),
             },
         );
     }
@@ -433,51 +534,102 @@ impl InputMailboxesInner {
     pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
+        let (staged, audio_window_stage) = {
+            let mut ports = self.ports.lock();
+            let port_config = ports
+                .get_mut(port)
+                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            (
+                port_config.staged_oversized.take(),
+                port_config.audio_window_stage.clone(),
+            )
+        };
+
+        // The stage's decode, channel convert, resample and framing all run
+        // here, with the `ports` mutex released — it guards the port map, and a
+        // resampler pass is not port-map work.
+        let candidate = match staged {
+            Some(staged) => Some(staged),
+            None => match audio_window_stage {
+                None => self.pop_one_bag_off_the_mailbox(port)?,
+                Some(stage) => self.next_window_out_of_the_stage(port, &stage)?,
+            },
+        };
+        let Some(candidate) = candidate else {
+            return Ok(BoundedReadOutcome::Empty);
+        };
+
+        if candidate.0.len() <= out_cap {
+            return Ok(BoundedReadOutcome::Frame {
+                data: candidate.0,
+                timestamp_ns: candidate.1,
+            });
+        }
+
+        let required_bytes = candidate.0.len();
         let mut ports = self.ports.lock();
         let port_config = ports
             .get_mut(port)
             .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+        port_config.staged_oversized = Some(candidate);
+        Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
+    }
 
-        let candidate: (Vec<u8>, i64) = if let Some(staged) = port_config.staged_oversized.take() {
-            staged
-        } else {
-            let raw = match port_config.read_mode {
+    /// Pop the next queued frame for `port` per its read mode and strip its
+    /// header, or `None` when the mailbox is empty.
+    fn pop_one_bag_off_the_mailbox(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        let raw = {
+            let ports = self.ports.lock();
+            let port_config = ports
+                .get(port)
+                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            match port_config.read_mode {
                 ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
-            };
-            match raw {
-                None => return Ok(BoundedReadOutcome::Empty),
-                Some(mut frame_bytes_from_wire) => {
-                    let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
-                    let stamped_payload_bytes = header.len as usize;
-                    let available_payload_bytes = frame_bytes_from_wire.len() - FRAME_HEADER_SIZE;
-                    if stamped_payload_bytes > available_payload_bytes {
-                        return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
-                            port: port.to_string(),
-                            stamped_payload_bytes,
-                            available_payload_bytes,
-                        });
-                    }
-                    frame_bytes_from_wire.copy_within(
-                        FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
-                        0,
-                    );
-                    frame_bytes_from_wire.truncate(stamped_payload_bytes);
-                    let payload_bytes = frame_bytes_from_wire;
-                    (payload_bytes, header.timestamp_ns)
-                }
             }
         };
+        let Some(mut frame_bytes_from_wire) = raw else {
+            return Ok(None);
+        };
 
-        if candidate.0.len() <= out_cap {
-            Ok(BoundedReadOutcome::Frame {
-                data: candidate.0,
-                timestamp_ns: candidate.1,
-            })
-        } else {
-            let required_bytes = candidate.0.len();
-            port_config.staged_oversized = Some(candidate);
-            Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
+        let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
+        let stamped_payload_bytes = header.len as usize;
+        let available_payload_bytes = frame_bytes_from_wire.len() - FRAME_HEADER_SIZE;
+        if stamped_payload_bytes > available_payload_bytes {
+            return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
+                port: port.to_string(),
+                stamped_payload_bytes,
+                available_payload_bytes,
+            });
+        }
+        frame_bytes_from_wire.copy_within(
+            FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes,
+            0,
+        );
+        frame_bytes_from_wire.truncate(stamped_payload_bytes);
+        Ok(Some((frame_bytes_from_wire, header.timestamp_ns)))
+    }
+
+    /// The next full window from a windowed port's stage, feeding it consumed
+    /// bags until it can emit one or the mailbox runs dry.
+    ///
+    /// The emitted window carries the timestamp the stage derived from the
+    /// device's own stamp on the source block, not the wire frame's — the
+    /// frame header stamps when a bag was published, and a window's first
+    /// sample is an instant inside the block it came from.
+    fn next_window_out_of_the_stage(
+        &self,
+        port: &str,
+        stage: &SharedAudioWindowStage,
+    ) -> Result<Option<(Vec<u8>, i64)>> {
+        loop {
+            if let Some(window) = stage.lock().next_ready_window()? {
+                return Ok(Some(window));
+            }
+            let Some((bag_body, _published_at_ns)) = self.pop_one_bag_off_the_mailbox(port)? else {
+                return Ok(None);
+            };
+            stage.lock().accept(&bag_body)?;
         }
     }
 
@@ -498,13 +650,16 @@ impl InputMailboxesInner {
 
     /// Check if a port has any payloads available. This first
     /// receives any pending data from the iceoryx2 Subscriber.
+    ///
+    /// On a port declaring a window contract this means a full window, not an
+    /// arrived bag: the contract promises `process()` exact-size blocks, so a
+    /// reactive processor that woke and found nothing would contradict it.
     pub fn has_data(&self, port: &str) -> bool {
         self.receive_pending();
-        self.ports
-            .lock()
-            .get(port)
-            .map(|p| !p.mailbox.is_empty())
-            .unwrap_or(false)
+        let Some(readiness) = self.readiness_of_one_port(port) else {
+            return false;
+        };
+        readiness.a_read_would_return_something()
     }
 
     /// True iff any configured input port has at least one queued
@@ -519,7 +674,20 @@ impl InputMailboxesInner {
     /// queue depth itself rather than trusting one wake = one event.
     pub fn any_port_has_data(&self) -> bool {
         self.receive_pending();
-        self.ports.lock().values().any(|p| !p.mailbox.is_empty())
+        self.readiness_of_every_port()
+            .into_iter()
+            .any(|readiness| readiness.a_read_would_return_something())
+    }
+
+    /// What one port would hand a reader, gathered under the `ports` lock so
+    /// the judgement itself is made with that lock released.
+    fn readiness_of_one_port(&self, port: &str) -> Option<PortReadiness> {
+        self.ports.lock().get(port).map(PortReadiness::of)
+    }
+
+    /// The same, for every configured port.
+    fn readiness_of_every_port(&self) -> Vec<PortReadiness> {
+        self.ports.lock().values().map(PortReadiness::of).collect()
     }
 
     /// Drain all raw frame slices from the given port's mailbox.

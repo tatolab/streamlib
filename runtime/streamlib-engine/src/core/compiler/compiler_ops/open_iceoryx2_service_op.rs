@@ -26,7 +26,8 @@ use crate::core::graph::{
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService,
-    Iceoryx2Service, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, delivery_profile_for_input_port,
+    Iceoryx2Service, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, ResolvedAudioWindowContract,
+    audio_window_contract_for_input_port, delivery_profile_for_input_port,
     effective_channel_ceiling_bytes,
 };
 
@@ -66,6 +67,29 @@ pub fn open_iceoryx2_service(
 
     let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
     let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
+
+    // A windowed destination is resolved and refused before any service is
+    // opened: a contract whose sentinel nothing resolved, or a second link into
+    // a port that windows, must not leave half-wired iceoryx2 ports behind.
+    let dest_audio_window_contract =
+        audio_window_contract_for_input_port_of(graph, &dest_proc_id, &dest_port)?;
+    if let Some(contract) = dest_audio_window_contract {
+        refuse_a_second_inbound_link_into_a_windowed_port(
+            graph,
+            &dest_proc_id,
+            &dest_port,
+            link_id,
+        )?;
+        tracing::debug!(
+            dest = %dest_proc_id,
+            port = %dest_port,
+            sample_rate = contract.sample_rate,
+            channels = contract.channels,
+            window_size = contract.window_size,
+            hop = contract.hop,
+            "Destination input port declares a window contract; its reads run through the stage"
+        );
+    }
 
     let channel_service_name = channel_service_name(&source_proc_id, &source_port)?;
 
@@ -172,6 +196,7 @@ pub fn open_iceoryx2_service(
             max_subscribers,
             max_notifiers,
             link_id,
+            dest_audio_window_contract,
         )?;
     } else {
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
@@ -185,6 +210,7 @@ pub fn open_iceoryx2_service(
             max_queued_messages,
             &service,
             notify_service.as_ref(),
+            dest_audio_window_contract,
         )?;
     }
 
@@ -526,6 +552,62 @@ fn channel_delivery_profile(
     Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Newest))
 }
 
+/// The window contract this destination's input port declares, if it declares
+/// one.
+///
+/// Reads the destination's registered class, the same way the delivery profile
+/// is read: the declaration is the whole answer and nothing is inferred.
+fn audio_window_contract_for_input_port_of(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    dest_port: &str,
+) -> Result<Option<ResolvedAudioWindowContract>> {
+    let Some(dest_type) = graph
+        .traversal_mut()
+        .v(dest_proc_id)
+        .first()
+        .map(|node| node.processor_type().clone())
+    else {
+        return Ok(None);
+    };
+    audio_window_contract_for_input_port(&dest_type, dest_port)
+}
+
+/// Refuse a second inbound link into a port that windows, naming the port and
+/// both links.
+///
+/// Fan-in legally interleaves N producers' blocks in one mailbox today, and two
+/// sample streams interleaved into one accumulator is plausible-looking wrong
+/// audio — the worst outcome available to a contract whose whole promise is
+/// that a window is exact.
+fn refuse_a_second_inbound_link_into_a_windowed_port(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    dest_port: &str,
+    link_id: &LinkUniqueId,
+) -> Result<()> {
+    let already_wired: Vec<String> = graph
+        .traversal_mut()
+        .v(dest_proc_id)
+        .in_e()
+        .iter()
+        .filter(|link| link.to_port().port_name == dest_port)
+        .map(|link| link.id.to_string())
+        .filter(|wired| wired != link_id.as_str())
+        .collect();
+    let Some(first) = already_wired.first() else {
+        return Ok(());
+    };
+
+    Err(Error::Configuration(format!(
+        "input port '{dest_port}' on '{dest_proc_id}' declares an `audio_window` contract \
+         and already has inbound link '{first}'; link '{link_id}' would make a second. A \
+         windowed port accepts exactly one inbound link — two sample streams interleaved \
+         into one accumulator is not a mix, it is garbage windows. Fan the producers into \
+         separate windowed ports, or drop the contract from this one."
+    )))
+}
+
 /// Check if a processor is a subprocess.
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
     let has_component = graph
@@ -682,6 +764,7 @@ fn wire_rust_dest(
     depth: usize,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
+    audio_window_contract: Option<ResolvedAudioWindowContract>,
 ) -> Result<()> {
     let dest_guard = dest_processor.lock();
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
@@ -689,7 +772,10 @@ fn wire_rust_dest(
     };
 
     if !input_inner.has_port(dest_port) {
-        input_inner.add_port(dest_port, depth, drain_order);
+        match audio_window_contract {
+            Some(contract) => input_inner.add_windowed_port(dest_port, drain_order, contract),
+            None => input_inner.add_port(dest_port, depth, drain_order),
+        }
     }
 
     let subscriber = service.create_subscriber()?;
@@ -806,6 +892,7 @@ fn wire_subprocess_dest(
     max_subscribers: usize,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
+    audio_window_contract: Option<ResolvedAudioWindowContract>,
 ) -> Result<()> {
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
@@ -813,7 +900,7 @@ fn wire_subprocess_dest(
     // The drain order is the delivery profile's, resolved host-side; the
     // subprocess maps the string back to its `*_input_set_read_mode` integer.
     // `enable_safe_overflow` is the same wire fact the source side records.
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "name": dest_port,
         "link_id": link_id.to_string(),
         "enable_safe_overflow": true,
@@ -824,6 +911,19 @@ fn wire_subprocess_dest(
         "max_subscribers": max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
+    // The window contract rides the envelope beside `read_mode`, or the child's
+    // own stage windows nothing. The five values go over resolved — a sentinel
+    // resolves in the parent, where the device stream is — so the child reads
+    // one shape and never a sentinel it could not settle.
+    if let Some(contract) = audio_window_contract {
+        entry["audio_window"] =
+            serde_json::to_value(contract.as_declared_values()).map_err(|render_failure| {
+                Error::Configuration(format!(
+                    "the window contract on input port '{dest_port}' could not be rendered \
+                     onto the helper wiring envelope: {render_failure}"
+                ))
+            })?;
+    }
 
     let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
     let mut dest_processor = dest_proc_arc.lock();
@@ -1006,6 +1106,7 @@ mod tests {
             2,
             1,
             link_id,
+            None,
         )
         .expect("recording dest wiring must succeed");
     }
@@ -1290,6 +1391,7 @@ mod tests {
             2,
             1,
             &link_id,
+            None,
         )
         .expect("recording dest wiring must succeed");
         assert!(source_output.has_channel_publisher("out1"));
@@ -1464,6 +1566,7 @@ mod tests {
             8,
             &channel,
             notify_service.as_ref(),
+            None,
         )
         .expect("the destination side wires");
 
@@ -1524,6 +1627,7 @@ mod tests {
             crate::iceoryx2::ReadMode::ReadNextInOrder,
             DESTINATION_MAILBOX_DEPTH,
             &channel,
+            None,
             None,
         )
         .expect("the destination side wires");

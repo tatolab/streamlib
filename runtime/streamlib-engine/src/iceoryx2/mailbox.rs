@@ -3,9 +3,22 @@
 
 //! Per-port mailbox using crossbeam ArrayQueue for thread-safe access.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crossbeam_queue::ArrayQueue;
 
 use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
+
+/// A per-frame measure a port may install so it can ask what its mailbox holds
+/// without consuming any of it.
+///
+/// `ArrayQueue` admits no peek — pushing and popping is the whole of its API —
+/// so a port that needs to reason about queued content takes the measure once,
+/// as the frame arrives, and the mailbox keeps the running total across every
+/// push, pop and eviction. Only the audio window contract's readiness gate
+/// installs one; a port without one pays nothing.
+pub type QueuedFrameMeasure = Arc<dyn Fn(&[u8]) -> u64 + Send + Sync>;
 
 /// One queued frame and the inbound link it arrived on.
 ///
@@ -17,6 +30,9 @@ use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
 struct PortMailboxQueuedFrame {
     payload: Vec<u8>,
     dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
+    /// This frame's share of [`PortMailbox::queued_frame_measure_total`], taken
+    /// when it was pushed. Zero on a mailbox with no measure installed.
+    measure: u64,
 }
 
 impl PortMailboxQueuedFrame {
@@ -36,15 +52,38 @@ impl PortMailboxQueuedFrame {
 pub struct PortMailbox {
     queue: ArrayQueue<PortMailboxQueuedFrame>,
     capacity: usize,
+    measure: Option<QueuedFrameMeasure>,
+    queued_frame_measure_total: AtomicU64,
 }
 
 impl PortMailbox {
     /// Create a new mailbox with the given history depth.
     pub fn new(history: usize) -> Self {
+        Self::new_measuring(history, None)
+    }
+
+    /// Create a new mailbox that keeps a running total of `measure` over every
+    /// frame it holds, so its port can read what is queued without popping it.
+    pub fn new_measuring(history: usize, measure: Option<QueuedFrameMeasure>) -> Self {
         let capacity = history.max(1);
         Self {
             queue: ArrayQueue::new(capacity),
             capacity,
+            measure,
+            queued_frame_measure_total: AtomicU64::new(0),
+        }
+    }
+
+    /// The installed measure summed over every frame currently queued; zero on
+    /// a mailbox with no measure.
+    pub fn queued_frame_measure_total(&self) -> u64 {
+        self.queued_frame_measure_total.load(Ordering::Relaxed)
+    }
+
+    fn take_out_of_the_total(&self, frame: &PortMailboxQueuedFrame) {
+        if frame.measure != 0 {
+            self.queued_frame_measure_total
+                .fetch_sub(frame.measure, Ordering::Relaxed);
         }
     }
 
@@ -58,28 +97,52 @@ impl PortMailbox {
         payload: Vec<u8>,
         dropped_bag_counter: &InboundLinkDroppedBagCounter,
     ) {
+        let measure = self.measure_of(&payload);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             dropped_bag_counter: Some(dropped_bag_counter.clone()),
+            measure,
         });
     }
 
     /// Push a raw frame slice that no inbound link delivered — the
     /// manual-injection path, whose evictions have no link to name.
     pub fn push_frame_without_inbound_link_attribution(&self, payload: Vec<u8>) {
+        let measure = self.measure_of(&payload);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             dropped_bag_counter: None,
+            measure,
         });
+    }
+
+    fn measure_of(&self, payload: &[u8]) -> u64 {
+        self.measure
+            .as_ref()
+            .map(|measure| measure(payload))
+            .unwrap_or(0)
     }
 
     fn push_frame(&self, mut frame: PortMailboxQueuedFrame) {
         // `ArrayQueue::push` hands the frame back only when the queue is full,
         // so this is the one eviction site: try, evict oldest, retry.
-        while let Err(rejected) = self.queue.push(frame) {
-            frame = rejected;
-            if let Some(evicted) = self.queue.pop() {
-                evicted.record_eviction();
+        loop {
+            let measure = frame.measure;
+            match self.queue.push(frame) {
+                Ok(()) => {
+                    if measure != 0 {
+                        self.queued_frame_measure_total
+                            .fetch_add(measure, Ordering::Relaxed);
+                    }
+                    return;
+                }
+                Err(rejected) => {
+                    frame = rejected;
+                    if let Some(evicted) = self.queue.pop() {
+                        self.take_out_of_the_total(&evicted);
+                        evicted.record_eviction();
+                    }
+                }
             }
         }
     }
@@ -88,7 +151,10 @@ impl PortMailbox {
     ///
     /// Thread-safe: can be called from any thread.
     pub fn pop(&self) -> Option<Vec<u8>> {
-        self.queue.pop().map(|frame| frame.payload)
+        self.queue.pop().map(|frame| {
+            self.take_out_of_the_total(&frame);
+            frame.payload
+        })
     }
 
     /// Drain buffer and return only the newest entry.
@@ -100,6 +166,7 @@ impl PortMailbox {
     pub fn pop_latest(&self) -> Option<Vec<u8>> {
         let mut latest = None;
         while let Some(frame) = self.queue.pop() {
+            self.take_out_of_the_total(&frame);
             latest = Some(frame.payload);
         }
         latest
