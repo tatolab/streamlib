@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.21](https://github.com/tatolab/streamlib/compare/v0.18.20...v0.18.21) (2026-08-29)
+
+
+### Features
+
+* **engine:** SpeakerSink matches its device — match_device resolves at setup() and the refusal deletes ([#2041](https://github.com/tatolab/streamlib/issues/2041)) ([b5939ea](https://github.com/tatolab/streamlib/commit/b5939ea8e1ef28802efc3ff90de915983da707cc))
+
 ## [0.18.20](https://github.com/tatolab/streamlib/compare/v0.18.19...v0.18.20) (2026-08-29)
 
 
