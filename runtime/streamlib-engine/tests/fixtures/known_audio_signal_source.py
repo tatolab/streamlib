@@ -10,9 +10,10 @@ Generated rather than read back from a WAV so no quantisation sits between the
 reference and what is played.
 
 The format is the fixture sink's: 48 kHz stereo `f32`. It is stated rather than
-discovered because there is no resampler on this rung and `SpeakerSink` refuses
-what its device cannot play — so a mismatch has to be a named failure in the
-run's log, not something this quietly adapts to.
+discovered so the measurement stays about the transport: `SpeakerSink` now
+declares `audio_window = match_device`, so a mismatch would be resampled into
+the device's format instead of failing — and a comparison against the reference
+would then be measuring the resampler rather than the path under test.
 
 Paced to stay a bounded lead ahead of the monotonic clock rather than published
 as fast as the loop runs. A lead is what absorbs a scheduling hiccup, and the
@@ -43,8 +44,9 @@ DTYPE = "f32"
 SAMPLES_PER_BLOCK = SAMPLE_RATE // 100
 
 # How far ahead of real time the publishing runs. Enough that a late `process()`
-# call costs the speaker nothing, and well inside the sixteen-block mailbox the
-# consumer's port carries, so no block is dropped between the two.
+# call costs the speaker nothing, and well inside the depth the consumer's
+# windowed port is sized to from its own contract, so no block is dropped
+# between the two.
 PUBLISHING_LEAD_NS = 100_000_000
 
 # Silence after the signal, so the capture has an unambiguous tail to end on

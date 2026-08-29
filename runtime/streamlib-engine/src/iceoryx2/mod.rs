@@ -17,8 +17,14 @@ mod output;
 mod payload;
 mod read_mode;
 
-pub use audio_window::ResolvedAudioWindowContract;
-pub(crate) use audio_window::audio_window_contract_for_input_port;
+pub use audio_window::{
+    AudioWindowContractMatchingADeviceStream, DeviceMatchedAudioWindowContractsByInputPort,
+    ResolvedAudioWindowContract,
+};
+pub(crate) use audio_window::{
+    AudioWindowDeclarationOfAnInputPort, audio_windowing_declared_by_input_port,
+    refuse_an_unsettled_match_device_sentinel,
+};
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_ceiling_bytes,

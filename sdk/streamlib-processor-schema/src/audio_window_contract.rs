@@ -46,6 +46,20 @@ pub enum AudioWindowContract {
     /// as a bare sentinel; an empty struct variant refuses it.
     #[serde(rename = "match_device")]
     MatchDevice {},
+    /// The five values a [`AudioWindowContract::MatchDevice`] port settled to,
+    /// taken from the format of the device stream its processor opened.
+    ///
+    /// Rendering only — no authoring surface produces it. The `#[processor]`
+    /// grammar and the wheel's declaration bridge each yield
+    /// [`AudioWindowContract::Declaration`] or
+    /// [`AudioWindowContract::MatchDevice`] and nothing else, so an author
+    /// cannot write it. It exists because a port that resolved 48 kHz stereo
+    /// from *this machine's* speaker and one whose author wrote those numbers
+    /// down are not the same fact, and `graph` is where the difference is
+    /// readable: a reader round-tripping the rendering back into a declaration
+    /// would otherwise pin a machine-specific format as if it had been chosen.
+    #[serde(rename = "device")]
+    Device(AudioWindowContractDeclaredValues),
 }
 
 /// The five values an `audio_window` declaration states.
@@ -188,11 +202,30 @@ mod tests {
         assert_eq!(json, serde_json::json!({ "resolved_from": "match_device" }));
     }
 
+    /// A port that resolved its numbers from this machine's device and one
+    /// whose author wrote them down render differently, because they are
+    /// different facts — the whole reason `match_device` exists.
     #[test]
-    fn both_arms_round_trip_through_their_rendering() {
+    fn values_settled_from_a_device_render_as_the_device_rather_than_as_a_declaration() {
+        let settled = serde_json::to_value(AudioWindowContract::Device(declared_values()))
+            .expect("a settled contract serializes");
+
+        assert_eq!(settled["resolved_from"], "device");
+        assert_eq!(settled["sample_rate"], 16_000);
+        assert_ne!(
+            settled,
+            serde_json::to_value(AudioWindowContract::Declaration(declared_values()))
+                .expect("a declared contract serializes"),
+            "the two carry the same five values and must still be told apart"
+        );
+    }
+
+    #[test]
+    fn every_arm_round_trips_through_its_rendering() {
         for contract in [
             AudioWindowContract::Declaration(declared_values()),
             AudioWindowContract::MatchDevice {},
+            AudioWindowContract::Device(declared_values()),
         ] {
             let rendered = serde_json::to_string(&contract).expect("serializes");
             let read_back: AudioWindowContract =

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod component_map;
+mod device_matched_audio_window_contracts_component;
 mod execution_lightweight_component;
 mod execution_main_thread_component;
 mod execution_rayon_pool_component;
@@ -19,6 +20,7 @@ mod subprocess_handle_component;
 mod thread_handle_component;
 
 pub use component_map::*;
+pub use device_matched_audio_window_contracts_component::*;
 pub use execution_lightweight_component::*;
 pub use execution_main_thread_component::*;
 pub use execution_rayon_pool_component::*;

@@ -155,14 +155,23 @@ impl PortMailbox {
         }
     }
 
+    /// Pop the oldest entry whole, keeping the running total straight.
+    ///
+    /// The one place a frame leaves the queue by being read: every reader goes
+    /// through this so the measure total cannot drift from what is queued. The
+    /// eviction inside [`Self::push_frame`] is the only other exit, and it is
+    /// not a read.
+    fn pop_frame(&self) -> Option<PortMailboxQueuedFrame> {
+        self.queue.pop().inspect(|frame| {
+            self.take_out_of_the_total(frame);
+        })
+    }
+
     /// Pop the oldest entry from the mailbox (FIFO).
     ///
     /// Thread-safe: can be called from any thread.
     pub fn pop(&self) -> Option<Vec<u8>> {
-        self.queue.pop().map(|frame| {
-            self.take_out_of_the_total(&frame);
-            frame.payload
-        })
+        self.pop_frame().map(|frame| frame.payload)
     }
 
     /// Drain buffer and return only the newest entry.
@@ -173,8 +182,7 @@ impl PortMailbox {
     /// Thread-safe: can be called from any thread.
     pub fn pop_latest(&self) -> Option<Vec<u8>> {
         let mut latest = None;
-        while let Some(frame) = self.queue.pop() {
-            self.take_out_of_the_total(&frame);
+        while let Some(frame) = self.pop_frame() {
             latest = Some(frame.payload);
         }
         latest
@@ -200,6 +208,26 @@ impl PortMailbox {
     /// Thread-safe: can be called from any thread.
     pub fn drain(&self) -> impl Iterator<Item = Vec<u8>> + '_ {
         std::iter::from_fn(move || self.pop())
+    }
+
+    /// Hand every queued frame over to the mailbox replacing this one, oldest
+    /// first, each re-measured by the replacement's own measure.
+    ///
+    /// A port whose window contract settles at `setup()` is re-sized from that
+    /// contract, and `ArrayQueue` has a fixed capacity — so the replacement is
+    /// a new queue and the frames already in flight have to move into it. They
+    /// move rather than being dropped because a bag lost here would be lost
+    /// where nothing counts it: eviction is charged to the link a frame arrived
+    /// on, and a frame discarded by the swap arrived on a link that is still
+    /// wired and still delivering. Each frame keeps the inbound link it came in
+    /// on, so a later eviction is still charged to the right one, and any that
+    /// overrun the replacement's depth are evicted and counted by it exactly as
+    /// a burst would be.
+    pub fn hand_every_queued_frame_over_to(&self, replacement: &PortMailbox) {
+        while let Some(frame) = self.pop_frame() {
+            let measure = replacement.measure_of(&frame.payload);
+            replacement.push_frame(PortMailboxQueuedFrame { measure, ..frame });
+        }
     }
 }
 
@@ -243,6 +271,66 @@ mod tests {
 
         assert_eq!(counter.dropped_bag_count(), 0);
         assert_eq!(mailbox.len(), 4);
+    }
+
+    /// The hand-over moves frames, it does not re-attribute them: a bag that
+    /// arrived on one link is still that link's if the replacement evicts it,
+    /// and order is unchanged.
+    #[test]
+    fn a_hand_over_keeps_each_frames_inbound_link_and_its_order() {
+        let counts = DroppedBagCountsByInboundLink::default();
+        let from_first_link = counts.counter_for_inbound_link("L-a");
+        let from_second_link = counts.counter_for_inbound_link("L-b");
+        let settling = PortMailbox::new(4);
+        settling.push_frame_from_inbound_link(vec![1], &from_first_link);
+        settling.push_frame_from_inbound_link(vec![2], &from_first_link);
+        settling.push_frame_from_inbound_link(vec![3], &from_second_link);
+
+        let replacement = PortMailbox::new(1);
+        settling.hand_every_queued_frame_over_to(&replacement);
+
+        assert!(settling.is_empty(), "every frame moved");
+        assert_eq!(
+            replacement.pop(),
+            Some(vec![3]),
+            "the newest survives a shallower replacement, as under any other burst"
+        );
+        assert_eq!(
+            from_first_link.dropped_bag_count(),
+            2,
+            "both evicted bags were the first link's, and a swap does not launder them"
+        );
+        assert_eq!(from_second_link.dropped_bag_count(), 0);
+    }
+
+    /// A frame that arrived before the contract settled carries no measure —
+    /// there was none to take. The replacement re-measures each on the way in,
+    /// so the readiness gate counts what is really queued.
+    #[test]
+    fn a_hand_over_re_measures_every_frame_by_the_replacements_own_measure() {
+        let counts = DroppedBagCountsByInboundLink::default();
+        let counter = counts.counter_for_inbound_link("L-unmeasured");
+        let settling = PortMailbox::new(4);
+        for byte in 0..3u8 {
+            settling.push_frame_from_inbound_link(vec![byte], &counter);
+        }
+        assert_eq!(
+            settling.queued_frame_measure_total(),
+            0,
+            "a mailbox with no measure totals nothing"
+        );
+
+        let replacement = PortMailbox::new_measuring(
+            4,
+            Some(Arc::new(|payload: &[u8]| payload.len() as u64 * 10)),
+        );
+        settling.hand_every_queued_frame_over_to(&replacement);
+
+        assert_eq!(
+            replacement.queued_frame_measure_total(),
+            30,
+            "three one-byte frames, each measured at ten by the replacement's own measure"
+        );
     }
 
     #[test]

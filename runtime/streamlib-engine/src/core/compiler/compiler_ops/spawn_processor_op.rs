@@ -152,12 +152,13 @@ fn spawn_dedicated_thread(
 
     // Create processor instance now (with lock) since factory needs node
     // reference.
-    let processor_arc = {
+    let (processor_arc, processor_type) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
-        Arc::new(Mutex::new(factory.create(node)?))
+        let processor_type = node.processor_type().clone();
+        (Arc::new(Mutex::new(factory.create(node)?)), processor_type)
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
@@ -366,6 +367,21 @@ fn spawn_dedicated_thread(
                     return;
                 }
 
+                // `setup()` is where a `match_device` window contract settles,
+                // and the only processor that could settle one has now had its
+                // chance. A port still holding the sentinel belongs to a
+                // processor that opens no device stream — a wiring error, and
+                // one that must surface here rather than as a port that
+                // silently hands its reader nothing for the rest of the run.
+                if let Err(e) = refuse_a_port_setup_left_awaiting_its_device_stream_format(
+                    &guard,
+                    &processor_type,
+                ) {
+                    tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
+                    state_arc.transition_to(ProcessorState::Error);
+                    return;
+                }
+
                 tracing::info!("[{}] Setup completed successfully", proc_id_clone);
             }
 
@@ -406,6 +422,35 @@ fn spawn_dedicated_thread(
     }
 
     Ok(())
+}
+
+/// Refuse a processor whose `setup()` returned with an input port still
+/// holding an unsettled `audio_window = match_device` sentinel.
+///
+/// The refusal is the wiring path's own, in its own words: the only difference
+/// is where it can be raised. A helper-placed destination is refused at wire
+/// time, because a child can never settle one; an app-process processor cannot
+/// be judged until it has run the hook that would have.
+fn refuse_a_port_setup_left_awaiting_its_device_stream_format(
+    processor: &crate::core::processors::ProcessorInstance,
+    processor_type: &streamlib_processor_schema::ProcessorClassImportPath,
+) -> Result<()> {
+    let Some(input_inner) = processor.iceoryx2_input_mailboxes_inner() else {
+        return Ok(());
+    };
+    // Sorted so a processor with several unsettled ports names the same one on
+    // every run — a refusal that reshuffles reads as two different defects.
+    let Some(port) = input_inner
+        .input_ports_still_awaiting_their_device_stream_format()
+        .into_iter()
+        .min()
+    else {
+        return Ok(());
+    };
+    Err(crate::iceoryx2::refuse_an_unsettled_match_device_sentinel(
+        processor_type,
+        &port,
+    ))
 }
 
 /// The trust-axis moat at the FullAccess minting seam: yield a
@@ -482,9 +527,126 @@ fn clone_shutdown_eventfd(
 mod tests {
     use super::*;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::processors::ProcessorInstance;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
+
+    /// A processor whose `setup()` opened no device stream leaves its
+    /// `match_device` port holding the sentinel, and the spawn seam refuses it
+    /// there — the one place that can know nothing ever will settle it.
+    ///
+    /// Mentally revert the check and that port hands its reader nothing for the
+    /// whole run, with the processor reported Running and `graph` still
+    /// rendering the sentinel: a pipeline that looks healthy and moves no
+    /// audio.
+    #[test]
+    fn a_setup_that_settled_no_match_device_contract_is_refused_naming_the_port() {
+        let processor = a_device_matched_audio_consumer_whose_port_is(|mailboxes| {
+            mailboxes.add_port_awaiting_its_device_stream_format(
+                "audio",
+                crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
+                crate::iceoryx2::ReadMode::ReadNextInOrder,
+            )
+        });
+
+        let refusal = refuse_a_port_setup_left_awaiting_its_device_stream_format(
+            &processor,
+            &a_device_matched_processor_type(),
+        )
+        .expect_err("nothing settled the sentinel")
+        .to_string();
+
+        assert!(
+            refusal.contains("match_device")
+                && refusal.contains("setup()")
+                && refusal.contains("audio"),
+            "the refusal must name the sentinel, where it resolves, and the port; got {refusal}"
+        );
+    }
+
+    /// The same processor once its `setup()` has settled the contract: nothing
+    /// is waiting, and the spawn seam lets it run.
+    #[test]
+    fn a_setup_that_settled_its_contract_is_not_refused() {
+        let processor = a_device_matched_audio_consumer_whose_port_is(|mailboxes| {
+            mailboxes.add_port_awaiting_its_device_stream_format(
+                "audio",
+                crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
+                crate::iceoryx2::ReadMode::ReadNextInOrder,
+            );
+            mailboxes
+                .settle_a_ports_device_matched_audio_window_contract(
+                    "audio",
+                    &crate::iceoryx2::AudioWindowContractMatchingADeviceStream {
+                        device_stream_format: crate::core::context::AudioStreamFormat {
+                            sample_rate: 48_000,
+                            channels: 2,
+                            sample_format: crate::core::context::AudioSampleFormat::F32,
+                        },
+                        window_size_in_per_channel_samples: 480,
+                        hop_in_per_channel_samples: 480,
+                    },
+                )
+                .expect("a device format settles the contract");
+        });
+
+        refuse_a_port_setup_left_awaiting_its_device_stream_format(
+            &processor,
+            &a_device_matched_processor_type(),
+        )
+        .expect("a settled port is not a wiring error");
+    }
+
+    /// A processor with no input resources at all reaches the same check and
+    /// passes it — nothing about a port with no contract moves.
+    #[test]
+    fn a_processor_holding_no_input_mailboxes_is_not_refused() {
+        use crate::core::processors::GeneratedProcessor;
+
+        crate::core::test_support::ensure_test_mocks_registered();
+        let processor = ProcessorInstance::new(Box::new(
+            crate::core::test_support::MockOutputOnlyProcessor::Processor::from_config(
+                Default::default(),
+            )
+            .expect("the mock constructs from its default config"),
+        ));
+
+        refuse_a_port_setup_left_awaiting_its_device_stream_format(
+            &processor,
+            &a_device_matched_processor_type(),
+        )
+        .expect("a processor with no input mailboxes has no sentinel to settle");
+    }
+
+    fn a_device_matched_processor_type() -> streamlib_processor_schema::ProcessorClassImportPath {
+        crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor::Processor::processor_class_import_path()
+    }
+
+    /// The `match_device` mock, with its input mailboxes put into whatever state
+    /// `arrange` leaves them in.
+    fn a_device_matched_audio_consumer_whose_port_is(
+        arrange: impl FnOnce(&crate::iceoryx2::InputMailboxesInner),
+    ) -> ProcessorInstance {
+        use crate::core::processors::GeneratedProcessor;
+
+        crate::core::test_support::ensure_test_mocks_registered();
+        let mut processor = ProcessorInstance::new(Box::new(
+            crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor::Processor::from_config(
+                Default::default(),
+            )
+            .expect("the mock constructs from its default config"),
+        ));
+        processor
+            .install_iceoryx2_resources()
+            .expect("the mock accepts its iceoryx2 resources");
+        arrange(
+            &processor
+                .iceoryx2_input_mailboxes_inner()
+                .expect("a windowed consumer holds input mailboxes"),
+        );
+        processor
+    }
 
     /// The trust-axis moat wiring at the spawn setup seam: an untrusted tier
     /// yields no [`FullAccessGrant`], and the gate marks the processor
