@@ -476,8 +476,9 @@ mod tests {
     /// device's own thread.
     ///
     /// Mental revert: publish straight from the callback instead of handing
-    /// off, and under `delivery_profile = "lossless"` the capture thread waits
-    /// on the consumer — the shape the ring exists to make impossible.
+    /// off, and the device's own callback thread is on the publish path — any
+    /// wait there is a wait the device takes, which is the shape the ring
+    /// exists to make impossible.
     #[test]
     fn the_device_callback_hands_off_into_the_ring_and_the_loss_lands_there() {
         const BLOCKS_THE_RING_HOLDS: usize = 4;

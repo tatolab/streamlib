@@ -329,6 +329,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph::components::processor_metrics::tests::a_processor_that_has_lost_nothing_says_so_rather_than_staying_silent",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_dropping_destinations_node_renders_each_inbound_links_losses",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero",
+                "iceoryx2::delivery_profile",
             ],
         ),
         // The deviceless arm's integration binaries, which the workflow runs

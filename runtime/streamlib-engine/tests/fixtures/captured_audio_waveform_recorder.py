@@ -42,7 +42,7 @@ class CapturedAudioWaveformRecorder:
 
     # The plan's profile for audio: order matters and no sample may be dropped
     # on the consumer side.
-    @input(delivery_profile="lossless")
+    @input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

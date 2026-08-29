@@ -18,7 +18,7 @@ from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, output, pr
 class DoublingFilter:
     """One input, one output — the shape the harness exists to drive."""
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def numbers_from_upstream(self) -> None: ...
 
     @output()
@@ -38,7 +38,7 @@ class ConfiguredScaler:
     def __init__(self, factor: int = 1) -> None:
         self.factor = factor
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def numbers_from_upstream(self) -> None: ...
 
     @output()
@@ -62,7 +62,7 @@ class AudioBlockInspector:
     a processor that produced nothing.
     """
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     @output()

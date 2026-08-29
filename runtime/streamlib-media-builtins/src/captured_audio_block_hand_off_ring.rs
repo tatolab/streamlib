@@ -4,13 +4,12 @@
 //! The bounded hand-off between a device's capture callback and the thread
 //! that publishes.
 //!
-//! An audio input port declares `lossless`, which resolves to
-//! `Overflow::Block` — right for the consumer, and fatal if a device callback
-//! ever waited on it. So the callback only ever hands off: when a stalled
-//! consumer fills the ring the oldest block is dropped at the device edge and
-//! counted, and the gap stays derivable from the timestamps and sample counts
-//! of the blocks either side of it. Nothing is interpolated and no sample is
-//! invented.
+//! A device callback runs on the device's own thread and cannot wait for
+//! anything downstream of it. So the callback only ever hands off: when a
+//! stalled consumer fills the ring the oldest block is dropped at the device
+//! edge and counted, and the gap stays derivable from the timestamps and
+//! sample counts of the blocks either side of it. Nothing is interpolated and
+//! no sample is invented.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -261,8 +260,8 @@ mod tests {
         ring.hand_off_from_device_callback(block_stamped(0));
         let published_before_the_stall = timestamps_drained_from(&ring);
 
-        // The publisher stalls on a `lossless` consumer; the device keeps
-        // capturing regardless, which is the whole situation the ring is for.
+        // The publisher stalls; the device keeps capturing regardless, which
+        // is the whole situation the ring is for.
         for block_index in 1..=3 {
             ring.hand_off_from_device_callback(block_stamped(block_index * ONE_BLOCK_NS));
         }

@@ -119,12 +119,12 @@ class _LaggedHolderProbe:
     variable under test.
     """
 
-    # `latest`, not `every_sample`: an unclaimed bag's id is only good for
+    # `newest`, not `ordered`: an unclaimed bag's id is only good for
     # pool-depth frames after publish, so a probe that lets bags queue reads
     # ids the camera has already recycled — refused loudly now (#1872), but
     # that refusal on *arrival* is not what these probes measure. Reading the
     # newest bag keeps arrivals current; the held frame still gets lapped.
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -304,11 +304,11 @@ class _BareProtocolProbe:
     takes the capsule.
     """
 
-    # `latest`: an unclaimed bag's id is only good for pool-depth frames after
+    # `newest`: an unclaimed bag's id is only good for pool-depth frames after
     # publish, and this probe reads exactly one frame at whatever moment it
     # starts — a queue of stale bags would refuse on arrival for reasons that
     # have nothing to do with the protocol under test.
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

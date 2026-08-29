@@ -182,15 +182,16 @@ impl ContinuousProcessor for TestBagFeeder::Processor {
 
 /// Collects everything the processor under test produces.
 ///
-/// `every_sample` rather than the default: a test asserts on what was
-/// produced, so dropping a bag under a burst would make the assertion lie.
+/// `ordered` rather than `newest`: a test asserts on what was produced in the
+/// order it was produced, and a profile that passes over bags to reach the
+/// freshest would make the assertion lie under a burst.
 #[streamlib::sdk::processor(
     description = "Collects every bag the processor under test produced",
     execution = reactive,
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,
     input(
         "bags_from_upstream",
-        delivery_profile = "every_sample",
+        delivery_profile = "ordered",
         description = "Bags the processor under test produced"
     ),
 )]

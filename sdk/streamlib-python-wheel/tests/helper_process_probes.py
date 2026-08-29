@@ -19,7 +19,7 @@ class PassThroughProbe:
     def __init__(self, tag: str = "untagged") -> None:
         self.tag = tag
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
 
     @output()

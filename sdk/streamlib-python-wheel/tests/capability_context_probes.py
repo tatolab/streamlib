@@ -142,7 +142,7 @@ class DefaultStampedSource:
 
 @processor
 class TimestampCollectingSink:
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def bags_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -215,7 +215,7 @@ class WorkerThreadSource:
 
 @processor
 class WorkerThreadBagSink:
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def bags_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

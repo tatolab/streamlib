@@ -16,7 +16,7 @@ pub struct PortInfo {
     #[serde(default)]
     pub port_kind: PortKind,
     /// Delivery profile declared by this input port —
-    /// `Some("latest" | "every_sample" | "lossless")` on every input, `None`
+    /// `Some("newest" | "ordered")` on every input, `None`
     /// on an output. Mirrors the field on
     /// [`crate::core::descriptors::PortDescriptor`] so the compiler op
     /// can resolve a destination's delivery profile at wire time without

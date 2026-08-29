@@ -21,7 +21,7 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
 
     @processor
     class BrightnessFilter:
-        @input(delivery_profile="latest")
+        @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
 
         @output()
@@ -39,7 +39,7 @@ def test_the_method_name_is_the_port_name():
 
     @processor
     class Passthrough:
-        @input(delivery_profile="every_sample")
+        @input(delivery_profile="ordered")
         def frames_from_upstream(self) -> None: ...
 
         @output(description="the filtered frames")
@@ -49,7 +49,7 @@ def test_the_method_name_is_the_port_name():
         {
             "name": "frames_from_upstream",
             "description": "",
-            "delivery_profile": "every_sample",
+            "delivery_profile": "ordered",
         }
     ]
     assert Passthrough.__streamlib_processor_output_ports__ == [
@@ -63,7 +63,7 @@ def test_the_method_name_is_the_port_name():
 def test_an_explicit_name_overrides_the_method_name():
     @processor
     class Renamed:
-        @input(name="video_in", delivery_profile="latest")
+        @input(name="video_in", delivery_profile="newest")
         def handle_incoming_video(self) -> None: ...
 
         @output(name="video_out")
@@ -84,7 +84,7 @@ def test_a_port_declaration_takes_no_schema():
     return annotation — and never reaches the engine.
     """
     with pytest.raises(TypeError, match="unexpected keyword argument 'schema'"):
-        input(schema="VideoFrame", delivery_profile="latest")  # type: ignore[call-arg]
+        input(schema="VideoFrame", delivery_profile="newest")  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="unexpected keyword argument 'schema'"):
         output(schema="VideoFrame")  # type: ignore[call-arg]
 
@@ -92,7 +92,7 @@ def test_a_port_declaration_takes_no_schema():
 def test_a_declared_port_carries_no_type_key_under_any_spelling():
     @processor
     class Untyped:
-        @input(delivery_profile="latest")
+        @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
 
         @output()
@@ -150,7 +150,7 @@ def test_a_duplicate_port_name_is_refused():
 
         @processor
         class Clashing:
-            @input(name="frames", delivery_profile="latest")
+            @input(name="frames", delivery_profile="newest")
             def frames_in(self) -> None: ...
 
             @output(name="frames")
@@ -242,7 +242,7 @@ def test_a_class_name_that_is_not_pascal_case_is_accepted():
 
     @processor
     class lowercase_name:
-        @input(delivery_profile="latest")
+        @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
 
     assert lowercase_name.__streamlib_processor_declared__ is True
@@ -260,7 +260,7 @@ def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message
 
         @processor(**{keyword: value})
         class Filter:
-            @input(delivery_profile="latest")
+            @input(delivery_profile="newest")
             def frames_from_upstream(self) -> None: ...
 
 
@@ -276,7 +276,7 @@ def test_a_negative_interval_is_refused():
 def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
     @processor
     class BaseFilter:
-        @input(delivery_profile="latest")
+        @input(delivery_profile="newest")
         def frames_from_upstream(self) -> None: ...
 
         @output()
@@ -284,14 +284,14 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
 
     @processor
     class AudioFilter(BaseFilter):
-        @input(delivery_profile="every_sample")
+        @input(delivery_profile="ordered")
         def frames_from_upstream(self) -> None: ...
 
     assert AudioFilter.__streamlib_processor_input_ports__ == [
         {
             "name": "frames_from_upstream",
             "description": "",
-            "delivery_profile": "every_sample",
+            "delivery_profile": "ordered",
         }
     ]
     # The inherited output survives the subclass's redeclaration of the input.

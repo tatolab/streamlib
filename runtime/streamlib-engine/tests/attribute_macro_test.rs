@@ -16,7 +16,7 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 // descriptor, and the class-path accessor — it never auto-registers.
 #[streamlib::sdk::processor(
     execution = manual,
-    input("video_in", delivery_profile = "latest"),
+    input("video_in", delivery_profile = "newest"),
     output("video_out"),
 )]
 pub struct TestProcessor;
@@ -179,7 +179,7 @@ pub struct CfgGatedFieldAlwaysCompiledState {
 // shape on top of the target-independent halves.
 #[streamlib::sdk::processor(
     execution = manual,
-    input("video_in", delivery_profile = "latest"),
+    input("video_in", delivery_profile = "newest"),
     output("video_out"),
 )]
 pub struct CfgGatedFieldProcessor {

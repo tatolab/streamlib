@@ -27,16 +27,17 @@ class AudioBlockProbe:
     def __init__(self) -> None:
         self.readings = []
 
-    # The plan's profile for audio: order matters and no sample may be dropped
-    # on the consumer side. The producer's own loss is counted at the device
-    # edge instead, which is why a blocking consumer cannot stall a device.
-    @input(delivery_profile="lossless")
+    # The plan's profile for audio: order carries meaning, so the probe reads
+    # blocks in the order they were published rather than skipping to the
+    # freshest. It promises nothing about how many arrive — loss at the device
+    # edge is counted there, loss on this link is counted at this port.
+    @input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        # Drained even after the report is out: a `lossless` port makes the
-        # producer wait, so a probe that stopped reading would be testing the
-        # stall rather than the capture.
+        # Drained even after the report is out: a probe that stopped reading
+        # would be measuring its own backlog draining away as counted drops
+        # rather than the capture.
         block = ctx.inputs.read("audio_from_upstream", into=AudioBlock)
         if block is None or len(self.readings) >= BLOCKS_REPORTED:
             return

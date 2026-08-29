@@ -22,7 +22,7 @@ class VideoFrameProbe:
     def __init__(self) -> None:
         self.bags_seen = []
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

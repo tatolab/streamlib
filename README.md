@@ -124,7 +124,7 @@ from streamlib import RuntimeContextLimitedAccess, VideoFrame, input, output, pr
 
 @processor
 class InvertingEffect:
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     @output()
@@ -264,19 +264,23 @@ use is an ordinary pip dependency in your venv, upgraded on your schedule.
 </details>
 
 <details>
-<summary><b>Back-pressure is decided at the consumer</b> — delivery profiles and payloads</summary>
+<summary><b>The read policy is decided at the consumer</b> — delivery profiles and payloads</summary>
 
 <br>
 
-A controller that must never miss a command and a display that should always show the newest frame
-want opposite things from the same producer. Each input says which it is, and saying so is
-required — there is no default to inherit by accident:
+A logger that wants its bags in the order they were sent and a display that should always show the
+newest frame want opposite things from the same producer. Each input says which it is, and saying
+so is required — there is no default to inherit by accident:
 
 ```python
-@input(delivery_profile="latest")          # newest wins, stale samples dropped
-@input(delivery_profile="every_sample")    # every sample in order, may fall behind
-@input(delivery_profile="lossless")        # never dropped
+@input(delivery_profile="newest")     # drains to the most recent bag, older ones passed over
+@input(delivery_profile="ordered")    # bags in publication order, may fall behind
 ```
+
+A profile names a read policy and nothing more. Neither promises delivery: both drop under
+sustained pressure, and no link ever blocks a producer. What they do promise is that no loss is
+silent — a dropped bag is counted at the port that dropped it, per link, and shows up in
+`streamlib graph` beside the processor's other metrics.
 
 What crosses a link is a self-describing named map. No schema registry, no negotiation, no
 versions, no code-generation step, and nothing in the engine ever compares one stage's types

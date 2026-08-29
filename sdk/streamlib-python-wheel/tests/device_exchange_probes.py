@@ -54,7 +54,7 @@ def _report(probe_body) -> None:
 class _FrameProbeBase:
     """Reads exactly one frame bag, then reports through `_report`."""
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -228,7 +228,7 @@ class LaggedConsumerHoldsItsFrameProbe:
     slot within a ring cycle and `held_frame_unchanged` reads False.
     """
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     # Comfortably past the pool's pre-allocated depth, so the producer has

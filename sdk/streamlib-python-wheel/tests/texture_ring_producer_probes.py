@@ -111,7 +111,7 @@ class TextureRingPublishingVideoSource:
 class PublishedFramePixelReadingSink:
     """Resolves each published surface id and reports the pixels behind it."""
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

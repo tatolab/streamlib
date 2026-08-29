@@ -42,8 +42,9 @@ def test_a_fed_bag_reaches_the_processor_and_its_output_comes_back():
 
 
 def test_every_fed_bag_comes_back_in_order():
-    """`every_sample` on the collector is what makes an assertion honest: a
-    dropped bag under a burst would let a broken processor look correct."""
+    """`ordered` on the collector is what makes an assertion honest: a
+    profile that skipped to the freshest bag under a burst would let a broken
+    processor look correct."""
     with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
         for value in range(8):
             pipeline.feed("numbers_from_upstream", {"value": value})

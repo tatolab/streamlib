@@ -21,7 +21,7 @@ class ReportsItsProcessOnFirstFrame:
     def __init__(self) -> None:
         self.announced = False
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

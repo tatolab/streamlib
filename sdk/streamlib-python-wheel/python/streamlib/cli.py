@@ -317,7 +317,7 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 class {SCAFFOLDED_EFFECT_CLASS_NAME}:
     """Reads each frame, inverts its colors in place, and passes it on."""
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     @output()

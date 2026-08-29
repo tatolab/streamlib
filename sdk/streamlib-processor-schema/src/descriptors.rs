@@ -29,8 +29,8 @@ pub struct PortDescriptor {
     #[serde(default)]
     pub is_iceoryx2: bool,
     /// Delivery profile declared by an *input* port (the destination of an
-    /// iceoryx2 service) — `"latest"`, `"every_sample"`, or `"lossless"`.
-    /// Required on every input port and always `None` on an output port.
+    /// iceoryx2 service) — `"newest"` or `"ordered"`. Required on every input
+    /// port and always `None` on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
 }

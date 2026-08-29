@@ -12,7 +12,7 @@ from streamlib import RuntimeContextLimitedAccess, input, processor
 
 @processor
 class AudioChannelDrain:
-    @input(delivery_profile="lossless")
+    @input(delivery_profile="ordered")
     def audio_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

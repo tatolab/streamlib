@@ -141,6 +141,12 @@ jobs:
           # counting has. Four of them open real iceoryx2 services, which need
           # /dev/shm and nothing else — no GPU, no audio device — so the
           # end-to-end half of that contract runs here rather than on the rig.
+          # `iceoryx2::delivery_profile` is likewise the only gate the
+          # declaration surface has: the two profiles' resolutions, the
+          # wire-time refusal that lists the legal values, and the
+          # missing-declaration wiring error are pure registry work needing no
+          # device, and before they were named here they ran in no CI job at
+          # all despite two of them anchoring `verify:` lines in the plan.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -168,7 +174,8 @@ jobs:
             core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name \
             core::graph::components::processor_metrics::tests::a_processor_that_has_lost_nothing_says_so_rather_than_staying_silent \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_dropping_destinations_node_renders_each_inbound_links_losses \
-            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero \
+            iceoryx2::delivery_profile
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

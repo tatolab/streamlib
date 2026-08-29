@@ -123,8 +123,10 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
         f"the speaker reached Running but was never given a block:\n{app.output}"
     )
 
-    # Nothing is lost between the two built-ins: what the microphone published
-    # is what the speaker was handed, over a real `lossless` link.
+    # Nothing is lost between the two built-ins on this run. `ordered`
+    # promises order, not delivery, so the equality holds because the run
+    # stays inside the link's depth — a mismatch here is a regression, not
+    # the pressure loss the profile allows for.
     published = PUBLISHED_BLOCKS.search(app.output)
     assert published is not None, f"no MicrophoneSource teardown line:\n{app.output}"
     assert int(played.group(1)) == int(published.group(1)), (

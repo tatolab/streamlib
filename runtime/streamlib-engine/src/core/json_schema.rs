@@ -75,8 +75,8 @@ pub struct PortInfoOutput {
     /// Kind of port: data, event, or control.
     #[serde(default)]
     pub port_kind: PortKindOutput,
-    /// Delivery profile declared by this input port — `"latest"`,
-    /// `"every_sample"` or `"lossless"`; `None` on an output port.
+    /// Delivery profile declared by this input port — `"newest"` or
+    /// `"ordered"`; `None` on an output port.
     pub delivery_profile: Option<String>,
 }
 
@@ -208,8 +208,8 @@ pub struct PortDescriptorOutput {
     pub description: String,
     /// Whether the port is required.
     pub required: bool,
-    /// Delivery profile declared by this input port — `"latest"`,
-    /// `"every_sample"` or `"lossless"`; `None` on an output port.
+    /// Delivery profile declared by this input port — `"newest"` or
+    /// `"ordered"`; `None` on an output port.
     pub delivery_profile: Option<String>,
 }
 
@@ -413,14 +413,14 @@ mod port_rendering_tests {
             name: "video_in".to_string(),
             description: "Frames to convert".to_string(),
             port_kind: crate::core::graph::PortKind::Data,
-            delivery_profile: Some("latest".to_string()),
+            delivery_profile: Some("newest".to_string()),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
         assert_eq!(json["name"], "video_in");
         assert_eq!(json["description"], "Frames to convert");
         assert_eq!(json["port_kind"], "data");
-        assert_eq!(json["delivery_profile"], "latest");
+        assert_eq!(json["delivery_profile"], "newest");
         assert_renders_exactly(&json, &PORT_INFO_KEYS);
     }
 
@@ -441,12 +441,12 @@ mod port_rendering_tests {
     #[test]
     fn port_descriptor_output_carries_no_type_key() {
         let pd = crate::core::PortDescriptor::new("video", "Video output", true)
-            .with_delivery_profile("lossless");
+            .with_delivery_profile("ordered");
         let json = serde_json::to_value(PortDescriptorOutput::from(&pd)).unwrap();
 
         assert_eq!(json["name"], "video");
         assert_eq!(json["description"], "Video output");
-        assert_eq!(json["delivery_profile"], "lossless");
+        assert_eq!(json["delivery_profile"], "ordered");
         assert_renders_exactly(&json, &PORT_DESCRIPTOR_KEYS);
         assert_carries_no_type_key(&json);
     }

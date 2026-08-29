@@ -102,7 +102,7 @@ pub struct SpeakerSinkConfig {
     config = crate::speaker_sink::SpeakerSinkConfig,
     input(
         "audio",
-        delivery_profile = "lossless",
+        delivery_profile = "ordered",
         description = "Timestamped blocks of interleaved samples to play"
     ),
 )]

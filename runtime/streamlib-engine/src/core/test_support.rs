@@ -15,8 +15,8 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 /// Mock processor with two input ports + two output ports.
 #[crate::processor(
     execution = manual,
-    input("in1", delivery_profile = "latest"),
-    input("in2", delivery_profile = "latest"),
+    input("in1", delivery_profile = "newest"),
+    input("in2", delivery_profile = "newest"),
     output("out1"),
     output("out2"),
 )]
@@ -75,8 +75,8 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 /// Mock processor with only input ports.
 #[crate::processor(
     execution = manual,
-    input("in1", delivery_profile = "latest"),
-    input("in2", delivery_profile = "latest"),
+    input("in1", delivery_profile = "newest"),
+    input("in2", delivery_profile = "newest"),
 )]
 pub(crate) struct MockInputOnlyProcessor;
 
@@ -106,8 +106,8 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
 /// notifications its listener receives.
 #[crate::processor(
     execution = reactive,
-    input("in1", delivery_profile = "latest"),
-    input("in2", delivery_profile = "latest"),
+    input("in1", delivery_profile = "newest"),
+    input("in2", delivery_profile = "newest"),
 )]
 pub(crate) struct MockReactiveInputOnlyProcessor;
 

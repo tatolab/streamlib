@@ -13,7 +13,7 @@
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
 //!     config = crate::CameraConfig,     // Rust type path for the typed Config alias
-//!     input("video_in", delivery_profile = "latest"),
+//!     input("video_in", delivery_profile = "newest"),
 //!     output("video"),
 //! )]
 //! ```
@@ -519,14 +519,14 @@ mod tests {
         let parsed = parse_ok(quote! {
             execution = manual,
             scheduling = high,
-            input("video_in", delivery_profile = "latest"),
+            input("video_in", delivery_profile = "newest"),
             output("video"),
         });
         assert_eq!(parsed.execution, ProcessorSchemaExecution::Manual);
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
         assert_eq!(parsed.inputs.len(), 1);
         assert_eq!(parsed.inputs[0].name, "video_in");
-        assert_eq!(parsed.inputs[0].delivery_profile.as_deref(), Some("latest"));
+        assert_eq!(parsed.inputs[0].delivery_profile.as_deref(), Some("newest"));
         assert_eq!(parsed.outputs.len(), 1);
         assert_eq!(parsed.outputs[0].name, "video");
         // Output ports never carry a delivery profile.
@@ -543,7 +543,7 @@ mod tests {
             execution = manual,
             input(
                 "video_in",
-                delivery_profile = "latest",
+                delivery_profile = "newest",
                 description = "Frames to convert"
             ),
             output("video", description = "Live video frames"),
@@ -591,7 +591,7 @@ mod tests {
         // silently accepted and dropped.
         let msg = parse_err(quote! {
             execution = manual,
-            input("in1", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
+            input("in1", "@tatolab/core/VideoFrame", delivery_profile = "newest"),
         });
         assert!(
             msg.contains("a port declares no type") && msg.contains("input(\"in1\", ...)"),
@@ -677,8 +677,8 @@ mod tests {
     fn duplicate_input_port_is_an_error() {
         let msg = parse_err(quote! {
             execution = manual,
-            input("dup", delivery_profile = "latest"),
-            input("dup", delivery_profile = "latest"),
+            input("dup", delivery_profile = "newest"),
+            input("dup", delivery_profile = "newest"),
         });
         assert!(
             msg.contains("duplicate input port name `dup`"),
@@ -706,7 +706,7 @@ mod tests {
         // Mentally revert `reject_delivery_profile_on_output` and this parses
         // cleanly (bug) instead of erroring.
         let tokens: proc_macro2::TokenStream =
-            "execution = manual, output(\"video\", delivery_profile = \"latest\")"
+            "execution = manual, output(\"video\", delivery_profile = \"newest\")"
                 .parse()
                 .expect("token stream parses");
         let msg = parse_err(tokens);
@@ -722,11 +722,11 @@ mod tests {
         // an `input(...)` and reaches the parsed port.
         let parsed = parse_ok(quote! {
             execution = manual,
-            input("video_in", delivery_profile = "lossless"),
+            input("video_in", delivery_profile = "ordered"),
         });
         assert_eq!(
             parsed.inputs[0].delivery_profile.as_deref(),
-            Some("lossless")
+            Some("ordered")
         );
     }
 
@@ -741,7 +741,7 @@ mod tests {
             "got: {msg}"
         );
         assert!(
-            msg.contains("latest") && msg.contains("every_sample") && msg.contains("lossless"),
+            msg.contains("newest") && msg.contains("ordered"),
             "the error must list the valid profiles: {msg}"
         );
     }
