@@ -785,19 +785,19 @@ fn wire_rust_dest(
     };
 
     if !input_inner.has_port(dest_port) {
-        // A sentinel this processor already settled — a link wired after its
-        // `setup()` ran — windows from the settled values, not from the
-        // declaration that asked for them.
-        let settled_from_its_device = input_inner
-            .device_matched_audio_window_contracts()
-            .settled_for_input_port(dest_port);
         match audio_windowing {
             None => input_inner.add_port(dest_port, depth, drain_order),
             Some(AudioWindowingOfAnInputPort::Resolved(contract)) => {
                 input_inner.add_windowed_port(dest_port, drain_order, contract)
             }
+            // A sentinel this processor already settled — a link wired after
+            // its `setup()` ran — windows from the settled values rather than
+            // waiting for a `setup()` that has been and gone.
             Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat) => {
-                match settled_from_its_device {
+                match input_inner
+                    .device_matched_audio_window_contracts()
+                    .settled_for_input_port(dest_port)
+                {
                     Some(contract) => {
                         input_inner.add_windowed_port(dest_port, drain_order, contract)
                     }
