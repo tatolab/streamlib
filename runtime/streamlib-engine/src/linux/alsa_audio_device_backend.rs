@@ -113,9 +113,10 @@ const PREFERRED_CAPTURE_CHANNELS: c_uint = 1;
 
 /// Preferred playback channel count. Stereo rather than the capture side's
 /// mono because that is what a sink almost always is; `_near` lets a mono-only
-/// device say so. The two preferences differ because the devices do, and there
-/// is no resampler on this rung to reconcile them — a speaker refuses a block
-/// whose channel count it cannot play, naming both.
+/// device say so. The two preferences differ because the devices do, and the
+/// read-side window stage that reconciles them is not yet what a speaker reads
+/// through — so a speaker still refuses a block whose channel count it cannot
+/// play, naming both.
 const PREFERRED_PLAYBACK_CHANNELS: c_uint = 2;
 
 /// Preferred period, ~10.7 ms at 48 kHz — a block small enough to be a useful
