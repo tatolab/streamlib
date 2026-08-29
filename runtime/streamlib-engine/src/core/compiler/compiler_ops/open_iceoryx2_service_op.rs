@@ -21,7 +21,7 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
-    LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
+    LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics, SubprocessHandleComponent,
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
@@ -180,6 +180,8 @@ pub fn open_iceoryx2_service(
     } else {
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
         wire_rust_dest(
+            graph,
+            &dest_proc_id,
             &dest_processor,
             &dest_port,
             link_id,
@@ -671,11 +673,15 @@ fn wire_rust_source(
 }
 
 /// Subscribe the Rust destination to the channel bound to its local input port,
-/// and ensure its single listener exists.
+/// ensure its single listener exists, and publish its dropped-bag counts onto
+/// its graph node.
 ///
 /// `notify_service` is `None` when this destination never drains a listener, and
 /// no listener is created for it.
+#[allow(clippy::too_many_arguments)]
 fn wire_rust_dest(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
@@ -707,7 +713,35 @@ fn wire_rust_dest(
             tracing::debug!("Created listener for destination on its notify service");
         }
     }
+    publish_dropped_bag_counts_on_destination_node(graph, dest_proc_id, &input_inner);
     Ok(())
+}
+
+/// Share the destination's per-inbound-link dropped-bag counts onto its graph
+/// node, so `graph` reads them live off the mailboxes that do the evicting.
+///
+/// Inserted with the destination's first inbound link and left alone after: the
+/// counts are one shared object for the whole processor, and a link wired later
+/// mints its own zeroed entry inside it.
+///
+/// A destination whose mailboxes live out of process never reaches here — it
+/// counts its evictions in its own process, and its node carries no metrics at
+/// all rather than a zero the parent cannot stand behind.
+fn publish_dropped_bag_counts_on_destination_node(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    input_inner: &Arc<crate::iceoryx2::InputMailboxesInner>,
+) {
+    let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
+        return;
+    };
+    if node.has::<ProcessorMetrics>() {
+        return;
+    }
+    node.insert(ProcessorMetrics {
+        dropped_bag_counts_by_inbound_link: input_inner.dropped_bag_counts_by_inbound_link(),
+        ..Default::default()
+    });
 }
 
 /// Record this link's source-side wiring on a processor whose transport lives
@@ -1032,6 +1066,52 @@ mod tests {
         );
     }
 
+    /// A helper-placed destination's node carries no metrics at all.
+    ///
+    /// Its mailboxes are its own process's, so the parent counts none of its
+    /// evictions and has nothing to render. Rendering an empty map or a zero
+    /// here would say "this processor lost nothing", which the parent cannot
+    /// know — the absent key is what makes it readable as unanswered rather
+    /// than as healthy. The gap itself is plan-level (ARCHITECTURE.md's
+    /// counting entry is unconditional); this locks the shape chosen for it so
+    /// nobody closes it later with a zero.
+    #[test]
+    fn a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        attach_processor_instance(
+            &mut graph,
+            &source_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+
+        record_wiring_for_both_out_of_process_endpoints(
+            &mut graph,
+            &source_id,
+            &dest_id,
+            &"L-helper-placed".into(),
+        );
+
+        assert!(
+            graph
+                .traversal_mut()
+                .v(&dest_unique_id)
+                .first()
+                .expect("the destination node must be in the graph")
+                .serialize_components()
+                .get("metrics")
+                .is_none(),
+            "a destination the parent holds no mailboxes for must render no metrics key",
+        );
+    }
+
     /// Disconnecting a link whose endpoints both live out of process reclaims
     /// BOTH halves through the same seam that wired them, each told its own
     /// local port and direction — and each host's envelope forgets the link, so
@@ -1348,6 +1428,7 @@ mod tests {
         } else {
             add_mock_input_only(&mut graph)
         };
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
         let (dest, _, dest_input) = attach_mock_instance::<Destination>(&mut graph, &dest_id);
         let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
 
@@ -1370,6 +1451,8 @@ mod tests {
         )
         .expect("the source side wires");
         wire_rust_dest(
+            &mut graph,
+            &dest_unique_id,
             &dest,
             "in1",
             &link_id,
@@ -1381,6 +1464,100 @@ mod tests {
         .expect("the destination side wires");
 
         (source_output, dest_input)
+    }
+
+    /// What the control plane serves for a dropping run: the destination's node
+    /// carries its per-inbound-link dropped-bag counts, live off the mailboxes
+    /// that did the evicting.
+    ///
+    /// Driven through the real seam end to end — the destination-side wiring
+    /// the compiler op runs, a real channel service, the source's own
+    /// `write_raw`, the destination's own `receive_pending` — so what is
+    /// asserted is the rendering a `GET /api/graph` reader gets, not a counter
+    /// poked by hand. Fail-without-fix: drop the publish step from
+    /// `wire_rust_dest` and the node renders no `metrics` at all, so a run that
+    /// lost three of its four bags reads exactly like a healthy one.
+    #[test]
+    fn a_dropping_destinations_node_renders_each_inbound_links_losses() {
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        const DESTINATION_MAILBOX_DEPTH: usize = 1;
+        const FRAMES_PUBLISHED: usize = 4;
+
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let (source, source_output, _) =
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let source_output = source_output.expect("an output-only mock holds an output writer");
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        let (dest, _, dest_input) =
+            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+        let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
+
+        let (channel, _) = open_test_link_services("dropped-bag-counts", false);
+        let link_id: LinkUniqueId = "L-dropping".into();
+        wire_rust_source(
+            &source,
+            "out1",
+            &link_id,
+            &channel,
+            None,
+            ChannelEgressConfig {
+                service_name: unique_service_name("dropped-bag-counts"),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        )
+        .expect("the source side wires");
+        wire_rust_dest(
+            &mut graph,
+            &dest_unique_id,
+            &dest,
+            "in1",
+            &link_id,
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+            DESTINATION_MAILBOX_DEPTH,
+            &channel,
+            None,
+        )
+        .expect("the destination side wires");
+
+        let rendered_metrics = |graph: &mut Graph| -> serde_json::Value {
+            graph
+                .traversal_mut()
+                .v(&dest_unique_id)
+                .first()
+                .expect("the destination node must be in the graph")
+                .serialize_components()["metrics"]
+                .clone()
+        };
+
+        assert_eq!(
+            rendered_metrics(&mut graph)["dropped_bags_by_link"],
+            serde_json::json!({ "L-dropping": 0 }),
+            "a wired link that has lost nothing must render a zero, not go missing"
+        );
+
+        for frame in 0..FRAMES_PUBLISHED {
+            source_output
+                .write_raw("out1", b"a bag the destination never reads", frame as i64)
+                .expect("the source publishes onto the wired channel");
+        }
+        dest_input.receive_pending();
+
+        let metrics = rendered_metrics(&mut graph);
+        assert_eq!(
+            metrics["dropped_bags_by_link"],
+            serde_json::json!({ "L-dropping": FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH }),
+            "the node must read the counts live, off the mailboxes that evicted"
+        );
+        assert_eq!(
+            metrics["frames_dropped"],
+            serde_json::json!(FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH),
+            "the total must be the per-link counts summed, never a second tally"
+        );
     }
 
     /// The decision reaches the ports: no notify service means the source

@@ -12,10 +12,11 @@
 //! there when the callback asks.
 //!
 //! The wait backs the drain thread's mailbox up, which is as far as
-//! backpressure reaches today: `PortMailbox::push` drops its oldest entry when
-//! full whatever a port's profile says, so a producer racing far enough ahead
-//! loses blocks there rather than being held. Nothing here can close that —
-//! it is a transport-layer gap this ring is downstream of.
+//! backpressure reaches today: `PortMailbox::push_frame_from_inbound_link`
+//! evicts its oldest entry when full whatever a port's profile says, so a
+//! producer racing far enough ahead loses blocks there rather than being held.
+//! Nothing here can close that — it is a transport-layer gap this ring is
+//! downstream of, and one the port counts per link now rather than swallowing.
 //!
 //! Samples rather than blocks, because a device period and a published block
 //! are different sizes and neither divides the other. What a callback needs is

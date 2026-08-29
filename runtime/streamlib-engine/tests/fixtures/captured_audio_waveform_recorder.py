@@ -52,8 +52,9 @@ class CapturedAudioWaveformRecorder:
         if self._written:
             # Still drained: a recorder that stopped reading would back its
             # link up behind the microphone, and a full link costs dropped
-            # blocks rather than a stalled producer — `PortMailbox::push`
-            # evicts its oldest entry whatever a port's profile says.
+            # blocks rather than a stalled producer —
+            # `PortMailbox::push_frame_from_inbound_link` evicts its oldest entry
+            # whatever a port's profile says.
             return
 
         self._sample_rate = block.sample_rate

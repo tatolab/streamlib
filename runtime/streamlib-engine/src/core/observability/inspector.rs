@@ -92,11 +92,12 @@ impl GraphInspector {
 
         for node in graph.traversal().v(()).iter() {
             if let Some(metrics) = node.get::<ProcessorMetrics>() {
-                total_dropped += metrics.frames_dropped;
+                let dropped = metrics.total_dropped_bag_count();
+                total_dropped += dropped;
 
                 // Simple bottleneck detection: high drop rate
                 if metrics.frames_processed > 0 {
-                    let drop_rate = metrics.frames_dropped as f64 / metrics.frames_processed as f64;
+                    let drop_rate = dropped as f64 / metrics.frames_processed as f64;
                     if drop_rate > 0.01 {
                         // More than 1% drops
                         bottlenecks.push(node.id.clone());
