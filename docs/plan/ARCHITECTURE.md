@@ -247,9 +247,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — No loss is silent. A bag dropped at a port is counted by the port that
   dropped it and is readable over the control plane in `graph`, alongside the processor's
   other metrics. Drops are counted per link, never as one blended total, so a future
-  reflection of a link's count to its producer stays possible without recounting. A drop
-  is a normal, reportable event on a realtime link, never an error and never invisible —
-  a run that lost most of its bags must not read as a healthy one. A `newest` port
+  reflection of a link's count to its producer stays possible without recounting. A count
+  is cumulative for the life of one wiring, not of the link id: disconnect takes it with
+  the link and reconnecting the same id starts from zero, because a count outliving its
+  link would name something `graph` no longer has. A drop is a normal, reportable event
+  on a realtime link, never an error and never invisible — a run that lost most of its
+  bags must not read as a healthy one. A `newest` port
   passing over bags to reach the most recent is the profile working, not loss at the
   port, and is deliberately uncounted. **The clause states the intent, not yet the
   tree**: what shipped counts the mailbox eviction at an app-process destination and
