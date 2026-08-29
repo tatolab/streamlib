@@ -603,6 +603,61 @@ mod tests {
         );
     }
 
+    /// The declaration the whole rung turns on. The sink's input port asks the
+    /// engine to window every block into whatever its own playback device
+    /// opened at, and nothing else in this file can compensate if it stops:
+    /// with the sentinel gone the read-side stage does not run, the refusal
+    /// that used to catch a mismatched block is deleted, and a 16 kHz mono
+    /// capture reaches a 48 kHz stereo device to be played at the wrong speed —
+    /// audible, and indistinguishable from a device fault.
+    #[test]
+    fn the_audio_port_asks_the_engine_to_match_whatever_device_this_sink_opens() {
+        use streamlib::sdk::processors::GeneratedProcessor;
+
+        let descriptor = <SpeakerSink::Processor as GeneratedProcessor>::descriptor()
+            .expect("a `#[processor]` type carries a descriptor");
+        let audio = descriptor
+            .inputs
+            .iter()
+            .find(|port| port.name == AUDIO_INPUT_PORT)
+            .expect("the sink declares the port a microphone wires to");
+
+        assert_eq!(
+            audio.audio_window,
+            Some(streamlib::sdk::descriptors::AudioWindowContract::MatchDevice {}),
+            "the port must declare `audio_window = match_device` — five written values \
+             would be a guess at a format that varies by machine"
+        );
+        assert_eq!(
+            audio.delivery_profile.as_deref(),
+            Some("ordered"),
+            "a window contract requires `ordered`; `newest` passes over bags by design"
+        );
+    }
+
+    /// Window and hop are one device period, so the stage converts format
+    /// without also re-framing: a sink wants what its device can play, at the
+    /// cadence its device asks for it.
+    #[test]
+    fn the_window_this_sink_settles_is_one_device_period_at_the_devices_own_rate() {
+        assert_eq!(
+            a_device_periods_worth_of_per_channel_samples(a_stream_format(48_000, 2)),
+            480,
+            "ten milliseconds at 48 kHz"
+        );
+        assert_eq!(
+            a_device_periods_worth_of_bytes(a_stream_format(48_000, 2)),
+            480 * 2 * 4,
+            "the two must move together — the ring is sized in the periods the contract \
+             frames in"
+        );
+        assert_eq!(
+            a_device_periods_worth_of_per_channel_samples(a_stream_format(1, 1)),
+            1,
+            "a rate no period divides still settles a contract the stage can honour"
+        );
+    }
+
     /// `rt.add(SpeakerSink)` sends `{}` to the engine, and every field of a
     /// built-in's config has to deserialize from it — the spelling the plan
     /// blesses for a block that needs no configuration.

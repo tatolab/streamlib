@@ -232,7 +232,6 @@ jobs:
             iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_contract_saturates_at_both_endpoints_rather_than_wrapping \
             iceoryx2::audio_window::audio_block_bag_wire_codec::tests::an_i16_scalar_survives_the_decode_and_encode_round_trip_unchanged \
             iceoryx2::audio_window::resolved_audio_window_contract::tests::a_declared_contract_resolves_to_the_five_values_it_declared \
-            iceoryx2::audio_window::resolved_audio_window_contract::tests::an_unresolved_sentinel_is_a_wiring_error_naming_the_resolution_mechanism \
             iceoryx2::audio_window::resolved_audio_window_contract::tests::a_declaration_the_stage_could_not_honour_is_refused_naming_the_port \
             iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta \
             iceoryx2::audio_window::audio_window_stage_tests::a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart \
@@ -259,9 +258,26 @@ jobs:
             iceoryx2::input::tests::a_bag_the_stage_cannot_read_is_refused_at_the_read_naming_the_port \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_windowed_destinations_contract_resolves_at_wire_time \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_declaring_no_contract_resolves_to_none \
-            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::an_unresolved_match_device_contract_is_a_wiring_error_naming_the_mechanism \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_match_device_contract_wires_awaiting_its_device_rather_than_refusing \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_both_links \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_one_inbound_link_a_windowed_port_takes_is_not_refused \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::the_sentinel_reads_as_a_port_awaiting_its_device_rather_than_as_five_values \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::an_unsettled_sentinel_is_refused_naming_the_resolution_mechanism \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::a_device_stream_format_resolves_to_the_contract_that_plays_on_it \
+            iceoryx2::audio_window::resolved_audio_window_contract::tests::a_device_stream_format_the_stage_could_not_honour_is_refused_too \
+            iceoryx2::audio_window::device_matched_audio_window_contracts::tests::a_port_nothing_resolved_reads_back_as_unsettled \
+            iceoryx2::audio_window::device_matched_audio_window_contracts::tests::a_settled_port_renders_the_five_values_the_device_gave_it \
+            iceoryx2::audio_window::device_matched_audio_window_contracts::tests::resolving_a_second_time_replaces_the_contract_rather_than_keeping_the_first \
+            iceoryx2::input::tests::a_port_awaiting_its_device_hands_a_reader_nothing_however_much_is_queued \
+            iceoryx2::input::tests::settling_a_port_converts_the_bags_that_arrived_before_the_device_was_known \
+            iceoryx2::input::tests::only_a_port_still_holding_the_sentinel_is_listed_as_awaiting_its_device \
+            iceoryx2::input::tests::a_contract_settled_before_its_port_existed_is_still_there_for_the_wiring \
+            iceoryx2::input::tests::a_device_format_the_stage_cannot_honour_is_refused_at_the_settle_naming_the_port \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_settled_contract_reaches_a_helper_placed_destination_as_five_values \
+            core::json_schema::port_rendering_tests::a_settled_match_device_port_renders_the_five_values_its_device_gave \
+            core::json_schema::port_rendering_tests::an_unsettled_match_device_port_still_renders_the_sentinel \
+            core::json_schema::port_rendering_tests::the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and

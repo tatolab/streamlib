@@ -583,6 +583,113 @@ mod port_rendering_tests {
         );
     }
 
+    /// A node whose input port declares the sentinel, with `settled` optionally
+    /// standing in for what its own device gave it.
+    fn a_node_declaring_the_sentinel(
+        settled: Option<crate::iceoryx2::ResolvedAudioWindowContract>,
+    ) -> crate::core::graph::ProcessorNode {
+        use crate::core::graph::GraphNodeWithComponents;
+
+        let mut node = crate::core::graph::ProcessorNode::new(
+            streamlib_processor_schema::ProcessorClassImportPath::new("tests.SpeakerSink")
+                .expect("a legal import path"),
+            "SpeakerSink",
+            None,
+            vec![crate::core::graph::PortInfo {
+                name: "audio".to_string(),
+                description: "Blocks to play".to_string(),
+                port_kind: crate::core::graph::PortKind::Data,
+                delivery_profile: Some("ordered".to_string()),
+                audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+            }],
+            Vec::new(),
+        );
+
+        let contracts =
+            std::sync::Arc::new(crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort::default());
+        if let Some(contract) = settled {
+            contracts.settle_for_input_port("audio", contract);
+        }
+        node.insert_component_without_rendering_it(
+            crate::core::graph::DeviceMatchedAudioWindowContractsComponent(contracts),
+        );
+        node
+    }
+
+    fn a_playback_stream_of(sample_rate: u32, channels: u32) -> crate::core::context::AudioStreamFormat {
+        crate::core::context::AudioStreamFormat {
+            sample_rate,
+            channels,
+            sample_format: crate::core::context::AudioSampleFormat::F32,
+        }
+    }
+
+    /// `graph` renders what the device gave rather than the sentinel that asked
+    /// for it — machine-dependent because the device format is, which is truer
+    /// than a static lie.
+    #[test]
+    fn a_settled_match_device_port_renders_the_five_values_its_device_gave() {
+        let settled = crate::iceoryx2::ResolvedAudioWindowContract::from_a_device_stream_format(
+            &crate::iceoryx2::AudioWindowContractMatchingADeviceStream {
+                device_stream_format: a_playback_stream_of(44_100, 2),
+                window_size_in_per_channel_samples: 441,
+                hop_in_per_channel_samples: 441,
+            },
+        )
+        .expect("a device format settles a contract");
+
+        let rendered =
+            serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(Some(
+                settled,
+            ))))
+            .unwrap();
+
+        assert_eq!(
+            rendered["ports"]["inputs"][0]["audio_window"],
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 44_100,
+                "channels": 2,
+                "dtype": "f32",
+                "window_size": 441,
+                "hop": 441,
+            })
+        );
+    }
+
+    /// Before its processor's `setup()` opens a device there is nothing to
+    /// render but the declaration, and rendering a guess in its place would be
+    /// the static lie the resolved rendering exists instead of.
+    #[test]
+    fn an_unsettled_match_device_port_still_renders_the_sentinel() {
+        let rendered =
+            serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(None)))
+                .unwrap();
+
+        assert_eq!(
+            rendered["ports"]["inputs"][0]["audio_window"],
+            serde_json::json!({ "resolved_from": "match_device" })
+        );
+    }
+
+    /// The settled contracts reach a reader on the port that settled them and
+    /// nowhere else: a second rendering under `components` would be one more
+    /// copy of the same fact to keep in agreement.
+    #[test]
+    fn the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own() {
+        let rendered =
+            serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(None)))
+                .unwrap();
+
+        assert!(
+            rendered["components"]
+                .get("device_matched_audio_window_contracts")
+                .is_none(),
+            "the settled contracts carry no `components` key of their own; got {}",
+            rendered["components"]
+        );
+    }
+
     /// The contract rides `PortDescriptor` into `PortInfo` untouched — the
     /// carrier the macro and the wheel's declaration bridge both fill.
     #[test]

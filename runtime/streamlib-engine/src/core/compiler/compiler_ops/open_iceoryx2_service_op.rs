@@ -1927,6 +1927,106 @@ mod tests {
         );
     }
 
+    /// A `match_device` port on a helper-placed destination is refused where it
+    /// is wired, not left to wait.
+    ///
+    /// A child can never settle one: the format comes from a device stream a
+    /// processor opens in the app process, and the wiring envelope carries five
+    /// resolved values or nothing. Waiting for a `setup()` that has no way to
+    /// answer would be a port that silently hands its reader nothing for the
+    /// whole run, which is the failure this refusal exists instead of.
+    #[test]
+    fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
+        attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+
+        let refusal = wire_subprocess_dest(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "audio",
+            "pabc/out1",
+            "pdef/notify",
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+            8,
+            2,
+            1,
+            &"L-helper-windowed".into(),
+            Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat),
+        )
+        .expect_err("a helper child cannot settle a sentinel")
+        .to_string();
+
+        assert!(
+            refusal.contains("match_device")
+                && refusal.contains("setup()")
+                && refusal.contains("audio"),
+            "the refusal must name the sentinel, where it resolves, and the port; got {refusal}"
+        );
+    }
+
+    /// A contract the parent settled rides the envelope as five values, so the
+    /// child opens its own stage on the same numbers and never sees a sentinel.
+    #[test]
+    fn a_settled_contract_reaches_a_helper_placed_destination_as_five_values() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
+        let dest_instance = attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+
+        let settled = crate::iceoryx2::ResolvedAudioWindowContract::from_a_device_stream_format(
+            &crate::iceoryx2::AudioWindowContractMatchingADeviceStream {
+                device_stream_format: crate::core::context::AudioStreamFormat {
+                    sample_rate: 48_000,
+                    channels: 2,
+                    sample_format: crate::core::context::AudioSampleFormat::F32,
+                },
+                window_size_in_per_channel_samples: 480,
+                hop_in_per_channel_samples: 480,
+            },
+        )
+        .expect("a device format settles a contract");
+
+        wire_subprocess_dest(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "audio",
+            "pabc/out1",
+            "pdef/notify",
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+            8,
+            2,
+            1,
+            &"L-helper-settled".into(),
+            Some(AudioWindowingOfAnInputPort::Resolved(settled)),
+        )
+        .expect("a settled contract renders onto the envelope");
+
+        let recorded = dest_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports();
+        assert_eq!(
+            recorded["inputs"][0]["audio_window"],
+            serde_json::json!({
+                "sample_rate": 48_000,
+                "channels": 2,
+                "dtype": "f32",
+                "window_size": 480,
+                "hop": 480,
+            }),
+            "the child reads five values, never the sentinel that produced them"
+        );
+    }
+
     /// Fan-in legally interleaves N producers' blocks in one mailbox, and two
     /// sample streams interleaved into one accumulator is not a mix — it is
     /// garbage windows. A windowed port takes exactly one inbound link.
