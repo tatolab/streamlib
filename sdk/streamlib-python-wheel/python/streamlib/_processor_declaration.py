@@ -61,9 +61,10 @@ class AudioWindowContract:
     Declared beside `delivery_profile` on an `@input`, which must be
     `"ordered"`. `window_size` counts per-channel samples — the unit
     `AudioBlock.sample_count` uses — so one window carries
-    `window_size * channels` scalars. `hop` defaults to `window_size`,
-    which is contiguous, non-overlapping windows; a smaller hop is a rolling
-    window.
+    `window_size * channels` scalars. An omitted `hop` resolves to
+    `window_size` at construction, so the attribute always holds the real hop:
+    contiguous, non-overlapping windows by default, a rolling window below
+    that.
 
     All-or-nothing: there is no partial form, because a half-declared contract
     would leave the engine guessing at exactly the values a model asserts on.
