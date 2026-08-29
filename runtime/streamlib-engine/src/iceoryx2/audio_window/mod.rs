@@ -29,7 +29,7 @@ pub(crate) use resolved_audio_window_contract::audio_window_contract_for_input_p
 
 use audio_block_bag_wire_codec::read_an_audio_block_off_the_wire;
 
-use super::mailbox::QueuedFrameMeasure;
+use super::mailbox::PortMailboxQueuedFrameMeasure;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 
 /// A measure over one queued wire frame: what the audio block it carries is
@@ -50,7 +50,7 @@ use super::{FRAME_HEADER_SIZE, FrameHeader};
 pub(crate) fn queued_audio_window_frame_measure(
     contract: ResolvedAudioWindowContract,
     latest_source_sample_rate: Arc<AtomicU32>,
-) -> QueuedFrameMeasure {
+) -> PortMailboxQueuedFrameMeasure {
     Arc::new(move |wire_frame: &[u8]| -> u64 {
         if wire_frame.len() < FRAME_HEADER_SIZE {
             return 0;

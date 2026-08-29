@@ -255,7 +255,7 @@ impl AudioWindowAccumulator {
                 self.rate_conversion.priming_output_frames();
         }
 
-        let channel_converted = self.channel_converted_samples(&block)?;
+        let channel_converted = self.samples_converted_to_the_contracts_channel_count(&block)?;
         self.channel_converted_source_scalars
             .extend(channel_converted);
 
@@ -457,7 +457,10 @@ impl AudioWindowAccumulator {
     /// Owns the decode so the commonest case — a source whose channel count
     /// already matches — hands back the decoded scalars rather than copying
     /// them into a second buffer.
-    fn channel_converted_samples(&self, block: &AudioBlockReadFromTheWire<'_>) -> Result<Vec<f32>> {
+    fn samples_converted_to_the_contracts_channel_count(
+        &self,
+        block: &AudioBlockReadFromTheWire<'_>,
+    ) -> Result<Vec<f32>> {
         let source_channels = block.channels;
         let contract_channels = self.contract.channels;
         if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {

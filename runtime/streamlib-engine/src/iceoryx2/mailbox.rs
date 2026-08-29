@@ -18,7 +18,7 @@ use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
 /// as the frame arrives, and the mailbox keeps the running total across every
 /// push, pop and eviction. Only the audio window contract's readiness gate
 /// installs one; a port without one pays nothing.
-pub type QueuedFrameMeasure = Arc<dyn Fn(&[u8]) -> u64 + Send + Sync>;
+pub type PortMailboxQueuedFrameMeasure = Arc<dyn Fn(&[u8]) -> u64 + Send + Sync>;
 
 /// One queued frame and the inbound link it arrived on.
 ///
@@ -52,7 +52,7 @@ impl PortMailboxQueuedFrame {
 pub struct PortMailbox {
     queue: ArrayQueue<PortMailboxQueuedFrame>,
     capacity: usize,
-    measure: Option<QueuedFrameMeasure>,
+    measure: Option<PortMailboxQueuedFrameMeasure>,
     queued_frame_measure_total: AtomicU64,
 }
 
@@ -64,7 +64,7 @@ impl PortMailbox {
 
     /// Create a new mailbox that keeps a running total of `measure` over every
     /// frame it holds, so its port can read what is queued without popping it.
-    pub fn new_measuring(history: usize, measure: Option<QueuedFrameMeasure>) -> Self {
+    pub fn new_measuring(history: usize, measure: Option<PortMailboxQueuedFrameMeasure>) -> Self {
         let capacity = history.max(1);
         Self {
             queue: ArrayQueue::new(capacity),
