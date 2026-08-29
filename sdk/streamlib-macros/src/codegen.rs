@@ -601,13 +601,13 @@ fn generate_descriptor_from_schema(
         .collect();
 
     // iceoryx2-based output ports
+    let no_audio_window_tokens = audio_window_contract_tokens(None);
     let ipc_output_ports: Vec<TokenStream> = schema
         .outputs
         .iter()
         .map(|p| {
             let port_name = &p.name;
             let port_desc = p.description.as_deref().unwrap_or("");
-            let no_audio_window_tokens = audio_window_contract_tokens(None);
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),

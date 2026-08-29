@@ -505,9 +505,6 @@ fn parse_audio_window_contract(
         body.parse::<Token![,]>()?;
     }
 
-    // One refutable pattern rather than a presence table plus four unwraps:
-    // the compiler owns the correspondence, so a sixth required field cannot
-    // turn an author's error message into a proc-macro panic.
     let absent_required_fields = [
         ("sample_rate", sample_rate.is_none()),
         ("channels", channels.is_none()),

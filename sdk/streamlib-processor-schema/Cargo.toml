@@ -22,9 +22,10 @@ schemars = "0.8"  # JsonSchema impls on the processor-schema and descriptor type
 utoipa = { version = "5.3", optional = true }
 
 [features]
-# Adds a `utoipa::ToSchema` derive to `ProcessorClassImportPath` for host-side
-# OpenAPI generation. Off by default so the engine-free authoring chain carries
-# no OpenAPI machinery.
+# Adds a `utoipa::ToSchema` derive to the types the control plane renders —
+# `ProcessorClassImportPath` and the window contract — for host-side OpenAPI
+# generation. Off by default so the engine-free authoring chain carries no
+# OpenAPI machinery.
 utoipa = ["dep:utoipa"]
 
 [dev-dependencies]

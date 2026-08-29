@@ -167,6 +167,13 @@ fn read_port_descriptors(
             .get_item("audio_window")?
             .filter(|declared| !declared.is_none())
         {
+            if matches!(direction, PortDirection::Output) {
+                return Err(PyValueError::new_err(format!(
+                    "output port {:?} declares an audio_window — a producer publishes what \
+                     it has, and only a consuming input port states the window it needs",
+                    port.name
+                )));
+            }
             let contract = read_audio_window_contract(
                 &audio_window,
                 &port.name,
@@ -298,9 +305,7 @@ fn read_dict_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::python_class_from_source_for_tests::{
-        class_from_source, class_from_source_in_namespace,
-    };
+    use crate::python_class_from_source_for_tests::class_from_source;
 
     /// A class carrying what `@streamlib.processor` attaches.
     const DECLARED_CLASS_SOURCE: &str = "\
@@ -352,6 +357,19 @@ class BlurProcessor:
     const PROCESSOR_DECLARATION_MODULE_SOURCE: &str =
         include_str!("../python/streamlib/_processor_declaration.py");
 
+    /// A namespace with the real decorator module already run in it.
+    fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
+        let namespace = PyDict::new(python);
+        python
+            .run(
+                &std::ffi::CString::new(PROCESSOR_DECLARATION_MODULE_SOURCE).unwrap(),
+                Some(&namespace),
+                None,
+            )
+            .expect("the decorator module runs");
+        namespace
+    }
+
     /// Run the real decorator module, run `class_body_source` against it, and
     /// read the resulting class through the bridge the engine uses at `rt.add`.
     ///
@@ -360,12 +378,7 @@ class BlurProcessor:
     fn read_python_declaration(class_body_source: &str) -> PyResult<PythonProcessorDeclaration> {
         Python::initialize();
         Python::attach(|python| {
-            let namespace = PyDict::new(python);
-            python.run(
-                &std::ffi::CString::new(PROCESSOR_DECLARATION_MODULE_SOURCE).unwrap(),
-                Some(&namespace),
-                None,
-            )?;
+            let namespace = declaration_module_namespace(python);
 
             let source = format!("__name__ = 'my_app.audio'\n\n\n{class_body_source}");
             python.run(
@@ -606,10 +619,46 @@ class AudioConsumer:
 
             let refusal = hand_built_marker_refusal(&fields);
             assert!(
-                refusal.contains("audio") && refusal.contains(missing_field),
+                refusal.contains("input port \"audio\"") && refusal.contains(missing_field),
                 "a missing {missing_field:?} must name the port and the field; got {refusal}"
             );
         }
+    }
+
+    /// An output port declares no contract — the invariant three carrier docs
+    /// state and the `#[processor]` grammar refuses. A hand-built marker is
+    /// the only way to reach it, since `output()` takes no such argument.
+    #[test]
+    fn a_hand_built_output_marker_declaring_a_contract_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let source = "\
+__name__ = 'my_app.audio'
+
+
+class AudioConsumer:
+    __streamlib_processor_declared__ = True
+    __streamlib_processor_description__ = ''
+    __streamlib_processor_execution__ = {'mode': 'manual'}
+    __streamlib_processor_scheduling_priority__ = None
+    __streamlib_processor_input_ports__ = []
+    __streamlib_processor_output_ports__ = [{
+        'name': 'windows',
+        'description': '',
+        'audio_window': {'resolved_from': 'match_device'},
+    }]
+";
+            let declared_class = class_from_source(python, source, "AudioConsumer");
+
+            let refusal = match PythonProcessorDeclaration::read_from_class(&declared_class) {
+                Ok(_) => panic!("an output contract was accepted; a refusal was expected"),
+                Err(refusal) => refusal.to_string(),
+            };
+            assert!(
+                refusal.contains("output port \"windows\"") && refusal.contains("consuming"),
+                "the refusal must name the port and whose setting it is; got {refusal}"
+            );
+        });
     }
 
     /// The dtype vocabulary is spelled once per language, and nothing but this
@@ -620,14 +669,7 @@ class AudioConsumer:
     fn both_languages_legalise_the_same_window_dtypes() {
         Python::initialize();
         Python::attach(|python| {
-            let namespace = PyDict::new(python);
-            python
-                .run(
-                    &std::ffi::CString::new(PROCESSOR_DECLARATION_MODULE_SOURCE).unwrap(),
-                    Some(&namespace),
-                    None,
-                )
-                .expect("the decorator module runs");
+            let namespace = declaration_module_namespace(python);
 
             let python_dtypes = namespace
                 .get_item("_AUDIO_WINDOW_DTYPES")

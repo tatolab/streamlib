@@ -221,10 +221,9 @@ def input(
     `ctx.inputs.read(port_name)`.
 
     `audio_window` is optional and opt-in: an audio input may declare an
-    [`AudioWindowContract`] or [`AUDIO_WINDOW_MATCH_DEVICE`], and the engine
-    then resamples, converts channels and frames natively so `process()`
-    receives exact-size blocks. A port declaring none is unchanged in every
-    respect.
+    [`AudioWindowContract`] or [`AUDIO_WINDOW_MATCH_DEVICE`], stating the rate,
+    channels, dtype, window size and hop it wants. A port declaring none is
+    unchanged in every respect.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(
