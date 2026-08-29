@@ -51,9 +51,11 @@ pub enum DeliveryProfile {
     /// declares, so a producer that outruns a slow reader still loses samples
     /// there. Measured while building the audio playback path: a producer
     /// publishing about a thousand blocks a second reached its consumer as 78
-    /// of 378. That loss is counted now — per inbound link, rendered in
-    /// `graph` — but counting it is not delivering it, and the word still
-    /// promises what the tree does not do.
+    /// of 378. Eviction at that mailbox is counted now, per inbound link and
+    /// rendered in `graph`; loss at the iceoryx2 subscriber ring, which
+    /// overflows while a consumer parked inside `process()` pumps no receive,
+    /// is counted nowhere. Either way, counting a loss is not delivering it —
+    /// the word still promises what the tree does not do.
     Lossless,
 }
 

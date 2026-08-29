@@ -40,6 +40,12 @@ impl JsonSerializableComponent for ProcessorMetrics {
         "metrics"
     }
 
+    /// Only the fields something actually computes reach the wire. Nothing
+    /// writes `throughput_fps`, the two latencies or `frames_processed`, and
+    /// this component had no insert site at all until drop counts gave it one —
+    /// so rendering their zeros would put four permanent false claims on
+    /// `graph`'s first-ever `metrics` key. A reader could not tell an idle
+    /// processor from an uninstrumented one.
     fn to_json(&self) -> JsonValue {
         // One snapshot for both keys: taken twice, an eviction landing between
         // them renders a total smaller than the per-link counts it claims to be
@@ -48,10 +54,6 @@ impl JsonSerializableComponent for ProcessorMetrics {
             .dropped_bag_counts_by_inbound_link
             .dropped_bag_count_snapshot_by_inbound_link();
         serde_json::json!({
-            "throughput_fps": self.throughput_fps,
-            "latency_p50_ms": self.latency_p50_ms,
-            "latency_p99_ms": self.latency_p99_ms,
-            "frames_processed": self.frames_processed,
             "frames_dropped": by_inbound_link.values().sum::<u64>(),
             "dropped_bags_by_link": by_inbound_link
         })
@@ -78,11 +80,13 @@ mod tests {
         }
         .to_json();
 
-        assert_eq!(rendered["dropped_bags_by_link"]["L-first"], 7);
-        assert_eq!(rendered["dropped_bags_by_link"]["L-second"], 1);
         assert_eq!(
-            rendered["frames_dropped"], 8,
-            "the total must be derived from the per-link counts, never counted apart from them"
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 8,
+                "dropped_bags_by_link": { "L-first": 7, "L-second": 1 }
+            }),
+            "the whole rendering, so an uncomputed field cannot creep back onto the wire as a              zero, and so the total stays the per-link counts summed"
         );
     }
 
@@ -97,7 +101,12 @@ mod tests {
         }
         .to_json();
 
-        assert_eq!(rendered["dropped_bags_by_link"]["L-healthy"], 0);
-        assert_eq!(rendered["frames_dropped"], 0);
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": { "L-healthy": 0 }
+            }),
+        );
     }
 }

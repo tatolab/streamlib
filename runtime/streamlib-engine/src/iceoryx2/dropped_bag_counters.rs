@@ -32,9 +32,10 @@ impl InboundLinkDroppedBagCounter {
 /// Every inbound link's dropped-bag counter for one destination processor.
 ///
 /// A link gets its counter when its subscriber binds, so a wired link that has
-/// lost nothing reports zero rather than going missing, and loses it when the
-/// link disconnects — a count outliving its link would name something `graph`
-/// no longer has.
+/// lost nothing reports zero rather than going missing. A count is cumulative
+/// for the life of one wiring, not of the link id: disconnect takes it with the
+/// link, and reconnecting the same id starts from zero, because a count
+/// outliving its link would name something `graph` no longer has.
 #[derive(Default)]
 pub struct DroppedBagCountsByInboundLink {
     per_inbound_link: Mutex<HashMap<String, InboundLinkDroppedBagCounter>>,

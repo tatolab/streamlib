@@ -958,6 +958,12 @@ mod tests {
     /// charging the pushing link would report A=3/B=5, charging the link the
     /// evicted bag came in on reports A=5/B=3. The tag rides the entry for
     /// exactly this reason.
+    ///
+    /// The stall here is the consumer never reading — the transport is pumped
+    /// after every publish on purpose, so what the counts account for is
+    /// eviction at the mailbox alone. A consumer parked deeper, pumping no
+    /// receive at all, overflows the iceoryx2 subscriber ring instead, and
+    /// that loss is counted nowhere.
     #[test]
     fn each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port() {
         const MAILBOX_DEPTH: usize = 2;
