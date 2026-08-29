@@ -5,9 +5,7 @@
 //!
 //! A [`DeliveryProfile`] is the one word an author writes at a port declaration
 //! site (`#[processor]` attribute / `@processor` decorator). It names a read
-//! policy — which bag the consumer gets next — and resolves to the three
-//! transport settings the engine used to expose as four separate knobs
-//! (`read_mode`, `overflow`, `buffer_size`, `max_queued_messages`): the
+//! policy — which bag the consumer gets next — and resolves to the
 //! consumer-side drain order ([`ReadMode`]), the producer-side overflow policy
 //! ([`Overflow`]), and the ring depth. Every input port declares one and
 //! nothing is inferred — an input port without a profile is a wiring error.
