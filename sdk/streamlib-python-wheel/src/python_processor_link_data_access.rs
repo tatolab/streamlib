@@ -144,7 +144,6 @@ impl PythonProcessorLinkDataAccess {
         max_queued_messages,
         max_subscribers,
         notify_max_notifiers,
-        enable_safe_overflow,
         link_id,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -159,7 +158,6 @@ impl PythonProcessorLinkDataAccess {
         max_queued_messages: usize,
         max_subscribers: usize,
         notify_max_notifiers: usize,
-        enable_safe_overflow: bool,
         link_id: &str,
     ) -> PyResult<()> {
         let (node, output_writer) = self.helper_process_output_plane()?;
@@ -171,7 +169,6 @@ impl PythonProcessorLinkDataAccess {
                         channel_service_name,
                         max_subscribers,
                         max_queued_messages,
-                        enable_safe_overflow,
                     )?;
                     let publisher = channel.create_publisher(expected_payload_bytes)?;
                     output_writer.set_channel_publisher(
@@ -227,7 +224,6 @@ impl PythonProcessorLinkDataAccess {
         max_queued_messages,
         max_subscribers,
         notify_max_notifiers,
-        enable_safe_overflow,
         link_id,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -241,7 +237,6 @@ impl PythonProcessorLinkDataAccess {
         max_queued_messages: usize,
         max_subscribers: usize,
         notify_max_notifiers: usize,
-        enable_safe_overflow: bool,
         link_id: &str,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
@@ -265,7 +260,6 @@ impl PythonProcessorLinkDataAccess {
                     channel_service_name,
                     max_subscribers,
                     max_queued_messages,
-                    enable_safe_overflow,
                 )?;
                 input_mailboxes.add_channel_subscriber(
                     port_name,
@@ -477,7 +471,6 @@ mod tests {
                     8,
                     2,
                     1,
-                    true,
                     "link-1",
                 )
                 .unwrap();
@@ -492,7 +485,6 @@ mod tests {
                     8,
                     2,
                     1,
-                    true,
                     "link-1",
                 )
                 .unwrap();
@@ -540,7 +532,6 @@ mod tests {
                     8,
                     2,
                     1,
-                    true,
                     "link-1",
                 )
                 .unwrap();
@@ -555,7 +546,6 @@ mod tests {
                     8,
                     2,
                     1,
-                    true,
                     "link-2",
                 )
                 .expect("a second link out of one port must not reopen the publisher");
@@ -582,7 +572,6 @@ mod tests {
                     8,
                     2,
                     1,
-                    true,
                     "link-1",
                 )
                 .unwrap_err();
@@ -609,7 +598,6 @@ mod tests {
                     8,
                     2,
                     1,
-                    true,
                     "link-1",
                 )
                 .unwrap_err();

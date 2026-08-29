@@ -382,9 +382,9 @@ pub struct ProcessorPortSchema {
     pub description: Option<String>,
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`. The one delivery knob on the authoring surface: it names
-    /// a read policy and resolves to the consumer-side drain order, the
-    /// producer-side overflow policy, and the ring depth. Required on every
-    /// input port and always `None` on an output port.
+    /// a read policy and resolves to the consumer-side drain order and the
+    /// ring depth. Required on every input port and always `None` on an
+    /// output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
 }

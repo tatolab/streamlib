@@ -3660,7 +3660,6 @@ class FrameSomebodyElseWrote:
                     8,
                     2,
                     1,
-                    true,
                     &link_id,
                 ),
             )
@@ -3679,7 +3678,6 @@ class FrameSomebodyElseWrote:
                     8,
                     2,
                     1,
-                    true,
                     &link_id,
                 ),
             )

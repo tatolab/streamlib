@@ -105,12 +105,11 @@ pub fn open_iceoryx2_service(
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
     // Subscriber count is the compile-time destination fan-out plus the reserved
-    // tap slot. Ring depth, overflow policy, and consumer drain order all derive
-    // from the single delivery profile the channel's destinations agree on.
+    // tap slot. Ring depth and consumer drain order both derive from the single
+    // delivery profile the channel's destinations agree on.
     let ChannelSizing {
         max_subscribers,
         max_queued_messages,
-        enable_safe_overflow,
         drain_order,
     } = resolve_channel_sizing(graph, &source_proc_id, &source_port)?;
     let max_notifiers = destination_fanin(graph, &dest_proc_id);
@@ -120,7 +119,6 @@ pub fn open_iceoryx2_service(
         &channel_service_name,
         max_subscribers,
         max_queued_messages,
-        enable_safe_overflow,
     )?;
     let notify_service = notify_service_name
         .as_deref()
@@ -141,7 +139,6 @@ pub fn open_iceoryx2_service(
             max_queued_messages,
             max_subscribers,
             max_notifiers,
-            enable_safe_overflow,
             link_id,
         )?;
     } else {
@@ -174,7 +171,6 @@ pub fn open_iceoryx2_service(
             max_queued_messages,
             max_subscribers,
             max_notifiers,
-            enable_safe_overflow,
             link_id,
         )?;
     } else {
@@ -335,7 +331,7 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
 /// The full graph is built by the time the compiler op runs, so this outbound
 /// set is stable — every link out of the same source port sees the same set,
 /// which is what lets the incremental `open_or_create` calls agree (iceoryx2
-/// verifies `max_subscribers` / `enable_safe_overflow` on reopen).
+/// verifies `max_subscribers` on reopen).
 fn channel_destinations(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
@@ -375,15 +371,13 @@ fn channel_max_subscribers(
 /// phase-3.5 `tap` op (which reopens it publisher-free to add a reserved-slot
 /// subscriber) derive this from the SAME graph state via
 /// [`resolve_channel_sizing`], so their `open_or_create_service` calls agree —
-/// a mismatched `max_subscribers` / `subscriber_max_buffer_size` /
-/// `enable_safe_overflow` would be rejected by iceoryx2 on open.
+/// a mismatched `max_subscribers` / `subscriber_max_buffer_size` would be
+/// rejected by iceoryx2 on open.
 pub(crate) struct ChannelSizing {
     /// Compile-time destination count plus the reserved tap slot.
     pub(crate) max_subscribers: usize,
     /// Ring depth (`subscriber_max_buffer_size`) — the agreed delivery profile's depth.
     pub(crate) max_queued_messages: usize,
-    /// Overflow policy — `true` drops-oldest, which every profile resolves to.
-    pub(crate) enable_safe_overflow: bool,
     /// The agreed delivery profile's consumer drain order.
     pub(crate) drain_order: crate::iceoryx2::ReadMode,
 }
@@ -401,7 +395,6 @@ pub(crate) fn resolve_channel_sizing(
     Ok(ChannelSizing {
         max_subscribers: channel_max_subscribers(graph, source_proc_id, source_port),
         max_queued_messages: delivery.depth,
-        enable_safe_overflow: delivery.overflow.enable_safe_overflow(),
         drain_order: delivery.drain_order,
     })
 }
@@ -481,12 +474,12 @@ fn destination_consumes_notifications(
 /// The channel's [`DeliveryProfile`], agreed across every destination the
 /// channel feeds.
 ///
-/// A channel's single publisher shares one ring config
-/// (depth + `enable_safe_overflow`) across all subscribers, so its
-/// destinations must resolve to one delivery profile. A channel whose
-/// destinations disagree (`newest` vs `ordered`, say) is genuinely ambiguous —
-/// a named [`Error::Configuration`] rather than a silent pick. A channel with a
-/// single destination (the common case) uses that destination's profile.
+/// A channel's single publisher shares one ring depth across all subscribers
+/// and its destinations drain in one order, so they must resolve to one
+/// delivery profile. A channel whose destinations disagree (`newest` vs
+/// `ordered`, say) is genuinely ambiguous in both — a named
+/// [`Error::Configuration`] rather than a silent pick. A channel with a single
+/// destination (the common case) uses that destination's profile.
 ///
 /// [`DeliveryProfile`]: crate::iceoryx2::DeliveryProfile
 fn channel_delivery_profile(
@@ -764,13 +757,15 @@ fn wire_subprocess_source(
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
-    enable_safe_overflow: bool,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
+    // `enable_safe_overflow` is a wire fact, not a knob: iceoryx2 verifies it on
+    // every reopen, so an SDK opening this service from its own bindings must
+    // request the same value the engine did.
     let entry = serde_json::json!({
         "name": source_port,
         "link_id": link_id.to_string(),
-        "enable_safe_overflow": enable_safe_overflow,
+        "enable_safe_overflow": true,
         "channel_service_name": channel_service_name,
         "dest_notify_service_name": notify_service_name,
         "expected_payload_bytes": expected_payload,
@@ -810,7 +805,6 @@ fn wire_subprocess_dest(
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
-    enable_safe_overflow: bool,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
     // The dest reader no longer carries a payload-size hint: the subprocess read
@@ -818,10 +812,11 @@ fn wire_subprocess_dest(
     // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
     // The drain order is the delivery profile's, resolved host-side; the
     // subprocess maps the string back to its `*_input_set_read_mode` integer.
+    // `enable_safe_overflow` is the same wire fact the source side records.
     let entry = serde_json::json!({
         "name": dest_port,
         "link_id": link_id.to_string(),
-        "enable_safe_overflow": enable_safe_overflow,
+        "enable_safe_overflow": true,
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": drain_order.as_manifest_str(),
@@ -997,7 +992,6 @@ mod tests {
             8,
             2,
             1,
-            true,
             link_id,
         )
         .expect("recording source wiring must succeed");
@@ -1011,7 +1005,6 @@ mod tests {
             8,
             2,
             1,
-            true,
             link_id,
         )
         .expect("recording dest wiring must succeed");
@@ -1053,6 +1046,12 @@ mod tests {
             recorded_source_ports["outputs"][0]["channel_service_name"],
             serde_json::json!("pabc/out1"),
         );
+        assert_eq!(
+            recorded_source_ports["outputs"][0]["enable_safe_overflow"],
+            serde_json::json!(true),
+            "the envelope states the overflow mode iceoryx2 verifies on open; an SDK \
+             that opens this service from its own bindings has nothing else to read it from"
+        );
 
         let recorded_dest_ports = dest_instance
             .lock()
@@ -1063,6 +1062,12 @@ mod tests {
         assert_eq!(
             recorded_dest_ports["inputs"][0]["read_mode"],
             serde_json::json!("skip_to_latest"),
+        );
+        assert_eq!(
+            recorded_dest_ports["inputs"][0]["enable_safe_overflow"],
+            serde_json::json!(true),
+            "both ends of the link state the same overflow mode — iceoryx2 rejects a \
+             reopen that disagrees"
         );
     }
 
@@ -1284,7 +1289,6 @@ mod tests {
             8,
             2,
             1,
-            true,
             &link_id,
         )
         .expect("recording dest wiring must succeed");
@@ -1356,7 +1360,7 @@ mod tests {
     ) {
         let node = crate::iceoryx2::Iceoryx2Node::new().expect("an iceoryx2 node must open");
         let channel = node
-            .open_or_create_service(&unique_service_name(&format!("{tag}/channel")), 2, 8, true)
+            .open_or_create_service(&unique_service_name(&format!("{tag}/channel")), 2, 8)
             .expect("the channel service must open");
         let notify = destination_consumes_notifications.then(|| {
             node.open_or_create_notify_service(&unique_service_name(&format!("{tag}/notify")), 1)

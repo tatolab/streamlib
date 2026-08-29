@@ -59,8 +59,8 @@ impl std::fmt::Debug for ExchangedPublishedSurfaceFramePngImage {
 
 /// Encode tightly-packed RGBA8 pixels as PNG bytes.
 ///
-/// Lossless and un-inflated: the exact pixels the GPU copy produced are
-/// what a caller writes to disk or measures PSNR against.
+/// The exact pixels the GPU copy produced, lossless and un-inflated: what a
+/// caller writes to disk or measures PSNR against.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn encode_rgba8_pixels_as_png_image_bytes(
     rgba8_pixel_bytes: &[u8],

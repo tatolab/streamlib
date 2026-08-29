@@ -6,14 +6,13 @@
 //! A [`DeliveryProfile`] is the one word an author writes at a port declaration
 //! site (`#[processor]` attribute / `@processor` decorator). It names a read
 //! policy — which bag the consumer gets next — and resolves to the
-//! consumer-side drain order ([`ReadMode`]), the producer-side overflow policy
-//! ([`Overflow`]), and the ring depth. Every input port declares one and
-//! nothing is inferred — an input port without a profile is a wiring error.
+//! consumer-side drain order ([`ReadMode`]) and the ring depth. Every input
+//! port declares one and nothing is inferred — an input port without a profile
+//! is a wiring error.
 
 use streamlib_processor_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
 use streamlib_processor_schema::ProcessorClassImportPath;
 
-use super::overflow::Overflow;
 use super::read_mode::ReadMode;
 use crate::core::error::{Error, Result};
 use crate::core::processors::PROCESSOR_REGISTRY;
@@ -28,7 +27,7 @@ fn render_delivery_profile_values() -> String {
 }
 
 /// The one per-port delivery knob. Each profile bundles a fixed
-/// (drain order, overflow policy, ring depth) triple; see [`DeliveryProfile::resolve`].
+/// (drain order, ring depth) pair; see [`DeliveryProfile::resolve`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryProfile {
     /// The consumer drains to the most recent bag; older ones are passed
@@ -41,13 +40,11 @@ pub enum DeliveryProfile {
     Ordered,
 }
 
-/// The resolved transport triple a [`DeliveryProfile`] expands to at wire time.
+/// The resolved transport pair a [`DeliveryProfile`] expands to at wire time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeliveryResolution {
     /// Consumer-side drain order applied by the destination's mailbox.
     pub drain_order: ReadMode,
-    /// Producer-side overflow policy sizing the channel's `enable_safe_overflow`.
-    pub overflow: Overflow,
     /// Ring depth — both the iceoryx2 subscriber buffer and the host mailbox
     /// capacity.
     pub depth: usize,
@@ -59,17 +56,15 @@ impl DeliveryProfile {
     /// Ring depth for [`DeliveryProfile::Ordered`].
     pub const ORDERED_DEPTH: usize = 16;
 
-    /// Expand this profile into its fixed (drain order, overflow, depth) triple.
+    /// Expand this profile into its fixed (drain order, depth) pair.
     pub fn resolve(self) -> DeliveryResolution {
         match self {
             DeliveryProfile::Newest => DeliveryResolution {
                 drain_order: ReadMode::SkipToLatest,
-                overflow: Overflow::DropOldest,
                 depth: Self::NEWEST_DEPTH,
             },
             DeliveryProfile::Ordered => DeliveryResolution {
                 drain_order: ReadMode::ReadNextInOrder,
-                overflow: Overflow::DropOldest,
                 depth: Self::ORDERED_DEPTH,
             },
         }
@@ -145,36 +140,14 @@ mod tests {
     fn newest_resolves_to_skip_drop_shallow() {
         let resolution = DeliveryProfile::Newest.resolve();
         assert_eq!(resolution.drain_order, ReadMode::SkipToLatest);
-        assert_eq!(resolution.overflow, Overflow::DropOldest);
         assert_eq!(resolution.depth, 4);
-        assert!(resolution.overflow.enable_safe_overflow());
     }
 
     #[test]
     fn ordered_resolves_to_fifo_drop_deep() {
         let resolution = DeliveryProfile::Ordered.resolve();
         assert_eq!(resolution.drain_order, ReadMode::ReadNextInOrder);
-        assert_eq!(resolution.overflow, Overflow::DropOldest);
         assert_eq!(resolution.depth, 16);
-        assert!(resolution.overflow.enable_safe_overflow());
-    }
-
-    /// No declarable profile reaches producer-blocking. Driven from the
-    /// declaration constant rather than a literal so a profile added there is
-    /// covered here without anyone remembering to widen this.
-    #[test]
-    fn no_declarable_profile_resolves_to_a_blocking_producer() {
-        for declared_value in DELIVERY_PROFILE_DECLARATION_VALUES {
-            let resolution = DeliveryProfile::from_manifest_str(declared_value)
-                .expect("every legal declaration value parses")
-                .resolve();
-            assert_eq!(
-                resolution.overflow,
-                Overflow::DropOldest,
-                "'{declared_value}' must drop rather than park its producer"
-            );
-            assert!(resolution.overflow.enable_safe_overflow());
-        }
     }
 
     #[test]

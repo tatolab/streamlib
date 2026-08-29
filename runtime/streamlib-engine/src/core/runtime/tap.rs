@@ -33,11 +33,12 @@
 //! The forwarder ALWAYS drains the iceoryx2 subscriber and NEVER blocks on the
 //! downstream: it forwards with `try_send` over a BOUNDED mpsc and, when that
 //! channel is full, DROPS the newest bag (counted, [`TapSubscription::dropped_bags`])
-//! rather than parking. A read-only observability tap must never gate production
-//! throughput — on a lossless channel a forwarder parked in a blocking send
-//! would stop draining, fill the iceoryx2 buffer, and back-pressure the source
-//! processor's `send()`. This is deliberately unlike the UNBOUNDED event
-//! WebSocket bridge: the tap trades completeness for guaranteed non-interference.
+//! rather than parking. A forwarder parked in a blocking send would stop
+//! draining the reserved slot, so every later bag on the channel would reach no
+//! observer and detaching the tap would hang on a thread that never returns.
+//! This is deliberately unlike the UNBOUNDED event WebSocket bridge: the tap
+//! trades completeness for liveness — detach returns, and the bags after a
+//! stall still reach an observer.
 //!
 //! Detaching = dropping the [`TapSubscription`]: the mpsc receiver is closed,
 //! the forwarder thread is signalled to stop, joined, and the reserved slot is
@@ -64,13 +65,12 @@ const TAP_IDLE_POLL_BACKOFF: Duration = Duration::from_micros(500);
 const TAP_DROP_WARN_INTERVAL: u64 = 256;
 
 /// The iceoryx2 sizing a tap must reopen its channel data service with. Both
-/// the compiler op that created the service and this tap derive the same triple
+/// the compiler op that created the service and this tap derive the same pair
 /// from the live graph, so iceoryx2 accepts the publisher-free reopen.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TapChannelSizing {
     pub(crate) max_subscribers: usize,
     pub(crate) max_queued_messages: usize,
-    pub(crate) enable_safe_overflow: bool,
 }
 
 /// The two Arc handles shared between a [`TapSubscription`] and its forwarder
@@ -237,7 +237,6 @@ fn run_forwarder(
         &channel,
         sizing.max_subscribers,
         sizing.max_queued_messages,
-        sizing.enable_safe_overflow,
     ) {
         Ok(service) => service,
         Err(open_error) => {
@@ -349,17 +348,15 @@ mod tests {
     }
 
     fn open_channel(node: &Iceoryx2Node, name: &str, max_subscribers: usize) -> Iceoryx2Service {
-        node.open_or_create_service(name, max_subscribers, RING_DEPTH, true)
+        node.open_or_create_service(name, max_subscribers, RING_DEPTH)
             .expect("open channel data service")
     }
 
-    /// Realtime (drop-oldest) sizing matching [`open_channel`], for the tap's
-    /// publisher-free reopen.
-    fn realtime_sizing(max_subscribers: usize) -> TapChannelSizing {
+    /// Sizing matching [`open_channel`], for the tap's publisher-free reopen.
+    fn tap_channel_sizing_matching_open_channel(max_subscribers: usize) -> TapChannelSizing {
         TapChannelSizing {
             max_subscribers,
             max_queued_messages: RING_DEPTH,
-            enable_safe_overflow: true,
         }
     }
 
@@ -391,7 +388,7 @@ mod tests {
         let mut tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            realtime_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect("first tap attaches to the reserved slot");
@@ -400,7 +397,7 @@ mod tests {
         let err = start_channel_tap(
             node.clone(),
             channel.clone(),
-            realtime_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect_err("a second concurrent tap must be rejected");
@@ -443,7 +440,7 @@ mod tests {
         let tap_again = start_channel_tap(
             node.clone(),
             channel.clone(),
-            realtime_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect("reserved slot must be free again after the first tap detached");
@@ -464,7 +461,7 @@ mod tests {
         let mut tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            realtime_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             Some(2),
         )
         .expect("bounded tap attaches");
@@ -517,7 +514,7 @@ mod tests {
         let mut tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            realtime_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             Some(0),
         )
         .expect("zero-count tap attaches");
@@ -545,11 +542,10 @@ mod tests {
     /// block the forwarder's iceoryx2 drain, and detaching such a tap must
     /// return promptly instead of hanging on a parked forwarder.
     ///
-    /// This is exercised on a LOSSLESS channel (`enable_safe_overflow = false`),
-    /// the exact production hazard: a forwarder parked in a blocking send would
-    /// stop draining iceoryx2 and back-pressure the source's `send()`. The
-    /// forwarder must instead keep receiving and DROP into the full mpsc
-    /// (asserted via `dropped_bags()`), and `drop(tap)` must not hang.
+    /// The forwarder must keep receiving and DROP into the full mpsc (asserted
+    /// via `dropped_bags()`) rather than parking: a parked forwarder stops
+    /// draining the reserved slot, so the bags it never picks up reach no
+    /// observer at all, and `drop(tap)` joins a thread that never returns.
     ///
     /// Mentally revert to `blocking_send` (and remove `receiver.close()` from
     /// Drop): the forwarder parks the moment the bounded mpsc fills, never bumps
@@ -559,22 +555,19 @@ mod tests {
     fn stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly() {
         let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
-        let channel = unique_channel_name("backpressure");
-        // Lossless: a forwarder that parks would stall the producer.
-        let service = node
-            .open_or_create_service(&channel, max_subscribers, RING_DEPTH, false)
-            .expect("open lossless channel data service");
+        let channel = unique_channel_name("stalled-downstream");
+        let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");
 
-        let sizing = TapChannelSizing {
-            max_subscribers,
-            max_queued_messages: RING_DEPTH,
-            enable_safe_overflow: false,
-        };
         // Never drain this tap: the bounded forward channel (capacity RING_DEPTH)
         // fills and stays full, so every further bag must be dropped.
-        let tap =
-            start_channel_tap(node.clone(), channel.clone(), sizing, None).expect("tap attaches");
+        let tap = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
+            None,
+        )
+        .expect("tap attaches");
 
         // Drive far more than the mpsc capacity through the channel until the
         // forwarder reports drops — proving it kept receiving past a full
