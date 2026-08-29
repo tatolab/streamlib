@@ -180,13 +180,16 @@ impl ContinuousProcessor for TestBagFeeder::Processor {
     }
 }
 
-/// Collects everything the processor under test produces.
+/// Collects what the processor under test produces, in publication order.
 ///
 /// `ordered` rather than `newest`: a test asserts on what was produced in the
 /// order it was produced, and a profile that passes over bags to reach the
-/// freshest would make the assertion lie under a burst.
+/// freshest would make the assertion lie under a burst. Bounding loss is not
+/// preventing it — a burst deeper than the port's ring evicts its oldest like
+/// any other link, so a test feeding more bags than `ORDERED_DEPTH` before it
+/// drains is asserting on a prefix it never received.
 #[streamlib::sdk::processor(
-    description = "Collects every bag the processor under test produced",
+    description = "Collects the bags the processor under test produced, bounded by the port ring depth",
     execution = reactive,
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,
     input(

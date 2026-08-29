@@ -269,8 +269,8 @@ use is an ordinary pip dependency in your venv, upgraded on your schedule.
 <br>
 
 A logger that wants its bags in the order they were sent and a display that should always show the
-newest frame want opposite things from the same producer. Each input says which it is, and saying
-so is required — there is no default to inherit by accident:
+newest frame want opposite things. Each input says which it is, and saying so is required — there
+is no default to inherit by accident:
 
 ```python
 @input(delivery_profile="newest")     # drains to the most recent bag, older ones passed over
@@ -278,7 +278,9 @@ so is required — there is no default to inherit by accident:
 ```
 
 A profile names a read policy and nothing more. Neither promises delivery: both drop under
-sustained pressure, and no link ever blocks a producer.
+sustained pressure, and no link ever blocks a producer. One output port carries one policy — every
+consumer wired to it declares the same profile, and consumers that want different ones are fanned
+out through distinct output ports.
 
 What crosses a link is a self-describing named map. No schema registry, no negotiation, no
 versions, no code-generation step, and nothing in the engine ever compares one stage's types
