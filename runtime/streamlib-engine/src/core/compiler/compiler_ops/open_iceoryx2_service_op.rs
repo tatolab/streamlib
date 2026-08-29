@@ -180,6 +180,8 @@ pub fn open_iceoryx2_service(
     } else {
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
         wire_rust_dest(
+            graph,
+            &dest_proc_id,
             &dest_processor,
             &dest_port,
             link_id,
@@ -188,7 +190,6 @@ pub fn open_iceoryx2_service(
             &service,
             notify_service.as_ref(),
         )?;
-        publish_dropped_bag_counts_on_destination_node(graph, &dest_proc_id, &dest_processor);
     }
 
     let link = graph
@@ -672,11 +673,15 @@ fn wire_rust_source(
 }
 
 /// Subscribe the Rust destination to the channel bound to its local input port,
-/// and ensure its single listener exists.
+/// ensure its single listener exists, and publish its dropped-bag counts onto
+/// its graph node.
 ///
 /// `notify_service` is `None` when this destination never drains a listener, and
 /// no listener is created for it.
+#[allow(clippy::too_many_arguments)]
 fn wire_rust_dest(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
@@ -708,6 +713,7 @@ fn wire_rust_dest(
             tracing::debug!("Created listener for destination on its notify service");
         }
     }
+    publish_dropped_bag_counts_on_destination_node(graph, dest_proc_id, &input_inner);
     Ok(())
 }
 
@@ -718,17 +724,14 @@ fn wire_rust_dest(
 /// counts are one shared object for the whole processor, and a link wired later
 /// mints its own zeroed entry inside it.
 ///
-/// A destination whose mailboxes live out of process counts its evictions
-/// there and exposes nothing here, so its node carries no metrics at all rather
-/// than a zero the parent cannot stand behind.
+/// A destination whose mailboxes live out of process never reaches here — it
+/// counts its evictions in its own process, and its node carries no metrics at
+/// all rather than a zero the parent cannot stand behind.
 fn publish_dropped_bag_counts_on_destination_node(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
-    dest_processor: &Arc<Mutex<ProcessorInstance>>,
+    input_inner: &Arc<crate::iceoryx2::InputMailboxesInner>,
 ) {
-    let Some(input_inner) = dest_processor.lock().iceoryx2_input_mailboxes_inner() else {
-        return;
-    };
     let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
         return;
     };
@@ -1379,6 +1382,7 @@ mod tests {
         } else {
             add_mock_input_only(&mut graph)
         };
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
         let (dest, _, dest_input) = attach_mock_instance::<Destination>(&mut graph, &dest_id);
         let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
 
@@ -1401,6 +1405,8 @@ mod tests {
         )
         .expect("the source side wires");
         wire_rust_dest(
+            &mut graph,
+            &dest_unique_id,
             &dest,
             "in1",
             &link_id,
@@ -1418,11 +1424,12 @@ mod tests {
     /// carries its per-inbound-link dropped-bag counts, live off the mailboxes
     /// that did the evicting.
     ///
-    /// Driven through the real seam end to end — a real channel service, the
-    /// source's own `write_raw`, the destination's own `receive_pending` — so
-    /// what is asserted is the rendering a `GET /api/graph` reader gets, not a
-    /// counter poked by hand. Fail-without-fix: drop the metrics insert from
-    /// the wiring op and the node renders no `metrics` at all, so a run that
+    /// Driven through the real seam end to end — the destination-side wiring
+    /// the compiler op runs, a real channel service, the source's own
+    /// `write_raw`, the destination's own `receive_pending` — so what is
+    /// asserted is the rendering a `GET /api/graph` reader gets, not a counter
+    /// poked by hand. Fail-without-fix: drop the publish step from
+    /// `wire_rust_dest` and the node renders no `metrics` at all, so a run that
     /// lost three of its four bags reads exactly like a healthy one.
     #[test]
     fn a_dropping_destinations_node_renders_each_inbound_links_losses() {
@@ -1459,6 +1466,8 @@ mod tests {
         )
         .expect("the source side wires");
         wire_rust_dest(
+            &mut graph,
+            &dest_unique_id,
             &dest,
             "in1",
             &link_id,
@@ -1468,7 +1477,6 @@ mod tests {
             None,
         )
         .expect("the destination side wires");
-        publish_dropped_bag_counts_on_destination_node(&mut graph, &dest_unique_id, &dest);
 
         let rendered_metrics = |graph: &mut Graph| -> serde_json::Value {
             graph

@@ -41,15 +41,19 @@ impl JsonSerializableComponent for ProcessorMetrics {
     }
 
     fn to_json(&self) -> JsonValue {
+        // One snapshot for both keys: taken twice, an eviction landing between
+        // them renders a total smaller than the per-link counts it claims to be
+        // the sum of.
+        let by_inbound_link = self
+            .dropped_bag_counts_by_inbound_link
+            .dropped_bag_count_snapshot_by_inbound_link();
         serde_json::json!({
             "throughput_fps": self.throughput_fps,
             "latency_p50_ms": self.latency_p50_ms,
             "latency_p99_ms": self.latency_p99_ms,
             "frames_processed": self.frames_processed,
-            "frames_dropped": self.total_dropped_bag_count(),
-            "dropped_bags_by_link": self
-                .dropped_bag_counts_by_inbound_link
-                .dropped_bag_count_by_inbound_link()
+            "frames_dropped": by_inbound_link.values().sum::<u64>(),
+            "dropped_bags_by_link": by_inbound_link
         })
     }
 }

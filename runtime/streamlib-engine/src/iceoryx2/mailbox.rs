@@ -73,15 +73,9 @@ impl PortMailbox {
         });
     }
 
-    fn push_frame(&self, frame: PortMailboxQueuedFrame) {
-        // If full, evict oldest to make room
-        while self.queue.is_full() {
-            if let Some(evicted) = self.queue.pop() {
-                evicted.record_eviction();
-            }
-        }
-        // Push should succeed now (may fail if another thread filled it, retry)
-        let mut frame = frame;
+    fn push_frame(&self, mut frame: PortMailboxQueuedFrame) {
+        // `ArrayQueue::push` hands the frame back only when the queue is full,
+        // so this is the one eviction site: try, evict oldest, retry.
         while let Err(rejected) = self.queue.push(frame) {
             frame = rejected;
             if let Some(evicted) = self.queue.pop() {

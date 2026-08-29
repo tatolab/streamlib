@@ -754,6 +754,45 @@ mod tests {
         frame
     }
 
+    /// Open a channel sized for `buffered_frames` in flight and hand back the
+    /// publisher (kept alive so sent samples stay resident) plus a bound
+    /// subscriber, so a test can publish one frame at a time.
+    fn open_channel_for_one_link(
+        node: &iceoryx2::node::Node<ipc::Service>,
+        tag: &str,
+        buffered_frames: usize,
+    ) -> (
+        iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
+        Subscriber<ipc::Service, [u8], ()>,
+    ) {
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .subscriber_max_buffer_size(buffered_frames)
+            .enable_safe_overflow(true)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .create()
+            .unwrap();
+        let subscriber = pubsub.subscriber_builder().create().unwrap();
+        (publisher, subscriber)
+    }
+
+    /// Publish one frame stamped with `source_port` onto an open channel.
+    fn publish_one_frame(
+        publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
+        source_port: &str,
+        body: &[u8],
+    ) {
+        let frame = wire_frame_stamping(source_port, 0, body.len() as u32, body);
+        let sample = publisher.loan_slice_uninit(frame.len()).unwrap();
+        sample.write_from_slice(&frame).send().unwrap();
+    }
+
     /// Driving the iceoryx2 Event service end-to-end: notify must transition
     /// the Listener fd to readable within a short bounded window so an epoll
     /// or select wait wakes promptly.
@@ -887,33 +926,10 @@ mod tests {
     #[test]
     fn two_channel_subscribers_fan_into_one_local_port() {
         let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
-
-        // Open a fresh channel, publish one frame stamped with its own source
-        // port, and hand back the publisher (kept alive so the sent sample stays
-        // resident) plus the bound subscriber.
-        let open_channel_and_publish = |tag: &str, source_port: &str, data: &[u8]| {
-            let pubsub = node
-                .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
-                .publish_subscribe::<[u8]>()
-                .max_publishers(2)
-                .open_or_create()
-                .unwrap();
-            let publisher = pubsub
-                .publisher_builder()
-                .initial_max_slice_len(4096)
-                .create()
-                .unwrap();
-            let subscriber = pubsub.subscriber_builder().create().unwrap();
-
-            let frame = wire_frame_stamping(source_port, 0, data.len() as u32, data);
-            let sample = publisher.loan_slice_uninit(frame.len()).unwrap();
-            sample.write_from_slice(&frame).send().unwrap();
-
-            (publisher, subscriber)
-        };
-
-        let (_pub_a, sub_a) = open_channel_and_publish("fanin/a", "src_a_out", b"frame-from-a");
-        let (_pub_b, sub_b) = open_channel_and_publish("fanin/b", "src_b_out", b"frame-from-b");
+        let (publisher_a, sub_a) = open_channel_for_one_link(&node, "fanin/a", 1);
+        let (publisher_b, sub_b) = open_channel_for_one_link(&node, "fanin/b", 1);
+        publish_one_frame(&publisher_a, "src_a_out", b"frame-from-a");
+        publish_one_frame(&publisher_b, "src_b_out", b"frame-from-b");
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
@@ -930,49 +946,6 @@ mod tests {
             vec![b"frame-from-a".to_vec(), b"frame-from-b".to_vec()],
             "both inbound channels must fan into the one local input port's mailbox",
         );
-    }
-
-    /// Open a channel sized for `buffered_frames` in flight and hand back the
-    /// publisher (kept alive so sent samples stay resident) plus a bound
-    /// subscriber, so a test can publish one frame at a time.
-    fn open_channel_for_one_link(
-        node: &iceoryx2::node::Node<ipc::Service>,
-        tag: &str,
-        buffered_frames: usize,
-    ) -> (
-        iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
-        Subscriber<ipc::Service, [u8], ()>,
-    ) {
-        let pubsub = node
-            .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .subscriber_max_buffer_size(buffered_frames)
-            .enable_safe_overflow(true)
-            .open_or_create()
-            .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(4096)
-            .create()
-            .unwrap();
-        let subscriber = pubsub.subscriber_builder().create().unwrap();
-        (publisher, subscriber)
-    }
-
-    /// Publish one frame stamped with `source_port` and route it into the
-    /// destination's mailbox, so the test owns the interleaving rather than
-    /// leaving it to whatever the transport happened to buffer.
-    fn publish_one_frame_and_receive(
-        publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
-        mailboxes: &InputMailboxesInner,
-        source_port: &str,
-        body: &[u8],
-    ) {
-        let frame = wire_frame_stamping(source_port, 0, body.len() as u32, body);
-        let sample = publisher.loan_slice_uninit(frame.len()).unwrap();
-        sample.write_from_slice(&frame).send().unwrap();
-        mailboxes.receive_pending();
     }
 
     /// The counting contract under fan-in: a stalled `ordered` consumer whose
@@ -1002,15 +975,17 @@ mod tests {
         mailboxes.add_channel_subscriber("in", "L-second", subscriber_b);
 
         for _ in 0..FRAMES_PER_LINK {
-            publish_one_frame_and_receive(&publisher_a, &mailboxes, "src_a_out", b"from-a");
+            publish_one_frame(&publisher_a, "src_a_out", b"from-a");
+            mailboxes.receive_pending();
         }
         for _ in 0..FRAMES_PER_LINK {
-            publish_one_frame_and_receive(&publisher_b, &mailboxes, "src_b_out", b"from-b");
+            publish_one_frame(&publisher_b, "src_b_out", b"from-b");
+            mailboxes.receive_pending();
         }
 
         let counts = mailboxes
             .dropped_bag_counts_by_inbound_link()
-            .dropped_bag_count_by_inbound_link();
+            .dropped_bag_count_snapshot_by_inbound_link();
         assert_eq!(
             counts,
             std::collections::BTreeMap::from([
@@ -1045,14 +1020,16 @@ mod tests {
         mailboxes.add_channel_subscriber("in", "L-second", subscriber_b);
 
         for _ in 0..2 {
-            publish_one_frame_and_receive(&publisher_a, &mailboxes, "src_a_out", b"from-a");
-            publish_one_frame_and_receive(&publisher_b, &mailboxes, "src_b_out", b"from-b");
+            publish_one_frame(&publisher_a, "src_a_out", b"from-a");
+            mailboxes.receive_pending();
+            publish_one_frame(&publisher_b, "src_b_out", b"from-b");
+            mailboxes.receive_pending();
         }
 
         assert_eq!(
             mailboxes
                 .dropped_bag_counts_by_inbound_link()
-                .dropped_bag_count_by_inbound_link(),
+                .dropped_bag_count_snapshot_by_inbound_link(),
             std::collections::BTreeMap::from([
                 ("L-first".to_string(), 0),
                 ("L-second".to_string(), 0),
@@ -1073,12 +1050,13 @@ mod tests {
         mailboxes.add_port("in", 1, ReadMode::ReadNextInOrder);
         mailboxes.add_channel_subscriber("in", "L-departing", subscriber);
         for _ in 0..3 {
-            publish_one_frame_and_receive(&publisher, &mailboxes, "src_out", b"body");
+            publish_one_frame(&publisher, "src_out", b"body");
+            mailboxes.receive_pending();
         }
         assert_eq!(
             mailboxes
                 .dropped_bag_counts_by_inbound_link()
-                .dropped_bag_count_by_inbound_link()["L-departing"],
+                .dropped_bag_count_snapshot_by_inbound_link()["L-departing"],
             2,
         );
 
@@ -1087,7 +1065,7 @@ mod tests {
         assert!(
             mailboxes
                 .dropped_bag_counts_by_inbound_link()
-                .dropped_bag_count_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link()
                 .is_empty(),
         );
     }

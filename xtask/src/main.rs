@@ -315,8 +315,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "linux::alsa_audio_device_backend::tests::a_stop_arriving_during_the_last_silent_wait_outranks_the_silence",
                 "linux::pipewire_audio_device_backend::tests::a_failure_the_shim_reports_lands_in_the_report_the_owner_holds",
                 "linux::pipewire_audio_device_backend::tests::a_failure_the_daemon_did_not_explain_is_still_reported_as_one",
-                "iceoryx2::dropped_bag_counters::tests::a_wired_link_that_has_lost_nothing_reports_zero_rather_than_going_missing",
-                "iceoryx2::dropped_bag_counters::tests::each_inbound_links_losses_are_counted_against_that_link_alone",
                 "iceoryx2::dropped_bag_counters::tests::asking_twice_for_one_links_counter_shares_the_count",
                 "iceoryx2::dropped_bag_counters::tests::a_disconnected_links_count_leaves_with_it",
                 "iceoryx2::mailbox::tests::an_eviction_is_counted_against_the_link_whose_bag_was_lost",
