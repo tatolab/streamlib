@@ -247,7 +247,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &["test", "--locked", "-p", "xtask"],
         ),
         (
-            "SDK + macros unit tests",
+            "SDK + macros + processor-schema unit tests",
             "cargo",
             &[
                 "test",
@@ -256,6 +256,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib",
                 "-p",
                 "streamlib-macros",
+                "-p",
+                "streamlib-processor-schema",
                 "--lib",
             ],
         ),
@@ -340,6 +342,13 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::delivery_profile::tests::port_declaration_resolution::declared_profile_is_the_whole_answer",
                 "iceoryx2::delivery_profile::tests::port_declaration_resolution::missing_declaration_is_a_wiring_error_naming_the_port",
                 "iceoryx2::delivery_profile::tests::port_declaration_resolution::unknown_declared_value_is_rejected_with_the_legal_values",
+                "core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys",
+                "core::json_schema::port_rendering_tests::port_info_output_carries_no_type_key_under_any_spelling",
+                "core::json_schema::port_rendering_tests::port_descriptor_output_carries_no_type_key",
+                "core::json_schema::port_rendering_tests::a_contract_bearing_port_renders_its_contract_beside_the_four",
+                "core::json_schema::port_rendering_tests::a_port_declaring_the_sentinel_renders_it_as_a_whole_contract",
+                "core::json_schema::port_rendering_tests::a_declared_contract_survives_the_descriptor_to_port_info_hop",
+                "core::json_schema::port_rendering_tests::a_contract_bearing_descriptor_renders_its_contract_too",
             ],
         ),
         // The deviceless arm's integration binaries, which the workflow runs
