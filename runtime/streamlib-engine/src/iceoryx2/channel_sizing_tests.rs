@@ -149,10 +149,10 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
     );
 }
 
-/// Every channel service opens under safe overflow, read back from the live
-/// static config rather than from what this caller asked for. It is not a
-/// parameter and no profile derives it: a full subscriber buffer evicts its
-/// oldest sample so the publisher's `send()` never blocks.
+/// Every channel service opens under safe overflow, read off the service's own
+/// static config. It is not a parameter and no profile derives it: a full
+/// subscriber buffer evicts its oldest sample so the publisher's `send()`
+/// never blocks.
 ///
 /// Mentally-revert: drop the `.enable_safe_overflow(true)` line in
 /// [`Iceoryx2Node::open_or_create_service`] and this test still passes —
