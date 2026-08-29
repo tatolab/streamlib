@@ -242,6 +242,7 @@ jobs:
             iceoryx2::audio_window::audio_window_stage_tests::the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce \
             iceoryx2::audio_window::audio_window_stage_tests::the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to \
             iceoryx2::input::tests::a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted \
+            iceoryx2::input::tests::a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitted \
             iceoryx2::input::tests::one_1024_sample_quantum_reads_out_of_a_512_512_port_exactly_twice \
             iceoryx2::input::tests::a_contract_less_port_still_reads_the_bag_the_producer_published_byte_for_byte \
             iceoryx2::input::tests::a_windowed_ports_per_link_drop_counts_match_an_unwindowed_ports_under_the_same_overrun \

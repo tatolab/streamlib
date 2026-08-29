@@ -198,11 +198,6 @@ impl AudioWindowAccumulator {
         }
     }
 
-    /// The contract this stage runs on.
-    pub(crate) fn contract(&self) -> ResolvedAudioWindowContract {
-        self.contract
-    }
-
     /// Take one bag consumed from the port's mailbox through the stage.
     ///
     /// Refuses by name rather than reshaping: a dtype it does not know, a

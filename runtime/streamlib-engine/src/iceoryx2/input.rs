@@ -1217,6 +1217,62 @@ mod tests {
         .expect("a contract the stage can honour")
     }
 
+    /// A 48 kHz source into a 16 kHz port takes the resampling arm, where the
+    /// readiness floor has to know the source rate to give back the right
+    /// priming — and the only place it can learn one before consuming a bag is
+    /// the mailbox's own measure.
+    ///
+    /// The identity arm cannot catch a measure that reports no rate: with the
+    /// rates equal there is no filter and no priming to give back.
+    #[test]
+    fn a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) =
+            open_channel_for_one_link_loaning(&node, "window/resampled", 32, 16_384);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        // 160-frame quanta, so the queue crosses one window's worth in steps
+        // smaller than the priming and chunk slack. A floor that cannot see
+        // that slack says yes somewhere in that gap and the read then produces
+        // nothing — the exact shape the contract exists to rule out, and one a
+        // coarser quantum steps straight over.
+        const SOURCE_FRAMES_PER_BLOCK: u64 = 160;
+
+        let mut windows = 0;
+        for block in 0..24u64 {
+            publish_one_frame(
+                &publisher,
+                "mic_out",
+                &mono_audio_block_body(
+                    SOURCE_FRAMES_PER_BLOCK as usize,
+                    48_000,
+                    (block * SOURCE_FRAMES_PER_BLOCK * 1_000_000_000 / 48_000) as i64,
+                ),
+            );
+            while mailboxes.any_port_has_data() {
+                assert!(
+                    mailboxes.read_raw("in").expect("reads").is_some(),
+                    "the gate promised a window at 48 kHz into a 16 kHz port; the read \
+                     must produce one"
+                );
+                windows += 1;
+            }
+        }
+
+        assert!(
+            windows >= 2,
+            "24 blocks of 160 frames at 48 kHz is 1280 frames at 16 kHz, so at least \
+             two 512-sample windows; got {windows}"
+        );
+    }
+
     /// One audio-block bag body carrying `frames` per-channel mono samples at
     /// `sample_rate`, the shape a microphone publishes.
     fn mono_audio_block_body(

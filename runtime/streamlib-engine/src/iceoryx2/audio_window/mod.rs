@@ -69,6 +69,7 @@ pub(crate) fn queued_audio_window_frame_measure(
         if block.sample_rate == 0 {
             return 0;
         }
+        latest_source_sample_rate.store(block.sample_rate, Ordering::Relaxed);
         u64::from(block.sample_count) * u64::from(contract.sample_rate)
             / u64::from(block.sample_rate)
     })

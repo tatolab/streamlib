@@ -541,10 +541,13 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
         let (mut stage, rate_the_mailbox_reports) =
             stage_and_the_rate_its_mailbox_reports(contract);
 
-        let source_frames_per_block = 512u64;
+        // Small quanta on purpose: the queue must cross one window's worth in
+        // steps smaller than the priming and chunk slack, or a floor blind to
+        // that slack steps straight over the gap where it would overclaim.
+        let source_frames_per_block = 160u64;
         let mut queued_equivalents = 0u64;
         let mut blocks = Vec::new();
-        for block_index in 0..40u64 {
+        for block_index in 0..60u64 {
             let first_frame = block_index * source_frames_per_block;
             blocks.push(source_block(
                 &interleaved_sine(
