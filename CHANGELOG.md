@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.20](https://github.com/tatolab/streamlib/compare/v0.18.19...v0.18.20) (2026-08-29)
+
+
+### Bug Fixes
+
+* **ci:** the wheel crate's lib tests share one interpreter, so run them serially ([#2039](https://github.com/tatolab/streamlib/issues/2039)) ([4a7813b](https://github.com/tatolab/streamlib/commit/4a7813bbe5dc0c05a3b31f91abcf4df35d92f2b0))
+
 ## [0.18.19](https://github.com/tatolab/streamlib/compare/v0.18.18...v0.18.19) (2026-08-29)
 
 
