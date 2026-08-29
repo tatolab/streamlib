@@ -1066,6 +1066,52 @@ mod tests {
         );
     }
 
+    /// A helper-placed destination's node carries no metrics at all.
+    ///
+    /// Its mailboxes are its own process's, so the parent counts none of its
+    /// evictions and has nothing to render. Rendering an empty map or a zero
+    /// here would say "this processor lost nothing", which the parent cannot
+    /// know — the absent key is what makes it readable as unanswered rather
+    /// than as healthy. The gap itself is plan-level (ARCHITECTURE.md's
+    /// counting entry is unconditional); this locks the shape chosen for it so
+    /// nobody closes it later with a zero.
+    #[test]
+    fn a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        attach_processor_instance(
+            &mut graph,
+            &source_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+
+        record_wiring_for_both_out_of_process_endpoints(
+            &mut graph,
+            &source_id,
+            &dest_id,
+            &"L-helper-placed".into(),
+        );
+
+        assert!(
+            graph
+                .traversal_mut()
+                .v(&dest_unique_id)
+                .first()
+                .expect("the destination node must be in the graph")
+                .serialize_components()
+                .get("metrics")
+                .is_none(),
+            "a destination the parent holds no mailboxes for must render no metrics key",
+        );
+    }
+
     /// Disconnecting a link whose endpoints both live out of process reclaims
     /// BOTH halves through the same seam that wired them, each told its own
     /// local port and direction — and each host's envelope forgets the link, so

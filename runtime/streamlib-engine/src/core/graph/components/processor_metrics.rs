@@ -86,7 +86,7 @@ mod tests {
                 "frames_dropped": 8,
                 "dropped_bags_by_link": { "L-first": 7, "L-second": 1 }
             }),
-            "the whole rendering, so an uncomputed field cannot creep back onto the wire as a              zero, and so the total stays the per-link counts summed"
+            "the whole rendering, so no uncomputed field creeps back onto the wire as a zero"
         );
     }
 
