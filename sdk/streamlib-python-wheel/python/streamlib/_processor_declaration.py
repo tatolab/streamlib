@@ -17,10 +17,14 @@ A processor is named by its class's import path, derived from `__module__` and
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, TypeVar
+import dataclasses
+from typing import Any, Callable, Optional, TypeVar, Union
 
 
 __all__ = [
+    "AUDIO_WINDOW_MATCH_DEVICE",
+    "AudioWindowContract",
+    "AudioWindowMatchDeviceSentinel",
     "input",
     "output",
     "processor",
@@ -29,6 +33,167 @@ __all__ = [
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
 _DELIVERY_PROFILES = ("newest", "ordered")
+_AUDIO_WINDOW_DTYPES = ("f32", "i16")
+
+
+class AudioWindowMatchDeviceSentinel:
+    """The type of [`AUDIO_WINDOW_MATCH_DEVICE`] — never constructed by an author."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "AUDIO_WINDOW_MATCH_DEVICE"
+
+
+AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
+"""Resolve the whole window contract at `setup()` from the device stream the
+declaring processor opened, rather than stating five values here.
+
+Whole-contract, never per-field, and only a processor that opens a device
+stream can satisfy it.
+"""
+
+
+class AudioWindowContract:
+    """The rate, channels, dtype, window size and hop an audio input port wants.
+
+    Declared beside `delivery_profile` on an `@input`, which must be
+    `"ordered"`. `window_size` counts per-channel samples — the unit
+    `AudioBlock.sample_count` uses — so one window carries
+    `window_size * channels` scalars. `hop` may be omitted and then resolves to
+    `window_size`: contiguous, non-overlapping windows by default, a rolling
+    window below that. The attribute always holds the resolved hop, never
+    `None`, which is why the constructor takes the omittable spelling and the
+    attribute does not.
+
+    All-or-nothing: there is no partial form, because a half-declared contract
+    would leave the engine guessing at exactly the values a model asserts on.
+    """
+
+    __slots__ = ("sample_rate", "channels", "dtype", "window_size", "hop")
+
+    sample_rate: int
+    channels: int
+    dtype: str
+    window_size: int
+    hop: int
+
+    def __init__(
+        self,
+        sample_rate: int,
+        channels: int,
+        dtype: str,
+        window_size: int,
+        hop: Optional[int] = None,
+    ) -> None:
+        resolved_hop = window_size if hop is None else hop
+        for field_name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("window_size", window_size),
+            ("hop", resolved_hop),
+        ):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise TypeError(
+                    f"AudioWindowContract field {field_name!r} must be an int; got "
+                    f"{type(value).__name__}"
+                )
+            if value <= 0:
+                raise ValueError(
+                    f"AudioWindowContract field {field_name!r} is {value} — every numeric "
+                    f"field is strictly positive"
+                )
+
+        if dtype not in _AUDIO_WINDOW_DTYPES:
+            raise ValueError(
+                f"AudioWindowContract field 'dtype' is {dtype!r} — must be one of "
+                f"{', '.join(_AUDIO_WINDOW_DTYPES)}, the two an AudioBlock legalises"
+            )
+
+        if resolved_hop > window_size:
+            raise ValueError(
+                f"AudioWindowContract declares hop {resolved_hop} above window_size "
+                f"{window_size} — a hop above the window silently discards the samples "
+                f"between windows. A hop below it is a rolling window and is legal; omitting "
+                f"it makes windows contiguous"
+            )
+
+        for field_name, value in (
+            ("sample_rate", sample_rate),
+            ("channels", channels),
+            ("dtype", dtype),
+            ("window_size", window_size),
+            ("hop", resolved_hop),
+        ):
+            object.__setattr__(self, field_name, value)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise dataclasses.FrozenInstanceError(
+            f"AudioWindowContract is frozen; cannot assign to {name!r}"
+        )
+
+    def __delattr__(self, name: str) -> None:
+        raise dataclasses.FrozenInstanceError(
+            f"AudioWindowContract is frozen; cannot delete {name!r}"
+        )
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AudioWindowContract):
+            return NotImplemented
+        return self._as_declaration() == other._as_declaration()
+
+    def __hash__(self) -> int:
+        return hash(
+            (self.sample_rate, self.channels, self.dtype, self.window_size, self.hop)
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"AudioWindowContract(sample_rate={self.sample_rate}, "
+            f"channels={self.channels}, dtype={self.dtype!r}, "
+            f"window_size={self.window_size}, hop={self.hop})"
+        )
+
+    def _as_declaration(self) -> "dict[str, Any]":
+        """The wire shape the native half reads — identical to Rust's rendering."""
+        return {
+            "resolved_from": "declaration",
+            "sample_rate": self.sample_rate,
+            "channels": self.channels,
+            "dtype": self.dtype,
+            "window_size": self.window_size,
+            "hop": self.hop,
+        }
+
+
+DeclaredAudioWindow = Union[AudioWindowContract, AudioWindowMatchDeviceSentinel]
+
+
+def _audio_window_declaration(
+    audio_window: DeclaredAudioWindow,
+    port_name: str,
+    delivery_profile: str,
+) -> "dict[str, Any]":
+    """Validate a declared window contract and render it for the native half."""
+    if delivery_profile == "newest":
+        raise ValueError(
+            f"input port {port_name!r} declares an audio_window, so it must declare "
+            f"delivery_profile='ordered', not 'newest' — 'newest' skips to the latest bag "
+            f"by design, and an accumulator that needs contiguous samples would flush on "
+            f"nearly every read"
+        )
+
+    if isinstance(audio_window, AudioWindowMatchDeviceSentinel):
+        return {"resolved_from": "match_device"}
+
+    if not isinstance(audio_window, AudioWindowContract):
+        raise TypeError(
+            f"input port {port_name!r} declares audio_window="
+            f"{type(audio_window).__name__} — expected an AudioWindowContract or "
+            f"AUDIO_WINDOW_MATCH_DEVICE"
+        )
+
+    return audio_window._as_declaration()
 
 _INPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_input_port"
 _OUTPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_output_port"
@@ -42,6 +207,7 @@ def input(
     *,
     description: str = "",
     delivery_profile: Optional[str] = None,
+    audio_window: Optional[DeclaredAudioWindow] = None,
 ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
     """Mark a method as declaring an input port.
 
@@ -53,6 +219,11 @@ def input(
     under sustained pressure, and no link ever blocks a producer. The
     decorated method is a declaration only: bags are read with
     `ctx.inputs.read(port_name)`.
+
+    `audio_window` is optional and opt-in: an audio input may declare an
+    [`AudioWindowContract`] or [`AUDIO_WINDOW_MATCH_DEVICE`], stating the rate,
+    channels, dtype, window size and hop it wants. A port declaring none is
+    unchanged in every respect.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(
@@ -71,15 +242,19 @@ def input(
                 f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
                 f"is declared port-locally at the consuming input port"
             )
-        setattr(
-            method,
-            _INPUT_PORT_MARKER_ATTRIBUTE,
-            {
-                "name": port_name,
-                "description": description,
-                "delivery_profile": delivery_profile,
-            },
-        )
+        marker: "dict[str, Any]" = {
+            "name": port_name,
+            "description": description,
+            "delivery_profile": delivery_profile,
+        }
+        # Present only when declared: a contract-less port's marker is what it
+        # always was, which is what makes the contract opt-in in the tree and
+        # not only in the prose.
+        if audio_window is not None:
+            marker["audio_window"] = _audio_window_declaration(
+                audio_window, port_name, delivery_profile
+            )
+        setattr(method, _INPUT_PORT_MARKER_ATTRIBUTE, marker)
         return method
 
     return attach_input_port_marker
@@ -201,13 +376,14 @@ def _collect_declared_ports(
             )
         claimed_port_names.add(port_name)
         if "delivery_profile" in marker:
-            input_ports.append(
-                {
-                    "name": port_name,
-                    "description": marker["description"],
-                    "delivery_profile": marker["delivery_profile"],
-                }
-            )
+            declared_input = {
+                "name": port_name,
+                "description": marker["description"],
+                "delivery_profile": marker["delivery_profile"],
+            }
+            if "audio_window" in marker:
+                declared_input["audio_window"] = marker["audio_window"]
+            input_ports.append(declared_input)
         else:
             output_ports.append(
                 {

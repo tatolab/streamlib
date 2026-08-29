@@ -118,7 +118,8 @@ jobs:
 
       - name: Run unit tests
         run: |
-          cargo test --locked -p streamlib -p streamlib-macros --lib
+          cargo test --locked -p streamlib -p streamlib-macros \
+            -p streamlib-processor-schema --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # The built-ins were reached by no cargo invocation here: the clippy
           # step above compiles default targets only, so it builds their lib and
@@ -147,6 +148,12 @@ jobs:
           # missing-declaration wiring error are pure registry work needing no
           # device, and before they were named here they ran in no CI job at
           # all despite two of them anchoring `verify:` lines in the plan.
+          # The port-rendering entries are the only gate the control plane's
+          # port surface has, and before they were named here they ran in no
+          # CI job at all: they assert that a windowed port renders its
+          # contract, that a contract-less one renders exactly the four keys
+          # it always did, and that no port carries a type key under any
+          # spelling. Pure serde — no device, no graph.
           # Named one by one rather than by module prefix: a prefix would
           # enrol whatever that module holds next, which is how a device test
           # joins this list without anyone deciding to add it.
@@ -188,7 +195,14 @@ jobs:
             iceoryx2::delivery_profile::tests::port_declaration_resolution::unregistered_processor_falls_back_to_newest \
             iceoryx2::delivery_profile::tests::port_declaration_resolution::declared_profile_is_the_whole_answer \
             iceoryx2::delivery_profile::tests::port_declaration_resolution::missing_declaration_is_a_wiring_error_naming_the_port \
-            iceoryx2::delivery_profile::tests::port_declaration_resolution::unknown_declared_value_is_rejected_with_the_legal_values
+            iceoryx2::delivery_profile::tests::port_declaration_resolution::unknown_declared_value_is_rejected_with_the_legal_values \
+            core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys \
+            core::json_schema::port_rendering_tests::port_info_output_carries_no_type_key_under_any_spelling \
+            core::json_schema::port_rendering_tests::port_descriptor_output_carries_no_type_key \
+            core::json_schema::port_rendering_tests::a_contract_bearing_port_renders_its_contract_beside_the_four \
+            core::json_schema::port_rendering_tests::a_port_declaring_the_sentinel_renders_it_as_a_whole_contract \
+            core::json_schema::port_rendering_tests::a_declared_contract_survives_the_descriptor_to_port_info_hop \
+            core::json_schema::port_rendering_tests::a_contract_bearing_descriptor_renders_its_contract_too
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

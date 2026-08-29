@@ -387,6 +387,13 @@ pub struct ProcessorPortSchema {
     /// output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
+    /// Window contract declared by this audio input port, or `None` — the one
+    /// optional thing a port declares beyond its name, description and
+    /// delivery profile. Absent from the rendering entirely on a port that
+    /// declares none, and always `None` on an output port: a producer
+    /// publishes what it has, and only a consumer states what it needs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_window: Option<crate::AudioWindowContract>,
 }
 
 /// Config definition within a processor schema.

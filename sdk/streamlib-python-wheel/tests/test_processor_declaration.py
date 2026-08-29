@@ -7,9 +7,17 @@ Everything here is a pure declaration check — no runtime boots — so this is 
 half of the authoring surface that stays honest on a machine with no GPU.
 """
 
+import dataclasses
+
 import pytest
 
-from streamlib import input, output, processor
+from streamlib import (
+    AUDIO_WINDOW_MATCH_DEVICE,
+    AudioWindowContract,
+    input,
+    output,
+    processor,
+)
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
@@ -298,3 +306,188 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
     assert [port["name"] for port in AudioFilter.__streamlib_processor_output_ports__] == [
         "frames_to_downstream"
     ]
+
+
+# ---- `audio_window`: the declaration, and every way it is refused ----
+
+
+def test_an_audio_input_declares_its_window_contract():
+    @processor
+    class WakeWordDetector:
+        @input(
+            "audio",
+            delivery_profile="ordered",
+            audio_window=AudioWindowContract(
+                sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=512
+            ),
+        )
+        def audio_from_microphone(self) -> None: ...
+
+    assert WakeWordDetector.__streamlib_processor_input_ports__ == [
+        {
+            "name": "audio",
+            "description": "",
+            "delivery_profile": "ordered",
+            "audio_window": {
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 512,
+            },
+        }
+    ]
+
+
+def test_the_sentinel_is_a_whole_contract_carrying_no_values():
+    @processor(execution="manual")
+    class Speaker:
+        @input("audio", delivery_profile="ordered", audio_window=AUDIO_WINDOW_MATCH_DEVICE)
+        def audio_from_upstream(self) -> None: ...
+
+    assert Speaker.__streamlib_processor_input_ports__[0]["audio_window"] == {
+        "resolved_from": "match_device"
+    }
+
+
+def test_a_port_declaring_no_contract_carries_no_audio_window_key():
+    """The contract is opt-in: nothing about a contract-less port moves."""
+
+    @processor
+    class Passthrough:
+        @input(delivery_profile="newest")
+        def frames_from_upstream(self) -> None: ...
+
+        @output()
+        def frames_to_downstream(self) -> None: ...
+
+    for port in (
+        Passthrough.__streamlib_processor_input_ports__
+        + Passthrough.__streamlib_processor_output_ports__
+    ):
+        assert "audio_window" not in port
+
+
+def test_an_omitted_hop_defaults_to_the_window_size():
+    """Contiguous, non-overlapping windows — the default an author gets."""
+    contract = AudioWindowContract(
+        sample_rate=16_000, channels=1, dtype="f32", window_size=400
+    )
+
+    assert contract.hop == 400
+
+
+def test_a_hop_below_the_window_is_a_rolling_window_and_is_accepted():
+    contract = AudioWindowContract(
+        sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=160
+    )
+
+    assert contract.hop == 160
+
+
+def test_a_hop_above_the_window_size_is_refused_naming_both_numbers():
+    with pytest.raises(ValueError) as refusal:
+        AudioWindowContract(
+            sample_rate=16_000, channels=1, dtype="f32", window_size=512, hop=1024
+        )
+
+    assert "1024" in str(refusal.value) and "512" in str(refusal.value)
+
+
+@pytest.mark.parametrize(
+    "field_name", ["sample_rate", "channels", "window_size", "hop"]
+)
+@pytest.mark.parametrize("value", [0, -1])
+def test_every_numeric_field_is_refused_at_zero_or_below_naming_the_field_and_the_value(
+    field_name: str, value: int
+):
+    """Python's declaration path would otherwise carry either straight to the engine."""
+    fields = {
+        "sample_rate": 16_000,
+        "channels": 1,
+        "dtype": "f32",
+        "window_size": 512,
+        "hop": 512,
+    }
+    fields[field_name] = value
+
+    with pytest.raises(ValueError) as refusal:
+        AudioWindowContract(**fields)  # type: ignore[arg-type]
+
+    assert field_name in str(refusal.value)
+    assert str(value) in str(refusal.value)
+
+
+def test_an_unknown_dtype_is_refused_listing_the_legal_values():
+    with pytest.raises(ValueError) as refusal:
+        AudioWindowContract(
+            sample_rate=16_000, channels=1, dtype="f64", window_size=512
+        )
+
+    message = str(refusal.value)
+    assert "f64" in message and "f32" in message and "i16" in message
+
+
+def test_a_partial_contract_is_refused_naming_the_missing_fields():
+    """All-or-nothing: a half-declared contract leaves the engine guessing."""
+    with pytest.raises(TypeError) as refusal:
+        AudioWindowContract(sample_rate=16_000, window_size=512)  # type: ignore[call-arg]
+
+    message = str(refusal.value)
+    assert "channels" in message and "dtype" in message
+
+
+def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs():
+    with pytest.raises(ValueError) as refusal:
+
+        @processor
+        class Skipping:
+            @input(
+                "audio",
+                delivery_profile="newest",
+                audio_window=AudioWindowContract(
+                    sample_rate=16_000, channels=1, dtype="f32", window_size=512
+                ),
+            )
+            def audio_from_microphone(self) -> None: ...
+
+    message = str(refusal.value)
+    assert "audio_window" in message and "newest" in message and "ordered" in message
+
+
+def test_the_sentinel_beside_a_skipping_delivery_profile_is_refused_too():
+    """The sentinel is a contract too, so it takes the same refusal."""
+    with pytest.raises(ValueError, match="ordered"):
+
+        @processor(execution="manual")
+        class Skipping:
+            @input(
+                "audio", delivery_profile="newest", audio_window=AUDIO_WINDOW_MATCH_DEVICE
+            )
+            def audio_from_upstream(self) -> None: ...
+
+
+def test_an_audio_window_that_is_neither_a_contract_nor_the_sentinel_is_refused():
+    with pytest.raises(TypeError, match="AudioWindowContract"):
+
+        @processor
+        class Wrong:
+            @input("audio", delivery_profile="ordered", audio_window={"window_size": 512})  # type: ignore[arg-type]
+            def audio_from_microphone(self) -> None: ...
+
+
+def test_an_output_port_takes_no_window_contract():
+    """A producer publishes what it has; only a consumer states what it needs."""
+    with pytest.raises(TypeError):
+        output("audio_out", audio_window=AUDIO_WINDOW_MATCH_DEVICE)  # type: ignore[call-arg]
+
+
+def test_a_contract_is_frozen_after_declaration():
+    """A declaration a processor could edit later is not a declaration."""
+    contract = AudioWindowContract(
+        sample_rate=16_000, channels=1, dtype="f32", window_size=512
+    )
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        contract.window_size = 1024  # type: ignore[misc]

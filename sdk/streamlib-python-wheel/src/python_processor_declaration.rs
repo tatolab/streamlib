@@ -11,8 +11,9 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
-    ProcessorRuntime, ProcessorScheduling,
+    AudioWindowContract, AudioWindowContractDeclaredValues, PortDescriptor,
+    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
+    ProcessorScheduling,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 
@@ -162,9 +163,132 @@ fn read_port_descriptors(
         {
             port = port.with_delivery_profile(delivery_profile.extract::<String>()?);
         }
+        if let Some(audio_window) = declaration
+            .get_item("audio_window")?
+            .filter(|declared| !declared.is_none())
+        {
+            if matches!(direction, PortDirection::Output) {
+                return Err(PyValueError::new_err(format!(
+                    "output port {:?} declares an audio_window — a producer publishes what \
+                     it has, and only a consuming input port states the window it needs",
+                    port.name
+                )));
+            }
+            let contract = read_audio_window_contract(
+                &audio_window,
+                &port.name,
+                port.delivery_profile.as_deref(),
+            )?;
+            port = port.with_audio_window_contract(contract);
+        }
         ports.push(port);
     }
     Ok(ports)
+}
+
+/// Read one `audio_window` declaration off a Python port marker.
+///
+/// The wheel's own decorator validates first, so this is not the only guard —
+/// it is the guard that holds when the marker was built by something other
+/// than the decorator, and it renders its refusals from the same shared
+/// validator the `#[processor]` grammar uses.
+fn read_audio_window_contract(
+    audio_window: &Bound<'_, PyAny>,
+    port_name: &str,
+    delivery_profile: Option<&str>,
+) -> PyResult<AudioWindowContract> {
+    let declaration = audio_window.cast::<PyDict>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "input port {port_name:?}: audio_window must be a dict"
+        ))
+    })?;
+
+    streamlib::sdk::descriptors::refuse_audio_window_beside_a_skipping_delivery_profile(
+        delivery_profile,
+    )
+    .map_err(|refusal| PyValueError::new_err(format!("input port {port_name:?}: {refusal}")))?;
+
+    let resolved_from = read_audio_window_string_field(declaration, "resolved_from", port_name)?;
+    match resolved_from.as_str() {
+        "match_device" => Ok(AudioWindowContract::MatchDevice {}),
+        "declaration" => {
+            let values = AudioWindowContractDeclaredValues {
+                sample_rate: read_audio_window_numeric_field(
+                    declaration,
+                    "sample_rate",
+                    port_name,
+                )?,
+                channels: read_audio_window_numeric_field(declaration, "channels", port_name)?,
+                dtype: read_audio_window_string_field(declaration, "dtype", port_name)?,
+                window_size: read_audio_window_numeric_field(
+                    declaration,
+                    "window_size",
+                    port_name,
+                )?,
+                hop: read_audio_window_numeric_field(declaration, "hop", port_name)?,
+            };
+            values.refuse_if_unhonourable().map_err(|refusal| {
+                PyValueError::new_err(format!("input port {port_name:?}: {refusal}"))
+            })?;
+            Ok(AudioWindowContract::Declaration(values))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "input port {port_name:?}: audio_window `resolved_from` is {other:?} — expected \
+             \"declaration\" or \"match_device\""
+        ))),
+    }
+}
+
+/// Read one strictly-positive `audio_window` numeric field, refusing a
+/// negative integer by name rather than as an extraction failure.
+fn read_audio_window_numeric_field(
+    declaration: &Bound<'_, PyDict>,
+    key: &str,
+    port_name: &str,
+) -> PyResult<u32> {
+    let value = audio_window_field(declaration, key, port_name)?;
+    let declared = value.extract::<i64>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "input port {port_name:?}: audio_window field {key:?} must be an int"
+        ))
+    })?;
+    u32::try_from(declared).map_err(|_| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?}: audio_window field {key:?} is {declared} — every \
+             numeric field is strictly positive"
+        ))
+    })
+}
+
+/// Read one `audio_window` string field, naming the port the way every other
+/// field of the contract does.
+fn read_audio_window_string_field(
+    declaration: &Bound<'_, PyDict>,
+    key: &str,
+    port_name: &str,
+) -> PyResult<String> {
+    audio_window_field(declaration, key, port_name)?
+        .extract::<String>()
+        .map_err(|_| {
+            PyTypeError::new_err(format!(
+                "input port {port_name:?}: audio_window field {key:?} must be a string"
+            ))
+        })
+}
+
+/// One missing-`audio_window`-field refusal, so no field of the contract
+/// falls through to a bare `missing key` with no port and no contract named.
+fn audio_window_field<'py>(
+    declaration: &Bound<'py, PyDict>,
+    key: &str,
+    port_name: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    declaration.get_item(key)?.ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?}: audio_window is missing {key:?} — the contract is \
+             all-or-nothing"
+        ))
+    })
 }
 
 fn read_string_attribute(object: &Bound<'_, PyAny>, attribute: &str) -> PyResult<String> {
@@ -219,6 +343,346 @@ class BlurProcessor:
                         .to_string()
                 ),
                 declaration.descriptor.entrypoint,
+            );
+        });
+    }
+
+    // ---- the window contract, declared in both languages ----
+
+    /// The wheel's own `@processor` grammar, run in the test interpreter.
+    ///
+    /// Embedded rather than imported: `cargo test` has no installed wheel on
+    /// `sys.path`, and the point is to read a marker the real decorator built
+    /// rather than one this test hand-wrote.
+    const PROCESSOR_DECLARATION_MODULE_SOURCE: &str =
+        include_str!("../python/streamlib/_processor_declaration.py");
+
+    /// A namespace with the real decorator module already run in it.
+    fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
+        let namespace = PyDict::new(python);
+        python
+            .run(
+                &std::ffi::CString::new(PROCESSOR_DECLARATION_MODULE_SOURCE).unwrap(),
+                Some(&namespace),
+                None,
+            )
+            .expect("the decorator module runs");
+        namespace
+    }
+
+    /// Run the real decorator module, run `class_body_source` against it, and
+    /// read the resulting class through the bridge the engine uses at `rt.add`.
+    ///
+    /// A refusal raised at decoration and one raised at the bridge both land
+    /// in the `Err` arm, because to an author they are one refusal.
+    fn read_python_declaration(class_body_source: &str) -> PyResult<PythonProcessorDeclaration> {
+        Python::initialize();
+        Python::attach(|python| {
+            let namespace = declaration_module_namespace(python);
+
+            let source = format!("__name__ = 'my_app.audio'\n\n\n{class_body_source}");
+            python.run(
+                &std::ffi::CString::new(source).unwrap(),
+                Some(&namespace),
+                None,
+            )?;
+
+            let declared_class = namespace
+                .get_item("AudioConsumer")?
+                .expect("the class bound");
+            PythonProcessorDeclaration::read_from_class(&declared_class)
+        })
+    }
+
+    /// The input ports a Python class declares, as the engine reads them.
+    fn python_declared_ports(class_body_source: &str) -> Vec<PortDescriptor> {
+        read_python_declaration(class_body_source)
+            .expect("the declaration reads")
+            .descriptor
+            .inputs
+    }
+
+    /// The message a refused Python declaration hands a user.
+    ///
+    /// `expect_err` is not available here: the success type is a production
+    /// type, and deriving `Debug` on it to satisfy a test would be the test
+    /// reshaping library code.
+    fn python_declaration_refusal(class_body_source: &str) -> String {
+        match read_python_declaration(class_body_source) {
+            Ok(_) => panic!("the declaration was accepted; a refusal was expected"),
+            Err(refusal) => refusal.to_string(),
+        }
+    }
+
+    /// The contract a Rust author declares with the `#[processor]` grammar,
+    /// spelled for the same port the Python class below declares.
+    #[streamlib::sdk::processor(
+        execution = reactive,
+        input(
+            "audio",
+            delivery_profile = "ordered",
+            audio_window(
+                sample_rate = 16_000,
+                channels = 1,
+                dtype = "f32",
+                window_size = 512,
+                hop = 160
+            )
+        ),
+    )]
+    struct RustDeclaredAudioConsumer;
+
+    impl streamlib::sdk::processors::ReactiveProcessor for RustDeclaredAudioConsumer::Processor {
+        fn process(
+            &mut self,
+            _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+        ) -> streamlib::sdk::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The headline: one contract, two authoring languages, one schema.
+    ///
+    /// Both halves are read from the surfaces an author actually writes — the
+    /// `@input` decorator and the `#[processor]` attribute — so a divergence
+    /// in either grammar fails here rather than reaching a user.
+    #[test]
+    fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
+        let python_ports = python_declared_ports(
+            "@processor\n\
+             class AudioConsumer:\n\
+             \x20   @input('audio', delivery_profile='ordered',\n\
+             \x20          audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                           dtype='f32', window_size=512, hop=160))\n\
+             \x20   def audio_from_microphone(self): ...\n",
+        );
+
+        let rust_descriptor =
+            <RustDeclaredAudioConsumer::Processor as streamlib::sdk::processors::GeneratedProcessor>::descriptor()
+                .expect("the macro emits a descriptor");
+
+        assert_eq!(python_ports.len(), 1);
+        assert_eq!(
+            python_ports[0].audio_window, rust_descriptor.inputs[0].audio_window,
+            "the two authoring surfaces must produce one contract"
+        );
+        assert_eq!(
+            serde_json::to_value(&python_ports[0].audio_window).unwrap(),
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 160,
+            })
+        );
+    }
+
+    #[test]
+    fn a_python_declared_sentinel_reaches_the_descriptor_as_a_whole_contract() {
+        let ports = python_declared_ports(
+            "@processor(execution='manual')\n\
+             class AudioConsumer:\n\
+             \x20   @input('audio', delivery_profile='ordered',\n\
+             \x20          audio_window=AUDIO_WINDOW_MATCH_DEVICE)\n\
+             \x20   def audio_from_device(self): ...\n",
+        );
+
+        assert_eq!(
+            ports[0].audio_window,
+            Some(AudioWindowContract::MatchDevice {})
+        );
+    }
+
+    #[test]
+    fn a_python_port_declaring_no_contract_reaches_the_descriptor_with_none() {
+        let ports = python_declared_ports(
+            "@processor\n\
+             class AudioConsumer:\n\
+             \x20   @input('audio', delivery_profile='newest')\n\
+             \x20   def audio_from_microphone(self): ...\n",
+        );
+
+        assert_eq!(ports[0].audio_window, None);
+        assert_eq!(ports[0].delivery_profile.as_deref(), Some("newest"));
+    }
+
+    #[test]
+    fn a_python_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
+        let refusal = python_declaration_refusal(
+            "@processor\n\
+             class AudioConsumer:\n\
+             \x20   @input('audio', delivery_profile='newest',\n\
+             \x20          audio_window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                           dtype='f32', window_size=512))\n\
+             \x20   def audio_from_microphone(self): ...\n",
+        );
+
+        assert!(
+            refusal.contains("audio_window")
+                && refusal.contains("newest")
+                && refusal.contains("ordered"),
+            "the refusal must name both knobs; got {refusal}"
+        );
+    }
+
+    /// A class carrying a hand-built port marker — the case the decorator's
+    /// own validation never sees.
+    fn hand_built_marker_source(audio_window_fields: &str) -> String {
+        format!(
+            "__name__ = 'my_app.audio'
+
+
+class AudioConsumer:
+    __streamlib_processor_declared__ = True
+    __streamlib_processor_description__ = ''
+    __streamlib_processor_execution__ = {{'mode': 'reactive'}}
+    __streamlib_processor_scheduling_priority__ = None
+    __streamlib_processor_input_ports__ = [{{
+        'name': 'audio',
+        'description': '',
+        'delivery_profile': 'ordered',
+        'audio_window': {{{audio_window_fields}}},
+    }}]
+    __streamlib_processor_output_ports__ = []
+"
+        )
+    }
+
+    /// The message a hand-built marker's refusal hands a user.
+    fn hand_built_marker_refusal(audio_window_fields: &str) -> String {
+        Python::initialize();
+        Python::attach(|python| {
+            let source = hand_built_marker_source(audio_window_fields);
+            let declared_class = class_from_source(python, &source, "AudioConsumer");
+            match PythonProcessorDeclaration::read_from_class(&declared_class) {
+                Ok(_) => panic!("the marker was accepted; a refusal was expected"),
+                Err(refusal) => refusal.to_string(),
+            }
+        })
+    }
+
+    /// A marker built by something other than the decorator still meets the
+    /// refusals: the wheel is never the only guard.
+    #[test]
+    fn a_hand_built_marker_smuggling_a_bad_contract_is_refused_at_the_bridge() {
+        let refusal = hand_built_marker_refusal(
+            "'resolved_from': 'declaration', 'sample_rate': 16000, 'channels': 1, \
+             'dtype': 'f32', 'window_size': 512, 'hop': 4096",
+        );
+
+        assert!(
+            refusal.contains("4096") && refusal.contains("512"),
+            "the refusal must name both numbers; got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_hand_built_marker_with_a_negative_count_is_refused_naming_the_field() {
+        let refusal = hand_built_marker_refusal(
+            "'resolved_from': 'declaration', 'sample_rate': -1, 'channels': 1, \
+             'dtype': 'f32', 'window_size': 512, 'hop': 512",
+        );
+
+        assert!(
+            refusal.contains("sample_rate") && refusal.contains("-1"),
+            "the refusal must name the field and the value; got {refusal}"
+        );
+    }
+
+    /// Every field of the contract names the port and the contract when it is
+    /// missing — none falls through to a bare `missing key`.
+    #[test]
+    fn a_marker_missing_any_contract_field_is_refused_naming_the_port_and_the_field() {
+        for missing_field in [
+            "resolved_from",
+            "sample_rate",
+            "channels",
+            "dtype",
+            "window_size",
+            "hop",
+        ] {
+            let fields = [
+                ("resolved_from", "'declaration'"),
+                ("sample_rate", "16000"),
+                ("channels", "1"),
+                ("dtype", "'f32'"),
+                ("window_size", "512"),
+                ("hop", "512"),
+            ]
+            .into_iter()
+            .filter(|(name, _)| *name != missing_field)
+            .map(|(name, value)| format!("'{name}': {value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+            let refusal = hand_built_marker_refusal(&fields);
+            assert!(
+                refusal.contains("input port \"audio\"") && refusal.contains(missing_field),
+                "a missing {missing_field:?} must name the port and the field; got {refusal}"
+            );
+        }
+    }
+
+    /// An output port declares no contract — the invariant three carrier docs
+    /// state and the `#[processor]` grammar refuses. A hand-built marker is
+    /// the only way to reach it, since `output()` takes no such argument.
+    #[test]
+    fn a_hand_built_output_marker_declaring_a_contract_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let source = "\
+__name__ = 'my_app.audio'
+
+
+class AudioConsumer:
+    __streamlib_processor_declared__ = True
+    __streamlib_processor_description__ = ''
+    __streamlib_processor_execution__ = {'mode': 'manual'}
+    __streamlib_processor_scheduling_priority__ = None
+    __streamlib_processor_input_ports__ = []
+    __streamlib_processor_output_ports__ = [{
+        'name': 'windows',
+        'description': '',
+        'audio_window': {'resolved_from': 'match_device'},
+    }]
+";
+            let declared_class = class_from_source(python, source, "AudioConsumer");
+
+            let refusal = match PythonProcessorDeclaration::read_from_class(&declared_class) {
+                Ok(_) => panic!("an output contract was accepted; a refusal was expected"),
+                Err(refusal) => refusal.to_string(),
+            };
+            assert!(
+                refusal.contains("output port \"windows\"") && refusal.contains("consuming"),
+                "the refusal must name the port and whose setting it is; got {refusal}"
+            );
+        });
+    }
+
+    /// The dtype vocabulary is spelled once per language, and nothing but this
+    /// keeps the two from drifting: a third dtype added on the Rust side would
+    /// otherwise be refused by the Python decorator before the bridge that
+    /// accepts it ever runs.
+    #[test]
+    fn both_languages_legalise_the_same_window_dtypes() {
+        Python::initialize();
+        Python::attach(|python| {
+            let namespace = declaration_module_namespace(python);
+
+            let python_dtypes = namespace
+                .get_item("_AUDIO_WINDOW_DTYPES")
+                .unwrap()
+                .expect("the decorator module names its dtypes")
+                .extract::<Vec<String>>()
+                .expect("the dtypes are strings");
+
+            assert_eq!(
+                python_dtypes,
+                streamlib::sdk::descriptors::AUDIO_WINDOW_DTYPE_DECLARATION_VALUES
+                    .map(String::from)
+                    .to_vec()
             );
         });
     }

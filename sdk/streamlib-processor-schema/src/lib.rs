@@ -7,6 +7,7 @@ mod execution_config;
 mod process_execution;
 mod thread_priority;
 
+pub mod audio_window_contract;
 pub mod descriptors;
 pub mod error;
 pub mod processor_class_import_path;
@@ -19,6 +20,10 @@ pub use process_execution::ProcessExecution;
 pub use thread_priority::ThreadPriority;
 
 // Processor schema re-exports
+pub use audio_window_contract::{
+    AUDIO_WINDOW_DTYPE_DECLARATION_VALUES, AudioWindowContract, AudioWindowContractDeclaredValues,
+    refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
+};
 pub use error::{SchemaError, SchemaResult};
 pub use processor_class_import_path::ProcessorClassImportPath;
 pub use processor_class_short_name::ProcessorClassShortName;

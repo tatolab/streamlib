@@ -249,3 +249,81 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
         "attribute_macro_test::TestProcessor"
     );
 }
+
+// A windowed audio consumer: the declaration the macro must carry all the way
+// into the emitted descriptor, since that descriptor is what the engine reads
+// at `rt.add` time.
+#[streamlib::sdk::processor(
+    execution = reactive,
+    input(
+        "audio",
+        delivery_profile = "ordered",
+        audio_window(
+            sample_rate = 16_000,
+            channels = 1,
+            dtype = "f32",
+            window_size = 512,
+            hop = 160
+        )
+    ),
+    output("windows"),
+)]
+pub struct WindowedAudioConsumer;
+
+impl streamlib_engine::ReactiveProcessor for WindowedAudioConsumer::Processor {
+    fn process(
+        &mut self,
+        _ctx: &streamlib_engine::core::RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn the_descriptor_carries_the_window_contract_its_port_declared() {
+    let descriptor = <WindowedAudioConsumer::Processor as GeneratedProcessor>::descriptor()
+        .expect("the macro emits a descriptor");
+    let audio = descriptor
+        .inputs
+        .iter()
+        .find(|port| port.name == "audio")
+        .expect("the audio port is in the descriptor");
+
+    assert_eq!(
+        audio.audio_window,
+        Some(
+            streamlib_engine::core::descriptors::AudioWindowContract::Declaration(
+                streamlib_engine::core::descriptors::AudioWindowContractDeclaredValues {
+                    sample_rate: 16_000,
+                    channels: 1,
+                    dtype: "f32".to_string(),
+                    window_size: 512,
+                    hop: 160,
+                }
+            )
+        )
+    );
+}
+
+#[test]
+fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
+    let descriptor = <WindowedAudioConsumer::Processor as GeneratedProcessor>::descriptor()
+        .expect("the macro emits a descriptor");
+
+    assert!(
+        descriptor
+            .outputs
+            .iter()
+            .all(|port| port.audio_window.is_none()),
+        "an output port declares no contract"
+    );
+    let unwindowed = <TestProcessor::Processor as GeneratedProcessor>::descriptor()
+        .expect("the macro emits a descriptor");
+    assert!(
+        unwindowed
+            .inputs
+            .iter()
+            .all(|port| port.audio_window.is_none()),
+        "a port that declared no contract carries none"
+    );
+}
