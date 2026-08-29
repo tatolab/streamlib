@@ -13,7 +13,6 @@ mod input;
 mod mailbox;
 mod node;
 mod output;
-mod overflow;
 mod payload;
 mod read_mode;
 
@@ -35,7 +34,6 @@ pub use node::{
     Iceoryx2Service,
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
-pub use overflow::Overflow;
 pub use payload::{
     ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES, EventPayload,
     FRAME_HEADER_SIZE, FrameHeader, MAX_EVENT_PAYLOAD_SIZE, MAX_PUBLISHERS_PER_CHANNEL,

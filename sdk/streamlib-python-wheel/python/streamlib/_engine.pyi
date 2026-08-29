@@ -272,7 +272,6 @@ class ProcessorLinkDataAccess:
         max_queued_messages: int,
         max_subscribers: int,
         notify_max_notifiers: int,
-        enable_safe_overflow: bool,
         link_id: str,
     ) -> None: ...
     def wire_input_link(
@@ -284,7 +283,6 @@ class ProcessorLinkDataAccess:
         max_queued_messages: int,
         max_subscribers: int,
         notify_max_notifiers: int,
-        enable_safe_overflow: bool,
         link_id: str,
     ) -> None: ...
     def unwire_output_link(self, port_name: str, link_id: str) -> None: ...

@@ -72,14 +72,12 @@ fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
 #[test]
 fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
     let max_subscribers = 2;
-    let enable_safe_overflow = true;
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-default-grows",
             max_subscribers,
             DEFAULT_MAX_QUEUED_MESSAGES,
-            enable_safe_overflow,
         )
         .unwrap();
     let publisher = service
@@ -102,14 +100,12 @@ fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
 #[test]
 fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
     let max_subscribers = 2;
-    let enable_safe_overflow = true;
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-default-roundtrip",
             max_subscribers,
             DEFAULT_MAX_QUEUED_MESSAGES,
-            enable_safe_overflow,
         )
         .unwrap();
     let publisher = service
@@ -150,5 +146,33 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
         payload.as_slice(),
         "payload bytes must survive the grow-on-first-loan path — a mismatch means \
          the subscriber dropped data past the prime"
+    );
+}
+
+/// Every channel service opens under safe overflow, read back from the live
+/// static config rather than from what this caller asked for. It is not a
+/// parameter and no profile derives it: a full subscriber buffer evicts its
+/// oldest sample so the publisher's `send()` never blocks.
+///
+/// Mentally-revert: drop the `.enable_safe_overflow(true)` line in
+/// [`Iceoryx2Node::open_or_create_service`] and this test still passes —
+/// iceoryx2 0.8.1's own default is `true`. Pass `false` there instead, which is
+/// the only way the contract can actually break now, and it goes red.
+#[test]
+fn every_channel_service_opens_under_safe_overflow() {
+    let node = Iceoryx2Node::new().unwrap();
+    let service = node
+        .open_or_create_service(
+            "streamlib/test/sizing-safe-overflow",
+            2,
+            DEFAULT_MAX_QUEUED_MESSAGES,
+        )
+        .unwrap();
+
+    assert!(
+        service.has_safe_overflow(),
+        "a channel service must be created with safe overflow on — without it the \
+         publisher back-pressures on a full subscriber buffer, which is the \
+         producer-blocking this engine deleted"
     );
 }

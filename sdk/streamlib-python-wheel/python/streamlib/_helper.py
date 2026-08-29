@@ -385,7 +385,6 @@ def wire_link_data_access(
             input_link["max_queued_messages"],
             input_link["max_subscribers"],
             input_link["notify_max_notifiers"],
-            input_link["enable_safe_overflow"],
             input_link["link_id"],
         )
     for output_link in port_wiring.get("outputs", []):
@@ -398,7 +397,6 @@ def wire_link_data_access(
             output_link["max_queued_messages"],
             output_link["max_subscribers"],
             output_link["notify_max_notifiers"],
-            output_link["enable_safe_overflow"],
             output_link["link_id"],
         )
 
