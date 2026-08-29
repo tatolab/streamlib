@@ -32,9 +32,7 @@ use serde_json::{Value, json};
 use streamlib::sdk::App;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::{
-    ContinuousProcessor, GeneratedProcessor, PROCESSOR_REGISTRY, ReactiveProcessor,
-};
+use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY, ReactiveProcessor};
 use streamlib_media_builtins::{SpeakerSink, register_media_builtin_processor_types};
 
 /// The source's rate. No audio device opens at 16 kHz, so every arm's settled
