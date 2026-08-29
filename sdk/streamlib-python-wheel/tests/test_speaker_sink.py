@@ -130,6 +130,10 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     # asserted as numbers: the values are this machine's device format, which
     # is the whole reason the port declares `match_device` instead of five
     # written values. Only their shape is fixed.
+    assert "MARKER:SPEAKER_AUDIO_WINDOW_UNREADABLE" not in app.output, (
+        f"the run could not read its own graph, so the rendering below was never "
+        f"measured:\n{app.output}"
+    )
     settled = SETTLED_AUDIO_WINDOW.search(app.output)
     assert settled is not None, f"the app never reported the graph's rendering:\n{app.output}"
     rendered = json.loads(settled.group(1))

@@ -58,7 +58,12 @@ def _report_the_speakers_settled_window_contract() -> None:
         # speaker, so the default is unambiguous.
         if node["display_name"] != "SpeakerSink":
             continue
-        audio = next(port for port in node["ports"]["inputs"] if port["name"] == "audio")
+        audio = next(
+            (port for port in node["ports"]["inputs"] if port["name"] == "audio"),
+            None,
+        )
+        if audio is None:
+            raise RuntimeError(f"the speaker node renders no `audio` input port: {node}")
         print(
             f"MARKER:SPEAKER_AUDIO_WINDOW {json.dumps(audio.get('audio_window'))}",
             flush=True,
@@ -83,13 +88,25 @@ def main() -> None:
                 timeout=READINESS_TIMEOUT_SECONDS
             )
             print("MARKER:EVERY_PROCESSOR_RUNNING", flush=True)
-            _report_the_speakers_settled_window_contract()
         except RuntimeError as refusal:
             print(f"MARKER:NOT_EVERY_PROCESSOR_RUNNING {refusal}", flush=True)
             # Shut down rather than leave `run()` holding the main thread: a
             # processor that failed setup never reaches Running, so waiting for
             # it is waiting for nothing.
             runtime.shutdown()
+            return
+
+        # Reported outside the readiness `try`, and never fatal. Reading the
+        # graph can fail on its own terms — no registry entry, a control plane
+        # that does not answer, a speaker with no `audio` port — and inside the
+        # readiness handler every one of those would print
+        # `NOT_EVERY_PROCESSOR_RUNNING` after the run had already reported
+        # itself healthy, which reads as a startup failure this graph did not
+        # have.
+        try:
+            _report_the_speakers_settled_window_contract()
+        except Exception as unreadable:  # noqa: BLE001 — the marker is the report
+            print(f"MARKER:SPEAKER_AUDIO_WINDOW_UNREADABLE {unreadable}", flush=True)
 
     threading.Thread(target=watch_readiness, daemon=True).start()
     runtime.run()

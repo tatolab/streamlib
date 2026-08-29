@@ -125,11 +125,14 @@ class SpeakerSink:
 
     Blocks to play arrive on the `audio` input as bags in the
     `streamlib.AudioBlock` shape. The port declares
-    `audio_window = match_device`, so blocks at any rate, channel count or
-    dtype are resampled, channel-converted and re-framed into what this
-    machine's device opened at — `graph` renders the resolved values on the
-    port. The device is never left waiting on the graph — a period the graph
-    had no samples for is silence, and the count of it is reported.
+    `audio_window = match_device`, so the engine resamples every block to the
+    device's rate and re-frames it into device-period windows — `graph` renders
+    the resolved values on the port. Conversion is not unconditional: `dtype`
+    must be `"f32"` or `"i16"`, and channels convert N to 1 by averaging and 1
+    to N by duplicating, so a pair with neither side mono (stereo into a
+    five-channel device, say) is refused by name rather than mixed. The device
+    is never left waiting on the graph — a period the graph had no samples for
+    is silence, and the count of it is reported.
     """
 
 @final
