@@ -50,8 +50,9 @@ _Static_assert(sizeof(struct StreamLibPipeWireEntryPoints) ==
                "the entry-point struct must be exactly one function pointer per resolved name");
 
 /// The device's own sample rate and channel count are what a stream settles on
-/// in either direction: the port window contract and its resampler are a later
-/// rung, so asking PipeWire to convert either one would be resampling nothing
+/// in either direction: rate and channel conversion belong to the read-side
+/// window stage at a consuming port, which converts to what that port declared,
+/// so asking PipeWire to convert either one would convert toward nothing
 /// declared. Only the scalar encoding is pinned, and it is pinned little-endian
 /// rather than host-endian because `AudioBlock.samples` is little-endian by
 /// wire contract.

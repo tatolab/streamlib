@@ -120,6 +120,51 @@ impl crate::core::ReactiveProcessor for MockReactiveInputOnlyProcessor::Processo
     }
 }
 
+/// Mock consumer whose audio input port declares a window contract — the
+/// destination shape the read-side windowing stage exists for.
+#[crate::processor(
+    execution = reactive,
+    input(
+        "audio",
+        delivery_profile = "ordered",
+        audio_window(
+            sample_rate = 16_000,
+            channels = 1,
+            dtype = "f32",
+            window_size = 512,
+            hop = 512
+        )
+    ),
+)]
+pub(crate) struct MockWindowedAudioConsumerProcessor;
+
+impl crate::core::ReactiveProcessor for MockWindowedAudioConsumerProcessor::Processor {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
+/// Mock consumer whose audio input port declares the `match_device` sentinel.
+/// Nothing resolves it on this rung, which is what makes it a wiring error
+/// rather than a default.
+#[crate::processor(
+    execution = reactive,
+    input("audio", delivery_profile = "ordered", audio_window = match_device),
+)]
+pub(crate) struct MockDeviceMatchedAudioConsumerProcessor;
+
+impl crate::core::ReactiveProcessor for MockDeviceMatchedAudioConsumerProcessor::Processor {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Register all engine-internal test mock processors with the global
 /// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
 /// fixture that builds a graph against `lookup_registered_ident` or
@@ -129,6 +174,8 @@ pub(crate) fn ensure_test_mocks_registered() {
     REGISTER.call_once(|| {
         PROCESSOR_REGISTRY.register::<MockProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockOutputOnlyProcessor::Processor>();
+        PROCESSOR_REGISTRY.register::<MockWindowedAudioConsumerProcessor::Processor>();
+        PROCESSOR_REGISTRY.register::<MockDeviceMatchedAudioConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
     });

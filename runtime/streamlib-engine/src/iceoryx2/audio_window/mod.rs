@@ -21,6 +21,7 @@ mod resolved_audio_window_contract;
 mod audio_window_stage_tests;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub(crate) use audio_window_accumulator::AudioWindowAccumulator;
 pub use resolved_audio_window_contract::ResolvedAudioWindowContract;
@@ -32,7 +33,7 @@ use super::mailbox::QueuedFrameMeasure;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 
 /// A measure over one queued wire frame: what the audio block it carries is
-/// worth in frames at `contract`'s rate.
+/// worth in frames at `contract`'s rate, and the rate it stated.
 ///
 /// Installed on a windowed port's mailbox so the readiness gate can ask how
 /// much is queued without consuming any of it. `crossbeam`'s `ArrayQueue`
@@ -41,8 +42,14 @@ use super::{FRAME_HEADER_SIZE, FrameHeader};
 /// this cannot read measures zero: the read path is where a bag is refused by
 /// name, and a readiness gate that raised there would refuse it before any
 /// reader could be told which port it arrived on.
+///
+/// `latest_source_sample_rate` is the same reading in the units the stage
+/// needs to build its rate conversion, so the very first readiness question —
+/// asked before any bag has been consumed — is answered against the real
+/// filter delay rather than a worst case.
 pub(crate) fn queued_audio_window_frame_measure(
     contract: ResolvedAudioWindowContract,
+    latest_source_sample_rate: Arc<AtomicU32>,
 ) -> QueuedFrameMeasure {
     Arc::new(move |wire_frame: &[u8]| -> u64 {
         if wire_frame.len() < FRAME_HEADER_SIZE {

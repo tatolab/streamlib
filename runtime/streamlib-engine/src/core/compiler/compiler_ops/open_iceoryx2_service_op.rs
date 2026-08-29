@@ -586,16 +586,29 @@ fn refuse_a_second_inbound_link_into_a_windowed_port(
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
-    let already_wired: Vec<String> = graph
+    let already_inbound: Vec<String> = graph
         .traversal_mut()
         .v(dest_proc_id)
         .in_e()
         .iter()
         .filter(|link| link.to_port().port_name == dest_port)
+        // A link on its way out of the graph is not a second inbound one, or a
+        // disconnect followed by a reconnect of the same port would refuse
+        // itself.
+        .filter(|link| {
+            link.get::<LinkStateComponent>()
+                .map(|state| {
+                    !matches!(
+                        state.0,
+                        LinkState::Disconnecting | LinkState::Disconnected | LinkState::Error
+                    )
+                })
+                .unwrap_or(true)
+        })
         .map(|link| link.id.to_string())
-        .filter(|wired| wired != link_id.as_str())
+        .filter(|inbound| inbound != link_id.as_str())
         .collect();
-    let Some(first) = already_wired.first() else {
+    let Some(first) = already_inbound.first() else {
         return Ok(());
     };
 
@@ -1758,6 +1771,201 @@ mod tests {
             .expect("mock_reactive_input_only_processor must be in the registry")
             .id
             .to_string()
+    }
+
+    fn add_mock_windowed_audio_consumer(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
+        graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                crate::core::test_support::MockWindowedAudioConsumerProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("mock_windowed_audio_consumer_processor must be in the registry")
+            .id
+            .to_string()
+    }
+
+    fn add_mock_device_matched_audio_consumer(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
+        graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("mock_device_matched_audio_consumer_processor must be in the registry")
+            .id
+            .to_string()
+    }
+
+    /// A port declaring the five values resolves to them at wire time, and the
+    /// mailbox that port gets is sized by the contract rather than the profile.
+    #[test]
+    fn a_windowed_destinations_contract_resolves_at_wire_time() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_windowed_audio_consumer(&mut graph);
+
+        let contract =
+            audio_window_contract_for_input_port_of(&mut graph, &dest_id.as_str().into(), "audio")
+                .expect("a declared contract resolves")
+                .expect("the port declares one");
+
+        assert_eq!(contract.sample_rate, 16_000);
+        assert_eq!(contract.channels, 1);
+        assert_eq!(contract.window_size, 512);
+        assert_eq!(contract.hop, 512);
+    }
+
+    /// A port with no contract resolves to none, and nothing about it moves.
+    #[test]
+    fn a_port_declaring_no_contract_resolves_to_none() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_reactive_input_only(&mut graph);
+
+        let contract =
+            audio_window_contract_for_input_port_of(&mut graph, &dest_id.as_str().into(), "in1")
+                .expect("resolution succeeds");
+        assert!(contract.is_none());
+    }
+
+    /// `match_device` resolves at `setup()` from the device stream the
+    /// declaring processor opened. Nothing resolves it on this rung, so every
+    /// one is a wiring error that says where it would have been settled.
+    #[test]
+    fn an_unresolved_match_device_contract_is_a_wiring_error_naming_the_mechanism() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
+
+        let refusal =
+            audio_window_contract_for_input_port_of(&mut graph, &dest_id.as_str().into(), "audio")
+                .expect_err("nothing has resolved the sentinel");
+        let rendered = refusal.to_string();
+        assert!(
+            rendered.contains("match_device")
+                && rendered.contains("setup()")
+                && rendered.contains("audio"),
+            "the refusal must name the sentinel, where it resolves, and the port; got {rendered}"
+        );
+    }
+
+    /// Fan-in legally interleaves N producers' blocks in one mailbox, and two
+    /// sample streams interleaved into one accumulator is not a mix — it is
+    /// garbage windows. A windowed port takes exactly one inbound link.
+    #[test]
+    fn a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_both_links() {
+        let mut graph = Graph::new();
+        let first_source = add_mock_output_only(&mut graph);
+        let second_source = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_windowed_audio_consumer(&mut graph);
+
+        let mut wired = Vec::new();
+        for source in [&first_source, &second_source] {
+            let link = graph
+                .traversal_mut()
+                .add_e(
+                    OutputLinkPortRef::new(source, "out1"),
+                    InputLinkPortRef::new(&dest_id, "audio"),
+                )
+                .first()
+                .expect("the link is added")
+                .id
+                .to_string();
+            wired.push(link);
+        }
+
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        // The first link is fine on its own.
+        let second_link: LinkUniqueId = wired[1].as_str().into();
+        let refusal = refuse_a_second_inbound_link_into_a_windowed_port(
+            &mut graph,
+            &dest_unique_id,
+            "audio",
+            &second_link,
+        )
+        .expect_err("a windowed port accepts exactly one inbound link");
+
+        let rendered = refusal.to_string();
+        assert!(
+            rendered.contains("audio")
+                && rendered.contains(&wired[0])
+                && rendered.contains(&wired[1]),
+            "the refusal must name the port and both links; got {rendered}"
+        );
+    }
+
+    /// The port's only inbound link must not refuse itself.
+    #[test]
+    fn the_one_inbound_link_a_windowed_port_takes_is_not_refused() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_windowed_audio_consumer(&mut graph);
+        let link = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(&source_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "audio"),
+            )
+            .first()
+            .expect("the link is added")
+            .id
+            .to_string();
+
+        refuse_a_second_inbound_link_into_a_windowed_port(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "audio",
+            &link.as_str().into(),
+        )
+        .expect("one inbound link is what a windowed port takes");
+    }
+
+    /// A link on its way out of the graph is not a second inbound one, or a
+    /// disconnect followed by a reconnect would refuse itself.
+    #[test]
+    fn a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link() {
+        let mut graph = Graph::new();
+        let old_source = add_mock_output_only(&mut graph);
+        let new_source = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_windowed_audio_consumer(&mut graph);
+
+        let departed = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(&old_source, "out1"),
+                InputLinkPortRef::new(&dest_id, "audio"),
+            )
+            .first()
+            .expect("the link is added")
+            .id
+            .to_string();
+        graph
+            .traversal_mut()
+            .e(&LinkUniqueId::from(departed.as_str()))
+            .first_mut()
+            .expect("the departing link is in the graph")
+            .insert(LinkStateComponent(LinkState::Disconnected));
+
+        let reconnecting = graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(&new_source, "out1"),
+                InputLinkPortRef::new(&dest_id, "audio"),
+            )
+            .first()
+            .expect("the link is added")
+            .id
+            .to_string();
+
+        refuse_a_second_inbound_link_into_a_windowed_port(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "audio",
+            &reconnecting.as_str().into(),
+        )
+        .expect("a reconnect past a disconnected link is one inbound link, not two");
     }
 
     /// The channel service name a link's source output port publishes to is

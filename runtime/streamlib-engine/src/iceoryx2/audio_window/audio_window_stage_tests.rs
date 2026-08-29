@@ -5,6 +5,9 @@
 //! counts: exact windows, exact stamps, overlap proven sample by sample, and a
 //! gap that flushes the filter instead of blending audio across it.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use streamlib_processor_schema::AudioWindowContractDeclaredValues;
 
 use super::audio_block_bag_wire_codec::{
@@ -30,6 +33,29 @@ fn contract(
         hop,
     })
     .expect("a contract the stage can honour")
+}
+
+/// A stage on a port nothing has queued a bag into yet — every test drives it
+/// through `accept`, which is what a read does once the gate has cleared.
+fn stage_on(contract: ResolvedAudioWindowContract) -> AudioWindowAccumulator {
+    AudioWindowAccumulator::new("audio", contract, Arc::new(AtomicU32::new(0)))
+}
+
+/// A stage plus the source-rate cell its port's mailbox measure writes into.
+/// The readiness tests drive that cell themselves, because it is what makes the
+/// floor exact before a single bag has been consumed.
+fn stage_and_the_rate_its_mailbox_reports(
+    contract: ResolvedAudioWindowContract,
+) -> (AudioWindowAccumulator, Arc<AtomicU32>) {
+    let latest_queued_source_sample_rate = Arc::new(AtomicU32::new(0));
+    (
+        AudioWindowAccumulator::new(
+            "audio",
+            contract,
+            Arc::clone(&latest_queued_source_sample_rate),
+        ),
+        latest_queued_source_sample_rate,
+    )
 }
 
 /// One source block on the wire, as the stage receives it: `frames` per-channel
@@ -107,7 +133,7 @@ fn nanoseconds_for(frames: u64, sample_rate: u32) -> i64 {
 #[test]
 fn a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let source_frames_per_block = 512;
     let mut windows = Vec::new();
@@ -161,7 +187,7 @@ fn a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart()
 #[test]
 fn the_first_window_carries_the_anchor_stamp_rather_than_one_a_group_delay_later() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let anchor_ns = 4_000_000_000;
     let mut windows = Vec::new();
@@ -192,7 +218,7 @@ fn the_first_window_carries_the_anchor_stamp_rather_than_one_a_group_delay_later
 #[test]
 fn a_hop_of_160_against_a_window_of_512_overlaps_by_352_samples() {
     let contract = contract(16_000, 1, "f32", 512, 160);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     for block_index in 0..8u64 {
         let first_frame = block_index * 512;
@@ -226,7 +252,7 @@ fn a_hop_of_160_against_a_window_of_512_overlaps_by_352_samples() {
 #[test]
 fn one_1024_sample_quantum_against_a_512_512_contract_yields_exactly_two_windows() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     stage
         .accept(&source_block(
@@ -251,7 +277,7 @@ fn one_1024_sample_quantum_against_a_512_512_contract_yields_exactly_two_windows
 #[test]
 fn a_stream_that_stops_mid_window_hands_over_nothing_rather_than_a_short_block() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     stage
         .accept(&source_block(
@@ -272,7 +298,7 @@ fn a_stream_that_stops_mid_window_hands_over_nothing_rather_than_a_short_block()
 #[test]
 fn the_first_window_after_a_gap_carries_no_energy_from_before_it() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     // A full-scale tone, right up to the gap.
     for block_index in 0..24u64 {
@@ -328,7 +354,7 @@ fn the_first_window_after_a_gap_carries_no_energy_from_before_it() {
 #[test]
 fn no_window_spans_a_gap_in_the_source_stream() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let gap_ns = NANOSECONDS_PER_SECOND / 2;
     let mut windows = Vec::new();
@@ -371,7 +397,7 @@ fn no_window_spans_a_gap_in_the_source_stream() {
 #[test]
 fn a_stamp_jittering_inside_half_a_quantum_does_not_flush_the_run() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let an_eighth_of_a_quantum_ns = nanoseconds_for(512, 16_000) / 8;
     let mut windows = Vec::new();
@@ -409,7 +435,7 @@ fn a_stamp_jittering_inside_half_a_quantum_does_not_flush_the_run() {
 #[test]
 fn a_stereo_source_reaching_a_mono_contract_is_averaged_across_its_channels() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     // Left at +0.5, right at -0.25 — an average of +0.125 the test can name.
     let interleaved: Vec<f32> = (0..512).flat_map(|_| [0.5f32, -0.25f32]).collect();
@@ -430,7 +456,7 @@ fn a_stereo_source_reaching_a_mono_contract_is_averaged_across_its_channels() {
 #[test]
 fn a_mono_source_reaching_a_stereo_contract_is_duplicated_across_its_channels() {
     let contract = contract(16_000, 2, "f32", 256, 256);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let interleaved: Vec<f32> = (0..256).map(|index| index as f32 / 256.0).collect();
     stage
@@ -452,7 +478,7 @@ fn a_mono_source_reaching_a_stereo_contract_is_duplicated_across_its_channels() 
 #[test]
 fn a_channel_pair_with_neither_side_at_one_is_refused_naming_both_counts() {
     let contract = contract(16_000, 4, "f32", 256, 256);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let refusal = stage
         .accept(&source_block(&vec![0.0f32; 512], 16_000, 2, 0))
@@ -467,7 +493,7 @@ fn a_channel_pair_with_neither_side_at_one_is_refused_naming_both_counts() {
 #[test]
 fn a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped() {
     let contract = contract(16_000, 1, "f32", 256, 256);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let not_an_audio_block =
         rmp_serde::to_vec_named(&serde_json::json!({ "width": 1920 })).expect("encodes");
@@ -486,7 +512,7 @@ fn a_bag_the_stage_cannot_read_is_refused_by_name_rather_than_reshaped() {
 #[test]
 fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
     let contract = contract(16_000, 1, "i16", 256, 256);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let mut stage = stage_on(contract);
 
     let interleaved: Vec<f32> = (0..256).map(|_| 0.5f32).collect();
     stage
@@ -512,7 +538,8 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
 fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 1)] {
         let contract = contract(16_000, 1, "f32", 512, 512);
-        let mut stage = AudioWindowAccumulator::new("audio", contract);
+        let (mut stage, rate_the_mailbox_reports) =
+            stage_and_the_rate_its_mailbox_reports(contract);
 
         let source_frames_per_block = 512u64;
         let mut queued_equivalents = 0u64;
@@ -533,6 +560,7 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
             ));
             queued_equivalents +=
                 source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
+            rate_the_mailbox_reports.store(source_rate, Ordering::Relaxed);
 
             if !stage.a_full_window_would_be_ready_after(queued_equivalents) {
                 continue;
@@ -557,7 +585,8 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
 #[test]
 fn the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to() {
     let contract = contract(16_000, 1, "f32", 16_000, 160);
-    let mut stage = AudioWindowAccumulator::new("audio", contract);
+    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
+    rate_the_mailbox_reports.store(48_000, Ordering::Relaxed);
 
     let depth = contract.windowed_port_mailbox_depth() as u64;
     let mut queued_equivalents = 0u64;

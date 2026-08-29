@@ -19,10 +19,11 @@ use std::sync::{Arc, OnceLock};
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InputMailboxesInner, OutputWriterInner,
-    ReadMode,
+    ReadMode, ResolvedAudioWindowContract,
 };
 
 use crate::python_bag_conversion::{
@@ -225,6 +226,7 @@ impl PythonProcessorLinkDataAccess {
         max_subscribers,
         notify_max_notifiers,
         link_id,
+        audio_window = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn wire_input_link(
@@ -238,6 +240,7 @@ impl PythonProcessorLinkDataAccess {
         max_subscribers: usize,
         notify_max_notifiers: usize,
         link_id: &str,
+        audio_window: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
         let read_mode = match read_mode {
@@ -250,11 +253,23 @@ impl PythonProcessorLinkDataAccess {
                 )));
             }
         };
+        let audio_window = audio_window
+            .map(|declared| read_the_window_contract_the_parent_wired(port_name, declared))
+            .transpose()?;
 
         python
             .detach(|| -> Result<(), Error> {
                 if !input_mailboxes.has_port(port_name) {
-                    input_mailboxes.add_port(port_name, max_queued_messages, read_mode);
+                    match audio_window {
+                        // The window contract sizes the mailbox itself, so the
+                        // envelope's depth is the profile's and this port's is
+                        // its own — the same derivation the parent runs for an
+                        // app-process destination.
+                        Some(contract) => {
+                            input_mailboxes.add_windowed_port(port_name, read_mode, contract)
+                        }
+                        None => input_mailboxes.add_port(port_name, max_queued_messages, read_mode),
+                    }
                 }
                 let channel = node.open_or_create_service(
                     channel_service_name,
@@ -607,6 +622,48 @@ mod tests {
             );
         });
     }
+}
+
+/// Read the window contract the parent wired this input port with.
+///
+/// The parent sends the five values resolved — a `match_device` sentinel
+/// resolves in the process that opened the device stream — so a child reads one
+/// shape and never a sentinel it could not settle. Field by field rather than
+/// through a serde bridge, so a key the parent got wrong is named here rather
+/// than surfacing as an anonymous decode failure.
+fn read_the_window_contract_the_parent_wired(
+    port_name: &str,
+    declared: &Bound<'_, PyAny>,
+) -> PyResult<ResolvedAudioWindowContract> {
+    fn field<'py, T: for<'a> FromPyObject<'a, 'py, Error = PyErr>>(
+        port_name: &str,
+        declared: &Bound<'py, PyAny>,
+        key: &str,
+    ) -> PyResult<T> {
+        declared
+            .get_item(key)
+            .and_then(|value| value.extract())
+            .map_err(|read_failure| {
+                PyValueError::new_err(format!(
+                    "input port {port_name:?} was wired with an `audio_window` whose \
+                     {key:?} the helper could not read: {read_failure}"
+                ))
+            })
+    }
+
+    let values = AudioWindowContractDeclaredValues {
+        sample_rate: field(port_name, declared, "sample_rate")?,
+        channels: field(port_name, declared, "channels")?,
+        dtype: field(port_name, declared, "dtype")?,
+        window_size: field(port_name, declared, "window_size")?,
+        hop: field(port_name, declared, "hop")?,
+    };
+    ResolvedAudioWindowContract::from_declared_values(&values).map_err(|refusal| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?} was wired with an `audio_window` the stage cannot \
+             honour: {refusal}"
+        ))
+    })
 }
 
 fn not_a_helper_process_data_plane_error() -> PyErr {

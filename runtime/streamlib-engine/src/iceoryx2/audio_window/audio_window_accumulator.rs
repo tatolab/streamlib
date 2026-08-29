@@ -27,6 +27,8 @@
 //! The stage derives a stamp; it never reads a clock.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
@@ -69,8 +71,8 @@ enum AudioWindowRateConversion {
 }
 
 impl AudioWindowRateConversion {
-    fn build(source: SourceAudioFormat, contract: ResolvedAudioWindowContract) -> Result<Self> {
-        if source.sample_rate == contract.sample_rate {
+    fn build(source_sample_rate: u32, contract: ResolvedAudioWindowContract) -> Result<Self> {
+        if source_sample_rate == contract.sample_rate {
             return Ok(AudioWindowRateConversion::RatesAlreadyAgree);
         }
         let parameters = SincInterpolationParameters {
@@ -81,7 +83,7 @@ impl AudioWindowRateConversion {
             window: WindowFunction::BlackmanHarris2,
         };
         let resampler = Async::<f32>::new_sinc(
-            f64::from(contract.sample_rate) / f64::from(source.sample_rate),
+            f64::from(contract.sample_rate) / f64::from(source_sample_rate),
             // The ratio is fixed for the life of a run: a source that changes
             // format rebuilds the resampler rather than retuning it.
             1.0,
@@ -92,9 +94,9 @@ impl AudioWindowRateConversion {
         )
         .map_err(|construction_failure| {
             Error::Configuration(format!(
-                "no resampler could be built from {} Hz to {} Hz across {} channels: \
-                 {construction_failure}",
-                source.sample_rate, contract.sample_rate, contract.channels
+                "no resampler could be built from {source_sample_rate} Hz to {} Hz across \
+                 {} channels: {construction_failure}",
+                contract.sample_rate, contract.channels
             ))
         })?;
         Ok(AudioWindowRateConversion::Resampled(Box::new(resampler)))
@@ -135,11 +137,17 @@ impl AudioWindowRateConversion {
 pub(crate) struct AudioWindowAccumulator {
     port_name: String,
     contract: ResolvedAudioWindowContract,
-    /// The format the rate conversion is built for. Independent of whether a
-    /// contiguous run is in progress: a flush keeps the conversion and resets
-    /// it, and only a format change rebuilds it.
+    /// The format the last accepted block arrived in, for spotting a source
+    /// that changes format mid-stream.
     source_format: Option<SourceAudioFormat>,
     rate_conversion: AudioWindowRateConversion,
+    /// The source rate [`Self::rate_conversion`] was built for. A flush keeps
+    /// the conversion and resets it; only a rate change rebuilds it.
+    rate_conversion_built_for_source_rate: Option<u32>,
+    /// The rate of the most recent bag pushed into the port's mailbox, written
+    /// by that mailbox's measure. Lets the readiness floor be exact before the
+    /// stage has consumed anything at all.
+    latest_queued_source_sample_rate: Arc<AtomicU32>,
     /// Source-rate scalars already converted to the contract's channel count,
     /// waiting for a whole resampler chunk.
     channel_converted_source_scalars: Vec<f32>,
@@ -165,12 +173,21 @@ pub(crate) struct AudioWindowAccumulator {
 
 impl AudioWindowAccumulator {
     /// Build the stage one windowed port reads through.
-    pub(crate) fn new(port_name: &str, contract: ResolvedAudioWindowContract) -> Self {
+    ///
+    /// `latest_queued_source_sample_rate` is shared with the mailbox's measure,
+    /// which writes every arriving bag's rate into it.
+    pub(crate) fn new(
+        port_name: &str,
+        contract: ResolvedAudioWindowContract,
+        latest_queued_source_sample_rate: Arc<AtomicU32>,
+    ) -> Self {
         Self {
             port_name: port_name.to_string(),
             contract,
             source_format: None,
             rate_conversion: AudioWindowRateConversion::RatesAlreadyAgree,
+            rate_conversion_built_for_source_rate: None,
+            latest_queued_source_sample_rate,
             channel_converted_source_scalars: Vec::new(),
             windowable_output_scalars: VecDeque::new(),
             priming_output_frames_still_to_discard: 0,
@@ -219,7 +236,8 @@ impl AudioWindowAccumulator {
         {
             self.flush("the source changed format mid-stream");
         }
-        self.build_the_rate_conversion_if_this_format_is_new(arriving)?;
+        self.source_format = Some(arriving);
+        self.build_the_rate_conversion_if_this_rate_is_new(arriving.sample_rate)?;
 
         let arrived_away_from_where_the_last_block_ended = self
             .expected_next_source_timestamp_ns
@@ -312,14 +330,38 @@ impl AudioWindowAccumulator {
     /// rule out. Under-reporting costs the drain loop one more bag before it
     /// dispatches; over-reporting costs the contract.
     pub(crate) fn a_full_window_would_be_ready_after(
-        &self,
+        &mut self,
         queued_output_frame_equivalents: u64,
     ) -> bool {
         if self.holds_a_full_window() {
             return true;
         }
+        // Building the conversion from the rate the mailbox last saw is what
+        // makes the floor exact rather than worst-case on the first question,
+        // before any bag has been consumed. It costs one construction, reused
+        // by the read that follows, and touches nothing a run depends on.
+        //
+        // Only between runs: mid-run the conversion is already built for the
+        // rate the run is on, and a queued bag announcing a new one is a format
+        // change for `accept` to flush — rebuilding here would throw away the
+        // filter state and the remainder a reader is still owed.
+        let latest_queued_rate = self
+            .latest_queued_source_sample_rate
+            .load(Ordering::Relaxed);
+        if self.run_anchor_timestamp_ns.is_none()
+            && latest_queued_rate != 0
+            && self
+                .build_the_rate_conversion_if_this_rate_is_new(latest_queued_rate)
+                .is_err()
+        {
+            // The read path reports the failure with the bag that caused it;
+            // reporting "nothing is ready" here leaves it to do that.
+            return false;
+        }
+
         let held = self.output_frames_held() as u64;
-        let (staged_equivalents, slack) = self.staged_output_frame_equivalents_and_slack();
+        let (staged_equivalents, slack) =
+            self.staged_output_frame_equivalents_and_slack(latest_queued_rate);
         held + staged_equivalents + queued_output_frame_equivalents
             >= u64::from(self.contract.window_size).saturating_add(slack)
     }
@@ -337,27 +379,26 @@ impl AudioWindowAccumulator {
     /// two frames for the fractional index the resampler carries between
     /// calls (carried, not accumulated — the cumulative output tracks the
     /// ratio across a whole run, not per chunk).
-    fn staged_output_frame_equivalents_and_slack(&self) -> (u64, u64) {
+    fn staged_output_frame_equivalents_and_slack(
+        &self,
+        latest_queued_source_rate: u32,
+    ) -> (u64, u64) {
+        let source_rate = self
+            .source_format
+            .map(|format| format.sample_rate)
+            .unwrap_or(latest_queued_source_rate)
+            .max(1);
         let staged_source_frames = (self.channel_converted_source_scalars.len()
             / self.contract.channels.max(1) as usize) as u64;
+        let equivalents =
+            staged_source_frames * u64::from(self.contract.sample_rate) / u64::from(source_rate);
 
-        let Some(source) = self.source_format else {
-            // No block has arrived, so nothing is staged and no conversion is
-            // built. The caller's equivalents are already at the contract rate,
-            // but a resampler this stage has not seen yet may still owe priming
-            // and hold back an incomplete chunk — so the cold floor gives back
-            // the most either could cost.
-            return (0, COLD_START_OUTPUT_FRAME_SLACK);
-        };
-
-        let equivalents = staged_source_frames * u64::from(self.contract.sample_rate)
-            / u64::from(source.sample_rate).max(1);
         let slack = match self.rate_conversion.source_frames_per_call() {
             None => 0,
             Some(chunk) => {
                 let one_chunk_at_the_output_rate = (chunk as u64
                     * u64::from(self.contract.sample_rate))
-                .div_ceil(u64::from(source.sample_rate).max(1));
+                .div_ceil(u64::from(source_rate));
                 one_chunk_at_the_output_rate + 2
             }
         };
@@ -367,17 +408,17 @@ impl AudioWindowAccumulator {
         )
     }
 
-    /// Build the rate conversion when this format is the first the stage has
-    /// seen, or differs from the one it was built for.
-    fn build_the_rate_conversion_if_this_format_is_new(
+    /// Build the rate conversion when this source rate is the first the stage
+    /// has seen, or differs from the one it was built for.
+    fn build_the_rate_conversion_if_this_rate_is_new(
         &mut self,
-        arriving: SourceAudioFormat,
+        source_sample_rate: u32,
     ) -> Result<()> {
-        if self.source_format == Some(arriving) {
+        if self.rate_conversion_built_for_source_rate == Some(source_sample_rate) {
             return Ok(());
         }
-        self.rate_conversion = AudioWindowRateConversion::build(arriving, self.contract)?;
-        self.source_format = Some(arriving);
+        self.rate_conversion = AudioWindowRateConversion::build(source_sample_rate, self.contract)?;
+        self.rate_conversion_built_for_source_rate = Some(source_sample_rate);
         Ok(())
     }
 
@@ -494,15 +535,6 @@ impl AudioWindowAccumulator {
         Ok(())
     }
 }
-
-/// What the readiness floor gives back before any block has arrived: one
-/// resampler chunk plus a sinc filter's worth of priming, the most a
-/// conversion the stage has not built yet could cost it.
-///
-/// One-time — the first accepted block settles the real numbers — and the
-/// windowed mailbox depth is sized to clear it.
-const COLD_START_OUTPUT_FRAME_SLACK: u64 =
-    RESAMPLER_SOURCE_FRAMES_PER_CHUNK as u64 + RESAMPLER_SINC_FILTER_LENGTH as u64;
 
 /// `frames` at `rate` as nanoseconds, in widened integer arithmetic.
 ///
