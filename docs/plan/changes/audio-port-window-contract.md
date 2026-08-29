@@ -21,8 +21,9 @@ graph block (`:135-137`). Nothing below decides past it.
 under `[audio-subsystem]`, unbuilt — three code sites say so in as many words
 (`core/context/audio_device_backend.rs:266`, `linux/alsa_audio_device_backend.rs:117`,
 `linux/pipewire_audio_shim.c:53-54`). §Processor model's port entries (`:219-296`) are
-DECIDED too, and two of their absolutes contradict it head-on. That collision is
-`[NEEDS DECISION] 1` below; this delta does not resolve it.
+DECIDED too, and two of their absolutes contradict it head-on. That collision was
+brought as a decision and the owner resolved it 2026-08-29 — see the RESOLVED block
+below.
 
 ---
 
@@ -203,34 +204,24 @@ versus
 A windower must decode `samples`, `sample_rate`, `channels` and `dtype` out of a bag. That
 is inspecting a payload, at a read path, driven by a fourth thing the port declared.
 
-[NEEDS DECISION] **Which entry yields, and how is the exception written?**
+**RESOLVED (owner, 2026-08-29): (a) — §Processor model yields; the exception is named
+and bounded.** The port declares three things *plus an optional window contract on an
+audio input*; rendering becomes five; and the no-payload-inspection absolute gains one
+carve-out — declaring a window contract **is** the port's opt-in to the engine reading
+its bags as `AudioBlock`, and the engine inspects a payload on exactly the ports that
+asked it to and nowhere else. Links with no contract stay pure plumbing, `connect` still
+compares nothing, and the frame header still carries no schema ident. The ship fold
+amends the four §Processor model absolutes (`:219-221`, `:320-322`, `:211-216`, `:292-294`)
+with this carve-out, in those words.
 
-- **(a) §Processor model yields; the exception is named and bounded.** The port declares
-  three things *plus an optional window contract on an audio input*; rendering becomes
-  five; and the no-payload-inspection absolute gains one carve-out — declaring a window
-  contract **is** the port's opt-in to the engine reading its bags as `AudioBlock`, and
-  the engine inspects a payload on exactly the ports that asked it to and nowhere else.
-  Links with no contract stay pure plumbing, `connect` still compares nothing, and the
-  frame header still carries no schema ident.
-  *Recommended.* It is what the DECIDED §Media I/O entry and the ADR both already
-  describe, it keeps one implementation at the seam the app process and every helper
-  child already share, and the carve-out is opt-in and legible at the declaration site
-  rather than ambient.
-- **(b) §Media I/O yields; the contract moves off the port onto the processor's config.**
-  The absolutes survive untouched and the stage becomes a built-in's own business. Cost:
-  it reverses a DECIDED entry and the ADR's centrepiece claim, it gives Rust and Python
-  two implementations, and a *user's* Python processor — the case the contract exists for
-  — gets nothing, because a user processor has no built-in to configure.
-- **(c) Neither yields; the framing runs in a compiler-spliced native node on the link.**
-  The engine's read path still inspects nothing, because a processor does the inspecting
-  and processors are allowed to. Cost: no compiler op inserts nodes today
-  (`core/compiler/compiler_ops/` has five, none of them this), it adds an IPC hop per
-  windowed link, it becomes visible in `graph` and `tap` topology, and the ADR already
-  rejected a spliced block for the adjacent conditioning case on alignment grounds
-  (`audio-subsystem.md:135-137`).
-
-I cannot resolve this one — it retires an absolute either way, and which absolute the
-plan keeps is yours.
+Rejected, for the record: moving the contract onto processor config reverses the DECIDED
+§Media I/O entry and strands the user-Python case (a user processor has no built-in to
+configure); a compiler-spliced native node on the link needs a node-insertion capability
+no compiler op has, adds an IPC hop per windowed link, surfaces in `graph`/`tap`
+topology, is nearly incompatible with the `match_device` resolution below (a `setup()`
+re-resolution would mean re-splicing topology at runtime), and the ADR already rejected
+a spliced block for the adjacent conditioning case on alignment grounds
+(`audio-subsystem.md:135-137`).
 
 ## MODIFIED: §Media I/O — SpeakerSink's refusal becomes a conversion
 
@@ -245,41 +236,35 @@ The obstacle is that `SpeakerSink`'s target format is not knowable when its port
 declared: it comes from `playback_stream.stream_format()` after `setup()` opens the device
 (`speaker_sink.rs:130`), and it varies by machine.
 
-[NEEDS DECISION] **May a native built-in set its input port's window contract at
-`setup()`?**
+**RESOLVED (owner, 2026-08-29): (c) — `setup()`-time resolution, spelled as a
+declaration sentinel.** The port's declaration itself carries
+`audio_window = match_device`; the contract resolves at `setup()`, where the typestate
+is Full — the same phase in which a processor requests a window (`:591`) — from the
+format the device stream just opened. Only a processor that opens a device stream can
+satisfy the sentinel; the `setup()` setter is the engine-internal mechanism, never
+public surface, and it is deliberately not exported to Python — the parity disposition,
+named: a Python processor's window is its model's compile-time knowledge, and it holds
+no machine-varying device format to resolve. `graph` renders the resolved values —
+machine-dependent because the device format is, which is truer than a static lie.
+`SpeakerSink` declares `audio_window = match_device` with window = hop = one device
+period — it wants format conversion, not framing, and under all-or-nothing that is how
+a converter is spelled. `refuse_a_block_the_device_cannot_play` then deletes: the stage
+converts, and the sink plays.
 
-- **(a) Static declaration only.** The contract is a compile-time declaration and nothing
-  else. `SpeakerSink` keeps refusing, and a user whose mic and speaker disagree has no
-  fix — there is no user-authorable resampler, and the plan says there must not be one.
-  The rung ships without solving its most obvious case.
-- **(b) A built-in may resolve its contract at `setup()`, where the typestate is Full.**
-  The declaration surface gains a runtime setter reachable only from `setup()` — the same
-  phase in which a processor requests a window (`:591`) — and `SpeakerSink` sets it
-  from the format it just opened. `refuse_a_block_the_device_cannot_play` then deletes:
-  the stage converts, and the sink plays.
-  Cost, stated plainly: a port's rendered contract in `graph` becomes machine-dependent
-  for such a port, and this is a new capability on the declaration surface — which is
-  precisely why it is here and not assumed.
-- **(c) — (b) spelled as a declaration sentinel.** The port's declaration itself carries
-  `audio_window = match_device`; only a processor that opens a device stream can satisfy
-  it, the `setup()` setter is the engine-internal mechanism rather than public surface,
-  and it is deliberately not exported to Python — the parity disposition, named: a
-  Python processor's window is its model's compile-time knowledge, and it holds no
-  machine-varying device format to resolve. `graph` renders the resolved values, which
-  is truer than a static lie about a machine-dependent format. `SpeakerSink` declares
-  window = hop = one device period — it wants format conversion, not framing, and under
-  all-or-nothing that is how a converter is spelled. *Recommended over the bare setter*:
-  the declaration site stays legible, and the new capability is bounded to the one
-  processor class that can honestly claim it.
+Rejected, for the record: static-only ships the rung with its flagship case unsolved
+(mono-preferring mic into a stereo-preferring speaker fails on a stock machine, with no
+user-authorable fix by design); a bare public setter puts a dynamic-contract API on the
+declaration surface where any processor could reach it, and leaves the declaration site
+silent about a resolution the reader needs to know happens.
 
 ## REMOVED:
 
 - REMOVED: refuse_a_block_the_device_cannot_play
 
-**This bullet is provisional on `[NEEDS DECISION] 2` resolving to (b)** and must be struck
-from this file before `/derive-tickets` if it resolves to (a) — a bullet whose artifact is
-meant to survive would fail the ship gate forever. Nothing else in this delta is a
-deletion: the rung is additive. The three "no resampler on this rung" comments
+**The bullet stands**: decision 2 resolved to the sentinel, whose mechanism deletes the
+refusal — the stage converts, so a block the device cannot play as it stands stops being
+refusable and starts being playable. Nothing else in this delta is a deletion: the rung
+is additive. The three "no resampler on this rung" comments
 (`audio_device_backend.rs:266`, `alsa_audio_device_backend.rs:117`,
 `pipewire_audio_shim.c:53-54`) become false the moment the stage lands and are corrected
 in the PRs that falsify them — ordinary doc hygiene inside work already being done, not
