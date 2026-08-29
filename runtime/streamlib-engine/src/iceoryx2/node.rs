@@ -103,10 +103,9 @@ impl Iceoryx2Node {
     /// [`DeliveryProfile`](crate::iceoryx2::DeliveryProfile), resolved via
     /// [`crate::iceoryx2::delivery_profile_for_input_port`].
     ///
-    /// Safe overflow is on for every channel service and is not a parameter:
-    /// a full subscriber buffer auto-evicts its oldest sample so the
-    /// publisher's `send()` never blocks. No link blocks a producer, so
-    /// nothing derives, passes, or overrides this.
+    /// Safe overflow is on for every channel service: a full subscriber
+    /// buffer auto-evicts its oldest sample so the publisher's `send()`
+    /// never blocks.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
@@ -424,10 +423,11 @@ mod tests {
     /// dropped on the floor at send time regardless of the overflow
     /// flag).
     ///
-    /// This is the behavioural half of the contract;
-    /// [`crate::iceoryx2::channel_sizing_tests`] asserts the flag itself
-    /// on the opened service's static config, which is what catches a
-    /// service that agrees with iceoryx2 0.8.1's default by accident.
+    /// The behavioural half; `channel_sizing_tests` reads the same
+    /// contract off the opened service's static config. Neither catches
+    /// the `.enable_safe_overflow(true)` line simply going missing —
+    /// iceoryx2 0.8.1 defaults to `true` — but a `false` written there
+    /// fails both.
     #[test]
     fn overflow_enabled_publisher_does_not_block_on_full_buffer() {
         use std::time::{Duration, Instant};

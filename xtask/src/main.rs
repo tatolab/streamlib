@@ -329,6 +329,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph::components::processor_metrics::tests::a_processor_that_has_lost_nothing_says_so_rather_than_staying_silent",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_dropping_destinations_node_renders_each_inbound_links_losses",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero",
+                "core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly",
+                "iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer",
                 "iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow",
                 "iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow",
                 "iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep",

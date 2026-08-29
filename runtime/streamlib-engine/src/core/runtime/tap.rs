@@ -37,7 +37,8 @@
 //! draining the reserved slot, so every later bag on the channel would reach no
 //! observer and detaching the tap would hang on a thread that never returns.
 //! This is deliberately unlike the UNBOUNDED event WebSocket bridge: the tap
-//! trades completeness for guaranteed non-interference.
+//! trades completeness for liveness — detach returns, and the bags after a
+//! stall still reach an observer.
 //!
 //! Detaching = dropping the [`TapSubscription`]: the mpsc receiver is closed,
 //! the forwarder thread is signalled to stop, joined, and the reserved slot is
@@ -352,7 +353,7 @@ mod tests {
     }
 
     /// Sizing matching [`open_channel`], for the tap's publisher-free reopen.
-    fn channel_sizing(max_subscribers: usize) -> TapChannelSizing {
+    fn tap_channel_sizing_matching_open_channel(max_subscribers: usize) -> TapChannelSizing {
         TapChannelSizing {
             max_subscribers,
             max_queued_messages: RING_DEPTH,
@@ -387,7 +388,7 @@ mod tests {
         let mut tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            channel_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect("first tap attaches to the reserved slot");
@@ -396,7 +397,7 @@ mod tests {
         let err = start_channel_tap(
             node.clone(),
             channel.clone(),
-            channel_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect_err("a second concurrent tap must be rejected");
@@ -439,7 +440,7 @@ mod tests {
         let tap_again = start_channel_tap(
             node.clone(),
             channel.clone(),
-            channel_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect("reserved slot must be free again after the first tap detached");
@@ -460,7 +461,7 @@ mod tests {
         let mut tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            channel_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             Some(2),
         )
         .expect("bounded tap attaches");
@@ -513,7 +514,7 @@ mod tests {
         let mut tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            channel_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             Some(0),
         )
         .expect("zero-count tap attaches");
@@ -563,7 +564,7 @@ mod tests {
         let tap = start_channel_tap(
             node.clone(),
             channel.clone(),
-            channel_sizing(max_subscribers),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
             None,
         )
         .expect("tap attaches");

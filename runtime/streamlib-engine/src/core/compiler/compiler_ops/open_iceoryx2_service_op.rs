@@ -1046,6 +1046,12 @@ mod tests {
             recorded_source_ports["outputs"][0]["channel_service_name"],
             serde_json::json!("pabc/out1"),
         );
+        assert_eq!(
+            recorded_source_ports["outputs"][0]["enable_safe_overflow"],
+            serde_json::json!(true),
+            "the envelope states the overflow mode iceoryx2 verifies on open; an SDK \
+             that opens this service from its own bindings has nothing else to read it from"
+        );
 
         let recorded_dest_ports = dest_instance
             .lock()
@@ -1056,6 +1062,12 @@ mod tests {
         assert_eq!(
             recorded_dest_ports["inputs"][0]["read_mode"],
             serde_json::json!("skip_to_latest"),
+        );
+        assert_eq!(
+            recorded_dest_ports["inputs"][0]["enable_safe_overflow"],
+            serde_json::json!(true),
+            "both ends of the link state the same overflow mode — iceoryx2 rejects a \
+             reopen that disagrees"
         );
     }
 
