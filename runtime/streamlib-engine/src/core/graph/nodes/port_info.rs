@@ -23,6 +23,12 @@ pub struct PortInfo {
     /// locking the processor instance.
     #[serde(default)]
     pub delivery_profile: Option<String>,
+    /// Window contract declared by this audio input port, or `None`. Mirrors
+    /// the field on [`crate::core::descriptors::PortDescriptor`]; absent from
+    /// the rendering entirely on a port that declares none, so a contract-less
+    /// port renders exactly what it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
@@ -32,6 +38,7 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             description: port.description.clone(),
             port_kind: PortKind::default(),
             delivery_profile: port.delivery_profile.clone(),
+            audio_window: port.audio_window.clone(),
         }
     }
 }

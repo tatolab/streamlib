@@ -31,7 +31,6 @@ use streamlib_processor_schema::{
     ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
     RuntimeConfig, RuntimeOptions, ThreadPriority,
     refuse_audio_window_beside_a_skipping_delivery_profile,
-    render_audio_window_dtype_declaration_values,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -962,6 +961,21 @@ mod tests {
     }
 
     // ---- `audio_window`: the declaration, and every way it is refused ----
+    /// The unknown-port-key list is the author's map of the port grammar, so a
+    /// key the grammar accepts and the list omits is a key nobody finds.
+    #[test]
+    fn the_unknown_port_key_error_offers_every_key_a_port_accepts() {
+        let msg = parse_err(quote! {
+            execution = reactive,
+            input("audio", delivery_profile = "ordered", frobnicate = "yes"),
+        });
+
+        assert!(msg.contains("unknown port key `frobnicate`"), "got: {msg}");
+        for key in ["delivery_profile", "description", "audio_window"] {
+            assert!(msg.contains(key), "the list must offer `{key}`; got: {msg}");
+        }
+    }
+
 
     fn declared_contract(parsed: &ParsedProcessorAttr) -> &AudioWindowContractDeclaredValues {
         match parsed.inputs[0]

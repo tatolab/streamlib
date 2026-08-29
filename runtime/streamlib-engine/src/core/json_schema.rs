@@ -78,6 +78,11 @@ pub struct PortInfoOutput {
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`; `None` on an output port.
     pub delivery_profile: Option<String>,
+    /// Window contract declared by this audio input port. Absent from the
+    /// rendering on a port that declares none — the contract is opt-in, and a
+    /// port without one renders exactly what it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
 }
 
 /// The kind of port - determines how data flows.
@@ -211,6 +216,10 @@ pub struct PortDescriptorOutput {
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`; `None` on an output port.
     pub delivery_profile: Option<String>,
+    /// Window contract declared by this audio input port. Absent from the
+    /// rendering on a port that declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_window: Option<crate::core::descriptors::AudioWindowContract>,
 }
 
 /// Code examples for a processor in different languages.
@@ -258,6 +267,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             description: port.description.clone(),
             port_kind: PortKindOutput::from(port.port_kind),
             delivery_profile: port.delivery_profile.clone(),
+            audio_window: port.audio_window.clone(),
         }
     }
 }
@@ -362,6 +372,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             description: port.description.clone(),
             required: port.required,
             delivery_profile: port.delivery_profile.clone(),
+            audio_window: port.audio_window.clone(),
         }
     }
 }
@@ -384,6 +395,20 @@ mod port_rendering_tests {
     /// again fails here, whatever the field is named.
     const PORT_INFO_KEYS: [&str; 4] = ["name", "description", "port_kind", "delivery_profile"];
     const PORT_DESCRIPTOR_KEYS: [&str; 4] = ["name", "description", "required", "delivery_profile"];
+    const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 5] = [
+        "name",
+        "description",
+        "port_kind",
+        "delivery_profile",
+        "audio_window",
+    ];
+    const PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS: [&str; 5] = [
+        "name",
+        "description",
+        "required",
+        "delivery_profile",
+        "audio_window",
+    ];
     const FORBIDDEN_PORT_TYPE_KEYS: [&str; 4] = ["data_type", "schema", "type", "schema_ident"];
 
     fn assert_renders_exactly(json: &serde_json::Value, expected: &[&str]) {
@@ -407,6 +432,8 @@ mod port_rendering_tests {
         }
     }
 
+    /// The contract is opt-in: a port declaring none renders exactly the four
+    /// keys it always did, with no `audio_window` present as a null.
     #[test]
     fn port_info_output_renders_exactly_the_declared_keys() {
         let port = crate::core::graph::PortInfo {
@@ -414,6 +441,7 @@ mod port_rendering_tests {
             description: "Frames to convert".to_string(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("newest".to_string()),
+            audio_window: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 
@@ -433,6 +461,7 @@ mod port_rendering_tests {
             description: String::new(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: None,
+            audio_window: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
         assert_carries_no_type_key(&json);
@@ -449,5 +478,89 @@ mod port_rendering_tests {
         assert_eq!(json["delivery_profile"], "ordered");
         assert_renders_exactly(&json, &PORT_DESCRIPTOR_KEYS);
         assert_carries_no_type_key(&json);
+    }
+
+    fn declared_window_contract() -> crate::core::descriptors::AudioWindowContract {
+        crate::core::descriptors::AudioWindowContract::Declaration(
+            crate::core::descriptors::AudioWindowContractDeclaredValues {
+                sample_rate: 16_000,
+                channels: 1,
+                dtype: "f32".to_string(),
+                window_size: 512,
+                hop: 512,
+            },
+        )
+    }
+
+    #[test]
+    fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
+        let port = crate::core::graph::PortInfo {
+            name: "audio".to_string(),
+            description: "Samples to frame".to_string(),
+            port_kind: crate::core::graph::PortKind::Data,
+            delivery_profile: Some("ordered".to_string()),
+            audio_window: Some(declared_window_contract()),
+        };
+        let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+
+        assert_eq!(
+            json["audio_window"],
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 512,
+            })
+        );
+        assert_renders_exactly(&json, &PORT_INFO_WITH_A_CONTRACT_KEYS);
+        assert_carries_no_type_key(&json);
+    }
+
+    #[test]
+    fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
+        let port = crate::core::graph::PortInfo {
+            name: "audio".to_string(),
+            description: String::new(),
+            port_kind: crate::core::graph::PortKind::Data,
+            delivery_profile: Some("ordered".to_string()),
+            audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
+        };
+        let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+
+        assert_eq!(
+            json["audio_window"],
+            serde_json::json!({ "resolved_from": "match_device" })
+        );
+    }
+
+    /// The contract rides `PortDescriptor` into `PortInfo` untouched — the
+    /// carrier the macro and the wheel's declaration bridge both fill.
+    #[test]
+    fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
+        let descriptor = crate::core::PortDescriptor::iceoryx2("audio", "Samples to frame")
+            .with_delivery_profile("ordered")
+            .with_audio_window_contract(declared_window_contract());
+
+        let port = crate::core::graph::PortInfo::from(&descriptor);
+
+        assert_eq!(port.audio_window, Some(declared_window_contract()));
+    }
+
+    #[test]
+    fn a_contract_bearing_descriptor_renders_its_contract_too() {
+        let descriptor = crate::core::PortDescriptor::iceoryx2("audio", "Samples to frame")
+            .with_delivery_profile("ordered")
+            .with_audio_window_contract(
+                crate::core::descriptors::AudioWindowContract::MatchDevice {},
+            );
+        let json = serde_json::to_value(PortDescriptorOutput::from(&descriptor)).unwrap();
+
+        assert_eq!(
+            json["audio_window"],
+            serde_json::json!({ "resolved_from": "match_device" })
+        );
+        assert_renders_exactly(&json, &PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS);
     }
 }
