@@ -147,9 +147,10 @@ impl Iceoryx2Service {
         self.max_queued_messages
     }
 
-    /// Whether iceoryx2 holds this service under safe overflow — read back from
-    /// the live static config, so it reports what the service was created with
-    /// rather than what this opener requested.
+    /// Whether iceoryx2 holds this service under safe overflow, read off the
+    /// live static config — on a reopen that is the config the service was
+    /// created with, not what this call asked for.
+    #[cfg(test)]
     pub(crate) fn has_safe_overflow(&self) -> bool {
         self.inner.static_config().has_safe_overflow()
     }

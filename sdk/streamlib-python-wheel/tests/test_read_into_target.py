@@ -95,7 +95,6 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         8,
         2,
         1,
-        True,
         link_id,
     )
     source = ProcessorLinkDataAccess()
@@ -108,7 +107,6 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
         8,
         2,
         1,
-        True,
         link_id,
     )
     yield WiredLinkUnderTest(source, destination)
