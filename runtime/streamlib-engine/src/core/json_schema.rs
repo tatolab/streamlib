@@ -245,7 +245,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
             display_name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
-            ports: ProcessorNodePortsOutput::of_this_node(node),
+            ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
             components: node.serialize_components(),
         }
     }
@@ -263,10 +263,12 @@ impl ProcessorNodePortsOutput {
     /// rendered: the settled values live beside the ports rather than in them,
     /// so a renderer handed the ports alone could only ever produce the
     /// sentinel — and would look like the right call to reach for.
-    fn of_this_node(node: &crate::core::graph::ProcessorNode) -> Self {
+    fn rendered_for_a_node_over_its_settled_contracts(
+        node: &crate::core::graph::ProcessorNode,
+    ) -> Self {
         let settled = node
             .get::<crate::core::graph::DeviceMatchedAudioWindowContractsComponent>()
-            .map(|component| &component.0);
+            .map(|component| &*component.0);
         Self {
             inputs: node
                 .ports
@@ -289,9 +291,7 @@ impl PortInfoOutput {
     /// its own device stream settled it to.
     fn rendered_over_any_settled_contract(
         port: &crate::core::graph::PortInfo,
-        settled: Option<
-            &std::sync::Arc<crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>,
-        >,
+        settled: Option<&crate::iceoryx2::DeviceMatchedAudioWindowContractsByInputPort>,
     ) -> Self {
         let mut rendered = PortInfoOutput::from(port);
         if !matches!(
@@ -303,9 +303,9 @@ impl PortInfoOutput {
         if let Some(values) =
             settled.and_then(|contracts| contracts.settled_declaration_for_input_port(&port.name))
         {
-            rendered.audio_window = Some(
-                crate::core::descriptors::AudioWindowContract::Declaration(values),
-            );
+            rendered.audio_window = Some(crate::core::descriptors::AudioWindowContract::Device(
+                values,
+            ));
         }
         rendered
     }
@@ -653,7 +653,7 @@ mod port_rendering_tests {
         assert_eq!(
             rendered["ports"]["inputs"][0]["audio_window"],
             serde_json::json!({
-                "resolved_from": "declaration",
+                "resolved_from": "device",
                 "sample_rate": 44_100,
                 "channels": 2,
                 "dtype": "f32",

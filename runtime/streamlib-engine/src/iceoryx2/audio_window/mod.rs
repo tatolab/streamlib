@@ -40,7 +40,7 @@ pub use device_matched_audio_window_contracts::{
 };
 pub use resolved_audio_window_contract::ResolvedAudioWindowContract;
 pub(crate) use resolved_audio_window_contract::{
-    AudioWindowingOfAnInputPort, audio_windowing_declared_by_input_port,
+    AudioWindowDeclarationOfAnInputPort, audio_windowing_declared_by_input_port,
     refuse_an_unsettled_match_device_sentinel,
 };
 

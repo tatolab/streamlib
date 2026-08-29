@@ -545,6 +545,7 @@ mod tests {
         let processor = a_device_matched_audio_consumer_whose_port_is(|mailboxes| {
             mailboxes.add_port_awaiting_its_device_stream_format(
                 "audio",
+                crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
                 crate::iceoryx2::ReadMode::ReadNextInOrder,
             )
         });
@@ -571,6 +572,7 @@ mod tests {
         let processor = a_device_matched_audio_consumer_whose_port_is(|mailboxes| {
             mailboxes.add_port_awaiting_its_device_stream_format(
                 "audio",
+                crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
                 crate::iceoryx2::ReadMode::ReadNextInOrder,
             );
             mailboxes

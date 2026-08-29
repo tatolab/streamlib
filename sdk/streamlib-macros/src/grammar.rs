@@ -975,7 +975,7 @@ mod tests {
             .expect("the port declared a contract")
         {
             AudioWindowContract::Declaration(values) => values,
-            AudioWindowContract::MatchDevice {} => panic!("expected declared values"),
+            other => panic!("expected declared values, got {other:?}"),
         }
     }
 

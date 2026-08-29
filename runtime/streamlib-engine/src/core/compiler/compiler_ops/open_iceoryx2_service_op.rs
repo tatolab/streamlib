@@ -26,7 +26,7 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
-    AudioWindowingOfAnInputPort, ChannelEgressConfig, ChannelTrustTier,
+    AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService, Iceoryx2Service,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, audio_windowing_declared_by_input_port,
     delivery_profile_for_input_port, effective_channel_ceiling_bytes,
@@ -562,7 +562,7 @@ fn audio_windowing_declared_by_input_port_of(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
-) -> Result<Option<AudioWindowingOfAnInputPort>> {
+) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
     let Some(dest_type) = graph
         .traversal_mut()
         .v(dest_proc_id)
@@ -777,7 +777,7 @@ fn wire_rust_dest(
     depth: usize,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
-    audio_windowing: Option<AudioWindowingOfAnInputPort>,
+    audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
 ) -> Result<()> {
     let dest_guard = dest_processor.lock();
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
@@ -787,13 +787,13 @@ fn wire_rust_dest(
     if !input_inner.has_port(dest_port) {
         match audio_windowing {
             None => input_inner.add_port(dest_port, depth, drain_order),
-            Some(AudioWindowingOfAnInputPort::Resolved(contract)) => {
+            Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {
                 input_inner.add_windowed_port(dest_port, drain_order, contract)
             }
             // A sentinel this processor already settled — a link wired after
             // its `setup()` ran — windows from the settled values rather than
             // waiting for a `setup()` that has been and gone.
-            Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat) => {
+            Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream) => {
                 match input_inner
                     .device_matched_audio_window_contracts()
                     .settled_for_input_port(dest_port)
@@ -801,8 +801,11 @@ fn wire_rust_dest(
                     Some(contract) => {
                         input_inner.add_windowed_port(dest_port, drain_order, contract)
                     }
-                    None => input_inner
-                        .add_port_awaiting_its_device_stream_format(dest_port, drain_order),
+                    None => input_inner.add_port_awaiting_its_device_stream_format(
+                        dest_port,
+                        depth,
+                        drain_order,
+                    ),
                 }
             }
         }
@@ -869,7 +872,7 @@ fn publish_dropped_bag_counts_on_destination_node(
 fn publish_device_matched_audio_window_contracts_on_destination_node(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
-    input_inner: &Arc<crate::iceoryx2::InputMailboxesInner>,
+    input_inner: &crate::iceoryx2::InputMailboxesInner,
 ) {
     let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
         return;
@@ -951,7 +954,7 @@ fn wire_subprocess_dest(
     max_subscribers: usize,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
-    audio_windowing: Option<AudioWindowingOfAnInputPort>,
+    audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
 ) -> Result<()> {
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
@@ -979,7 +982,7 @@ fn wire_subprocess_dest(
     // placement is known.
     match audio_windowing {
         None => {}
-        Some(AudioWindowingOfAnInputPort::Resolved(contract)) => {
+        Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {
             entry["audio_window"] =
                 serde_json::to_value(contract.as_declared_values()).map_err(|render_failure| {
                     Error::Configuration(format!(
@@ -988,7 +991,7 @@ fn wire_subprocess_dest(
                     ))
                 })?;
         }
-        Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat) => {
+        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream) => {
             let dest_type = graph
                 .traversal_mut()
                 .v(dest_proc_id)
@@ -1881,7 +1884,7 @@ mod tests {
         .expect("a declared contract resolves")
         .expect("the port declares one");
 
-        let AudioWindowingOfAnInputPort::Resolved(contract) = windowing else {
+        let AudioWindowDeclarationOfAnInputPort::StatedOutright(contract) = windowing else {
             panic!("a port stating five values resolves to them at wire time");
         };
         assert_eq!(contract.sample_rate, 16_000);
@@ -1923,7 +1926,7 @@ mod tests {
 
         assert_eq!(
             windowing,
-            AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat
+            AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream
         );
     }
 
@@ -1959,7 +1962,7 @@ mod tests {
             crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             &channel,
             None,
-            Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat),
+            Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
         )
         .expect("a sentinel wires rather than refusing");
 
@@ -1992,7 +1995,7 @@ mod tests {
         assert_eq!(
             rendered_audio_window_of(&mut graph, &dest_unique_id),
             serde_json::json!({
-                "resolved_from": "declaration",
+                "resolved_from": "device",
                 "sample_rate": 44_100,
                 "channels": 2,
                 "dtype": "f32",
@@ -2047,7 +2050,7 @@ mod tests {
             2,
             1,
             &"L-helper-windowed".into(),
-            Some(AudioWindowingOfAnInputPort::AwaitingItsDeviceStreamFormat),
+            Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
         )
         .expect_err("a helper child cannot settle a sentinel")
         .to_string();
@@ -2096,7 +2099,7 @@ mod tests {
             2,
             1,
             &"L-helper-settled".into(),
-            Some(AudioWindowingOfAnInputPort::Resolved(settled)),
+            Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(settled)),
         )
         .expect("a settled contract renders onto the envelope");
 

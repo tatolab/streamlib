@@ -430,6 +430,22 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::port_rendering_tests::the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own",
             ],
         ),
+        // The rig-tier integration binary that drives the two `match_device`
+        // call sites, compiled only: it stands up a real graph and needs a GPU,
+        // so building it is what keeps it from rotting between rig runs.
+        (
+            "the match_device integration binary compiles",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-media-builtins",
+                "--test",
+                "speaker_sink_matches_its_device",
+                "--no-run",
+            ],
+        ),
         // The deviceless arm's integration binaries, which the workflow runs
         // beside the slice. `attribute_macro_test` aside, these are the only
         // engine integration tests CI runs at all.

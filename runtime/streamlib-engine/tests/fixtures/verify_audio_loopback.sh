@@ -80,12 +80,14 @@ for _ in $(seq 60); do
     sleep 0.5
 done
 
-# The refusal `SpeakerSink` owes a block it cannot play. Checked by name rather
-# than left to show up as silence, because silence is also what a dead sink
-# looks like and the two need different fixes.
-if grep -q "cannot be played on a device running at" "$OUTPUT_DIR/node.log"; then
-    echo "ERROR: the speaker refused the signal's format — there is no resampler yet" >&2
-    grep "cannot be played on a device running at" "$OUTPUT_DIR/node.log" >&2
+# A bag the windowing stage could not read, by name rather than left to show up
+# as silence — silence is also what a dead sink looks like and the two need
+# different fixes. The speaker no longer refuses a format it cannot play: its
+# port declares `audio_window = match_device`, so the stage converts. What it
+# still refuses is a bag it cannot decode as an audio block at all.
+if grep -q "cannot be read as an audio block" "$OUTPUT_DIR/node.log"; then
+    echo "ERROR: the speaker's port refused the signal's bags — see the reason below" >&2
+    grep "cannot be read as an audio block" "$OUTPUT_DIR/node.log" >&2
     exit 1
 fi
 

@@ -136,8 +136,9 @@ def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     assert rendered is not None, (
         f"the speaker's port rendered no window contract at all:\n{app.output}"
     )
-    assert rendered["resolved_from"] == "declaration", (
-        f"graph must render the values the device settled, not the sentinel: {rendered}"
+    assert rendered["resolved_from"] == "device", (
+        f"graph must render the values the device settled, said to have come from the "
+        f"device rather than from an author: {rendered}"
     )
     assert rendered["window_size"] == rendered["hop"], (
         f"a sink converts format rather than re-framing, so window and hop are one "

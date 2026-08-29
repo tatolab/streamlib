@@ -155,14 +155,23 @@ impl PortMailbox {
         }
     }
 
+    /// Pop the oldest entry whole, keeping the running total straight.
+    ///
+    /// The one place a frame leaves the queue by being read: every reader goes
+    /// through this so the measure total cannot drift from what is queued. The
+    /// eviction inside [`Self::push_frame`] is the only other exit, and it is
+    /// not a read.
+    fn pop_frame(&self) -> Option<PortMailboxQueuedFrame> {
+        self.queue.pop().inspect(|frame| {
+            self.take_out_of_the_total(frame);
+        })
+    }
+
     /// Pop the oldest entry from the mailbox (FIFO).
     ///
     /// Thread-safe: can be called from any thread.
     pub fn pop(&self) -> Option<Vec<u8>> {
-        self.queue.pop().map(|frame| {
-            self.take_out_of_the_total(&frame);
-            frame.payload
-        })
+        self.pop_frame().map(|frame| frame.payload)
     }
 
     /// Drain buffer and return only the newest entry.
@@ -173,8 +182,7 @@ impl PortMailbox {
     /// Thread-safe: can be called from any thread.
     pub fn pop_latest(&self) -> Option<Vec<u8>> {
         let mut latest = None;
-        while let Some(frame) = self.queue.pop() {
-            self.take_out_of_the_total(&frame);
+        while let Some(frame) = self.pop_frame() {
             latest = Some(frame.payload);
         }
         latest
@@ -216,8 +224,7 @@ impl PortMailbox {
     /// overrun the replacement's depth are evicted and counted by it exactly as
     /// a burst would be.
     pub fn hand_every_queued_frame_over_to(&self, replacement: &PortMailbox) {
-        while let Some(frame) = self.queue.pop() {
-            self.take_out_of_the_total(&frame);
+        while let Some(frame) = self.pop_frame() {
             let measure = replacement.measure_of(&frame.payload);
             replacement.push_frame(PortMailboxQueuedFrame { measure, ..frame });
         }

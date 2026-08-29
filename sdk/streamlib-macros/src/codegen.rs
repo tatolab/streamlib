@@ -788,6 +788,17 @@ fn audio_window_contract_tokens(
 
     match audio_window {
         None => quote! { ::std::option::Option::None },
+        // Rendering-only: `graph` uses it to say five values came from a device
+        // rather than from an author, and the grammar this codegen reads has no
+        // spelling that produces one. A `compile_error!` rather than a panic
+        // because the only way to reach it is a future grammar change, and that
+        // change should fail the build that introduced it.
+        Some(AudioWindowContract::Device(_)) => quote! {
+            compile_error!(
+                "`audio_window` resolved from a device is a rendering, not a declaration \
+                 — a port states its five values or `match_device`"
+            )
+        },
         Some(AudioWindowContract::MatchDevice {}) => quote! {
             ::std::option::Option::Some(
                 __streamlib_sdk::descriptors::AudioWindowContract::MatchDevice {},

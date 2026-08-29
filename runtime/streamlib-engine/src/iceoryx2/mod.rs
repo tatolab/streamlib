@@ -22,7 +22,7 @@ pub use audio_window::{
     ResolvedAudioWindowContract,
 };
 pub(crate) use audio_window::{
-    AudioWindowingOfAnInputPort, audio_windowing_declared_by_input_port,
+    AudioWindowDeclarationOfAnInputPort, audio_windowing_declared_by_input_port,
     refuse_an_unsettled_match_device_sentinel,
 };
 pub use channel_ceiling::{

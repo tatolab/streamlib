@@ -127,6 +127,14 @@ jobs:
           # the display's fold onto the engine's present machinery — the rest of
           # that coverage is rig-gated and never runs in CI at all.
           cargo test --locked -p streamlib-media-builtins --lib
+          # Compiled but not run. `speaker_sink_matches_its_device` is the only
+          # thing that drives the two `match_device` production call sites —
+          # `SpeakerSink::setup()` settling its port, and the spawn seam refusing
+          # a port setup left unsettled — but it stands up a real graph, and
+          # `App::new()` needs a GpuContext no CI runner has. Building it here is
+          # what stops it rotting between rig runs; the rig is where it passes.
+          cargo test --locked -p streamlib-media-builtins \
+            --test speaker_sink_matches_its_device --no-run
           # The present-class escalate ops' headless arm. `streamlib-engine`'s
           # lib tests are deliberately not run wholesale here (see
           # python-wheel.yml's carve-out, which says so), so a named slice is
