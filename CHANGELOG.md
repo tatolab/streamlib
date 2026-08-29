@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.17](https://github.com/tatolab/streamlib/compare/v0.18.16...v0.18.17) (2026-08-29)
+
+
+### Features
+
+* **engine:** a dropped bag is counted at its port, per link, and graph shows it ([#2026](https://github.com/tatolab/streamlib/issues/2026)) ([da6c4b7](https://github.com/tatolab/streamlib/commit/da6c4b7a9ebc1ac09879e071bdddf82cc70b648c))
+
 ## [0.18.16](https://github.com/tatolab/streamlib/compare/v0.18.15...v0.18.16) (2026-08-28)
 
 
