@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.18](https://github.com/tatolab/streamlib/compare/v0.18.17...v0.18.18) (2026-08-29)
+
+
+### Features
+
+* **engine:** an audio input port declares its window contract, refused wrong by name ([#2035](https://github.com/tatolab/streamlib/issues/2035)) ([9516463](https://github.com/tatolab/streamlib/commit/95164639dcee2411049f11ad45514b56564c91eb))
+
 ## [0.18.17](https://github.com/tatolab/streamlib/compare/v0.18.16...v0.18.17) (2026-08-29)
 
 
