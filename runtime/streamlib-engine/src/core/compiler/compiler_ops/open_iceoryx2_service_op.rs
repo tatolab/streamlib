@@ -21,7 +21,7 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
-    LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
+    LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics, SubprocessHandleComponent,
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
@@ -188,6 +188,7 @@ pub fn open_iceoryx2_service(
             &service,
             notify_service.as_ref(),
         )?;
+        publish_dropped_bag_counts_on_destination_node(graph, &dest_proc_id, &dest_processor);
     }
 
     let link = graph
@@ -708,6 +709,36 @@ fn wire_rust_dest(
         }
     }
     Ok(())
+}
+
+/// Share the destination's per-inbound-link dropped-bag counts onto its graph
+/// node, so `graph` reads them live off the mailboxes that do the evicting.
+///
+/// Inserted with the destination's first inbound link and left alone after: the
+/// counts are one shared object for the whole processor, and a link wired later
+/// mints its own zeroed entry inside it.
+///
+/// A destination whose mailboxes live out of process counts its evictions
+/// there and exposes nothing here, so its node carries no metrics at all rather
+/// than a zero the parent cannot stand behind.
+fn publish_dropped_bag_counts_on_destination_node(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    dest_processor: &Arc<Mutex<ProcessorInstance>>,
+) {
+    let Some(input_inner) = dest_processor.lock().iceoryx2_input_mailboxes_inner() else {
+        return;
+    };
+    let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
+        return;
+    };
+    if node.has::<ProcessorMetrics>() {
+        return;
+    }
+    node.insert(ProcessorMetrics {
+        dropped_bag_counts_by_inbound_link: input_inner.dropped_bag_counts_by_inbound_link(),
+        ..Default::default()
+    });
 }
 
 /// Record this link's source-side wiring on a processor whose transport lives

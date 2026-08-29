@@ -30,6 +30,7 @@ use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
+use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
@@ -53,6 +54,10 @@ struct PortBoundSubscriber {
     link_id: String,
     local_port: String,
     subscriber: Subscriber<ipc::Service, [u8], ()>,
+    /// This link's share of the destination's dropped-bag counts. Every frame
+    /// this subscriber delivers is queued holding it, so an eviction names the
+    /// link the evicted bag came in on rather than the one that made room.
+    dropped_bag_counter: InboundLinkDroppedBagCounter,
 }
 
 /// Thread-local set of channel subscribers.
@@ -80,6 +85,7 @@ impl SendableChannelSubscribers {
         link_id: String,
         local_port: String,
         subscriber: Subscriber<ipc::Service, [u8], ()>,
+        dropped_bag_counter: InboundLinkDroppedBagCounter,
     ) {
         // SAFETY: Only called from the processor's execution thread during wiring.
         unsafe {
@@ -87,6 +93,7 @@ impl SendableChannelSubscribers {
                 link_id,
                 local_port,
                 subscriber,
+                dropped_bag_counter,
             });
         }
     }
@@ -215,6 +222,7 @@ pub struct InputMailboxesInner {
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
     subscribers: SendableChannelSubscribers,
     listener: SendableListener,
+    dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
 }
 
 impl InputMailboxesInner {
@@ -224,6 +232,7 @@ impl InputMailboxesInner {
             ports: parking_lot::Mutex::new(HashMap::new()),
             subscribers: SendableChannelSubscribers::new(),
             listener: SendableListener::new(),
+            dropped_bag_counts: Arc::new(DroppedBagCountsByInboundLink::default()),
         }
     }
 
@@ -270,8 +279,20 @@ impl InputMailboxesInner {
         link_id: &str,
         subscriber: Subscriber<ipc::Service, [u8], ()>,
     ) {
-        self.subscribers
-            .push(link_id.to_string(), local_port.to_string(), subscriber);
+        self.subscribers.push(
+            link_id.to_string(),
+            local_port.to_string(),
+            subscriber,
+            self.dropped_bag_counts.counter_for_inbound_link(link_id),
+        );
+    }
+
+    /// This processor's per-inbound-link dropped-bag counts, shared with the
+    /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
+    ///
+    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
+    pub fn dropped_bag_counts_by_inbound_link(&self) -> Arc<DroppedBagCountsByInboundLink> {
+        Arc::clone(&self.dropped_bag_counts)
     }
 
     /// Reclaim the destination-side ports for one disconnected `connect()` link.
@@ -288,6 +309,7 @@ impl InputMailboxesInner {
         let Some(local_port) = self.subscribers.remove_by_link(link_id) else {
             return;
         };
+        self.dropped_bag_counts.forget_inbound_link(link_id);
         if !self.subscribers.port_still_bound(&local_port) {
             self.ports.lock().remove(&local_port);
         }
@@ -376,7 +398,12 @@ impl InputMailboxesInner {
                             // the reading processor, not a receive-time drop) and
                             // reshapes the mailbox's raw-wire-frame element
                             // contract (`route`, `drain`, [`PortMailbox`]).
-                            port_config.mailbox.push(slice.to_vec());
+                            port_config
+                                .mailbox
+                                .push_frame_from_inbound_link(
+                                    slice.to_vec(),
+                                    &bound.dropped_bag_counter,
+                                );
                         } else {
                             tracing::warn!(
                                 port = %bound.local_port,
@@ -527,7 +554,9 @@ impl InputMailboxesInner {
         let port = FrameHeader::read_port_from_slice(&raw);
         let ports = self.ports.lock();
         if let Some(port_config) = ports.get(port) {
-            port_config.mailbox.push(raw);
+            port_config
+                .mailbox
+                .push_frame_without_inbound_link_attribution(raw);
             true
         } else {
             false

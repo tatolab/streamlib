@@ -46,13 +46,14 @@ pub enum DeliveryProfile {
     ///
     /// What this configures is the *publisher's* policy, and that is as far as
     /// it reaches today: the consumer's host mailbox
-    /// ([`super::mailbox::PortMailbox::push`]) drops its oldest entry whenever
-    /// it is full, whatever profile the port declares, so a producer that
-    /// outruns a slow reader still loses samples there — silently and
-    /// uncounted. Measured while building the audio playback path: a producer
+    /// ([`super::mailbox::PortMailbox::push_frame_from_inbound_link`]) evicts
+    /// its oldest entry whenever it is full, whatever profile the port
+    /// declares, so a producer that outruns a slow reader still loses samples
+    /// there. Measured while building the audio playback path: a producer
     /// publishing about a thousand blocks a second reached its consumer as 78
-    /// of 378. Naming the gap here rather than leaving the word to promise
-    /// what the tree does not do.
+    /// of 378. That loss is counted now — per inbound link, rendered in
+    /// `graph` — but counting it is not delivering it, and the word still
+    /// promises what the tree does not do.
     Lossless,
 }
 
