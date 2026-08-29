@@ -266,6 +266,66 @@ mod tests {
         assert_eq!(mailbox.len(), 4);
     }
 
+    /// The hand-over moves frames, it does not re-attribute them: a bag that
+    /// arrived on one link is still that link's if the replacement evicts it,
+    /// and order is unchanged.
+    #[test]
+    fn a_hand_over_keeps_each_frames_inbound_link_and_its_order() {
+        let counts = DroppedBagCountsByInboundLink::default();
+        let from_first_link = counts.counter_for_inbound_link("L-a");
+        let from_second_link = counts.counter_for_inbound_link("L-b");
+        let settling = PortMailbox::new(4);
+        settling.push_frame_from_inbound_link(vec![1], &from_first_link);
+        settling.push_frame_from_inbound_link(vec![2], &from_first_link);
+        settling.push_frame_from_inbound_link(vec![3], &from_second_link);
+
+        let replacement = PortMailbox::new(1);
+        settling.hand_every_queued_frame_over_to(&replacement);
+
+        assert!(settling.is_empty(), "every frame moved");
+        assert_eq!(
+            replacement.pop(),
+            Some(vec![3]),
+            "the newest survives a shallower replacement, as under any other burst"
+        );
+        assert_eq!(
+            from_first_link.dropped_bag_count(),
+            2,
+            "both evicted bags were the first link's, and a swap does not launder them"
+        );
+        assert_eq!(from_second_link.dropped_bag_count(), 0);
+    }
+
+    /// A frame that arrived before the contract settled carries no measure —
+    /// there was none to take. The replacement re-measures each on the way in,
+    /// so the readiness gate counts what is really queued.
+    #[test]
+    fn a_hand_over_re_measures_every_frame_by_the_replacements_own_measure() {
+        let counts = DroppedBagCountsByInboundLink::default();
+        let counter = counts.counter_for_inbound_link("L-unmeasured");
+        let settling = PortMailbox::new(4);
+        for byte in 0..3u8 {
+            settling.push_frame_from_inbound_link(vec![byte], &counter);
+        }
+        assert_eq!(
+            settling.queued_frame_measure_total(),
+            0,
+            "a mailbox with no measure totals nothing"
+        );
+
+        let replacement = PortMailbox::new_measuring(
+            4,
+            Some(Arc::new(|payload: &[u8]| payload.len() as u64 * 10)),
+        );
+        settling.hand_every_queued_frame_over_to(&replacement);
+
+        assert_eq!(
+            replacement.queued_frame_measure_total(),
+            30,
+            "three one-byte frames, each measured at ten by the replacement's own measure"
+        );
+    }
+
     #[test]
     fn every_bag_a_sustained_overrun_evicts_is_counted() {
         let counts = DroppedBagCountsByInboundLink::default();
