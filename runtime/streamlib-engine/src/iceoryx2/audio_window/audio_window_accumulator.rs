@@ -37,7 +37,8 @@ use rubato::{
 };
 
 use super::audio_block_bag_wire_codec::{
-    encode_an_audio_block_onto_the_wire, read_an_audio_block_off_the_wire,
+    AudioBlockReadFromTheWire, encode_an_audio_block_onto_the_wire,
+    read_an_audio_block_off_the_wire,
 };
 use super::resolved_audio_window_contract::ResolvedAudioWindowContract;
 use crate::core::error::{Error, Result};
@@ -154,6 +155,9 @@ pub(crate) struct AudioWindowAccumulator {
     /// Contract-rate scalars, interleaved by the contract's channels, whose
     /// front frame is [`Self::next_window_start_output_frame`].
     windowable_output_scalars: VecDeque<f32>,
+    /// Where the resampler writes one call's output before it is appended.
+    /// Held rather than allocated per bag: this is the per-block read path.
+    resampler_output_scratch: Vec<f32>,
     /// Priming frames the current run still owes before an output frame counts
     /// as derived from real input.
     priming_output_frames_still_to_discard: usize,
@@ -190,6 +194,7 @@ impl AudioWindowAccumulator {
             latest_queued_source_sample_rate,
             channel_converted_source_scalars: Vec::new(),
             windowable_output_scalars: VecDeque::new(),
+            resampler_output_scratch: Vec::new(),
             priming_output_frames_still_to_discard: 0,
             run_anchor_timestamp_ns: None,
             next_window_start_output_frame: 0,
@@ -250,8 +255,7 @@ impl AudioWindowAccumulator {
                 self.rate_conversion.priming_output_frames();
         }
 
-        let interleaved_source = block.interleaved_samples_as_f32();
-        let channel_converted = self.channel_convert(&interleaved_source, arriving.channels)?;
+        let channel_converted = self.channel_converted_samples(&block)?;
         self.channel_converted_source_scalars
             .extend(channel_converted);
 
@@ -449,10 +453,24 @@ impl AudioWindowAccumulator {
     /// Both directions by fixed rule: N→1 averages, 1→N duplicates, and any
     /// other N→M is refused naming both counts. The source count arrives with
     /// the bags, so declaration could not have seen it.
-    fn channel_convert(&self, interleaved: &[f32], source_channels: u32) -> Result<Vec<f32>> {
+    ///
+    /// Owns the decode so the commonest case — a source whose channel count
+    /// already matches — hands back the decoded scalars rather than copying
+    /// them into a second buffer.
+    fn channel_converted_samples(&self, block: &AudioBlockReadFromTheWire<'_>) -> Result<Vec<f32>> {
+        let source_channels = block.channels;
         let contract_channels = self.contract.channels;
+        if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {
+            return Err(Error::AudioWindowStageChannelConversionRefused {
+                port: self.port_name.clone(),
+                source_channels,
+                contract_channels,
+            });
+        }
+
+        let interleaved = block.interleaved_samples_as_f32();
         if source_channels == contract_channels {
-            return Ok(interleaved.to_vec());
+            return Ok(interleaved);
         }
         if contract_channels == 1 {
             let source_channels = source_channels as usize;
@@ -462,17 +480,10 @@ impl AudioWindowAccumulator {
                 .map(|frame| frame.iter().sum::<f32>() * reciprocal)
                 .collect());
         }
-        if source_channels == 1 {
-            return Ok(interleaved
-                .iter()
-                .flat_map(|sample| std::iter::repeat_n(*sample, contract_channels as usize))
-                .collect());
-        }
-        Err(Error::AudioWindowStageChannelConversionRefused {
-            port: self.port_name.clone(),
-            source_channels,
-            contract_channels,
-        })
+        Ok(interleaved
+            .iter()
+            .flat_map(|sample| std::iter::repeat_n(*sample, contract_channels as usize))
+            .collect())
     }
 
     /// Run every whole chunk the staging buffer holds through the rate
@@ -487,7 +498,8 @@ impl AudioWindowAccumulator {
 
         let source_frames_per_call = resampler.input_frames_next();
         let scalars_per_call = source_frames_per_call * contract_channels;
-        let mut output_scratch = vec![0.0f32; resampler.output_frames_max() * contract_channels];
+        let output_scratch = &mut self.resampler_output_scratch;
+        output_scratch.resize(resampler.output_frames_max() * contract_channels, 0.0);
         let output_frames_available = output_scratch.len() / contract_channels;
         let mut consumed_scalars = 0usize;
 
@@ -500,7 +512,7 @@ impl AudioWindowAccumulator {
             )
             .map_err(refused_resampler_buffer)?;
             let mut output = InterleavedSlice::new_mut(
-                &mut output_scratch,
+                output_scratch,
                 contract_channels,
                 output_frames_available,
             )
