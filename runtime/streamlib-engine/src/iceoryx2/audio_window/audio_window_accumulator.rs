@@ -36,6 +36,7 @@ use rubato::{
     WindowFunction,
 };
 
+use super::super::input::BagBodyForTheReader;
 use super::audio_block_bag_wire_codec::{
     AudioBlockReadFromTheWire, encode_an_audio_block_onto_the_wire,
     read_an_audio_block_off_the_wire,
@@ -158,6 +159,12 @@ pub(crate) struct AudioWindowAccumulator {
     /// Where the resampler writes one call's output before it is appended.
     /// Held rather than allocated per bag: this is the per-block read path.
     resampler_output_scratch: Vec<f32>,
+    /// Where one window is gathered out of the deque before it is encoded.
+    /// Held for the same reason, one per hop rather than one per bag.
+    window_scratch: Vec<f32>,
+    /// Whether the port has already been told it cannot form a window from a
+    /// mailbox that is full. Said once per port, not once per read.
+    warned_that_a_full_mailbox_still_cannot_fill_a_window: bool,
     /// Priming frames the current run still owes before an output frame counts
     /// as derived from real input.
     priming_output_frames_still_to_discard: usize,
@@ -195,6 +202,8 @@ impl AudioWindowAccumulator {
             channel_converted_source_scalars: Vec::new(),
             windowable_output_scalars: VecDeque::new(),
             resampler_output_scratch: Vec::new(),
+            window_scratch: Vec::new(),
+            warned_that_a_full_mailbox_still_cannot_fill_a_window: false,
             priming_output_frames_still_to_discard: 0,
             run_anchor_timestamp_ns: None,
             next_window_start_output_frame: 0,
@@ -255,9 +264,7 @@ impl AudioWindowAccumulator {
                 self.rate_conversion.priming_output_frames();
         }
 
-        let channel_converted = self.samples_converted_to_the_contracts_channel_count(&block)?;
-        self.channel_converted_source_scalars
-            .extend(channel_converted);
+        self.append_the_blocks_samples_in_the_contracts_channel_count(&block)?;
 
         let block_duration_ns =
             frames_as_nanoseconds(u64::from(block.sample_count), arriving.sample_rate);
@@ -273,7 +280,7 @@ impl AudioWindowAccumulator {
     ///
     /// `None` means the stage holds less than one window — the caller feeds it
     /// another bag and asks again.
-    pub(crate) fn next_ready_window(&mut self) -> Result<Option<(Vec<u8>, i64)>> {
+    pub(crate) fn next_ready_window(&mut self) -> Result<Option<BagBodyForTheReader>> {
         let scalars_per_window = self.contract.scalars_per_window();
         if self.windowable_output_scalars.len() < scalars_per_window {
             return Ok(None);
@@ -282,12 +289,13 @@ impl AudioWindowAccumulator {
             return Ok(None);
         };
 
-        let window: Vec<f32> = self
-            .windowable_output_scalars
-            .iter()
-            .take(scalars_per_window)
-            .copied()
-            .collect();
+        self.window_scratch.clear();
+        self.window_scratch.extend(
+            self.windowable_output_scalars
+                .iter()
+                .take(scalars_per_window)
+                .copied(),
+        );
         let first_sample_timestamp_ns = anchor
             + frames_as_nanoseconds(
                 self.next_window_start_output_frame,
@@ -295,7 +303,7 @@ impl AudioWindowAccumulator {
             );
 
         let bag = encode_an_audio_block_onto_the_wire(
-            &window,
+            &self.window_scratch,
             self.contract.sample_rate,
             self.contract.channels,
             self.contract.window_size,
@@ -310,7 +318,21 @@ impl AudioWindowAccumulator {
         self.windowable_output_scalars.drain(..scalars_per_hop);
         self.next_window_start_output_frame += u64::from(self.contract.hop);
 
-        Ok(Some((bag, first_sample_timestamp_ns)))
+        Ok(Some(BagBodyForTheReader {
+            body: bag,
+            first_sample_or_publish_timestamp_ns: first_sample_timestamp_ns,
+        }))
+    }
+
+    /// Whether this port has already been told its mailbox cannot fill a
+    /// window.
+    ///
+    /// Test-only: the warning itself is a log line and the engine tree has no
+    /// capture to assert one against, so the guard that makes it once-per-port
+    /// is asserted through the state it sets.
+    #[cfg(test)]
+    pub(crate) fn has_said_a_full_mailbox_cannot_fill_a_window(&self) -> bool {
+        self.warned_that_a_full_mailbox_still_cannot_fill_a_window
     }
 
     /// Whether a full window can be emitted right now.
@@ -328,9 +350,23 @@ impl AudioWindowAccumulator {
     /// and found nothing is exactly the shape the window contract exists to
     /// rule out. Under-reporting costs the drain loop one more bag before it
     /// dispatches; over-reporting costs the contract.
+    ///
+    /// One bounded exception, and it is inherent rather than an oversight: the
+    /// measure counts a queued bag's samples and never reads its stamp, so a
+    /// discontinuity or a format change sitting in the queue is invisible here
+    /// and the read that follows flushes what it had accumulated. That costs
+    /// exactly one empty read per discontinuity — the samples before the gap
+    /// are discarded by design, so there genuinely is no window to hand over —
+    /// and the queue is counted afresh from the next bag. Reading every queued
+    /// bag's stamp at this gate would decode the whole mailbox on every wake to
+    /// forecast an event that already cost the stream audio.
+    ///
+    /// `the_mailbox_is_full` only sharpens the diagnosis: a port that cannot
+    /// form a window from a mailbox with no room left is stalled, and says so.
     pub(crate) fn a_full_window_would_be_ready_after(
         &mut self,
         queued_output_frame_equivalents: u64,
+        the_mailbox_is_full: bool,
     ) -> bool {
         if self.holds_a_full_window() {
             return true;
@@ -361,13 +397,57 @@ impl AudioWindowAccumulator {
         let held = self.output_frames_held() as u64;
         let (staged_equivalents, slack) =
             self.staged_output_frame_equivalents_and_slack(latest_queued_rate);
-        held + staged_equivalents + queued_output_frame_equivalents
-            >= u64::from(self.contract.window_size).saturating_add(slack)
+        let reachable = held
+            .saturating_add(staged_equivalents)
+            .saturating_add(queued_output_frame_equivalents);
+        let ready = reachable >= u64::from(self.contract.window_size).saturating_add(slack);
+
+        if !ready && the_mailbox_is_full {
+            self.warn_once_that_a_full_mailbox_cannot_fill_a_window(reachable);
+        }
+        ready
+    }
+
+    /// Say, once, that this port is stalled: its mailbox has no room left and
+    /// what it holds still cannot make one window.
+    ///
+    /// The depth a windowed port is sized to assumes a source quantum, because
+    /// the real one arrives with the bags rather than with the declaration. A
+    /// source publishing quanta far smaller than that assumption can fill the
+    /// mailbox without ever filling a window, and every bag past that point is
+    /// evicted. The per-link drop counter climbs, which is true but says
+    /// nothing about why — this names the port, the window it owes and how far
+    /// short a full mailbox falls.
+    fn warn_once_that_a_full_mailbox_cannot_fill_a_window(&mut self, reachable_output_frames: u64) {
+        if self.warned_that_a_full_mailbox_still_cannot_fill_a_window {
+            return;
+        }
+        self.warned_that_a_full_mailbox_still_cannot_fill_a_window = true;
+        tracing::warn!(
+            port = %self.port_name,
+            window_size = self.contract.window_size,
+            reachable_output_frames,
+            "audio window stage: this port's mailbox is full and everything in it still \
+             makes less than one window, so it is delivering nothing and evicting every \
+             further bag. The depth is derived from an assumed source quantum; a source \
+             publishing much smaller blocks than that outruns it"
+        );
     }
 
     /// Output frames the stage already holds, whole windows included.
     fn output_frames_held(&self) -> usize {
-        self.windowable_output_scalars.len() / self.contract.channels.max(1) as usize
+        self.windowable_output_scalars.len() / self.contract.channels as usize
+    }
+
+    /// Source frames staged for the rate conversion but not yet consumed by
+    /// it — under one resampler chunk.
+    ///
+    /// Neither this nor [`Self::output_frames_held`] guards the divisor: a
+    /// contract can only be built through
+    /// [`ResolvedAudioWindowContract::from_declared_values`], which refuses a
+    /// zero in any numeric field.
+    fn staged_source_frames_held(&self) -> usize {
+        self.channel_converted_source_scalars.len() / self.contract.channels as usize
     }
 
     /// What the staged source frames are worth at the contract's rate, and the
@@ -387,8 +467,7 @@ impl AudioWindowAccumulator {
             .map(|format| format.sample_rate)
             .unwrap_or(latest_queued_source_rate)
             .max(1);
-        let staged_source_frames = (self.channel_converted_source_scalars.len()
-            / self.contract.channels.max(1) as usize) as u64;
+        let staged_source_frames = self.staged_source_frames_held() as u64;
         let equivalents =
             staged_source_frames * u64::from(self.contract.sample_rate) / u64::from(source_rate);
 
@@ -429,8 +508,7 @@ impl AudioWindowAccumulator {
     /// bags lost.
     fn flush(&mut self, why: &str) {
         let discarded_output_frames = self.output_frames_held();
-        let discarded_source_frames =
-            self.channel_converted_source_scalars.len() / self.contract.channels.max(1) as usize;
+        let discarded_source_frames = self.staged_source_frames_held();
         self.windowable_output_scalars.clear();
         self.channel_converted_source_scalars.clear();
         self.rate_conversion.forget_everything_held();
@@ -448,19 +526,20 @@ impl AudioWindowAccumulator {
         );
     }
 
-    /// Interleaved source scalars in the contract's channel count.
+    /// Append this block's samples to the staging buffer in the contract's
+    /// channel count.
     ///
     /// Both directions by fixed rule: N→1 averages, 1→N duplicates, and any
     /// other N→M is refused naming both counts. The source count arrives with
     /// the bags, so declaration could not have seen it.
     ///
-    /// Owns the decode so the commonest case — a source whose channel count
-    /// already matches — hands back the decoded scalars rather than copying
-    /// them into a second buffer.
-    fn samples_converted_to_the_contracts_channel_count(
-        &self,
+    /// Written straight into the buffer the stage keeps, from the decode's own
+    /// iterator: the samples are being reshaped anyway, so neither the decoded
+    /// scalars nor the converted ones need a buffer of their own first.
+    fn append_the_blocks_samples_in_the_contracts_channel_count(
+        &mut self,
         block: &AudioBlockReadFromTheWire<'_>,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<()> {
         let source_channels = block.channels;
         let contract_channels = self.contract.channels;
         if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {
@@ -471,22 +550,24 @@ impl AudioWindowAccumulator {
             });
         }
 
-        let interleaved = block.interleaved_samples_as_f32();
+        let staging = &mut self.channel_converted_source_scalars;
+        let mut samples = block.interleaved_samples_as_f32();
         if source_channels == contract_channels {
-            return Ok(interleaved);
-        }
-        if contract_channels == 1 {
+            staging.extend(samples);
+        } else if contract_channels == 1 {
             let source_channels = source_channels as usize;
             let reciprocal = 1.0 / source_channels as f32;
-            return Ok(interleaved
-                .chunks_exact(source_channels)
-                .map(|frame| frame.iter().sum::<f32>() * reciprocal)
-                .collect());
+            staging.reserve(block.sample_count as usize);
+            for _ in 0..block.sample_count {
+                let across_the_frame: f32 = samples.by_ref().take(source_channels).sum();
+                staging.push(across_the_frame * reciprocal);
+            }
+        } else {
+            staging.extend(
+                samples.flat_map(|sample| std::iter::repeat_n(sample, contract_channels as usize)),
+            );
         }
-        Ok(interleaved
-            .iter()
-            .flat_map(|sample| std::iter::repeat_n(*sample, contract_channels as usize))
-            .collect())
+        Ok(())
     }
 
     /// Run every whole chunk the staging buffer holds through the rate
@@ -550,12 +631,55 @@ impl AudioWindowAccumulator {
 ///
 /// Never an accumulated per-sample delta, which drifts at 44.1 kHz-family
 /// rates: every offset is computed from the frame index against the rate.
+///
+/// Widened to `u128` because the frame index is not: it counts every output
+/// frame since the run's anchor and only a flush resets it, so at `u64` the
+/// multiply overflows after 4.4 days of one contiguous run at 48 kHz and 1.1
+/// days at 192 kHz — silently, in release. Both callers refuse a zero rate
+/// before reaching here, the contract's constructor for one and `accept` for
+/// the other.
 fn frames_as_nanoseconds(frames: u64, rate: u32) -> i64 {
-    (frames * 1_000_000_000 / u64::from(rate).max(1)) as i64
+    (u128::from(frames) * 1_000_000_000 / u128::from(rate)) as i64
 }
 
 fn refused_resampler_buffer(size_error: impl std::fmt::Display) -> Error {
     Error::Configuration(format!(
         "the audio window stage sized a resampler buffer wrong: {size_error}"
     ))
+}
+
+#[cfg(test)]
+mod stamp_arithmetic_tests {
+    use super::frames_as_nanoseconds;
+
+    /// The frame index counts every output frame since the run's anchor and
+    /// only a flush resets it, so a long-lived always-on node reaches numbers a
+    /// `u64` multiply cannot hold: `u64::MAX / 1e9` is 1.84e10 frames, which is
+    /// 4.4 days at 48 kHz and 1.1 days at 192 kHz. Release builds wrap there
+    /// silently and every window stamp after it is garbage.
+    #[test]
+    fn a_frame_index_past_a_u64_multiplys_reach_is_still_stamped_exactly() {
+        for rate in [16_000u32, 44_100, 48_000, 192_000] {
+            let a_week = u64::from(rate) * 60 * 60 * 24 * 7;
+            assert_eq!(
+                frames_as_nanoseconds(a_week, rate),
+                7 * 24 * 60 * 60 * 1_000_000_000,
+                "a week of contiguous {rate} Hz audio must still stamp at a week"
+            );
+        }
+    }
+
+    /// Exactness at the sizes a window actually uses is what the 32 ms cadence
+    /// assertion rests on, and it must not have been traded for the headroom.
+    #[test]
+    fn the_widening_changes_no_answer_a_window_sized_run_produces() {
+        for rate in [16_000u32, 44_100, 48_000] {
+            for frames in [0u64, 1, 160, 512, 1024, 16_000, 1_000_000] {
+                assert_eq!(
+                    frames_as_nanoseconds(frames, rate),
+                    (frames * 1_000_000_000 / u64::from(rate)) as i64,
+                );
+            }
+        }
+    }
 }

@@ -37,15 +37,19 @@ pub struct ResolvedAudioWindowContract {
 }
 
 /// The source quantum the engine assumes when sizing a windowed port's
-/// mailbox: the engine's own preferred device period, 512 samples at 48 kHz.
+/// mailbox: 128 samples at 48 kHz, about 2.7 ms.
 ///
 /// A wire-time depth cannot read the real quantum — the producer's block size
-/// arrives with the bags, not with the declaration — so the depth is derived
-/// from the period the engine's own capture backends ask for. A source
-/// publishing smaller blocks simply uses more of the depth; overflow past it
-/// stays an ordinary counted mailbox eviction, plus the bounded flush a
-/// windowed port adds.
-const ASSUMED_SOURCE_QUANTUM_NANOSECONDS: u64 = 512 * 1_000_000_000 / 48_000;
+/// arrives with the bags, not with the declaration. Sized well under the
+/// engine's own preferred period of 512 rather than at it, because being wrong
+/// in the two directions costs differently: too generous costs queue slots,
+/// which hold a pointer each until bags actually arrive, while too mean is a
+/// port that can fill its mailbox without ever filling a window and then
+/// delivers nothing at all. 128 covers the quanta a PipeWire graph is
+/// ordinarily configured with. Past that the stage says so rather than
+/// stalling silently — see the warning it raises when a full mailbox still
+/// cannot make one window.
+const ASSUMED_SOURCE_QUANTUM_NANOSECONDS: u64 = 128 * 1_000_000_000 / 48_000;
 
 /// Extra queued blocks beyond the window's own worth, so a burst that arrives
 /// while the reader is mid-window does not evict the samples the window still
@@ -133,7 +137,7 @@ impl ResolvedAudioWindowContract {
     /// a depth dial.
     pub(crate) fn windowed_port_mailbox_depth(&self) -> usize {
         let window_nanoseconds =
-            u64::from(self.window_size) * 1_000_000_000 / u64::from(self.sample_rate).max(1);
+            u64::from(self.window_size) * 1_000_000_000 / u64::from(self.sample_rate);
         let quanta_per_window = window_nanoseconds.div_ceil(ASSUMED_SOURCE_QUANTUM_NANOSECONDS);
         let derived = usize::try_from(quanta_per_window)
             .unwrap_or(usize::MAX - WINDOWED_PORT_MAILBOX_DEPTH_MARGIN)
@@ -241,19 +245,68 @@ mod tests {
         );
     }
 
-    /// A short window fits inside the profile's own depth, so the profile is
-    /// the floor rather than something the contract undercuts.
+    /// The delivery profile's depth is a floor the contract may raise and never
+    /// undercuts, so a windowed port is never shallower than an unwindowed one.
     #[test]
-    fn a_window_shorter_than_the_profiles_depth_leaves_the_profiles_depth_alone() {
-        let resolved = resolve(&AudioWindowContract::Declaration(declared_values()))
+    fn the_profiles_depth_is_a_floor_no_contract_undercuts() {
+        for window_size in [1u32, 16, 64, 512] {
+            let depth = resolve(&AudioWindowContract::Declaration(
+                AudioWindowContractDeclaredValues {
+                    window_size,
+                    hop: window_size,
+                    ..declared_values()
+                },
+            ))
             .expect("resolves")
             .windowed_port_mailbox_depth();
 
-        assert_eq!(resolved, DeliveryProfile::ORDERED_DEPTH);
+            assert!(
+                depth >= DeliveryProfile::ORDERED_DEPTH,
+                "a {window_size}-sample window sized its port to {depth}, below the profile's \
+                 own {}",
+                DeliveryProfile::ORDERED_DEPTH
+            );
+        }
     }
 
-    /// The case the change file names: a one-second rolling window needs about
-    /// forty-seven quanta, which `ORDERED_DEPTH` = 16 cannot hold.
+    /// The invariant the depth exists for, asserted as itself rather than as a
+    /// constant: whatever the window, the mailbox must hold one window's worth
+    /// of source blocks at the quantum the engine assumes.
+    ///
+    /// A depth that cannot is a port which fills up without ever filling a
+    /// window — it would deliver nothing at all and evict everything behind it.
+    #[test]
+    fn every_windows_depth_holds_a_windows_worth_of_the_assumed_quantum() {
+        for (sample_rate, window_size) in [
+            (16_000u32, 512u32),
+            (16_000, 16_000),
+            (48_000, 1_024),
+            (8_000, 8_000),
+        ] {
+            let contract = resolve(&AudioWindowContract::Declaration(
+                AudioWindowContractDeclaredValues {
+                    sample_rate,
+                    window_size,
+                    hop: window_size,
+                    ..declared_values()
+                },
+            ))
+            .expect("resolves");
+
+            let window_nanoseconds =
+                u64::from(window_size) * 1_000_000_000 / u64::from(sample_rate);
+            let depth_nanoseconds =
+                contract.windowed_port_mailbox_depth() as u64 * ASSUMED_SOURCE_QUANTUM_NANOSECONDS;
+            assert!(
+                depth_nanoseconds >= window_nanoseconds,
+                "a {window_size}-sample window at {sample_rate} Hz spans {window_nanoseconds} ns \
+                 but its port holds only {depth_nanoseconds} ns of assumed quanta"
+            );
+        }
+    }
+
+    /// The case the change file names: a one-second rolling window needs far
+    /// more than the profile's sixteen blocks.
     #[test]
     fn a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta() {
         let one_second_rolling =
@@ -269,13 +322,8 @@ mod tests {
             .windowed_port_mailbox_depth();
 
         assert!(
-            depth > DeliveryProfile::ORDERED_DEPTH,
-            "a one-second window must outgrow the profile's depth; got {depth}"
-        );
-        assert_eq!(
-            depth,
-            94 + WINDOWED_PORT_MAILBOX_DEPTH_MARGIN,
-            "one second at the assumed ~10.67 ms quantum is 94 blocks, plus the margin"
+            depth > DeliveryProfile::ORDERED_DEPTH * 4,
+            "a one-second window must outgrow the profile's depth by a wide margin; got {depth}"
         );
     }
 }

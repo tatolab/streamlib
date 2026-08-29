@@ -586,7 +586,7 @@ fn refuse_a_second_inbound_link_into_a_windowed_port(
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
-    let already_inbound: Vec<String> = graph
+    let already_inbound = graph
         .traversal_mut()
         .v(dest_proc_id)
         .in_e()
@@ -606,9 +606,8 @@ fn refuse_a_second_inbound_link_into_a_windowed_port(
                 .unwrap_or(true)
         })
         .map(|link| link.id.to_string())
-        .filter(|inbound| inbound != link_id.as_str())
-        .collect();
-    let Some(first) = already_inbound.first() else {
+        .find(|inbound| inbound != link_id.as_str());
+    let Some(first) = already_inbound else {
         return Ok(());
     };
 

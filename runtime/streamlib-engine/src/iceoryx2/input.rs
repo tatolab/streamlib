@@ -43,6 +43,23 @@ use crate::core::error::{Error, Result};
 /// mixdown and framing work runs with that mutex released.
 type SharedAudioWindowStage = Arc<parking_lot::Mutex<AudioWindowAccumulator>>;
 
+/// One bag body ready to hand a reader, and the instant it is stamped with.
+///
+/// The two stamps are not the same thing and the type is what keeps them
+/// straight: on a port with no contract it is the frame header's, which marks
+/// when the bag was published; on a windowed port it is the one the stage
+/// derived from the device's own stamp, which marks an instant inside the
+/// source block the window came from.
+pub(super) struct BagBodyForTheReader {
+    pub(super) body: Vec<u8>,
+    pub(super) first_sample_or_publish_timestamp_ns: i64,
+}
+
+/// The one spelling of "this port was never configured".
+fn unknown_input_port(port: &str) -> Error {
+    Error::Link(format!("Unknown input port: {port}"))
+}
+
 /// One channel subscriber bound to the local input port it feeds.
 ///
 /// The transport inversion (#1419): a channel is keyed on its source output
@@ -212,6 +229,9 @@ enum PortReadiness {
     AWindowedPort {
         stage: SharedAudioWindowStage,
         queued_output_frame_equivalents: u64,
+        /// A windowed port that cannot form a window out of a mailbox with no
+        /// room left is stalled; the stage says so once.
+        the_mailbox_is_full: bool,
     },
 }
 
@@ -231,6 +251,7 @@ impl PortReadiness {
             Some(stage) => PortReadiness::AWindowedPort {
                 stage: Arc::clone(stage),
                 queued_output_frame_equivalents: port_config.mailbox.queued_frame_measure_total(),
+                the_mailbox_is_full: port_config.mailbox.len() >= port_config.mailbox.capacity(),
             },
         }
     }
@@ -242,9 +263,11 @@ impl PortReadiness {
             PortReadiness::AWindowedPort {
                 stage,
                 queued_output_frame_equivalents,
-            } => stage
-                .lock()
-                .a_full_window_would_be_ready_after(*queued_output_frame_equivalents),
+                the_mailbox_is_full,
+            } => stage.lock().a_full_window_would_be_ready_after(
+                *queued_output_frame_equivalents,
+                *the_mailbox_is_full,
+            ),
         }
     }
 }
@@ -265,7 +288,7 @@ struct PortConfig {
     /// on the next call once the caller resizes — the grow-and-retry contract
     /// that lets a PowerOfTwo-grown oversized payload reach the reader without
     /// dropping it.
-    staged_oversized: Option<(Vec<u8>, i64)>,
+    staged_oversized: Option<BagBodyForTheReader>,
     /// The window contract's read-side stage, on a port that declared one.
     /// `None` on every other port, which is unchanged in every respect.
     audio_window_stage: Option<SharedAudioWindowStage>,
@@ -566,30 +589,28 @@ impl InputMailboxesInner {
             return Ok(BoundedReadOutcome::Empty);
         };
 
-        if candidate.0.len() <= out_cap {
+        if candidate.body.len() <= out_cap {
             return Ok(BoundedReadOutcome::Frame {
-                data: candidate.0,
-                timestamp_ns: candidate.1,
+                data: candidate.body,
+                timestamp_ns: candidate.first_sample_or_publish_timestamp_ns,
             });
         }
 
-        let required_bytes = candidate.0.len();
+        let required_bytes = candidate.body.len();
         let mut ports = self.ports.lock();
         let port_config = ports
             .get_mut(port)
-            .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            .ok_or_else(|| unknown_input_port(port))?;
         port_config.staged_oversized = Some(candidate);
         Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
     }
 
     /// Pop the next queued frame for `port` per its read mode and strip its
     /// header, or `None` when the mailbox is empty.
-    fn pop_one_bag_off_the_mailbox(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+    fn pop_one_bag_off_the_mailbox(&self, port: &str) -> Result<Option<BagBodyForTheReader>> {
         let raw = {
             let ports = self.ports.lock();
-            let port_config = ports
-                .get(port)
-                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
+            let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
             match port_config.read_mode {
                 ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
@@ -614,7 +635,10 @@ impl InputMailboxesInner {
             0,
         );
         frame_bytes_from_wire.truncate(stamped_payload_bytes);
-        Ok(Some((frame_bytes_from_wire, header.timestamp_ns)))
+        Ok(Some(BagBodyForTheReader {
+            body: frame_bytes_from_wire,
+            first_sample_or_publish_timestamp_ns: header.timestamp_ns,
+        }))
     }
 
     /// The next full window from a windowed port's stage, feeding it consumed
@@ -628,15 +652,15 @@ impl InputMailboxesInner {
         &self,
         port: &str,
         stage: &SharedAudioWindowStage,
-    ) -> Result<Option<(Vec<u8>, i64)>> {
+    ) -> Result<Option<BagBodyForTheReader>> {
         loop {
             if let Some(window) = stage.lock().next_ready_window()? {
                 return Ok(Some(window));
             }
-            let Some((bag_body, _published_at_ns)) = self.pop_one_bag_off_the_mailbox(port)? else {
+            let Some(bag) = self.pop_one_bag_off_the_mailbox(port)? else {
                 return Ok(None);
             };
-            stage.lock().accept(&bag_body)?;
+            stage.lock().accept(&bag.body)?;
         }
     }
 
@@ -681,9 +705,7 @@ impl InputMailboxesInner {
     /// queue depth itself rather than trusting one wake = one event.
     pub fn any_port_has_data(&self) -> bool {
         self.receive_pending();
-        self.readiness_of_every_port()
-            .into_iter()
-            .any(|readiness| readiness.a_read_would_return_something())
+        self.any_ports_read_would_return_something()
     }
 
     /// What one port would hand a reader, gathered under the `ports` lock so
@@ -692,9 +714,28 @@ impl InputMailboxesInner {
         self.ports.lock().get(port).map(PortReadiness::of)
     }
 
-    /// The same, for every configured port.
-    fn readiness_of_every_port(&self) -> Vec<PortReadiness> {
-        self.ports.lock().values().map(PortReadiness::of).collect()
+    /// Whether any port would hand a reader something.
+    ///
+    /// Answers under the lock for every port that needs no judging, and
+    /// collects only the windowed ones — normally none — so a processor with no
+    /// window contract pays no allocation on a path the reactive runner walks
+    /// once per wake and once per drain iteration.
+    fn any_ports_read_would_return_something(&self) -> bool {
+        let windowed: Vec<PortReadiness> = {
+            let ports = self.ports.lock();
+            let mut windowed = Vec::new();
+            for readiness in ports.values().map(PortReadiness::of) {
+                match readiness {
+                    PortReadiness::AFrameIsWaiting => return true,
+                    PortReadiness::NothingIsWaiting => {}
+                    windowed_port => windowed.push(windowed_port),
+                }
+            }
+            windowed
+        };
+        windowed
+            .iter()
+            .any(|readiness| readiness.a_read_would_return_something())
     }
 
     /// Drain all raw frame slices from the given port's mailbox.
@@ -1419,10 +1460,6 @@ mod tests {
     fn a_windowed_ports_per_link_drop_counts_match_an_unwindowed_ports_under_the_same_overrun() {
         let contract = a_512_512_contract_at(16_000, 1);
         let depth = contract.windowed_port_mailbox_depth();
-        // Shared by the mailbox's measure, which writes every arriving bag's
-        // rate into it, and the stage, which reads it so its readiness floor is
-        // exact before it has consumed anything.
-        let latest_queued_source_sample_rate = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let published_bags = depth + 7;
 
         fn losses_under_overrun(
@@ -1723,6 +1760,16 @@ mod tests {
             }
         }
 
+        // A staged frame is data waiting. Before the readiness gate consulted
+        // it, a grow-and-retry frame with an empty mailbox behind it reported
+        // no data — so the reactive drain loop stopped and the frame sat until
+        // some later bag happened to wake the port.
+        assert!(
+            inner.has_data("in"),
+            "a frame staged by a bounded read is still waiting for its retry"
+        );
+        assert!(inner.any_port_has_data());
+
         // Retry with a large-enough buffer: the SAME frame is re-delivered.
         match inner
             .read_raw_bounded("in", body.len())
@@ -1736,6 +1783,7 @@ mod tests {
         }
 
         // The staged frame was consumed exactly once — the mailbox is now empty.
+        assert!(!inner.has_data("in"));
         assert!(matches!(
             inner
                 .read_raw_bounded("in", body.len())

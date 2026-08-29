@@ -13,7 +13,7 @@
 //! unchanged on a windowed port.
 //!
 //! Reading borrows: the payload is a `bin` run inside the frame body, so
-//! [`AudioBlockBagReadFromTheWire`] holds a slice of it rather than a copy —
+//! [`AudioBlockReadFromTheWire`] holds a slice of it rather than a copy —
 //! which is what lets the readiness gate decode a queued bag's header fields
 //! without paying for its samples.
 
@@ -183,21 +183,26 @@ impl AudioBlockReadFromTheWire<'_> {
     /// The payload as f32 scalars, still interleaved, in the order the wire
     /// carries them.
     ///
+    /// An iterator rather than a buffer so a caller that is going to reshape
+    /// the samples anyway — which the stage's channel conversion always is —
+    /// can write its result straight into the buffer it keeps, with no
+    /// intermediate.
+    ///
     /// `i16` divides by 32768 so the whole `i16` range maps into `[-1, 1)`,
     /// the inverse of what [`encode_an_audio_block_onto_the_wire`] applies.
-    pub(crate) fn interleaved_samples_as_f32(&self) -> Vec<f32> {
-        match self.dtype {
-            AudioBlockSampleDtype::F32 => self
-                .interleaved_sample_bytes
-                .chunks_exact(4)
-                .map(|scalar| f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]]))
-                .collect(),
-            AudioBlockSampleDtype::I16 => self
-                .interleaved_sample_bytes
-                .chunks_exact(2)
-                .map(|scalar| i16::from_le_bytes([scalar[0], scalar[1]]) as f32 / 32_768.0)
-                .collect(),
-        }
+    pub(crate) fn interleaved_samples_as_f32(&self) -> impl Iterator<Item = f32> + '_ {
+        let bytes_per_sample = self.dtype.bytes_per_sample();
+        let dtype = self.dtype;
+        self.interleaved_sample_bytes
+            .chunks_exact(bytes_per_sample)
+            .map(move |scalar| match dtype {
+                AudioBlockSampleDtype::F32 => {
+                    f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]])
+                }
+                AudioBlockSampleDtype::I16 => {
+                    i16::from_le_bytes([scalar[0], scalar[1]]) as f32 / 32_768.0
+                }
+            })
     }
 }
 
@@ -329,7 +334,10 @@ mod tests {
         assert_eq!(read.sample_count, 3);
         assert_eq!(read.dtype, AudioBlockSampleDtype::F32);
         assert_eq!(read.first_sample_timestamp_ns, 123_456_789);
-        assert_eq!(read.interleaved_samples_as_f32(), scalars);
+        assert_eq!(
+            read.interleaved_samples_as_f32().collect::<Vec<_>>(),
+            scalars
+        );
     }
 
     /// The payload is a `bin` run inside the body, so the decode hands back a
@@ -458,7 +466,7 @@ mod tests {
 
         let read = read_an_audio_block_off_the_wire(&wire).expect("decodes");
         let re_encoded = encode_an_audio_block_onto_the_wire(
-            &read.interleaved_samples_as_f32(),
+            &read.interleaved_samples_as_f32().collect::<Vec<_>>(),
             16_000,
             1,
             5,

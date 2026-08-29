@@ -349,6 +349,15 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::port_rendering_tests::a_port_declaring_the_sentinel_renders_it_as_a_whole_contract",
                 "core::json_schema::port_rendering_tests::a_declared_contract_survives_the_descriptor_to_port_info_hop",
                 "core::json_schema::port_rendering_tests::a_contract_bearing_descriptor_renders_its_contract_too",
+                "iceoryx2::audio_window::audio_window_accumulator::stamp_arithmetic_tests::a_frame_index_past_a_u64_multiplys_reach_is_still_stamped_exactly",
+                "iceoryx2::audio_window::audio_window_accumulator::stamp_arithmetic_tests::the_widening_changes_no_answer_a_window_sized_run_produces",
+                "iceoryx2::audio_window::audio_window_stage_tests::a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more",
+                "iceoryx2::audio_window::audio_window_stage_tests::a_full_mailbox_that_still_cannot_make_a_window_says_so_once",
+                "iceoryx2::audio_window::resolved_audio_window_contract::tests::the_profiles_depth_is_a_floor_no_contract_undercuts",
+                "iceoryx2::audio_window::resolved_audio_window_contract::tests::every_windows_depth_holds_a_windows_worth_of_the_assumed_quantum",
+                "core::execution::thread_runner::tests::a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner",
+                "core::execution::thread_runner::tests::a_processor_with_no_input_mailboxes_is_not_gated_at_all",
+                "iceoryx2::input::tests::read_raw_bounded_stages_oversized_frame_and_redelivers",
                 // The audio window contract's read-side stage — the stage's
                 // exactness, its overlap, the flush that resets the
                 // resampler's filter state, its refusals, and the readiness
@@ -367,7 +376,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::audio_window::resolved_audio_window_contract::tests::a_declared_contract_resolves_to_the_five_values_it_declared",
                 "iceoryx2::audio_window::resolved_audio_window_contract::tests::an_unresolved_sentinel_is_a_wiring_error_naming_the_resolution_mechanism",
                 "iceoryx2::audio_window::resolved_audio_window_contract::tests::a_declaration_the_stage_could_not_honour_is_refused_naming_the_port",
-                "iceoryx2::audio_window::resolved_audio_window_contract::tests::a_window_shorter_than_the_profiles_depth_leaves_the_profiles_depth_alone",
                 "iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta",
                 "iceoryx2::audio_window::audio_window_stage_tests::a_48k_stereo_source_reaches_a_16k_mono_512_port_as_exact_windows_32ms_apart",
                 "iceoryx2::audio_window::audio_window_stage_tests::the_first_window_carries_the_anchor_stamp_rather_than_one_a_group_delay_later",

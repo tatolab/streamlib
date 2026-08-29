@@ -80,10 +80,18 @@ impl PortMailbox {
         self.queued_frame_measure_total.load(Ordering::Relaxed)
     }
 
+    /// Saturating, because the push adds to the total only after the queue
+    /// accepted the frame: a pop landing in between would otherwise wrap the
+    /// total to near `u64::MAX`, and every consumer of it reads the total as an
+    /// upper bound on what is queued. Under-reporting is the direction that
+    /// costs nothing — a reader waits for one more bag.
     fn take_out_of_the_total(&self, frame: &PortMailboxQueuedFrame) {
         if frame.measure != 0 {
-            self.queued_frame_measure_total
-                .fetch_sub(frame.measure, Ordering::Relaxed);
+            let _ = self.queued_frame_measure_total.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |total| Some(total.saturating_sub(frame.measure)),
+            );
         }
     }
 
