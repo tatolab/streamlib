@@ -1414,6 +1414,98 @@ mod tests {
         (source_output, dest_input)
     }
 
+    /// What the control plane serves for a dropping run: the destination's node
+    /// carries its per-inbound-link dropped-bag counts, live off the mailboxes
+    /// that did the evicting.
+    ///
+    /// Driven through the real seam end to end — a real channel service, the
+    /// source's own `write_raw`, the destination's own `receive_pending` — so
+    /// what is asserted is the rendering a `GET /api/graph` reader gets, not a
+    /// counter poked by hand. Fail-without-fix: drop the metrics insert from
+    /// the wiring op and the node renders no `metrics` at all, so a run that
+    /// lost three of its four bags reads exactly like a healthy one.
+    #[test]
+    fn a_dropping_destinations_node_renders_each_inbound_links_losses() {
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        const DESTINATION_MAILBOX_DEPTH: usize = 1;
+        const FRAMES_PUBLISHED: usize = 4;
+
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let (source, source_output, _) =
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let source_output = source_output.expect("an output-only mock holds an output writer");
+        let dest_id = add_mock_input_only(&mut graph);
+        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        let (dest, _, dest_input) =
+            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+        let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
+
+        let (channel, _) = open_test_link_services("dropped-bag-counts", false);
+        let link_id: LinkUniqueId = "L-dropping".into();
+        wire_rust_source(
+            &source,
+            "out1",
+            &link_id,
+            &channel,
+            None,
+            ChannelEgressConfig {
+                service_name: unique_service_name("dropped-bag-counts"),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        )
+        .expect("the source side wires");
+        wire_rust_dest(
+            &dest,
+            "in1",
+            &link_id,
+            crate::iceoryx2::ReadMode::ReadNextInOrder,
+            DESTINATION_MAILBOX_DEPTH,
+            &channel,
+            None,
+        )
+        .expect("the destination side wires");
+        publish_dropped_bag_counts_on_destination_node(&mut graph, &dest_unique_id, &dest);
+
+        let rendered_metrics = |graph: &mut Graph| -> serde_json::Value {
+            graph
+                .traversal_mut()
+                .v(&dest_unique_id)
+                .first()
+                .expect("the destination node must be in the graph")
+                .serialize_components()["metrics"]
+                .clone()
+        };
+
+        assert_eq!(
+            rendered_metrics(&mut graph)["dropped_bags_by_link"],
+            serde_json::json!({ "L-dropping": 0 }),
+            "a wired link that has lost nothing must render a zero, not go missing"
+        );
+
+        for frame in 0..FRAMES_PUBLISHED {
+            source_output
+                .write_raw("out1", b"a bag the destination never reads", frame as i64)
+                .expect("the source publishes onto the wired channel");
+        }
+        dest_input.receive_pending();
+
+        let metrics = rendered_metrics(&mut graph);
+        assert_eq!(
+            metrics["dropped_bags_by_link"],
+            serde_json::json!({ "L-dropping": FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH }),
+            "the node must read the counts live, off the mailboxes that evicted"
+        );
+        assert_eq!(
+            metrics["frames_dropped"],
+            serde_json::json!(FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH),
+            "the total must be the per-link counts summed, never a second tally"
+        );
+    }
+
     /// The decision reaches the ports: no notify service means the source
     /// installs its channel publisher and no notifier, and the destination
     /// subscribes with no listener. Data wiring is untouched either way — the

@@ -934,6 +934,166 @@ mod tests {
         );
     }
 
+    /// Open a channel sized for `buffered_frames` in flight and hand back the
+    /// publisher (kept alive so sent samples stay resident) plus a bound
+    /// subscriber, so a test can publish one frame at a time.
+    fn open_channel_for_one_link(
+        node: &iceoryx2::node::Node<ipc::Service>,
+        tag: &str,
+        buffered_frames: usize,
+    ) -> (
+        iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
+        Subscriber<ipc::Service, [u8], ()>,
+    ) {
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .subscriber_max_buffer_size(buffered_frames)
+            .enable_safe_overflow(true)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .create()
+            .unwrap();
+        let subscriber = pubsub.subscriber_builder().create().unwrap();
+        (publisher, subscriber)
+    }
+
+    /// Publish one frame stamped with `source_port` and route it into the
+    /// destination's mailbox, so the test owns the interleaving rather than
+    /// leaving it to whatever the transport happened to buffer.
+    fn publish_one_frame_and_receive(
+        publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
+        mailboxes: &InputMailboxesInner,
+        source_port: &str,
+        body: &[u8],
+    ) {
+        let frame = wire_frame_stamping(source_port, 0, body.len() as u32, body);
+        let sample = publisher.loan_slice_uninit(frame.len()).unwrap();
+        sample.write_from_slice(&frame).send().unwrap();
+        mailboxes.receive_pending();
+    }
+
+    /// The counting contract under fan-in: a stalled `ordered` consumer whose
+    /// port two links feed reports each link's OWN losses, and the counts sum
+    /// to published minus delivered — the 78-of-378 audio arrangement, made
+    /// visible.
+    ///
+    /// The attribution is what makes this more than a total. Frames arrive
+    /// A×5 then B×5 into a depth-2 mailbox, so B's arrivals evict A's bags:
+    /// charging the pushing link would report A=3/B=5, charging the link the
+    /// evicted bag came in on reports A=5/B=3. The tag rides the entry for
+    /// exactly this reason.
+    #[test]
+    fn each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port() {
+        const MAILBOX_DEPTH: usize = 2;
+        const FRAMES_PER_LINK: usize = 5;
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher_a, subscriber_a) =
+            open_channel_for_one_link(&node, "drop-count/a", FRAMES_PER_LINK);
+        let (publisher_b, subscriber_b) =
+            open_channel_for_one_link(&node, "drop-count/b", FRAMES_PER_LINK);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber("in", "L-first", subscriber_a);
+        mailboxes.add_channel_subscriber("in", "L-second", subscriber_b);
+
+        for _ in 0..FRAMES_PER_LINK {
+            publish_one_frame_and_receive(&publisher_a, &mailboxes, "src_a_out", b"from-a");
+        }
+        for _ in 0..FRAMES_PER_LINK {
+            publish_one_frame_and_receive(&publisher_b, &mailboxes, "src_b_out", b"from-b");
+        }
+
+        let counts = mailboxes
+            .dropped_bag_counts_by_inbound_link()
+            .dropped_bag_count_by_inbound_link();
+        assert_eq!(
+            counts,
+            std::collections::BTreeMap::from([
+                ("L-first".to_string(), 5),
+                ("L-second".to_string(), 3),
+            ]),
+            "each link must carry the bags IT lost, not the ones it displaced",
+        );
+
+        let delivered = mailboxes.drain("in").len();
+        assert_eq!(delivered, MAILBOX_DEPTH);
+        assert_eq!(
+            counts.values().sum::<u64>() + delivered as u64,
+            (FRAMES_PER_LINK * 2) as u64,
+            "counted plus delivered must account for every bag published",
+        );
+    }
+
+    /// The negative half: a consumer that keeps up loses nothing, and its
+    /// wired links say so with a zero rather than by going missing. A counter
+    /// that only appears once a link has lost something is indistinguishable
+    /// from a link nobody wired.
+    #[test]
+    fn a_port_that_keeps_up_reports_a_zero_for_every_wired_link() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher_a, subscriber_a) = open_channel_for_one_link(&node, "no-drop/a", 4);
+        let (publisher_b, subscriber_b) = open_channel_for_one_link(&node, "no-drop/b", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber("in", "L-first", subscriber_a);
+        mailboxes.add_channel_subscriber("in", "L-second", subscriber_b);
+
+        for _ in 0..2 {
+            publish_one_frame_and_receive(&publisher_a, &mailboxes, "src_a_out", b"from-a");
+            publish_one_frame_and_receive(&publisher_b, &mailboxes, "src_b_out", b"from-b");
+        }
+
+        assert_eq!(
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_by_inbound_link(),
+            std::collections::BTreeMap::from([
+                ("L-first".to_string(), 0),
+                ("L-second".to_string(), 0),
+            ]),
+        );
+        assert_eq!(mailboxes.drain("in").len(), 4);
+    }
+
+    /// A disconnected link's count leaves with it: `graph` renders counts
+    /// beside links it still has, and a count naming a link the graph dropped
+    /// is a reader's dead end.
+    #[test]
+    fn a_disconnected_links_count_goes_with_the_link() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "reclaim-count", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 1, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber("in", "L-departing", subscriber);
+        for _ in 0..3 {
+            publish_one_frame_and_receive(&publisher, &mailboxes, "src_out", b"body");
+        }
+        assert_eq!(
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_by_inbound_link()["L-departing"],
+            2,
+        );
+
+        mailboxes.remove_channel_link("L-departing");
+
+        assert!(
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_by_inbound_link()
+                .is_empty(),
+        );
+    }
+
     /// Per-link destination reclaim (#1549): a destination fanning two inbound
     /// links into ONE local port holds two tagged subscribers plus one shared
     /// listener. Disconnecting one link drops only its subscriber (the port
