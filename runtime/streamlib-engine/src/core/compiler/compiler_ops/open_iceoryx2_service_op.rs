@@ -382,7 +382,7 @@ pub(crate) struct ChannelSizing {
     pub(crate) max_subscribers: usize,
     /// Ring depth (`subscriber_max_buffer_size`) — the agreed delivery profile's depth.
     pub(crate) max_queued_messages: usize,
-    /// Overflow policy — `true` drops-oldest (realtime), `false` back-pressures (lossless).
+    /// Overflow policy — `true` drops-oldest, which every profile resolves to.
     pub(crate) enable_safe_overflow: bool,
     /// The agreed delivery profile's consumer drain order.
     pub(crate) drain_order: crate::iceoryx2::ReadMode,
@@ -484,7 +484,7 @@ fn destination_consumes_notifications(
 /// A channel's single publisher shares one ring config
 /// (depth + `enable_safe_overflow`) across all subscribers, so its
 /// destinations must resolve to one delivery profile. A channel whose
-/// destinations disagree (`latest` vs `lossless`, say) is genuinely ambiguous —
+/// destinations disagree (`newest` vs `ordered`, say) is genuinely ambiguous —
 /// a named [`Error::Configuration`] rather than a silent pick. A channel with a
 /// single destination (the common case) uses that destination's profile.
 ///
@@ -507,7 +507,7 @@ fn channel_delivery_profile(
             .map(|node| node.processor_type().clone());
         let profile = match dest_type.as_ref() {
             Some(ident) => delivery_profile_for_input_port(ident, dest_port)?,
-            None => crate::iceoryx2::DeliveryProfile::Latest,
+            None => crate::iceoryx2::DeliveryProfile::Newest,
         };
         match agreed {
             None => agreed = Some(profile),
@@ -530,7 +530,7 @@ fn channel_delivery_profile(
 
     // Every wired link has at least the current destination, so `agreed` is Some;
     // the realtime default is the correct fallback if the outbound set were empty.
-    Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Latest))
+    Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Newest))
 }
 
 /// Check if a processor is a subprocess.
@@ -1781,7 +1781,7 @@ mod tests {
     }
 
     /// A source output port feeding two destinations whose input ports resolve
-    /// to CONFLICTING delivery profiles (`lossless` vs `latest`) is genuinely
+    /// to CONFLICTING delivery profiles (`ordered` vs `newest`) is genuinely
     /// ambiguous: a channel's single publisher shares one ring config across
     /// every subscriber. `channel_delivery_profile` surfaces this as a named
     /// [`Error::Configuration`], not a silent first-connection-wins pick.
@@ -1796,8 +1796,8 @@ mod tests {
 
         // One sink per profile, under distinct import paths: the registry keys
         // on the path, so two sinks sharing one would collide and the second
-        // registration — the `latest` half this test needs — would be
-        // discarded, leaving both destinations agreeing on `lossless` and no
+        // registration — the `newest` half this test needs — would be
+        // discarded, leaving both destinations agreeing on `ordered` and no
         // conflict to detect.
         let register_sink = |profile: &str| -> ProcessorClassImportPath {
             let import_path =
@@ -1816,33 +1816,33 @@ mod tests {
             import_path
         };
 
-        let lossless_ident = register_sink("lossless");
-        let latest_ident = register_sink("latest");
+        let ordered_ident = register_sink("ordered");
+        let newest_ident = register_sink("newest");
 
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
-        let lossless_dest = graph
+        let ordered_dest = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(lossless_ident, serde_json::Value::Null))
+            .add_v(ProcessorSpec::new(ordered_ident, serde_json::Value::Null))
             .first()
-            .expect("lossless sink node")
+            .expect("ordered sink node")
             .id
             .to_string();
-        let latest_dest = graph
+        let newest_dest = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(latest_ident, serde_json::Value::Null))
+            .add_v(ProcessorSpec::new(newest_ident, serde_json::Value::Null))
             .first()
-            .expect("latest sink node")
+            .expect("newest sink node")
             .id
             .to_string();
 
         graph.traversal_mut().add_e(
             OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&lossless_dest, "in1"),
+            InputLinkPortRef::new(&ordered_dest, "in1"),
         );
         graph.traversal_mut().add_e(
             OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&latest_dest, "in1"),
+            InputLinkPortRef::new(&newest_dest, "in1"),
         );
 
         let src_uid: ProcessorUniqueId = src_id.as_str().into();

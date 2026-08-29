@@ -28,7 +28,7 @@ __all__ = [
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
-_DELIVERY_PROFILES = ("latest", "every_sample", "lossless")
+_DELIVERY_PROFILES = ("newest", "ordered")
 
 _INPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_input_port"
 _OUTPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_output_port"
@@ -47,9 +47,12 @@ def input(
 
     The port is named after the method unless `name` overrides it. The port
     carries no type — the method's return annotation is the declaration, read
-    by humans and type checkers only. `delivery_profile` is required and is
-    `"latest"`, `"every_sample"`, or `"lossless"`. The decorated method is a
-    declaration only: bags are read with `ctx.inputs.read(port_name)`.
+    by humans and type checkers only. `delivery_profile` is required and names
+    a read policy: `"newest"` drains to the most recent bag, `"ordered"`
+    receives them in publication order. Neither promises delivery — both drop
+    under sustained pressure, and no link ever blocks a producer. The
+    decorated method is a declaration only: bags are read with
+    `ctx.inputs.read(port_name)`.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(

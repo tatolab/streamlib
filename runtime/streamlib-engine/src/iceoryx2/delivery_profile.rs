@@ -4,9 +4,8 @@
 //! The single per-port delivery knob on the authoring surface.
 //!
 //! A [`DeliveryProfile`] is the one word an author writes at a port declaration
-//! site (`#[processor]` attribute / `@processor` decorator). It resolves to the
-//! three transport settings the engine used to expose as four separate knobs
-//! (`read_mode`, `overflow`, `buffer_size`, `max_queued_messages`): the
+//! site (`#[processor]` attribute / `@processor` decorator). It names a read
+//! policy — which bag the consumer gets next — and resolves to the
 //! consumer-side drain order ([`ReadMode`]), the producer-side overflow policy
 //! ([`Overflow`]), and the ring depth. Every input port declares one and
 //! nothing is inferred — an input port without a profile is a wiring error.
@@ -32,31 +31,14 @@ fn render_delivery_profile_values() -> String {
 /// (drain order, overflow policy, ring depth) triple; see [`DeliveryProfile::resolve`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryProfile {
-    /// Newest-wins: drain to the latest sample, evict oldest under pressure,
-    /// shallow ring. State snapshots — video frames, control state — where a
-    /// stale sample has no value once a fresher one exists.
-    Latest,
-    /// FIFO with a bounded backlog: read next in order, evict + count the
-    /// oldest under sustained overrun, deeper ring. Sample streams — encoded
-    /// frames — where order matters but the producer must never block.
-    EverySample,
-    /// Lossless FIFO: read next in order, the producer blocks rather than
-    /// drop, deeper ring. Audio, file writers, muxers, loggers where every
-    /// sample must be delivered.
-    ///
-    /// What this configures is the *publisher's* policy, and that is as far as
-    /// it reaches today: the consumer's host mailbox
-    /// ([`super::mailbox::PortMailbox::push_frame_from_inbound_link`]) evicts
-    /// its oldest entry whenever it is full, whatever profile the port
-    /// declares, so a producer that outruns a slow reader still loses samples
-    /// there. Measured while building the audio playback path: a producer
-    /// publishing about a thousand blocks a second reached its consumer as 78
-    /// of 378. Eviction at that mailbox is counted now, per inbound link and
-    /// rendered in `graph`; loss at the iceoryx2 subscriber ring, which
-    /// overflows while a consumer parked inside `process()` pumps no receive,
-    /// is counted nowhere. Either way, counting a loss is not delivering it —
-    /// the word still promises what the tree does not do.
-    Lossless,
+    /// The consumer drains to the most recent bag; older ones are passed
+    /// over. Shallow ring. State snapshots — video frames, control state —
+    /// where a stale bag has no value once a fresher one exists.
+    Newest,
+    /// The consumer receives bags in publication order, evicting the oldest
+    /// under sustained overrun. Deeper ring. Sample streams — audio blocks,
+    /// encoded frames — where order carries meaning.
+    Ordered,
 }
 
 /// The resolved transport triple a [`DeliveryProfile`] expands to at wire time.
@@ -72,42 +54,36 @@ pub struct DeliveryResolution {
 }
 
 impl DeliveryProfile {
-    /// Ring depth for [`DeliveryProfile::Latest`].
-    pub const LATEST_DEPTH: usize = 4;
-    /// Ring depth for [`DeliveryProfile::EverySample`] and [`DeliveryProfile::Lossless`].
-    pub const STREAM_DEPTH: usize = 16;
+    /// Ring depth for [`DeliveryProfile::Newest`].
+    pub const NEWEST_DEPTH: usize = 4;
+    /// Ring depth for [`DeliveryProfile::Ordered`].
+    pub const ORDERED_DEPTH: usize = 16;
 
     /// Expand this profile into its fixed (drain order, overflow, depth) triple.
     pub fn resolve(self) -> DeliveryResolution {
         match self {
-            DeliveryProfile::Latest => DeliveryResolution {
+            DeliveryProfile::Newest => DeliveryResolution {
                 drain_order: ReadMode::SkipToLatest,
                 overflow: Overflow::DropOldest,
-                depth: Self::LATEST_DEPTH,
+                depth: Self::NEWEST_DEPTH,
             },
-            DeliveryProfile::EverySample => DeliveryResolution {
+            DeliveryProfile::Ordered => DeliveryResolution {
                 drain_order: ReadMode::ReadNextInOrder,
                 overflow: Overflow::DropOldest,
-                depth: Self::STREAM_DEPTH,
-            },
-            DeliveryProfile::Lossless => DeliveryResolution {
-                drain_order: ReadMode::ReadNextInOrder,
-                overflow: Overflow::Block,
-                depth: Self::STREAM_DEPTH,
+                depth: Self::ORDERED_DEPTH,
             },
         }
     }
 
     /// Parse an author-declared profile string.
     ///
-    /// Recognized values: `"latest"`, `"every_sample"`, `"lossless"`. Unknown
-    /// values surface as a structured configuration error so a typo at the
-    /// declaration site is rejected at wire time, not silently defaulted.
+    /// Recognized values: `"newest"`, `"ordered"`. Unknown values surface as a
+    /// structured configuration error so a typo at the declaration site is
+    /// rejected at wire time, not silently defaulted.
     pub fn from_manifest_str(value: &str) -> std::result::Result<Self, String> {
         match value {
-            "latest" => Ok(Self::Latest),
-            "every_sample" => Ok(Self::EverySample),
-            "lossless" => Ok(Self::Lossless),
+            "newest" => Ok(Self::Newest),
+            "ordered" => Ok(Self::Ordered),
             other => Err(format!(
                 "unknown delivery_profile value '{other}', expected one of {}",
                 render_delivery_profile_values()
@@ -118,9 +94,8 @@ impl DeliveryProfile {
     /// The canonical manifest string for this profile.
     pub fn as_manifest_str(self) -> &'static str {
         match self {
-            DeliveryProfile::Latest => "latest",
-            DeliveryProfile::EverySample => "every_sample",
-            DeliveryProfile::Lossless => "lossless",
+            DeliveryProfile::Newest => "newest",
+            DeliveryProfile::Ordered => "ordered",
         }
     }
 }
@@ -132,7 +107,7 @@ impl DeliveryProfile {
 /// input port carrying no declaration is a wiring error, not a silent
 /// substitution.
 ///
-/// Falls back to [`DeliveryProfile::Latest`] when the destination processor
+/// Falls back to [`DeliveryProfile::Newest`] when the destination processor
 /// type isn't registered or the named port doesn't exist (defensive; a Wired
 /// link always resolves both — the wiring path itself reports the missing
 /// processor).
@@ -141,10 +116,10 @@ pub(crate) fn delivery_profile_for_input_port(
     port_name: &str,
 ) -> Result<DeliveryProfile> {
     let Some((inputs, _outputs)) = PROCESSOR_REGISTRY.port_info(processor_type) else {
-        return Ok(DeliveryProfile::Latest);
+        return Ok(DeliveryProfile::Newest);
     };
     let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
-        return Ok(DeliveryProfile::Latest);
+        return Ok(DeliveryProfile::Newest);
     };
 
     let Some(declared) = port.delivery_profile.as_deref() else {
@@ -167,64 +142,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn latest_resolves_to_skip_drop_shallow() {
-        let r = DeliveryProfile::Latest.resolve();
-        assert_eq!(r.drain_order, ReadMode::SkipToLatest);
-        assert_eq!(r.overflow, Overflow::DropOldest);
-        assert_eq!(r.depth, 4);
-        assert!(r.overflow.enable_safe_overflow());
+    fn newest_resolves_to_skip_drop_shallow() {
+        let resolution = DeliveryProfile::Newest.resolve();
+        assert_eq!(resolution.drain_order, ReadMode::SkipToLatest);
+        assert_eq!(resolution.overflow, Overflow::DropOldest);
+        assert_eq!(resolution.depth, 4);
+        assert!(resolution.overflow.enable_safe_overflow());
     }
 
     #[test]
-    fn every_sample_resolves_to_fifo_drop_deep() {
-        let r = DeliveryProfile::EverySample.resolve();
-        assert_eq!(r.drain_order, ReadMode::ReadNextInOrder);
-        assert_eq!(r.overflow, Overflow::DropOldest);
-        assert_eq!(r.depth, 16);
-        assert!(r.overflow.enable_safe_overflow());
+    fn ordered_resolves_to_fifo_drop_deep() {
+        let resolution = DeliveryProfile::Ordered.resolve();
+        assert_eq!(resolution.drain_order, ReadMode::ReadNextInOrder);
+        assert_eq!(resolution.overflow, Overflow::DropOldest);
+        assert_eq!(resolution.depth, 16);
+        assert!(resolution.overflow.enable_safe_overflow());
     }
 
+    /// No declarable profile reaches producer-blocking. Driven from the
+    /// declaration constant rather than a literal so a profile added there is
+    /// covered here without anyone remembering to widen this.
     #[test]
-    fn lossless_resolves_to_fifo_block_deep() {
-        let r = DeliveryProfile::Lossless.resolve();
-        assert_eq!(r.drain_order, ReadMode::ReadNextInOrder);
-        assert_eq!(r.overflow, Overflow::Block);
-        assert_eq!(r.depth, 16);
-        assert!(
-            !r.overflow.enable_safe_overflow(),
-            "lossless must NOT enable safe overflow — the producer backpressures"
-        );
+    fn no_declarable_profile_resolves_to_a_blocking_producer() {
+        for declared_value in DELIVERY_PROFILE_DECLARATION_VALUES {
+            let resolution = DeliveryProfile::from_manifest_str(declared_value)
+                .expect("every legal declaration value parses")
+                .resolve();
+            assert_eq!(
+                resolution.overflow,
+                Overflow::DropOldest,
+                "'{declared_value}' must drop rather than park its producer"
+            );
+            assert!(resolution.overflow.enable_safe_overflow());
+        }
     }
 
     #[test]
     fn profile_parses_known_and_rejects_unknown() {
         assert_eq!(
-            DeliveryProfile::from_manifest_str("latest").unwrap(),
-            DeliveryProfile::Latest
+            DeliveryProfile::from_manifest_str("newest").unwrap(),
+            DeliveryProfile::Newest
         );
         assert_eq!(
-            DeliveryProfile::from_manifest_str("every_sample").unwrap(),
-            DeliveryProfile::EverySample
+            DeliveryProfile::from_manifest_str("ordered").unwrap(),
+            DeliveryProfile::Ordered
         );
-        assert_eq!(
-            DeliveryProfile::from_manifest_str("lossless").unwrap(),
-            DeliveryProfile::Lossless
+        // Case is part of the value: the declaration surface is lowercase, so
+        // a capitalised spelling is a typo like any other.
+        let err = DeliveryProfile::from_manifest_str("Newest").unwrap_err();
+        assert!(
+            err.contains("'newest'") && err.contains("'ordered'"),
+            "{err}"
         );
-        let err = DeliveryProfile::from_manifest_str("Latest").unwrap_err();
-        assert!(err.contains("every_sample"));
     }
 
+    /// The parser and the declaration constant agree in both directions: every
+    /// legal value parses, and every parsed profile renders back the same
+    /// spelling. A value in the constant that the parser rejects would make
+    /// every error message list a word the engine refuses.
     #[test]
-    fn manifest_str_roundtrips() {
-        for p in [
-            DeliveryProfile::Latest,
-            DeliveryProfile::EverySample,
-            DeliveryProfile::Lossless,
-        ] {
-            assert_eq!(
-                DeliveryProfile::from_manifest_str(p.as_manifest_str()).unwrap(),
-                p
-            );
+    fn manifest_str_roundtrips_through_the_declaration_constant() {
+        for declared_value in DELIVERY_PROFILE_DECLARATION_VALUES {
+            let profile = DeliveryProfile::from_manifest_str(declared_value)
+                .expect("every legal declaration value parses");
+            assert_eq!(profile.as_manifest_str(), declared_value);
         }
     }
 
@@ -267,26 +248,26 @@ mod tests {
             import_path
         }
 
-        /// The default-fallback path: an unregistered processor type yields the
-        /// newest-wins realtime default. Mentally reverting this to a blocking
-        /// profile would silently re-introduce producer-blocking for the
-        /// defensively-handled cases.
+        /// The default-fallback path: an unregistered processor type yields
+        /// the realtime default, the shallowest ring there is. Mentally
+        /// reverting this to the deeper profile would hand a defensively
+        /// handled case a backlog nothing asked for.
         #[test]
-        fn unregistered_processor_falls_back_to_latest() {
+        fn unregistered_processor_falls_back_to_newest() {
             let unknown = class_path("NothingRegisteredUnderThisPath");
             assert_eq!(
                 delivery_profile_for_input_port(&unknown, "video_in").unwrap(),
-                DeliveryProfile::Latest
+                DeliveryProfile::Newest
             );
         }
 
         #[test]
         fn declared_profile_is_the_whole_answer() {
             let ident =
-                register_processor_with_one_input_port("BlockSink", "video_in", Some("lossless"));
+                register_processor_with_one_input_port("OrderedSink", "video_in", Some("ordered"));
             assert_eq!(
                 delivery_profile_for_input_port(&ident, "video_in").unwrap(),
-                DeliveryProfile::Lossless,
+                DeliveryProfile::Ordered,
             );
         }
 
@@ -320,11 +301,11 @@ mod tests {
                 .expect_err("unknown delivery_profile must error");
             let msg = err.to_string();
             assert!(
-                msg.contains("'latest'"),
+                msg.contains("'newest'"),
                 "error must list the legal values, quoted as the renderer emits them: {msg}"
             );
             assert!(
-                msg.contains("'every_sample'"),
+                msg.contains("'ordered'"),
                 "error must list the legal values, quoted as the renderer emits them: {msg}"
             );
             assert!(matches!(err, Error::Configuration(_)));

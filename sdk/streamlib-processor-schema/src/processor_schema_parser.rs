@@ -263,14 +263,14 @@ name: Writer
 
 inputs:
   - name: video_in
-    delivery_profile: lossless
+    delivery_profile: ordered
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.inputs.len(), 1);
         assert_eq!(
             schema.inputs[0].delivery_profile,
-            Some("lossless".to_string())
+            Some("ordered".to_string())
         );
     }
 

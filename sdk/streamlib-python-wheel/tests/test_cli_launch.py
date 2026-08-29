@@ -486,8 +486,8 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     for anchor, replacement in (
         ("    input,\n", "    input,\n    log,\n"),
         (
-            '    @input(delivery_profile="latest")',
-            '    announced = False\n\n    @input(delivery_profile="latest")',
+            '    @input(delivery_profile="newest")',
+            '    announced = False\n\n    @input(delivery_profile="newest")',
         ),
         (
             '        ctx.outputs.write("video_to_downstream", bag)',

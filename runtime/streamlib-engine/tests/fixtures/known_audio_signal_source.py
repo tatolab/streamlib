@@ -18,7 +18,7 @@ Paced to stay a bounded lead ahead of the monotonic clock rather than published
 as fast as the loop runs. A lead is what absorbs a scheduling hiccup, and the
 bound is what keeps the producer from racing: a burst larger than the consumer's
 mailbox is lost there — `PortMailbox::push_frame_from_inbound_link` evicts its
-oldest to make room, which a port's `lossless` profile does not prevent — and the lost audio is a hole the
+oldest to make room, which no delivery profile prevents — and the lost audio is a hole the
 analysis would then report as this fixture's failure rather than the transport's.
 
 The lead is monotonic by construction: it compares the duration of what has been

@@ -118,7 +118,7 @@ class _WindowOwningProbeBase:
     gradient_kernel: ComputeKernel
     kernel_output: GpuSurfaceHandle
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:
@@ -333,7 +333,7 @@ class AProcessThatCanGetNoWindowRefusesAtSetupProbe:
     window optional carries on without one.
     """
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

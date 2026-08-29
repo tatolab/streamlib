@@ -39,7 +39,7 @@ class ReportsUpstreamProcessSink:
     def __init__(self) -> None:
         self.bags_seen = 0
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
@@ -68,7 +68,7 @@ class ReportsItsOwnProcessVideoSink:
     def __init__(self) -> None:
         self.announced = False
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:

@@ -35,7 +35,7 @@ use streamlib::sdk::window_event_pump::WindowRegistrationRequestFromOwningProces
 use crate::video_frame::{ColorInfo, VideoFrame};
 
 /// How long the render thread parks when the input has no frame to show. The
-/// display is a `latest`-profile sink, so this is the worst-case lateness of a
+/// display is a `newest`-profile sink, so this is the worst-case lateness of a
 /// frame that arrives just after a poll, not a frame budget.
 const DISPLAY_RENDER_THREAD_IDLE_PARK_INTERVAL: Duration = Duration::from_millis(1);
 
@@ -111,7 +111,7 @@ impl Default for DisplayWindowConfig {
     execution = manual,
     scheduling = high,
     config = crate::display_window::DisplayWindowConfig,
-    input("video", delivery_profile = "latest", description = "Video frames to show in the window"),
+    input("video", delivery_profile = "newest", description = "Video frames to show in the window"),
 )]
 pub struct DisplayWindow {
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -304,7 +304,7 @@ impl DisplayWindowRenderLoop {
     }
 
     fn show_next_frame_on_the_window(&mut self) {
-        // Taken before the destructive `latest` read below, so a frame is not
+        // Taken before the destructive `newest` read below, so a frame is not
         // consumed when there is no window to show it on.
         let Some(processor_owned_window) = self.processor_owned_window.as_mut() else {
             return;

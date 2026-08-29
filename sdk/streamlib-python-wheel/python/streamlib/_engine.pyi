@@ -408,8 +408,9 @@ class LinkOutputDataWriter:
     ) -> None:
         """Publish one bag to every downstream link on `port_name`.
 
-        Writes past a `lossless` link's ceiling block; on other profiles an
-        over-ceiling write is silently dropped.
+        A bag over the channel's payload ceiling is refused here and counted
+        against this port, never raised. Loss from a consumer that cannot keep
+        up is a separate mechanism and lands at the consuming port.
         """
 
 @final

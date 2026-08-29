@@ -248,7 +248,7 @@ class InvertingEffect:
     opens CPU access, and edits the engine's own memory in place.
     """
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
 
     def __init__(self) -> None:

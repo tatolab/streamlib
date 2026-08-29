@@ -6,17 +6,13 @@
 //!
 //! It is the capture ring's mirror, and the asymmetry is the point. On capture
 //! the device is the producer and must never wait, so a full ring drops its
-//! oldest block. On playback the *graph* is the producer, its port declares
-//! `lossless`, and the one thing that must never wait is the device callback —
-//! so this ring makes the drain thread wait for room, and takes whatever is
-//! there when the callback asks.
+//! oldest block. On playback the *graph* is the producer and the one thing
+//! that must never wait is the device callback — so this ring makes the drain
+//! thread wait for room, and takes whatever is there when the callback asks.
 //!
-//! The wait backs the drain thread's mailbox up, which is as far as
-//! backpressure reaches today: `PortMailbox::push_frame_from_inbound_link`
-//! evicts its oldest entry when full whatever a port's profile says, so a
-//! producer racing far enough ahead loses blocks there rather than being held.
-//! Nothing here can close that — it is a transport-layer gap this ring is
-//! downstream of, and one the port counts per link now rather than swallowing.
+//! That wait is bounded queueing inside this sink, never a promise to the
+//! graph: it holds only the drain thread, and a producer racing far enough
+//! ahead loses blocks at its port, counted there per link.
 //!
 //! Samples rather than blocks, because a device period and a published block
 //! are different sizes and neither divides the other. What a callback needs is
@@ -114,11 +110,11 @@ impl AudioSamplesAwaitingPlaybackRing {
     /// Queue every byte for the device, waiting for room as many times as it
     /// takes.
     ///
-    /// The wait is the backpressure `lossless` names: a caller held here is a
-    /// caller not draining its mailbox, which is what makes the producer block
-    /// rather than this ring drop. Bytes are queued in pieces as room appears,
-    /// which changes nothing about what is played — samples are a stream, and
-    /// where one block ended is not something a device acts on.
+    /// Waiting rather than dropping is what keeps playback continuous: this
+    /// ring holds only its own caller, never the graph. Bytes are queued in
+    /// pieces as room appears, which changes nothing about what is played —
+    /// samples are a stream, and where one block ended is not something a
+    /// device acts on.
     ///
     /// `room_wait_poll_interval` only bounds how long a wait sits before it
     /// re-reads the state; ending playback is what releases a caller for good.
@@ -412,10 +408,9 @@ mod tests {
         assert_eq!(period, [1, 2, 3, 4]);
     }
 
-    /// The backpressure `lossless` names: a full ring holds the drain thread,
-    /// which stops it draining its mailbox, which is what makes the producer
-    /// block. A ring that dropped here instead would make `lossless` a lie no
-    /// test downstream could catch.
+    /// The ring bounds this sink's own queueing: a full ring holds the drain
+    /// thread rather than discarding samples it could not take, so what was
+    /// handed off is what gets played.
     #[test]
     fn a_full_ring_holds_the_graph_rather_than_dropping_what_it_could_not_take() {
         let ring = Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(4));
