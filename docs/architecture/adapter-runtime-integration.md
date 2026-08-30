@@ -347,9 +347,10 @@ by design — so an in-process consumer reading the same surface
 every frame would pay a fresh import + QFOT acquire on every
 render.
 
-For hot-path in-process consumers (e.g. `LinuxDisplayProcessor`,
-the `BlendingCompositor`, video encoders), populate Path 1 by
-**dual-registering** in the setup hook:
+For hot-path in-process consumers (e.g. the display's
+`ProcessorOwnedWindow`, the `BlendingCompositor`, video
+encoders), populate Path 1 by **dual-registering** in the setup
+hook:
 
 ```rust
 // 1. Cross-process publish (subprocess customers):
@@ -384,9 +385,9 @@ the other by Path 1 (in-process, via the registry held in
 [`TextureRegistration` anti-pattern #2 — descriptor-side claims
 that don't match registration](texture-registration.md#anti-patterns).
 
-The reference in-tree producer is `LinuxCameraProcessor` in the
-`streamlib-camera` package — `packages/camera/processors/camera_linux.rs`
-calls both `store.register_texture(...)` and
+The reference in-tree producer is the `CameraSource` built-in —
+`runtime/streamlib-media-builtins/src/camera_source.rs` calls both
+`store.register_texture(...)` and
 `gpu_context.register_texture_with_layout(...)` (outside the
 `escalate(|full| ...)` closure where the ring textures were
 constructed) for every ring texture it allocates, with the same
