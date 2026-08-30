@@ -206,6 +206,63 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
+## Consumers — examples & packages
+
+- **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
+  current authoring idiom, converted gradually and never a contract source: engine
+  contracts are stated in the engine and proven by engine tests, and no example is read
+  to infer what the engine guarantees. An external examples repository (the
+  framework-repo/examples-repo model) remains a possible later move and is not decided
+  now. [consumer-tree-disposition]
+- **DECIDED** — `packages/` holds first-party *optional* Python packages — integrations
+  and optional capabilities that do not belong in the engine tree. What belongs in the
+  engine goes in the engine; each package is an ordinary pip-installable Python package
+  depending on the streamlib wheel through its public surface, never linking the engine.
+  In-repo consumers (examples included) link a package locally as a Python path
+  dependency — no publish loop stands between an example and the package it uses.
+  Externally, packages publish through the same GitHub-hosted PEP 503 index the wheel
+  uses (PyPI after the rename). `test-fixtures` remains as the tree's one
+  engine-adjacent Rust crate. [consumer-tree-disposition]
+- **DECIDED** — Conversion is a from-scratch rewrite in the current idiom, never an
+  in-place upgrade: start from the `streamlib new` scaffold, mine the old directory for
+  its logic only, author against today's full surface (delivery profiles, window
+  contracts, cast objects, kernels-as-objects), and delete the old directory in the same
+  PR. Every pre-pivot consumer neither deleted nor held below is conversion backlog
+  under this doctrine. [consumer-tree-disposition]
+- **DECIDED** — Retired now, superseded by deleted machinery or shipped pivots (one
+  sweep): `examples/pipelines`, `examples/camera-deno-subprocess` (its halftone effect
+  is conversion backlog, rebuilt as a Python-authored kernel),
+  `examples/camera-python-subprocess`, `examples/polyglot-manual-source`,
+  `examples/camera-rust-plugin`, `examples/vulkan-video-roundtrip-cdylib-camera`,
+  `examples/dynamic-reconfigure`, `examples/api-server`, `examples/api-server-demo`,
+  `examples/runtime-graph-json-demo`, `examples/hello-streamlib` (the `streamlib new`
+  scaffold is the hello; `camera-display` is the canonical minimal example), and
+  `packages/audio`, `packages/camera`,
+  `packages/display`, `packages/frame-tap`, plus the `packages/core` stub.
+  [consumer-tree-disposition]
+- **DECIDED** — A consumer blocked on an undecided domain is held in-tree until the
+  align covering that domain mines it for logic; its deletion rides that change's own
+  ship. Held on codec blocks: `packages/{h264,h265,jpeg,opus,mp4}`,
+  `examples/{jpeg-psnr,vulkan-video-roundtrip,vulkan-video-psnr,h264-opus-validator,camera-audio-recorder}`.
+  Held on networking: `packages/{moq,webrtc}`,
+  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}`. Held on audio
+  plugins: `packages/clap`. Held on screen capture: `packages/screen-capture`,
+  `examples/screen-recorder`. [consumer-tree-disposition]
+- **DECIDED** — No additional native-processor distribution mechanism is owed pre-1.0:
+  the extension paths in §Packages & extension model are the complete set, and
+  closed-source Rust processors for Rust apps are deliberately not a path — a
+  closed-source vendor ships the Python package whose native internals expose handles.
+  [consumer-tree-disposition]
+- **DECIDED** — Lag-by-design ends for a converted consumer: when an engine change
+  breaks one, the breakage is filed as tracked backlog at the consumer and never
+  blocks the engine change.
+  The showcase is kept current by convention, with no CI presence — a compile/import
+  smoke check is a later ticket-level choice if rot appears. One exception, rare by
+  design: an example serving as the deliberate canary of in-flight work is updated
+  in-stream at the most appropriate time; a canary is normally planned as a separate
+  path an example later adopts, so in-stream example surgery stays the exception.
+  [consumer-tree-disposition]
+
 ## Processor model & scheduling — IN-FLIGHT
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag

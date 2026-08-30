@@ -19,6 +19,15 @@ expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 audio) — instantiated and configured from Python; its per-frame path never enters the
 interpreter.
 
+**Integration package**: a first-party *optional* Python package under `packages/` —
+an integration or optional capability depending on the wheel's public surface, linked
+locally by in-repo consumers and published through the wheel's own index. _Avoid_:
+"plugin" (pre-pivot), "built-in" (those ship inside the wheel).
+
+**Conversion**: rewriting a pre-pivot consumer from scratch in the current idiom — the
+old directory mined for logic only and deleted in the same PR. _Avoid_: "upgrade",
+"port" (both imply editing the old form in place).
+
 **Placement**: settled, not an axis — every Python processor runs in its own helper
 process (own interpreter, own GIL), spawned by the engine as an exec of
 `sys.executable` from the app's venv. There is no second placement and no choice:
