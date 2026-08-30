@@ -22,7 +22,7 @@ self.grayscale_kernel.dispatch(
     bindings={"camera_frame": camera_frame_texture,
               "grayscale_frame": grayscale_frame_texture},
     group_count=(240, 135, 1),
-    push_constants=struct.pack("<f", self.strength),
+    push_constants=self.strength_push_constants,
 )
 ```
 
@@ -42,12 +42,16 @@ Four things fall out of that pair, and they are the whole lesson:
   no implicit default and no value carried over from the previous frame — and
   an unknown or omitted name raises before any GPU work is submitted.
 - **Dispatch is synchronous.** It returns when the work has retired and the
-  writes are visible. Several passes that want one submission and one stall go
-  inside a `ctx.gpu_full_access.kernel_dispatch_batch()` scope instead; this
-  effect is one pass, so it needs none.
+  writes are visible. Several passes that want one submission and one stall are
+  recorded inside a `kernel_dispatch_batch()` scope instead — a scope opened on
+  the **Full** capability, the one `setup()` is handed, not on the limited
+  context `process()` gets. This effect is one pass, so it needs neither.
 - **The kernel's output is an engine-owned texture named by surface id.** The
-  bag this processor writes carries that id, an extent and a timestamp — about
-  250 bytes, whatever the resolution. Pixels never ride a link.
+  bag this processor writes carries that id, an extent and a timestamp — 167
+  bytes on the wire, header included, and the same 167 whatever the resolution.
+  (`streamlib tap` reports it as `byte_len`; the camera's own bag is 248,
+  the difference being the colour metadata it carries and this one does not.)
+  Pixels never ride a link.
 
 ### The landing copy, and why it is here
 
@@ -134,14 +138,18 @@ Change the luma weights, or the whole effect, and re-run — the engine compiles
 the new text at startup, and a warm restart is sub-second. That is the edit
 loop; there is no reload-on-save and nothing is cached against you.
 
+`WORKGROUP_TILE_SIZE` is safe to change on its own: it reaches the shader as a
+`#define`, so the tile size and the group count cannot disagree. Everything
+else the shader and the Python share is a name, and names are checked.
+
 Two edits worth making on purpose, because each fails in an instructive way:
 
 - Rename a binding in the GLSL but not in the Python. The refusal lands at
-  `setup()` and names the shader's own bindings.
-- Change `local_size_x` / `local_size_y` without changing `WORKGROUP_TILE_SIZE`
-  beside it. Nothing refuses — the two agreeing is this file's own contract,
-  not the engine's — and the frame comes back part-redrawn or redrawn several
-  times over, depending on which way you moved it.
+  `setup()`, before a single frame, and names the shader's own bindings.
+- Bind the camera's own surface id — `frame.surface_id` in place of
+  `camera_frame_texture` — and skip the landing copy. The dispatch refuses,
+  saying the graph cannot resolve that surface to a device texture. That
+  refusal is the reason the landing copy exists, and it is worth seeing once.
 
 ## Observing it
 
@@ -149,10 +157,17 @@ From another terminal with this venv activated, while it runs:
 
 ```bash
 streamlib nodes                       # the live nodes on this machine
-streamlib graph                       # processors, ports, links and per-link drop counts
+streamlib graph                       # processors, ports, links and their states
 streamlib logs --list                 # the runtimes that have a log file
 streamlib logs <RUNTIME_ID> --follow  # tail one of them, like `tail -F`
 ```
+
+`graph` renders per-link drop counts under a node's `metrics`, but only for a
+destination that lives in the app process — here, the window. `GrayscaleCompute`
+is helper-placed, like every Python processor, and counts its losses inside its
+own child; its node carries no `metrics` key at all rather than a zero the
+parent cannot stand behind. So a quiet `graph` is not yet proof that the effect
+dropped nothing.
 
 `logs` takes the runtime id, not a node — it reads the file on disk, and the
 ids `--list` prints are what `nodes` calls `runtime_id`.
@@ -180,8 +195,11 @@ uses, with no window in the graph and no display server in the path. It prints
 the paths it wrote, one per line; read those rather than listing the directory,
 which is not cleared between runs.
 
-`--count` is an upper bound over a short sampling window, so a slower channel
-returns fewer frames rather than blocking.
+`--count` here is a target, not a ceiling: `exchange` keeps tapping — up to
+eight bounded sampling rounds — until it has that many frames, and a run that
+comes up short **exits nonzero** and says how many it got. That is the opposite
+of `tap`'s own `--count`, which is an upper bound over one 500 ms window and
+returns whatever arrived. Worth knowing before either goes in a script.
 
 ## Runtime knobs
 

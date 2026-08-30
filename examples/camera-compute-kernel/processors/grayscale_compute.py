@@ -54,19 +54,23 @@ SAMPLED_TEXTURE_USAGE = ["texture_binding"]
 # The texture the kernel writes as a storage image and the window then samples.
 STORAGE_AND_SAMPLED_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
-# Matches `local_size_x` / `local_size_y` in the shader below — the two must
-# agree, because the dispatch asks for one workgroup per tile of this size and
-# the shader bounds-checks the edge tiles that hang off the frame.
+# The dispatch asks for one workgroup per tile of this size, and the shader
+# declares the same size as its `local_size`. The two reach the shader as one
+# number — see the `#define` below — because raising the Python without the
+# GLSL leaves the right and bottom of every frame ungraded and nothing
+# anywhere refuses.
 WORKGROUP_TILE_SIZE = 8
 
 # One `float strength`, little-endian at the wire like every push constant.
 GRAYSCALE_STRENGTH_FORMAT = "<f"
 GRAYSCALE_STRENGTH_SIZE = struct.calcsize(GRAYSCALE_STRENGTH_FORMAT)
 
-GRAYSCALE_COMPUTE_GLSL = """\
-#version 450
-
-layout(local_size_x = 8, local_size_y = 8) in;
+# The `#define` is the only interpolated line: the body stays a plain string,
+# so the shader's own braces need no doubling and it reads as GLSL.
+GRAYSCALE_COMPUTE_GLSL = (
+    f"#version 450\n#define WORKGROUP_TILE_SIZE {WORKGROUP_TILE_SIZE}\n"
+    """
+layout(local_size_x = WORKGROUP_TILE_SIZE, local_size_y = WORKGROUP_TILE_SIZE) in;
 
 layout(set = 0, binding = 0) uniform sampler2D camera_frame;
 layout(set = 0, binding = 1, rgba8) uniform writeonly image2D grayscale_frame;
@@ -93,11 +97,12 @@ void main() {
     imageStore(grayscale_frame, at, vec4(graded, source.a));
 }
 """
+)
 
 
 def _workgroups_covering(pixels: int) -> int:
     """How many tiles it takes to cover `pixels`, the last one hanging over."""
-    return -(-pixels // WORKGROUP_TILE_SIZE)
+    return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
 @processor(description="Grades each frame toward its luma with a compute kernel")
@@ -110,7 +115,12 @@ class GrayscaleCompute:
                 f"GrayscaleCompute was configured with strength={strength} — the "
                 f"dial runs from 0.0 (the picture untouched) to 1.0 (full luma)"
             )
-        self.strength = float(strength)
+        # Packed once, because the dial is fixed at construction. It is still
+        # handed to every dispatch below: push constants travel with a
+        # dispatch and never persist on the kernel, exactly as bindings do.
+        self.strength_push_constants = struct.pack(
+            GRAYSCALE_STRENGTH_FORMAT, float(strength)
+        )
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Depth 1, unlike the output ring: `dispatch` returns with the GPU
@@ -164,7 +174,7 @@ class GrayscaleCompute:
                 _workgroups_covering(frame.height),
                 1,
             ),
-            push_constants=struct.pack(GRAYSCALE_STRENGTH_FORMAT, self.strength),
+            push_constants=self.strength_push_constants,
         )
 
         ctx.outputs.write(
