@@ -202,17 +202,16 @@ plant packages/h264/src/lib.rs "// resolves a .fkpkg from the store"
 run_gate
 expect_pass "a consumer package is not residue"
 
-# packages/ is split and the split is load-bearing (CLAUDE.md): these three are engine-side,
-# not downstream consumers, so their residue is real work and must still be reported.
-for engine_pkg in escalate core test-fixtures; do
-  new_repo <<'EOF'
+# packages/ is split and the split is load-bearing (ARCHITECTURE.md §Consumers):
+# `test-fixtures` is engine-side, not a downstream consumer, so its residue is real work
+# and must still be reported.
+new_repo <<'EOF'
 - REMOVED: .fkpkg
 EOF
-  plant "packages/$engine_pkg/src/lib.rs" "// resolves a .fkpkg from the store"
-  run_gate
-  expect_fail "packages/$engine_pkg is engine-side and stays in the sweep" \
-    "STILL PRESENT (referenced): .fkpkg"
-done
+plant packages/test-fixtures/src/lib.rs "// resolves a .fkpkg from the store"
+run_gate
+expect_fail "packages/test-fixtures is engine-side and stays in the sweep" \
+  "STILL PRESENT (referenced): .fkpkg"
 
 # ...but the path check inherits none of those exclusions. A bullet naming a path inside
 # an excluded tree still fails while that path is tracked — otherwise this change's own
