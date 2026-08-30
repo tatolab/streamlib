@@ -121,8 +121,10 @@ streamlib tap "$CHANNEL" --count 20
 Unlike a video bag, an audio bag carries its payload: `samples` is the block's
 interleaved little-endian bytes, with `sample_rate`, `channels`, `sample_count`,
 `dtype` and `first_sample_timestamp_ns` beside them. Every bag off this port is
-512 bytes — 128 mono `f32` samples — and consecutive stamps are 2 666 667 ns
-apart, which is what the declared window means expressed as time.
+512 bytes — 128 mono `f32` samples — and consecutive stamps are one window
+apart: 2 666 666 or 2 666 667 ns, alternating, because 128/48 000 s is not a
+whole number of nanoseconds and the stamps are derived in integer arithmetic
+from one anchor rather than accumulated a rounded delta at a time.
 
 ### Recording the loop instead of shouting at it
 
