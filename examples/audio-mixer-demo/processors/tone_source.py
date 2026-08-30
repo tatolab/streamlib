@@ -51,6 +51,20 @@ class ToneSource:
         self.block_size = int(block_size)
         self.amplitude = float(amplitude)
 
+        # Refused here rather than left to surface downstream: a block_size of
+        # zero never advances the emitted-sample counter, so `process()` would
+        # publish empty blocks forever without ever catching up to the clock.
+        for field_name, value in (
+            ("sample_rate", self.sample_rate),
+            ("channels", self.channels),
+            ("block_size", self.block_size),
+        ):
+            if value <= 0:
+                raise ValueError(
+                    f"ToneSource was configured with {field_name}={value} — the rate, "
+                    f"channel count and block size are each strictly positive"
+                )
+
         self.run_anchor_timestamp_ns: int | None = None
         self.samples_emitted_in_this_run = 0
         self.next_phase_radians = 0.0
