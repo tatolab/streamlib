@@ -45,11 +45,13 @@ Three further things it teaches:
   per-block delta — which is what keeps 44.1 kHz-family rates exact.
 - **The mixer joins on those timestamps, not on arrival order.** Each voice
   starts when its own child interpreter does, so the three streams sit on grids
-  tens of milliseconds apart. `ChordMixer` discards any window more than half a
-  window behind the newest of the three, which is the block-level join the
+  tens of milliseconds apart. `ChordMixer` discards any window a whole window or
+  more behind the newest of the three, which is the block-level join the
   monotonic clock exists for; pairing by arrival order instead would freeze the
   startup skew in for the whole run and publish a timestamp two of the three
-  contributions never came from.
+  contributions never came from. A whole window is the only stable bound — the
+  grids carry sub-window offsets that discarding cannot remove, so a tighter one
+  thrashes forever instead of converging.
 
 Each of the four Python processors runs in its own child interpreter with its own
 GIL; `SpeakerSink` is a native built-in inside the wheel.

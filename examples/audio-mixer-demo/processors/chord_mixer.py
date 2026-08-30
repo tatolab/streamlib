@@ -59,14 +59,16 @@ MAXIMUM_PENDING_WINDOWS_PER_VOICE = 8
 WINDOW_DURATION_NS = (
     CHORD_MIX_WINDOW.window_size * 1_000_000_000 // CHORD_MIX_WINDOW.sample_rate
 )
-# How far apart three windows' first samples may sit and still be mixed as one
-# instant. The voices start when their helper interpreters do, so their stamps
-# sit on three grids offset by tens of milliseconds; pairing by arrival order
-# would freeze that skew in permanently and publish a stamp two of the three
-# contributions never came from. Half a window is the tightest the grids allow —
-# each voice advances by exactly one window, so no amount of discarding aligns
-# them closer than the residual between their anchors.
-ALIGNMENT_TOLERANCE_NS = WINDOW_DURATION_NS // 2
+# A head is discarded only once it is a *whole* window or more behind the
+# newest. One window is not a slack choice, it is the only stable one: each
+# voice anchors when its own helper interpreter reaches its first tick, so the
+# three stamp grids carry sub-window offsets that no discarding can remove —
+# popping advances a head by exactly one window, leaving its offset unchanged.
+# A tighter bound therefore never converges; it discards the laggard, makes it
+# the leader, and thrashes a window per mix forever. At one window the discard
+# strictly reduces the spread and cannot overshoot, so startup skew is paid off
+# once and the voices then advance in lockstep.
+ALIGNMENT_TOLERANCE_NS = WINDOW_DURATION_NS
 
 
 @processor(description="Sums three voices into one chord")
@@ -124,7 +126,7 @@ class ChordMixer:
         pending.append(window)
 
     def _discard_heads_lagging_the_newest(self) -> bool:
-        """Drop any head more than half a window behind the newest one.
+        """Drop any head a whole window or more behind the newest one.
 
         This is the join: three streams are mixed because their samples cover
         the same instant, which is what `first_sample_timestamp_ns` is for —
@@ -138,7 +140,7 @@ class ChordMixer:
 
         discarded_any = False
         for port_name, head in heads.items():
-            if newest_ns - head.first_sample_timestamp_ns <= ALIGNMENT_TOLERANCE_NS:
+            if newest_ns - head.first_sample_timestamp_ns < ALIGNMENT_TOLERANCE_NS:
                 continue
             self.pending_windows_by_port[port_name].popleft()
             self.realigned_window_count += 1
@@ -161,8 +163,8 @@ class ChordMixer:
         # what a raised gain can send to a speaker.
         numpy.clip(mixed, -1.0, 1.0, out=mixed)
 
-        # The three agree to within half a window by the join above, and the
-        # mixed block names the latest of them — the instant by which every
+        # The three agree to within one window by the join above, and the mixed
+        # block names the latest of them — the instant by which every
         # contribution has started.
         first_sample_timestamp_ns = max(
             window.first_sample_timestamp_ns for window in windows
