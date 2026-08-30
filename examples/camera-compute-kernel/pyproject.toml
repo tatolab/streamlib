@@ -1,0 +1,21 @@
+[project]
+name = "camera-compute-kernel"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "streamlib",
+    # The landing copy's device-to-device move, and the only thing this app
+    # needs a third-party GPU package for. Any DLPack-speaking GPU array
+    # package would serve; cupy is the smallest one that does nothing else.
+    "cupy-cuda13x>=14.2",
+]
+
+# streamlib is served from its own simple index until the PyPI publication that
+# follows the project rename; everything else resolves from PyPI as usual.
+[[tool.uv.index]]
+name = "streamlib"
+url = "https://tatolab.github.io/streamlib/simple/"
+explicit = true
+
+[tool.uv.sources]
+streamlib = { index = "streamlib" }
