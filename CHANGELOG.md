@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.27](https://github.com/tatolab/streamlib/compare/v0.18.26...v0.18.27) (2026-08-30)
+
+
+### Features
+
+* **examples:** rebuild camera-plugin-sdk-compute as a compute-kernel example ([#2070](https://github.com/tatolab/streamlib/issues/2070)) ([f5a5c33](https://github.com/tatolab/streamlib/commit/f5a5c3317bc562aa62cdc69c58993f6cb2ae2e13))
+
 ## [0.18.26](https://github.com/tatolab/streamlib/compare/v0.18.25...v0.18.26) (2026-08-30)
 
 
