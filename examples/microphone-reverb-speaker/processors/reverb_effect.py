@@ -238,8 +238,12 @@ class ReverbEffect:
             wet = all_pass_filter.diffuse_one_window(wet)
 
         mixed = dry * self.dry_level + wet * self.wet_level
-        # The defaults sum below full scale by construction, so this catches a
-        # raised dial rather than the ordinary case.
+        # The defaults leave headroom for anything a microphone produces — a
+        # full-scale sine reaches 0.78 and full-scale noise 0.99 — but the wet
+        # path has no bound worth relying on: the four allpass stages have
+        # negative taps, so their gains multiply rather than cancel, and a
+        # full-scale square wave gets past 1.0. The clamp is what makes the
+        # sink's format the only thing that decides what a speaker is asked for.
         numpy.clip(mixed, -1.0, 1.0, out=mixed)
 
         # The tail rides later windows; these samples still cover the instants

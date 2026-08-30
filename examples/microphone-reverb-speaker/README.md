@@ -150,10 +150,13 @@ takes four 0..1 dials:
 | `wet_level` | 0.25 | how much of the tail you hear |
 | `dry_level` | 0.7 | how much of the original you hear |
 
-The two levels are set so the defaults cannot clip: the wet path's own gain
-peaks around 1.15×, so 0.7 + 0.25 × 1.15 = 0.99, just under full scale. Raise
-them and the clamp in `process()` is what stops a speaker from being asked for
-something it cannot play.
+The two levels leave headroom for anything a microphone realistically produces:
+at the defaults a full-scale sine comes out at 0.78 and full-scale noise at
+0.99, neither of them touching the clamp. The wet path has no useful analytic
+bound, though — the four allpass stages have negative taps, so their gains
+multiply instead of cancelling — and a full-scale 40 Hz square wave does get
+past 1.0. That is what the clamp in `process()` is for, along with a raised
+dial.
 
 `MicrophoneSource` and `SpeakerSink` each take a `device_id`; unset picks the
 default device, and one that *is* named and cannot be opened raises at `setup()`
