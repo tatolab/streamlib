@@ -258,6 +258,13 @@ SCAFFOLDED_EFFECT_MODULE_PATH = "processors/inverting_effect.py"
 SCAFFOLDED_EFFECT_CLASS_NAME = "InvertingEffect"
 SCAFFOLDED_EFFECT_MODULE_NAME = "processors.inverting_effect"
 
+# Carries a docstring rather than being empty: every other file `new` writes
+# explains itself, and this one is where a reader first meets the rule that
+# sends processor classes out of the entry file.
+SCAFFOLDED_PROCESSOR_PACKAGE_SOURCE = (
+    '"""One module per processor — each one a class a child interpreter imports."""\n'
+)
+
 
 def _scaffolded_app_entry_source(*, source_class_name: str) -> str:
     """The entry file: imports, wiring, and nothing else.
@@ -380,7 +387,7 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
         DEFAULT_APP_ENTRY_FILE_NAME: _scaffolded_app_entry_source(
             source_class_name=source_class_name
         ),
-        "processors/__init__.py": "",
+        "processors/__init__.py": SCAFFOLDED_PROCESSOR_PACKAGE_SOURCE,
         SCAFFOLDED_EFFECT_MODULE_PATH: _scaffolded_effect_module_source(),
         "pyproject.toml": _scaffolded_project_manifest(
             _python_distribution_name_for(target_directory.resolve().name)
