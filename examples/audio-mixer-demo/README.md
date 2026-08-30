@@ -43,6 +43,13 @@ Three further things it teaches:
 - **Every timestamp is the machine's monotonic clock.** Each voice stamps a
   block with its run anchor plus an integer sample offset, never an accumulated
   per-block delta — which is what keeps 44.1 kHz-family rates exact.
+- **The mixer joins on those timestamps, not on arrival order.** Each voice
+  starts when its own child interpreter does, so the three streams sit on grids
+  tens of milliseconds apart. `ChordMixer` discards any window more than half a
+  window behind the newest of the three, which is the block-level join the
+  monotonic clock exists for; pairing by arrival order instead would freeze the
+  startup skew in for the whole run and publish a timestamp two of the three
+  contributions never came from.
 
 Each of the four Python processors runs in its own child interpreter with its own
 GIL; `SpeakerSink` is a native built-in inside the wheel.
@@ -118,6 +125,10 @@ voices ran far enough apart that windows were dropped waiting to be mixed droppe
 
 It is a startup transient, not a leak: the count stops climbing once all three
 voices are live, so a longer run reports roughly the same handful as a short one.
+The same startup skew is why the mixer also reports a few `realigned_windows` —
+the windows it discarded to bring the three voices onto one instant. Both counts
+settle once the grids line up and stay put, because the voices then advance in
+lockstep.
 
 ## Runtime knobs
 

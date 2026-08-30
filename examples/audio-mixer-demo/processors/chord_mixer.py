@@ -8,6 +8,12 @@ resamples, mixes each voice down to mono and frames it before `process()` runs:
 what this class receives is three exactly-512-sample mono f32 windows, and
 mixing them is addition. There is no resampler, no ring buffer and no format
 negotiation in this file, because none of that is a user processor's job.
+
+What is this class's job is deciding *which* three windows belong together.
+Each voice starts when its own helper interpreter does, so the three streams
+sit on grids offset by tens of milliseconds; the windows are joined on
+`first_sample_timestamp_ns` — the block-level A/V-sync primitive — never on
+arrival order, which would freeze that startup skew in for the whole run.
 """
 
 import collections
@@ -50,6 +56,18 @@ MIXED_CHORD_OUTPUT_PORT = "mixed_chord_to_downstream"
 # clock ever need, and small enough that a stalled voice costs bounded memory.
 MAXIMUM_PENDING_WINDOWS_PER_VOICE = 8
 
+WINDOW_DURATION_NS = (
+    CHORD_MIX_WINDOW.window_size * 1_000_000_000 // CHORD_MIX_WINDOW.sample_rate
+)
+# How far apart three windows' first samples may sit and still be mixed as one
+# instant. The voices start when their helper interpreters do, so their stamps
+# sit on three grids offset by tens of milliseconds; pairing by arrival order
+# would freeze that skew in permanently and publish a stamp two of the three
+# contributions never came from. Half a window is the tightest the grids allow —
+# each voice advances by exactly one window, so no amount of discarding aligns
+# them closer than the residual between their anchors.
+ALIGNMENT_TOLERANCE_NS = WINDOW_DURATION_NS // 2
+
 
 @processor(description="Sums three voices into one chord")
 class ChordMixer:
@@ -62,6 +80,7 @@ class ChordMixer:
             for port_name in VOICE_INPUT_PORTS
         }
         self.dropped_window_count = 0
+        self.realigned_window_count = 0
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         # A reactive process() runs as soon as any one port has a full window,
@@ -73,6 +92,10 @@ class ChordMixer:
             self._hold(port_name, window)
 
         while all(self.pending_windows_by_port[port] for port in VOICE_INPUT_PORTS):
+            # Re-checked after every discard: dropping a lagging head can empty
+            # its voice, and the next window has to arrive before mixing again.
+            if self._discard_heads_lagging_the_newest():
+                continue
             self._publish_one_mixed_window(ctx)
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
@@ -81,6 +104,11 @@ class ChordMixer:
                 "voices ran far enough apart that windows were dropped waiting to be "
                 "mixed",
                 dropped_windows=self.dropped_window_count,
+            )
+        if self.realigned_window_count:
+            log.info(
+                "windows discarded to bring the voices onto one instant",
+                realigned_windows=self.realigned_window_count,
             )
 
     def _hold(self, port_name: str, window: AudioBlock) -> None:
@@ -94,6 +122,28 @@ class ChordMixer:
                     port=port_name,
                 )
         pending.append(window)
+
+    def _discard_heads_lagging_the_newest(self) -> bool:
+        """Drop any head more than half a window behind the newest one.
+
+        This is the join: three streams are mixed because their samples cover
+        the same instant, which is what `first_sample_timestamp_ns` is for —
+        not because they happened to arrive in the same order.
+        """
+        heads = {
+            port_name: self.pending_windows_by_port[port_name][0]
+            for port_name in VOICE_INPUT_PORTS
+        }
+        newest_ns = max(head.first_sample_timestamp_ns for head in heads.values())
+
+        discarded_any = False
+        for port_name, head in heads.items():
+            if newest_ns - head.first_sample_timestamp_ns <= ALIGNMENT_TOLERANCE_NS:
+                continue
+            self.pending_windows_by_port[port_name].popleft()
+            self.realigned_window_count += 1
+            discarded_any = True
+        return discarded_any
 
     def _publish_one_mixed_window(self, ctx: RuntimeContextLimitedAccess) -> None:
         windows = [
@@ -111,9 +161,12 @@ class ChordMixer:
         # what a raised gain can send to a speaker.
         numpy.clip(mixed, -1.0, 1.0, out=mixed)
 
-        # The root voice's stamp is the mixed window's: all three cover the same
-        # span of samples, and one of them has to name the instant.
-        first_sample_timestamp_ns = windows[0].first_sample_timestamp_ns
+        # The three agree to within half a window by the join above, and the
+        # mixed block names the latest of them — the instant by which every
+        # contribution has started.
+        first_sample_timestamp_ns = max(
+            window.first_sample_timestamp_ns for window in windows
+        )
         ctx.outputs.write(
             MIXED_CHORD_OUTPUT_PORT,
             {
