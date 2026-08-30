@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.26](https://github.com/tatolab/streamlib/compare/v0.18.25...v0.18.26) (2026-08-30)
+
+
+### Features
+
+* **examples:** convert microphone-reverb-speaker to the current authoring idiom ([#2068](https://github.com/tatolab/streamlib/issues/2068)) ([c0cd402](https://github.com/tatolab/streamlib/commit/c0cd4020c7edbff54496cc04ce727206b7b2adab))
+
 ## [0.18.25](https://github.com/tatolab/streamlib/compare/v0.18.24...v0.18.25) (2026-08-30)
 
 
