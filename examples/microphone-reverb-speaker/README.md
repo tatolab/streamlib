@@ -16,7 +16,12 @@ anybody states is the one the reverb wants:
 | --- | --- | --- |
 | Capture device | 48 kHz **stereo**, device-sized blocks | the machine |
 | `ReverbEffect`'s input port | 48 kHz **mono** f32, 128-sample windows | the declaration below |
-| Playback device | 48 kHz **stereo**, 480-sample periods | the machine |
+| `SpeakerSink`'s input port | 48 kHz **stereo**, 480-sample windows | the machine's rate, framed by the sink |
+
+The rate and channel count in the last row come off the playback stream;
+the 480 is `SpeakerSink`'s own 10 ms window, which is what it settles
+`match_device` to where the backend has not told it a period. Both numbers vary
+by machine, and neither appears in this app.
 
 ```python
 REVERB_WINDOW = AudioWindowContract(
@@ -30,12 +35,24 @@ def dry_audio_from_upstream(self) -> None: ...
 On the way in, the engine mixes the capture device's stereo down to mono and
 reframes it into exactly-128-sample windows. On the way out, `SpeakerSink`'s own
 input declares `match_device`, so the same stage duplicates the reverb's mono to
-stereo and reframes it into the device's 480-sample periods. Both conversions
-are engine stages that run before anyone's `process()` does. Run it and look:
+stereo and reframes it into 480-sample windows. Both conversions are engine
+stages that run before anyone's `process()` does.
 
-```
-"dry_audio_from_upstream": {"resolved_from": "declaration", "channels": 1, "window_size": 128}
-"audio":                   {"resolved_from": "device",      "channels": 2, "window_size": 480}
+`streamlib graph` reports each input port as an object carrying its
+`audio_window`, and the `resolved_from` field is where the two halves show up —
+`"declaration"` on the reverb's port, `"device"` on the speaker's:
+
+```json
+{
+  "name": "dry_audio_from_upstream", "delivery_profile": "ordered",
+  "audio_window": {"resolved_from": "declaration", "sample_rate": 48000,
+                   "channels": 1, "dtype": "f32", "window_size": 128, "hop": 128}
+}
+{
+  "name": "audio", "delivery_profile": "ordered",
+  "audio_window": {"resolved_from": "device", "sample_rate": 48000,
+                   "channels": 2, "dtype": "f32", "window_size": 480, "hop": 480}
+}
 ```
 
 That is the whole reason a delay-line algorithm can be a plain Python class
@@ -51,10 +68,12 @@ Three more things it teaches:
   by design, and a skipped block is a hole in a delay line.
 - **The window size is the latency dial** — 128 samples is 2.67 ms at 48 kHz,
   and it is the only number here you would expect to tune. It also has a real
-  ceiling: every delay line must be longer than one window, or a window feeds
-  back into itself inside a single vectorised pass. The shortest filter here is
-  245 samples, so that is the ceiling. `ReverbDelayLine` refuses rather than
-  quietly computing the wrong thing.
+  ceiling: every delay line must be at least one window long, or its ring
+  positions alias and the vectorised pass reads samples that should have fed
+  back inside the window. The shortest filter here is 245 samples, so that is
+  the ceiling. `ReverbDelayLine` refuses rather than quietly computing the
+  wrong thing — which is the failure mode that matters, because aliasing
+  produces plausible audio rather than an error.
 - **The engine flushes rather than interpolating.** If a block is lost, the
   windowing stage drops what it was accumulating and re-anchors on the next
   device stamp instead of blending audio across the gap. The reverb's own delay
@@ -120,11 +139,13 @@ streamlib tap "$CHANNEL" --count 20
 
 Unlike a video bag, an audio bag carries its payload: `samples` is the block's
 interleaved little-endian bytes, with `sample_rate`, `channels`, `sample_count`,
-`dtype` and `first_sample_timestamp_ns` beside them. Every bag off this port is
-512 bytes — 128 mono `f32` samples — and consecutive stamps are one window
-apart: 2 666 666 or 2 666 667 ns, alternating, because 128/48 000 s is not a
-whole number of nanoseconds and the stamps are derived in integer arithmetic
-from one anchor rather than accumulated a rounded delta at a time.
+`dtype` and `first_sample_timestamp_ns` beside them. The payload off this port
+is always 512 bytes — 128 mono `f32` samples — and consecutive stamps are one
+window apart: 2 666 666, 2 666 667, 2 666 667, repeating, and summing to
+exactly 8 000 000 ns every three windows. 128/48 000 s is not a whole number of
+nanoseconds, so a stamp that accumulated a rounded delta would drift; each one
+is instead derived from a single anchor in integer arithmetic, which is what
+makes the cycle exact rather than approximately right.
 
 ### Recording the loop instead of shouting at it
 
@@ -150,13 +171,18 @@ takes four 0..1 dials:
 | `wet_level` | 0.25 | how much of the tail you hear |
 | `dry_level` | 0.7 | how much of the original you hear |
 
-The two levels leave headroom for anything a microphone realistically produces:
-at the defaults a full-scale sine comes out at 0.78 and full-scale noise at
-0.99, neither of them touching the clamp. The wet path has no useful analytic
-bound, though — the four allpass stages have negative taps, so their gains
-multiply instead of cancelling — and a full-scale 40 Hz square wave does get
-past 1.0. That is what the clamp in `process()` is for, along with a raised
-dial.
+The two levels leave headroom for most of what a microphone produces — a
+full-scale sine measures 0.64 at 440 Hz, 0.78 at 1 kHz and 0.69 at 8 kHz, none
+of them touching the clamp — but there is no bound here worth relying on. The
+wet path peaks near **2.5× at 5 766 Hz**, where the eight combs' resonances
+line up and the four diffuser stages (which are not allpass, whatever Freeverb
+calls them) multiply on top. The resonance is razor-thin — 5 760 Hz and
+5 770 Hz both come out under 0.6 — but a full-scale sine sitting on it clamps
+41% of its samples, and a full-scale 40 Hz square wave clamps 30%.
+
+That is worth more than a footnote given the warning at the top of this file:
+acoustic feedback locks onto whichever frequency the loop has the most gain at,
+which is precisely that 5.77 kHz peak. Headphones.
 
 `MicrophoneSource` and `SpeakerSink` each take a `device_id`; unset picks the
 default device, and one that *is* named and cannot be opened raises at `setup()`

@@ -38,20 +38,21 @@ REVERB_WINDOW = AudioWindowContract(
     window_size=128,
 )
 
-# Schroeder's parallel-comb / series-allpass topology with Moorer's damped
-# feedback, at the delay lengths Freeverb published. They are irregularly
-# spaced on purpose: rounding them to a convenient common multiple — of the
-# window size, say — lands their echoes on the same instants and rings audibly.
-# So they are scaled to the contract's rate and then used wherever they land.
+# Schroeder's parallel-comb / series-diffuser topology at the delay lengths
+# Freeverb published. They are irregularly spaced on purpose: rounding them to
+# a convenient common multiple — of the window size, say — lands their echoes
+# on the same instants and rings audibly. So they are scaled to the contract's
+# rate and then used wherever they land.
 FREEVERB_REFERENCE_SAMPLE_RATE_HZ = 44_100
 COMB_DELAYS_AT_THE_REFERENCE_RATE = (1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617)
-ALL_PASS_DELAYS_AT_THE_REFERENCE_RATE = (556, 441, 341, 225)
-ALL_PASS_FEEDBACK = 0.5
+DIFFUSER_DELAYS_AT_THE_REFERENCE_RATE = (556, 441, 341, 225)
+DIFFUSER_FEEDBACK = 0.5
 
-# The combs are eight resonators in parallel, each with a steady-state gain of
-# 1/(1 - feedback); at the default room size that is a wet path around 1.15×.
-# The input is attenuated this far going in so the tail comes back at roughly
-# unity rather than eighty times what was said into the microphone.
+# Freeverb's input attenuation, kept as published. It is not a headroom
+# guarantee: the eight combs each reach 1/(1 - feedback) at their own
+# resonances, and the diffuser chain multiplies on top of that, so the wet
+# path peaks near 2.5x around 5.77 kHz where the comb resonances align. What
+# the clamp in `process()` is for.
 GAIN_INTO_THE_COMB_BANK = 0.015
 
 # `room_size` and `damping` are 0..1 dials; these map them onto the ranges the
@@ -73,24 +74,26 @@ def _delay_length_at_the_contracts_rate(delay_at_the_reference_rate: int) -> int
 class ReverbDelayLine:
     """A ring of past samples, read and written one whole window at a time.
 
-    The delay must be longer than the window, and that is a correctness
-    condition rather than a preference: the samples this window reads were
-    written a delay ago, and the ones it writes are read a delay from now, so
-    no sample inside a window feeds back into itself and the whole window can
-    be computed in one vectorised pass. Shorten the delay past the window and
-    that stops being true — the pass would read positions it had already
-    overwritten in the same call and produce a plausible-looking wrong answer
-    rather than fail. The shortest delay here is 245 samples, which is the real
-    ceiling on `REVERB_WINDOW.window_size`.
+    The delay must be at least one window, and that is a correctness condition
+    rather than a preference. A window's positions are
+    `(index + arange(window)) % delay`: while the delay is at least a window
+    those are all distinct, so the samples read were written a delay ago and
+    the ones written are read a delay from now, and the whole window computes
+    in one vectorised pass. Below that the positions alias — the same slot
+    appears twice — and the pass silently returns stale values where a sample
+    should have fed back inside the window, with the scatter behind it going
+    last-wins. It produces a plausible-looking wrong answer rather than
+    failing, which is why this refuses. The shortest delay here is 245 samples,
+    which is the real ceiling on `REVERB_WINDOW.window_size`.
     """
 
     def __init__(self, delay_in_samples: int, window_size: int) -> None:
-        if delay_in_samples <= window_size:
+        if delay_in_samples < window_size:
             raise ValueError(
                 f"ReverbDelayLine was given a {delay_in_samples}-sample delay for a "
-                f"{window_size}-sample window — a delay must be strictly longer than "
-                f"one window, or the window feeds back into itself within a single "
-                f"vectorised pass"
+                f"{window_size}-sample window — a delay must be at least one window, "
+                f"or the window's ring positions alias and the vectorised pass reads "
+                f"samples that should have fed back inside it"
             )
         self.past_samples = numpy.zeros(delay_in_samples, dtype=numpy.float32)
         # Precomputed once: the modulo below runs on every window of every
@@ -117,6 +120,13 @@ class ReverbCombFilter:
     through a one-zero lowpass. The lowpass is the damping: each pass around
     the loop loses a little more of the top end, so a bright room and a dull
     one differ by one coefficient rather than by a second filter bank.
+
+    Freeverb damps with a one-*pole* filter instead. This is a deliberate
+    departure: a pole is a per-sample recursion on the filter's own output, and
+    a window of those cannot be computed without stepping sample by sample —
+    which is the whole vectorisation gone. A one-zero lowpass reads only the
+    delayed signal, which is already known for the entire window, and has the
+    same unity DC gain, so the room still gets duller as the tail decays.
     """
 
     def __init__(self, delay_in_samples: int, window_size: int) -> None:
@@ -148,12 +158,20 @@ class ReverbCombFilter:
         return delayed
 
 
-class ReverbAllPassFilter:
+class ReverbDiffuserFilter:
     """One of the four series stages that smear the comb bank's echoes.
 
-    Its magnitude response is flat — it colours nothing and adds no energy. All
-    it does is disperse the echoes in time, which is the difference between a
-    reverb and four flutter echoes.
+    Freeverb calls this its allpass and it is not one. A true allpass would be
+    `(z^-N - g) / (1 - g·z^-N)`; this structure is
+    `((1+g)·z^-N - 1) / (1 - g·z^-N)`, which is unity only at DC and rises to
+    `(2+g)/(1+g)` — 1.67 at the feedback used here — toward Nyquist. Four of
+    them in series peak near 7.7. That is worth knowing rather than inheriting
+    the name's promise: it is where the wet path's headroom actually goes, and
+    why `process()` clamps.
+
+    What the stage is for is real regardless: dispersing the comb bank's
+    echoes in time, which is the difference between a reverb and four flutter
+    echoes.
     """
 
     def __init__(self, delay_in_samples: int, window_size: int) -> None:
@@ -162,7 +180,7 @@ class ReverbAllPassFilter:
     def diffuse_one_window(self, window: "numpy.ndarray") -> "numpy.ndarray":
         positions = self.delay_line.positions_of_the_next_window()
         delayed = self.delay_line.past_samples[positions]
-        self.delay_line.past_samples[positions] = window + delayed * ALL_PASS_FEEDBACK
+        self.delay_line.past_samples[positions] = window + delayed * DIFFUSER_FEEDBACK
         self.delay_line.advance_one_window()
         return delayed - window
 
@@ -203,11 +221,11 @@ class ReverbEffect:
             )
             for delay in COMB_DELAYS_AT_THE_REFERENCE_RATE
         ]
-        self.all_pass_filters = [
-            ReverbAllPassFilter(
+        self.diffuser_filters = [
+            ReverbDiffuserFilter(
                 _delay_length_at_the_contracts_rate(delay), REVERB_WINDOW.window_size
             )
-            for delay in ALL_PASS_DELAYS_AT_THE_REFERENCE_RATE
+            for delay in DIFFUSER_DELAYS_AT_THE_REFERENCE_RATE
         ]
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -234,16 +252,15 @@ class ReverbEffect:
             wet += comb_filter.add_one_window_to_the_tail(
                 into_the_comb_bank, self.comb_feedback, self.damping_coefficient
             )
-        for all_pass_filter in self.all_pass_filters:
-            wet = all_pass_filter.diffuse_one_window(wet)
+        for diffuser_filter in self.diffuser_filters:
+            wet = diffuser_filter.diffuse_one_window(wet)
 
         mixed = dry * self.dry_level + wet * self.wet_level
-        # The defaults leave headroom for anything a microphone produces — a
-        # full-scale sine reaches 0.78 and full-scale noise 0.99 — but the wet
-        # path has no bound worth relying on: the four allpass stages have
-        # negative taps, so their gains multiply rather than cancel, and a
-        # full-scale square wave gets past 1.0. The clamp is what makes the
-        # sink's format the only thing that decides what a speaker is asked for.
+        # Not a formality. The wet path peaks near 2.5x at 5766 Hz, where the
+        # comb resonances align and the diffuser chain multiplies on top, so a
+        # full-scale sine sitting on that peak clamps 41% of its samples. Most
+        # input stays well under it — 0.78 for a 1 kHz full-scale sine — which
+        # is exactly why the peak is worth clamping rather than trusting.
         numpy.clip(mixed, -1.0, 1.0, out=mixed)
 
         # The tail rides later windows; these samples still cover the instants
