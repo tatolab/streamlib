@@ -45,7 +45,7 @@ class AudioWindowMatchDeviceSentinel:
 
 AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
 """The engine-side spelling for a contract resolved at `setup()` from a device
-stream — reachable here only so [`input`] can refuse it by name.
+stream — reachable here only so [`input`] can recognise and refuse it.
 
 It is on no public surface: a native built-in like `SpeakerSink` declares it in
 Rust, where a processor opens the device stream that settles it. A Python

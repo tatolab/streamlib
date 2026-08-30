@@ -14,7 +14,7 @@ import pytest
 import streamlib
 from streamlib import AudioWindowContract, input, output, processor
 
-# Not `from streamlib import ...`: the sentinel left the package root, and
+# Not `from streamlib import ...`: the sentinel is on no public surface, so
 # reaching the private module for it is what an author would have to do to
 # reach the refusal below at all.
 from streamlib._processor_declaration import AUDIO_WINDOW_MATCH_DEVICE
@@ -489,14 +489,17 @@ def test_an_audio_window_that_is_not_a_contract_is_refused():
 
 
 def test_an_output_port_takes_no_window_contract():
-    """A producer publishes what it has; only a consumer states what it needs."""
+    """A producer publishes what it has; only a consumer states what it needs.
+
+    The contract handed over is a valid one, so what the refusal rejects is
+    unambiguously the keyword and not the value behind it.
+    """
+    contract = AudioWindowContract(
+        sample_rate=16_000, channels=1, dtype="f32", window_size=512
+    )
+
     with pytest.raises(TypeError):
-        output(  # type: ignore[call-arg]
-            "audio_out",
-            audio_window=AudioWindowContract(
-                sample_rate=16_000, channels=1, dtype="f32", window_size=512
-            ),
-        )
+        output("audio_out", audio_window=contract)  # type: ignore[call-arg]
 
 
 def test_a_contract_is_frozen_after_declaration():

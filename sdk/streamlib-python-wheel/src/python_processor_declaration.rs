@@ -556,17 +556,22 @@ class AudioConsumer:
         )
     }
 
-    /// The message a hand-built marker's refusal hands a user.
-    fn hand_built_marker_refusal(audio_window_fields: &str) -> String {
+    /// Read a hand-built marker through the bridge the engine uses at `rt.add`.
+    fn read_hand_built_marker(audio_window_fields: &str) -> PyResult<PythonProcessorDeclaration> {
         Python::initialize();
         Python::attach(|python| {
             let source = hand_built_marker_source(audio_window_fields);
             let declared_class = class_from_source(python, &source, "AudioConsumer");
-            match PythonProcessorDeclaration::read_from_class(&declared_class) {
-                Ok(_) => panic!("the marker was accepted; a refusal was expected"),
-                Err(refusal) => refusal.to_string(),
-            }
+            PythonProcessorDeclaration::read_from_class(&declared_class)
         })
+    }
+
+    /// The message a hand-built marker's refusal hands a user.
+    fn hand_built_marker_refusal(audio_window_fields: &str) -> String {
+        match read_hand_built_marker(audio_window_fields) {
+            Ok(_) => panic!("the marker was accepted; a refusal was expected"),
+            Err(refusal) => refusal.to_string(),
+        }
     }
 
     /// The decorator refuses the sentinel; this bridge does not, and must not.
@@ -575,18 +580,14 @@ class AudioConsumer:
     /// placement, as nothing here does — is the guard that speaks.
     #[test]
     fn a_hand_built_match_device_marker_still_reaches_the_bridge() {
-        Python::initialize();
-        Python::attach(|python| {
-            let source = hand_built_marker_source("'resolved_from': 'match_device'");
-            let declared_class = class_from_source(python, &source, "AudioConsumer");
-            let declaration = PythonProcessorDeclaration::read_from_class(&declared_class)
-                .expect("the bridge reads a hand-built sentinel");
+        let declaration = read_hand_built_marker("'resolved_from': 'match_device'")
+            .expect("the bridge reads a hand-built sentinel");
 
-            assert_eq!(
-                declaration.descriptor.inputs[0].audio_window,
-                Some(AudioWindowContract::MatchDevice {})
-            );
-        });
+        assert_eq!(declaration.descriptor.inputs.len(), 1);
+        assert_eq!(
+            declaration.descriptor.inputs[0].audio_window,
+            Some(AudioWindowContract::MatchDevice {})
+        );
     }
 
     /// A marker built by something other than the decorator still meets the
