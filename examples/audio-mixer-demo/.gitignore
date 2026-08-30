@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.py[cod]
+.streamlib/
+# Resolved per machine rather than pinned: an example should track the release
+# its engine is on, not the one it was written against.
+uv.lock
