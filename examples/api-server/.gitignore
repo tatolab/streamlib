@@ -1,5 +1,0 @@
-# Rust build artifacts
-/target/
-
-# The probe has no external deps, but a lockfile is still generated locally.
-Cargo.lock
