@@ -121,10 +121,11 @@ uv pip install maturin
 maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 ```
 
-Unlike the audio examples, this one needs real hardware on both ends: the
-kernel runs on the engine's Vulkan device and `cupy-cuda13x` wants a CUDA
-runtime, so a machine with no GPU fails at `setup()` rather than showing an
-empty window.
+This app needs real hardware, and says so rather than pretending: the kernel
+runs on the engine's own Vulkan device and `cupy-cuda13x` wants a CUDA runtime,
+so a machine with neither fails while the graph is starting. There is no
+demotion path here of the kind the audio backends have — a null GPU would have
+no pixels to hand back.
 
 ## Editing it
 
@@ -147,10 +148,14 @@ Two edits worth making on purpose, because each fails in an instructive way:
 From another terminal with this venv activated, while it runs:
 
 ```bash
-streamlib nodes           # the live nodes on this machine
-streamlib graph           # processors, ports, links and per-link drop counts
-streamlib logs --follow   # the node's JSONL log
+streamlib nodes                       # the live nodes on this machine
+streamlib graph                       # processors, ports, links and per-link drop counts
+streamlib logs --list                 # the runtimes that have a log file
+streamlib logs <RUNTIME_ID> --follow  # tail one of them, like `tail -F`
 ```
+
+`logs` takes the runtime id, not a node — it reads the file on disk, and the
+ids `--list` prints are what `nodes` calls `runtime_id`.
 
 To see what the kernel actually wrote rather than what the window shows, tap
 its output channel and exchange the surface ids for PNGs. The channel name is
