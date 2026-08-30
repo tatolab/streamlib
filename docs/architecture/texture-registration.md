@@ -484,15 +484,15 @@ When a new field lands on `TextureRegistration`:
   `GpuContext::register_texture_with_layout` /
   `GpuContext::resolve_texture_registration_by_surface_id` in
   `runtime/streamlib-engine/src/core/context/gpu_context.rs`.
-- **First consumer**: `LinuxDisplayProcessor::render_frame` in
-  `packages/display/processors/display_linux.rs`.
+- **In-process consumer**: `ProcessorOwnedWindow::show_named_surface` in
+  `runtime/streamlib-engine/src/core/processor_owned_window.rs`, the path
+  the `DisplayWindow` built-in presents through.
 - **First adapter-output producer**: `register_render_target_surface` in
   the pre-pivot `camera-python-display` example, which is retired — host-side
   surface pre-registration went with it, and a Python processor now acquires
   its own textures.
-- **First in-tree producer**: `LinuxCameraProcessor` in the
-  `streamlib-camera` package —
-  `packages/camera/processors/camera_linux.rs`.
+- **In-tree producer**: the `CameraSource` built-in in
+  `runtime/streamlib-media-builtins/src/camera_source.rs`.
 - **Adapter-scope sibling**: `SurfaceState` in
   `adapters/streamlib-adapter-vulkan/src/state.rs` (and the same-shape
   opengl + cuda + cpu-readback adapter state structs). These are at

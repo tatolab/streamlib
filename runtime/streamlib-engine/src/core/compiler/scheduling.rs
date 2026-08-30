@@ -100,9 +100,4 @@ mod tests {
             }
         }
     }
-
-    // The macro → manifest → registry smoke test previously locked here
-    // for `LinuxDisplayProcessor` moved with the display processor into
-    // `@tatolab/display` (#674). Other macro-roundtrip locks live in
-    // `streamlib-macros` and the per-processor packages' own test trees.
 }

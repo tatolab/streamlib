@@ -12,11 +12,6 @@
 //! a YUV camera frame goes through the converter (NV12 → sRGB RGBA),
 //! and an HDR PQ frame goes through the tone mapper (PQ → sRGB RGBA
 //! with BT.2390 EETF).
-//!
-//! Consumers (the display, encoders targeting cross-color-space output)
-//! hold an `Arc<RhiToneMapper>` as a struct field — same shape as
-//! `LinuxCameraProcessor` holds `Arc<RhiColorConverter>` per
-//! `packages/camera/processors/camera_linux.rs`.
 
 use crate::core::color::TransferId;
 
@@ -137,7 +132,7 @@ pub struct ToneMapperFinalTextureLayouts {
 /// kernel is allocated lazily on first dispatch, so construction is
 /// effectively free — consumers can hold their own instance as a
 /// struct field without worrying about pre-warm cost. Mirrors the
-/// shape `LinuxCameraProcessor` uses for `RhiColorConverter` (held in
+/// shape `CameraSource` uses for `RhiColorConverter` (held in
 /// `CameraGpuResources` and dispatched per-frame).
 ///
 /// No engine-side shared cache: there's no per-`(src,dst)` keying to

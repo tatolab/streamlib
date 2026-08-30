@@ -42,7 +42,6 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
-  <!-- verify: cargo test -p streamlib example_dir_has_no_ceremony_files -->
 
 ## Packages & extension model — IN-FLIGHT
 

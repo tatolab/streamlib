@@ -41,10 +41,10 @@ use std::path::{Path, PathBuf};
 ///
 /// `packages/test-fixtures` is in because it is engine-side test infrastructure
 /// compiled into the engine's own runs, not a consumer. The rest of `packages/`
-/// and all of `examples/` are downstream consumers that lag the engine by
-/// design. `packages/escalate` and `packages/core` are engine-side too but hold
-/// schemas only — no source this gate reads, and a root that contributes no
-/// files fails [`ensure_every_arm_read_source`].
+/// and all of `examples/` are downstream consumers, dispositioned by
+/// `docs/plan/ARCHITECTURE.md` §Consumers and never gated here. A root that
+/// contributes no files fails [`ensure_every_arm_read_source`], so a tree
+/// holding nothing this gate reads cannot be listed either.
 const SCAN_ROOTS: &[&str] = &[
     "runtime",
     "sdk",

@@ -58,5 +58,6 @@ impl<'de> serde::Deserialize<'de> for EmptyConfig {
     }
 }
 
-// Audio processors (capture, output, mixer, channel converter, resampler,
-// buffer rechunker, chord generator) live in `@tatolab/audio` (#672).
+// Audio processors are not here: capture and playback ship as engine
+// built-ins in `streamlib-media-builtins` (`microphone_source.rs`,
+// `speaker_sink.rs`).

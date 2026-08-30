@@ -54,7 +54,6 @@ pre-push:
     # 4. Example builds - ensure examples still compile
     test-examples:
       run: |
-        cargo build -p api-server
         cargo build -p tokio-integration
 
 # Skip hooks with LEFTHOOK=0 environment variable
