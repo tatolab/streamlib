@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.23](https://github.com/tatolab/streamlib/compare/v0.18.22...v0.18.23) (2026-08-30)
+
+
+### Bug Fixes
+
+* **engine:** an unsettled match_device port's evictions name the unsettled contract ([#2048](https://github.com/tatolab/streamlib/issues/2048)) ([0f1eda3](https://github.com/tatolab/streamlib/commit/0f1eda3a8c51b753f431ceb4aa66552f3aea34dd))
+
 ## [0.18.22](https://github.com/tatolab/streamlib/compare/v0.18.21...v0.18.22) (2026-08-30)
 
 
