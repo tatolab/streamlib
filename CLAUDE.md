@@ -87,22 +87,24 @@ framework repo first, holohub/examples follow releases). Architecture lives in O
 `docs/plan/ARCHITECTURE.md` plus `docs/plan/architecture.excalidraw` — agreed with the owner
 before implementation. Sessions implement the plan; they never make architecture.
 
-- `examples/` and the consumer entries in `packages/` (everything except `escalate`, `core`,
-  `test-fixtures`) are downstream consumers, **not contract sources**. Never read them to infer
-  what the engine guarantees; never edit them to make an engine change pass; never bend a runtime
-  design to fit their existing patterns. Contracts are stated in the engine and proven by engine
-  tests and fixtures.
-- An engine change that breaks a package or example is **expected, not a defect** —
-  it is upgrade backlog for a later consumer-upgrade session run inside that consumer, not work
-  for this session. Do not file tickets for it.
+- `examples/` and the consumer entries in `packages/` (everything except `test-fixtures`) are
+  downstream consumers, **not contract sources** — converted or not. Never read one to infer what
+  the engine guarantees; never bend a runtime design to fit their existing patterns. Contracts
+  are stated in the engine and proven by engine tests and fixtures. Disposition per directory is
+  decided in `docs/plan/ARCHITECTURE.md` §Consumers.
+- **A converted consumer** — current-idiom shape: a scaffolded app (`app.py` + `pyproject.toml`)
+  or an ordinary Python package — **is the model of the current authoring idiom and ordinary
+  editable work.** An engine change that breaks one files tracked backlog at that consumer and
+  never blocks the engine change; fixing it in-stream is reserved for the rare case where the
+  consumer is the deliberate canary of the in-flight work.
 - File an issue only when something blocks the current milestone. Non-blocking findings go in the
   PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
-- They are the pre-pivot tree, **not a model for new code**. Each is written against the
-  deleted identity grammar, the deleted schema layer, `streamlib.yaml` manifests and the
-  package-as-distributable shape the wheel replaced — so reading one to learn how a processor
-  is declared teaches the model we removed. Their *logic* still holds (how a codec was wired to
-  the RHI, what a capture path must handle); read for that, never for form. Editing stays
-  deny-ruled.
+- **A held pre-pivot consumer** (`Cargo.toml` + `setup.sh` shape) keeps the old treatment:
+  written against deleted machinery — the identity grammar, the schema layer, `streamlib.yaml`
+  manifests, the package-as-distributable shape — so read it for *logic* only (how a codec was
+  wired to the RHI, what a capture path must handle), never for form; breakage is expected, not
+  a defect, and gets no ticket. It converts or deletes only through §Consumers' rules, never in
+  passing.
 
 Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
 from code at need — do not create summary docs of what code already shows.
@@ -115,8 +117,9 @@ from code at need — do not create summary docs of what code already shows.
 - New Rust files carry the BUSL header. Never touch `vendor/tatolab-vulkanalia*` or license files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
-  surfaced them. Pattern migrations cover the engine tree only — `packages/` and `examples/`
-  lag by design.
+  surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
+  migration's scope; a broken *converted* consumer gets backlog filed, a held pre-pivot one
+  just lags.
 - Architecture is decided in `docs/plan/`, never per-ticket. A missing decision stops work and
   goes to the owner; it is never inferred from existing code.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
