@@ -302,10 +302,9 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // into the engine; it sits above `vulkan/rhi/` and migrates toward
     // engine-RHI-only Vulkan access as the RHI grows codec primitives.
     //
-    // Display processor lives in `@tatolab/display` (#674) — the carve-out
-    // rewrote it on `streamlib::sdk::engine::host_rhi::VulkanPresentTarget`,
-    // retiring the prior CLAUDE.md exception for raw vulkanalia in the
-    // engine's `linux/processors/display.rs`. No allowlist entry needed.
+    // The display built-in (`streamlib-media-builtins/src/display_window.rs`)
+    // presents through `ProcessorOwnedWindow` and the RHI, never raw
+    // vulkanalia. No allowlist entry needed.
     //
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
