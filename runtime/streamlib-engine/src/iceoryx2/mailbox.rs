@@ -20,6 +20,15 @@ use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
 /// installs one; a port without one pays nothing.
 pub type PortMailboxQueuedFrameMeasure = Arc<dyn Fn(&[u8]) -> u64 + Send + Sync>;
 
+/// A notice a port may install to explain a loss the per-link count cannot.
+///
+/// Signalled once per evicted frame — it is handed nothing, because the count
+/// already names the link — and it runs at the eviction site, under whatever
+/// lock the pushing caller holds, so a notice does cheap work or defers it.
+/// How often it actually speaks is its own business. A port without one pays
+/// nothing.
+pub type PortMailboxEvictionNotice = Arc<dyn Fn() + Send + Sync>;
+
 /// One queued frame and the inbound link it arrived on.
 ///
 /// The tag rides the entry rather than the port so a port fanning in N links
@@ -54,24 +63,40 @@ pub struct PortMailbox {
     capacity: usize,
     measure: Option<PortMailboxQueuedFrameMeasure>,
     queued_frame_measure_total: AtomicU64,
+    eviction_notice: Option<PortMailboxEvictionNotice>,
 }
 
 impl PortMailbox {
     /// Create a new mailbox with the given history depth.
     pub fn new(history: usize) -> Self {
-        Self::new_measuring(history, None)
-    }
-
-    /// Create a new mailbox that keeps a running total of `measure` over every
-    /// frame it holds, so its port can read what is queued without popping it.
-    pub fn new_measuring(history: usize, measure: Option<PortMailboxQueuedFrameMeasure>) -> Self {
         let capacity = history.max(1);
         Self {
             queue: ArrayQueue::new(capacity),
             capacity,
-            measure,
+            measure: None,
             queued_frame_measure_total: AtomicU64::new(0),
+            eviction_notice: None,
         }
+    }
+
+    /// Keep a running total of `measure` over every frame held, so this
+    /// mailbox's port can read what is queued without popping it.
+    #[must_use]
+    pub fn measuring_every_queued_frame_with(
+        mut self,
+        measure: PortMailboxQueuedFrameMeasure,
+    ) -> Self {
+        self.measure = Some(measure);
+        self
+    }
+
+    /// Signal `notice` once for every bag evicted, so a port whose loss has a
+    /// reason states it rather than leaving a reader to infer one from the
+    /// count alone.
+    #[must_use]
+    pub fn reporting_every_eviction_to(mut self, notice: PortMailboxEvictionNotice) -> Self {
+        self.eviction_notice = Some(notice);
+        self
     }
 
     /// The installed measure summed over every frame currently queued; zero on
@@ -149,6 +174,9 @@ impl PortMailbox {
                     if let Some(evicted) = self.queue.pop() {
                         self.take_out_of_the_total(&evicted);
                         evicted.record_eviction();
+                        if let Some(notice) = &self.eviction_notice {
+                            notice();
+                        }
                     }
                 }
             }
@@ -320,10 +348,10 @@ mod tests {
             "a mailbox with no measure totals nothing"
         );
 
-        let replacement = PortMailbox::new_measuring(
-            4,
-            Some(Arc::new(|payload: &[u8]| payload.len() as u64 * 10)),
-        );
+        let replacement =
+            PortMailbox::new(4).measuring_every_queued_frame_with(Arc::new(|payload: &[u8]| {
+                payload.len() as u64 * 10
+            }));
         settling.hand_every_queued_frame_over_to(&replacement);
 
         assert_eq!(
@@ -367,6 +395,43 @@ mod tests {
             counter.dropped_bag_count(),
             0,
             "the `newest` read policy passing over bags is the profile working, never loss"
+        );
+    }
+
+    /// The mailbox's whole part in explaining a loss: it says nothing itself,
+    /// it signals the port's notice once for each bag it evicts, and never for
+    /// one it had room for.
+    #[test]
+    fn an_installed_notice_is_signalled_for_every_evicted_bag_and_never_with_room() {
+        let counts = DroppedBagCountsByInboundLink::default();
+        let counter = counts.counter_for_inbound_link("L-noticed");
+        let evictions_heard = Arc::new(AtomicU64::new(0));
+        let heard_by_the_notice = Arc::clone(&evictions_heard);
+        let mailbox = PortMailbox::new(2).reporting_every_eviction_to(Arc::new(move || {
+            heard_by_the_notice.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        for byte in 0..2u8 {
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+        }
+        assert_eq!(
+            evictions_heard.load(Ordering::Relaxed),
+            0,
+            "a mailbox with room evicts nothing, so there is nothing to explain"
+        );
+
+        for byte in 2..6u8 {
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+        }
+        assert_eq!(
+            counter.dropped_bag_count(),
+            4,
+            "four bags past a depth of two are four evictions"
+        );
+        assert_eq!(
+            evictions_heard.load(Ordering::Relaxed),
+            counter.dropped_bag_count(),
+            "the notice must hear exactly the bags the inbound link was charged for"
         );
     }
 
