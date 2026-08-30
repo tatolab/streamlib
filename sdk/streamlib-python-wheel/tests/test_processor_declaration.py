@@ -11,13 +11,14 @@ import dataclasses
 
 import pytest
 
-from streamlib import (
-    AUDIO_WINDOW_MATCH_DEVICE,
-    AudioWindowContract,
-    input,
-    output,
-    processor,
-)
+import streamlib
+from streamlib import AudioWindowContract, input, output, processor
+
+# Not `from streamlib import ...`: the sentinel is on no public surface, so
+# reaching the private module for it is what an author would have to do to
+# reach the refusal below at all.
+from streamlib import _processor_declaration
+from streamlib._processor_declaration import AUDIO_WINDOW_MATCH_DEVICE
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
@@ -340,15 +341,44 @@ def test_an_audio_input_declares_its_window_contract():
     ]
 
 
-def test_the_sentinel_is_a_whole_contract_carrying_no_values():
-    @processor(execution="manual")
-    class Speaker:
-        @input("audio", delivery_profile="ordered", audio_window=AUDIO_WINDOW_MATCH_DEVICE)
-        def audio_from_upstream(self) -> None: ...
+@pytest.mark.parametrize("delivery_profile", ["ordered", "newest"])
+def test_the_device_matching_sentinel_is_refused_at_decoration(delivery_profile: str):
+    """No Python processor can resolve it, so the line that writes it never takes.
 
-    assert Speaker.__streamlib_processor_input_ports__[0]["audio_window"] == {
-        "resolved_from": "match_device"
-    }
+    Under either delivery profile: the sentinel is refused for what it is, not
+    for the company it keeps, so the profile refusal never gets to speak first
+    and send an author to fix the wrong knob.
+    """
+    with pytest.raises(TypeError) as refusal:
+
+        @processor(execution="manual")
+        class Speaker:
+            @input(
+                "audio",
+                delivery_profile=delivery_profile,
+                audio_window=AUDIO_WINDOW_MATCH_DEVICE,  # type: ignore[arg-type]
+            )
+            def audio_from_upstream(self) -> None: ...
+
+    message = str(refusal.value)
+    assert "audio" in message, message
+    assert "AUDIO_WINDOW_MATCH_DEVICE" in message, message
+    assert "helper" in message, message
+    assert "setup()" in message, message
+    assert "AudioWindowContract" in message, message
+
+
+def test_the_device_matching_sentinel_is_on_no_public_surface():
+    """The refusal above is the second guard; not being reachable is the first.
+
+    The declaring module's own list counts: it is what a `import *` would take,
+    so a name restored there is back on the surface whatever the package root
+    re-exports.
+    """
+    for name in ("AUDIO_WINDOW_MATCH_DEVICE", "AudioWindowMatchDeviceSentinel"):
+        assert name not in streamlib.__all__, name
+        assert not hasattr(streamlib, name), name
+        assert name not in _processor_declaration.__all__, name
 
 
 def test_a_port_declaring_no_contract_carries_no_audio_window_key():
@@ -456,19 +486,7 @@ def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_kn
     assert "audio_window" in message and "newest" in message and "ordered" in message
 
 
-def test_the_sentinel_beside_a_skipping_delivery_profile_is_refused_too():
-    """The sentinel is a contract too, so it takes the same refusal."""
-    with pytest.raises(ValueError, match="ordered"):
-
-        @processor(execution="manual")
-        class Skipping:
-            @input(
-                "audio", delivery_profile="newest", audio_window=AUDIO_WINDOW_MATCH_DEVICE
-            )
-            def audio_from_upstream(self) -> None: ...
-
-
-def test_an_audio_window_that_is_neither_a_contract_nor_the_sentinel_is_refused():
+def test_an_audio_window_that_is_not_a_contract_is_refused():
     with pytest.raises(TypeError, match="AudioWindowContract"):
 
         @processor
@@ -478,9 +496,17 @@ def test_an_audio_window_that_is_neither_a_contract_nor_the_sentinel_is_refused(
 
 
 def test_an_output_port_takes_no_window_contract():
-    """A producer publishes what it has; only a consumer states what it needs."""
+    """A producer publishes what it has; only a consumer states what it needs.
+
+    The contract handed over is a valid one, so what the refusal rejects is
+    unambiguously the keyword and not the value behind it.
+    """
+    contract = AudioWindowContract(
+        sample_rate=16_000, channels=1, dtype="f32", window_size=512
+    )
+
     with pytest.raises(TypeError):
-        output("audio_out", audio_window=AUDIO_WINDOW_MATCH_DEVICE)  # type: ignore[call-arg]
+        output("audio_out", audio_window=contract)  # type: ignore[call-arg]
 
 
 def test_a_contract_is_frozen_after_declaration():

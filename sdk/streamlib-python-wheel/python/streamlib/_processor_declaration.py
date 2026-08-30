@@ -18,13 +18,11 @@ A processor is named by its class's import path, derived from `__module__` and
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, TypeVar
 
 
 __all__ = [
-    "AUDIO_WINDOW_MATCH_DEVICE",
     "AudioWindowContract",
-    "AudioWindowMatchDeviceSentinel",
     "input",
     "output",
     "processor",
@@ -46,11 +44,12 @@ class AudioWindowMatchDeviceSentinel:
 
 
 AUDIO_WINDOW_MATCH_DEVICE = AudioWindowMatchDeviceSentinel()
-"""Resolve the whole window contract at `setup()` from the device stream the
-declaring processor opened, rather than stating five values here.
+"""The engine-side spelling for a contract resolved at `setup()` from a device
+stream — reachable here only so [`input`] can recognise and refuse it.
 
-Whole-contract, never per-field, and only a processor that opens a device
-stream can satisfy it.
+It is on no public surface: a native built-in like `SpeakerSink` declares it in
+Rust, where a processor opens the device stream that settles it. A Python
+processor never holds one.
 """
 
 
@@ -166,15 +165,23 @@ class AudioWindowContract:
         }
 
 
-DeclaredAudioWindow = Union[AudioWindowContract, AudioWindowMatchDeviceSentinel]
-
-
 def _audio_window_declaration(
-    audio_window: DeclaredAudioWindow,
+    audio_window: object,
     port_name: str,
     delivery_profile: str,
 ) -> "dict[str, Any]":
     """Validate a declared window contract and render it for the native half."""
+    if isinstance(audio_window, AudioWindowMatchDeviceSentinel):
+        raise TypeError(
+            f"input port {port_name!r} declares audio_window="
+            f"AUDIO_WINDOW_MATCH_DEVICE, which no Python processor can resolve. The "
+            f"sentinel settles at setup() from the device stream the declaring processor "
+            f"opened, and every Python processor is helper-placed — it opens no device "
+            f"stream, and its window is its model's compile-time knowledge, not a "
+            f"machine-varying device format. Declare an AudioWindowContract with the five "
+            f"values the model wants and the engine converts every block to them"
+        )
+
     if delivery_profile == "newest":
         raise ValueError(
             f"input port {port_name!r} declares an audio_window, so it must declare "
@@ -183,14 +190,10 @@ def _audio_window_declaration(
             f"nearly every read"
         )
 
-    if isinstance(audio_window, AudioWindowMatchDeviceSentinel):
-        return {"resolved_from": "match_device"}
-
     if not isinstance(audio_window, AudioWindowContract):
         raise TypeError(
             f"input port {port_name!r} declares audio_window="
-            f"{type(audio_window).__name__} — expected an AudioWindowContract or "
-            f"AUDIO_WINDOW_MATCH_DEVICE"
+            f"{type(audio_window).__name__} — expected an AudioWindowContract"
         )
 
     return audio_window._as_declaration()
@@ -207,7 +210,7 @@ def input(
     *,
     description: str = "",
     delivery_profile: Optional[str] = None,
-    audio_window: Optional[DeclaredAudioWindow] = None,
+    audio_window: Optional[AudioWindowContract] = None,
 ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
     """Mark a method as declaring an input port.
 
@@ -221,9 +224,8 @@ def input(
     `ctx.inputs.read(port_name)`.
 
     `audio_window` is optional and opt-in: an audio input may declare an
-    [`AudioWindowContract`] or [`AUDIO_WINDOW_MATCH_DEVICE`], stating the rate,
-    channels, dtype, window size and hop it wants. A port declaring none is
-    unchanged in every respect.
+    [`AudioWindowContract`], stating the rate, channels, dtype, window size and
+    hop it wants. A port declaring none is unchanged in every respect.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(
