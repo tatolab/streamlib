@@ -1,5 +1,5 @@
 flowchart LR
-  subgraph env["One uv-managed venv — one Python, PyPI deps only"]
+  subgraph env["One uv-managed venv — one Python, ordinary Python package deps only"]
     app["User Python app\n(app.py setup(rt) — normal codebase;\nhosts no processor)"]
     procs["User processor classes\n(importable modules — imported by the app\nto register, by helpers to run;\nnever hosted in the app;\nthe class's import path is its identity)"]
     pkgs["Processor packages\n(ordinary PyPI packages; native internals\nexpose handles, never streamlib internals;\nfirst-party optional integrations live in packages/,\nlocal-linked in-repo, published via the wheel's index)"]

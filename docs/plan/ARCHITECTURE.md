@@ -253,8 +253,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   closed-source Rust processors for Rust apps are deliberately not a path — a
   closed-source vendor ships the Python package whose native internals expose handles.
   [consumer-tree-disposition]
-- **DECIDED** — Lag-by-design ends for a converted consumer: an engine change that
-  breaks one files tracked backlog at the consumer and never blocks the engine change.
+- **DECIDED** — Lag-by-design ends for a converted consumer: when an engine change
+  breaks one, the breakage is filed as tracked backlog at the consumer and never
+  blocks the engine change.
   The showcase is kept current by convention, with no CI presence — a compile/import
   smoke check is a later ticket-level choice if rot appears. One exception, rare by
   design: an example serving as the deliberate canary of in-flight work is updated
