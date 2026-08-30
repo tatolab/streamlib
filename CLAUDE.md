@@ -109,6 +109,24 @@ before implementation. Sessions implement the plan; they never make architecture
 Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
 from code at need — do not create summary docs of what code already shows.
 
+## Reading the Python surface
+
+`sdk/streamlib-python-wheel/python/streamlib/_engine.pyi` is the reference for everything the
+wheel exports. The hand-written stub is where a built-in's config shape, its port names, and
+each context method's contract are actually written down — read it before reading Rust. A
+detour into `runtime/` to learn what a built-in publishes on means you skipped it.
+
+- **The docs are stub-only.** A compiled class's runtime `__doc__` is a one-liner and `dir()`
+  on it is empty, so `help()` under-reports the surface badly. Never conclude from a REPL that
+  something is undocumented.
+- **The stub cannot drift.** `stubtest` gates it against the real binary and pyright gates the
+  callers, both in CI. A new pyclass is not done until its stub entry exists.
+- **Typing is load-bearing on the read side and absent on the write side.** `read(port,
+  into=T)` narrows to `T | None` and catches a wrong attribute; `write(port, bag)` takes
+  `Mapping[str, Any]` and catches nothing — a typo'd key, a `str` where the wire wants an
+  `int`, and a missing required key all reach the runtime silently. Spell a bag literal
+  against the wire contract in `docs/plan/ARCHITECTURE.md`, never from memory.
+
 ## Non-negotiables
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +
   `runtime/streamlib-consumer-rhi/`). Nothing else touches `vulkanalia`. CI enforces.
