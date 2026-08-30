@@ -22,7 +22,8 @@ StreamLib is a game-engine-shaped substrate: one core system per concern, many c
 - **Engine-wide defects get fixed at the engine layer**, never bandaided in the consumer that
   surfaced them.
 - **Pattern migrations cover the engine tree only** — runtime, SDK, adapters, engine tests,
-  docs. `packages/` and `examples/` lag by design and are never in scope.
+  docs. Consumers are never in a migration's scope: a converted consumer's breakage is filed as
+  tracked backlog at that consumer; held pre-pivot consumers lag by design.
 
 Prohibited in library code (tests/examples exempt):
 - `todo!()` / `unimplemented!()`, no-op methods, back-compat shims (pre-1.0 — rename cleanly).
