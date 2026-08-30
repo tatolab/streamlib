@@ -479,7 +479,7 @@ def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_kn
     assert "audio_window" in message and "newest" in message and "ordered" in message
 
 
-def test_an_audio_window_that_is_neither_a_contract_nor_the_sentinel_is_refused():
+def test_an_audio_window_that_is_not_a_contract_is_refused():
     with pytest.raises(TypeError, match="AudioWindowContract"):
 
         @processor
