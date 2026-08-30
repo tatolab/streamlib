@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.22](https://github.com/tatolab/streamlib/compare/v0.18.21...v0.18.22) (2026-08-30)
+
+
+### Bug Fixes
+
+* **wheel:** AUDIO_WINDOW_MATCH_DEVICE is refused at decoration and leaves the Python export surface ([#2046](https://github.com/tatolab/streamlib/issues/2046)) ([646bb53](https://github.com/tatolab/streamlib/commit/646bb5318ea8178351c46124a5fc07e377c51bd7))
+
 ## [0.18.21](https://github.com/tatolab/streamlib/compare/v0.18.20...v0.18.21) (2026-08-29)
 
 
