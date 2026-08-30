@@ -17,6 +17,7 @@ from streamlib import AudioWindowContract, input, output, processor
 # Not `from streamlib import ...`: the sentinel is on no public surface, so
 # reaching the private module for it is what an author would have to do to
 # reach the refusal below at all.
+from streamlib import _processor_declaration
 from streamlib._processor_declaration import AUDIO_WINDOW_MATCH_DEVICE
 
 
@@ -368,10 +369,16 @@ def test_the_device_matching_sentinel_is_refused_at_decoration(delivery_profile:
 
 
 def test_the_device_matching_sentinel_is_on_no_public_surface():
-    """The refusal above is the second guard; not being reachable is the first."""
+    """The refusal above is the second guard; not being reachable is the first.
+
+    The declaring module's own list counts: it is what a `import *` would take,
+    so a name restored there is back on the surface whatever the package root
+    re-exports.
+    """
     for name in ("AUDIO_WINDOW_MATCH_DEVICE", "AudioWindowMatchDeviceSentinel"):
         assert name not in streamlib.__all__, name
         assert not hasattr(streamlib, name), name
+        assert name not in _processor_declaration.__all__, name
 
 
 def test_a_port_declaring_no_contract_carries_no_audio_window_key():
