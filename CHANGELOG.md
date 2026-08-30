@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.24](https://github.com/tatolab/streamlib/compare/v0.18.23...v0.18.24) (2026-08-30)
+
+
+### Bug Fixes
+
+* **cli:** give the scaffolded processors package a docstring ([#2065](https://github.com/tatolab/streamlib/issues/2065)) ([033bb1c](https://github.com/tatolab/streamlib/commit/033bb1c51636a1a5eaafccb04d23057a2aec3c2c))
+
 ## [0.18.23](https://github.com/tatolab/streamlib/compare/v0.18.22...v0.18.23) (2026-08-30)
 
 
