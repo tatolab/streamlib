@@ -88,13 +88,20 @@ their per-sample paths never enter an interpreter at all.
 
 ```bash
 uv venv --python 3.12 && uv sync
+source .venv/bin/activate
 streamlib run
 ```
 
 Speak into your microphone and you should hear yourself, wet. Ctrl-C stops it.
 
 `uv sync` installs `streamlib` from the simple index pinned in `pyproject.toml`;
-the wheel carries the Python API, the engine and the `streamlib` CLI.
+the wheel carries the Python API, the engine and the `streamlib` CLI. The CLI
+lands in `.venv/bin`, so it needs the venv on your `PATH` — activate it as
+above, or spell it `.venv/bin/streamlib` every time.
+
+**Not `uv run streamlib`.** It re-syncs the environment from `pyproject.toml`
+first, which silently replaces a locally built wheel with the released one —
+exactly what the next paragraph is for.
 
 To work against a checkout rather than a release, install that checkout's wheel
 into this venv instead:
@@ -111,7 +118,7 @@ exercised in a headless container, silently.
 
 ## Observing it
 
-From another terminal, while it runs:
+From another terminal with this venv activated, while it runs:
 
 ```bash
 streamlib nodes           # the live nodes on this machine
