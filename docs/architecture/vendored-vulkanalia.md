@@ -33,9 +33,9 @@ contract, and it is the whole of it: no stable rustfmt exclusion
 mechanism exists (`rustfmt.toml`'s `ignore` is nightly-only), so a
 workspace fmt sweep is not held off, it is caught.
 
-The trees are rustfmt-clean as vendored, so `cargo fmt --all` — the
-`.lefthook.yml` pre-commit `format` gate — is a no-op over them and the
-gate needs no vendor carve-out. Two things keep that true, and a
+The trees are rustfmt-clean as vendored, so `cargo fmt --all` — CI's
+rustfmt gate — is a no-op over them and the gate needs no vendor
+carve-out. Two things keep that true, and a
 re-vendor must preserve both:
 
 - Upstream marks every generated `vk` / sys module declaration
