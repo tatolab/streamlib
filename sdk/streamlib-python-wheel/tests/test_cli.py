@@ -464,6 +464,29 @@ def test_the_scaffolded_app_parses_and_declares_setup(tmp_path: Path):
     assert "DisplayWindow" in entry_source
 
 
+def test_every_scaffolded_python_file_is_valid_python_that_explains_itself(
+    tmp_path: Path,
+):
+    """The scaffold is the first code the user reads, `__init__.py` included.
+
+    An empty package init parses but teaches nothing, and this is where a
+    reader first meets the rule that keeps processor classes out of the entry
+    file.
+    """
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
+
+    for file_name in SCAFFOLDED_FILE_NAMES:
+        if not file_name.endswith(".py"):
+            continue
+        source = (app_directory / file_name).read_text()
+        parsed = ast.parse(source)
+        assert ast.get_docstring(parsed), (
+            f"{file_name} carries no module docstring — every file `new` writes "
+            f"explains what it is for"
+        )
+
+
 def test_the_scaffolded_processor_lives_outside_the_entry_file(tmp_path: Path):
     """A processor class in the entry file identifies as `__main__:<Type>`,
     which is a wiring error — the entry runs as `__main__`, and the child
