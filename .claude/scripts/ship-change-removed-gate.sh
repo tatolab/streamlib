@@ -40,7 +40,7 @@ trap 'rm -f "$hits"' EXIT
 #                     breaks a deadlock: /ship-change gates at step 1 but folds
 #                     ARCHITECTURE.md at step 3, so a change whose own plan text names
 #                     what it removes could never reach the step that retires that text.
-#   examples/**       consumers, lagging by design (CLAUDE.md).
+#   examples/**       consumers, never contract sources (ARCHITECTURE.md §Consumers).
 #   packages/<consumer>  the downstream-consumer entries only, same doctrine — see below.
 #   vendor/**         the vendored vulkanalia fork, never ours to edit.
 # The path check inherits none of these: a file existing at a named path is residue
@@ -55,12 +55,12 @@ content_excludes=(
   ':!CHANGELOG.md'
 )
 
-# packages/ is split, and the split is load-bearing (CLAUDE.md): these entries are
-# engine-side — not downstream consumers — so they stay in the sweep and their residue is
-# real work. Everything else under packages/ is a consumer that lags by design and is
+# packages/ is split, and the split is load-bearing (ARCHITECTURE.md §Consumers):
+# the entries below are engine-side — not downstream consumers — so they stay in the
+# sweep and their residue is real work. Everything else under packages/ is a consumer and
 # excluded. Derived from the tree rather than hard-listed, so a package added later is
 # excluded by default and this list stays the only thing to maintain.
-engine_side_packages=" escalate core test-fixtures "
+engine_side_packages=" test-fixtures "
 for pkg_dir in packages/*/; do
   [ -d "$pkg_dir" ] || continue
   pkg_name="${pkg_dir#packages/}"
