@@ -567,12 +567,9 @@ mod connect_wires_without_inspecting_a_port_tests {
     //! at read, and nothing at wiring time hints at it. Reintroducing any
     //! inspection or comparison in [`connect_impl`] fails this module.
 
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use serde_json::Value;
-    use tracing::field::{Field, Visit};
-    use tracing_subscriber::Layer;
-    use tracing_subscriber::layer::{Context, SubscriberExt};
 
     use super::connect_impl;
     use crate::core::compiler::Compiler;
@@ -580,6 +577,7 @@ mod connect_wires_without_inspecting_a_port_tests {
     use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::test_support::CapturedTracingWarnings;
 
     const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
     const CONSUMER_TYPE: &str = "ConnectSilenceConsumer";
@@ -653,45 +651,11 @@ mod connect_wires_without_inspecting_a_port_tests {
         )
     }
 
-    /// Collects the message of every `WARN`-level tracing event raised while
-    /// connect runs.
-    #[derive(Clone, Default)]
-    struct CapturedWarnings(Arc<Mutex<Vec<String>>>);
-
-    impl CapturedWarnings {
-        fn captured_messages(&self) -> Vec<String> {
-            self.0.lock().unwrap().clone()
-        }
-    }
-
-    struct WarnMessageVisitor<'a>(&'a mut String);
-    impl Visit for WarnMessageVisitor<'_> {
-        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-            if field.name() == "message" {
-                use std::fmt::Write;
-                let _ = write!(self.0, "{value:?}");
-            }
-        }
-    }
-
-    impl<S: tracing::Subscriber> Layer<S> for CapturedWarnings {
-        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
-            if *event.metadata().level() == tracing::Level::WARN {
-                let mut message = String::new();
-                event.record(&mut WarnMessageVisitor(&mut message));
-                self.0.lock().unwrap().push(message);
-            }
-        }
-    }
-
     #[test]
     fn connect_wires_a_producer_to_a_consumer_without_warning() {
         register_producer_and_consumer_descriptors();
         let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
-        let warnings = CapturedWarnings::default();
-        let subscriber = tracing_subscriber::registry().with(warnings.clone());
-
-        let result = tracing::subscriber::with_default(subscriber, || {
+        let (result, captured) = CapturedTracingWarnings::captured_while(|| {
             tokio::runtime::Builder::new_current_thread()
                 .build()
                 .expect("current-thread runtime")
@@ -699,7 +663,6 @@ mod connect_wires_without_inspecting_a_port_tests {
         });
 
         result.expect("connect must wire any two ports — a link is pure plumbing");
-        let captured = warnings.captured_messages();
         assert!(
             captured.is_empty(),
             "connect must emit no WARN when wiring a link; captured: {captured:?}"

@@ -36,7 +36,7 @@ use super::audio_window::{
     queued_audio_window_frame_measure,
 };
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
-use super::mailbox::PortMailbox;
+use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
@@ -360,13 +360,11 @@ fn windowed_port_config(
     // before it has consumed anything.
     let latest_queued_source_sample_rate = Arc::new(std::sync::atomic::AtomicU32::new(0));
     PortConfig {
-        mailbox: PortMailbox::new_measuring(
-            contract.windowed_port_mailbox_depth(),
-            Some(queued_audio_window_frame_measure(
+        mailbox: PortMailbox::new(contract.windowed_port_mailbox_depth())
+            .measuring_every_queued_frame_with(queued_audio_window_frame_measure(
                 contract,
                 Arc::clone(&latest_queued_source_sample_rate),
             )),
-        ),
         read_mode,
         staged_oversized: None,
         audio_windowing: InstalledInputPortAudioWindowing::Windowed(Arc::new(
@@ -377,6 +375,43 @@ fn windowed_port_config(
             )),
         )),
     }
+}
+
+/// The one-shot notice a `match_device` port installs on the mailbox it holds
+/// while its contract is unsettled.
+///
+/// Every other port that evicts is a consumer falling behind, and the per-link
+/// count says so on its own. This one is not: an unsettled port has no contract
+/// to window by, so it hands its reader nothing however much arrives, and the
+/// climbing count reads as a consumer that is merely slow.
+///
+/// The state is reached only by a port being drained while unsettled, and the
+/// dominant way that happens is a link wired onto the port after its processor's
+/// `setup()` has been and gone without settling it — the branch the spawn-time
+/// refusal cannot cover, because a port with no link at `setup()` time is not in
+/// the map to be refused. Such a port stays unsettled for the rest of the run.
+/// Said once per port rather than once per bag: nothing about the state changes
+/// between one evicted bag and the next.
+fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled(
+    port: &str,
+    depth: usize,
+) -> PortMailboxEvictionNotice {
+    let port_name = port.to_string();
+    let already_said = std::sync::atomic::AtomicBool::new(false);
+    Arc::new(move || {
+        if already_said.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        tracing::warn!(
+            port = %port_name,
+            mailbox_depth = depth,
+            "input port evicted a bag while its `audio_window = match_device` contract is \
+             unsettled: with no contract to window by it hands its reader nothing, so this \
+             loss is not a consumer falling behind. If this port's processor already ran \
+             `setup()` without settling it — a link wired onto the port after the fact — \
+             it stays this way for the rest of the run"
+        );
+    })
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -436,11 +471,16 @@ impl InputMailboxesInner {
     /// Add a mailbox for a port whose window contract is `match_device` and is
     /// not settled yet.
     ///
-    /// The compiler wires every link before it releases any processor into
-    /// `setup()`, so this is what a `match_device` port looks like for the
-    /// whole of that gap: countable, and readable by nobody. A bag arriving
-    /// here is queued and, on overrun, evicted and counted against its own
-    /// inbound link, exactly as at any other port.
+    /// This is what a `match_device` port looks like while nothing has settled
+    /// it: countable, and readable by nobody. Two things reach the state — the
+    /// compiler wiring every link before it releases any processor into
+    /// `setup()`, and a link wired onto the port after that `setup()` has been
+    /// and gone without settling it. Only the second is ever drained while it
+    /// lasts, and it lasts for the rest of the run. A bag arriving here is
+    /// queued and, on overrun, evicted and counted against its own inbound
+    /// link, exactly as at any other port — and, unlike at any other port, said
+    /// out loud once, because an unsettled port hands its reader nothing and
+    /// the count alone reads as a consumer that is merely slow.
     ///
     /// `depth` comes from the caller the way [`Self::add_port`]'s does, rather
     /// than being assumed from the profile a window contract forces: there is
@@ -461,7 +501,11 @@ impl InputMailboxesInner {
         self.ports.lock().insert(
             port.to_string(),
             PortConfig {
-                mailbox: PortMailbox::new(depth),
+                mailbox: PortMailbox::new(depth).reporting_every_eviction_to(
+                    notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled(
+                        port, depth,
+                    ),
+                ),
                 read_mode,
                 staged_oversized: None,
                 audio_windowing: InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat,
@@ -796,9 +840,7 @@ impl InputMailboxesInner {
                     self.pop_one_bag_off_the_mailbox(port)?
                 }
                 // Nothing, and deliberately not the bag underneath: a port
-                // whose contract is unsettled has no exact size to cut one to,
-                // and `setup()` has not yet had its chance to say what the
-                // device's is.
+                // whose contract is unsettled has no exact size to cut one to.
                 InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat => None,
                 InstalledInputPortAudioWindowing::Windowed(stage) => {
                     self.next_window_out_of_the_stage(port, &stage)?
@@ -1196,6 +1238,7 @@ impl Drop for InputMailboxes {
 mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+    use crate::core::test_support::CapturedTracingWarnings;
     use crate::iceoryx2::PortKey;
 
     fn unique_suffix(tag: &str) -> String {
@@ -1680,6 +1723,112 @@ mod tests {
         assert_eq!(
             mailboxes.input_ports_still_awaiting_their_device_stream_format(),
             vec!["in".to_string()]
+        );
+    }
+
+    /// An unsettled port's loss, said in words. The count this link carries is
+    /// the very same count a stalled consumer produces, and this line is the
+    /// only thing that separates the two.
+    ///
+    /// Mentally revert it and a port that will never settle — one a link was
+    /// wired onto after its processor's `setup()` had been and gone — reads
+    /// exactly like a consumer that cannot keep up, while it delivers nothing
+    /// at all for the rest of the run.
+    #[test]
+    fn a_bag_evicted_at_a_port_with_an_unsettled_contract_says_so_once_naming_the_port() {
+        const MAILBOX_DEPTH: usize = 2;
+        const FRAMES_PUBLISHED: usize = 6;
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/awaiting-drop", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port_awaiting_its_device_stream_format(
+            "in",
+            MAILBOX_DEPTH,
+            ReadMode::ReadNextInOrder,
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+
+        let ((), warnings) = CapturedTracingWarnings::captured_while(|| {
+            for _ in 0..FRAMES_PUBLISHED {
+                publish_one_frame(&publisher, "mic_out", b"before-the-device-spoke");
+                mailboxes.receive_pending();
+            }
+        });
+
+        assert_eq!(
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link()
+                .get("L-only")
+                .copied(),
+            Some((FRAMES_PUBLISHED - MAILBOX_DEPTH) as u64),
+            "the loss is still counted against the link that lost it"
+        );
+        let about_the_unsettled_contract: Vec<&String> = warnings
+            .iter()
+            .filter(|said| said.contains("contract is unsettled"))
+            .collect();
+        assert_eq!(
+            about_the_unsettled_contract.len(),
+            1,
+            "four bags were evicted and the port diagnoses the run once, not once per \
+             bag; got {warnings:?}"
+        );
+        let said = about_the_unsettled_contract[0];
+        assert!(
+            said.contains("port=in") && said.contains("match_device"),
+            "the record must name the port and the contract that never settled; got {said}"
+        );
+    }
+
+    /// The notice belongs to the mailbox the sentinel holds, not to the port:
+    /// once the contract settles the port is sized from it like any other, and
+    /// an overrun there is an ordinary one that must read as one.
+    #[test]
+    fn a_settled_ports_evictions_are_not_reported_as_an_unsettled_contract() {
+        const FRAMES_PUBLISHED: usize = 24;
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/settled-drop", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port_awaiting_its_device_stream_format(
+            "in",
+            crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
+            ReadMode::ReadNextInOrder,
+        );
+        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes
+            .settle_a_ports_device_matched_audio_window_contract(
+                "in",
+                &a_device_stream_matching(48_000, 2, 48),
+            )
+            .expect("a device format settles the contract");
+
+        let ((), warnings) = CapturedTracingWarnings::captured_while(|| {
+            for _ in 0..FRAMES_PUBLISHED {
+                publish_one_frame(&publisher, "mic_out", b"after-the-device-spoke");
+                mailboxes.receive_pending();
+            }
+        });
+
+        assert!(
+            mailboxes
+                .dropped_bag_counts_by_inbound_link()
+                .dropped_bag_count_snapshot_by_inbound_link()
+                .get("L-only")
+                .copied()
+                .unwrap_or(0)
+                > 0,
+            "the run has to overrun the settled depth, or it proves nothing"
+        );
+        assert!(
+            !warnings
+                .iter()
+                .any(|said| said.contains("contract is unsettled")),
+            "a settled port's overrun is an ordinary one; got {warnings:?}"
         );
     }
 

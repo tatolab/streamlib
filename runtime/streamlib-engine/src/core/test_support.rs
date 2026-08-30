@@ -7,8 +7,15 @@
 //! graph + compiler code without depending on any external package's
 //! processors. The `#[processor]` macro never auto-registers; tests
 //! register the mocks explicitly via [`ensure_test_mocks_registered`].
+//!
+//! [`CapturedTracingWarnings`] is the one warning-capture layer every module
+//! asserts a log line against.
 
-use std::sync::Once;
+use std::fmt::Write;
+use std::sync::{Arc, Mutex, Once};
+
+use tracing::field::{Field, Visit};
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
 use crate::core::processors::PROCESSOR_REGISTRY;
 
@@ -179,4 +186,61 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
     });
+}
+
+/// Every `WARN`-level tracing event raised while this is the default
+/// subscriber's layer, each rendered as its `field=value` pairs.
+///
+/// Structured fields are kept rather than only the message, because the port a
+/// warning names is usually a field.
+#[derive(Clone, Default)]
+pub(crate) struct CapturedTracingWarnings(Arc<Mutex<Vec<String>>>);
+
+impl CapturedTracingWarnings {
+    /// Run `raising_them` with this installed on the calling thread, handing
+    /// back what it returned alongside the warnings it raised.
+    pub(crate) fn captured_while<T>(raising_them: impl FnOnce() -> T) -> (T, Vec<String>) {
+        let captured = Self::default();
+        let subscriber = tracing_subscriber::registry().with(captured.clone());
+        let returned = tracing::subscriber::with_default(subscriber, raising_them);
+        let warnings = captured.0.lock().expect("no test panics holding this lock");
+        (returned, warnings.clone())
+    }
+}
+
+/// Renders one event's fields into `name=value` pairs, so a test can assert on
+/// a structured field as readily as on the message.
+struct EveryFieldOfOneCapturedWarning<'a>(&'a mut String);
+
+impl EveryFieldOfOneCapturedWarning<'_> {
+    fn push_one_field(&mut self, name: &str, rendered: std::fmt::Arguments<'_>) {
+        if !self.0.is_empty() {
+            self.0.push(' ');
+        }
+        let _ = write!(self.0, "{name}={rendered}");
+    }
+}
+
+impl Visit for EveryFieldOfOneCapturedWarning<'_> {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.push_one_field(field.name(), format_args!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.push_one_field(field.name(), format_args!("{value}"));
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for CapturedTracingWarnings {
+    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+        if *event.metadata().level() != tracing::Level::WARN {
+            return;
+        }
+        let mut rendered = String::new();
+        event.record(&mut EveryFieldOfOneCapturedWarning(&mut rendered));
+        self.0
+            .lock()
+            .expect("no test panics holding this lock")
+            .push(rendered);
+    }
 }
