@@ -221,7 +221,7 @@ publishing AND `gpu.register_texture_with_layout(...)` for the
 in-process Path 1 fast path. See
 [Dual-registration for in-process consumers](adapter-runtime-integration.md#dual-registration-for-in-process-consumers)
 in the runtime-integration doc for the rule, the reference
-in-tree producer (`LinuxCameraProcessor`), and the cases where
+in-tree producer (the `CameraSource` built-in), and the cases where
 the second call is unnecessary (subprocess-only consumers,
 post-stop readback).
 

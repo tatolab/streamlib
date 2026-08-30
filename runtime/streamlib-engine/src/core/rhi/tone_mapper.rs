@@ -12,11 +12,6 @@
 //! a YUV camera frame goes through the converter (NV12 → sRGB RGBA),
 //! and an HDR PQ frame goes through the tone mapper (PQ → sRGB RGBA
 //! with BT.2390 EETF).
-//!
-//! Consumers (the display, encoders targeting cross-color-space output)
-//! hold an `Arc<RhiToneMapper>` as a struct field — same shape as the
-//! `CameraSource` built-in holding an `RhiColorConverter` per
-//! `runtime/streamlib-media-builtins/src/camera_source.rs`.
 
 use crate::core::color::TransferId;
 

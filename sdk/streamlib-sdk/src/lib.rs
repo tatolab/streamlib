@@ -108,11 +108,6 @@ pub mod sdk {
     pub use app::{AddedProcessor, App, AppPortEndpoint};
 
     // ---- Processors namespace ----
-    //
-    // Combines engine's `core::processors::*` with the platform-
-    // aliased processor types that engine exposes at its crate root
-    // (e.g., `CameraProcessor` is `LinuxCameraProcessor` on Linux,
-    // `AppleCameraProcessor` on macOS).
     pub mod processors {
         pub use streamlib_engine::core::processors::*;
 

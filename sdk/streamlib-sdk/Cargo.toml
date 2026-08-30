@@ -32,6 +32,3 @@ streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.18.23
 # runtime carries.
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }

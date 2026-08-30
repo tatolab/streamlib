@@ -8,7 +8,7 @@
 //! `vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.comp`.
 //!
 //! Per-frame [`ResolvedColorInfo`] changes cost one
-//! [`set_push_constants_value`] call rather than a pipeline rebuild.
+//! `set_push_constants_value` call rather than a pipeline rebuild.
 
 use crate::core::color::{ColorSpaceKind, ResolvedColorInfo, TransferId, yuv_to_rgb_matrix};
 use crate::core::rhi::PixelFormat;
