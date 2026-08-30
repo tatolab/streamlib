@@ -150,15 +150,17 @@ class GrayscaleCompute:
         if frame is None:
             return
 
-        camera_frame_texture = self.camera_frame_landing_ring.next_texture_for_this_frame(
-            ctx.gpu_limited_access, frame.width, frame.height
+        camera_frame_landing_texture = (
+            self.camera_frame_landing_ring.next_texture_for_this_frame(
+                ctx.gpu_limited_access, frame.width, frame.height
+            )
         )
         # The frame is a DLPack producer in its own right, so this is the whole
         # read — GPU-resident, and the cast object's claim is what holds the
         # camera's pixels still for the length of the copy. Leaving the scope
         # blits the write into the texture, ordered ahead of the engine's next
         # read of it.
-        with camera_frame_texture.as_device_tensor() as writable_texture:
+        with camera_frame_landing_texture.as_device_tensor() as writable_texture:
             cupy.from_dlpack(writable_texture)[...] = cupy.from_dlpack(frame)
 
         grayscale_frame_texture = self.grayscale_frame_ring.next_texture_for_this_frame(
@@ -166,7 +168,7 @@ class GrayscaleCompute:
         )
         self.grayscale_kernel.dispatch(
             bindings={
-                CAMERA_FRAME_BINDING: camera_frame_texture,
+                CAMERA_FRAME_BINDING: camera_frame_landing_texture,
                 GRAYSCALE_FRAME_BINDING: grayscale_frame_texture,
             },
             group_count=(

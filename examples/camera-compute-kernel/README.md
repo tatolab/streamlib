@@ -19,7 +19,7 @@ self.grayscale_kernel = ctx.gpu_full_access.create_compute_kernel(
 
 ```python
 self.grayscale_kernel.dispatch(
-    bindings={"camera_frame": camera_frame_texture,
+    bindings={"camera_frame": camera_frame_landing_texture,
               "grayscale_frame": grayscale_frame_texture},
     group_count=(240, 135, 1),
     push_constants=self.strength_push_constants,
@@ -62,7 +62,7 @@ surface id and it is refused by name. So each frame is copied into a texture
 this processor owns before the kernel can sample it:
 
 ```python
-with camera_frame_texture.as_device_tensor() as writable_texture:
+with camera_frame_landing_texture.as_device_tensor() as writable_texture:
     cupy.from_dlpack(writable_texture)[...] = cupy.from_dlpack(frame)
 ```
 
@@ -148,9 +148,12 @@ Two edits worth making on purpose, because each fails in an instructive way:
 - Rename a binding in the GLSL but not in the Python. The refusal lands at
   `setup()`, before a single frame, and names the shader's own bindings.
 - Bind the camera's own surface id — `frame.surface_id` in place of
-  `camera_frame_texture` — and skip the landing copy. The dispatch refuses,
-  saying the graph cannot resolve that surface to a device texture. That
-  refusal is the reason the landing copy exists, and it is worth seeing once.
+  `camera_frame_landing_texture` — and skip the landing copy. The dispatch
+  refuses, saying the graph cannot resolve that surface to a device texture.
+  Resolving the frame first (`ctx.gpu_limited_access.resolve_surface(...)`) and
+  binding the handle is refused identically, because a handle binding travels
+  as its surface id. That refusal is why the landing copy exists, and it is
+  worth seeing once.
 
 ## Observing it
 
