@@ -272,7 +272,7 @@ PR — never accreted mid-session because something annoyed an agent once.
 - `review-pr` gains one check: any new public trait, module, or cross-crate boundary in
   the diff that the change proposal doesn't name is a finding. This makes "no inline
   architecture" enforceable rather than aspirational.
-- The existing 14 xtask gates + lefthook battery, unchanged.
+- The existing xtask gate suite, unchanged.
 - `flow.md` unchanged: operating-model changes ship as their own PR; a session never
   edits the skills it is running.
 
