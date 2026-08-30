@@ -1004,6 +1004,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::an_unsettled_sentinel_is_refused_naming_the_resolution_mechanism -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time -->
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_match_device_contract_wires_awaiting_its_device_rather_than_refusing -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_the_device_matching_sentinel_is_on_no_public_surface -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_the_device_matching_sentinel_is_refused_at_decoration -->
 - **DECIDED** — `MicrophoneSource` and `SpeakerSink` are the audio built-ins, beside
   camera and display: native built-ins in the engine tree, registered with the other
   media built-ins and surfaced to Python as marker classes beside `CameraSource`,

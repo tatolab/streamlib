@@ -479,9 +479,12 @@ class BlurProcessor:
         );
     }
 
+    /// A helper-placed processor opens no device stream, so the sentinel it
+    /// would need to settle never resolves — and the decorator says so at the
+    /// line the author wrote, not three seams later in placement vocabulary.
     #[test]
-    fn a_python_declared_sentinel_reaches_the_descriptor_as_a_whole_contract() {
-        let ports = python_declared_ports(
+    fn a_python_declared_sentinel_is_refused_at_decoration() {
+        let refusal = python_declaration_refusal(
             "@processor(execution='manual')\n\
              class AudioConsumer:\n\
              \x20   @input('audio', delivery_profile='ordered',\n\
@@ -489,9 +492,12 @@ class BlurProcessor:
              \x20   def audio_from_device(self): ...\n",
         );
 
-        assert_eq!(
-            ports[0].audio_window,
-            Some(AudioWindowContract::MatchDevice {})
+        assert!(
+            refusal.contains("AUDIO_WINDOW_MATCH_DEVICE")
+                && refusal.contains("helper")
+                && refusal.contains("AudioWindowContract"),
+            "the refusal must name the sentinel, why it cannot resolve, and what to \
+             write instead; got {refusal}"
         );
     }
 
@@ -561,6 +567,26 @@ class AudioConsumer:
                 Err(refusal) => refusal.to_string(),
             }
         })
+    }
+
+    /// The decorator refuses the sentinel; this bridge does not, and must not.
+    /// A marker the decorator never built still carries `match_device` through
+    /// to the compiler, where the wire-time refusal — which knows the port's
+    /// placement, as nothing here does — is the guard that speaks.
+    #[test]
+    fn a_hand_built_match_device_marker_still_reaches_the_bridge() {
+        Python::initialize();
+        Python::attach(|python| {
+            let source = hand_built_marker_source("'resolved_from': 'match_device'");
+            let declared_class = class_from_source(python, &source, "AudioConsumer");
+            let declaration = PythonProcessorDeclaration::read_from_class(&declared_class)
+                .expect("the bridge reads a hand-built sentinel");
+
+            assert_eq!(
+                declaration.descriptor.inputs[0].audio_window,
+                Some(AudioWindowContract::MatchDevice {})
+            );
+        });
     }
 
     /// A marker built by something other than the decorator still meets the

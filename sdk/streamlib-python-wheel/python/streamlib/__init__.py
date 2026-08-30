@@ -42,13 +42,7 @@ from ._engine import (
     gpu_limited_access_of_the_typed_read_in_progress as gpu_limited_access_of_the_typed_read_in_progress,
 )
 from ._engine import monotonic_now_ns as monotonic_now_ns
-from ._processor_declaration import (
-    AUDIO_WINDOW_MATCH_DEVICE as AUDIO_WINDOW_MATCH_DEVICE,
-)
 from ._processor_declaration import AudioWindowContract as AudioWindowContract
-from ._processor_declaration import (
-    AudioWindowMatchDeviceSentinel as AudioWindowMatchDeviceSentinel,
-)
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
 from ._processor_declaration import processor as processor
@@ -70,11 +64,9 @@ from .video_frame import VideoFrame as VideoFrame
 # `input` and `output` shadow the builtins at module scope on purpose — the
 # authoring grammar reads `@input(...)` / `@output(...)`, matching the old SDK.
 __all__ = [
-    "AUDIO_WINDOW_MATCH_DEVICE",
     "AddedProcessor",
     "AudioBlock",
     "AudioWindowContract",
-    "AudioWindowMatchDeviceSentinel",
     "CameraSource",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
