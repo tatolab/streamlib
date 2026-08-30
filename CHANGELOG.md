@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.25](https://github.com/tatolab/streamlib/compare/v0.18.24...v0.18.25) (2026-08-30)
+
+
+### Features
+
+* **examples:** convert audio-mixer-demo to the current authoring idiom ([#2064](https://github.com/tatolab/streamlib/issues/2064)) ([8b57b3a](https://github.com/tatolab/streamlib/commit/8b57b3aaa5d744746f0fcb1793e21e838f0389d6)), closes [#2053](https://github.com/tatolab/streamlib/issues/2053)
+
 ## [0.18.24](https://github.com/tatolab/streamlib/compare/v0.18.23...v0.18.24) (2026-08-30)
 
 
