@@ -613,8 +613,14 @@ mod tests {
     #[test]
     fn a_sequence_index_that_does_not_advance_by_one_breaks_continuity_too() {
         let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-        gate.admit(0, true);
-        gate.admit(1, false);
+        assert_eq!(
+            gate.admit(0, true),
+            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
+        );
+        assert_eq!(
+            gate.admit(1, false),
+            ArrivingEncodedFrameDisposition::Decode
+        );
         assert_eq!(
             gate.admit(1, false),
             ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
@@ -653,7 +659,10 @@ mod tests {
     #[test]
     fn a_sequence_index_at_the_top_of_its_range_does_not_overflow_the_gap_arithmetic() {
         let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-        gate.admit(u64::MAX, true);
+        assert_eq!(
+            gate.admit(u64::MAX, true),
+            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
+        );
         assert_eq!(
             gate.admit(u64::MAX, false),
             ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
@@ -665,7 +674,10 @@ mod tests {
         // panicking under overflow checks.
         let mut alternating = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
         for hostile_index in [0, u64::MAX, 0, u64::MAX] {
-            alternating.admit(hostile_index, true);
+            assert_eq!(
+                alternating.admit(hostile_index, true),
+                ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
+            );
         }
         assert_eq!(alternating.frames_lost_to_gaps(), u64::MAX);
     }
@@ -676,7 +688,10 @@ mod tests {
     #[test]
     fn a_deliberately_broken_continuity_re_enters_at_the_next_sync_point() {
         let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-        gate.admit(0, true);
+        assert_eq!(
+            gate.admit(0, true),
+            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
+        );
         assert_eq!(
             gate.admit(1, false),
             ArrivingEncodedFrameDisposition::Decode
