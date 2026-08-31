@@ -135,6 +135,13 @@ jobs:
           # what stops it rotting between rig runs; the rig is where it passes.
           cargo test --locked -p streamlib-media-builtins \
             --test speaker_sink_matches_its_device --no-run
+          # Compiled but not run, for the same reason: the camera→H264Encoder
+          # round trip is the only thing that drives the encoder's production
+          # seam (the lazy session mint, the per-frame resolve + submit, the
+          # bag publish), and it needs a Vulkan Video encode queue and a
+          # /dev/video* device no CI runner has.
+          cargo test --locked -p streamlib-media-builtins \
+            --test h264_encoder_publishes_the_bag_convention --no-run
           # The present-class escalate ops' headless arm. `streamlib-engine`'s
           # lib tests are deliberately not run wholesale here (see
           # python-wheel.yml's carve-out, which says so), so a named slice is

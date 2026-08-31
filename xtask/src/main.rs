@@ -450,6 +450,23 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--no-run",
             ],
         ),
+        // The rig-tier camera→H264Encoder round trip, compiled only for the
+        // same reason: it needs a Vulkan Video encode queue and a /dev/video*
+        // device, and it is the only thing driving the encoder's production
+        // seam between rig runs.
+        (
+            "the H264Encoder bag-convention integration binary compiles",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-media-builtins",
+                "--test",
+                "h264_encoder_publishes_the_bag_convention",
+                "--no-run",
+            ],
+        ),
         // The deviceless arm's integration binaries, which the workflow runs
         // beside the slice. `attribute_macro_test` aside, these are the only
         // engine integration tests CI runs at all.

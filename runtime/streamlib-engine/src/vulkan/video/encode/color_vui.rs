@@ -3,12 +3,12 @@
 
 //! H.273 / VUI color metadata in its native bitstream byte representation.
 //!
-//! The codec layer (`vulkan/video/`) is leaf-level relative to the
-//! schema graph — it does not depend on `@tatolab/core` schemas or the
-//! engine's `ColorInfo` type. The encoder and decoder work in raw H.273
-//! enumerant bytes (the representation that appears verbatim in the
-//! H.264 / H.265 / AV1 bitstream). Callers in `packages/h26{4,5}/`
-//! translate `ColorInfo` ↔ [`H273ColorVui`] at the codec-processor seam.
+//! The codec layer (`vulkan/video/`) does not depend on the bag
+//! vocabulary's `ColorInfo` type. The encoder and decoder work in raw
+//! H.273 enumerant bytes (the representation that appears verbatim in
+//! the H.264 / H.265 / AV1 bitstream); the codec built-ins in
+//! `streamlib-media-builtins` translate `ColorInfo` ↔ [`H273ColorVui`]
+//! at the codec-processor seam.
 
 /// H.273 color VUI carried by the H.264 / H.265 SPS.
 ///

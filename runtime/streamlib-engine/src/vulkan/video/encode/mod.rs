@@ -366,11 +366,14 @@ impl SimpleEncoder {
         (self.compute_queue_family, self.compute_queue)
     }
 
-    /// Returns the aligned width and height used by the encode session.
+    /// Returns the aligned width and height used by the encode session —
+    /// the coded extent the bitstream carries before its conformance crop.
     ///
-    /// RGBA input images passed to `encode_image()` must have at least these
-    /// dimensions.  The driver may round up from the config width/height to
-    /// satisfy codec alignment requirements.
+    /// The driver may round up from the config width/height to satisfy
+    /// codec alignment requirements. An RGBA source passed to
+    /// [`encode_image`](Self::encode_image) only has to cover the
+    /// configured picture area; the gap up to this extent encodes as
+    /// edge-replicated padding the conformance crop hides.
     pub fn aligned_extent(&self) -> (u32, u32) {
         (self.aligned_width, self.aligned_height)
     }
@@ -412,16 +415,71 @@ impl SimpleEncoder {
     /// The `RgbToNv12Converter` is lazily created on first call and reused
     /// for subsequent frames.
     ///
-    /// # Arguments
-    ///
-    /// * `rgba_image_view` - An image view of the RGBA source image.
-    ///   The underlying image must be in `SHADER_READ_ONLY_OPTIMAL` layout.
+    /// `source_width` / `source_height` are the real extent of the image
+    /// behind the view. A source covering the configured picture area but
+    /// smaller than the codec-aligned extent is legal: the converter
+    /// edge-replicates into the alignment padding the SPS conformance crop
+    /// hides. A source smaller than the configured picture area is refused
+    /// naming both extents — encoding it would smear its edge pixels across
+    /// the missing picture region.
     pub fn encode_image(
         &mut self,
         rgba_image_view: vk::ImageView,
+        source_width: u32,
+        source_height: u32,
         timestamp_ns: Option<i64>,
     ) -> Result<Vec<EncodePacket>, VideoError> {
-        unsafe { self.encode_image_internal(rgba_image_view, timestamp_ns) }
+        if source_width < self.config.width || source_height < self.config.height {
+            return Err(VideoError::BitstreamError(format!(
+                "encode_image: source {}x{} does not cover the session's configured \
+                 picture area {}x{}",
+                source_width, source_height, self.config.width, self.config.height
+            )));
+        }
+        unsafe {
+            self.encode_image_internal(rgba_image_view, source_width, source_height, timestamp_ns)
+        }
+    }
+
+    /// Encode a GPU-resident RGBA source named as an engine [`Texture`] —
+    /// the handle-shaped submit for callers outside the RHI, which hold no
+    /// raw `vk::ImageView`.
+    ///
+    /// `source_layout` is the layout the caller's texture is currently in;
+    /// anything but `SHADER_READ_ONLY_OPTIMAL` (the layout resolved
+    /// published surfaces are left in, and the one the RGB→NV12 converter
+    /// samples from) is refused naming both layouts. The source extent is
+    /// read off the texture itself and bound by the same picture-area rule
+    /// as [`encode_image`](Self::encode_image).
+    ///
+    /// [`Texture`]: crate::core::rhi::Texture
+    pub fn encode_source_texture(
+        &mut self,
+        source: &crate::core::rhi::Texture,
+        source_layout: crate::core::rhi::VulkanLayout,
+        timestamp_ns: Option<i64>,
+    ) -> Result<Vec<EncodePacket>, VideoError> {
+        use crate::host_rhi::HostTextureExt;
+
+        if source_layout != crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+            return Err(VideoError::BitstreamError(format!(
+                "encode_source_texture: source layout {} unsupported — the RGB→NV12 \
+                 converter samples the source in SHADER_READ_ONLY_OPTIMAL ({})",
+                source_layout.0,
+                crate::core::rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
+            )));
+        }
+        let rgba_image_view = source.vulkan_inner().image_view().map_err(|e| {
+            VideoError::Engine(format!(
+                "encode_source_texture: resolve the source texture's image view: {e}"
+            ))
+        })?;
+        self.encode_image(
+            rgba_image_view,
+            source.width(),
+            source.height(),
+            timestamp_ns,
+        )
     }
 
     /// Eagerly allocate the GPU resources used by [`encode_image`](Self::encode_image).
