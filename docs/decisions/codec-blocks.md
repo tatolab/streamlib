@@ -21,8 +21,8 @@ numbers before the SDK pivots stranded its consumers:
 
 Consumers reached it through three successive APIs (typed structs → cdylib packages →
 plugin-SDK sessions), all deleted by the pivots. `GpuContext::create_encoder_session`
-/ `create_decoder_session` survive, maintained (correctness fixes through Aug 2026:
-#1895, #1894, #1920) — with zero live callers. The state was "dormant since mid-July,
+/ `create_decoder_session` survive, maintained (correctness fixes through Aug
+2026: #1895, #1894, #1920) — with zero live callers. The state was "dormant since mid-July,
 deliberately held", not "unproven". Hence: extend the existing machinery through
 built-ins; re-deriving DPB/reference-list logic would be the parallel-system mistake.
 
