@@ -64,7 +64,9 @@ async fn main() -> Result<()> {
 
     // Sent once, when the run loop returns, so the async jobs below wind
     // themselves up rather than being dropped where they are suspended — the
-    // tap in particular has a thread to join.
+    // tap in particular has a thread to join. On macOS the run loop does not
+    // return at all (AppKit terminates the process from inside it), so
+    // everything below the run loop is the non-Apple path.
     let (engine_is_down_sender, engine_is_down_receiver) = watch::channel(false);
 
     // Spawned before the graph starts; each waits for whatever it needs.
@@ -373,6 +375,12 @@ fn every_processor_is_running(graph: &serde_json::Value) -> bool {
 /// resolved — `Running` if it returned, something else if it did not. Waiting
 /// longer cannot move a processor out of one of those, so finding one ends the
 /// wait instead of burning the rest of the budget.
+///
+/// The two names below track `ProcessorState::is_before_setup_completed` in
+/// the engine. Reading them as strings is deliberate — this is the same JSON
+/// any API consumer of `streamlib graph` gets, and most of them have no Rust
+/// enum to deserialize into — but a state added ahead of `setup` there has to
+/// be added here too, or this reports a failure that has not happened.
 fn a_processor_that_settled_short_of_running(graph: &serde_json::Value) -> Option<String> {
     processor_nodes_of(graph).iter().find_map(|node| {
         let state = node["components"]["state"].as_str()?;

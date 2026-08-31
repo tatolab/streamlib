@@ -79,6 +79,11 @@ blocking-pool thread never is. Every other caller in the tree — `App::run`, th
 Python wheel's `Runtime.run` — calls it on its caller's thread for the same
 reason.
 
+macOS differs in one more way this app cannot paper over: that event loop never
+returns, because AppKit terminates the process from inside it. So the wind-up
+after the run loop — the shutdown signal, the joins, the tap's explicit detach —
+is the non-Apple path. This example is written and verified on Linux.
+
 ### A tap is how the graph's data reaches async code
 
 ```rust
@@ -178,7 +183,7 @@ Out of tree, the only line that changes is where the dependency comes from.
 the repo takes a git dependency pinned to a tag:
 
 ```toml
-streamlib = { git = "https://github.com/tato123/streamlib", tag = "v0.18.29" }
+streamlib = { git = "https://github.com/tatolab/streamlib", tag = "v0.18.29" }
 ```
 
 The plan is for the `streamlib` crate to be released alongside the wheel on one
@@ -201,7 +206,10 @@ Two edits worth making on purpose, because each fails in an instructive way:
 - Swap an `add_processor_async` for its sync `add_processor` and change
   `#[tokio::main]` to `#[tokio::main(flavor = "current_thread")]`. The app
   hangs on the first graph op, because the work it is waiting for has no thread
-  to run on.
+  to run on. Make only the flavor change and it breaks a second way instead:
+  `block_on` is then the sole executor, so the run loop blocking main strands
+  all three observer tasks — no tap, no state reports, and no deadline to end
+  the run. The multi-thread flavor is what makes the placement above work.
 - Change the sink's input to `delivery_profile = "newest"`. The ticks keep
   flowing, but any wake that finds more than one bag queued now collapses them:
   `newest` drains to the latest and discards the rest, so the intervals it does
