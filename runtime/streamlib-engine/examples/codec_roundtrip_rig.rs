@@ -40,6 +40,7 @@
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --codec h265
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1
+//! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1 --camera-max-width 3840 --camera-max-height 2160
 //! streamlib exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
@@ -402,6 +403,13 @@ mod linux_rig {
         /// and a real camera is whichever enumerates first, so the arm that
         /// must run on real hardware names its node.
         camera_device_id: Option<String>,
+        /// Resolution caps the camera arm negotiates against. Absent: the
+        /// built-in's own 1920x1080 default. Naming a higher cap is how a
+        /// run asks for more decode load than 1080p60 presents — the lever
+        /// the decoder-lags-encoder scenario needs on hardware whose decode
+        /// path has headroom at 60 fps.
+        camera_max_width: Option<u32>,
+        camera_max_height: Option<u32>,
     }
 
     fn parse_arguments() -> Result<RoundTripRigArguments> {
@@ -413,6 +421,8 @@ mod linux_rig {
             frames_per_reference: source_defaults.frames_per_reference,
             control_plane_port: DEFAULT_CONTROL_PLANE_PORT,
             camera_device_id: None,
+            camera_max_width: None,
+            camera_max_height: None,
         };
 
         let mut command_line = std::env::args().skip(1);
@@ -447,6 +457,18 @@ mod linux_rig {
                 }
                 "--fixtures" => arguments.fixtures_directory = next_value_for_this_flag()?,
                 "--camera" => arguments.camera_device_id = Some(next_value_for_this_flag()?),
+                "--camera-max-width" => {
+                    arguments.camera_max_width =
+                        Some(next_value_for_this_flag()?.parse().map_err(|_| {
+                            Error::Runtime("--camera-max-width takes a whole number".into())
+                        })?)
+                }
+                "--camera-max-height" => {
+                    arguments.camera_max_height =
+                        Some(next_value_for_this_flag()?.parse().map_err(|_| {
+                            Error::Runtime("--camera-max-height takes a whole number".into())
+                        })?)
+                }
                 "--control-plane-port" => {
                     arguments.control_plane_port = next_value_for_this_flag()?
                         .parse()
@@ -461,7 +483,8 @@ mod linux_rig {
                 unknown => {
                     return Err(Error::Runtime(format!(
                         "unknown flag {unknown}; the rig takes --source, --codec, --camera, \
-                         --fixtures, --frames-per-reference and --control-plane-port"
+                         --camera-max-width, --camera-max-height, --fixtures, \
+                         --frames-per-reference and --control-plane-port"
                     )));
                 }
             }
@@ -485,10 +508,11 @@ mod linux_rig {
             )?,
             RoundTripSourceArm::Camera => app.add(
                 CameraSource::Processor::processor_class_import_path(),
-                match &arguments.camera_device_id {
-                    Some(device_id) => serde_json::json!({ "device_id": device_id }),
-                    None => serde_json::json!({}),
-                },
+                serde_json::json!({
+                    "device_id": arguments.camera_device_id,
+                    "max_width": arguments.camera_max_width,
+                    "max_height": arguments.camera_max_height,
+                }),
                 Some("camera"),
             )?,
         };
