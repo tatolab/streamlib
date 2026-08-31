@@ -124,10 +124,15 @@ void main() {
     // BT.709 luma, the weights the mined original screened on.
     float luma = dot(ink.rgb, vec3(0.2126, 0.7152, 0.0722));
 
+    // Tone is carried by how much of the cell the ink covers, so it is the
+    // dot's *area* that scales with luma and the radius that takes the square
+    // root. Scaling the radius directly — what the mined original did —
+    // crushes every tone below mid grey to a single-texel speck.
+    //
     // 0.55 of the cell rather than 0.5, so dots in adjacent cells just touch
     // at full luma instead of leaving a permanent grid of background between
     // them.
-    float radius = float(dial.cell_size) * 0.55 * luma;
+    float radius = float(dial.cell_size) * 0.55 * sqrt(luma);
     float distance_from_centre = distance(vec2(at), vec2(centre));
     // One texel of feather on the dot's edge. A hard cutoff crawls on moving
     // video: a radius that grows by a fraction of a texel per frame lands on

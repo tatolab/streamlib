@@ -22,6 +22,13 @@ ivec2 centre = min(cell * dial.cell_size + dial.cell_size / 2, extent - 1);
 vec4 ink = texelFetch(camera_frame, centre, 0);
 ```
 
+What scales with brightness is the dot's **area**, not its radius — a cell
+twice as bright is twice as covered in ink — so the radius takes a square
+root. The mined original scaled the radius directly, which is why every tone
+below mid grey collapsed to a single-texel speck there and does not here. The
+edge gets one texel of feather for a reason worth knowing too, and the shader
+says which.
+
 **Every invocation reads a texel it does not write.** That is the one line
 worth carrying away, and it is what separates this from a per-texel grade like
 `camera-compute-kernel`'s: 64 invocations in an 8×8 cell all sample the same
@@ -191,16 +198,21 @@ Change it and re-run — the engine compiles the new text at startup, and a warm
 restart is sub-second. That is the edit loop; there is no reload-on-save and
 nothing is cached against you.
 
-Three edits worth making, in rising order of how much they teach:
+Four edits worth making, in rising order of how much they teach:
 
 - **Turn the screen up.** `cell_size` at 24 in `app.py` makes the dots big
   enough to count and the effect unmistakable from across a room; at 3 it
   approaches the original picture. No shader change — it is a push constant.
+- **Scale the radius by luma directly** — drop the `sqrt` — and watch the
+  shadows collapse. That is the mined original's tone curve, and against a
+  colour-bar pattern the magenta, red and blue bars go to near-black while the
+  top three stay fine. It is the clearest demonstration in this app that a
+  halftone's tone lives in dot *area*.
 - **Drop the feather.** Replace the `smoothstep` coverage with
-  `float coverage = distance_from_centre <= radius ? 1.0 : 0.0;`, which is what
-  the mined original did. Still recognisably halftone on a still frame, and
-  visibly crawling once you move — a dot's radius changes by a fraction of a
-  texel per frame, and a hard edge can only move a whole texel at a time.
+  `float coverage = distance_from_centre <= radius ? 1.0 : 0.0;`, also what the
+  mined original did. Still recognisably halftone on a still frame, and visibly
+  crawling once you move — a dot's radius changes by a fraction of a texel per
+  frame, and a hard edge can only move a whole texel at a time.
 - **Screen the dots monochrome.** Replace `ink.rgb` in `dot_colour` with
   `vec3(luma)` and the picture becomes true black-and-white newsprint rather
   than a colour screen.
