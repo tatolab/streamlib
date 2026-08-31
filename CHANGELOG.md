@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.30](https://github.com/tatolab/streamlib/compare/v0.18.29...v0.18.30) (2026-08-31)
+
+
+### Features
+
+* **examples:** convert tokio-integration as a plain-cargo Rust app ([#2076](https://github.com/tatolab/streamlib/issues/2076)) ([6daf9f6](https://github.com/tatolab/streamlib/commit/6daf9f6f8054461e6bc6444322c1c320f75dda3c))
+
 ## [0.18.29](https://github.com/tatolab/streamlib/compare/v0.18.28...v0.18.29) (2026-08-31)
 
 
