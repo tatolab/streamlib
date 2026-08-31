@@ -1,19 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 [package]
 name = "tokio-integration"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Standalone example (headed to its own repo). The empty `[workspace]` makes this
-# its own workspace root so it builds off-tree, and the `streamlib` SDK resolves
-# by version. This demo drives `Runner` directly and loads no processor
-# packages — so `./setup.sh` only links the SDK.
-[dependencies]
-# The SDK is resolved by version. `./setup.sh` runs
-# `streamlib link --engine <checkout>` to point this dep at the in-repo SDK
-# checkout (the static file tree / linked checkout is the package source; there
-# is no central package registry). Reverse with `streamlib unlink --engine`.
-streamlib = { version = "0.16.0" }
-tokio = { version = "1", features = ["full"] }
-
+# A downstream consumer, not a workspace member. The empty `[workspace]` makes
+# this directory its own workspace root, so `cargo run` from here builds it
+# against the checkout it ships inside.
 [workspace]
+
+[dependencies]
+# The one engine dependency. In-repo it resolves through the checkout beside
+# it; out of tree the same app writes `streamlib = "0.18"`. No version
+# requirement is stated on the path, because an example is never published and
+# a bare path dependency always resolves.
+streamlib = { path = "../../sdk/streamlib-sdk" }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+# A bag is msgpack, and the engine hands a tap the bytes verbatim — so the
+# async consumer decodes them with an ordinary msgpack crate.
+rmp-serde = "1.3"
+tracing = "0.1"
