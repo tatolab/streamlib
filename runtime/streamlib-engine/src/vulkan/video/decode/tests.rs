@@ -590,14 +590,52 @@ fn a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr() {
 /// H.264 permits trailing zero bytes after a NAL unit's payload, and a
 /// driver's parameter sets may carry them. Those bytes belong to no NAL
 /// unit: the reader must not hand them on as payload, or the parameter set
-/// the decoder parses is not the one the encoder wrote.
+/// the decoder parses is not the one the encoder wrote. Both start-code
+/// widths, because a four-byte code absorbs one leading zero itself and a
+/// zero ahead of it used to stay attached to the preceding NAL while the
+/// three-byte case shed it.
 #[test]
 fn trailing_zero_bytes_between_nal_units_stay_out_of_the_payload() {
-    let mut with_trailing_zero = annex_b_nal_unit(4, &[0x67, 0x42, 0x00, 0x1E, 0x00]);
-    with_trailing_zero.extend_from_slice(&annex_b_nal_unit(3, &[0x68, 0xCE, 0x38, 0x80]));
+    for next_start_code_length in [3usize, 4] {
+        let mut with_trailing_zero = annex_b_nal_unit(4, &[0x67, 0x42, 0x00, 0x1E, 0x00]);
+        with_trailing_zero.extend_from_slice(&annex_b_nal_unit(
+            next_start_code_length,
+            &[0x68, 0xCE, 0x38, 0x80],
+        ));
 
-    let nal_units = SimpleDecoder::split_nal_units_owned(&with_trailing_zero);
-    assert_eq!(nal_units.len(), 2);
-    assert_eq!(nal_units[0], vec![0x67, 0x42, 0x00, 0x1E]);
-    assert_eq!(nal_units[1], vec![0x68, 0xCE, 0x38, 0x80]);
+        let nal_units = SimpleDecoder::split_nal_units_owned(&with_trailing_zero);
+        assert_eq!(
+            nal_units.len(),
+            2,
+            "next start code {next_start_code_length} bytes"
+        );
+        assert_eq!(nal_units[0], vec![0x67, 0x42, 0x00, 0x1E]);
+        assert_eq!(nal_units[1], vec![0x68, 0xCE, 0x38, 0x80]);
+    }
+
+    // Trailing zeros ahead of no further start code — the buffer's end —
+    // are filler too, and a run that is nothing but zeros is no NAL at all.
+    let trailing_at_end = annex_b_nal_unit(4, &[0x67, 0x42, 0x00, 0x1E, 0x00, 0x00]);
+    assert_eq!(
+        SimpleDecoder::split_nal_units_owned(&trailing_at_end),
+        vec![vec![0x67, 0x42, 0x00, 0x1E]]
+    );
+}
+
+/// The reader skips an H.265 NAL shorter than its two-byte header, so a
+/// truncated one must not satisfy the parameter-set check either — the
+/// check exists to agree with the reader.
+#[test]
+fn a_truncated_h265_nal_header_is_not_counted_as_a_parameter_set() {
+    let mut one_byte_parameter_sets = annex_b_nal_unit(4, &[33 << 1]);
+    one_byte_parameter_sets.extend_from_slice(&annex_b_nal_unit(4, &[34 << 1]));
+    let refusal = why_no_decoder_could_enter_on_these_parameter_sets(
+        &one_byte_parameter_sets,
+        crate::vulkan::video::encode::Codec::H265,
+    )
+    .expect("one-byte NAL headers configure nothing");
+    assert!(
+        refusal.contains("SPS") && refusal.contains("PPS"),
+        "{refusal}"
+    );
 }

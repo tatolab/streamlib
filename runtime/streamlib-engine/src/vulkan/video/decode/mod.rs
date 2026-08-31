@@ -61,13 +61,19 @@ pub(crate) fn why_no_decoder_could_enter_on_these_parameter_sets(
         crate::vulkan::video::encode::Codec::H264 => &[(7, "SPS"), (8, "PPS")],
         crate::vulkan::video::encode::Codec::H265 => &[(33, "SPS"), (34, "PPS")],
     };
+    // The reader's own floor: `feed` skips an H.265 NAL shorter than its
+    // two-byte header, so a truncated one must not count as a parameter set
+    // here either — the whole point is that this check and the reader agree.
+    let nal_header_bytes = match codec {
+        crate::vulkan::video::encode::Codec::H264 => 1,
+        crate::vulkan::video::encode::Codec::H265 => 2,
+    };
     let nal_unit_types: Vec<u8> = SimpleDecoder::split_nal_units_owned(parameter_set_bytes)
         .iter()
-        .filter_map(|nal_unit| {
-            nal_unit.first().map(|header_byte| match codec {
-                crate::vulkan::video::encode::Codec::H264 => header_byte & 0x1F,
-                crate::vulkan::video::encode::Codec::H265 => (header_byte >> 1) & 0x3F,
-            })
+        .filter(|nal_unit| nal_unit.len() >= nal_header_bytes)
+        .map(|nal_unit| match codec {
+            crate::vulkan::video::encode::Codec::H264 => nal_unit[0] & 0x1F,
+            crate::vulkan::video::encode::Codec::H265 => (nal_unit[0] >> 1) & 0x3F,
         })
         .collect();
 
@@ -666,7 +672,7 @@ impl SimpleDecoder {
 
             if let Some(sc_len) = is_start_code {
                 if let Some(s) = start {
-                    nals.push(data[s..i].to_vec());
+                    Self::push_nal_without_trailing_zero_bytes(&mut nals, &data[s..i]);
                 }
                 start = Some(i + sc_len);
                 i += sc_len;
@@ -677,11 +683,30 @@ impl SimpleDecoder {
 
         if let Some(s) = start {
             if s < data.len() {
-                nals.push(data[s..].to_vec());
+                Self::push_nal_without_trailing_zero_bytes(&mut nals, &data[s..]);
             }
         }
 
         nals
+    }
+
+    /// Push one split-out NAL with its Annex-B `trailing_zero_8bits` removed.
+    /// A four-byte start code absorbs one leading zero, so a zero sitting
+    /// between a NAL and a `00 00 00 01` would otherwise stay attached to the
+    /// NAL — asymmetrically with the three-byte case, which absorbs it. Safe
+    /// to trim unconditionally: a well-formed NAL never ends in a raw `0x00`
+    /// (its last byte carries the `rbsp_stop_bit`, and `cabac_zero_words`
+    /// end in `0x03` after emulation prevention).
+    fn push_nal_without_trailing_zero_bytes(nals: &mut Vec<Vec<u8>>, nal_bytes: &[u8]) {
+        let trailing_zero_count = nal_bytes
+            .iter()
+            .rev()
+            .take_while(|byte| **byte == 0)
+            .count();
+        let payload = &nal_bytes[..nal_bytes.len() - trailing_zero_count];
+        if !payload.is_empty() {
+            nals.push(payload.to_vec());
+        }
     }
 
     /// Find the byte position of the last start code in the buffer.

@@ -297,8 +297,9 @@ impl EncodedStreamSyncPointGate {
             // this reader's decode state cannot describe either way. The
             // indices come off the wire unchecked, so the arithmetic that
             // measures the gap must survive any pair of them.
-            self.frames_lost_to_gaps +=
-                sequence_index.saturating_sub(newest_seen).saturating_sub(1);
+            self.frames_lost_to_gaps = self
+                .frames_lost_to_gaps
+                .saturating_add(sequence_index.saturating_sub(newest_seen).saturating_sub(1));
             self.awaiting_a_sync_point = true;
         }
         self.newest_sequence_index_seen = Some(sequence_index);
@@ -658,6 +659,15 @@ mod tests {
             ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
         );
         assert_eq!(gate.frames_lost_to_gaps(), 0);
+
+        // A hostile producer alternating the extremes accumulates two
+        // near-u64::MAX gaps; the tally saturates rather than wrapping or
+        // panicking under overflow checks.
+        let mut alternating = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
+        for hostile_index in [0, u64::MAX, 0, u64::MAX] {
+            alternating.admit(hostile_index, true);
+        }
+        assert_eq!(alternating.frames_lost_to_gaps(), u64::MAX);
     }
 
     /// A reader that learned of a discontinuity the ordering pair cannot

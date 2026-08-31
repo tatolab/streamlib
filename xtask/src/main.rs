@@ -438,6 +438,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "vulkan::video::decode::tests::empty_parameter_sets_are_refused_naming_what_a_decoder_needed",
                 "vulkan::video::decode::tests::parameter_sets_missing_one_required_set_are_refused_naming_only_that_one",
                 "vulkan::video::decode::tests::h265_parameter_sets_carrying_no_vps_still_open_a_decodable_stream",
+                "vulkan::video::decode::tests::a_truncated_h265_nal_header_is_not_counted_as_a_parameter_set",
                 "vulkan::video::decode::tests::a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr",
                 "vulkan::video::decode::tests::trailing_zero_bytes_between_nal_units_stay_out_of_the_payload",
             ],
