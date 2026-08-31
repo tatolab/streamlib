@@ -94,9 +94,14 @@ struct H264EncodeSessionMintedFromUpstream {
 )]
 pub struct H264Encoder {
     encode_session: Option<H264EncodeSessionMintedFromUpstream>,
+    /// Latched on the first failed mint: this machine will not grow a
+    /// Vulkan Video encode queue mid-run, and retrying would re-take the
+    /// escalate gate — and its device-idle drain — on every camera frame.
+    session_mint_already_failed: bool,
     gpu_context: Option<GpuContextLimitedAccess>,
     ordering_pair_counter: EncodedFrameOrderingPairCounter,
     frames_encoded: u64,
+    frames_that_failed_to_encode: u64,
 }
 
 impl ReactiveProcessor for H264Encoder::Processor {
@@ -111,6 +116,7 @@ impl ReactiveProcessor for H264Encoder::Processor {
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_encoded = self.frames_encoded,
+            frames_that_failed_to_encode = self.frames_that_failed_to_encode,
             "H264Encoder: teardown"
         );
         self.encode_session.take();
@@ -124,35 +130,46 @@ impl ReactiveProcessor for H264Encoder::Processor {
         }
         let frame: VideoFrame = self.inputs.read("video")?;
 
+        // A frame arriving after a failed mint is drained and discarded, so
+        // upstream still sees a live consumer and the escalate gate is not
+        // re-taken at camera cadence on a machine with no encode queue.
+        if self.encode_session.is_none() && self.session_mint_already_failed {
+            return Ok(());
+        }
         let gpu_context = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| Error::Runtime("H264Encoder: GPU context not initialized".into()))?
-            .clone();
+            .ok_or_else(|| Error::Runtime("H264Encoder: GPU context not initialized".into()))?;
 
-        let session_is_stale = self
+        if let Some(stale_session) = self
             .encode_session
-            .as_ref()
-            .is_some_and(|minted| !minted.matches_source_extent(frame.width, frame.height));
-        if session_is_stale {
-            let minted = self.encode_session.take().expect("checked above");
+            .take_if(|minted| !minted.matches_source_extent(frame.width, frame.height))
+        {
             tracing::info!(
-                minted_width = minted.minted_width,
-                minted_height = minted.minted_height,
+                minted_width = stale_session.minted_width,
+                minted_height = stale_session.minted_height,
                 frame_width = frame.width,
                 frame_height = frame.height,
                 "H264Encoder: upstream extent changed — re-minting the encoder session"
             );
         }
-        if self.encode_session.is_none() {
-            self.encode_session = Some(mint_encode_session_from_first_frame(
-                &gpu_context,
-                &self.config,
-                &frame,
-            )?);
-        }
         let (packets, session_bag_fields) = {
-            let minted = self.encode_session.as_mut().expect("minted above");
+            let minted = match &mut self.encode_session {
+                Some(minted) => minted,
+                empty_session_slot => {
+                    match mint_encode_session_from_first_frame(gpu_context, &self.config, &frame) {
+                        Ok(minted) => empty_session_slot.insert(minted),
+                        Err(mint_failure) => {
+                            self.session_mint_already_failed = true;
+                            tracing::error!(
+                                "H264Encoder: the encoder session could not be minted; every \
+                                 later frame is discarded: {mint_failure}"
+                            );
+                            return Err(mint_failure);
+                        }
+                    }
+                }
+            };
             minted.warn_once_on_color_change(frame.color_info.as_ref());
 
             // Resolve the frame's published surface; the registration's
@@ -164,15 +181,20 @@ impl ReactiveProcessor for H264Encoder::Processor {
                 frame.width,
                 frame.height,
             )?;
-            let packets = minted
-                .session
-                .encode_source_texture(
-                    source_registration.texture(),
-                    source_registration.current_layout(),
-                    Some(frame.timestamp_ns),
-                )
-                .map_err(|e| Error::Runtime(format!("H264Encoder: encode failed: {e}")))?;
-            (packets, minted_bag_fields(minted))
+            let packets = match minted.session.encode_source_texture(
+                source_registration.texture(),
+                source_registration.current_layout(),
+                Some(frame.timestamp_ns),
+            ) {
+                Ok(packets) => packets,
+                Err(encode_failure) => {
+                    self.frames_that_failed_to_encode += 1;
+                    return Err(Error::Runtime(format!(
+                        "H264Encoder: encode failed: {encode_failure}"
+                    )));
+                }
+            };
+            (packets, minted.fields_every_published_bag_carries())
         };
 
         for packet in packets {
@@ -201,14 +223,6 @@ struct MintedSessionBagFields {
     coded_width: u32,
     coded_height: u32,
     color: Option<ColorInfo>,
-}
-
-fn minted_bag_fields(minted: &H264EncodeSessionMintedFromUpstream) -> MintedSessionBagFields {
-    MintedSessionBagFields {
-        coded_width: minted.coded_width,
-        coded_height: minted.coded_height,
-        color: minted.minted_color.clone(),
-    }
 }
 
 impl H264Encoder::Processor {
@@ -243,6 +257,14 @@ impl H264Encoder::Processor {
 }
 
 impl H264EncodeSessionMintedFromUpstream {
+    fn fields_every_published_bag_carries(&self) -> MintedSessionBagFields {
+        MintedSessionBagFields {
+            coded_width: self.coded_width,
+            coded_height: self.coded_height,
+            color: self.minted_color.clone(),
+        }
+    }
+
     fn matches_source_extent(&self, frame_width: u32, frame_height: u32) -> bool {
         self.minted_width == frame_width && self.minted_height == frame_height
     }

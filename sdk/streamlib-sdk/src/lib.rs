@@ -223,12 +223,12 @@ pub mod sdk {
         /// `Codec`, `Preset`, `EncodePacket`, codec configuration
         /// types, `H273ColorVui`). Sessions are minted through the
         /// `GpuContext` session surface — `create_encoder_session` /
-        /// `create_decoder_session`, mirrored on `GpuContextFullAccess`
-        /// so a processor's `process()` reaches the mint via
-        /// `escalate(|full| ...)` — which wires the host RHI's queue
-        /// mutex, allocator, and per-queue families internally. The
-        /// codec built-ins in `streamlib-media-builtins` reach for the
-        /// codec types here.
+        /// `create_decoder_session` — which wires the host RHI's queue
+        /// mutex, allocator, and per-queue families internally;
+        /// `create_encoder_session` is mirrored on
+        /// `GpuContextFullAccess` so a processor's `process()` reaches
+        /// the mint via `escalate(|full| ...)`. The codec built-ins in
+        /// `streamlib-media-builtins` reach for the codec types here.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::video;
     }

@@ -36,12 +36,25 @@ pub enum EncodedVideoCodec {
 }
 
 impl EncodedVideoCodec {
-    /// The wire spelling, which is also what a refusal names.
+    /// Every codec the convention legalises, in wire order.
+    pub const ALL: [EncodedVideoCodec; 2] = [EncodedVideoCodec::H264, EncodedVideoCodec::H265];
+
+    /// The wire spelling, which is also what a refusal names. The serde
+    /// renames on the enum are the same strings, locked together by the
+    /// wire-key test.
     pub fn as_wire_str(self) -> &'static str {
         match self {
             EncodedVideoCodec::H264 => "h264",
             EncodedVideoCodec::H265 => "h265",
         }
+    }
+
+    /// Read a wire spelling, or `None` for one this convention does not
+    /// legalise.
+    pub fn from_wire_str(codec: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|legal_codec| legal_codec.as_wire_str() == codec)
     }
 }
 
@@ -96,6 +109,8 @@ pub enum EncodedVideoFrameBagRefusal {
     MissingCodec,
 }
 
+impl std::error::Error for EncodedVideoFrameBagRefusal {}
+
 impl std::fmt::Display for EncodedVideoFrameBagRefusal {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -108,12 +123,16 @@ impl std::fmt::Display for EncodedVideoFrameBagRefusal {
             EncodedVideoFrameBagRefusal::UnknownCodec { codec } => write!(
                 formatter,
                 "`codec` is `\"{codec}\"`, which names no elementary stream this reader can \
-                 decode — it reads `\"h264\"` and `\"h265\"`"
+                 decode — it reads `\"{}\"` and `\"{}\"`",
+                EncodedVideoCodec::H264.as_wire_str(),
+                EncodedVideoCodec::H265.as_wire_str(),
             ),
             EncodedVideoFrameBagRefusal::MissingCodec => write!(
                 formatter,
                 "the bag names no `codec`, so no decoder can be chosen for its bitstream — \
-                 producers write `\"h264\"` or `\"h265\"`"
+                 producers write `\"{}\"` or `\"{}\"`",
+                EncodedVideoCodec::H264.as_wire_str(),
+                EncodedVideoCodec::H265.as_wire_str(),
             ),
         }
     }
@@ -149,13 +168,11 @@ pub fn read_encoded_video_frame_bag(
             },
         )?;
     let codec = match on_the_wire.codec.as_deref() {
-        Some("h264") => EncodedVideoCodec::H264,
-        Some("h265") => EncodedVideoCodec::H265,
-        Some(unknown_codec) => {
-            return Err(EncodedVideoFrameBagRefusal::UnknownCodec {
-                codec: unknown_codec.to_string(),
-            });
-        }
+        Some(wire_codec) => EncodedVideoCodec::from_wire_str(wire_codec).ok_or_else(|| {
+            EncodedVideoFrameBagRefusal::UnknownCodec {
+                codec: wire_codec.to_string(),
+            }
+        })?,
         None => return Err(EncodedVideoFrameBagRefusal::MissingCodec),
     };
     Ok(EncodedVideoFrame {
@@ -308,6 +325,42 @@ mod tests {
         assert!(
             refusal.to_string().contains("`bitstream`"),
             "the refusal names the keys the reader reads: {refusal}"
+        );
+    }
+
+    /// The serde renames and `as_wire_str` are two spellings of one
+    /// vocabulary; this is what keeps them one.
+    #[test]
+    fn the_serde_spelling_and_the_wire_str_pair_agree_for_every_codec() {
+        for codec in EncodedVideoCodec::ALL {
+            let serde_spelling = serde_json::to_value(codec).expect("serialize");
+            assert_eq!(serde_spelling, codec.as_wire_str());
+            assert_eq!(
+                EncodedVideoCodec::from_wire_str(codec.as_wire_str()),
+                Some(codec)
+            );
+        }
+        assert_eq!(EncodedVideoCodec::from_wire_str("av1"), None);
+    }
+
+    #[test]
+    fn a_bag_carrying_no_codec_at_all_is_refused_as_missing() {
+        let mut frame = an_encoded_frame();
+        frame.color = None;
+        let entries = decode_msgpack_named_map_entries(
+            &rmp_serde::to_vec_named(&frame).expect("msgpack serialize"),
+        )
+        .into_iter()
+        .filter(|(key, _)| key.as_str() != Some("codec"))
+        .collect();
+        let mut wire_bytes = Vec::new();
+        rmpv::encode::write_value(&mut wire_bytes, &rmpv::Value::Map(entries)).expect("re-encode");
+
+        let refusal = read_encoded_video_frame_bag(&wire_bytes).expect_err("must be refused");
+        assert_eq!(refusal, EncodedVideoFrameBagRefusal::MissingCodec);
+        assert!(
+            refusal.to_string().contains("no `codec`"),
+            "the refusal says what is missing: {refusal}"
         );
     }
 

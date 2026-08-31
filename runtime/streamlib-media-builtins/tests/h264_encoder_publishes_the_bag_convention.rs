@@ -34,10 +34,15 @@ use streamlib_media_builtins::{
 /// reach Running.
 const READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// How long the graph runs once every processor is up. Longer than the
-/// encoder's default 2 s IDR interval, so the collected stream must carry a
-/// periodic sync point beyond the opening one.
-const FRAMES_REALLY_FLOW_FOR: Duration = Duration::from_secs(5);
+/// The run is bounded by observation, not wall time: the IDR cadence is
+/// `keyframe_interval_seconds × the session's fps` counted in *encoded
+/// frames*, and the session's fps is whatever the camera negotiated — so a
+/// wall-clock run length proves nothing about how many sync points landed.
+/// The graph runs until this many bags and this many sync points are
+/// collected, under a generous cap.
+const ENOUGH_COLLECTED_BAGS: usize = 10;
+const ENOUGH_SYNC_POINTS: usize = 2;
+const COLLECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// One collected bag: the decoded convention fields plus the frame-header
 /// timestamp it rode with.
@@ -173,16 +178,33 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
     let readiness = app
         .runner()
         .wait_until_every_processor_is_running(READINESS_TIMEOUT);
-    let held_up_from = Instant::now();
-    while held_up_from.elapsed() < FRAMES_REALLY_FLOW_FOR {
+    let collecting_since = Instant::now();
+    let enough_was_collected = loop {
+        {
+            let observations = encoded_channel_observations().lock().unwrap();
+            let sync_points_collected = observations
+                .collected
+                .iter()
+                .filter(|collected| collected.encoded_frame.is_sync_point)
+                .count();
+            if observations.collected.len() >= ENOUGH_COLLECTED_BAGS
+                && sync_points_collected >= ENOUGH_SYNC_POINTS
+            {
+                break true;
+            }
+        }
+        if collecting_since.elapsed() > COLLECTION_TIMEOUT {
+            break false;
+        }
         std::thread::sleep(Duration::from_millis(100));
-    }
+    };
     let stop_outcome = app.runner().stop();
 
-    readiness.expect(
-        "every processor must reach Running — an encoder whose session mint \
-         failed errors in its first process()",
-    );
+    // Readiness covers setup only — the camera opening its device and the
+    // GPU bring-up. The lazy session mint happens in the first process()
+    // and a failed mint leaves the processor Running; what notices it is
+    // the collected stream staying empty below.
+    readiness.expect("every processor must reach Running");
     stop_outcome.expect("the graph stops cleanly");
 
     let observations = encoded_channel_observations().lock().unwrap();
@@ -192,10 +214,16 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
         "every published bag must read back through the convention's own reader"
     );
     assert!(
-        observations.collected.len() >= 10,
-        "a {FRAMES_REALLY_FLOW_FOR:?} camera run must land a real stream of encoded bags, \
-         got {}",
-        observations.collected.len()
+        enough_was_collected,
+        "a camera run must land {ENOUGH_COLLECTED_BAGS} encoded bags carrying \
+         {ENOUGH_SYNC_POINTS} sync points inside {COLLECTION_TIMEOUT:?}; got {} bags with {} \
+         sync points — an encoder whose session mint failed leaves this stream empty",
+        observations.collected.len(),
+        observations
+            .collected
+            .iter()
+            .filter(|collected| collected.encoded_frame.is_sync_point)
+            .count()
     );
 
     let first = &observations.collected[0].encoded_frame;
@@ -255,9 +283,9 @@ fn camera_frames_leave_the_graph_as_annex_b_bags_matching_the_convention() {
         previous = Some(collected);
     }
     assert!(
-        sync_point_count >= 2,
-        "a {FRAMES_REALLY_FLOW_FOR:?} run outlasts the 2 s IDR interval, so the opening \
-         sync point cannot be the only one, got {sync_point_count}"
+        sync_point_count >= ENOUGH_SYNC_POINTS,
+        "the collected stream carries the periodic sync points the run waited for, got \
+         {sync_point_count}"
     );
 
     let opening_access_unit_bytes = observations.collected[0]

@@ -366,11 +366,14 @@ impl SimpleEncoder {
         (self.compute_queue_family, self.compute_queue)
     }
 
-    /// Returns the aligned width and height used by the encode session.
+    /// Returns the aligned width and height used by the encode session —
+    /// the coded extent the bitstream carries before its conformance crop.
     ///
-    /// RGBA input images passed to `encode_image()` must have at least these
-    /// dimensions.  The driver may round up from the config width/height to
-    /// satisfy codec alignment requirements.
+    /// The driver may round up from the config width/height to satisfy
+    /// codec alignment requirements. An RGBA source passed to
+    /// [`encode_image`](Self::encode_image) only has to cover the
+    /// configured picture area; the gap up to this extent encodes as
+    /// edge-replicated padding the conformance crop hides.
     pub fn aligned_extent(&self) -> (u32, u32) {
         (self.aligned_width, self.aligned_height)
     }
