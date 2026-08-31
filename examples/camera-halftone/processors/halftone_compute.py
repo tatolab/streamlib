@@ -24,6 +24,7 @@ that copy; the pixels never touch the host.
 
 from __future__ import annotations
 
+import math
 import struct
 
 import cupy
@@ -169,12 +170,13 @@ class HalftoneCompute:
                 f"cell holds one dot and needs at least 2 pixels across to draw "
                 f"one; 8 is the screen the effect was written for"
             )
-        if float(dot_boost) <= 0.0:
+        if not math.isfinite(float(dot_boost)) or float(dot_boost) <= 0.0:
             raise ValueError(
                 f"HalftoneCompute was configured with dot_boost={dot_boost} — the "
-                f"dial scales the ink a dot is drawn in, so 1.0 leaves the "
-                f"sampled colour alone and anything at or below 0.0 prints black "
-                f"dots on the background"
+                f"dial scales the ink a dot is drawn in, so it wants a finite "
+                f"number above 0.0: 1.0 leaves the sampled colour alone, at or "
+                f"below 0.0 prints black dots on the background, and a NaN or an "
+                f"infinity reaches the shader as a multiply with no defined result"
             )
         if not 0.0 <= float(background_level) <= 1.0:
             raise ValueError(

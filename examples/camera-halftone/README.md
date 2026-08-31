@@ -200,9 +200,10 @@ nothing is cached against you.
 
 Four edits worth making, in rising order of how much they teach:
 
-- **Turn the screen up.** `cell_size` at 24 in `app.py` makes the dots big
-  enough to count and the effect unmistakable from across a room; at 3 it
-  approaches the original picture. No shader change — it is a push constant.
+- **Turn the screen up.** Raise `cell_size` from 8 to 24 in `app.py` and the
+  dots get big enough to count, the effect unmistakable from across a room;
+  drop it to 3 and the picture comes back. No shader change — it is a push
+  constant.
 - **Scale the radius by luma directly** — drop the `sqrt` — and watch the
   shadows collapse. That is the mined original's tone curve, and against a
   colour-bar pattern the magenta, red and blue bars go to near-black while the
