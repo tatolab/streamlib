@@ -49,12 +49,6 @@ const READINESS_TIMEOUT: Duration = Duration::from_secs(20);
 const ENOUGH_SYNC_POINTS_ENCODED: usize = 2;
 const COLLECTION_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// The most an `ordered` link can be holding for the decoder when the graph
-/// stops — the profile's own depth. Encoded frames still queued behind that
-/// are in flight, not lost, so the decoded count is allowed to trail the
-/// encoded one by this much and no more.
-const ORDERED_LINK_DEPTH: u64 = 16;
-
 /// The encoder's sync-point cadence for this run, short so the second IDR
 /// lands within a few seconds of the test pattern's 30 fps.
 const KEYFRAME_INTERVAL_SECONDS: u32 = 1;
@@ -64,20 +58,41 @@ const KEYFRAME_INTERVAL_SECONDS: u32 = 1;
 const PATTERN_WIDTH: u32 = 1920;
 const PATTERN_HEIGHT: u32 = 1080;
 
+/// One encoded frame as the tap beside the decoder saw it.
+struct TalliedEncodedFrame {
+    sequence_index: u64,
+    is_sync_point: bool,
+    frame_header_timestamp_ns: i64,
+}
+
 /// What the encoded channel's tap saw.
 #[derive(Default)]
 struct EncodedChannelTally {
-    /// `(sequence_index, is_sync_point)` per bag, in arrival order.
-    ordering_pairs: Vec<(u64, bool)>,
+    frames: Vec<TalliedEncodedFrame>,
     refusals: Vec<String>,
 }
 
 impl EncodedChannelTally {
     fn sync_point_sequence_indices(&self) -> Vec<u64> {
-        self.ordering_pairs
+        self.frames
             .iter()
-            .filter(|(_, is_sync_point)| *is_sync_point)
-            .map(|(sequence_index, _)| *sequence_index)
+            .filter(|frame| frame.is_sync_point)
+            .map(|frame| frame.sequence_index)
+            .collect()
+    }
+
+    fn sync_point_timestamps_ns(&self) -> std::collections::HashSet<i64> {
+        self.frames
+            .iter()
+            .filter(|frame| frame.is_sync_point)
+            .map(|frame| frame.frame_header_timestamp_ns)
+            .collect()
+    }
+
+    fn every_published_timestamp_ns(&self) -> std::collections::HashSet<i64> {
+        self.frames
+            .iter()
+            .map(|frame| frame.frame_header_timestamp_ns)
             .collect()
     }
 }
@@ -115,12 +130,16 @@ pub struct EncodedFrameBagTally;
 
 impl ReactiveProcessor for EncodedFrameBagTally::Processor {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        while let Some((bag_bytes, _)) = self.inputs.read_raw("encoded_video")? {
+        while let Some((bag_bytes, frame_header_timestamp_ns)) =
+            self.inputs.read_raw("encoded_video")?
+        {
             let mut tally = encoded_channel_tally().lock().unwrap();
             match read_encoded_video_frame_bag(&bag_bytes) {
-                Ok(encoded_frame) => tally
-                    .ordering_pairs
-                    .push((encoded_frame.sequence_index, encoded_frame.is_sync_point)),
+                Ok(encoded_frame) => tally.frames.push(TalliedEncodedFrame {
+                    sequence_index: encoded_frame.sequence_index,
+                    is_sync_point: encoded_frame.is_sync_point,
+                    frame_header_timestamp_ns,
+                }),
                 Err(refusal) => tally.refusals.push(refusal.to_string()),
             }
         }
@@ -277,7 +296,7 @@ fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface()
         "every decoded bag must cast to a video frame"
     );
 
-    let encoded_frames = tally.ordering_pairs.len() as u64;
+    let encoded_frames = tally.frames.len() as u64;
     let decoded_frames = observations.frames.len() as u64;
     let sync_point_sequence_indices = tally.sync_point_sequence_indices();
     assert!(
@@ -292,12 +311,34 @@ fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface()
         "a decoder publishes at most one picture per access unit it was handed, got \
          {decoded_frames} from {encoded_frames}"
     );
+
+    // How far the decoded count trails the encoded one is not a contract: on
+    // a link that lost bags the doctrine discards a whole group on purpose,
+    // and in a debug build at 1080p that happens. What IS a contract is that
+    // every picture published corresponds to an access unit the encoder
+    // actually produced, and that the stream is only ever entered at a sync
+    // point. The gate's own arithmetic is unit-covered in
+    // `encoded_video_frame`; these are its observable consequences.
+    let published_timestamps_ns = tally.every_published_timestamp_ns();
+    let invented: Vec<i64> = observations
+        .frame_header_timestamps_ns
+        .iter()
+        .copied()
+        .filter(|timestamp_ns| !published_timestamps_ns.contains(timestamp_ns))
+        .collect();
+    assert_eq!(
+        invented,
+        Vec::<i64>::new(),
+        "every decoded frame carries the timestamp of an access unit the encoder published — \
+         a decoder invents no pictures and stamps none itself"
+    );
+
+    let sync_point_timestamps_ns = tally.sync_point_timestamps_ns();
+    let first_decoded_timestamp_ns = observations.frame_header_timestamps_ns[0];
     assert!(
-        encoded_frames - decoded_frames <= ORDERED_LINK_DEPTH,
-        "the decoded stream tracks the encoded one: at most the link's own depth \
-         ({ORDERED_LINK_DEPTH}) may still be in flight when the graph stops, but \
-         {encoded_frames} encoded against {decoded_frames} decoded leaves {} unaccounted",
-        encoded_frames - decoded_frames
+        sync_point_timestamps_ns.contains(&first_decoded_timestamp_ns),
+        "the stream is entered at a sync point and never mid-group: the first decoded frame \
+         carries timestamp {first_decoded_timestamp_ns}, which is no sync point's"
     );
 
     let mut previous_frame_header_timestamp_ns: Option<i64> = None;
@@ -322,8 +363,9 @@ fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface()
         );
         if let Some(previous) = previous_frame_header_timestamp_ns {
             assert!(
-                *frame_header_timestamp_ns >= previous,
-                "decoded timestamps never run backwards on an ordered channel"
+                *frame_header_timestamp_ns > previous,
+                "decoded timestamps advance strictly: an ordered channel never runs backwards, \
+                 and a picture is never published twice"
             );
         }
         previous_frame_header_timestamp_ns = Some(*frame_header_timestamp_ns);

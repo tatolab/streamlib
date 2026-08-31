@@ -6,10 +6,18 @@
 //! Built-in H.264 decoder: encoded-frame bags in, published video surfaces
 //! out, via the engine's Vulkan Video session surface.
 //!
-//! The session mints in `setup()`, whose typestate is already Full, with the
-//! DPB auto-sized from the stream's first SPS. Decoded pictures are read back
-//! as RGBA and staged into pooled pixel buffers whose pool id is the
-//! published `surface_id` — the same CPU→GPU hand-off the camera uses.
+//! The session mints in `setup()`, whose typestate is already Full, with its
+//! coded dimensions auto-detected from the stream's first SPS. Decoded
+//! pictures are read back as RGBA and staged into pooled pixel buffers whose
+//! pool id is the published `surface_id` — the same CPU→GPU hand-off the
+//! camera uses.
+//!
+//! One session serves one coded extent. A producer that renegotiates — the
+//! shipped encoder re-mints at a new extent and opens the new stream at a
+//! sync point without breaking `sequence_index` — is noticed by the extent on
+//! the bag, which is why the convention carries it: the session resets and
+//! the gate re-enters, rather than feeding new parameter sets into a session
+//! configured for the old ones.
 //!
 //! A consumer of an encoded stream must bound loss, so this one enters the
 //! stream at a sync point and discards back to one after a `sequence_index`
@@ -28,19 +36,28 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::rhi::PixelFormat;
 
+use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::encoded_video_frame::{
-    EncodedVideoCodec, EncodedVideoFrame, read_encoded_video_frame_bag,
+    ArrivingEncodedFrameDisposition, EncodedStreamSyncPointGate, EncodedVideoCodec,
+    EncodedVideoFrame, read_encoded_video_frame_bag,
 };
 use crate::h273_color_vui_translation::h273_color_vui_to_color_info;
+use crate::pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 use crate::video_frame::{ColorInfo, VideoFrame};
 
 /// Decode-progress log cadence, in frames.
 const DECODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 
-/// Configuration for [`H264Decoder`]. Both knobs are DPB-allocation
-/// guardrails and both are optional: absent, the coded dimensions and the
-/// DPB size are auto-detected from the stream's first SPS, which is what a
-/// decoder fed by an unknown producer wants.
+/// Stream re-entries between reports. A healthy run enters once and says so;
+/// a persistently lossy link re-enters at the producer's GOP cadence, and
+/// saying that every time buries the run in the symptom.
+const STREAM_RE_ENTRY_REPORT_INTERVAL: u64 = 20;
+
+/// Configuration for [`H264Decoder`]. Both knobs cap the extent the decoded
+/// picture buffer is allocated for, and both are optional: absent, the extent
+/// is auto-detected from the stream's first SPS, which is what a decoder fed
+/// by an unknown producer wants. The DPB's slot count is the session
+/// surface's own and is not configurable here.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct H264DecoderConfig {
     /// Upper bound on the coded width the DPB is allocated for. Absent:
@@ -50,90 +67,6 @@ pub struct H264DecoderConfig {
     /// Upper bound on the coded height, paired with [`Self::max_width`].
     #[serde(default)]
     pub max_height: Option<u32>,
-}
-
-/// What the loss doctrine says to do with one arriving encoded frame, given
-/// everything the gate has seen on this link before it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArrivingEncodedFrameDisposition {
-    /// Feed it: it continues a stream whose continuity is intact.
-    Decode,
-    /// Reset the decoder's parser state, then feed it: this frame is the
-    /// sync point that re-enters a stream whose continuity was broken.
-    ReEnterAtThisSyncPoint,
-    /// Discard it: the stream's continuity is broken and this frame is not
-    /// a re-entry point, so its reference frames were never seen.
-    DiscardUntilTheNextSyncPoint,
-}
-
-/// Per-link gate applying the decided loss doctrine to an encoded stream: a
-/// consumer that sees a `sequence_index` gap discards until the producer's
-/// next sync point, and never forwards a stream it knows is broken.
-///
-/// It opens broken, because the first bag a subscriber receives is not
-/// necessarily the first bag the producer published — an attach mid-GOP
-/// hands over slices whose IDR is already gone, and feeding those is exactly
-/// how a decoder ends a run having decoded nothing.
-#[derive(Debug, Default)]
-pub struct EncodedStreamSyncPointGate {
-    /// `None` until the first frame arrives; afterwards the newest
-    /// `sequence_index` seen, decoded or discarded.
-    newest_sequence_index_seen: Option<u64>,
-    awaiting_a_sync_point: bool,
-    frames_lost_to_gaps: u64,
-    frames_discarded_awaiting_a_sync_point: u64,
-}
-
-impl EncodedStreamSyncPointGate {
-    /// Open a gate that has seen nothing and is therefore waiting for a
-    /// sync point to enter the stream at.
-    pub fn opening_at_the_next_sync_point() -> Self {
-        Self {
-            newest_sequence_index_seen: None,
-            awaiting_a_sync_point: true,
-            frames_lost_to_gaps: 0,
-            frames_discarded_awaiting_a_sync_point: 0,
-        }
-    }
-
-    /// Admit one arriving frame, accounting the gap it exposes.
-    pub fn admit(
-        &mut self,
-        sequence_index: u64,
-        is_sync_point: bool,
-    ) -> ArrivingEncodedFrameDisposition {
-        if let Some(newest_seen) = self.newest_sequence_index_seen
-            && sequence_index != newest_seen + 1
-        {
-            // Any step other than exactly one breaks continuity: a forward
-            // jump is loss, and a repeat or a step backwards is a producer
-            // this reader's decode state cannot describe either way.
-            self.frames_lost_to_gaps += sequence_index.saturating_sub(newest_seen + 1);
-            self.awaiting_a_sync_point = true;
-        }
-        self.newest_sequence_index_seen = Some(sequence_index);
-
-        if !self.awaiting_a_sync_point {
-            return ArrivingEncodedFrameDisposition::Decode;
-        }
-        if is_sync_point {
-            self.awaiting_a_sync_point = false;
-            return ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint;
-        }
-        self.frames_discarded_awaiting_a_sync_point += 1;
-        ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
-    }
-
-    /// How many frames the `sequence_index` gaps say the link lost.
-    pub fn frames_lost_to_gaps(&self) -> u64 {
-        self.frames_lost_to_gaps
-    }
-
-    /// How many arriving frames were discarded because they were not a
-    /// re-entry point into a broken stream.
-    pub fn frames_discarded_awaiting_a_sync_point(&self) -> u64 {
-        self.frames_discarded_awaiting_a_sync_point
-    }
 }
 
 #[streamlib::sdk::processor(
@@ -152,6 +85,10 @@ pub struct H264Decoder {
     decode_session: Option<SimpleDecoder>,
     gpu_context: Option<GpuContextLimitedAccess>,
     sync_point_gate: EncodedStreamSyncPointGate,
+    stream_re_entry_report_schedule: Option<CumulativeCountReportThreshold>,
+    /// The coded extent the minted session's parameter sets describe, learned
+    /// from the first bag admitted and compared against every later one.
+    session_coded_extent: Option<(u32, u32)>,
     frames_decoded: u64,
     /// The color the published frames carry, resolved once the stream's SPS
     /// has been parsed, and said once rather than per frame.
@@ -160,7 +97,7 @@ pub struct H264Decoder {
 
 impl ReactiveProcessor for H264Decoder::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let (max_width, max_height) = resolve_decode_pool_dimension_caps(&self.config);
+        let (max_width, max_height) = resolve_decoded_picture_buffer_dimension_caps(&self.config);
         let session = ctx
             .gpu_full_access()
             .create_decoder_session(SimpleDecoderConfig {
@@ -179,7 +116,9 @@ impl ReactiveProcessor for H264Decoder::Processor {
                 ))
             })?;
 
-        self.sync_point_gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
+        self.stream_re_entry_report_schedule = Some(
+            CumulativeCountReportThreshold::reporting_every(STREAM_RE_ENTRY_REPORT_INTERVAL),
+        );
         self.decode_session = Some(session);
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
@@ -201,10 +140,18 @@ impl ReactiveProcessor for H264Decoder::Processor {
         );
         self.decode_session.take();
         self.gpu_context.take();
+        self.session_coded_extent = None;
         Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        if !self.inputs.has_data("encoded_video") {
+            return Ok(());
+        }
+        // Cloned once per tick that carries work, not per frame: the publish
+        // below needs `&mut self` for the session, the gate and the outputs
+        // while this is live, and a handle clone is cheaper than a signature
+        // that hands borrowck six disjoint fields.
         let gpu_context = self
             .gpu_context
             .as_ref()
@@ -231,14 +178,10 @@ impl H264Decoder::Processor {
     ) -> Result<()> {
         let encoded_frame = read_encoded_video_frame_bag(bag_bytes)
             .map_err(|refusal| Error::Runtime(format!("H264Decoder: {refusal}")))?;
-        if encoded_frame.codec != EncodedVideoCodec::H264 {
-            return Err(Error::Runtime(format!(
-                "H264Decoder: the bag names codec `\"{}\"`, which this decoder cannot decode — \
-                 it decodes `\"{}\"`",
-                encoded_frame.codec.as_wire_str(),
-                EncodedVideoCodec::H264.as_wire_str(),
-            )));
+        if let Some(refusal) = why_this_decoder_cannot_decode(encoded_frame.codec) {
+            return Err(Error::Runtime(refusal));
         }
+        self.break_continuity_if_the_producer_renegotiated_its_extent(&encoded_frame);
 
         match self
             .sync_point_gate
@@ -279,8 +222,38 @@ impl H264Decoder::Processor {
         Ok(())
     }
 
+    /// A producer that renegotiated its extent publishes new parameter sets
+    /// at a sync point without breaking `sequence_index` — the ordering pair
+    /// cannot show it, so the coded extent on the bag is what does. The
+    /// session must reconfigure from the new SPS rather than decode into a
+    /// DPB sized for the old one.
+    fn break_continuity_if_the_producer_renegotiated_its_extent(
+        &mut self,
+        encoded_frame: &EncodedVideoFrame,
+    ) {
+        let arriving_extent = (encoded_frame.width, encoded_frame.height);
+        match self.session_coded_extent {
+            Some(session_extent) if session_extent != arriving_extent => {
+                tracing::info!(
+                    session_width = session_extent.0,
+                    session_height = session_extent.1,
+                    arriving_width = arriving_extent.0,
+                    arriving_height = arriving_extent.1,
+                    "H264Decoder: the producer renegotiated its coded extent — reconfiguring \
+                     from the next sync point"
+                );
+                self.session_coded_extent = None;
+                self.sync_point_gate.break_continuity();
+            }
+            Some(_) => {}
+            None => self.session_coded_extent = Some(arriving_extent),
+        }
+    }
+
     /// Drop the decode state a broken stream left behind, so the sync point
-    /// about to be fed re-enters against nothing stale.
+    /// about to be fed re-enters against nothing stale. A full reset, not a
+    /// discontinuity: the parameter sets themselves may have changed, and the
+    /// ones that replace them ride the sync point about to be fed.
     fn reset_parser_state_before_re_entering(
         &mut self,
         encoded_frame: &EncodedVideoFrame,
@@ -289,16 +262,26 @@ impl H264Decoder::Processor {
             .decode_session
             .as_mut()
             .ok_or_else(|| Error::Runtime("H264Decoder: decoder session not initialized".into()))?;
-        session.feed_discontinuity();
-        tracing::info!(
-            sequence_index = encoded_frame.sequence_index,
-            group_index = encoded_frame.group_index,
-            frames_lost_to_gaps = self.sync_point_gate.frames_lost_to_gaps(),
-            frames_discarded_awaiting_a_sync_point = self
-                .sync_point_gate
-                .frames_discarded_awaiting_a_sync_point(),
-            "H264Decoder: entering the stream at a sync point"
-        );
+        session.reset();
+        self.session_coded_extent = Some((encoded_frame.width, encoded_frame.height));
+
+        let stream_re_entries = self.sync_point_gate.sync_points_entered_at();
+        let worth_reporting = self
+            .stream_re_entry_report_schedule
+            .as_mut()
+            .is_some_and(|schedule| schedule.count_is_worth_reporting(stream_re_entries));
+        if worth_reporting {
+            tracing::info!(
+                sequence_index = encoded_frame.sequence_index,
+                group_index = encoded_frame.group_index,
+                stream_re_entries,
+                frames_lost_to_gaps = self.sync_point_gate.frames_lost_to_gaps(),
+                frames_discarded_awaiting_a_sync_point = self
+                    .sync_point_gate
+                    .frames_discarded_awaiting_a_sync_point(),
+                "H264Decoder: entering the stream at a sync point"
+            );
+        }
         Ok(())
     }
 
@@ -321,38 +304,16 @@ impl H264Decoder::Processor {
         }
         let width = decoded_frame.width;
         let height = decoded_frame.height;
-        let rgba_byte_count = (width as usize) * (height as usize) * 4;
-        if decoded_frame.data.len() < rgba_byte_count {
-            return Err(Error::Runtime(format!(
-                "H264Decoder: the decoded picture is {} bytes, short of the {rgba_byte_count} \
-                 its {width}x{height} RGBA extent needs",
-                decoded_frame.data.len()
-            )));
-        }
 
         let (published_frame_id, pixel_buffer) =
             gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-        let plane_pointer = pixel_buffer.plane_base_address(0);
-        let plane_size = pixel_buffer.plane_size(0) as usize;
-        if plane_pointer.is_null() || plane_size < rgba_byte_count {
-            return Err(Error::Runtime(format!(
-                "H264Decoder: pixel-buffer plane unusable (ptr null: {}, size {plane_size} < \
-                 expected {rgba_byte_count})",
-                plane_pointer.is_null()
-            )));
-        }
-        // SAFETY: `plane_pointer` is the mapped host-visible base of plane 0
-        // of a freshly-acquired `Rgba32` pixel buffer, valid for `plane_size`
-        // bytes and checked above to be at least `rgba_byte_count`; the
-        // source is a distinct owned buffer of at least that length, so the
-        // regions cannot overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                decoded_frame.data.as_ptr(),
-                plane_pointer,
-                rgba_byte_count,
-            );
-        }
+        stage_tightly_packed_rgba_into_pooled_pixel_buffer(
+            &pixel_buffer,
+            &decoded_frame.data,
+            width,
+            height,
+        )
+        .map_err(|staging_failure| Error::Runtime(format!("H264Decoder: {staging_failure}")))?;
 
         let frame = VideoFrame {
             surface_id: published_frame_id.to_string(),
@@ -398,7 +359,7 @@ impl H264Decoder::Processor {
 /// surface's spelling of "auto-detect from the first SPS"; a half-specified
 /// pair caps nothing a DPB can be sized from, so it warns and auto-detects
 /// rather than allocating against one axis.
-fn resolve_decode_pool_dimension_caps(config: &H264DecoderConfig) -> (u32, u32) {
+fn resolve_decoded_picture_buffer_dimension_caps(config: &H264DecoderConfig) -> (u32, u32) {
     match (config.max_width, config.max_height) {
         (Some(max_width), Some(max_height)) => (max_width, max_height),
         (None, None) => (0, 0),
@@ -412,6 +373,20 @@ fn resolve_decode_pool_dimension_caps(config: &H264DecoderConfig) -> (u32, u32) 
             (0, 0)
         }
     }
+}
+
+/// Why this decoder cannot decode a bag naming `codec`, or `None` when it
+/// can. Refusal names both spellings rather than reshaping an elementary
+/// stream it does not know into one it does.
+fn why_this_decoder_cannot_decode(codec: EncodedVideoCodec) -> Option<String> {
+    (codec != EncodedVideoCodec::H264).then(|| {
+        format!(
+            "the bag names codec `\"{}\"`, which this decoder cannot decode — it decodes \
+             `\"{}\"`",
+            codec.as_wire_str(),
+            EncodedVideoCodec::H264.as_wire_str(),
+        )
+    })
 }
 
 /// The color a decoded frame is published with: the stream's own parsed VUI
@@ -434,7 +409,7 @@ mod tests {
     #[test]
     fn an_absent_config_auto_detects_both_dimensions_from_the_first_sps() {
         assert_eq!(
-            resolve_decode_pool_dimension_caps(&H264DecoderConfig::default()),
+            resolve_decoded_picture_buffer_dimension_caps(&H264DecoderConfig::default()),
             (0, 0)
         );
     }
@@ -445,7 +420,10 @@ mod tests {
             max_width: Some(1920),
             max_height: Some(1080),
         };
-        assert_eq!(resolve_decode_pool_dimension_caps(&config), (1920, 1080));
+        assert_eq!(
+            resolve_decoded_picture_buffer_dimension_caps(&config),
+            (1920, 1080)
+        );
     }
 
     /// A cap on one axis alone describes no allocation, so it must fall all
@@ -460,8 +438,14 @@ mod tests {
             max_width: None,
             max_height: Some(1080),
         };
-        assert_eq!(resolve_decode_pool_dimension_caps(&width_only), (0, 0));
-        assert_eq!(resolve_decode_pool_dimension_caps(&height_only), (0, 0));
+        assert_eq!(
+            resolve_decoded_picture_buffer_dimension_caps(&width_only),
+            (0, 0)
+        );
+        assert_eq!(
+            resolve_decoded_picture_buffer_dimension_caps(&height_only),
+            (0, 0)
+        );
     }
 
     /// `rt.add(H264Decoder)` with no config at all must deserialize.
@@ -471,109 +455,18 @@ mod tests {
         assert_eq!(config, H264DecoderConfig::default());
     }
 
-    /// The #1077 shape, as logic: a subscriber that attaches mid-GOP is
-    /// handed slices whose IDR is already gone. Feeding those is what ends
-    /// a run at `frames_decoded = 0`; the gate discards them and enters at
-    /// the producer's next sync point instead.
     #[test]
-    fn a_stream_joined_mid_group_is_discarded_until_its_next_sync_point() {
-        let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-
-        assert_eq!(
-            gate.admit(7, false),
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
+    fn an_h265_bag_reaching_this_decoder_is_refused_naming_both_codecs() {
+        let refusal = why_this_decoder_cannot_decode(EncodedVideoCodec::H265)
+            .expect("an H.265 bag must be refused");
+        assert!(
+            refusal.contains("h265") && refusal.contains("h264"),
+            "{refusal}"
         );
         assert_eq!(
-            gate.admit(8, false),
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
+            why_this_decoder_cannot_decode(EncodedVideoCodec::H264),
+            None
         );
-        assert_eq!(
-            gate.admit(9, true),
-            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
-        );
-        assert_eq!(
-            gate.admit(10, false),
-            ArrivingEncodedFrameDisposition::Decode
-        );
-        assert_eq!(gate.frames_discarded_awaiting_a_sync_point(), 2);
-        // Contiguous arrivals are not loss, however late the join was.
-        assert_eq!(gate.frames_lost_to_gaps(), 0);
-    }
-
-    /// The decided loss doctrine: a `sequence_index` gap breaks the stream,
-    /// and every frame until the producer's next sync point is discarded
-    /// rather than decoded against reference frames that were never seen.
-    #[test]
-    fn a_sequence_index_gap_discards_until_the_next_sync_point() {
-        let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-        assert_eq!(
-            gate.admit(0, true),
-            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
-        );
-        assert_eq!(
-            gate.admit(1, false),
-            ArrivingEncodedFrameDisposition::Decode
-        );
-
-        // 2 and 3 were overwritten in the ring; 4 is a non-sync-point.
-        assert_eq!(
-            gate.admit(4, false),
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
-        );
-        assert_eq!(
-            gate.admit(5, false),
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
-        );
-        assert_eq!(
-            gate.admit(6, true),
-            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
-        );
-        assert_eq!(
-            gate.admit(7, false),
-            ArrivingEncodedFrameDisposition::Decode
-        );
-
-        assert_eq!(gate.frames_lost_to_gaps(), 2);
-        assert_eq!(gate.frames_discarded_awaiting_a_sync_point(), 2);
-    }
-
-    /// A gap landing exactly on a sync point costs nothing but the gap: the
-    /// sync point is itself the re-entry point, so nothing is discarded.
-    #[test]
-    fn a_gap_landing_on_a_sync_point_re_enters_without_discarding_anything() {
-        let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-        assert_eq!(
-            gate.admit(0, true),
-            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
-        );
-        assert_eq!(
-            gate.admit(30, true),
-            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint
-        );
-        assert_eq!(gate.frames_lost_to_gaps(), 29);
-        assert_eq!(gate.frames_discarded_awaiting_a_sync_point(), 0);
-    }
-
-    /// `sequence_index` is monotonic for the life of a producer, so a repeat
-    /// or a step backwards describes a stream this reader's decode state
-    /// cannot continue — it re-enters rather than decoding on.
-    #[test]
-    fn a_sequence_index_that_does_not_advance_by_one_breaks_continuity_too() {
-        let mut gate = EncodedStreamSyncPointGate::opening_at_the_next_sync_point();
-        gate.admit(0, true);
-        gate.admit(1, false);
-        assert_eq!(
-            gate.admit(1, false),
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
-        );
-        assert_eq!(
-            gate.admit(0, false),
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint
-        );
-        // Neither backwards step is counted as frames lost — no frame went
-        // missing, the producer's numbering stopped making sense.
-        assert_eq!(gate.frames_lost_to_gaps(), 0);
-        assert_eq!(gate.frames_discarded_awaiting_a_sync_point(), 2);
     }
 
     #[test]

@@ -42,17 +42,24 @@ use crate::vulkan::video::video_context::{VideoContext, VideoError};
 /// The bytes `vkGetEncodedVideoSessionParametersKHR` hands an encoder back
 /// are implementation-defined, and an encoder that prepends them to its sync
 /// points has made them the stream's only entry point: a decoder that cannot
-/// find an SPS and a PPS in them configures no session and decodes nothing,
-/// however many slices follow. This answers the question with the engine's
-/// own NAL reader — the one that will actually be asked to find them — so
-/// the check and the reader cannot disagree about what is framed correctly.
-pub fn why_no_decoder_could_enter_on_these_parameter_sets(
+/// find them configures no session and decodes nothing, however many slices
+/// follow. This answers the question with the engine's own NAL reader — the
+/// one that will actually be asked to find them — so the check and the reader
+/// cannot disagree about what is framed correctly.
+///
+/// It asks for exactly what this decoder needs and no more. An SPS, because
+/// [`SimpleDecoder`] configures its session from one and refuses without the
+/// dimensions it carries; a PPS, because a slice resolves its `pic_parameter_
+/// set_id` against the parsed set and fails by name when it is absent. Not a
+/// VPS: the H.265 path defaults every field it would have read, so demanding
+/// one would refuse an encoder session whose stream this engine decodes.
+pub(crate) fn why_no_decoder_could_enter_on_these_parameter_sets(
     parameter_set_bytes: &[u8],
     codec: crate::vulkan::video::encode::Codec,
 ) -> Option<String> {
     let required_parameter_sets: &[(u8, &str)] = match codec {
         crate::vulkan::video::encode::Codec::H264 => &[(7, "SPS"), (8, "PPS")],
-        crate::vulkan::video::encode::Codec::H265 => &[(32, "VPS"), (33, "SPS"), (34, "PPS")],
+        crate::vulkan::video::encode::Codec::H265 => &[(33, "SPS"), (34, "PPS")],
     };
     let nal_unit_types: Vec<u8> = SimpleDecoder::split_nal_units_owned(parameter_set_bytes)
         .iter()

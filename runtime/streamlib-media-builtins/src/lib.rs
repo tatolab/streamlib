@@ -30,6 +30,7 @@ pub mod h273_color_vui_translation;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
+pub mod pooled_rgba_frame_staging;
 pub(crate) mod processor_thread_join;
 pub mod speaker_sink;
 pub mod test_pattern_source;
@@ -45,14 +46,16 @@ pub use camera_source::{CameraSource, CameraSourceConfig};
 #[cfg(target_os = "linux")]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
 pub use encoded_video_frame::{
-    EncodedFrameOrderingPair, EncodedFrameOrderingPairCounter, EncodedVideoCodec,
-    EncodedVideoFrame, EncodedVideoFrameBagRefusal, read_encoded_video_frame_bag,
+    ArrivingEncodedFrameDisposition, EncodedFrameOrderingPair, EncodedFrameOrderingPairCounter,
+    EncodedStreamSyncPointGate, EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal,
+    read_encoded_video_frame_bag,
 };
 #[cfg(target_os = "linux")]
 pub use h264_decoder::{H264Decoder, H264DecoderConfig};
 #[cfg(target_os = "linux")]
 pub use h264_encoder::{H264Encoder, H264EncoderConfig};
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
+pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;

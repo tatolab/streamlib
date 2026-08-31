@@ -20,6 +20,13 @@
 //! channel's exact pixels out of process — no window in the observation path,
 //! and the graph unchanged by being watched.
 //!
+//! A scorer joins the two taps on the **frame-header timestamp**, not on
+//! `sequence_index`. The ordering pair is an encoded-frame field and a
+//! decoded frame is an ordinary video-frame bag, which carries no such pair;
+//! what the decoder does propagate, unchanged, is the encoded frame's own
+//! timestamp. So: tap the encoded channel for `sequence_index` → timestamp,
+//! tap the decoded channel for timestamp → `surface_id`, and exchange that.
+//!
 //! ```text
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
@@ -53,21 +60,32 @@ mod linux_rig {
     };
     use streamlib_media_builtins::{
         CameraSource, DisplayWindow, H264Decoder, H264Encoder,
-        register_media_builtin_processor_types,
+        register_media_builtin_processor_types, stage_tightly_packed_rgba_into_pooled_pixel_buffer,
     };
 
-    /// The fixture source's publish cadence. The old harness settled on 10
-    /// fps because a faster source lets the display's `newest` input skip
-    /// frames right at a reference boundary, which is where a scorer's
-    /// pairing is most fragile.
-    const FIXTURE_PUBLISH_INTERVAL_MS: u64 = 100;
-    const FIXTURE_PUBLISH_FPS: u32 = 1_000 / FIXTURE_PUBLISH_INTERVAL_MS as u32;
+    /// The fixture source's publish rate, and the twin of the
+    /// `interval_ms = 100` on its `#[processor]` attribute below — that
+    /// attribute is what actually schedules, this is what every frame
+    /// declares, and an encoder mints its SPS VUI timing from the declaration.
+    /// The attribute takes a literal, so the two are kept in step here and
+    /// nowhere else.
+    ///
+    /// 10 fps rather than camera cadence because a faster source lets the
+    /// display's `newest` input skip frames right at a reference boundary,
+    /// which is where a scorer's pairing is most fragile.
+    const FIXTURE_PUBLISH_FPS: u32 = 10;
 
-    /// Frames each reference is held for. At 10 fps and the encoder's
-    /// 2-second IDR interval this crosses at least one GOP boundary per
-    /// reference, which is what makes each reference independently
-    /// decodable from a mid-stream join.
-    const DEFAULT_FRAMES_PER_REFERENCE: u32 = 15;
+    /// Seconds between the encoder's IDRs, stated by the rig rather than
+    /// left to the encoder's own default, because the reference run length
+    /// below is derived from it.
+    const ENCODER_KEYFRAME_INTERVAL_SECONDS: u32 = 2;
+
+    /// Frames each reference is held for: exactly one GOP
+    /// (`keyframe_interval_seconds × fps`), so every reference run opens on a
+    /// sync point and is independently decodable from a mid-stream join. A
+    /// run shorter than a GOP would leave some references carrying none.
+    const DEFAULT_FRAMES_PER_REFERENCE: u32 =
+        ENCODER_KEYFRAME_INTERVAL_SECONDS * FIXTURE_PUBLISH_FPS;
 
     /// Which source arm feeds the encoder.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,10 +162,8 @@ mod linux_rig {
 
             for reference_path in reference_paths {
                 let (rgba_pixels, width, height) = decode_png_as_rgba8(&reference_path)?;
-                if let Some((staged_width, staged_height)) =
-                    self.staged_references.first().map(|_| self.frame_extent)
-                    && (staged_width, staged_height) != (width, height)
-                {
+                if !self.staged_references.is_empty() && self.frame_extent != (width, height) {
+                    let (staged_width, staged_height) = self.frame_extent;
                     return Err(Error::Runtime(format!(
                         "PsnrReferenceFixtureSource: {} is {width}x{height} but the set opened \
                          at {staged_width}x{staged_height}; one session encodes one extent",
@@ -159,7 +175,12 @@ mod linux_rig {
                 let (published_frame_id, pixel_buffer) = ctx
                     .gpu_full_access()
                     .acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-                copy_rgba_into_pixel_buffer(&rgba_pixels, &pixel_buffer, width, height)?;
+                stage_tightly_packed_rgba_into_pooled_pixel_buffer(
+                    &pixel_buffer,
+                    &rgba_pixels,
+                    width,
+                    height,
+                )?;
                 self.staged_references.push(StagedReferenceFixture {
                     file_name: reference_path
                         .file_name()
@@ -285,15 +306,17 @@ mod linux_rig {
 
         let rgba_pixels = match decoded_frame.color_type {
             png::ColorType::Rgba => decoded,
-            png::ColorType::Rgb => widen_to_rgba8(&decoded, pixel_count, 3, |source| {
-                [source[0], source[1], source[2], 0xFF]
+            png::ColorType::Rgb => widen_to_rgba8(&decoded, pixel_count, |[red, green, blue]| {
+                [red, green, blue, 0xFF]
             }),
-            png::ColorType::Grayscale => widen_to_rgba8(&decoded, pixel_count, 1, |source| {
-                [source[0], source[0], source[0], 0xFF]
-            }),
-            png::ColorType::GrayscaleAlpha => widen_to_rgba8(&decoded, pixel_count, 2, |source| {
-                [source[0], source[0], source[0], source[1]]
-            }),
+            png::ColorType::Grayscale => {
+                widen_to_rgba8(&decoded, pixel_count, |[luma]| [luma, luma, luma, 0xFF])
+            }
+            png::ColorType::GrayscaleAlpha => {
+                widen_to_rgba8(&decoded, pixel_count, |[luma, alpha]| {
+                    [luma, luma, luma, alpha]
+                })
+            }
             unexpected => {
                 return Err(Error::Runtime(format!(
                     "PsnrReferenceFixtureSource: {} normalised to {unexpected:?}, which this \
@@ -305,49 +328,24 @@ mod linux_rig {
         Ok((rgba_pixels, width, height))
     }
 
-    /// Widen `bytes_per_pixel`-wide samples to RGBA8, one pixel at a time.
-    fn widen_to_rgba8(
+    /// Widen `SOURCE_BYTES_PER_PIXEL`-wide samples to RGBA8, one pixel at a
+    /// time. The source width is a const generic so a widening closure that
+    /// reads more channels than the caller declared is a compile error rather
+    /// than an out-of-bounds index on a decode nobody re-reads.
+    fn widen_to_rgba8<const SOURCE_BYTES_PER_PIXEL: usize>(
         decoded: &[u8],
         pixel_count: usize,
-        bytes_per_pixel: usize,
-        widen_one_pixel: impl Fn(&[u8]) -> [u8; 4],
+        widen_one_pixel: impl Fn([u8; SOURCE_BYTES_PER_PIXEL]) -> [u8; 4],
     ) -> Vec<u8> {
-        let mut rgba_pixels = Vec::with_capacity(pixel_count * 4);
-        for source in decoded.chunks_exact(bytes_per_pixel).take(pixel_count) {
-            rgba_pixels.extend_from_slice(&widen_one_pixel(source));
-        }
-        rgba_pixels
-    }
-
-    /// Stage tightly-packed RGBA8 into a pooled pixel buffer's plane 0.
-    fn copy_rgba_into_pixel_buffer(
-        rgba_pixels: &[u8],
-        pixel_buffer: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        let rgba_byte_count = (width as usize) * (height as usize) * 4;
-        let plane_pointer = pixel_buffer.plane_base_address(0);
-        let plane_size = pixel_buffer.plane_size(0) as usize;
-        if plane_pointer.is_null()
-            || plane_size < rgba_byte_count
-            || rgba_pixels.len() < rgba_byte_count
-        {
-            return Err(Error::Runtime(format!(
-                "PsnrReferenceFixtureSource: cannot stage a {width}x{height} reference (ptr \
-                 null: {}, plane {plane_size} bytes, decoded {} bytes, needs {rgba_byte_count})",
-                plane_pointer.is_null(),
-                rgba_pixels.len()
-            )));
-        }
-        // SAFETY: `plane_pointer` is the mapped host-visible base of plane 0
-        // of a freshly-acquired `Rgba32` pixel buffer, valid for `plane_size`
-        // bytes and checked above to be at least `rgba_byte_count`; the
-        // source is a distinct owned buffer of at least that length.
-        unsafe {
-            std::ptr::copy_nonoverlapping(rgba_pixels.as_ptr(), plane_pointer, rgba_byte_count);
-        }
-        Ok(())
+        decoded
+            .chunks_exact(SOURCE_BYTES_PER_PIXEL)
+            .take(pixel_count)
+            .flat_map(|source| {
+                let source: [u8; SOURCE_BYTES_PER_PIXEL] =
+                    source.try_into().expect("chunks_exact yields exact widths");
+                widen_one_pixel(source)
+            })
+            .collect()
     }
 
     /// The port the hosted control plane binds, so `streamlib nodes` finds
@@ -374,14 +372,14 @@ mod linux_rig {
 
         let mut command_line = std::env::args().skip(1);
         while let Some(flag) = command_line.next() {
-            let mut value = || {
+            let mut next_value_for_this_flag = || {
                 command_line
                     .next()
                     .ok_or_else(|| Error::Runtime(format!("{flag} needs a value")))
             };
             match flag.as_str() {
                 "--source" => {
-                    arguments.source_arm = match value()?.as_str() {
+                    arguments.source_arm = match next_value_for_this_flag()?.as_str() {
                         "fixture" => RoundTripSourceArm::PsnrReferenceFixtures,
                         "camera" => RoundTripSourceArm::Camera,
                         unknown => {
@@ -391,16 +389,17 @@ mod linux_rig {
                         }
                     }
                 }
-                "--fixtures" => arguments.fixtures_directory = value()?,
+                "--fixtures" => arguments.fixtures_directory = next_value_for_this_flag()?,
                 "--control-plane-port" => {
-                    arguments.control_plane_port = value()?
+                    arguments.control_plane_port = next_value_for_this_flag()?
                         .parse()
                         .map_err(|_| Error::Runtime("--control-plane-port takes a port".into()))?
                 }
                 "--frames-per-reference" => {
-                    arguments.frames_per_reference = value()?.parse().map_err(|_| {
-                        Error::Runtime("--frames-per-reference takes a whole number".into())
-                    })?
+                    arguments.frames_per_reference =
+                        next_value_for_this_flag()?.parse().map_err(|_| {
+                            Error::Runtime("--frames-per-reference takes a whole number".into())
+                        })?
                 }
                 unknown => {
                     return Err(Error::Runtime(format!(
@@ -435,7 +434,7 @@ mod linux_rig {
         };
         let encoder = app.add(
             H264Encoder::Processor::processor_class_import_path(),
-            serde_json::json!({}),
+            serde_json::json!({ "keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS }),
             Some("encoder"),
         )?;
         let decoder = app.add(

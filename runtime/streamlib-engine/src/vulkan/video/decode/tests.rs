@@ -531,18 +531,44 @@ fn parameter_sets_missing_one_required_set_are_refused_naming_only_that_one() {
         "the SPS was there; the refusal must not name it: {refusal}"
     );
 
-    // H.265 needs a VPS beside them, and its NAL types are read from a
-    // different bit field — a header framed for H.264 does not satisfy it.
+    // H.265 reads its NAL types out of a different bit field, so a header
+    // framed for H.264 satisfies none of them.
     let h265_refusal = why_no_decoder_could_enter_on_these_parameter_sets(
         &h264_annex_b_parameter_sets(),
         crate::vulkan::video::encode::Codec::H265,
     )
     .expect("H.264 parameter sets open no H.265 stream");
     assert!(
-        h265_refusal.contains("VPS")
-            && h265_refusal.contains("SPS")
-            && h265_refusal.contains("PPS"),
+        h265_refusal.contains("SPS") && h265_refusal.contains("PPS"),
         "{h265_refusal}"
+    );
+}
+
+/// The check asks for what this engine's decoder needs and no more. Its
+/// H.265 path configures the session from the SPS and defaults every field a
+/// VPS would have carried, so a driver whose parameter-set blob omits the VPS
+/// must still mint — refusing it would reject a stream this engine decodes.
+#[test]
+fn h265_parameter_sets_carrying_no_vps_still_open_a_decodable_stream() {
+    let mut sps_and_pps = annex_b_nal_unit(4, &[33 << 1, 0x00, 0x00, 0x03]);
+    sps_and_pps.extend_from_slice(&annex_b_nal_unit(4, &[34 << 1, 0x00, 0xC1]));
+    assert_eq!(
+        why_no_decoder_could_enter_on_these_parameter_sets(
+            &sps_and_pps,
+            crate::vulkan::video::encode::Codec::H265,
+        ),
+        None
+    );
+
+    let vps_only = annex_b_nal_unit(4, &[32 << 1, 0x00, 0x0C]);
+    let refusal = why_no_decoder_could_enter_on_these_parameter_sets(
+        &vps_only,
+        crate::vulkan::video::encode::Codec::H265,
+    )
+    .expect("a VPS alone opens nothing");
+    assert!(
+        refusal.contains("SPS") && refusal.contains("PPS") && !refusal.contains("VPS"),
+        "{refusal}"
     );
 }
 
