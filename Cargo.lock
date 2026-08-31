@@ -6675,6 +6675,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "png",
  "proc-macro2",
  "serde_json",
  "syn",

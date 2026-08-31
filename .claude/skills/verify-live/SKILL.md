@@ -62,11 +62,11 @@ Grabbing the window is still the right tool for exactly one thing: proving the *
 
 ## PSNR rigs
 Three fixture rigs guard the color path; each has bug-injection modes that must deterministically FAIL to prove the gate is live:
-- **`e2e_fixture_psnr.sh <out> {h264|h265}`** — reference PNGs through `BgraFileSource → encoder → decoder → display`, Y/U/V PSNR vs reference. Negative modes: `PSNR_INJECT_BUG=swap-channels` (R↔B), `bt601-bt709` (matrix), `range-swap` (PC/TV range).
-- **`e2e_fixture_psnr_vivid.sh <out> h264`** — V4L2 colorimetry gate on a saturated single-color pattern vs a checked-in baseline TSV; negative `INJECT_BUG=bt601-bt709`. (Range-swap is intentionally not covered here — saturated patterns are range-insensitive; the main rig's gradients catch it.)
-- **`e2e_fixture_psnr_jpeg.sh <out>`** — GPU JPEG decode, same shape and same injection modes.
+- **`e2e_fixture_psnr.sh <out> h264`** — the checked-in reference PNGs through `codec_roundtrip_rig` (fixture source → `H264Encoder` → `H264Decoder` → display), scored with `cargo xtask psnr score`. One cold rig run per reference, because a decoded bag carries nothing to pair on; frames are read by tap + exchange, never off the display. Negative modes: `PSNR_INJECT_BUG=swap-channels` (R↔B), `bt601-bt709` (matrix), `range-swap` (PC/TV range). h265 lands with #2086.
+- **`e2e_fixture_psnr_vivid.sh <out> h264`** — V4L2 colorimetry gate on a saturated single-color pattern vs a checked-in baseline TSV, via `cargo xtask psnr channel-means`; negative `INJECT_BUG=bt601-bt709` / `swap-channels`. (Range-swap is refused here — a saturated primary sits at the end of the coded range and clips straight back; the main rig's gradients catch it.)
+- **`e2e_fixture_psnr_jpeg.sh <out>`** — GPU JPEG decode, same injection modes. Still on the *pre-#2085* shape: it drives the `jpeg-psnr` example and scores with ffmpeg, because the JPEG rung is held (#1212).
 
-**PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout).
+**PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout). For the two video rigs the bar and the three injection modes live in `cargo xtask psnr` — pure GPU-free image math whose unit tests run in CI, so the scorer itself is gated even though the runs that feed it are not; ffmpeg and ImageMagick are out of *those* two scoring paths. The JPEG rig still shells out to ffmpeg.
 
 ## Audio loopback rigs
 Two fixture rigs guard the audio path, measuring a known signal — tone frequency / amplitude / distortion, plus a DTMF symbol grid whose *spacing* is what a dropped block moves. Both gate on `virtual_audio_device.sh check` and **exit 77** (`SKIP: no virtual audio device available on this machine`) where no PipeWire session is reachable; 77 is cannot-run and is never reported as a pass:

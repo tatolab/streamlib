@@ -62,8 +62,12 @@ proposed spelling, honoring the delivery-profile decision's fields
 - `bitstream` — msgpack `bin`, one Annex-B access unit
 - `is_sync_point` — bool; IDR/CRA, the group boundary
 - `group_index`, `sequence_index` — u64; the MoQ-mappable ordering pair, and
-  the PSNR rig's frame-pairing key (replacing the old
-  `frame_number → frame_index` threading)
+  ~~the PSNR rig's frame-pairing key (replacing the old
+  `frame_number → frame_index` threading)~~
+
+  > Superseded 2026-08-31 by #2085 (PR #2093). These are encoded-frame keys and
+  > never reach a decoded bag, so they cannot pair a decoded frame to its
+  > reference; see §the rig, rebuilt on tap + exchange.
 - `width`, `height` — coded extent before crop
 - `color` — the H.273 tuple (primaries, transfer, matrix, range)
 
@@ -85,10 +89,20 @@ to the next `is_sync_point`, per the decided loss doctrine
 - Scoring rides observation, not display side effects: the rig tooling taps the
   decoded channel for bags, exchanges each sampled surface id for the exact
   frame bytes over the control plane's bytes route (the plan's own "evidence
-  and PSNR path", `ARCHITECTURE.md:1305-1316`), and pairs against references by
-  `sequence_index`. The display-writes-PNGs mechanism retires with the old
+  and PSNR path", `ARCHITECTURE.md:1305-1316`), and ~~pairs against references
+  by `sequence_index`~~. The display-writes-PNGs mechanism retires with the old
   examples. Budget taps per the 500 ms sampling window; read `received` vs
   `requested`.
+  > Superseded 2026-08-31 by #2085 (PR #2093). `sequence_index` is an
+  > encoded-frame bag key and never reaches a decoded bag — a decoded frame is
+  > an ordinary `VideoFrame` — so the join the proposal assumed does not exist
+  > on the decoded side. Best-match pairing was rejected as vacuous: it
+  > satisfies `swap-channels` by re-pairing a swapped red onto
+  > `solid_blue.png`, the regression that mode exists to catch. Delivered
+  > instead as one rig run per reference (`--fixtures` holding a single PNG),
+  > with the scorer pairing on the `<reference_stem>__<n>.png` filename
+  > contract (`xtask/src/psnr.rs`). **#2086 builds on this rig — read this, not
+  > the struck clause.**
 - PSNR becomes first-class in the proof tooling: `cargo xtask psnr` — per-frame
   and per-plane Y/U/V against a reference set, the Y ≥ 35 dB pass / 30–35 warn
   / < 30 fail classification, and the three injection modes preserved
@@ -97,7 +111,17 @@ to the next `is_sync_point`, per the decided loss doctrine
   the scoring path.
 - `e2e_fixture_psnr.sh` and `e2e_fixture_psnr_vivid.sh` re-point from the dead
   examples to the fixture app + `xtask psnr`; the vivid baseline
-  (`psnr_vivid_baseline.tsv`) and its drift lock carry over unchanged.
+  (`psnr_vivid_baseline.tsv`) and ~~its drift lock carry over unchanged~~ its
+  drift lock carry over.
+  > Superseded 2026-08-31 by #2085 (PR #2093). The drift lock does carry over
+  > unchanged — tolerance ±0.05 and comparison semantics are untouched — but
+  > its numbers could not: they were sampled off the display's composited
+  > output, which is the thing this change removed from the measurement path,
+  > so the old TSV fails outright against the new one
+  > (|0.9792 − 0.9180| = 0.0612 > 0.05). Re-measured r 0.9180/g 0.0575/b 0.0536
+  > → r 0.9792/g 0.0029/b 0.0068, identical to four decimals across three cold
+  > runs, and the gate gained headroom: the bt601/bt709 green rise now reads
+  > 0.0965 off a 0.0029 floor instead of a 0.0575 one.
 
 ## ADDED: the adjudications
 

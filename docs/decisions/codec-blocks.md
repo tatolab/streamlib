@@ -12,8 +12,9 @@ numbers before the SDK pivots stranded its consumers:
 
 - PR #328 (2026-04-19): fixture PSNR rig, 8/9 references ≥ 35 dB for both codecs.
 - PR #827 (2026-05-16): all 9 references PASS, lowest-Y 43.16 dB (h264) / 43.07 dB
-  (h265), vivid colorimetry drift 0.0000; the baseline is still checked in at
-  `runtime/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv`.
+  (h265), vivid colorimetry drift 0.0000; the drift lock is still checked in at
+  `runtime/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv`, re-measured
+  under #2085 when the rig stopped sampling the display's composited output.
 - Real-hardware runs on a Cam Link 4K surfaced #756/#335 (shutdown/queue races) —
   failure modes only running code produces.
 - The encoder's bitstream fed a verified MoQ A/V round-trip through Cloudflare's

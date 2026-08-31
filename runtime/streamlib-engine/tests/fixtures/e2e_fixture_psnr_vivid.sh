@@ -2,28 +2,32 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Vivid color-roundtrip regression gate.
+# Vivid color-roundtrip regression gate (issues #305, #2085).
 #
-# Sister fixture to e2e_fixture_psnr.sh. Where that rig measures
-# encode/decode quality against checked-in reference PNGs via PSNR,
-# this one guards the V4L2 color path against the matrix
-# mis-interpretation regressions that produce the green/magenta
-# tint symptom class.
+# Sister fixture to e2e_fixture_psnr.sh. Where that rig measures encode/decode
+# quality against checked-in reference PNGs via PSNR, this one guards the V4L2
+# color path against the matrix mis-interpretation regressions that produce the
+# green/magenta tint symptom class.
 #
-# Vivid produces dynamic content without a checked-in ground truth,
-# so per-pixel PSNR isn't applicable. Instead the rig forces the
-# vivid driver into a saturated single-color test pattern (default
-# "100% Red"), captures the rig-wide mean of each RGB channel
-# across all sampled decoded frames, and compares to a baseline TSV
-# with a fixed absolute tolerance. A saturated chromatic pattern
-# magnifies matrix mis-interpretations — bt.601 vs bt.709 on a 100%
-# red frame produces a measurable green channel rise (~0.09)
-# instead of the ~0.005 shift the same bug produces on the
-# color-balanced default colorbar.
+# Vivid produces dynamic content without a checked-in ground truth, so
+# per-pixel PSNR isn't applicable. Instead the rig forces the vivid driver into
+# a saturated single-color test pattern (default "100% Red"), captures the
+# rig-wide mean of each RGB channel across the decoded frames, and compares to
+# a baseline TSV with a fixed absolute tolerance. A saturated chromatic pattern
+# magnifies matrix mis-interpretations — bt.601 vs bt.709 on a 100% red frame
+# produces a measurable green channel rise (~0.09) instead of the ~0.005 shift
+# the same bug produces on the color-balanced default colorbar.
 #
-# Range mis-interpretation is intentionally NOT covered here — the
-# range-swap class is caught by the main fixture rig's gradient
+# Range mis-interpretation is intentionally NOT covered here — a saturated
+# primary already sits at the end of the coded range and clips straight back,
+# so the range-swap class is caught by the main fixture rig's gradient
 # references, where it deterministically drops Y PSNR below FAIL.
+#
+# Frames are read the way the main rig reads them: the decoded channel is
+# tapped and each sampled surface id is exchanged for that frame's exact pixels
+# over the control plane. Measurement and injection are both
+# `cargo xtask psnr channel-means`, which is what took ffmpeg and ImageMagick
+# out of this path — the injection modes are the main rig's, defined once.
 #
 # Usage:
 #   runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh \
@@ -31,29 +35,30 @@
 #
 # Arguments:
 #   output_dir — defaults to /tmp/streamlib-vivid-color-<timestamp>
-#   codec      — h264 (default) or h265
+#   codec      — h264 (default). h265 lands with #2086.
 #
 # Environment overrides:
-#   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 =
-#                         "100% Red"; 8=Green, 9=Blue work the same
-#                         shape if a future regression-classifier
-#                         wants per-primary sensitivity)
-#   FRAME_LIMIT        — display frames before exit (default 180)
-#   PNG_SAMPLE_EVERY   — display sample interval in frames (default 15)
-#   DURATION_SECS      — roundtrip run duration (default 12)
+#   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
+#                         8=Green, 9=Blue work the same shape if a future
+#                         regression-classifier wants per-primary sensitivity)
+#   SAMPLE_COUNT       — decoded frames exchanged (default 6)
+#   SAMPLE_EVERY       — exchange every Nth sampled bag, for temporal spread
+#                         (default 2). SAMPLE_COUNT x SAMPLE_EVERY is a bag
+#                         budget, not a wish: `exchange` gives up after 8 tap
+#                         rounds and each round is a ~500 ms window, so at the
+#                         5 fps vivid negotiates about 19 bags reach the run.
+#                         Asking for more returns short, which is a failure.
+#   CONTROL_PLANE_PORT — port the rig's control plane binds (default 9402)
+#   RUN_SECONDS        — rig budget (default 60)
 #   TOLERANCE          — abs channel-mean drift bound on [0,1] scale
-#                         (default 0.05; bug-injection negative test
-#                         must drift further than this on at least
-#                         one channel for the gate to be non-vacuous)
-#   BASELINE_CAPTURE   — set to 1 to overwrite the checked-in
-#                         baseline TSV instead of comparing
-#   INJECT_BUG         — bt601-bt709 | swap-channels (the matrix /
-#                         channel-swap modes from the main rig;
-#                         range-swap is intentionally not supported
-#                         since the saturated-color pattern is
-#                         insensitive to range mis-interpretation —
-#                         use the main rig's gradient fixtures for
-#                         that)
+#                         (default 0.05; the bug-injection negative test must
+#                         drift further than this on at least one channel for
+#                         the gate to be non-vacuous)
+#   BASELINE_CAPTURE   — set to 1 to overwrite the checked-in baseline TSV
+#                         instead of comparing
+#   INJECT_BUG         — bt601-bt709 | swap-channels (the matrix / channel-swap
+#                         modes from the main rig; range-swap is rejected here
+#                         for the reason above)
 #
 # Exit codes: 0 = pass, 1 = fail, 77 = skip.
 
@@ -66,9 +71,10 @@ BASELINE_TSV="$SCRIPT_DIR/psnr_vivid_baseline.tsv"
 OUTPUT_DIR="${1:-/tmp/streamlib-vivid-color-$(date +%s)}"
 CODEC="${2:-h264}"
 
-FRAME_LIMIT="${FRAME_LIMIT:-180}"
-PNG_SAMPLE_EVERY="${PNG_SAMPLE_EVERY:-15}"
-DURATION_SECS="${DURATION_SECS:-12}"
+SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
+SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
+CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9402}"
+RUN_SECONDS="${RUN_SECONDS:-60}"
 TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
 INJECT_BUG="${INJECT_BUG:-}"
@@ -77,9 +83,30 @@ VIVID_TEST_PATTERN="${VIVID_TEST_PATTERN:-7}"  # 7 = "100% Red"
 # ── Prerequisites ────────────────────────────────────────────────────
 need() { command -v "$1" >/dev/null || { echo "[vivid-color] missing: $1" >&2; exit 77; }; }
 need cargo
-need identify
-need awk
-[ -n "$INJECT_BUG" ] && need ffmpeg
+need python3
+need v4l2-ctl
+
+if [ "$CODEC" != "h264" ]; then
+    echo "[vivid-color] SKIP: the rig encodes h264 only today; the H.265 arm lands with #2086" >&2
+    exit 77
+fi
+
+if [ "$INJECT_BUG" = "range-swap" ]; then
+    echo "[vivid-color] ERROR: INJECT_BUG=range-swap is not supported by this rig" >&2
+    echo "[vivid-color] saturated single-color patterns sit at the end of the coded" >&2
+    echo "[vivid-color] range and clip straight back; use e2e_fixture_psnr.sh on the" >&2
+    echo "[vivid-color] gradient references instead" >&2
+    exit 1
+fi
+
+STREAMLIB_CLI="$(command -v streamlib || true)"
+if [ -z "$STREAMLIB_CLI" ]; then
+    STREAMLIB_CLI="$REPO_ROOT/sdk/streamlib-python-wheel/.venv/bin/streamlib"
+fi
+if [ ! -x "$STREAMLIB_CLI" ]; then
+    echo "[vivid-color] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
+    exit 77
+fi
 
 # vivid is an in-kernel V4L2 test driver — no DKMS or out-of-tree modules.
 if ! lsmod | grep -q vivid; then
@@ -104,25 +131,49 @@ if [ -z "$VIVID_DEVICE" ]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
-PNG_DIR="$OUTPUT_DIR/png_samples"
+EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
 LOG_FILE="$OUTPUT_DIR/pipeline.log"
-mkdir -p "$PNG_DIR"
+CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
 
-# Force vivid into the requested pattern; restore on exit. Captured
-# value covers the case where another rig left vivid in a non-default
-# state — we still put it back to what it was, not blindly to 0.
-# `v4l2-ctl -C test_pattern` formats as "test_pattern: 7 (100% Red)";
-# field $2 gives the numeric id only (needed for `-c`).
+# Force vivid into the requested pattern; restore on exit. Captured value
+# covers the case where another rig left vivid in a non-default state — we
+# still put it back to what it was, not blindly to 0.
+# `v4l2-ctl -C test_pattern` formats as "test_pattern: 7 (100% Red)"; field $2
+# gives the numeric id only (needed for `-c`).
 ORIGINAL_PATTERN="$(v4l2-ctl -d "$VIVID_DEVICE" -C test_pattern 2>/dev/null | awk '{print $2}')"
 if ! [[ "$ORIGINAL_PATTERN" =~ ^[0-9]+$ ]]; then
     echo "[vivid-color] WARN: failed to read original vivid test_pattern; will restore to 0" >&2
     ORIGINAL_PATTERN=0
 fi
-restore_pattern() {
-    v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
-    pkill -9 -f vulkan-video-roundtrip 2>/dev/null || true
+
+RIG_PID=""
+RIG_NEEDED_SIGKILL=0
+stop_rig() {
+    RIG_NEEDED_SIGKILL=0
+    if [ -n "$RIG_PID" ] && kill -0 "$RIG_PID" 2>/dev/null; then
+        # SIGTERM so the graph tears down the way a real stop does — a killed
+        # rig would hide exactly the shutdown race #335 is about.
+        kill -TERM "$RIG_PID" 2>/dev/null || true
+        for _ in $(seq 1 50); do
+            kill -0 "$RIG_PID" 2>/dev/null || break
+            sleep 0.2
+        done
+        # A rig still alive after 10 s of SIGTERM is the #335 shutdown race, not
+        # a slow exit. SIGKILL releases the camera; the caller is told, so the
+        # kill can never launder a hung teardown into a PASS.
+        if kill -0 "$RIG_PID" 2>/dev/null; then
+            RIG_NEEDED_SIGKILL=1
+            kill -9 "$RIG_PID" 2>/dev/null || true
+        fi
+        wait "$RIG_PID" 2>/dev/null || true
+    fi
+    RIG_PID=""
 }
-trap restore_pattern EXIT
+restore_pattern_and_stop_rig() {
+    stop_rig
+    v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
+}
+trap restore_pattern_and_stop_rig EXIT
 
 if ! v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$VIVID_TEST_PATTERN" 2>"$OUTPUT_DIR/vivid-ctl.log"; then
     echo "[vivid-color] FAIL: could not set vivid test_pattern=$VIVID_TEST_PATTERN" >&2
@@ -134,152 +185,128 @@ echo "[vivid-color] Output dir:        $OUTPUT_DIR"
 echo "[vivid-color] Vivid device:      $VIVID_DEVICE"
 echo "[vivid-color] Test pattern:      $VIVID_TEST_PATTERN (was $ORIGINAL_PATTERN, restored on exit)"
 echo "[vivid-color] Codec:             $CODEC"
-echo "[vivid-color] Duration:          ${DURATION_SECS}s (frame limit $FRAME_LIMIT)"
+echo "[vivid-color] Control plane:     $CONTROL_PLANE_URL"
 
 # ── Build ────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-echo "[vivid-color] Building vulkan-video-roundtrip..."
-if ! cargo build -p vulkan-video-roundtrip 2>"$OUTPUT_DIR/build.log"; then
-    echo "[vivid-color] FAIL: build failed" >&2
-    tail -30 "$OUTPUT_DIR/build.log" >&2
+echo "[vivid-color] Building codec_roundtrip_rig + xtask (release)..."
+if ! cargo build --release --locked -p streamlib-engine --example codec_roundtrip_rig \
+        > "$OUTPUT_DIR/build.log" 2>&1; then
+    echo "[vivid-color] FAIL: rig build failed" >&2
+    tail -40 "$OUTPUT_DIR/build.log" >&2
     exit 1
 fi
-BINARY="$REPO_ROOT/target/debug/vulkan-video-roundtrip"
+if ! cargo build --release --locked -p xtask >> "$OUTPUT_DIR/build.log" 2>&1; then
+    echo "[vivid-color] FAIL: xtask build failed" >&2
+    tail -40 "$OUTPUT_DIR/build.log" >&2
+    exit 1
+fi
 
 # ── Run ──────────────────────────────────────────────────────────────
-echo "[vivid-color] Running roundtrip..."
+echo "[vivid-color] Running the round trip against $VIVID_DEVICE..."
 DISPLAY="${DISPLAY:-:0}" \
-RUST_LOG=warn,streamlib=info \
-timeout --kill-after=3 $((DURATION_SECS + 8)) \
-    "$BINARY" "$CODEC" "$VIVID_DEVICE" "$DURATION_SECS" \
-    > "$LOG_FILE" 2>&1 || true
+RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
+    timeout --kill-after=5 "$RUN_SECONDS" \
+        "$REPO_ROOT/target/release/examples/codec_roundtrip_rig" \
+        --source camera \
+        --camera "$VIVID_DEVICE" \
+        --control-plane-port "$CONTROL_PLANE_PORT" \
+        > "$LOG_FILE" 2>&1 &
+RIG_PID=$!
 
-shopt -s nullglob
-SAMPLES=( "$PNG_DIR"/display_*.png )
-shopt -u nullglob
+for _ in $(seq 1 60); do
+    if "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1; then
+        break
+    fi
+    sleep 0.5
+done
 
-if [ "${#SAMPLES[@]}" -eq 0 ]; then
-    echo "[vivid-color] FAIL: no PNG samples produced" >&2
-    echo "[vivid-color] Last 30 lines of pipeline log:" >&2
+# A channel is `{processor_id}/{output_port}` with the id chunk lowercased, and
+# a processor id is a cuid2 minted at add time — `decoder` is the rig's display
+# name, not its id. Derived from the live graph rather than guessed.
+DECODED_CHANNEL="$("$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+import json, sys
+graph = json.load(sys.stdin)
+decoder = next(
+    (node for node in graph.get("nodes", []) if node.get("display_name") == "decoder"), None
+)
+if decoder is None:
+    sys.exit("the running graph has no processor named `decoder`")
+print(decoder["id"].lower() + "/video")
+')" || {
+    echo "[vivid-color] FAIL: could not read the decoder channel off the live graph" >&2
+    tail -30 "$LOG_FILE" >&2
+    exit 1
+}
+echo "[vivid-color] Decoded channel:   $DECODED_CHANNEL"
+
+if ! "$STREAMLIB_CLI" exchange \
+        --channel "$DECODED_CHANNEL" \
+        --out "$EXCHANGED_DIR" \
+        --count "$SAMPLE_COUNT" \
+        --every "$SAMPLE_EVERY" \
+        --url "$CONTROL_PLANE_URL" \
+        > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
+    echo "[vivid-color] FAIL: exchanged fewer frames than asked for" >&2
+    cat "$OUTPUT_DIR/exchange.log" >&2
     tail -30 "$LOG_FILE" >&2
     exit 1
 fi
-echo "[vivid-color] Captured ${#SAMPLES[@]} PNG samples"
+cat "$OUTPUT_DIR/exchange.log"
 
-# ── Optional bug injection (negative-test mode) ──────────────────────
-if [ -n "$INJECT_BUG" ]; then
-    case "$INJECT_BUG" in
-        swap-channels)
-            inject_filter="colorchannelmixer=rr=0:rb=1:bb=0:br=1:gg=1"
-            ;;
-        bt601-bt709)
-            inject_filter="scale=out_color_matrix=bt601:flags=accurate_rnd,format=yuv420p,scale=in_color_matrix=bt709:flags=accurate_rnd,format=rgba"
-            ;;
-        range-swap)
-            echo "[vivid-color] ERROR: INJECT_BUG=range-swap is not supported by this rig" >&2
-            echo "[vivid-color] saturated single-color patterns are insensitive to range" >&2
-            echo "[vivid-color] mis-interpretation; use e2e_fixture_psnr.sh on the" >&2
-            echo "[vivid-color] gradient fixtures instead" >&2
-            exit 1
-            ;;
-        *)
-            echo "[vivid-color] ERROR: unknown INJECT_BUG=$INJECT_BUG" >&2
-            echo "[vivid-color] valid: swap-channels | bt601-bt709" >&2
-            exit 1
-            ;;
-    esac
-    echo "[vivid-color] INJECTING BUG: $INJECT_BUG"
-    for f in "${SAMPLES[@]}"; do
-        ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "$inject_filter" "${f}.injected.png"
-        mv "${f}.injected.png" "$f"
-    done
+# Read the printed paths, not the directory: --out is not cleared, so a listing
+# can hand back an earlier run's frames.
+MEASURED_DIR="$OUTPUT_DIR/measured"
+mkdir -p "$MEASURED_DIR"
+sample_index=0
+while read -r exchanged_png; do
+    [ -f "$exchanged_png" ] || continue
+    cp "$exchanged_png" "$MEASURED_DIR/$(printf "%04d" "$sample_index").png"
+    sample_index=$(( sample_index + 1 ))
+done < "$OUTPUT_DIR/exchanged_paths.txt"
+
+if [ "$sample_index" -ne "$SAMPLE_COUNT" ]; then
+    echo "[vivid-color] FAIL: copied $sample_index of $SAMPLE_COUNT exchanged frames;" \
+         "a drift lock measured on fewer samples than the run asked for reports a" \
+         "thinner gate as a full one" >&2
+    cat "$OUTPUT_DIR/exchange.log" >&2
+    exit 1
+fi
+echo "[vivid-color] Captured $sample_index frames"
+stop_rig
+if [ "$RIG_NEEDED_SIGKILL" -eq 1 ]; then
+    echo "[vivid-color] FAIL: the rig did not exit on SIGTERM and needed SIGKILL." \
+         "A teardown that hangs is the #335 race class, not a slow exit." >&2
+    tail -30 "$LOG_FILE" >&2
+    exit 1
 fi
 
-# ── Compute rig-wide channel means ───────────────────────────────────
-STATS_TSV="$OUTPUT_DIR/channel_means.tsv"
-echo -e "sample\tr_mean\tg_mean\tb_mean" > "$STATS_TSV"
-
-sum_r=0; sum_g=0; sum_b=0; n=0
-for f in "${SAMPLES[@]}"; do
-    rgb=$(identify -format "%[fx:mean.r] %[fx:mean.g] %[fx:mean.b]" "$f")
-    r=$(echo "$rgb" | awk '{print $1}')
-    g=$(echo "$rgb" | awk '{print $2}')
-    b=$(echo "$rgb" | awk '{print $3}')
-    sum_r=$(awk -v s="$sum_r" -v v="$r" 'BEGIN{printf "%.6f", s + v}')
-    sum_g=$(awk -v s="$sum_g" -v v="$g" 'BEGIN{printf "%.6f", s + v}')
-    sum_b=$(awk -v s="$sum_b" -v v="$b" 'BEGIN{printf "%.6f", s + v}')
-    n=$((n + 1))
-    echo -e "$(basename "$f")\t$r\t$g\t$b" >> "$STATS_TSV"
-done
-
-avg_r=$(awk -v s="$sum_r" -v n="$n" 'BEGIN{printf "%.4f", s / n}')
-avg_g=$(awk -v s="$sum_g" -v n="$n" 'BEGIN{printf "%.4f", s / n}')
-avg_b=$(awk -v s="$sum_b" -v n="$n" 'BEGIN{printf "%.4f", s / n}')
+# ── Measure ──────────────────────────────────────────────────────────
+MEASURE_ARGUMENTS=(
+    psnr channel-means
+    --images "$MEASURED_DIR"
+    --baseline "$BASELINE_TSV"
+    --tolerance "$TOLERANCE"
+    --report "$OUTPUT_DIR/channel_means.tsv"
+)
+if [ -n "$INJECT_BUG" ]; then
+    MEASURE_ARGUMENTS+=(--inject "$INJECT_BUG")
+fi
+if [ "$BASELINE_CAPTURE" = "1" ]; then
+    MEASURE_ARGUMENTS+=(
+        --capture-baseline
+        --baseline-note "Vivid test_pattern: $VIVID_TEST_PATTERN"
+        --baseline-note "Measured from exact decoded pixels over the control plane's exchange route. The pre-#2085 baseline sampled the display's composited output, whose swapchain colour handling pulled green and blue up; do not compare the two."
+    )
+fi
 
 echo ""
-echo "══════════════════════════════════════════════════════════════"
-echo "  Vivid Color Roundtrip Channel Means ($CODEC)"
-echo "══════════════════════════════════════════════════════════════"
-echo "  Samples:  $n"
-echo "  Mean R:   $avg_r"
-echo "  Mean G:   $avg_g"
-echo "  Mean B:   $avg_b"
-echo "  Per-sample stats: $STATS_TSV"
-
-# ── Capture baseline OR compare ──────────────────────────────────────
-if [ "$BASELINE_CAPTURE" = "1" ]; then
-    {
-        echo "# Vivid color-roundtrip channel-mean baseline."
-        echo "# Generated by runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh"
-        echo "# Captured with: BASELINE_CAPTURE=1 e2e_fixture_psnr_vivid.sh <out> $CODEC"
-        echo "# Vivid test_pattern: $VIVID_TEST_PATTERN"
-        echo "# Default verification tolerance is ±0.05 absolute on the [0,1] scale."
-        printf "channel\tmean\n"
-        printf "r\t%s\n" "$avg_r"
-        printf "g\t%s\n" "$avg_g"
-        printf "b\t%s\n" "$avg_b"
-    } > "$BASELINE_TSV"
-    echo "  Baseline written: $BASELINE_TSV"
-    echo "══════════════════════════════════════════════════════════════"
-    echo "[vivid-color] BASELINE CAPTURED"
+if "$REPO_ROOT/target/release/xtask" "${MEASURE_ARGUMENTS[@]}"; then
+    echo "[vivid-color] Output dir:        $OUTPUT_DIR"
+    echo "[vivid-color] Per-sample stats:  $OUTPUT_DIR/channel_means.tsv"
     exit 0
 fi
-
-if [ ! -s "$BASELINE_TSV" ]; then
-    echo "[vivid-color] FAIL: baseline TSV missing at $BASELINE_TSV" >&2
-    echo "[vivid-color] capture with: BASELINE_CAPTURE=1 $0 $*" >&2
-    exit 1
-fi
-
-baseline_r=$(awk -F'\t' '$1 == "r" {print $2}' "$BASELINE_TSV")
-baseline_g=$(awk -F'\t' '$1 == "g" {print $2}' "$BASELINE_TSV")
-baseline_b=$(awk -F'\t' '$1 == "b" {print $2}' "$BASELINE_TSV")
-
-echo "  Baseline: R=$baseline_r  G=$baseline_g  B=$baseline_b  (±$TOLERANCE)"
-
-OVERALL_PASS=true
-check_channel() {
-    local chan="$1" actual="$2" base="$3"
-    local diff within
-    diff=$(awk -v a="$actual" -v b="$base" 'BEGIN{d = a - b; if (d < 0) d = -d; printf "%.4f", d}')
-    within=$(awk -v d="$diff" -v t="$TOLERANCE" 'BEGIN{print (d + 0 <= t + 0) ? 1 : 0}')
-    if [ "$within" = "1" ]; then
-        printf "    %s drift: %s  (limit %s)  PASS\n" "$chan" "$diff" "$TOLERANCE"
-    else
-        printf "    %s drift: %s  (limit %s)  FAIL\n" "$chan" "$diff" "$TOLERANCE"
-        OVERALL_PASS=false
-    fi
-}
-check_channel R "$avg_r" "$baseline_r"
-check_channel G "$avg_g" "$baseline_g"
-check_channel B "$avg_b" "$baseline_b"
-
-echo "══════════════════════════════════════════════════════════════"
-if [ "$OVERALL_PASS" = true ]; then
-    echo "[vivid-color] RESULT: PASS"
-    exit 0
-else
-    echo "[vivid-color] RESULT: FAIL — channel drift outside tolerance"
-    echo "[vivid-color] (color-management regression suspected — investigate)"
-    exit 1
-fi
+echo "[vivid-color] Output dir:        $OUTPUT_DIR"
+echo "[vivid-color] RESULT: FAIL — channel drift outside tolerance"
+echo "[vivid-color] (color-management regression suspected — investigate)"
+exit 1
