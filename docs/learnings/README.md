@@ -63,6 +63,12 @@ Avoid the two failure modes:
   Pattern for mixing DMA-BUF exportable and non-exportable allocations via VMA pools
 - [@docs/learnings/vulkan-frames-in-flight.md](vulkan-frames-in-flight.md) —
   `MAX_FRAMES_IN_FLIGHT = 2`, NOT `swapchain.images.len()`
+- [@docs/learnings/nv12-rgba-converter-extent-rescales.md](nv12-rgba-converter-extent-rescales.md) —
+  The decode path's NV12→RGBA converter samples through normalized coordinates,
+  so an extent that isn't the DPB's silently resamples the picture: PSNR
+  collapses on detailed content along one axis only, with no error anywhere.
+  The conformance crop belongs in the readback's copy region, never in the
+  converter's size
 - [@docs/learnings/camera-display-e2e-validation.md](camera-display-e2e-validation.md) —
   Validate camera→display end-to-end via virtual camera + window capture; gate on
   contracts, never on engine tracing prose
