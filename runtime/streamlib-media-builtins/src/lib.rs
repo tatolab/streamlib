@@ -22,6 +22,8 @@ pub mod display_window;
 mod emitted_log_line_test_support;
 pub mod encoded_video_frame;
 #[cfg(target_os = "linux")]
+pub mod h264_decoder;
+#[cfg(target_os = "linux")]
 pub mod h264_encoder;
 #[cfg(target_os = "linux")]
 pub mod h273_color_vui_translation;
@@ -47,6 +49,8 @@ pub use encoded_video_frame::{
     EncodedVideoFrame, EncodedVideoFrameBagRefusal, read_encoded_video_frame_bag,
 };
 #[cfg(target_os = "linux")]
+pub use h264_decoder::{H264Decoder, H264DecoderConfig};
+#[cfg(target_os = "linux")]
 pub use h264_encoder::{H264Encoder, H264EncoderConfig};
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
@@ -68,4 +72,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
+    #[cfg(target_os = "linux")]
+    PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
 }

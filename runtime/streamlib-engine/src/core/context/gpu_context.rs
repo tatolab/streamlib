@@ -3981,6 +3981,18 @@ impl GpuContextFullAccess {
             .create_encoder_session(config, prepare_gpu_input)
     }
 
+    /// Mint a hardware video decoder session — the FullAccess mirror of
+    /// [`GpuContext::create_decoder_session`], reachable from a processor's
+    /// `setup()`, whose typestate is already Full, and from `process()` via
+    /// `escalate(|full| ...)`.
+    #[cfg(target_os = "linux")]
+    pub fn create_decoder_session(
+        &self,
+        config: crate::vulkan::video::decode::SimpleDecoderConfig,
+    ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
+        self.host_inner().create_decoder_session(config)
+    }
+
     /// Wait for the GPU device to become idle.
     ///
     pub fn wait_device_idle(&self) -> Result<()> {

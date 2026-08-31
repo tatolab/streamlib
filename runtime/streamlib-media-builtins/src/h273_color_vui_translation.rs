@@ -33,6 +33,27 @@ pub fn color_info_to_h273_color_vui(color_info: &ColorInfo) -> H273ColorVui {
     }
 }
 
+/// Translate a decoder's parsed SPS VUI back into the bag vocabulary's
+/// [`ColorInfo`]. `None` when the bitstream described no axis at all —
+/// which is how "this stream said nothing about its colour" is spelled, and
+/// is distinct from a stream that described one axis and left the rest
+/// unspecified.
+pub fn h273_color_vui_to_color_info(color_vui: &H273ColorVui) -> Option<ColorInfo> {
+    let color_info = ColorInfo {
+        primaries: color_vui.primaries.and_then(primaries_from_h273_byte),
+        transfer: color_vui.transfer.and_then(transfer_from_h273_byte),
+        matrix: color_vui.matrix.and_then(matrix_from_h273_byte),
+        range: color_vui.full_range.map(|full_range| {
+            if full_range {
+                Range::Full
+            } else {
+                Range::Limited
+            }
+        }),
+    };
+    (color_info != ColorInfo::default()).then_some(color_info)
+}
+
 /// ColourPrimaries variant → H.273 §8.1 enumerant byte.
 pub fn primaries_to_h273_byte(value: &Primaries) -> u8 {
     match value {
@@ -266,6 +287,61 @@ mod tests {
                 Some(value.clone()),
             );
         }
+    }
+
+    /// The composite the decoder surfaces its parsed SPS VUI through, in
+    /// the direction the encoder's composite does not cover.
+    #[test]
+    fn a_parsed_vui_round_trips_back_to_the_color_info_it_was_minted_from() {
+        let minted_from = ColorInfo {
+            primaries: Some(Primaries::Bt709),
+            transfer: Some(Transfer::Srgb),
+            matrix: Some(Matrix::Bt709),
+            range: Some(Range::Limited),
+        };
+        let parsed_back = h273_color_vui_to_color_info(&color_info_to_h273_color_vui(&minted_from));
+        assert_eq!(parsed_back, Some(minted_from));
+    }
+
+    /// An axis the bitstream carried as Unspecified (or as an enumerant the
+    /// bag vocabulary does not model) comes back absent, while the axes
+    /// beside it survive — the decoder must not drop a whole description
+    /// because one axis was unreadable.
+    #[test]
+    fn an_unmodeled_axis_comes_back_absent_without_taking_its_peers_with_it() {
+        let color_info = h273_color_vui_to_color_info(&H273ColorVui {
+            primaries: Some(2),
+            transfer: Some(transfer::SRGB),
+            matrix: Some(255),
+            full_range: Some(true),
+        })
+        .expect("a description carrying two readable axes is a description");
+        assert_eq!(
+            color_info,
+            ColorInfo {
+                primaries: None,
+                transfer: Some(Transfer::Srgb),
+                matrix: None,
+                range: Some(Range::Full),
+            }
+        );
+    }
+
+    /// A bitstream that described nothing decodes to no `ColorInfo` at all,
+    /// so a decoder can tell "said nothing" from "said unspecified" and fall
+    /// back to the producer's attestation.
+    #[test]
+    fn a_vui_describing_nothing_decodes_to_no_color_info_at_all() {
+        assert_eq!(h273_color_vui_to_color_info(&H273ColorVui::default()), None);
+        assert_eq!(
+            h273_color_vui_to_color_info(&H273ColorVui {
+                primaries: Some(2),
+                transfer: Some(2),
+                matrix: Some(2),
+                full_range: None,
+            }),
+            None
+        );
     }
 
     #[test]
