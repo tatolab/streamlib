@@ -35,7 +35,11 @@
 #
 # Arguments:
 #   output_dir — defaults to /tmp/streamlib-vivid-color-<timestamp>
-#   codec      — h264 (default). h265 lands with #2086.
+#   codec      — h264 (default) or h265. Each codec locks against its own
+#                baseline TSV, because the drift lock is an absolute channel
+#                mean and two codecs reconstruct a saturated primary slightly
+#                differently; comparing one arm to the other's numbers would
+#                report a codec difference as a colour regression.
 #
 # Environment overrides:
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
@@ -66,7 +70,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-BASELINE_TSV="$SCRIPT_DIR/psnr_vivid_baseline.tsv"
+# h264 keeps the unsuffixed name its baseline was captured under; every later
+# codec is suffixed, so adding one never moves an existing lock's file.
+baseline_tsv_for_codec() {
+    case "$1" in
+        h264) echo "$SCRIPT_DIR/psnr_vivid_baseline.tsv" ;;
+        *) echo "$SCRIPT_DIR/psnr_vivid_baseline_$1.tsv" ;;
+    esac
+}
 
 OUTPUT_DIR="${1:-/tmp/streamlib-vivid-color-$(date +%s)}"
 CODEC="${2:-h264}"
@@ -86,9 +97,18 @@ need cargo
 need python3
 need v4l2-ctl
 
-if [ "$CODEC" != "h264" ]; then
-    echo "[vivid-color] SKIP: the rig encodes h264 only today; the H.265 arm lands with #2086" >&2
-    exit 77
+case "$CODEC" in
+    h264|h265) ;;
+    *)
+        echo "[vivid-color] FAIL: codec '$CODEC' is neither h264 nor h265" >&2
+        exit 1
+        ;;
+esac
+BASELINE_TSV="$(baseline_tsv_for_codec "$CODEC")"
+if [ ! -f "$BASELINE_TSV" ] && [ "$BASELINE_CAPTURE" != "1" ]; then
+    echo "[vivid-color] FAIL: no baseline for $CODEC at $BASELINE_TSV." >&2
+    echo "[vivid-color] Capture one on the rig with BASELINE_CAPTURE=1 before gating on it." >&2
+    exit 1
 fi
 
 if [ "$INJECT_BUG" = "range-swap" ]; then
@@ -209,6 +229,7 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
     timeout --kill-after=5 "$RUN_SECONDS" \
         "$REPO_ROOT/target/release/examples/codec_roundtrip_rig" \
         --source camera \
+        --codec "$CODEC" \
         --camera "$VIVID_DEVICE" \
         --control-plane-port "$CONTROL_PLANE_PORT" \
         > "$LOG_FILE" 2>&1 &
@@ -295,6 +316,7 @@ fi
 if [ "$BASELINE_CAPTURE" = "1" ]; then
     MEASURE_ARGUMENTS+=(
         --capture-baseline
+        --baseline-note "Codec: $CODEC"
         --baseline-note "Vivid test_pattern: $VIVID_TEST_PATTERN"
         --baseline-note "Measured from exact decoded pixels over the control plane's exchange route. The pre-#2085 baseline sampled the display's composited output, whose swapchain colour handling pulled green and blue up; do not compare the two."
     )

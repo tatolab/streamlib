@@ -4,9 +4,9 @@
 #
 # Fixture-driven encode/decode PSNR harness (issues #305, #2085).
 #
-# Drives the engine-owned `codec_roundtrip_rig` — fixture source -> H264Encoder
-# -> H264Decoder -> DisplayWindow, with the control plane hosted — and scores
-# the decoded frames with `cargo xtask psnr score`.
+# Drives the engine-owned `codec_roundtrip_rig` — fixture source -> encoder ->
+# decoder -> DisplayWindow, with the control plane hosted — and scores the
+# decoded frames with `cargo xtask psnr score`.
 #
 # Scoring rides observation, not display side effects. The rig is tapped for
 # bags on the decoded channel and each sampled surface id is exchanged for that
@@ -27,7 +27,10 @@
 #
 # Arguments:
 #   output_dir — defaults to /tmp/streamlib-fixture-psnr-<timestamp>
-#   codec      — h264 (default). h265 lands with #2086.
+#   codec      — h264 (default) or h265. The H.265 arm is the one carrying a
+#                CTU pad: a 1920x1080 source codes at 1920x1088, and a decoder
+#                that published the coded extent would score against a
+#                reference eight rows shorter than itself.
 #
 # Environment overrides:
 #   SAMPLES_PER_REFERENCE — decoded frames exchanged per reference (default 2)
@@ -66,10 +69,13 @@ need() { command -v "$1" >/dev/null || { echo "[psnr] missing: $1" >&2; exit 77;
 need cargo
 need python3
 
-if [ "$CODEC" != "h264" ]; then
-    echo "[psnr] SKIP: the rig encodes h264 only today; the H.265 arm lands with #2086" >&2
-    exit 77
-fi
+case "$CODEC" in
+    h264|h265) ;;
+    *)
+        echo "[psnr] FAIL: codec '$CODEC' is neither h264 nor h265" >&2
+        exit 1
+        ;;
+esac
 
 # The CLI ships in the wheel. The venv copy is the fallback for a machine that
 # has not put it on PATH; a stale build there scores old code, so it is named
@@ -234,6 +240,7 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
     RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
         timeout --kill-after=5 "$RUN_SECONDS" "$RIG_BINARY" \
             --source fixture \
+            --codec "$CODEC" \
             --fixtures "$arm_dir/fixtures" \
             --control-plane-port "$CONTROL_PLANE_PORT" \
             > "$pipeline_log" 2>&1 &
