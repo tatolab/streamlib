@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.29](https://github.com/tatolab/streamlib/compare/v0.18.28...v0.18.29) (2026-08-31)
+
+
+### Features
+
+* **examples:** rebuild raytracing-showcase as a split-screen RTX on/off comparison ([#2074](https://github.com/tatolab/streamlib/issues/2074)) ([11b35e3](https://github.com/tatolab/streamlib/commit/11b35e37f320672445c35d9ce2cbad79eaa18cd9))
+
 ## [0.18.28](https://github.com/tatolab/streamlib/compare/v0.18.27...v0.18.28) (2026-08-31)
 
 
