@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.31](https://github.com/tatolab/streamlib/compare/v0.18.30...v0.18.31) (2026-08-31)
+
+
+### Features
+
+* **examples:** rebuild the halftone effect as a Python-authored kernel example ([#2078](https://github.com/tatolab/streamlib/issues/2078)) ([3bf0b26](https://github.com/tatolab/streamlib/commit/3bf0b260a5c49c860e168654fb2c9752fff9f234))
+
 ## [0.18.30](https://github.com/tatolab/streamlib/compare/v0.18.29...v0.18.30) (2026-08-31)
 
 
