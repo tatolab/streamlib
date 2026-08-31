@@ -36,6 +36,64 @@ use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
 };
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
 
+/// Why no decoder could enter a stream on these parameter-set bytes, or
+/// `None` when they open one.
+///
+/// The bytes `vkGetEncodedVideoSessionParametersKHR` hands an encoder back
+/// are implementation-defined, and an encoder that prepends them to its sync
+/// points has made them the stream's only entry point: a decoder that cannot
+/// find them configures no session and decodes nothing, however many slices
+/// follow. This answers the question with the engine's own NAL reader — the
+/// one that will actually be asked to find them — so the check and the reader
+/// cannot disagree about what is framed correctly.
+///
+/// It asks for exactly what this decoder needs and no more. An SPS, because
+/// [`SimpleDecoder`] configures its session from one and refuses without the
+/// dimensions it carries; a PPS, because a slice resolves its `pic_parameter_
+/// set_id` against the parsed set and fails by name when it is absent. Not a
+/// VPS: the H.265 path defaults every field it would have read, so demanding
+/// one would refuse an encoder session whose stream this engine decodes.
+pub(crate) fn why_no_decoder_could_enter_on_these_parameter_sets(
+    parameter_set_bytes: &[u8],
+    codec: crate::vulkan::video::encode::Codec,
+) -> Option<String> {
+    let required_parameter_sets: &[(u8, &str)] = match codec {
+        crate::vulkan::video::encode::Codec::H264 => &[(7, "SPS"), (8, "PPS")],
+        crate::vulkan::video::encode::Codec::H265 => &[(33, "SPS"), (34, "PPS")],
+    };
+    // The reader's own floor: `feed` skips an H.265 NAL shorter than its
+    // two-byte header, so a truncated one must not count as a parameter set
+    // here either — the whole point is that this check and the reader agree.
+    let nal_header_bytes = match codec {
+        crate::vulkan::video::encode::Codec::H264 => 1,
+        crate::vulkan::video::encode::Codec::H265 => 2,
+    };
+    let nal_unit_types: Vec<u8> = SimpleDecoder::split_nal_units_owned(parameter_set_bytes)
+        .iter()
+        .filter(|nal_unit| nal_unit.len() >= nal_header_bytes)
+        .map(|nal_unit| match codec {
+            crate::vulkan::video::encode::Codec::H264 => nal_unit[0] & 0x1F,
+            crate::vulkan::video::encode::Codec::H265 => (nal_unit[0] >> 1) & 0x3F,
+        })
+        .collect();
+
+    let missing: Vec<&str> = required_parameter_sets
+        .iter()
+        .filter(|(nal_unit_type, _)| !nal_unit_types.contains(nal_unit_type))
+        .map(|(_, name)| *name)
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the engine's own NAL reader finds no {} in the {} byte(s) of parameter sets — it read \
+         the Annex-B NAL unit types {:?}",
+        missing.join(" and "),
+        parameter_set_bytes.len(),
+        nal_unit_types,
+    ))
+}
+
 // ======================================================================
 // SimpleDecoder — high-level decoder with auto NAL parsing
 // ======================================================================
@@ -614,7 +672,7 @@ impl SimpleDecoder {
 
             if let Some(sc_len) = is_start_code {
                 if let Some(s) = start {
-                    nals.push(data[s..i].to_vec());
+                    Self::push_nal_without_trailing_zero_bytes(&mut nals, &data[s..i]);
                 }
                 start = Some(i + sc_len);
                 i += sc_len;
@@ -625,11 +683,30 @@ impl SimpleDecoder {
 
         if let Some(s) = start {
             if s < data.len() {
-                nals.push(data[s..].to_vec());
+                Self::push_nal_without_trailing_zero_bytes(&mut nals, &data[s..]);
             }
         }
 
         nals
+    }
+
+    /// Push one split-out NAL with its Annex-B `trailing_zero_8bits` removed.
+    /// A four-byte start code absorbs one leading zero, so a zero sitting
+    /// between a NAL and a `00 00 00 01` would otherwise stay attached to the
+    /// NAL — asymmetrically with the three-byte case, which absorbs it. Safe
+    /// to trim unconditionally: a well-formed NAL never ends in a raw `0x00`
+    /// (its last byte carries the `rbsp_stop_bit`, and `cabac_zero_words`
+    /// end in `0x03` after emulation prevention).
+    fn push_nal_without_trailing_zero_bytes(nals: &mut Vec<Vec<u8>>, nal_bytes: &[u8]) {
+        let trailing_zero_count = nal_bytes
+            .iter()
+            .rev()
+            .take_while(|byte| **byte == 0)
+            .count();
+        let payload = &nal_bytes[..nal_bytes.len() - trailing_zero_count];
+        if !payload.is_empty() {
+            nals.push(payload.to_vec());
+        }
     }
 
     /// Find the byte position of the last start code in the buffer.
@@ -719,11 +796,21 @@ impl SimpleDecoder {
                 .size(total)
                 .usage(vk::BufferUsageFlags::TRANSFER_DST)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            // The CPU reads this buffer back every frame, so it must not
+            // land in write-combined memory: WC reads run at a few hundred
+            // MB/s and one 1080p RGBA frame is 8.3 MB, which turns the
+            // readback memcpy into tens of milliseconds — measured at 37 ms
+            // median (225 MB/s) on NVIDIA 595.84, 93% of the whole decode
+            // path. HOST_ACCESS_RANDOM declares the read access so VMA picks
+            // a HOST_CACHED type, the same trap
+            // `codec_utils/vulkan_bitstream_buffer_impl.rs` documents for the
+            // encoder's bitstream readback.
             let alloc_opts = vma::AllocationOptions {
                 flags: vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                 required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
+                preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
                 ..Default::default()
             };
             let (buf, alloc) = unsafe {
@@ -753,11 +840,15 @@ impl SimpleDecoder {
                 .size(total)
                 .usage(vk::BufferUsageFlags::TRANSFER_DST)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            // Same read-back constraint as `ensure_readback_staging` above:
+            // HOST_ACCESS_RANDOM + preferred HOST_CACHED, or the per-frame
+            // 8.3 MB memcpy runs at write-combined speed.
             let alloc_opts = vma::AllocationOptions {
                 flags: vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                 required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
+                preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
                 ..Default::default()
             };
             let (buf, alloc) = unsafe {

@@ -432,6 +432,15 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::port_rendering_tests::a_settled_match_device_port_renders_the_five_values_its_device_gave",
                 "core::json_schema::port_rendering_tests::an_unsettled_match_device_port_still_renders_the_sentinel",
                 "core::json_schema::port_rendering_tests::the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own",
+                "vulkan::video::decode::tests::annex_b_framed_parameter_sets_open_a_decodable_stream",
+                "vulkan::video::decode::tests::either_start_code_length_frames_parameter_sets_the_reader_accepts",
+                "vulkan::video::decode::tests::parameter_sets_carrying_no_start_code_are_refused_rather_than_silently_dropped",
+                "vulkan::video::decode::tests::empty_parameter_sets_are_refused_naming_what_a_decoder_needed",
+                "vulkan::video::decode::tests::parameter_sets_missing_one_required_set_are_refused_naming_only_that_one",
+                "vulkan::video::decode::tests::h265_parameter_sets_carrying_no_vps_still_open_a_decodable_stream",
+                "vulkan::video::decode::tests::a_truncated_h265_nal_header_is_not_counted_as_a_parameter_set",
+                "vulkan::video::decode::tests::a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr",
+                "vulkan::video::decode::tests::trailing_zero_bytes_between_nal_units_stay_out_of_the_payload",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
@@ -465,6 +474,37 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--test",
                 "h264_encoder_publishes_the_bag_convention",
                 "--no-run",
+            ],
+        ),
+        // #1077 read forwards: test pattern -> encode -> decode in one
+        // graph. Compiled only — it needs Vulkan Video encode *and* decode
+        // queues, which no CI runner has.
+        (
+            "the H264Decoder round-trip integration binary compiles",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-media-builtins",
+                "--test",
+                "h264_decoder_completes_the_round_trip",
+                "--no-run",
+            ],
+        ),
+        // The engine-owned codec round-trip rig. Examples are not a default
+        // cargo target, so no other entry here builds it and it would rot
+        // between rig runs unnoticed.
+        (
+            "the codec round-trip rig example compiles",
+            "cargo",
+            &[
+                "build",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--example",
+                "codec_roundtrip_rig",
             ],
         ),
         // The deviceless arm's integration binaries, which the workflow runs

@@ -142,6 +142,16 @@ jobs:
           # /dev/video* device no CI runner has.
           cargo test --locked -p streamlib-media-builtins \
             --test h264_encoder_publishes_the_bag_convention --no-run
+          # Compiled but not run, same reason on the decode side: the
+          # test-pattern -> encode -> decode round trip is #1077 read
+          # forwards, and it needs Vulkan Video encode *and* decode queues.
+          cargo test --locked -p streamlib-media-builtins \
+            --test h264_decoder_completes_the_round_trip --no-run
+          # The engine-owned codec round-trip rig. Examples are not a default
+          # cargo target, so nothing above builds it and it would rot between
+          # rig runs unnoticed; running it needs the queues, a display server
+          # and optionally a camera, so CI only compiles it.
+          cargo build --locked -p streamlib-engine --example codec_roundtrip_rig
           # The present-class escalate ops' headless arm. `streamlib-engine`'s
           # lib tests are deliberately not run wholesale here (see
           # python-wheel.yml's carve-out, which says so), so a named slice is
@@ -169,6 +179,13 @@ jobs:
           # contract, that a contract-less one renders exactly the four keys
           # it always did, and that no port carries a type key under any
           # spelling. Pure serde — no device, no graph.
+          # The codec entries are the NAL-parse seam #1077 implicates: the
+          # parameter sets an encoder prepends to every sync point are a
+          # mid-stream decoder's only entry point, and a framing the engine's
+          # own NAL reader cannot parse is dropped whole rather than refused —
+          # which is how a run encodes fifty frames and decodes none. Pure
+          # byte walking; the round trip that proves it end to end needs
+          # Vulkan Video queues and is compiled-only below.
           # Named one by one rather than by module prefix: a prefix would
           # enrol whatever that module holds next, which is how a device test
           # joins this list without anyone deciding to add it.
@@ -303,6 +320,15 @@ jobs:
             core::json_schema::port_rendering_tests::a_settled_match_device_port_renders_the_five_values_its_device_gave \
             core::json_schema::port_rendering_tests::an_unsettled_match_device_port_still_renders_the_sentinel \
             core::json_schema::port_rendering_tests::the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own \
+            vulkan::video::decode::tests::annex_b_framed_parameter_sets_open_a_decodable_stream \
+            vulkan::video::decode::tests::either_start_code_length_frames_parameter_sets_the_reader_accepts \
+            vulkan::video::decode::tests::parameter_sets_carrying_no_start_code_are_refused_rather_than_silently_dropped \
+            vulkan::video::decode::tests::empty_parameter_sets_are_refused_naming_what_a_decoder_needed \
+            vulkan::video::decode::tests::parameter_sets_missing_one_required_set_are_refused_naming_only_that_one \
+            vulkan::video::decode::tests::h265_parameter_sets_carrying_no_vps_still_open_a_decodable_stream \
+            vulkan::video::decode::tests::a_truncated_h265_nal_header_is_not_counted_as_a_parameter_set \
+            vulkan::video::decode::tests::a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr \
+            vulkan::video::decode::tests::trailing_zero_bytes_between_nal_units_stay_out_of_the_payload \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
