@@ -325,6 +325,7 @@ jobs:
             vulkan::video::decode::tests::parameter_sets_carrying_no_start_code_are_refused_rather_than_silently_dropped \
             vulkan::video::decode::tests::empty_parameter_sets_are_refused_naming_what_a_decoder_needed \
             vulkan::video::decode::tests::parameter_sets_missing_one_required_set_are_refused_naming_only_that_one \
+            vulkan::video::decode::tests::h265_parameter_sets_carrying_no_vps_still_open_a_decodable_stream \
             vulkan::video::decode::tests::a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr \
             vulkan::video::decode::tests::trailing_zero_bytes_between_nal_units_stay_out_of_the_payload \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link
