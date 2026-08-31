@@ -262,13 +262,20 @@ impl Default for SimpleDecoderConfig {
 }
 
 /// A fully decoded video frame with raw pixel data read back from the GPU.
+///
+/// `width` and `height` always describe `data`, but the two output paths hand
+/// back different pictures: the RGBA path applies the SPS's conformance
+/// window, so it publishes the picture the stream meant to carry, while the
+/// raw NV12 path is a direct DPB readback and hands back the block-aligned
+/// coded picture with its padding intact.
 #[derive(Debug, Clone)]
 pub struct SimpleDecodedFrame {
     /// Raw pixel data (NV12 or RGBA depending on `is_rgba`).
     pub data: Vec<u8>,
-    /// Frame width in pixels.
+    /// Width of `data` in pixels — cropped to the conformance window on the
+    /// RGBA path, the coded width on the raw NV12 path.
     pub width: u32,
-    /// Frame height in pixels.
+    /// Height of `data` in pixels, paired with [`Self::width`].
     pub height: u32,
     /// Decode order index.
     pub decode_order: u64,

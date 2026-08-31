@@ -149,8 +149,8 @@ impl SimpleDecoder {
             ));
         }
 
-        self.sps_width = width;
-        self.sps_height = height;
+        self.coded_picture_width = width;
+        self.coded_picture_height = height;
         self.vk_decoder = Some(vk_dec);
 
         info!(width, height, dpb_size, "Decoder session pre-initialized");
@@ -162,15 +162,18 @@ impl SimpleDecoder {
     // ------------------------------------------------------------------
 
     pub(crate) fn configure_session(&mut self) -> Result<(), VideoError> {
+        // The video session and its DPB images hold the *coded* picture,
+        // padding rows and all. Sizing them from the conformance-windowed
+        // extent would under-allocate by up to a block on each axis.
         let width = if self.config.max_width > 0 {
             self.config.max_width
         } else {
-            self.sps_width
+            self.coded_picture_width
         };
         let height = if self.config.max_height > 0 {
             self.config.max_height
         } else {
-            self.sps_height
+            self.coded_picture_height
         };
 
         if width == 0 || height == 0 {
@@ -247,11 +250,14 @@ impl SimpleDecoder {
         // reuse it rather than reallocating — that path sized the converter to
         // the codec-aligned max extent so it handles any SPS up to that cap.
         if self.config.rgba_output && self.nv12_converter.is_none() {
+            let (readback_span_width, readback_span_height) = self
+                .decoded_picture_display_window_or_whole_picture()
+                .extent_a_readback_must_span();
             let converter = unsafe {
                 crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter::new(
                     &self.ctx,
-                    self.sps_width,
-                    self.sps_height,
+                    readback_span_width,
+                    readback_span_height,
                     self.compute_queue_family,
                     self.compute_queue,
                     self.decode_queue_family,
@@ -515,9 +521,6 @@ impl SimpleDecoder {
     // ------------------------------------------------------------------
 
     pub(crate) fn create_session_params_h265(&mut self) -> Result<(), VideoError> {
-        let width = self.sps_width;
-        let height = self.sps_height;
-
         // Get parsed VPS/SPS/PPS from the parser if available
         let parsed_vps = self
             .h265_parser
@@ -642,6 +645,14 @@ impl SimpleDecoder {
             pHrdParameters: ptr::null(),
             pProfileTierLevel: &profile_tier_level,
         };
+
+        // `pic_*_in_luma_samples` is the coded extent by definition, so it
+        // comes off the parsed SPS itself rather than off the decoder's
+        // published extent, which the conformance window has already cropped.
+        let (width, height) = parsed_sps.map_or(
+            (self.coded_picture_width, self.coded_picture_height),
+            |s| (s.pic_width_in_luma_samples, s.pic_height_in_luma_samples),
+        );
 
         // Build SPS from parsed data
         let log2_min_cb = parsed_sps.map_or(0u8, |s| s.log2_min_luma_coding_block_size_minus3);
