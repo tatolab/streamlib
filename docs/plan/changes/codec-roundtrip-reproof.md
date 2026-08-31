@@ -1,0 +1,166 @@
+# codec-roundtrip-reproof
+
+The first rung of §Media I/O's codec half (decided 2026-08-31, align PR #2081,
+`385df4e0`; rationale in `docs/decisions/codec-blocks.md`): proof precedes surface.
+This change re-proves camera → encode → decode → display at HEAD for H.264 and
+H.265, adjudicates the #1077 decode regression, closes out the #756/#335
+real-hardware races, and rebuilds the PSNR rig on the control plane's own
+observation surface with PSNR a first-class calculation. It lands the engine half
+of the four video codec blocks and the encoded-frame bag convention — and no
+Python surface: the block API waits for this proof by decision.
+
+**Scale gate — this skill, no new ADR.** New behavior (the tree's first
+encoded-domain link, four engine processors, the rebuilt rig) built entirely on
+decided contracts: the existing session surface (`GpuContext::
+create_encoder_session` / `create_decoder_session`,
+`runtime/streamlib-engine/src/core/context/gpu_context.rs:2585,2617`), the bag
+wire, and the built-in registration path. The ADR was written by the align.
+
+**Precondition.** Every §Media I/O codec bullet is DECIDED (merged `385df4e0`),
+zero OPEN entries among them. Verified against the tree 2026-08-31: the session
+APIs are live and maintained; the PSNR fixtures are engine-owned
+(`runtime/streamlib-engine/tests/fixtures/{psnr/,psnr_vivid_baseline.tsv,
+e2e_fixture_psnr*.sh}`); built-ins register via `PROCESSOR_REGISTRY.register`
+(`runtime/streamlib-media-builtins/src/lib.rs:50-57`); a plain-Rust harness can
+build and run a graph (`Runner`, `ProcessorSpec` — the tokio-integration shape).
+
+---
+
+## ADDED: the four video codec processors, engine half
+
+`H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder` in
+`runtime/streamlib-media-builtins/`, registered beside camera and display —
+native processors whose per-frame paths never enter an interpreter. No Python
+marker classes, no stub entries, no `rt.add` reach in this change: that is the
+block API the proof gates.
+
+- Encoder: input port takes the camera's published surface; color conversion to
+  the codec's NV12 input rides the engine's existing converter path (the
+  `rgb_to_nv12` compute stage under `vulkan/video/`, reached like
+  `RhiColorConverter` is from `camera_source.rs`) — no new RHI primitive. The
+  session mints lazily from the first frame's dimensions
+  (`create_encoder_session(SimpleEncoderConfig, prepare_gpu_input)`), the mined
+  shape: config is a guardrail, dimensions track upstream. H.273 `ColorInfo` ↔
+  VUI translation is mined from
+  `packages/{h264,h265}/processors/color_vui_translate_linux.rs` into the
+  built-ins crate.
+- Decoder: `create_decoder_session(SimpleDecoderConfig)` with `max_width` /
+  `max_height` `0` — coded dimensions auto-detected from the first SPS, DPB
+  auto-sized. Output publishes as ordinary surfaces a display or tap consumer
+  reads. The H.265 CTU-padding crop (1920×1088 → 1920×1080, PR #328's lesson)
+  is applied at the decoder's publish edge, never left to consumers.
+- Both codecs, both directions, because the recorded proof (PRs #328, #827)
+  covered both and they share every seam. AV1/VP9 stay unexposed per the plan.
+
+## ADDED: the encoded-frame bag convention
+
+The tree's first encoded-domain link. An encoded frame is an ordinary bag; the
+proposed spelling, honoring the delivery-profile decision's fields
+(`docs/decisions/delivery-profile-vocabulary.md:143-152`):
+
+- `codec` — `"h264"` / `"h265"` (elementary-stream identity)
+- `bitstream` — msgpack `bin`, one Annex-B access unit
+- `is_sync_point` — bool; IDR/CRA, the group boundary
+- `group_index`, `sequence_index` — u64; the MoQ-mappable ordering pair, and
+  the PSNR rig's frame-pairing key (replacing the old
+  `frame_number → frame_index` threading)
+- `width`, `height` — coded extent before crop
+- `color` — the H.273 tuple (primaries, transfer, matrix, range)
+
+Timestamp rides the frame header like every bag. The decoder reads exactly this
+convention back; a bag it cannot read is refused by name, never reshaped — the
+audio wire codec's doctrine. A consumer seeing a `sequence_index` gap discards
+to the next `is_sync_point`, per the decided loss doctrine
+(`ARCHITECTURE.md:377-393`).
+
+## ADDED: the rig, rebuilt on tap + exchange
+
+- The proof harness is an engine-owned Rust fixture app —
+  `cargo run -p streamlib-engine --example codec_roundtrip_rig` — building
+  fixture-source/camera → encoder → decoder → display with `Runner` +
+  `ProcessorSpec`. Engine-owned means CI compiles it (rot protection) while
+  running stays rig-only, and no test reaches into a consumer for fixtures.
+  The fixture source replays the checked-in `psnr/` reference PNGs (the old
+  `BgraFileSource` role, mined); the vivid arm uses `CameraSource` unchanged.
+- Scoring rides observation, not display side effects: the rig tooling taps the
+  decoded channel for bags, exchanges each sampled surface id for the exact
+  frame bytes over the control plane's bytes route (the plan's own "evidence
+  and PSNR path", `ARCHITECTURE.md:1305-1316`), and pairs against references by
+  `sequence_index`. The display-writes-PNGs mechanism retires with the old
+  examples. Budget taps per the 500 ms sampling window; read `received` vs
+  `requested`.
+- PSNR becomes first-class in the proof tooling: `cargo xtask psnr` — per-frame
+  and per-plane Y/U/V against a reference set, the Y ≥ 35 dB pass / 30–35 warn
+  / < 30 fail classification, and the three injection modes preserved
+  (`swap-channels`, `bt601-bt709`, `range-swap`) so the gate stays provably
+  non-vacuous. Pure math, GPU-free: its unit tests are CI-named. ffmpeg leaves
+  the scoring path.
+- `e2e_fixture_psnr.sh` and `e2e_fixture_psnr_vivid.sh` re-point from the dead
+  examples to the fixture app + `xtask psnr`; the vivid baseline
+  (`psnr_vivid_baseline.tsv`) and its drift lock carry over unchanged.
+
+## ADDED: the adjudications
+
+- #1077: reproduce the decode regression against HEAD's wire with the rebuilt
+  rig, adjudicate its two recorded hypotheses — first-IDR loss at a
+  late-attaching subscriber (possibly transformed by today's `ordered`
+  depth-16 wiring) vs implementation-defined
+  `vkGetEncodedVideoSessionParametersKHR` header framing — and fix at the
+  engine layer. The ticket closes with the cause named, or closes as obsolete
+  with the HEAD-wire run that proves it gone.
+- #756 (h264 Cam Link `DEVICE_LOST`) and #335 (h265 shutdown race): re-run on
+  the rig's real capture hardware with the fixture app, 3+ cold clean runs per
+  #756's own bar; vivid alone is recorded as hiding this class. Close or
+  re-scope each on the evidence.
+- Ship bar per the plan: the change is complete only with the rig round-trip at
+  the PSNR floor via `/verify-live` for both codecs, plus the CI-named GPU-free
+  tests below.
+
+## ADDED: CI-named GPU-free tests
+
+Named individually in `test.yml` and the xtask mirror, or they run nowhere:
+encoded-frame bag codec round-trip (write → read, refusal naming, gap →
+sync-point discard), NAL/bitstream parse units for the seams #1077 implicates,
+`ColorInfo` ↔ VUI translation, encoder/decoder config resolution, and the
+`xtask psnr` math (including injection-mode trip tests).
+
+## MODIFIED: stale anchors the deletions expose
+
+- `docs/architecture/texture-ring.md:323-324` — cites
+  `packages/{h264,h265}/processors/decoder_linux.rs`; re-anchored to the
+  built-ins.
+- `runtime/streamlib-engine/src/apple/mod.rs:11` and
+  `runtime/streamlib-engine/src/vulkan/_nvjpeg_impl_pending_/README.md:11` —
+  comments citing `packages/h264` / `packages/mp4` paths; re-anchored.
+- `.claude/skills/verify-live/SKILL.md:80` and
+  `.claude/skills/verify-video/SKILL.md:30` — both name
+  `vulkan-video-roundtrip` as the runnable; re-pointed at the fixture app
+  (verify-video's fuller rewrite waits for the recording showcase).
+- `.claude/scripts/tests/rig-brake.test.sh:189-237` — brake tests use
+  `vulkan-video-roundtrip` paths as their example commands; re-pointed.
+- `.claude/scripts/tests/ship-change-removed-gate.test.sh:201` — plants a
+  synthetic `packages/h264/src/lib.rs` in its scratch repo; renamed to a
+  neutral synthetic path so the literal string stops shadowing a real bullet.
+
+## REMOVED: the mined four
+
+Per §Consumers and the codec disposition bullet: mined for logic in this change,
+deleted in this change. The residue enumerated above is the entire engine-side
+reference surface (gate-style search run 2026-08-31).
+
+- REMOVED: examples/vulkan-video-roundtrip
+- REMOVED: examples/vulkan-video-psnr
+- REMOVED: packages/h264
+- REMOVED: packages/h265
+
+## Not in this change
+
+- No Python surface: marker classes, stub entries, `rt.add` reach for codec
+  blocks — the next rung, gated on this proof.
+- No Opus, no `Mp4Sink`, no `JpegDecoder` rung (#1212 rides the JPEG rung);
+  `packages/{jpeg,opus,mp4}` and `examples/jpeg-psnr` stay held.
+- No `examples/camera-audio-recorder` conversion (the recording showcase waits
+  for encode + mux + audio).
+- No MoQ/WebRTC work; no producer-pressure reflection (stays OPEN); no rate-
+  control/GOP config surface beyond what the mined guardrail config already
+  carries.
