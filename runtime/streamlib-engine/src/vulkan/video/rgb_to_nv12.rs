@@ -334,11 +334,19 @@ impl RgbToNv12Converter {
     /// After this call, the encode-src NV12 image is in `VIDEO_ENCODE_SRC_KHR`
     /// layout and ready for the encoder.
     ///
+    /// `source_width` / `source_height` are the real extent of the image
+    /// behind `rgba_image_view`: the shader clamps every fetch to it, so a
+    /// source smaller than the converter's codec-aligned extent yields
+    /// edge-replicated padding rows/columns — the region the SPS conformance
+    /// crop hides — instead of out-of-bounds fetches of undefined pixels.
+    ///
     /// Returns `(encode_nv12_image, encode_nv12_color_view)` for the caller to
     /// pass to `Encoder::encode_frame()`.
     pub unsafe fn convert(
         &mut self,
         rgba_image_view: vk::ImageView,
+        source_width: u32,
+        source_height: u32,
     ) -> Result<(vk::Image, vk::ImageView), VideoError> {
         unsafe {
             let cb = self.command_buffer;
@@ -350,7 +358,7 @@ impl RgbToNv12Converter {
             self.kernel.set_storage_image_view(1, self.luma_view)?;
             self.kernel.set_storage_image_view(2, self.chroma_view)?;
             self.kernel.set_push_constants_value(&PushConstants {
-                resolution: [self.width as i32, self.height as i32],
+                resolution: [source_width as i32, source_height as i32],
             })?;
 
             self.device

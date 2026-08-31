@@ -3968,6 +3968,19 @@ impl GpuContextFullAccess {
             .create_present_compositor(attachment_format)
     }
 
+    /// Mint a hardware video encoder session — the FullAccess mirror of
+    /// [`GpuContext::create_encoder_session`], reachable from a processor's
+    /// `process()` via `escalate(|full| ...)` for the one-shot lazy mint.
+    #[cfg(target_os = "linux")]
+    pub fn create_encoder_session(
+        &self,
+        config: crate::vulkan::video::encode::SimpleEncoderConfig,
+        prepare_gpu_input: bool,
+    ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
+        self.host_inner()
+            .create_encoder_session(config, prepare_gpu_input)
+    }
+
     /// Wait for the GPU device to become idle.
     ///
     pub fn wait_device_idle(&self) -> Result<()> {
