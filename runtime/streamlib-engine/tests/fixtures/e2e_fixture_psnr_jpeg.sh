@@ -4,9 +4,13 @@
 #
 # Fixture-driven JPEG decode PSNR harness.
 #
-# Mirrors runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh so a
-# reviewer can read both rigs with the same mental model. Differences
-# (per the JPEG pipeline's shape):
+# Mirrored runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh, which
+# has since moved on: #2085 rebuilt that rig on `codec_roundtrip_rig` plus tap
+# and surface-id exchange, and moved its scoring into `cargo xtask psnr`. This
+# one still drives the `jpeg-psnr` example and still scores with ffmpeg,
+# because the JPEG rung is held (#1212) — so read the two side by side for the
+# shape of the *old* video rig, not the current one. Differences already noted
+# below are the ones the JPEG pipeline's own shape forces:
 #
 #   - JPEG is self-contained per-frame and `JpegBytesSource` reads a
 #     single file at setup (its schema's `file_path` is a required
