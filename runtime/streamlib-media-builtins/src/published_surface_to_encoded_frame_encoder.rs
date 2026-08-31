@@ -137,7 +137,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
     }
 }
 
-impl<Identity: HardwareVideoCodecProcessorIdentity> PublishedSurfaceToEncodedFrameEncoder<Identity> {
+impl<Identity: HardwareVideoCodecProcessorIdentity>
+    PublishedSurfaceToEncodedFrameEncoder<Identity>
+{
     /// The encoder-session mint is deferred to the first frame so its
     /// dimensions track upstream; setup only keeps the context handle the
     /// mint and the per-frame resolve need.
@@ -470,9 +472,7 @@ mod tests {
 
         let (_, _, fps_default) = resolve_encode_dimensions_from_first_frame::<
             H265EncoderCodecIdentity,
-        >(
-            &HardwareVideoEncoderConfig::default(), 1280, 720, None
-        );
+        >(&HardwareVideoEncoderConfig::default(), 1280, 720, None);
         assert_eq!(fps_default, DEFAULT_ENCODE_FPS);
     }
 
@@ -481,10 +481,7 @@ mod tests {
         let (width, height, _) = resolve_encode_dimensions_from_first_frame::<
             H265EncoderCodecIdentity,
         >(
-            &HardwareVideoEncoderConfig::default(),
-            3840,
-            2160,
-            Some(30),
+            &HardwareVideoEncoderConfig::default(), 3840, 2160, Some(30)
         );
         assert_eq!((width, height), (3840, 2160));
     }
@@ -502,18 +499,12 @@ mod tests {
     /// would produce a bitstream whose bag lies about it.
     #[test]
     fn each_encoders_identity_names_one_codec_on_both_the_session_and_the_bag() {
-        assert_eq!(
-            H264EncoderCodecIdentity::VIDEO_SESSION_CODEC,
-            Codec::H264
-        );
+        assert_eq!(H264EncoderCodecIdentity::VIDEO_SESSION_CODEC, Codec::H264);
         assert_eq!(
             H264EncoderCodecIdentity::ENCODED_VIDEO_CODEC.as_wire_str(),
             "h264"
         );
-        assert_eq!(
-            H265EncoderCodecIdentity::VIDEO_SESSION_CODEC,
-            Codec::H265
-        );
+        assert_eq!(H265EncoderCodecIdentity::VIDEO_SESSION_CODEC, Codec::H265);
         assert_eq!(
             H265EncoderCodecIdentity::ENCODED_VIDEO_CODEC.as_wire_str(),
             "h265"

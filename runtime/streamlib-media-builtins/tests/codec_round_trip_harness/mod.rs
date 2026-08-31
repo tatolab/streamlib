@@ -37,9 +37,9 @@ use std::time::{Duration, Instant};
 
 use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ReactiveProcessor};
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib_media_builtins::{
     TestPatternSource, VideoFrame, read_encoded_video_frame_bag,
     register_media_builtin_processor_types,

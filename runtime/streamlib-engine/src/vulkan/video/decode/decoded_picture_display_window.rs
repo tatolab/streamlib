@@ -97,14 +97,18 @@ pub(crate) fn h265_conformance_window(
     conf_win_bottom_offset: u32,
 ) -> Option<DecodedPictureDisplayWindow> {
     if !conformance_window_flag {
-        return Some(DecodedPictureDisplayWindow::covering_the_whole_coded_picture(
-            coded_width,
-            coded_height,
-        ));
+        return Some(
+            DecodedPictureDisplayWindow::covering_the_whole_coded_picture(
+                coded_width,
+                coded_height,
+            ),
+        );
     }
     let (sub_width_c, sub_height_c) = chroma_subsampling_factors(chroma_format_idc);
-    let cropped_from_the_sides = sub_width_c.checked_mul(conf_win_left_offset + conf_win_right_offset)?;
-    let cropped_from_the_ends = sub_height_c.checked_mul(conf_win_top_offset + conf_win_bottom_offset)?;
+    let cropped_from_the_sides =
+        sub_width_c.checked_mul(conf_win_left_offset + conf_win_right_offset)?;
+    let cropped_from_the_ends =
+        sub_height_c.checked_mul(conf_win_top_offset + conf_win_bottom_offset)?;
 
     let window = DecodedPictureDisplayWindow {
         origin_x: sub_width_c * conf_win_left_offset,
@@ -112,7 +116,9 @@ pub(crate) fn h265_conformance_window(
         width: coded_width.checked_sub(cropped_from_the_sides)?,
         height: coded_height.checked_sub(cropped_from_the_ends)?,
     };
-    window.fits_inside(coded_width, coded_height).then_some(window)
+    window
+        .fits_inside(coded_width, coded_height)
+        .then_some(window)
 }
 
 /// The window an H.264 SPS's frame cropping names (Rec. ITU-T H.264
@@ -134,10 +140,12 @@ pub(crate) fn h264_frame_cropping_window(
     frame_crop_bottom_offset: u32,
 ) -> Option<DecodedPictureDisplayWindow> {
     if !frame_cropping_flag {
-        return Some(DecodedPictureDisplayWindow::covering_the_whole_coded_picture(
-            coded_width,
-            coded_height,
-        ));
+        return Some(
+            DecodedPictureDisplayWindow::covering_the_whole_coded_picture(
+                coded_width,
+                coded_height,
+            ),
+        );
     }
     // A separate-colour-plane stream codes each plane as monochrome, so its
     // crop units are the monochrome ones whatever `chroma_format_idc` says.
@@ -160,7 +168,9 @@ pub(crate) fn h264_frame_cropping_window(
         width: coded_width.checked_sub(cropped_from_the_sides)?,
         height: coded_height.checked_sub(cropped_from_the_ends)?,
     };
-    window.fits_inside(coded_width, coded_height).then_some(window)
+    window
+        .fits_inside(coded_width, coded_height)
+        .then_some(window)
 }
 
 #[cfg(test)]
@@ -192,12 +202,12 @@ mod tests {
     /// which is eight rows of padding short of the picture.
     #[test]
     fn the_chroma_format_decides_how_many_luma_rows_an_offset_takes() {
-        let window_420 = h265_conformance_window(1920, 1088, 1, true, 0, 0, 0, 4)
-            .expect("4:2:0 window");
-        let window_422 = h265_conformance_window(1920, 1088, 2, true, 0, 0, 0, 4)
-            .expect("4:2:2 window");
-        let window_444 = h265_conformance_window(1920, 1088, 3, true, 0, 0, 0, 4)
-            .expect("4:4:4 window");
+        let window_420 =
+            h265_conformance_window(1920, 1088, 1, true, 0, 0, 0, 4).expect("4:2:0 window");
+        let window_422 =
+            h265_conformance_window(1920, 1088, 2, true, 0, 0, 0, 4).expect("4:2:2 window");
+        let window_444 =
+            h265_conformance_window(1920, 1088, 3, true, 0, 0, 0, 4).expect("4:4:4 window");
         assert_eq!(window_420.height, 1080);
         assert_eq!(window_422.height, 1084);
         assert_eq!(window_444.height, 1084);
@@ -244,8 +254,14 @@ mod tests {
     /// zero extent would describe a buffer that does not exist.
     #[test]
     fn a_window_cropping_past_the_coded_picture_is_refused_rather_than_wrapped() {
-        assert_eq!(h265_conformance_window(1920, 1088, 1, true, 0, 0, 0, 600), None);
-        assert_eq!(h265_conformance_window(1920, 1088, 1, true, 2000, 0, 0, 0), None);
+        assert_eq!(
+            h265_conformance_window(1920, 1088, 1, true, 0, 0, 0, 600),
+            None
+        );
+        assert_eq!(
+            h265_conformance_window(1920, 1088, 1, true, 2000, 0, 0, 0),
+            None
+        );
         // Exactly consumed is empty, not a picture.
         assert_eq!(h265_conformance_window(64, 64, 1, true, 0, 32, 0, 0), None);
         // And the offsets are not allowed to overflow their own sum.

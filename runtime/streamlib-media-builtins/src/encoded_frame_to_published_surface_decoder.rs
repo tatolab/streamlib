@@ -125,7 +125,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
     }
 }
 
-impl<Identity: HardwareVideoCodecProcessorIdentity> EncodedFrameToPublishedSurfaceDecoder<Identity> {
+impl<Identity: HardwareVideoCodecProcessorIdentity>
+    EncodedFrameToPublishedSurfaceDecoder<Identity>
+{
     pub fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -370,10 +372,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> EncodedFrameToPublishedSurfa
             height,
         )
         .map_err(|staging_failure| {
-            Error::Runtime(format!(
-                "{}: {staging_failure}",
-                Identity::PROCESSOR_NAME
-            ))
+            Error::Runtime(format!("{}: {staging_failure}", Identity::PROCESSOR_NAME))
         })?;
 
         let frame = VideoFrame {

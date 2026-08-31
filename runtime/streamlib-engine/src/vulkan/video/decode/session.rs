@@ -649,10 +649,10 @@ impl SimpleDecoder {
         // `pic_*_in_luma_samples` is the coded extent by definition, so it
         // comes off the parsed SPS itself rather than off the decoder's
         // published extent, which the conformance window has already cropped.
-        let (width, height) = parsed_sps.map_or(
-            (self.coded_picture_width, self.coded_picture_height),
-            |s| (s.pic_width_in_luma_samples, s.pic_height_in_luma_samples),
-        );
+        let (width, height) = parsed_sps
+            .map_or((self.coded_picture_width, self.coded_picture_height), |s| {
+                (s.pic_width_in_luma_samples, s.pic_height_in_luma_samples)
+            });
 
         // Build SPS from parsed data
         let log2_min_cb = parsed_sps.map_or(0u8, |s| s.log2_min_luma_coding_block_size_minus3);

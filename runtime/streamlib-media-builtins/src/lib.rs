@@ -55,13 +55,13 @@ pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use camera_source::{CameraSource, CameraSourceConfig};
 #[cfg(target_os = "linux")]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
+#[cfg(target_os = "linux")]
+pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 pub use encoded_video_frame::{
     ArrivingEncodedFrameDisposition, EncodedFrameOrderingPair, EncodedFrameOrderingPairCounter,
     EncodedStreamSyncPointGate, EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal,
     read_encoded_video_frame_bag,
 };
-#[cfg(target_os = "linux")]
-pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 #[cfg(target_os = "linux")]
 pub use h264_decoder::H264Decoder;
 #[cfg(target_os = "linux")]
@@ -70,10 +70,10 @@ pub use h264_encoder::H264Encoder;
 pub use h265_decoder::H265Decoder;
 #[cfg(target_os = "linux")]
 pub use h265_encoder::H265Encoder;
-#[cfg(target_os = "linux")]
-pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
+#[cfg(target_os = "linux")]
+pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
