@@ -122,13 +122,28 @@ impl SimpleEncoder {
             // Configure encoder (creates video session, DPB, etc.).
             this.configure(&enc_config)?;
 
-            let raw_header = this.extract_header().unwrap_or_default();
+            // The parameter sets prepended to every sync point are the only
+            // entry point a mid-stream decoder gets, so neither a failed
+            // extraction nor a framing the engine's own NAL reader cannot
+            // find them in may pass silently — that is a stream that encodes
+            // for a whole run and decodes to nothing.
+            let raw_header = this.extract_header()?;
             this.cached_header = super::vui_patch::patch_header_timing(
                 &raw_header,
                 this.codec_flag,
                 this.config.fps,
                 1,
             );
+            if let Some(refusal) =
+                crate::vulkan::video::decode::why_no_decoder_could_enter_on_these_parameter_sets(
+                    &this.cached_header,
+                    this.config.codec,
+                )
+            {
+                return Err(VideoError::BitstreamError(format!(
+                    "encoder session parameter sets open no decodable stream: {refusal}"
+                )));
+            }
             let (aligned_w, aligned_h) = this.aligned_extent();
 
             // Source NV12 image.

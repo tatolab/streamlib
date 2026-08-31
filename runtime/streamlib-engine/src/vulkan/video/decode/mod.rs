@@ -36,6 +36,51 @@ use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
 };
 use crate::vulkan::video::video_context::{VideoContext, VideoError};
 
+/// Why no decoder could enter a stream on these parameter-set bytes, or
+/// `None` when they open one.
+///
+/// The bytes `vkGetEncodedVideoSessionParametersKHR` hands an encoder back
+/// are implementation-defined, and an encoder that prepends them to its sync
+/// points has made them the stream's only entry point: a decoder that cannot
+/// find an SPS and a PPS in them configures no session and decodes nothing,
+/// however many slices follow. This answers the question with the engine's
+/// own NAL reader — the one that will actually be asked to find them — so
+/// the check and the reader cannot disagree about what is framed correctly.
+pub fn why_no_decoder_could_enter_on_these_parameter_sets(
+    parameter_set_bytes: &[u8],
+    codec: crate::vulkan::video::encode::Codec,
+) -> Option<String> {
+    let required_parameter_sets: &[(u8, &str)] = match codec {
+        crate::vulkan::video::encode::Codec::H264 => &[(7, "SPS"), (8, "PPS")],
+        crate::vulkan::video::encode::Codec::H265 => &[(32, "VPS"), (33, "SPS"), (34, "PPS")],
+    };
+    let nal_unit_types: Vec<u8> = SimpleDecoder::split_nal_units_owned(parameter_set_bytes)
+        .iter()
+        .filter_map(|nal_unit| {
+            nal_unit.first().map(|header_byte| match codec {
+                crate::vulkan::video::encode::Codec::H264 => header_byte & 0x1F,
+                crate::vulkan::video::encode::Codec::H265 => (header_byte >> 1) & 0x3F,
+            })
+        })
+        .collect();
+
+    let missing: Vec<&str> = required_parameter_sets
+        .iter()
+        .filter(|(nal_unit_type, _)| !nal_unit_types.contains(nal_unit_type))
+        .map(|(_, name)| *name)
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the engine's own NAL reader finds no {} in the {} byte(s) of parameter sets — it read \
+         the Annex-B NAL unit types {:?}",
+        missing.join(" and "),
+        parameter_set_bytes.len(),
+        nal_unit_types,
+    ))
+}
+
 // ======================================================================
 // SimpleDecoder — high-level decoder with auto NAL parsing
 // ======================================================================

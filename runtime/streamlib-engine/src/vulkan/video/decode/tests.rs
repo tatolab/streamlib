@@ -422,3 +422,156 @@ fn test_find_start_code_after() {
     let pos = SimpleDecoder::find_start_code_after(&data, 0);
     assert_eq!(pos, Some(4)); // next SC at offset 4
 }
+
+// ------------------------------------------------------------------
+// The parameter sets a sync point ships with — the #1077 seam
+// ------------------------------------------------------------------
+//
+// An encoder that prepends `vkGetEncodedVideoSessionParametersKHR` bytes to
+// its sync points has made them the stream's only entry point. If the engine's
+// NAL reader cannot find an SPS and a PPS in them, every slice that follows is
+// skipped and the run ends having decoded nothing — the recorded #1077
+// symptom. These lock the reader and the check that guards it together.
+
+/// One Annex-B NAL: `start_code_length` bytes of start code, then `bytes`.
+fn annex_b_nal_unit(start_code_length: usize, bytes: &[u8]) -> Vec<u8> {
+    let mut nal_unit = if start_code_length == 4 {
+        vec![0x00, 0x00, 0x00, 0x01]
+    } else {
+        vec![0x00, 0x00, 0x01]
+    };
+    nal_unit.extend_from_slice(bytes);
+    nal_unit
+}
+
+/// The H.264 parameter sets a driver hands back, Annex-B framed.
+fn h264_annex_b_parameter_sets() -> Vec<u8> {
+    let mut parameter_sets = annex_b_nal_unit(4, &[0x67, 0x42, 0x00, 0x1E]);
+    parameter_sets.extend_from_slice(&annex_b_nal_unit(4, &[0x68, 0xCE, 0x38, 0x80]));
+    parameter_sets
+}
+
+#[test]
+fn annex_b_framed_parameter_sets_open_a_decodable_stream() {
+    assert_eq!(
+        why_no_decoder_could_enter_on_these_parameter_sets(
+            &h264_annex_b_parameter_sets(),
+            crate::vulkan::video::encode::Codec::H264,
+        ),
+        None
+    );
+}
+
+/// A driver is free to pick either start-code length, and may mix them
+/// within one blob — neither framing may be read as missing parameter sets.
+#[test]
+fn either_start_code_length_frames_parameter_sets_the_reader_accepts() {
+    let mut mixed_framing = annex_b_nal_unit(3, &[0x67, 0x42, 0x00, 0x1E]);
+    mixed_framing.extend_from_slice(&annex_b_nal_unit(4, &[0x68, 0xCE, 0x38, 0x80]));
+    assert_eq!(
+        why_no_decoder_could_enter_on_these_parameter_sets(
+            &mixed_framing,
+            crate::vulkan::video::encode::Codec::H264,
+        ),
+        None
+    );
+}
+
+/// #1077 hypothesis 2, as logic: parameter sets that carry no start code are
+/// dropped whole by the reader, because everything before the first start
+/// code is not a NAL unit. Silently shipping those is what produces an
+/// encoder at ~50 frames and a decoder at 0.
+#[test]
+fn parameter_sets_carrying_no_start_code_are_refused_rather_than_silently_dropped() {
+    let unframed_parameter_sets = [0x67, 0x42, 0x00, 0x1E, 0x68, 0xCE, 0x38, 0x80];
+    assert!(
+        SimpleDecoder::split_nal_units_owned(&unframed_parameter_sets).is_empty(),
+        "the reader finds no NAL unit at all in unframed bytes — which is why they must be \
+         refused before they reach a stream"
+    );
+    let refusal = why_no_decoder_could_enter_on_these_parameter_sets(
+        &unframed_parameter_sets,
+        crate::vulkan::video::encode::Codec::H264,
+    )
+    .expect("unframed parameter sets must be refused");
+    assert!(
+        refusal.contains("SPS") && refusal.contains("PPS"),
+        "the refusal names what the decoder needed and did not find: {refusal}"
+    );
+}
+
+/// A failed `vkGetEncodedVideoSessionParametersKHR` used to become an empty
+/// header and then a headerless stream. Empty is a refusal, not a default.
+#[test]
+fn empty_parameter_sets_are_refused_naming_what_a_decoder_needed() {
+    let refusal = why_no_decoder_could_enter_on_these_parameter_sets(
+        &[],
+        crate::vulkan::video::encode::Codec::H264,
+    )
+    .expect("empty parameter sets must be refused");
+    assert!(
+        refusal.contains("SPS") && refusal.contains("PPS"),
+        "{refusal}"
+    );
+}
+
+/// Parameter sets that carry only half of what a decoder configures from are
+/// refused naming the half that is missing, not accepted for the half present.
+#[test]
+fn parameter_sets_missing_one_required_set_are_refused_naming_only_that_one() {
+    let sps_only = annex_b_nal_unit(4, &[0x67, 0x42, 0x00, 0x1E]);
+    let refusal = why_no_decoder_could_enter_on_these_parameter_sets(
+        &sps_only,
+        crate::vulkan::video::encode::Codec::H264,
+    )
+    .expect("an SPS with no PPS must be refused");
+    assert!(refusal.contains("PPS"), "{refusal}");
+    assert!(
+        !refusal.contains("SPS"),
+        "the SPS was there; the refusal must not name it: {refusal}"
+    );
+
+    // H.265 needs a VPS beside them, and its NAL types are read from a
+    // different bit field — a header framed for H.264 does not satisfy it.
+    let h265_refusal = why_no_decoder_could_enter_on_these_parameter_sets(
+        &h264_annex_b_parameter_sets(),
+        crate::vulkan::video::encode::Codec::H265,
+    )
+    .expect("H.264 parameter sets open no H.265 stream");
+    assert!(
+        h265_refusal.contains("VPS")
+            && h265_refusal.contains("SPS")
+            && h265_refusal.contains("PPS"),
+        "{h265_refusal}"
+    );
+}
+
+/// What actually ships: the parameter sets concatenated ahead of the IDR
+/// access unit, in one bag. The reader must recover all three NAL units from
+/// it, so the session configures on the same bag it then decodes.
+#[test]
+fn a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr() {
+    let mut sync_point_access_unit = h264_annex_b_parameter_sets();
+    sync_point_access_unit.extend_from_slice(&annex_b_nal_unit(4, &[0x65, 0x88, 0x84, 0x00]));
+
+    let nal_unit_types: Vec<u8> = SimpleDecoder::split_nal_units_owned(&sync_point_access_unit)
+        .iter()
+        .map(|nal_unit| nal_unit[0] & 0x1F)
+        .collect();
+    assert_eq!(nal_unit_types, vec![7, 8, 5]);
+}
+
+/// H.264 permits trailing zero bytes after a NAL unit's payload, and a
+/// driver's parameter sets may carry them. Those bytes belong to no NAL
+/// unit: the reader must not hand them on as payload, or the parameter set
+/// the decoder parses is not the one the encoder wrote.
+#[test]
+fn trailing_zero_bytes_between_nal_units_stay_out_of_the_payload() {
+    let mut with_trailing_zero = annex_b_nal_unit(4, &[0x67, 0x42, 0x00, 0x1E, 0x00]);
+    with_trailing_zero.extend_from_slice(&annex_b_nal_unit(3, &[0x68, 0xCE, 0x38, 0x80]));
+
+    let nal_units = SimpleDecoder::split_nal_units_owned(&with_trailing_zero);
+    assert_eq!(nal_units.len(), 2);
+    assert_eq!(nal_units[0], vec![0x67, 0x42, 0x00, 0x1E]);
+    assert_eq!(nal_units[1], vec![0x68, 0xCE, 0x38, 0x80]);
+}
