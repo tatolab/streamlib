@@ -4,8 +4,8 @@
 //! The graph's consumer — reports the cadence the ticks actually arrived at.
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::RuntimeContextLimitedAccess;
-use streamlib::sdk::error::Result;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::sequenced_tick::SequencedTick;
@@ -14,7 +14,12 @@ use crate::sequenced_tick::SequencedTick;
 /// shares with it.
 pub const TICK_INPUT_PORT_FROM_UPSTREAM: &str = "tick_from_upstream";
 
-/// How many ticks the sink gathers before it reports on them.
+/// The shortest window an interval can be read out of: two stamps.
+const FEWEST_TICKS_A_CADENCE_REPORT_CAN_READ: u32 = 2;
+
+/// How many ticks the sink gathers before it reports on them. Below
+/// [`FEWEST_TICKS_A_CADENCE_REPORT_CAN_READ`] there is no interval to measure,
+/// and `setup` refuses rather than reporting nothing forever.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TickCadenceReportingSinkConfig {
@@ -44,6 +49,10 @@ pub struct TickCadenceReportingSink {
 }
 
 impl ReactiveProcessor for TickCadenceReportingSink::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        refuse_a_window_too_short_to_hold_an_interval(self.config.ticks_per_cadence_report)
+    }
+
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         // One wake can carry more than one tick, so drain rather than read
         // once: `ordered` hands them back oldest-first, which is what makes
@@ -88,14 +97,29 @@ struct ObservedTickCadence {
     widest_interval_ms: f64,
 }
 
+/// Refuse a window size no interval can be read out of.
+///
+/// A window of one satisfies the report threshold on its first tick, measures
+/// nothing, and clears — so an unchecked knob leaves the processor running
+/// forever and saying nothing. Refusing at `setup` says it once, up front.
+fn refuse_a_window_too_short_to_hold_an_interval(ticks_per_cadence_report: u32) -> Result<()> {
+    if ticks_per_cadence_report < FEWEST_TICKS_A_CADENCE_REPORT_CAN_READ {
+        return Err(Error::Configuration(format!(
+            "ticks_per_cadence_report is {ticks_per_cadence_report}, and an interval needs at \
+             least {FEWEST_TICKS_A_CADENCE_REPORT_CAN_READ} ticks to be read out of"
+        )));
+    }
+    Ok(())
+}
+
 /// Read the cadence out of one window of ticks, in the order they arrived.
 ///
 /// `None` below two ticks: an interval needs two stamps.
 fn observed_cadence_of(ticks: &[SequencedTick]) -> Option<ObservedTickCadence> {
-    let (first, last) = (ticks.first()?, ticks.last()?);
-    if ticks.len() < 2 {
+    if ticks.len() < FEWEST_TICKS_A_CADENCE_REPORT_CAN_READ as usize {
         return None;
     }
+    let (first, last) = (ticks.first()?, ticks.last()?);
 
     let widest_interval_ns = ticks
         .windows(2)
@@ -189,5 +213,28 @@ mod tests {
     fn a_window_too_short_to_hold_an_interval_reports_nothing() {
         assert!(observed_cadence_of(&[]).is_none());
         assert!(observed_cadence_of(&evenly_spaced_ticks(1, 40)).is_none());
+    }
+
+    /// The knob the README invites a reader to turn. Set below two it would
+    /// otherwise run forever reporting nothing, with no diagnostic at all.
+    #[test]
+    fn a_window_size_that_could_never_report_is_refused_at_setup() {
+        for unreportable in [0, 1] {
+            let refusal = refuse_a_window_too_short_to_hold_an_interval(unreportable)
+                .expect_err("a window this short can never report");
+            assert!(
+                refusal.to_string().contains("ticks_per_cadence_report"),
+                "the refusal should name the knob, got {refusal}"
+            );
+        }
+
+        assert!(refuse_a_window_too_short_to_hold_an_interval(2).is_ok());
+        assert!(
+            refuse_a_window_too_short_to_hold_an_interval(
+                TickCadenceReportingSinkConfig::default().ticks_per_cadence_report
+            )
+            .is_ok(),
+            "the default must not be a size the sink refuses"
+        );
     }
 }

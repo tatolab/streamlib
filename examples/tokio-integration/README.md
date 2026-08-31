@@ -15,7 +15,7 @@ this one is `cargo run`.
 ```rust
 #[tokio::main]
 async fn main() -> Result<()> {
-    let runtime = Runner::new()?;   // finds this thread's runtime, takes its handle
+    let engine_runtime = Runner::new()?;   // finds this thread's runtime, takes its handle
 ```
 
 Called outside a tokio context, `Runner::new()` builds a multi-thread runtime
@@ -27,8 +27,8 @@ Nothing is configured for this; it is the same constructor either way.
 Every graph op has two spellings, and they are not interchangeable in a task:
 
 ```rust
-let source_id = runtime.add_processor_async(ProcessorSpec::new(source_class, config)).await?;
-runtime.connect_async(from, to).await?;
+let source_id = engine_runtime.add_processor_async(ProcessorSpec::new(source_class, config)).await?;
+engine_runtime.connect_async(from, to).await?;
 ```
 
 The sync twin (`add_processor`, `connect`) hands the work to the runtime and
@@ -47,31 +47,51 @@ Two calls are exceptions worth knowing, and this app leans on both:
   and returns without waiting for an answer, which is what makes it the one
   lifecycle op a task can call.
 
-### The run loop is blocking, so it goes on the blocking pool
+This is also why the app talks to `Runner` directly rather than through `App`,
+the authoring sugar a Rust app would otherwise reach for first. `App` is a thin
+wrapper — `add`, `add_local`, `connect`, `run` — but every one of its methods is
+the sync spelling, and it has no `*_async` twins. In a `fn main()` that is not
+async, `App` is the shorter way to write this graph; in a tokio service it is
+the wrong one. `App::runner()` is the escape hatch back if you want the sugar
+for setup and the async ops for the rest.
+
+### The run loop is blocking, and it keeps the main thread
 
 ```rust
-let graph_run = tokio::task::spawn_blocking({
-    let runtime = Arc::clone(&runtime);
-    move || runtime.start_and_wait_for_shutdown()
-});
+// … every observer task already spawned above …
+let run_outcome = engine_runtime.start_and_wait_for_shutdown();
 ```
 
 `start_and_wait_for_shutdown` takes ownership of the shutdown signals, starts
-the graph, and then polls until one arrives — a loop with a sleep in it. Put it
-on an async worker and it holds that worker for the entire run. This is the one
-piece of the integration that has to be placed deliberately.
+the graph, and then polls until one arrives — a loop with a sleep in it. This
+is the one piece of the integration that has to be placed deliberately, and the
+placement is: **leave it on the process main thread.**
+
+`#[tokio::main]` drives `main`'s future on the main thread via `block_on`, while
+the multi-thread runtime's workers are threads of their own. So blocking here
+parks main and starves nothing — every task spawned before this line keeps
+running. Spawn your observers first, then call it last.
+
+The tempting alternative, `spawn_blocking(move || …start_and_wait_for_shutdown())`,
+works on Linux and **panics on macOS**: there the wait becomes the
+`NSApplication` event loop, which asserts it is on the main thread, and a
+blocking-pool thread never is. Every other caller in the tree — `App::run`, the
+Python wheel's `Runtime.run` — calls it on its caller's thread for the same
+reason.
 
 ### A tap is how the graph's data reaches async code
 
 ```rust
-let mut tap = runtime.tap_async(tick_channel, None).await?;
+let mut tap = engine_runtime.tap_async(tick_channel, None).await?;
 while let Some(tapped_bag) = tap.recv().await { … }
 ```
 
 `tap_async` is a read-only subscription on one channel, and `recv()` is a
-genuine `async fn` — the graph's bags land in a tokio task with no bridging
-channel, no static, and no polling. It is the async-native seam between the two
-worlds.
+genuine `async fn` — so the graph's bags land in a tokio task with nothing you
+have to write: no bridging channel of your own, no static, no poll loop. It is
+the async-native seam between the two worlds. (Inside, the engine does own a
+thread for the `!Send` subscriber and forwards over a bounded channel; that is
+the machinery you are being handed rather than machinery that is absent.)
 
 Three properties that matter when you build on it:
 
@@ -93,9 +113,16 @@ drops it inside `spawn_blocking` rather than on an async worker.
 consumer — nodes with their ports, components and state, plus the links. This
 app reads it twice: to wait for every processor to reach `Running` before
 attaching the tap, and to report the graph's state every few seconds while it
-runs. Both are ordinary async polling, which is why neither needs the engine's
-own `wait_until_every_processor_is_running` — that answers the same question
-but blocks, and this service already has one blocking thread out.
+runs.
+
+The engine ships that first question as `wait_until_every_processor_is_running`,
+and it is the call to reach for first. This app polls instead, for two reasons a
+blocking wait cannot give a service: it gives up the moment the engine comes
+down, and it leaves nothing behind — a `spawn_blocking` wait that outlives its
+budget is still running when the tokio runtime shuts down, and the runtime waits
+for it. The trade is not free: `to_json_async` serializes the whole graph under
+the graph lock, which is the lock processor threads need in order to publish the
+very transitions being waited on. Cheap at two nodes; think again at fifty.
 
 ### Both processors are Rust classes in this binary
 
@@ -146,13 +173,17 @@ built from source.
 It needs a working Vulkan device: `start()` initializes the GPU context before
 any processor runs, and fails there rather than degrading if it cannot.
 
-Out of tree, the same app is unchanged except for one line —
+Out of tree, the only line that changes is where the dependency comes from.
+`Cargo.toml` here takes a path into the checkout it ships inside; an app outside
+the repo takes a git dependency pinned to a tag:
 
 ```toml
-streamlib = "0.18"
+streamlib = { git = "https://github.com/tato123/streamlib", tag = "v0.18.29" }
 ```
 
-— because the crate is released alongside the wheel, on one version.
+The plan is for the `streamlib` crate to be released alongside the wheel on one
+version, at which point that becomes `streamlib = "0.18"`. No workflow publishes
+the crate yet, so a bare version requirement does not resolve today.
 
 ## Editing it
 
@@ -162,7 +193,7 @@ Everything worth turning is a constant at the top of a file.
 | --- | --- | --- |
 | `SERVICE_RUN_DURATION` | `src/main.rs` | how long before the deadline task asks the graph to stop |
 | `GRAPH_REPORT_INTERVAL` | `src/main.rs` | how often async code prints the graph's state |
-| `TICKS_PER_CADENCE_REPORT` | `src/main.rs` | ticks the in-graph sink gathers before it reports |
+| `TICKS_PER_CADENCE_REPORT` | `src/main.rs` | ticks the in-graph sink gathers before it reports; below 2 the sink refuses at `setup`, because there is no interval to read |
 | `interval_ms` | `src/sequenced_tick_source.rs` | the source's cadence, in its `#[processor]` attribute |
 
 Two edits worth making on purpose, because each fails in an instructive way:
@@ -173,8 +204,11 @@ Two edits worth making on purpose, because each fails in an instructive way:
   to run on.
 - Change the sink's input to `delivery_profile = "newest"`. The ticks keep
   flowing, but any wake that finds more than one bag queued now collapses them:
-  `newest` drains to the latest and discards the rest, so the ones it skipped
-  surface as `skipped_tick_count` and the intervals it does measure widen.
+  `newest` drains to the latest and discards the rest, so the intervals it does
+  measure widen and the ones it skipped inside a window surface as
+  `skipped_tick_count`. (Loss falling between two windows is invisible to that
+  counter by construction — it is derived from the first and last sequence
+  numbers of one window.)
 
 ## Testing it
 
