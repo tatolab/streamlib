@@ -19,6 +19,11 @@ expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 audio) — instantiated and configured from Python; its per-frame path never enters the
 interpreter.
 
+**Codec block**: a codec built-in — encoder, decoder, or muxer shipped inside the
+wheel (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its per-frame
+path never enters an interpreter. _Avoid_: "codec processor" (user-authored shape),
+"codec plugin" (pre-pivot).
+
 **Integration package**: a first-party *optional* Python package under `packages/` —
 an integration or optional capability depending on the wheel's public surface, linked
 locally by in-repo consumers and published through the wheel's own index. _Avoid_:

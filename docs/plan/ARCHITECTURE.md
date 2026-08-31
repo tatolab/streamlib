@@ -631,7 +631,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio — IN-FLIGHT
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1118,6 +1118,51 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_speaker_sink.py::test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured -->
   <!-- verify: cargo test -p streamlib-media-builtins --test speaker_sink_matches_its_device a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-29-audio-port-window-contract.md -->
+- **DECIDED** — Codec blocks are native built-ins beside camera, display and the audio
+  pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`, `JpegDecoder`,
+  `OpusEncoder`, `OpusDecoder`, `Mp4Sink` — instantiated and configured the one way a
+  built-in is configured (`rt.add(H264Encoder)`), per-frame paths never entering an
+  interpreter, serving Python and Rust apps alike. Video blocks are built on the
+  engine's existing Vulkan Video machinery reached through `GpuContext`'s session
+  surface; JPEG decode is its own backend (`sdk/vulkan-jpeg`; the nvJPEG backend stays
+  parked). AV1 and VP9 remain ported but unexposed until a consumer demands them.
+  Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
+  auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
+  GOP knobs are ticket-level, like every other built-in's config. [codec-blocks]
+- **DECIDED** — An encoded frame is an ordinary bag: the bitstream rides inline as a
+  msgpack `bin` field beside the producer-written stream metadata the delivery-profile
+  decision already specified (sync-point flag, group index, sequence). No pooled-buffer
+  or surface-id carriage for encoded bytes unless a measured need appears. The
+  ring-overwrite loss §Processor model leaves OPEN is stream-corrupting for an encoded
+  link until the next sync point; the discard-to-sync-point doctrine makes it
+  survivable, and that OPEN stays its own decision — named here so a codec ship is
+  never read as having resolved it. [codec-blocks]
+- **DECIDED** — Proof precedes surface: the first codec work re-proves
+  camera → encode → decode → display at HEAD through the engine-owned PSNR rig
+  (`runtime/streamlib-engine/tests/fixtures/`, Y ≥ 35 dB floor), adjudicating the
+  #1077 decode regression — and closing out the #756/#335 real-hardware races — before
+  any block API lands. The rig rebuilds on the control plane's own observation
+  surface — tap the encoded and decoded channels, exchange surface ids for exact
+  pixel bytes — with PSNR a first-class calculation in the proof tooling, never a
+  display processor writing frames to disk for a script to score. A codec block ships only with (i) a rig round-trip carrying the
+  PSNR floor, run through `/verify-live`, and (ii) CI-named GPU-free tests: bitstream
+  parsing, VUI/color translation, config resolution, container bytes. [codec-blocks]
+- **DECIDED** — `Mp4Sink` muxes the encoded elementary streams the blocks produce
+  (H.264/H.265 video, Opus audio) in pure Rust — no ffmpeg subprocess, no raw-frame
+  transcode path, no new `DT_NEEDED` entry. [codec-blocks]
+- **DECIDED** — Opus links statically into the wheel: libopus is BSD-3-Clause and
+  royalty-free, its attribution rides the wheel's third-party-notices surface, and no
+  `DT_NEEDED` entry appears — the dlopen arm is for system audio servers, never for a
+  codec the wheel can carry. [codec-blocks]
+- **DECIDED** — The held codec consumers resolve through this align, per §Consumers:
+  `packages/{h264,h265,jpeg,opus,mp4}` are mined for their logic (session wiring,
+  H.273 ↔ VUI translation, Opus framing) and each deletes in the change that ships its
+  block. `examples/vulkan-video-roundtrip`, `examples/vulkan-video-psnr` and
+  `examples/jpeg-psnr` delete into the engine-owned proof rig — their job becomes the
+  rig's job, and a test owns its fixtures. `examples/h264-opus-validator` deletes
+  outright. `examples/camera-audio-recorder` is conversion backlog: the recording
+  showcase (camera + microphone → codec blocks → `Mp4Sink`) once the blocks exist.
+  [codec-blocks]
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
   concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
   out-of-process in its own helper over the engine's IPC transport, never in the app
