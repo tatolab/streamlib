@@ -66,9 +66,20 @@ _GLYPH_ART: dict[str, tuple[str, ...]] = {
 }
 
 
+def characters_drawn_for(text: str) -> str:
+    """The characters a label actually draws.
+
+    Upper-casing can change how many there are — `\N{LATIN SMALL LETTER SHARP S}`
+    becomes `SS` — so the width and the bitmap have to measure this rather than
+    the caller's string, or the label is laid out wider than it is reported and
+    the shader clips its last glyph.
+    """
+    return text.upper()
+
+
 def label_width_in_pixels(text: str) -> int:
     """How wide `text` renders, with no trailing inter-glyph gap."""
-    return max(0, len(text) * GLYPH_ADVANCE - 1)
+    return max(0, len(characters_drawn_for(text)) * GLYPH_ADVANCE - 1)
 
 
 def label_pixel_rows(text: str) -> list[int]:
@@ -76,7 +87,7 @@ def label_pixel_rows(text: str) -> list[int]:
 
     Bit 0 is the leftmost pixel, which is the order the shader unpacks in.
     """
-    glyphs = [_glyph_art_for(character) for character in text.upper()]
+    glyphs = [_glyph_art_for(character) for character in characters_drawn_for(text)]
     rows = []
     for row_index in range(GLYPH_HEIGHT):
         row_bits = 0
