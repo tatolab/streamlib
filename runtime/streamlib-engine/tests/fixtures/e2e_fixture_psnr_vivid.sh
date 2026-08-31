@@ -41,9 +41,13 @@
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
 #                         8=Green, 9=Blue work the same shape if a future
 #                         regression-classifier wants per-primary sensitivity)
-#   SAMPLE_COUNT       — decoded frames exchanged (default 8)
+#   SAMPLE_COUNT       — decoded frames exchanged (default 6)
 #   SAMPLE_EVERY       — exchange every Nth sampled bag, for temporal spread
-#                         (default 3)
+#                         (default 2). SAMPLE_COUNT x SAMPLE_EVERY is a bag
+#                         budget, not a wish: `exchange` gives up after 8 tap
+#                         rounds and each round is a ~500 ms window, so at the
+#                         5 fps vivid negotiates about 19 bags reach the run.
+#                         Asking for more returns short, which is a failure.
 #   CONTROL_PLANE_PORT — port the rig's control plane binds (default 9402)
 #   RUN_SECONDS        — rig budget (default 60)
 #   TOLERANCE          — abs channel-mean drift bound on [0,1] scale
@@ -67,8 +71,8 @@ BASELINE_TSV="$SCRIPT_DIR/psnr_vivid_baseline.tsv"
 OUTPUT_DIR="${1:-/tmp/streamlib-vivid-color-$(date +%s)}"
 CODEC="${2:-h264}"
 
-SAMPLE_COUNT="${SAMPLE_COUNT:-8}"
-SAMPLE_EVERY="${SAMPLE_EVERY:-3}"
+SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
+SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
 CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9402}"
 RUN_SECONDS="${RUN_SECONDS:-60}"
 TOLERANCE="${TOLERANCE:-0.05}"
@@ -276,6 +280,7 @@ if [ "$BASELINE_CAPTURE" = "1" ]; then
     MEASURE_ARGUMENTS+=(
         --capture-baseline
         --baseline-note "Vivid test_pattern: $VIVID_TEST_PATTERN"
+        --baseline-note "Measured from exact decoded pixels over the control plane's exchange route. The pre-#2085 baseline sampled the display's composited output, whose swapchain colour handling pulled green and blue up; do not compare the two."
     )
 fi
 

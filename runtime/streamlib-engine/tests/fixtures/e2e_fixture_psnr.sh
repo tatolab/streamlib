@@ -154,6 +154,34 @@ if ! cargo build --release --locked -p xtask >> "$OUTPUT_DIR/build.log" 2>&1; th
     exit 1
 fi
 RIG_BINARY="$REPO_ROOT/target/release/examples/codec_roundtrip_rig"
+XTASK_BINARY="$REPO_ROOT/target/release/xtask"
+
+# Ask the tool about the injection mode before spending rig time. The reference
+# set scored against itself is a perfect round trip, so an injected run of it
+# must fail — which catches a mode that has gone vacuous as well as a typo. A
+# mode the tool does not define is refused before it scores anything, and the
+# absent report is how that is told apart from a mode that scored and failed.
+if [ -n "$PSNR_INJECT_BUG" ]; then
+    preflight_log="$OUTPUT_DIR/injection_preflight.log"
+    preflight_report="$OUTPUT_DIR/injection_preflight.tsv"
+    preflight_passed=0
+    "$XTASK_BINARY" psnr score \
+        --decoded "$REFERENCES_DIR" \
+        --reference "$REFERENCES_DIR" \
+        --inject "$PSNR_INJECT_BUG" \
+        --report "$preflight_report" > "$preflight_log" 2>&1 || preflight_passed=1
+    if [ ! -s "$preflight_report" ]; then
+        echo "[psnr] FAIL: PSNR_INJECT_BUG=$PSNR_INJECT_BUG is not a mode the scorer defines" >&2
+        cat "$preflight_log" >&2
+        exit 1
+    fi
+    if [ "$preflight_passed" -eq 0 ]; then
+        echo "[psnr] FAIL: PSNR_INJECT_BUG=$PSNR_INJECT_BUG left the reference set at or above" >&2
+        echo "[psnr] the floor — the mode is vacuous and would pass a run carrying it" >&2
+        exit 1
+    fi
+    echo "[psnr] Injection pre-flight: $PSNR_INJECT_BUG trips the gate on the reference set"
+fi
 
 RIG_PID=""
 stop_rig() {
@@ -271,7 +299,7 @@ if [ -n "$PSNR_INJECT_BUG" ]; then
 fi
 
 echo ""
-if "$REPO_ROOT/target/release/xtask" "${SCORE_ARGUMENTS[@]}"; then
+if "$XTASK_BINARY" "${SCORE_ARGUMENTS[@]}"; then
     echo "[psnr] Output dir:   $OUTPUT_DIR"
     echo "[psnr] RESULT: PASS"
     exit 0
