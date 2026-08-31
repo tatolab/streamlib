@@ -15,11 +15,21 @@ each is laid out into a bitmap in Python and generated into the GLSL as a
 `right_label` rather than a module constant. Two short strings need neither a
 font rasterizer nor a glyph texture.
 
-The traced side paces the composite. Both renderers run their own clocks, so
-the two ports rarely deliver on the same wake; compositing when the traced
-frame lands, against the newest rasterized one held, costs one dispatch per
-displayed frame instead of two and leaves the left half at most one interval
-behind the right — far below what an eye reads as a difference.
+The traced side paces the composite. A reactive wake rarely carries both
+ports, so compositing when the traced frame lands, against the newest
+rasterized one held, costs one dispatch per displayed frame instead of two and
+leaves the left half at most one frame interval behind the right — a quarter
+of a degree of camera orbit. What makes that bound real is that both renderers
+take their phase from the one clock they share rather than from their own
+first frame; two private epochs would put the halves hundreds of milliseconds
+apart, because the ray tracer's `setup()` is the longer one.
+
+The held frame is read untyped and kept as a bag, not cast. A typed read takes
+a claim for as long as the object lives, and this one would live across every
+wake — pinning a ring slot for the processor's whole life and pushing the
+producer's pool to grow. Nothing here reads a pixel in Python: the id is
+handed straight back to a dispatch, and a slot the producer has since redrawn
+costs this frame the newer picture, never a torn one.
 """
 
 from __future__ import annotations
@@ -35,8 +45,6 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     output,
     processor,
 )
-from streamlib._engine import ComputeKernel
-
 from processors.label_font import (
     GLYPH_HEIGHT,
     label_pixel_rows,
@@ -244,19 +252,17 @@ class SplitScreenCompositor:
         self.output_ring = ProcessorOutputTextureRing(
             TEXTURE_FORMAT, STORAGE_AND_SAMPLED_TEXTURE_USAGE
         )
-        self.split_screen_kernel: ComputeKernel = (
-            ctx.gpu_full_access.create_compute_kernel(
-                source=_split_screen_compute_glsl(self.left_label, self.right_label),
-                push_constant_size=SPLIT_PUSH_CONSTANT_SIZE,
-                # Asserted against the shader's own reflection, so renaming a
-                # binding on one side of this file is refused here at
-                # construction rather than at the first dispatch.
-                bindings={
-                    RASTERIZED_FRAME_BINDING: "sampled_texture",
-                    RAY_TRACED_FRAME_BINDING: "sampled_texture",
-                    SPLIT_SCREEN_FRAME_BINDING: "storage_image",
-                },
-            )
+        self.split_screen_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=_split_screen_compute_glsl(self.left_label, self.right_label),
+            push_constant_size=SPLIT_PUSH_CONSTANT_SIZE,
+            # Asserted against the shader's own reflection, so renaming a
+            # binding on one side of this file is refused here at construction
+            # rather than at the first dispatch.
+            bindings={
+                RASTERIZED_FRAME_BINDING: "sampled_texture",
+                RAY_TRACED_FRAME_BINDING: "sampled_texture",
+                SPLIT_SCREEN_FRAME_BINDING: "storage_image",
+            },
         )
         self.newest_rasterized_frame: dict | None = None
 

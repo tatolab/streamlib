@@ -54,15 +54,17 @@ SHADOW_RAY_BIAS = 0.004
 NEAR_PLANE = 0.05
 FAR_PLANE = 500.0
 
+NANOSECONDS_PER_SECOND = 1_000_000_000
+
 SKY_BOX_INDEX = 0
 FLOOR_BOX_INDEX = 1
 FIRST_RING_CUBE_BOX_INDEX = 2
-RING_CUBE_COUNT = 8
 RING_RADIUS = 4.3
 
 # Four bits per cube, so the whole back-to-front order of the ring packs into
-# one push-constant word.
+# one push-constant word — which is what caps the ring at eight cubes.
 DRAW_ORDER_BITS_PER_CUBE = 4
+DRAW_ORDER_WORD_BITS = 32
 
 
 @dataclasses.dataclass(frozen=True)
@@ -89,6 +91,21 @@ _RING_CUBE_SIZES_AND_COLOURS: tuple[
     ((1.40, 0.94, 1.40), (0.66, 0.42, 0.96)),
     ((1.02, 1.55, 1.02), (0.96, 0.39, 0.79)),
 )
+
+# Derived from the table rather than written beside it, so adding a cube is
+# one edit. The ring's whole draw order rides one push-constant word, so a
+# ninth cube is refused here rather than shifting past the word's width in the
+# shader — which GLSL leaves undefined, and which would scramble a draw slot
+# instead of failing.
+RING_CUBE_COUNT = len(_RING_CUBE_SIZES_AND_COLOURS)
+if RING_CUBE_COUNT * DRAW_ORDER_BITS_PER_CUBE > DRAW_ORDER_WORD_BITS:
+    raise ValueError(
+        f"the scene has {RING_CUBE_COUNT} ring cubes, and a back-to-front order "
+        f"of that many needs {RING_CUBE_COUNT * DRAW_ORDER_BITS_PER_CUBE} bits "
+        f"in the {DRAW_ORDER_WORD_BITS}-bit push-constant word that carries it — "
+        f"the ring holds at most "
+        f"{DRAW_ORDER_WORD_BITS // DRAW_ORDER_BITS_PER_CUBE}"
+    )
 
 RING_CUBE_AZIMUTHS: tuple[float, ...] = tuple(
     index * math.tau / RING_CUBE_COUNT for index in range(RING_CUBE_COUNT)
@@ -192,22 +209,44 @@ def _row_major_scale_and_translation(box: ShowcaseBox) -> list[float]:
     ]
 
 
-def camera_position_at(elapsed_seconds: float) -> tuple[float, float, float]:
+def orbit_azimuths_at(monotonic_ns: int) -> tuple[float, float]:
+    """The camera's and the light's angles, as a pure function of the clock.
+
+    This is what keeps the two halves the same picture. Both renderers are
+    separate processes that reach `process()` at their own moments — the ray
+    tracer's `setup()` is the longer one, by a couple of hundred milliseconds —
+    so a phase counted from each processor's own first frame would put the two
+    cameras degrees apart and break every box that crosses the divider. Reading
+    the phase straight off `ctx.time`, which is the one machine-monotonic clock
+    every processor shares, leaves them apart by at most the interval between
+    the two frames the compositor happened to pair.
+
+    Both angles are wrapped into one turn before they reach a shader: a
+    monotonic clock counts from boot, and seconds that large would land on a
+    32-bit float with a resolution measured in fractions of a second.
+    """
+    seconds = monotonic_ns / NANOSECONDS_PER_SECOND
+    return (
+        (seconds * CAMERA_ORBIT_RADIANS_PER_SECOND) % math.tau,
+        (seconds * LIGHT_ORBIT_RADIANS_PER_SECOND) % math.tau,
+    )
+
+
+def camera_position_at(camera_azimuth: float) -> tuple[float, float, float]:
     """Where the camera is, in world space.
 
     Spelled here as well as in the GLSL because the sort below needs it on the
     CPU and the shaders need it on the GPU. Both read the constants above, so
     the two can disagree about nothing except this arithmetic.
     """
-    azimuth = elapsed_seconds * CAMERA_ORBIT_RADIANS_PER_SECOND
     return (
-        CAMERA_ORBIT_RADIUS * math.sin(azimuth),
+        CAMERA_ORBIT_RADIUS * math.sin(camera_azimuth),
         CAMERA_HEIGHT,
-        CAMERA_ORBIT_RADIUS * math.cos(azimuth),
+        CAMERA_ORBIT_RADIUS * math.cos(camera_azimuth),
     )
 
 
-def packed_ring_draw_order_furthest_first(elapsed_seconds: float) -> int:
+def packed_ring_draw_order_furthest_first(camera_azimuth: float) -> int:
     """The ring's cubes furthest-from-the-camera first, four bits each.
 
     The rasterizing pass has no depth attachment to test against — depth
@@ -218,7 +257,7 @@ def packed_ring_draw_order_furthest_first(elapsed_seconds: float) -> int:
     one is then wholly in front of the other or wholly beside it, and there is
     no pair a single order gets wrong.
     """
-    eye = camera_position_at(elapsed_seconds)
+    eye = camera_position_at(camera_azimuth)
     furthest_first = sorted(
         range(RING_CUBE_COUNT),
         key=lambda cube: -math.dist(
@@ -256,11 +295,9 @@ _SHOWCASE_SCENE_DEFINES = f"""\
 #define CAMERA_ORBIT_RADIUS {_glsl_float(CAMERA_ORBIT_RADIUS)}
 #define CAMERA_HEIGHT {_glsl_float(CAMERA_HEIGHT)}
 #define CAMERA_LOOK_AT_HEIGHT {_glsl_float(CAMERA_LOOK_AT_HEIGHT)}
-#define CAMERA_ORBIT_RADIANS_PER_SECOND {_glsl_float(CAMERA_ORBIT_RADIANS_PER_SECOND)}
 #define CAMERA_FIELD_OF_VIEW_RADIANS {_glsl_float(CAMERA_FIELD_OF_VIEW_RADIANS)}
 #define LIGHT_ORBIT_RADIUS {_glsl_float(LIGHT_ORBIT_RADIUS)}
 #define LIGHT_HEIGHT {_glsl_float(LIGHT_HEIGHT)}
-#define LIGHT_ORBIT_RADIANS_PER_SECOND {_glsl_float(LIGHT_ORBIT_RADIANS_PER_SECOND)}
 #define FLOOR_MIRROR_STRENGTH {_glsl_float(FLOOR_MIRROR_STRENGTH)}
 #define AMBIENT_LIGHT {_glsl_float(AMBIENT_LIGHT)}
 #define BOX_EDGE_DARKENING {_glsl_float(BOX_EDGE_DARKENING)}
@@ -278,26 +315,27 @@ _SHOWCASE_SCENE_DEFINES = f"""\
 """
 
 _SHOWCASE_SCENE_FUNCTIONS = """
-vec3 camera_position_at(float elapsed_seconds) {
-    float azimuth = elapsed_seconds * CAMERA_ORBIT_RADIANS_PER_SECOND;
-    return vec3(CAMERA_ORBIT_RADIUS * sin(azimuth),
+// Both angles arrive as push constants rather than being derived from a time,
+// because the two renderers are separate processes: only a phase read off the
+// one clock they share puts the halves of the picture at the same instant.
+vec3 camera_position_at(float camera_azimuth) {
+    return vec3(CAMERA_ORBIT_RADIUS * sin(camera_azimuth),
                 CAMERA_HEIGHT,
-                CAMERA_ORBIT_RADIUS * cos(azimuth));
+                CAMERA_ORBIT_RADIUS * cos(camera_azimuth));
 }
 
-vec3 light_position_at(float elapsed_seconds) {
-    float azimuth = elapsed_seconds * LIGHT_ORBIT_RADIANS_PER_SECOND;
-    return vec3(LIGHT_ORBIT_RADIUS * sin(azimuth),
+vec3 light_position_at(float light_azimuth) {
+    return vec3(LIGHT_ORBIT_RADIUS * sin(light_azimuth),
                 LIGHT_HEIGHT,
-                LIGHT_ORBIT_RADIUS * cos(azimuth));
+                LIGHT_ORBIT_RADIUS * cos(light_azimuth));
 }
 
 // The one camera both sides look through. The ray generator turns a pixel
 // into a ray with this basis; the vertex shader turns a point into a pixel
 // with the same one, which is why the split lines up across the divider.
-void showcase_camera_basis(float elapsed_seconds, out vec3 eye, out vec3 forward,
+void showcase_camera_basis(float camera_azimuth, out vec3 eye, out vec3 forward,
                            out vec3 right, out vec3 up) {
-    eye = camera_position_at(elapsed_seconds);
+    eye = camera_position_at(camera_azimuth);
     forward = normalize(vec3(0.0, CAMERA_LOOK_AT_HEIGHT, 0.0) - eye);
     right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
     up = cross(right, forward);
@@ -308,9 +346,9 @@ vec3 sky_colour_towards(vec3 direction) {
     return mix(SKY_HORIZON_COLOUR, SKY_ZENITH_COLOUR, height);
 }
 
-// The old showcase tinted its cube's edges with the hit's barycentrics. Same
-// idea from the object-space position instead, because a rasterized fragment
-// has no hit attributes and both halves have to draw the same lines.
+// Derived from the object-space position rather than the hit's barycentrics:
+// a rasterized fragment has no hit attributes, and both halves have to draw
+// the same lines.
 float box_edge_darkening(vec3 in_unit_cube) {
     vec3 from_centre = abs(in_unit_cube);
     // On a face one axis is at 0.5 and the other two are inside it, so the
@@ -324,8 +362,8 @@ float box_edge_darkening(vec3 in_unit_cube) {
 // the light reaches this point. The rasterizer can only ever pass 1.0 — being
 // able to answer that question is the whole of what the traced half adds.
 vec3 directly_lit_colour(vec3 base_colour, vec3 world_position, vec3 world_normal,
-                         float elapsed_seconds, float lit_fraction) {
-    vec3 towards_light = normalize(light_position_at(elapsed_seconds) - world_position);
+                         float light_azimuth, float lit_fraction) {
+    vec3 towards_light = normalize(light_position_at(light_azimuth) - world_position);
     float lambert = max(dot(world_normal, towards_light), 0.0);
     return base_colour * (AMBIENT_LIGHT + (1.0 - AMBIENT_LIGHT) * lambert * lit_fraction);
 }

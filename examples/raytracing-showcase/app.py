@@ -30,10 +30,11 @@ FRAME_HEIGHT = 720
 def setup(rt: Runtime) -> None:
     frame_size: dict[str, object] = {"width": FRAME_WIDTH, "height": FRAME_HEIGHT}
 
-    # Both renderers draw the whole frame, and the compositor takes half of
-    # each: the two sides then show the same view of the same scene at the
-    # same instant, which is what makes the cut a comparison rather than two
-    # pictures side by side.
+    # Both renderers draw the whole frame and the compositor takes half of
+    # each, so the two sides show the same view of the same scene — which is
+    # what makes the cut a comparison rather than two pictures side by side.
+    # They agree because each takes its orbit phase from the one monotonic
+    # clock every processor shares, never from its own first frame.
     rasterizer = rt.add(RasterizedSceneRenderer, config=frame_size)
     ray_tracer = rt.add(RayTracedSceneRenderer, config=frame_size)
     # These three are ordinary constructor keywords with ordinary Python

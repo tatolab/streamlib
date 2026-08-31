@@ -35,10 +35,9 @@ from streamlib import (
     output,
     processor,
 )
-from streamlib._engine import AccelerationStructureHandle, RayTracingKernel
-
 from processors.showcase_box_scene import (
     SHOWCASE_SCENE_GLSL,
+    orbit_azimuths_at,
     UNIT_CUBE_CORNER_POSITIONS,
     UNIT_CUBE_TRIANGLE_INDICES,
     showcase_tlas_instances,
@@ -57,13 +56,11 @@ TEXTURE_FORMAT = "rgba8_unorm"
 # its own helper process.
 STORAGE_AND_SAMPLED_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
-# `float elapsed_seconds` and `float aspect`, little-endian at the wire like
-# every push constant. The declared size must equal what the shaders reflect,
-# so the two cannot drift.
-SCENE_PUSH_CONSTANT_FORMAT = "<ff"
+# The camera's angle, the light's angle and the aspect, little-endian at the
+# wire like every push constant. The declared size must equal what the shaders
+# reflect, so the two cannot drift.
+SCENE_PUSH_CONSTANT_FORMAT = "<fff"
 SCENE_PUSH_CONSTANT_SIZE = struct.calcsize(SCENE_PUSH_CONSTANT_FORMAT)
-
-NANOSECONDS_PER_SECOND = 1_000_000_000
 
 # The sky miss shader is index 0 in the miss region of the shader binding
 # table and the shadow miss shader is index 1, in the order the groups below
@@ -92,7 +89,8 @@ struct PrimaryRayPayload {
 
 _SCENE_PUSH_CONSTANTS_GLSL = """
 layout(push_constant) uniform ScenePushConstants {
-    float elapsed_seconds;
+    float camera_azimuth;
+    float light_azimuth;
     float aspect;
 } scene;
 """
@@ -115,7 +113,7 @@ void main() {
     on_screen.y = -on_screen.y;
 
     vec3 eye, forward, right, up;
-    showcase_camera_basis(scene.elapsed_seconds, eye, forward, right, up);
+    showcase_camera_basis(scene.camera_azimuth, eye, forward, right, up);
     float half_height = tan(CAMERA_FIELD_OF_VIEW_RADIANS * 0.5);
     vec3 direction = normalize(forward
                                + right * (on_screen.x * half_height)
@@ -202,7 +200,7 @@ void main() {
     // The question a fragment shader cannot ask. A hit leaves the fraction at
     // zero because the shadow ray skips closest-hit shaders entirely — only
     // reaching the shadow miss shader lights this point.
-    vec3 light = light_position_at(scene.elapsed_seconds);
+    vec3 light = light_position_at(scene.light_azimuth);
     lit_fraction = 0.0;
     traceRayEXT(scene_structure,
                 gl_RayFlagsOpaqueEXT
@@ -213,7 +211,7 @@ void main() {
                 normalize(light - world_position), distance(light, world_position), 1);
 
     primary.colour = directly_lit_colour(base_colour, world_position, world_normal,
-                                         scene.elapsed_seconds, lit_fraction);
+                                         scene.light_azimuth, lit_fraction);
     primary.world_position = world_position;
     primary.world_normal = world_normal;
     primary.mirror_strength = (box == FLOOR_BOX_INDEX) ? FLOOR_MIRROR_STRENGTH : 0.0;
@@ -270,16 +268,16 @@ class RayTracedSceneRenderer:
         # nine times by the top-level one. The scene is built here and not per
         # frame because `build_tlas` is a method on the Full capability, which
         # only `setup()` holds — so the camera and the light are what move.
-        self.cube_structure: AccelerationStructureHandle = gpu.build_triangles_blas(
+        self.cube_structure = gpu.build_triangles_blas(
             vertices=list(UNIT_CUBE_CORNER_POSITIONS),
             indices=list(UNIT_CUBE_TRIANGLE_INDICES),
             label="showcase-unit-cube",
         )
-        self.scene_structure: AccelerationStructureHandle = gpu.build_tlas(
+        self.scene_structure = gpu.build_tlas(
             instances=showcase_tlas_instances(self.cube_structure),
             label="showcase-scene",
         )
-        self.trace_kernel: RayTracingKernel = gpu.create_ray_tracing_kernel(
+        self.trace_kernel = gpu.create_ray_tracing_kernel(
             stages=RAY_TRACING_STAGES,
             groups=RAY_TRACING_GROUPS,
             max_recursion_depth=MAX_RECURSION_DEPTH,
@@ -290,12 +288,12 @@ class RayTracedSceneRenderer:
             bindings=DECLARED_BINDINGS,
             label="showcase-ray-tracer",
         )
-        self.first_process_at_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.first_process_at_ns is None:
-            self.first_process_at_ns = ctx.time
-        elapsed_seconds = (ctx.time - self.first_process_at_ns) / NANOSECONDS_PER_SECOND
+        # Off the shared clock, never off a private epoch: the rasterizer is
+        # another process reaching its own first frame at its own moment, and
+        # the two halves have to be the same picture.
+        camera_azimuth, light_azimuth = orbit_azimuths_at(ctx.time)
 
         traced_frame_texture = self.output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, self.frame_width, self.frame_height
@@ -308,7 +306,8 @@ class RayTracedSceneRenderer:
             grid=(self.frame_width, self.frame_height, 1),
             push_constants=struct.pack(
                 SCENE_PUSH_CONSTANT_FORMAT,
-                elapsed_seconds,
+                camera_azimuth,
+                light_azimuth,
                 self.frame_width / self.frame_height,
             ),
         )

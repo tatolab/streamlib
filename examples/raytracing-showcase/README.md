@@ -150,10 +150,30 @@ by refusing at `setup()` rather than pretending.
 
 `build_tlas` is a method on the **Full** capability, and the capability
 typestate is on the phase axis: `setup()` holds Full, `process()` holds
-Limited. A scene's geometry lives in an acceleration structure, so the scene
-is built once and what animates is the camera and the light — two floats of
-push constant. Moving geometry would need the top-level structure rebuilt per
-frame, which no processor can reach from `process()` in either language.
+Limited. A scene's geometry lives in an acceleration structure, so the scene is
+built once and what animates is the camera and the light — two floats of push
+constant. Moving geometry would mean rebuilding the top-level structure every
+frame, and a Python processor cannot reach that from `process()` at all: its
+limited context's `escalate` is a refusal, because the callback's one atomic
+privileged scope cannot cross the helper's process boundary. (A Rust processor
+in the app process can escalate, at the cost of a device-idle wait per frame.)
+
+### The two halves are the same instant, and that is not free
+
+Both renderers are separate processes reaching their first frame at their own
+moment — the ray tracer's `setup()` is a couple of hundred milliseconds longer,
+with four shader modules and two acceleration structures to build. A phase
+counted from each processor's own first frame would leave the two cameras
+degrees apart and break every box crossing the divider. So the orbit angles are
+a pure function of `ctx.time`, the one machine-monotonic clock every processor
+shares, wrapped into a single turn before they reach a shader as push constants:
+
+```python
+camera_azimuth, light_azimuth = orbit_azimuths_at(ctx.time)
+```
+
+What is left is the interval between the two frames the compositor happened to
+pair — about a quarter of a degree of orbit, a pixel or two.
 
 ## Run it
 

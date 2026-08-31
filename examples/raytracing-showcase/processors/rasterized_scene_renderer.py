@@ -32,13 +32,12 @@ from streamlib import (
     output,
     processor,
 )
-from streamlib._engine import GraphicsKernel
-
 from processors.showcase_box_scene import (
     SHOWCASE_BOXES,
     SHOWCASE_CUBE_MESH_GLSL,
     SHOWCASE_SCENE_GLSL,
     UNIT_CUBE_VERTEX_COUNT,
+    orbit_azimuths_at,
     packed_ring_draw_order_furthest_first,
 )
 
@@ -49,12 +48,10 @@ TEXTURE_FORMAT = "rgba8_unorm"
 # helper process.
 RENDER_ATTACHMENT_AND_SAMPLED_TEXTURE_USAGE = ["render_attachment", "texture_binding"]
 
-# `float elapsed_seconds`, `float aspect`, `uint ring_draw_order` — the whole
+# The two orbit angles, the aspect, and `uint ring_draw_order` — the whole
 # back-to-front order of the ring in one word, four bits per cube.
-RASTER_PUSH_CONSTANT_FORMAT = "<ffI"
+RASTER_PUSH_CONSTANT_FORMAT = "<fffI"
 RASTER_PUSH_CONSTANT_SIZE = struct.calcsize(RASTER_PUSH_CONSTANT_FORMAT)
-
-NANOSECONDS_PER_SECOND = 1_000_000_000
 
 SHOWCASE_BOX_COUNT = len(SHOWCASE_BOXES)
 
@@ -62,7 +59,8 @@ SHOWCASE_BOX_COUNT = len(SHOWCASE_BOXES)
 # stage spells shorter than the other is a size the declaration cannot match.
 _RASTER_PUSH_CONSTANTS_GLSL = """
 layout(push_constant) uniform RasterPushConstants {
-    float elapsed_seconds;
+    float camera_azimuth;
+    float light_azimuth;
     float aspect;
     uint ring_draw_order;
 } raster;
@@ -106,7 +104,7 @@ void main() {
     fragment_box = box;
 
     vec3 eye, forward, right, up;
-    showcase_camera_basis(raster.elapsed_seconds, eye, forward, right, up);
+    showcase_camera_basis(raster.camera_azimuth, eye, forward, right, up);
 
     // Back-face culling done here rather than by the pipeline: the test is
     // against the face's own centre, so all six of its vertices agree and a
@@ -152,7 +150,7 @@ void main() {
         // The same gradient the ray tracer's miss shader answers with, out of
         // the same shared function — so the two halves' skies match exactly
         // and the divider does not draw a seam of its own.
-        vec3 eye = camera_position_at(raster.elapsed_seconds);
+        vec3 eye = camera_position_at(raster.camera_azimuth);
         out_colour = vec4(sky_colour_towards(normalize(fragment_world_position - eye)), 1.0);
         return;
     }
@@ -166,7 +164,7 @@ void main() {
     out_colour = vec4(directly_lit_colour(base_colour,
                                           fragment_world_position,
                                           fragment_world_normal,
-                                          raster.elapsed_seconds,
+                                          raster.light_azimuth,
                                           1.0),
                       1.0);
 }
@@ -190,7 +188,7 @@ class RasterizedSceneRenderer:
         self.output_ring = ProcessorOutputTextureRing(
             TEXTURE_FORMAT, RENDER_ATTACHMENT_AND_SAMPLED_TEXTURE_USAGE
         )
-        self.raster_kernel: GraphicsKernel = ctx.gpu_full_access.create_graphics_kernel(
+        self.raster_kernel = ctx.gpu_full_access.create_graphics_kernel(
             color_attachment_formats=[TEXTURE_FORMAT],
             vertex_source=RASTER_VERTEX_GLSL,
             fragment_source=RASTER_FRAGMENT_GLSL,
@@ -200,12 +198,12 @@ class RasterizedSceneRenderer:
             cull_mode="none",
             label="showcase-rasterizer",
         )
-        self.first_process_at_ns: int | None = None
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self.first_process_at_ns is None:
-            self.first_process_at_ns = ctx.time
-        elapsed_seconds = (ctx.time - self.first_process_at_ns) / NANOSECONDS_PER_SECOND
+        # Off the shared clock, never off a private epoch: the ray tracer is
+        # another process reaching its own first frame at its own moment, and
+        # the two halves have to be the same picture.
+        camera_azimuth, light_azimuth = orbit_azimuths_at(ctx.time)
 
         rasterized_frame_texture = self.output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, self.frame_width, self.frame_height
@@ -218,9 +216,10 @@ class RasterizedSceneRenderer:
             instance_count=SHOWCASE_BOX_COUNT,
             push_constants=struct.pack(
                 RASTER_PUSH_CONSTANT_FORMAT,
-                elapsed_seconds,
+                camera_azimuth,
+                light_azimuth,
                 self.frame_width / self.frame_height,
-                packed_ring_draw_order_furthest_first(elapsed_seconds),
+                packed_ring_draw_order_furthest_first(camera_azimuth),
             ),
         )
 
