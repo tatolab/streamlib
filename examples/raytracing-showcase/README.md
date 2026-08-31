@@ -1,9 +1,9 @@
 # raytracing-showcase
 
-One scene, rendered twice, cut down the middle: **rasterized on the left, ray
-traced on the right**. Same camera, same geometry, same shading function — so
-everything you can see across the divider is what casting a ray buys, and
-nothing else.
+One scene, rendered twice, cut down the middle: **RTX OFF on the left, RTX ON
+on the right**, each half labelled across the top. Same camera, same geometry,
+same shading function — so everything you can see across the divider is what
+casting a ray buys, and nothing else.
 
 The camera orbits and the light orbits at a different rate, so the shadows
 sweep across the floor on a period that is not the camera's. It never looks
@@ -19,7 +19,7 @@ built once in `setup()`, where the capability is Full, and used per frame in
 | --- | --- | --- |
 | `RasterizedSceneRenderer` | graphics | draws the scene as triangles — ray tracing off |
 | `RayTracedSceneRenderer` | ray tracing | traces it, with shadow and reflection rays |
-| `SplitScreenCompositor` | compute | cuts the two halves together |
+| `SplitScreenCompositor` | compute | cuts the two halves together and labels them |
 
 No handle string, fence, timeline or slot number ever reaches Python. The
 object is the handle — and so is an acceleration structure:
@@ -91,10 +91,26 @@ SHOWCASE_SCENE_GLSL = (
 ```
 
 The two renderers therefore cannot drift into drawing different scenes, they
-share one camera function and one lighting function, and the skies either side
-of the divider match to the pixel. None of that is possible with an
+share one camera function and one lighting function, and the sky runs
+continuously across the divider because both sides ask the same
+`sky_colour_towards` for the same view ray. None of that is possible with an
 ahead-of-time `glslc` step: it works because a StreamLib shader is a Python
 string the engine compiles at `setup()`, and there is no toolchain to install.
+
+### The labels are generated into the shader too
+
+Text on a GPU frame usually means a font rasterizer and a glyph atlas. Two
+short labels need neither: `processors/label_font.py` holds a 5×7 font written
+as ASCII art, Python lays each label out into a bitmap, and the compositor
+generates that bitmap into its GLSL as a `const uint` array. The shader unpacks
+one bit per pixel, scales it to the frame, and draws white ink over a black
+outline sampled at eight offsets — legible over a bright sky and a dark floor
+alike.
+
+This is also the one place the app builds a shader out of its own config: the
+kernel source is a function of `left_label` and `right_label`, not a module
+constant, so changing a label in `app.py` changes the GLSL the engine compiles
+at `setup()`. It is why the app still depends on nothing but the wheel.
 
 ### What the rasterized half cannot do, and why
 
@@ -182,6 +198,10 @@ nothing is cached against you.
   lengthens the shadows; changing its rate changes how fast they sweep.
 - **What the floor reflects** is `FLOOR_MIRROR_STRENGTH`. Set it to `0.0` and
   the two halves differ only by their shadows.
+- **The labels** are `left_label` / `right_label` in `app.py`. The font covers
+  A-Z, 0-9, space, hyphen and full stop, and a character it has no glyph for is
+  refused by name rather than drawn as a blank — so a typo says so instead of
+  leaving a hole.
 
 Two edits worth making on purpose, because each fails in an instructive way:
 
@@ -241,5 +261,6 @@ Everything is literal config in `app.py` — edit it and re-run.
 | Knob | Where | What it does |
 | --- | --- | --- |
 | `split_fraction` | `rt.add(SplitScreenCompositor, config=…)` | where the cut falls; 0.0 is all ray traced, 1.0 all rasterized |
+| `left_label` / `right_label` | `rt.add(SplitScreenCompositor, config=…)` | the text over each half; baked into the kernel at `setup()` |
 | `width` / `height` | `rt.add(…SceneRenderer, config=…)` | the resolution both halves render at |
 | `title` / `scaling` | `rt.add(DisplayWindow, config=…)` | window geometry; `scaling` is `fit` / `fill` / `stretch` |

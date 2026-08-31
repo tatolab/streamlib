@@ -36,10 +36,18 @@ def setup(rt: Runtime) -> None:
     # pictures side by side.
     rasterizer = rt.add(RasterizedSceneRenderer, config=frame_size)
     ray_tracer = rt.add(RayTracedSceneRenderer, config=frame_size)
-    # `split_fraction` is an ordinary constructor keyword with an ordinary
-    # Python default — `config` is how a processor's own `__init__` is called,
-    # and nothing about the dial is streamlib surface.
-    compositor = rt.add(SplitScreenCompositor, config={"split_fraction": 0.5})
+    # These three are ordinary constructor keywords with ordinary Python
+    # defaults — `config` is how a processor's own `__init__` is called, and
+    # nothing about them is streamlib surface. The labels reach the compositor
+    # before it builds its kernel, so they end up baked into its GLSL.
+    compositor = rt.add(
+        SplitScreenCompositor,
+        config={
+            "split_fraction": 0.5,
+            "left_label": "RTX OFF",
+            "right_label": "RTX ON",
+        },
+    )
     window = rt.add(
         DisplayWindow,
         config={

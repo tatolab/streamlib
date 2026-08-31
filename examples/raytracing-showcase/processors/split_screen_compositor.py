@@ -1,6 +1,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
-"""The two halves, cut down the middle by a compute kernel.
+"""The two halves, cut down the middle by a compute kernel, and labelled.
 
 Fan-in: two producers, each in its own child interpreter, publishing into one
 consumer. What arrives on either port is a bag naming a surface — an id, an
@@ -8,6 +8,12 @@ extent and a timestamp, no pixels — and the dispatch binds both ids straight
 into the shader. There is no landing copy here, unlike a camera: a kernel
 binding resolves texture-backed surfaces, and a kernel output is exactly
 that, whichever process acquired it.
+
+The labels are the one place this app builds a shader out of its own config:
+each is laid out into a bitmap in Python and generated into the GLSL as a
+`const` array, so the kernel source is a function of `left_label` and
+`right_label` rather than a module constant. Two short strings need neither a
+font rasterizer nor a glyph texture.
 
 The traced side paces the composite. Both renderers run their own clocks, so
 the two ports rarely deliver on the same wake; compositing when the traced
@@ -31,6 +37,12 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 )
 from streamlib._engine import ComputeKernel
 
+from processors.label_font import (
+    GLYPH_HEIGHT,
+    label_pixel_rows,
+    label_width_in_pixels,
+)
+
 RASTERIZED_FRAME_INPUT_PORT = "rasterized_frame_from_upstream"
 RAY_TRACED_FRAME_INPUT_PORT = "ray_traced_frame_from_upstream"
 SPLIT_SCREEN_FRAME_OUTPUT_PORT = "split_screen_frame_to_downstream"
@@ -50,13 +62,62 @@ WORKGROUP_TILE_SIZE = 8
 SPLIT_PUSH_CONSTANT_FORMAT = "<f"
 SPLIT_PUSH_CONSTANT_SIZE = struct.calcsize(SPLIT_PUSH_CONSTANT_FORMAT)
 
-# The `#define`s are the only interpolated lines: the body stays a plain
-# string, so the shader's own braces need no doubling and it reads as GLSL.
-SPLIT_SCREEN_COMPUTE_GLSL = (
-    f"#version 450\n#define WORKGROUP_TILE_SIZE {WORKGROUP_TILE_SIZE}\n"
-    "#define DIVIDER_HALF_WIDTH_IN_PIXELS 2\n"
-    "#define DIVIDER_COLOUR vec4(0.92, 0.94, 0.98, 1.0)\n"
+DEFAULT_LEFT_LABEL = "RTX OFF"
+DEFAULT_RIGHT_LABEL = "RTX ON"
+
+# Label geometry derived from the frame, so a label holds its proportions at
+# any resolution: one font pixel per this many frame pixels across, and the
+# top margin as a fraction of the height.
+FRAME_PIXELS_PER_FONT_PIXEL = 160
+FRAME_PIXELS_PER_TOP_MARGIN = 26
+
+_LABEL_BITMAP_WORD_BITS = 32
+
+
+def _packed_label_bitmap(labels: tuple[str, str]) -> tuple[int, int, list[int]]:
+    """Both labels stacked into one array: `(width, words_per_row, words)`.
+
+    One array rather than two, so the shader needs one lookup function and one
+    index; the narrower label is padded, which costs a handful of zero words.
     """
+    width = max(label_width_in_pixels(label) for label in labels)
+    words_per_row = max(1, -(-width // _LABEL_BITMAP_WORD_BITS))
+    words: list[int] = []
+    for label in labels:
+        for row_bits in label_pixel_rows(label):
+            for word in range(words_per_row):
+                words.append(
+                    (row_bits >> (word * _LABEL_BITMAP_WORD_BITS))
+                    & ((1 << _LABEL_BITMAP_WORD_BITS) - 1)
+                )
+    return width, words_per_row, words
+
+
+def _split_screen_compute_glsl(left_label: str, right_label: str) -> str:
+    """The kernel source for one compositor, its labels generated into it."""
+    bitmap_width, words_per_row, words = _packed_label_bitmap((left_label, right_label))
+    label_widths = ", ".join(
+        str(label_width_in_pixels(label)) for label in (left_label, right_label)
+    )
+    packed_words = ", ".join(f"{word}u" for word in words)
+    # The `#define`s and the two generated arrays are the only interpolated
+    # parts: the body stays a plain string, so the shader's own braces need no
+    # doubling and it reads as GLSL.
+    return (
+        f"#version 450\n"
+        f"#define WORKGROUP_TILE_SIZE {WORKGROUP_TILE_SIZE}\n"
+        f"#define DIVIDER_HALF_WIDTH_IN_PIXELS 2\n"
+        f"#define DIVIDER_COLOUR vec4(0.92, 0.94, 0.98, 1.0)\n"
+        f"#define LABEL_INK_COLOUR vec4(1.0, 1.0, 1.0, 1.0)\n"
+        f"#define LABEL_OUTLINE_COLOUR vec4(0.0, 0.0, 0.0, 1.0)\n"
+        f"#define LABEL_HEIGHT {GLYPH_HEIGHT}\n"
+        f"#define LABEL_BITMAP_WORDS_PER_ROW {words_per_row}\n"
+        f"#define FRAME_PIXELS_PER_FONT_PIXEL {FRAME_PIXELS_PER_FONT_PIXEL}\n"
+        f"#define FRAME_PIXELS_PER_TOP_MARGIN {FRAME_PIXELS_PER_TOP_MARGIN}\n"
+        f"const int LABEL_WIDTHS[2] = int[2]({label_widths});\n"
+        f"const uint LABEL_BITMAP[{len(words)}] = "
+        f"uint[{len(words)}]({packed_words});\n"
+        """
 layout(local_size_x = WORKGROUP_TILE_SIZE, local_size_y = WORKGROUP_TILE_SIZE) in;
 
 layout(set = 0, binding = 0) uniform sampler2D rasterized_frame;
@@ -66,6 +127,36 @@ layout(set = 0, binding = 2, rgba8) uniform writeonly image2D split_screen_frame
 layout(push_constant) uniform SplitDial {
     float split_fraction;
 } dial;
+
+// Whether font pixel (x, y) of `label` is ink. Bit 0 of a word is its
+// leftmost pixel, which is the order Python packed them in.
+bool label_ink(int label, int x, int y) {
+    if (x < 0 || y < 0 || x >= LABEL_WIDTHS[label] || y >= LABEL_HEIGHT) {
+        return false;
+    }
+    int row = label * LABEL_HEIGHT + y;
+    uint word = LABEL_BITMAP[row * LABEL_BITMAP_WORDS_PER_ROW + (x >> 5)];
+    return (word & (1u << uint(x & 31))) != 0u;
+}
+
+// The same test in frame pixels. Negatives are rejected before the division,
+// because integer division truncates towards zero and would otherwise fold
+// the whole column just left of a label onto its column 0.
+bool label_ink_at(int label, ivec2 origin, int scale, ivec2 at) {
+    ivec2 within = at - origin;
+    if (within.x < 0 || within.y < 0) {
+        return false;
+    }
+    return label_ink(label, within.x / scale, within.y / scale);
+}
+
+// Centred over its own half of the frame, near the top.
+ivec2 label_origin(int label, ivec2 extent, int divide_at, int scale) {
+    int half_start = (label == 0) ? 0 : divide_at;
+    int half_width = (label == 0) ? divide_at : (extent.x - divide_at);
+    return ivec2(half_start + (half_width - LABEL_WIDTHS[label] * scale) / 2,
+                 extent.y / FRAME_PIXELS_PER_TOP_MARGIN);
+}
 
 void main() {
     ivec2 at = ivec2(gl_GlobalInvocationID.xy);
@@ -87,10 +178,36 @@ void main() {
     if (abs(at.x - divide_at) <= DIVIDER_HALF_WIDTH_IN_PIXELS) {
         colour = DIVIDER_COLOUR;
     }
+
+    // Labels last, so neither half nor the divider paints over one. The
+    // outline is the glyph tested at eight offsets around this pixel: white
+    // ink on black stays legible over a bright sky and a dark floor alike.
+    int scale = max(2, extent.x / FRAME_PIXELS_PER_FONT_PIXEL);
+    int outline = max(1, scale / 3);
+    for (int label = 0; label < 2; label++) {
+        ivec2 origin = label_origin(label, extent, divide_at, scale);
+        if (label_ink_at(label, origin, scale, at)) {
+            colour = LABEL_INK_COLOUR;
+            break;
+        }
+        bool touching_ink = false;
+        for (int down = -1; down <= 1; down++) {
+            for (int across = -1; across <= 1; across++) {
+                touching_ink = touching_ink
+                    || label_ink_at(label, origin, scale,
+                                    at + ivec2(across, down) * outline);
+            }
+        }
+        if (touching_ink) {
+            colour = LABEL_OUTLINE_COLOUR;
+            break;
+        }
+    }
+
     imageStore(split_screen_frame, at, colour);
 }
 """
-)
+    )
 
 
 def _workgroups_covering(pixels: int) -> int:
@@ -100,15 +217,22 @@ def _workgroups_covering(pixels: int) -> int:
 
 @processor(description="Cuts the rasterized and ray-traced frames together")
 class SplitScreenCompositor:
-    """Rasterized on the left, ray traced on the right, one frame out."""
+    """Rasterized on the left, ray traced on the right, one labelled frame out."""
 
-    def __init__(self, split_fraction: float = 0.5) -> None:
+    def __init__(
+        self,
+        split_fraction: float = 0.5,
+        left_label: str = DEFAULT_LEFT_LABEL,
+        right_label: str = DEFAULT_RIGHT_LABEL,
+    ) -> None:
         if not 0.0 <= float(split_fraction) <= 1.0:
             raise ValueError(
                 f"SplitScreenCompositor was configured with "
                 f"split_fraction={split_fraction} — the dial runs from 0.0 (all "
                 f"ray traced) to 1.0 (all rasterized), and 0.5 cuts down the middle"
             )
+        self.left_label = left_label
+        self.right_label = right_label
         # Packed once, because the dial is fixed at construction. It is still
         # handed to every dispatch below: push constants travel with a
         # dispatch and never persist on the kernel, exactly as bindings do.
@@ -122,7 +246,7 @@ class SplitScreenCompositor:
         )
         self.split_screen_kernel: ComputeKernel = (
             ctx.gpu_full_access.create_compute_kernel(
-                source=SPLIT_SCREEN_COMPUTE_GLSL,
+                source=_split_screen_compute_glsl(self.left_label, self.right_label),
                 push_constant_size=SPLIT_PUSH_CONSTANT_SIZE,
                 # Asserted against the shader's own reflection, so renaming a
                 # binding on one side of this file is refused here at
@@ -197,5 +321,5 @@ class SplitScreenCompositor:
     )
     def ray_traced_frame_from_upstream(self) -> VideoFrame: ...
 
-    @output(description="Rasterized left, ray traced right, one frame")
+    @output(description="Rasterized left, ray traced right, labelled and cut")
     def split_screen_frame_to_downstream(self) -> VideoFrame: ...
