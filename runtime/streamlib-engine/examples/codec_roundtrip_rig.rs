@@ -15,13 +15,15 @@
 //! display server, and for the camera arm a `/dev/video*` device. CI
 //! compiles it, which is what keeps it from rotting between rig runs.
 //!
-//! Scoring is not this binary's job: it stays up on the control plane so
-//! `streamlib tap` and the surface-id `exchange` can read the decoded
-//! channel's exact pixels while it runs.
+//! Scoring is not this binary's job: it hosts the control plane and stays up,
+//! so `streamlib tap` and the surface-id `exchange` read the decoded
+//! channel's exact pixels out of process — no window in the observation path,
+//! and the graph unchanged by being watched.
 //!
 //! ```text
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
+//! streamlib exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
 fn main() -> streamlib::sdk::error::Result<()> {
@@ -348,11 +350,17 @@ mod linux_rig {
         Ok(())
     }
 
+    /// The port the hosted control plane binds, so `streamlib nodes` finds
+    /// the run. The wheel's own default; the api-server increments on
+    /// collision.
+    const DEFAULT_CONTROL_PLANE_PORT: u16 = 9000;
+
     /// What the command line asked for.
     struct RoundTripRigArguments {
         source_arm: RoundTripSourceArm,
         fixtures_directory: String,
         frames_per_reference: u32,
+        control_plane_port: u16,
     }
 
     fn parse_arguments() -> Result<RoundTripRigArguments> {
@@ -361,6 +369,7 @@ mod linux_rig {
             source_arm: RoundTripSourceArm::PsnrReferenceFixtures,
             fixtures_directory: source_defaults.fixtures_directory,
             frames_per_reference: source_defaults.frames_per_reference,
+            control_plane_port: DEFAULT_CONTROL_PLANE_PORT,
         };
 
         let mut command_line = std::env::args().skip(1);
@@ -383,6 +392,11 @@ mod linux_rig {
                     }
                 }
                 "--fixtures" => arguments.fixtures_directory = value()?,
+                "--control-plane-port" => {
+                    arguments.control_plane_port = value()?
+                        .parse()
+                        .map_err(|_| Error::Runtime("--control-plane-port takes a port".into()))?
+                }
                 "--frames-per-reference" => {
                     arguments.frames_per_reference = value()?.parse().map_err(|_| {
                         Error::Runtime("--frames-per-reference takes a whole number".into())
@@ -390,8 +404,8 @@ mod linux_rig {
                 }
                 unknown => {
                     return Err(Error::Runtime(format!(
-                        "unknown flag {unknown}; the rig takes --source, --fixtures and \
-                         --frames-per-reference"
+                        "unknown flag {unknown}; the rig takes --source, --fixtures, \
+                         --frames-per-reference and --control-plane-port"
                     )));
                 }
             }
@@ -433,6 +447,18 @@ mod linux_rig {
             DisplayWindow::Processor::processor_class_import_path(),
             serde_json::json!({ "title": "streamlib codec round-trip rig" }),
             Some("display"),
+        )?;
+
+        // Hosted, not optional: an unobservable rig can only be watched, and
+        // the codec proof is scored by tapping the decoded channel and
+        // exchanging its surface ids for exact pixels.
+        streamlib_api_server::control_plane_host::register_api_server_control_plane_processor_on_runtime(
+            app.runner(),
+            streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig {
+                bind_host: "127.0.0.1".to_string(),
+                bind_port: arguments.control_plane_port,
+                node_name: Some("codec-roundtrip-rig".to_string()),
+            },
         )?;
 
         app.connect((&source, "video"), (&encoder, "video"))?;

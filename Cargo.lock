@@ -4916,6 +4916,7 @@ dependencies = [
  "shaderc",
  "signal-hook",
  "streamlib",
+ "streamlib-api-server",
  "streamlib-consumer-rhi",
  "streamlib-error",
  "streamlib-ipc-types",

@@ -184,6 +184,10 @@ streamlib = { path = "../../sdk/streamlib-sdk" }
 # Same permitted dev-dep cycle as the self-alias above: built-ins depend on
 # the SDK, which re-exports this crate.
 streamlib-media-builtins = { path = "../streamlib-media-builtins" }
+# The control plane the `codec_roundtrip_rig` example hosts, so a rig run is
+# reachable by `streamlib graph` / `tap` / `exchange` — the observation
+# surface the codec proof is scored on. Same permitted dev-dep cycle.
+streamlib-api-server = { path = "../streamlib-api-server" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference

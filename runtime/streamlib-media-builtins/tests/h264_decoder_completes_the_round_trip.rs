@@ -15,6 +15,11 @@
 //! to within what the link can hold, and it runs past the stream's second
 //! sync point, which is the "periodic IDRs recognised" half.
 //!
+//! The pattern is 1920x1080 on purpose: 1080 is not a multiple of the H.264
+//! macroblock size, so the stream's coded height is 1088 and only the SPS's
+//! conformance crop brings it back. A decoder publishing the coded extent
+//! instead of the cropped one shows up as 1088 in the extent assertion below.
+//!
 //! Rig-tier by construction, not by choice: `App::new()` brings up a real
 //! `GpuContext` and the sessions need Vulkan Video encode *and* decode
 //! queues — so CI compiles this binary and the rig runs it. The source is
@@ -53,6 +58,11 @@ const ORDERED_LINK_DEPTH: u64 = 16;
 /// The encoder's sync-point cadence for this run, short so the second IDR
 /// lands within a few seconds of the test pattern's 30 fps.
 const KEYFRAME_INTERVAL_SECONDS: u32 = 1;
+
+/// The pattern's extent. 1080 is not macroblock-aligned, so the coded height
+/// is 1088 and the decoder must publish the SPS's cropped 1080.
+const PATTERN_WIDTH: u32 = 1920;
+const PATTERN_HEIGHT: u32 = 1080;
 
 /// What the encoded channel's tap saw.
 #[derive(Default)]
@@ -177,7 +187,7 @@ fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface()
     let source = app
         .add(
             TestPatternSource::Processor::processor_class_import_path(),
-            serde_json::json!({ "width": 1280, "height": 720 }),
+            serde_json::json!({ "width": PATTERN_WIDTH, "height": PATTERN_HEIGHT }),
             Some("pattern"),
         )
         .expect("the test pattern");
@@ -290,7 +300,6 @@ fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface()
         encoded_frames - decoded_frames
     );
 
-    let (pattern_width, pattern_height) = (1280u32, 720u32);
     let mut previous_frame_header_timestamp_ns: Option<i64> = None;
     for (frame, frame_header_timestamp_ns) in observations
         .frames
@@ -299,8 +308,8 @@ fn every_encoded_frame_the_decoder_is_handed_comes_back_as_a_published_surface()
     {
         assert_eq!(
             (frame.width, frame.height),
-            (pattern_width, pattern_height),
-            "the decoder publishes the stream's cropped extent, not its coded one"
+            (PATTERN_WIDTH, PATTERN_HEIGHT),
+            "the decoder publishes the stream's cropped extent, not the 1088-tall coded one"
         );
         assert!(
             !frame.surface_id.is_empty(),
