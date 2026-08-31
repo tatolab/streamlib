@@ -206,8 +206,8 @@ Four edits worth making, in rising order of how much they teach:
 - **Scale the radius by luma directly** — drop the `sqrt` — and watch the
   shadows collapse. That is the mined original's tone curve, and against a
   colour-bar pattern the magenta, red and blue bars go to near-black while the
-  top three stay fine. It is the clearest demonstration in this app that a
-  halftone's tone lives in dot *area*.
+  four above them screen fine. It is the clearest demonstration in this app
+  that a halftone's tone lives in dot *area*.
 - **Drop the feather.** Replace the `smoothstep` coverage with
   `float coverage = distance_from_centre <= radius ? 1.0 : 0.0;`, also what the
   mined original did. Still recognisably halftone on a still frame, and visibly
