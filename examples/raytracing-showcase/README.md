@@ -124,9 +124,11 @@ workarounds hidden in a helper:
   reachable from neither language. So the vertex shader collapses faces the
   camera cannot see (a test against the face's own centre, which every vertex
   of that face agrees on, and which needs no winding convention to be right),
-  and the app packs a back-to-front instance order into a push constant. That
-  ordering is *exact* rather than approximate here, because the boxes are
-  convex and none of them touches another.
+  and the app packs a back-to-front instance order into a push constant.
+  Sorting by the distance to each box's centre is not exact for convex bodies
+  in general; it is exact for *this* ring — one radius, well separated — and
+  that was established by ray-casting the scene, not argued from the shape. A
+  box moved off the ring is what would need re-checking.
 
 ### And the parts that are just the engine
 
@@ -138,9 +140,11 @@ surfaces, and a kernel output is exactly that, whichever process acquired it.
 `camera-compute-kernel` needs a copy and this app does not.)
 
 The compositor is also the tree's fan-in example: two producers, each in its
-own child interpreter, one consumer. Because both renderers run their own
-clocks, a reactive wake rarely carries both ports at once — so the compositor
-holds the newest rasterized frame and composites when the traced one lands.
+own child interpreter, one consumer. The two run at their own cadences, so a
+reactive wake rarely carries both ports at once — the compositor holds the
+newest rasterized frame and composites when the traced one lands. What keeps
+the halves the same picture despite that is the section below: one clock, not
+one cadence.
 
 Nothing here needs a camera, a microphone, or any other device. It needs a GPU
 with `VK_KHR_ray_tracing_pipeline` (an RTX-class or RDNA2+ card), and says so

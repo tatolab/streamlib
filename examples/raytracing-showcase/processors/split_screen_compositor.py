@@ -24,12 +24,10 @@ take their phase from the one clock they share rather than from their own
 first frame; two private epochs would put the halves hundreds of milliseconds
 apart, because the ray tracer's `setup()` is the longer one.
 
-The held frame is read untyped and kept as a bag, not cast. A typed read takes
-a claim for as long as the object lives, and this one would live across every
-wake — pinning a ring slot for the processor's whole life and pushing the
-producer's pool to grow. Nothing here reads a pixel in Python: the id is
-handed straight back to a dispatch, and a slot the producer has since redrawn
-costs this frame the newer picture, never a torn one.
+The held frame is read untyped and kept as a bag. Nothing here reads a pixel
+in Python — the id goes straight back to a dispatch — so there is nothing to
+cast for, and a slot the producer has since redrawn costs this frame the newer
+picture, never a torn one.
 """
 
 from __future__ import annotations
