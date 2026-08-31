@@ -144,8 +144,16 @@ macro where it expands — so `add_local` needs no manifest, no package on disk
 and no build step. The pair here is deliberately dull, because the subject is
 the integration and not the pipeline: a continuous source stamps a sequence
 number and a `MediaClock::now()` reading onto a bag every 40 ms, and a reactive
-sink reports the cadence a window of them actually arrived at, along with any
+sink reports the source cadence carried by a window of them, along with any
 sequence numbers it never saw.
+
+Both numbers come from the ticks' own `emitted_at_monotonic_ns`, so what the
+sink reports is the *producer's* pacing as it survives the link — deliberately,
+because that is what makes loss visible: a dropped tick widens the surviving
+interval. It is not this sink's arrival cadence, and a sink falling behind on a
+link that is still delivering everything shows up in neither number. Stamping
+at read would not fix that either, since a reactive wake drains its whole
+mailbox at one instant and would measure the wake schedule instead.
 
 The sink's input declares `delivery_profile = "ordered"`, which is what makes
 those intervals mean anything — `"newest"` would drain to the latest bag on

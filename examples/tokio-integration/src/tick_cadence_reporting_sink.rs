@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The graph's consumer — reports the cadence the ticks actually arrived at.
+//! The graph's consumer — reports the source cadence surviving on its link.
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -35,7 +35,7 @@ impl Default for TickCadenceReportingSinkConfig {
 }
 
 #[streamlib::sdk::processor(
-    description = "Reports the cadence a window of ticks actually arrived at",
+    description = "Reports the source cadence carried by a window of ticks, and the ticks missing from it",
     execution = reactive,
     config = crate::tick_cadence_reporting_sink::TickCadenceReportingSinkConfig,
     input(
@@ -73,28 +73,40 @@ impl ReactiveProcessor for TickCadenceReportingSink::Processor {
 
 impl TickCadenceReportingSink::Processor {
     fn report_the_window_and_start_another(&mut self) {
-        if let Some(cadence) = observed_cadence_of(&self.ticks_in_the_current_window) {
+        if let Some(cadence) =
+            emission_cadence_of_the_ticks_that_arrived(&self.ticks_in_the_current_window)
+        {
             tracing::info!(
                 tick_count = cadence.tick_count,
                 skipped_tick_count = cadence.skipped_tick_count,
-                mean_interval_ms = cadence.mean_interval_ms,
-                widest_interval_ms = cadence.widest_interval_ms,
-                "the graph's consumer measured the cadence it is being fed at"
+                mean_emission_interval_ms = cadence.mean_emission_interval_ms,
+                widest_emission_interval_ms = cadence.widest_emission_interval_ms,
+                "the graph's consumer measured the source cadence surviving on its link"
             );
         }
         self.ticks_in_the_current_window.clear();
     }
 }
 
-/// What one window of ticks says about how it actually arrived.
+/// What one window of ticks says about the source that emitted it.
+///
+/// Measured from each tick's own `emitted_at_monotonic_ns`, so it reports the
+/// producer's pacing as it survives the link — not this sink's arrival times.
+/// The distinction is deliberate and it is what the two numbers are good for:
+/// dropped ticks widen the surviving intervals, which is what makes the
+/// `newest`-versus-`ordered` difference visible here. It follows that a sink
+/// falling behind on a link that is still delivering everything shows up in
+/// neither number; a stamp taken at read would be needed for that, and it
+/// would measure this sink's wake schedule rather than any cadence, because a
+/// reactive wake drains its whole mailbox at one instant.
 #[derive(Debug, PartialEq)]
-struct ObservedTickCadence {
+struct EmissionCadenceOfTheTicksThatArrived {
     tick_count: usize,
     /// Sequence numbers the window never saw. A tick the producer emitted and
     /// this end never got — zero while the link keeps up.
     skipped_tick_count: u64,
-    mean_interval_ms: f64,
-    widest_interval_ms: f64,
+    mean_emission_interval_ms: f64,
+    widest_emission_interval_ms: f64,
 }
 
 /// Refuse a window size no interval can be read out of.
@@ -112,10 +124,12 @@ fn refuse_a_window_too_short_to_hold_an_interval(ticks_per_cadence_report: u32) 
     Ok(())
 }
 
-/// Read the cadence out of one window of ticks, in the order they arrived.
+/// Read the source's cadence out of one window of ticks, oldest first.
 ///
 /// `None` below two ticks: an interval needs two stamps.
-fn observed_cadence_of(ticks: &[SequencedTick]) -> Option<ObservedTickCadence> {
+fn emission_cadence_of_the_ticks_that_arrived(
+    ticks: &[SequencedTick],
+) -> Option<EmissionCadenceOfTheTicksThatArrived> {
     if ticks.len() < FEWEST_TICKS_A_CADENCE_REPORT_CAN_READ as usize {
         return None;
     }
@@ -129,14 +143,14 @@ fn observed_cadence_of(ticks: &[SequencedTick]) -> Option<ObservedTickCadence> {
     let interval_count = (ticks.len() - 1) as u64;
     let span_ns = last.emitted_at_monotonic_ns - first.emitted_at_monotonic_ns;
 
-    Some(ObservedTickCadence {
+    Some(EmissionCadenceOfTheTicksThatArrived {
         tick_count: ticks.len(),
         skipped_tick_count: last
             .sequence_number
             .saturating_sub(first.sequence_number)
             .saturating_sub(interval_count),
-        mean_interval_ms: nanoseconds_as_milliseconds(span_ns) / interval_count as f64,
-        widest_interval_ms: nanoseconds_as_milliseconds(widest_interval_ns),
+        mean_emission_interval_ms: nanoseconds_as_milliseconds(span_ns) / interval_count as f64,
+        widest_emission_interval_ms: nanoseconds_as_milliseconds(widest_interval_ns),
     })
 }
 
@@ -160,13 +174,13 @@ mod tests {
 
     #[test]
     fn an_even_window_reports_the_interval_it_arrived_on() {
-        let cadence = observed_cadence_of(&evenly_spaced_ticks(5, 40))
+        let cadence = emission_cadence_of_the_ticks_that_arrived(&evenly_spaced_ticks(5, 40))
             .expect("five ticks are enough for an interval");
 
         assert_eq!(cadence.tick_count, 5);
         assert_eq!(cadence.skipped_tick_count, 0);
-        assert_eq!(cadence.mean_interval_ms, 40.0);
-        assert_eq!(cadence.widest_interval_ms, 40.0);
+        assert_eq!(cadence.mean_emission_interval_ms, 40.0);
+        assert_eq!(cadence.widest_emission_interval_ms, 40.0);
     }
 
     /// The mean says the run was on cadence; only the widest interval shows
@@ -178,10 +192,11 @@ mod tests {
             tick.emitted_at_monotonic_ns += 200 * 1_000_000;
         }
 
-        let cadence = observed_cadence_of(&ticks).expect("five ticks are enough for an interval");
+        let cadence = emission_cadence_of_the_ticks_that_arrived(&ticks)
+            .expect("five ticks are enough for an interval");
 
-        assert_eq!(cadence.widest_interval_ms, 240.0);
-        assert_eq!(cadence.mean_interval_ms, 90.0);
+        assert_eq!(cadence.widest_emission_interval_ms, 240.0);
+        assert_eq!(cadence.mean_emission_interval_ms, 90.0);
     }
 
     /// A gap in the sequence is loss between the two ends, not slowness:
@@ -203,7 +218,8 @@ mod tests {
             },
         ];
 
-        let cadence = observed_cadence_of(&ticks).expect("three ticks are enough for an interval");
+        let cadence = emission_cadence_of_the_ticks_that_arrived(&ticks)
+            .expect("three ticks are enough for an interval");
 
         assert_eq!(cadence.skipped_tick_count, 2);
         assert_eq!(cadence.tick_count, 3);
@@ -211,8 +227,8 @@ mod tests {
 
     #[test]
     fn a_window_too_short_to_hold_an_interval_reports_nothing() {
-        assert!(observed_cadence_of(&[]).is_none());
-        assert!(observed_cadence_of(&evenly_spaced_ticks(1, 40)).is_none());
+        assert!(emission_cadence_of_the_ticks_that_arrived(&[]).is_none());
+        assert!(emission_cadence_of_the_ticks_that_arrived(&evenly_spaced_ticks(1, 40)).is_none());
     }
 
     /// The knob the README invites a reader to turn. Set below two it would
