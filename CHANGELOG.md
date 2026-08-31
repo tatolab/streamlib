@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.33](https://github.com/tatolab/streamlib/compare/v0.18.32...v0.18.33) (2026-08-31)
+
+
+### Features
+
+* **engine:** H264Decoder built-in + codec_roundtrip_rig — [#1077](https://github.com/tatolab/streamlib/issues/1077) adjudicated obsolete at HEAD ([#2090](https://github.com/tatolab/streamlib/issues/2090)) ([8f93da3](https://github.com/tatolab/streamlib/commit/8f93da39176b7ea8be3122159e1d0879f078ca63)), closes [#2084](https://github.com/tatolab/streamlib/issues/2084)
+
 ## [0.18.32](https://github.com/tatolab/streamlib/compare/v0.18.31...v0.18.32) (2026-08-31)
 
 
