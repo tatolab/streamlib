@@ -27,10 +27,15 @@
 #
 # Arguments:
 #   output_dir — defaults to /tmp/streamlib-fixture-psnr-<timestamp>
-#   codec      — h264 (default) or h265. The H.265 arm is the one carrying a
-#                CTU pad: a 1920x1080 source codes at 1920x1088, and a decoder
-#                that published the coded extent would score against a
-#                reference eight rows shorter than itself.
+#   codec      — h264 (default) or h265.
+#
+# This harness does NOT gate the H.265 CTU crop. `xtask psnr score` crops each
+# decode to its reference extent before comparing, and the conformance window's
+# origin is (0, 0), so a decoder publishing the padded 1088-tall picture scores
+# byte-identically to one publishing the windowed 1080. What gates the crop is
+# the extent assertion in
+# `cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip`,
+# run on the rig. This harness gates colour and codec quality.
 #
 # Environment overrides:
 #   SAMPLES_PER_REFERENCE — decoded frames exchanged per reference (default 2)

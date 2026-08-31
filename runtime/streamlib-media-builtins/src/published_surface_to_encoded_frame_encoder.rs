@@ -21,9 +21,7 @@
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{
-    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::video::{EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
 use streamlib::sdk::error::{Error, Result};
 
@@ -167,12 +165,12 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// re-taken at camera cadence on a machine with no encode queue.
     pub fn encode_one_published_surface(
         &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
         config: &HardwareVideoEncoderConfig,
         frame: &VideoFrame,
-    ) -> Result<Vec<EncodedFrameAwaitingPublication>> {
+        staged: &mut Vec<EncodedFrameAwaitingPublication>,
+    ) -> Result<()> {
         if self.encode_session.is_none() && self.session_mint_already_failed {
-            return Ok(Vec::new());
+            return Ok(());
         }
         let gpu_context = self.gpu_context.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
@@ -216,7 +214,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                     }
                 }
             };
-            minted.warn_once_on_color_change::<Identity>(frame.color_info.as_ref());
+            minted.warn_once_on_color_change(Identity::PROCESSOR_NAME, frame.color_info.as_ref());
 
             // Resolve the frame's published surface; the registration's
             // tracked layout is what the submit checks against its sampling
@@ -244,12 +242,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             (packets, minted.fields_every_published_bag_carries())
         };
 
-        let encoded_frames = packets
-            .into_iter()
-            .map(|packet| {
-                self.encoded_frame_bag_for(&session_bag_fields, packet, frame.timestamp_ns)
-            })
-            .collect();
+        staged.extend(packets.into_iter().map(|packet| {
+            self.encoded_frame_bag_for(&session_bag_fields, packet, frame.timestamp_ns)
+        }));
 
         self.frames_encoded += 1;
         if self.frames_encoded == 1 {
@@ -264,7 +259,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 Identity::PROCESSOR_NAME
             );
         }
-        Ok(encoded_frames)
+        Ok(())
     }
 
     /// Turn one encoded packet into an encoded-frame bag with its ordering
@@ -310,8 +305,9 @@ impl EncodeSessionMintedFromUpstream {
     /// A frame whose color disagrees with the minted SPS VUI is encoded
     /// anyway — switching colorimetry needs new parameter sets the session
     /// does not re-emit — and the disagreement is said once, not per frame.
-    fn warn_once_on_color_change<Identity: HardwareVideoCodecProcessorIdentity>(
+    fn warn_once_on_color_change(
         &mut self,
+        processor_name: &'static str,
         frame_color: Option<&ColorInfo>,
     ) {
         if self.color_change_already_warned {
@@ -323,7 +319,7 @@ impl EncodeSessionMintedFromUpstream {
                 frame_color = ?frame_color,
                 "{}: frame color differs from the color the session's SPS VUI was minted \
                  from; the bitstream keeps the minted color",
-                Identity::PROCESSOR_NAME
+                processor_name
             );
             self.color_change_already_warned = true;
         }
@@ -333,7 +329,8 @@ impl EncodeSessionMintedFromUpstream {
 /// Resolve the session's (width, height, fps) from the first frame, with
 /// config values as guardrails: a mismatching frame wins with a warning,
 /// and fps falls back frame → config → default.
-fn resolve_encode_dimensions_from_first_frame<Identity: HardwareVideoCodecProcessorIdentity>(
+fn resolve_encode_dimensions_from_first_frame(
+    processor_name: &'static str,
     config: &HardwareVideoEncoderConfig,
     frame_width: u32,
     frame_height: u32,
@@ -345,8 +342,8 @@ fn resolve_encode_dimensions_from_first_frame<Identity: HardwareVideoCodecProces
         tracing::warn!(
             config_width,
             frame_width,
-            "{}: config width does not match the incoming frame; using the frame's",
-            Identity::PROCESSOR_NAME
+            "{processor_name}: config width does not match the incoming frame; using the \
+             frame's"
         );
     }
     if let Some(config_height) = config.height
@@ -355,8 +352,8 @@ fn resolve_encode_dimensions_from_first_frame<Identity: HardwareVideoCodecProces
         tracing::warn!(
             config_height,
             frame_height,
-            "{}: config height does not match the incoming frame; using the frame's",
-            Identity::PROCESSOR_NAME
+            "{processor_name}: config height does not match the incoming frame; using the \
+             frame's"
         );
     }
     let fps = frame_fps.unwrap_or_else(|| config.fps.unwrap_or(DEFAULT_ENCODE_FPS));
@@ -370,7 +367,8 @@ fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIde
     config: &HardwareVideoEncoderConfig,
     frame: &VideoFrame,
 ) -> Result<EncodeSessionMintedFromUpstream> {
-    let (width, height, fps) = resolve_encode_dimensions_from_first_frame::<Identity>(
+    let (width, height, fps) = resolve_encode_dimensions_from_first_frame(
+        Identity::PROCESSOR_NAME,
         config,
         frame.width,
         frame.height,
@@ -453,9 +451,8 @@ mod tests {
             fps: Some(60),
             ..HardwareVideoEncoderConfig::default()
         };
-        let (width, height, fps) = resolve_encode_dimensions_from_first_frame::<
-            H264EncoderCodecIdentity,
-        >(&config, 1280, 720, Some(30));
+        let (width, height, fps) =
+            resolve_encode_dimensions_from_first_frame("H264Encoder", &config, 1280, 720, Some(30));
         assert_eq!((width, height, fps), (1280, 720, 30));
     }
 
@@ -465,23 +462,33 @@ mod tests {
             fps: Some(24),
             ..HardwareVideoEncoderConfig::default()
         };
-        let (_, _, fps_from_config) = resolve_encode_dimensions_from_first_frame::<
-            H265EncoderCodecIdentity,
-        >(&config_with_fps, 1280, 720, None);
+        let (_, _, fps_from_config) = resolve_encode_dimensions_from_first_frame(
+            "H265Encoder",
+            &config_with_fps,
+            1280,
+            720,
+            None,
+        );
         assert_eq!(fps_from_config, 24);
 
-        let (_, _, fps_default) = resolve_encode_dimensions_from_first_frame::<
-            H265EncoderCodecIdentity,
-        >(&HardwareVideoEncoderConfig::default(), 1280, 720, None);
+        let (_, _, fps_default) = resolve_encode_dimensions_from_first_frame(
+            "H265Encoder",
+            &HardwareVideoEncoderConfig::default(),
+            1280,
+            720,
+            None,
+        );
         assert_eq!(fps_default, DEFAULT_ENCODE_FPS);
     }
 
     #[test]
     fn an_empty_config_still_uses_the_frame_dimensions() {
-        let (width, height, _) = resolve_encode_dimensions_from_first_frame::<
-            H265EncoderCodecIdentity,
-        >(
-            &HardwareVideoEncoderConfig::default(), 3840, 2160, Some(30)
+        let (width, height, _) = resolve_encode_dimensions_from_first_frame(
+            "H265Encoder",
+            &HardwareVideoEncoderConfig::default(),
+            3840,
+            2160,
+            Some(30),
         );
         assert_eq!((width, height), (3840, 2160));
     }

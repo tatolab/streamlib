@@ -53,31 +53,36 @@ impl ReactiveProcessor for H264Decoder::Processor {
         self.decode_body.teardown(ctx)
     }
 
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("encoded_video") {
             return Ok(());
         }
-        let gpu_context = self.decode_body.gpu_context_for_this_tick(ctx)?;
+        let gpu_context = self.decode_body.gpu_context_for_this_tick()?;
 
+        // One allocation for the whole tick, drained after every bag so the
+        // pooled pixel buffers are released as soon as their frame is written
+        // rather than held for the batch.
+        let mut staged = Vec::new();
         while let Some((bag_bytes, frame_header_timestamp_ns)) =
             self.inputs.read_raw("encoded_video")?
         {
-            let decoded_frames = self.decode_body.decode_one_arriving_bag(
+            let decode_outcome = self.decode_body.decode_one_arriving_bag(
                 &gpu_context,
                 &bag_bytes,
                 frame_header_timestamp_ns,
-            )?;
-            for decoded_frame in decoded_frames {
-                // The pooled pixel buffer rides inside `decoded_frame` and
-                // is released when it drops at the end of this iteration —
-                // after the write, so the pool cannot rotate the slot out
-                // mid-flight.
+                &mut staged,
+            );
+            for decoded_frame in staged.drain(..) {
+                // The pooled pixel buffer rides inside `decoded_frame` and is
+                // released when it drops at the end of this iteration — after
+                // the write, so the pool cannot rotate the slot out mid-flight.
                 self.outputs.write_with_timestamp(
                     "video",
                     &decoded_frame.frame,
                     frame_header_timestamp_ns,
                 )?;
             }
+            decode_outcome?;
         }
         Ok(())
     }

@@ -12,6 +12,9 @@ use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
 };
 use crate::vulkan::video::video_context::VideoError;
 
+use super::decoded_picture_display_window::{
+    H265ConformanceWindowSyntax, SpsCropOffsets, h265_conformance_window,
+};
 use super::types::*;
 use super::{PendingFrame, SimpleDecoder};
 
@@ -76,18 +79,21 @@ impl SimpleDecoder {
         // mints — so a 1080-tall source is coded at 1088 and only this window
         // brings it back. The decoder applies it; a consumer handed the coded
         // extent could not tell the two numbers apart.
-        let display_window =
-            crate::vulkan::video::decode::decoded_picture_display_window::h265_conformance_window(
-                width,
-                height,
-                sps.chroma_format_idc,
-                sps.flags.conformance_window_flag,
-                sps.conf_win_left_offset as u32,
-                sps.conf_win_right_offset as u32,
-                sps.conf_win_top_offset as u32,
-                sps.conf_win_bottom_offset as u32,
-            );
-        self.adopt_parsed_sps_geometry(width, height, display_window, "h265");
+        let display_window = h265_conformance_window(
+            width,
+            height,
+            H265ConformanceWindowSyntax {
+                chroma_format_idc: sps.chroma_format_idc,
+                conformance_window_flag: sps.flags.conformance_window_flag,
+                offsets: SpsCropOffsets {
+                    left: sps.conf_win_left_offset as u32,
+                    right: sps.conf_win_right_offset as u32,
+                    top: sps.conf_win_top_offset as u32,
+                    bottom: sps.conf_win_bottom_offset as u32,
+                },
+            },
+        );
+        self.adopt_parsed_sps_geometry(width, height, display_window);
 
         debug!(
             width,

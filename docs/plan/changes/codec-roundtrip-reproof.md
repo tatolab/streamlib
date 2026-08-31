@@ -141,12 +141,13 @@ to the next `is_sync_point`, per the decided loss doctrine
   > → r 0.9792/g 0.0029/b 0.0068, identical to four decimals across three cold
   > runs, and the gate gained headroom: the bt601/bt709 green rise now reads
   > 0.0965 off a 0.0029 floor instead of a 0.0575 one.
-  > Amended 2026-08-31 by #2086: the lock is per codec, not per rig. Its
-  > numbers are absolute channel means, and two codecs reconstruct a
-  > saturated primary slightly differently, so the H.265 arm locks against
-  > `psnr_vivid_baseline_h265.tsv` and h264 keeps the unsuffixed file it was
-  > captured under. One shared file would have reported a codec difference as
-  > a colour regression.
+  > Amended 2026-08-31 by #2086: the lock is per codec, not per rig — the
+  > H.265 arm locks against `psnr_vivid_baseline_h265.tsv` and h264 keeps the
+  > unsuffixed file it was captured under. Measured, the two agree to 0.0001
+  > on every channel (r 0.9792 / g 0.0029 / b 0.0068 vs 0.0067) against a
+  > ±0.05 tolerance, so one shared file would in fact have passed both arms
+  > here. The split is headroom for a codec that does reconstruct a saturated
+  > primary differently, so that it cannot be read as a colour regression.
 
 ## ADDED: the adjudications
 

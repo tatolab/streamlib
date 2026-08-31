@@ -30,9 +30,7 @@
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{
-    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::video::H273ColorVui;
 use streamlib::sdk::engine::video::decode::{
     SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
@@ -134,7 +132,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         config: &HardwareVideoDecoderConfig,
     ) -> Result<()> {
         let (max_width, max_height) =
-            resolve_decoded_picture_buffer_dimension_caps::<Identity>(config);
+            resolve_decoded_picture_buffer_dimension_caps(Identity::PROCESSOR_NAME, config);
         let session = ctx
             .gpu_full_access()
             .create_decoder_session(SimpleDecoderConfig {
@@ -190,10 +188,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// the session, the gate and the counters while it is live, and a handle
     /// clone is cheaper than a signature that hands borrowck six disjoint
     /// fields.
-    pub fn gpu_context_for_this_tick(
-        &self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> Result<GpuContextLimitedAccess> {
+    pub fn gpu_context_for_this_tick(&self) -> Result<GpuContextLimitedAccess> {
         self.gpu_context.as_ref().cloned().ok_or_else(|| {
             Error::Runtime(format!(
                 "{}: GPU context not initialized",
@@ -204,12 +199,17 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
 
     /// Read one arriving bag through the convention's own reader, apply the
     /// loss doctrine to it, and hand back whatever pictures it completed.
+    /// Frames are pushed onto `staged` as they are staged, so a failure part
+    /// way through a batch leaves the caller holding — and writing — every
+    /// picture that did complete. Discarding those because a later one failed
+    /// would lose frames the decoder had already reconstructed.
     pub fn decode_one_arriving_bag(
         &mut self,
         gpu_context: &GpuContextLimitedAccess,
         bag_bytes: &[u8],
         frame_header_timestamp_ns: i64,
-    ) -> Result<Vec<DecodedFrameAwaitingPublication>> {
+        staged: &mut Vec<DecodedFrameAwaitingPublication>,
+    ) -> Result<()> {
         let encoded_frame = read_encoded_video_frame_bag(bag_bytes).map_err(|refusal| {
             Error::Runtime(format!("{}: {refusal}", Identity::PROCESSOR_NAME))
         })?;
@@ -226,9 +226,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint => {
                 self.reset_parser_state_before_re_entering(&encoded_frame)?;
             }
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint => {
-                return Ok(Vec::new());
-            }
+            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint => return Ok(()),
         }
 
         let (decoded_frames, published_color) = {
@@ -254,17 +252,15 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             (decoded_frames, published_color)
         };
 
-        decoded_frames
-            .into_iter()
-            .map(|decoded_frame| {
-                self.stage_decoded_frame(
-                    gpu_context,
-                    decoded_frame,
-                    published_color.clone(),
-                    frame_header_timestamp_ns,
-                )
-            })
-            .collect()
+        for decoded_frame in decoded_frames {
+            staged.push(self.stage_decoded_frame(
+                gpu_context,
+                decoded_frame,
+                published_color.clone(),
+                frame_header_timestamp_ns,
+            )?);
+        }
+        Ok(())
     }
 
     /// A producer that renegotiated its extent publishes new parameter sets
@@ -421,7 +417,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
 /// surface's spelling of "auto-detect from the first SPS"; a half-specified
 /// pair caps nothing a DPB can be sized from, so it warns and auto-detects
 /// rather than allocating against one axis.
-fn resolve_decoded_picture_buffer_dimension_caps<Identity: HardwareVideoCodecProcessorIdentity>(
+fn resolve_decoded_picture_buffer_dimension_caps(
+    processor_name: &'static str,
     config: &HardwareVideoDecoderConfig,
 ) -> (u32, u32) {
     match (config.max_width, config.max_height) {
@@ -431,9 +428,8 @@ fn resolve_decoded_picture_buffer_dimension_caps<Identity: HardwareVideoCodecPro
             tracing::warn!(
                 ?max_width,
                 ?max_height,
-                "{}: max_width and max_height cap the DPB together or not at all; \
-                 auto-detecting both from the first SPS",
-                Identity::PROCESSOR_NAME
+                "{processor_name}: max_width and max_height cap the DPB together or not at \
+                 all; auto-detecting both from the first SPS"
             );
             (0, 0)
         }
@@ -478,7 +474,8 @@ mod tests {
     #[test]
     fn an_absent_config_auto_detects_both_dimensions_from_the_first_sps() {
         assert_eq!(
-            resolve_decoded_picture_buffer_dimension_caps::<H265DecoderCodecIdentity>(
+            resolve_decoded_picture_buffer_dimension_caps(
+                "H265Decoder",
                 &HardwareVideoDecoderConfig::default()
             ),
             (0, 0)
@@ -492,7 +489,7 @@ mod tests {
             max_height: Some(1080),
         };
         assert_eq!(
-            resolve_decoded_picture_buffer_dimension_caps::<H265DecoderCodecIdentity>(&config),
+            resolve_decoded_picture_buffer_dimension_caps("H265Decoder", &config),
             (1920, 1080)
         );
     }
@@ -510,11 +507,11 @@ mod tests {
             max_height: Some(1080),
         };
         assert_eq!(
-            resolve_decoded_picture_buffer_dimension_caps::<H265DecoderCodecIdentity>(&width_only),
+            resolve_decoded_picture_buffer_dimension_caps("H265Decoder", &width_only),
             (0, 0)
         );
         assert_eq!(
-            resolve_decoded_picture_buffer_dimension_caps::<H265DecoderCodecIdentity>(&height_only),
+            resolve_decoded_picture_buffer_dimension_caps("H265Decoder", &height_only),
             (0, 0)
         );
     }

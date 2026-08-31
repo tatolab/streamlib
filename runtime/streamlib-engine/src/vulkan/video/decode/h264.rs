@@ -13,6 +13,9 @@ use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
 };
 use crate::vulkan::video::video_context::VideoError;
 
+use super::decoded_picture_display_window::{
+    H264FrameCroppingSyntax, SpsCropOffsets, h264_frame_cropping_window,
+};
 use super::types::*;
 use super::{PendingFrame, SimpleDecoder};
 
@@ -36,13 +39,9 @@ impl SimpleDecoder {
             .parse_sps(&mut reader)
             .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.264 SPS".into()))?;
 
-        // Taken by value so the parser borrow ends here: the geometry this
-        // SPS states is recorded on the decoder itself, which needs `&mut
-        // self` while a borrow of `self.h264_parser` would still be live.
-        let sps = parser.spss[sps_id as usize].clone().ok_or_else(|| {
+        let sps = parser.spss[sps_id as usize].as_ref().ok_or_else(|| {
             VideoError::BitstreamError(format!("SPS {} not found after parse", sps_id))
         })?;
-        parser.sps = Some(sps.clone());
 
         // Extract dimensions from parsed SPS
         let frame_mbs_only = sps.flags.frame_mbs_only_flag;
@@ -50,21 +49,22 @@ impl SimpleDecoder {
         let height = (if frame_mbs_only { 1 } else { 2 })
             * (sps.pic_height_in_map_units_minus1 + 1) as u32
             * 16;
-        let display_window = crate::vulkan::video::decode::decoded_picture_display_window::h264_frame_cropping_window(
+        let display_window = h264_frame_cropping_window(
             width,
             height,
-            sps.chroma_format_idc as u8,
-            sps.flags.separate_colour_plane_flag,
-            frame_mbs_only,
-            sps.flags.frame_cropping_flag,
-            sps.frame_crop_left_offset as u32,
-            sps.frame_crop_right_offset as u32,
-            sps.frame_crop_top_offset as u32,
-            sps.frame_crop_bottom_offset as u32,
+            H264FrameCroppingSyntax {
+                chroma_format_idc: sps.chroma_format_idc as u8,
+                separate_colour_plane_flag: sps.flags.separate_colour_plane_flag,
+                frame_mbs_only_flag: frame_mbs_only,
+                frame_cropping_flag: sps.flags.frame_cropping_flag,
+                offsets: SpsCropOffsets {
+                    left: sps.frame_crop_left_offset as u32,
+                    right: sps.frame_crop_right_offset as u32,
+                    top: sps.frame_crop_top_offset as u32,
+                    bottom: sps.frame_crop_bottom_offset as u32,
+                },
+            },
         );
-
-        self.cached_sps_nalu = Some(sps_nalu.to_vec());
-        self.adopt_parsed_sps_geometry(width, height, display_window, "h264");
 
         debug!(width, height, sps_id, profile_idc = sps.profile_idc,
               level_idc = ?sps.level_idc,
@@ -73,6 +73,13 @@ impl SimpleDecoder {
               log2_max_frame_num_m4 = sps.log2_max_frame_num_minus4,
               chroma_format_idc = sps.chroma_format_idc,
               "H.264 SPS parsed");
+
+        // Set as active SPS. The `parser` borrow ends here, which is what
+        // lets the geometry below take `&mut self`.
+        parser.sps = Some(sps.clone());
+
+        self.cached_sps_nalu = Some(sps_nalu.to_vec());
+        self.adopt_parsed_sps_geometry(width, height, display_window);
 
         // Don't configure yet — wait for PPS to also be available.
         // Session will be configured in handle_pps or handle_slice.

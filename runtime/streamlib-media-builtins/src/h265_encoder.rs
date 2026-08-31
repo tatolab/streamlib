@@ -51,21 +51,26 @@ impl ReactiveProcessor for H265Encoder::Processor {
         self.encode_body.teardown(ctx)
     }
 
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("video") {
             return Ok(());
         }
         let frame: VideoFrame = self.inputs.read("video")?;
-        let encoded_frames =
+
+        // Every bag the encode staged is written even when the call errored,
+        // so a failure part way through a frame's packets never discards the
+        // ones already produced.
+        let mut staged = Vec::new();
+        let encode_outcome =
             self.encode_body
-                .encode_one_published_surface(ctx, &self.config, &frame)?;
-        for encoded_frame in encoded_frames {
+                .encode_one_published_surface(&self.config, &frame, &mut staged);
+        for encoded_frame in staged {
             self.outputs.write_with_timestamp(
                 "encoded_video",
                 &encoded_frame.frame,
                 encoded_frame.timestamp_ns,
             )?;
         }
-        Ok(())
+        encode_outcome
     }
 }

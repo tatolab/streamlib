@@ -8,6 +8,7 @@ use tracing::{debug, info};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+use super::SimpleDecoder;
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
     H264LevelIdc, H264PocType, PicParameterSet as H264Pps, SeqParameterSet as H264Sps,
 };
@@ -16,32 +17,8 @@ use crate::vulkan::video::video_context::VideoError;
 use crate::vulkan::video::vk_video_decoder::vk_video_decoder::{
     VkParserDetectedVideoFormat, VkVideoDecoder,
 };
-use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
-    H264_MB_SIZE_ALIGNMENT, align_size,
-};
-
-use super::SimpleDecoder;
 
 impl SimpleDecoder {
-    /// Returns the codec-aligned output extent (width, height) derived from
-    /// [`SimpleDecoderConfig::max_width`] / [`SimpleDecoderConfig::max_height`]
-    /// rounded up to the macroblock alignment (16 pixels).
-    ///
-    /// Returns `(0, 0)` if the config has no max dimensions set.
-    pub fn aligned_extent(&self) -> (u32, u32) {
-        let w = if self.config.max_width > 0 {
-            align_size(self.config.max_width, H264_MB_SIZE_ALIGNMENT)
-        } else {
-            0
-        };
-        let h = if self.config.max_height > 0 {
-            align_size(self.config.max_height, H264_MB_SIZE_ALIGNMENT)
-        } else {
-            0
-        };
-        (w, h)
-    }
-
     /// Eagerly allocate the GPU resources used during decode.
     ///
     /// Creates the NV12→RGBA compute converter now (when `rgba_output` is
@@ -251,17 +228,16 @@ impl SimpleDecoder {
 
         // Create NV12→RGBA GPU converter if rgba_output is enabled.
         // If prepare_gpu_decode_resources() already created one (eager path),
-        // reuse it rather than reallocating — that path sized the converter to
-        // the codec-aligned max extent so it handles any SPS up to that cap.
+        // reuse it rather than reallocating — that path sized it to the same
+        // config caps this one hands start_video_sequence, so the converter
+        // and the DPB already agree.
         if self.config.rgba_output && self.nv12_converter.is_none() {
             // Exactly the extent `start_video_sequence` was handed above, which
             // is what the DPB images were created at. The conversion shader
             // samples the DPB through normalized coordinates derived from this
             // extent (`shaders/nv12_to_rgb.comp`), so a converter sized to
-            // anything else rescales the picture instead of converting it —
-            // sizing it to the conformance-windowed extent cost 22 dB of Y
-            // PSNR on detailed content. The window is applied by the readback's
-            // copy region, never here.
+            // anything else rescales the picture instead of converting it.
+            // The window is applied by the readback's copy region, never here.
             let converter = unsafe {
                 crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter::new(
                     &self.ctx,

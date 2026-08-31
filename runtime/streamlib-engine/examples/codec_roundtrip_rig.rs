@@ -14,10 +14,12 @@
 //! Two codec arms. `--codec h264` and `--codec h265` swap the encoder and
 //! decoder pair and change nothing else — the two built-in pairs share
 //! their whole body, so the graph, the scoring and the shutdown path are
-//! the same run twice. H.265 is the arm that carries a CTU pad: a
-//! 1920x1080 source is coded at 1920x1088, so a decoder publishing 1088
-//! would be visible here as a decoded extent that does not match its
-//! reference.
+//! the same run twice.
+//!
+//! Neither arm gates the conformance crop: the scorer crops each decode to
+//! its reference extent first, and the window's origin is (0, 0), so a
+//! decoder publishing the padded extent scores identically. That contract
+//! belongs to `h265_decoder_completes_the_round_trip`.
 //!
 //! Rig-only to run: it needs Vulkan Video encode and decode queues, a
 //! display server, and for the camera arm a `/dev/video*` device. CI

@@ -36,10 +36,10 @@
 # Arguments:
 #   output_dir — defaults to /tmp/streamlib-vivid-color-<timestamp>
 #   codec      — h264 (default) or h265. Each codec locks against its own
-#                baseline TSV, because the drift lock is an absolute channel
-#                mean and two codecs reconstruct a saturated primary slightly
-#                differently; comparing one arm to the other's numbers would
-#                report a codec difference as a colour regression.
+#                baseline TSV. Measured 2026-08-31 the two agree to 0.0001 on
+#                every channel against a ±0.05 tolerance, so this is headroom
+#                rather than a gap: a codec that does reconstruct a saturated
+#                primary differently cannot then be read as a colour regression.
 #
 # Environment overrides:
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";

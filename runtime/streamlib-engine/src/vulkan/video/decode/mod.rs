@@ -636,13 +636,12 @@ impl SimpleDecoder {
         coded_width: u32,
         coded_height: u32,
         parsed_window: Option<DecodedPictureDisplayWindow>,
-        codec_name: &str,
     ) {
         self.coded_picture_width = coded_width;
         self.coded_picture_height = coded_height;
         let window = parsed_window.unwrap_or_else(|| {
             tracing::warn!(
-                codec_name,
+                codec = ?self.config.codec,
                 coded_width,
                 coded_height,
                 "SPS conformance window does not describe a region inside the coded picture; \
@@ -655,7 +654,7 @@ impl SimpleDecoder {
         // trying to confirm.
         if !window.crops_nothing(coded_width, coded_height) {
             info!(
-                codec_name,
+                codec = ?self.config.codec,
                 coded_width,
                 coded_height,
                 published_width = window.width,
