@@ -3,12 +3,14 @@
 
 #![cfg(target_os = "linux")]
 
-//! Built-in H.264 decoder: encoded-frame bags in, published video surfaces
+//! Built-in H.265 decoder: encoded-frame bags in, published video surfaces
 //! out.
 //!
 //! The state machine is [`EncodedFrameToPublishedSurfaceDecoder`], shared
-//! with the H.265 decoder. What lives here is the port surface, the
-//! registration name, and the codec identity.
+//! with the H.264 decoder. The one thing H.265 brings that H.264 does not is
+//! the CTU pad — a 1920x1080 stream is coded at 1920x1088 — and that is
+//! handled where the SPS is parsed, so the frames arriving here are already
+//! the picture the stream meant to carry.
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::engine::video::Codec;
@@ -20,31 +22,31 @@ use crate::encoded_video_frame::EncodedVideoCodec;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
 
 /// What makes the shared decode body this built-in.
-pub struct H264DecoderCodecIdentity;
+pub struct H265DecoderCodecIdentity;
 
-impl HardwareVideoCodecProcessorIdentity for H264DecoderCodecIdentity {
-    const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H264;
-    const VIDEO_SESSION_CODEC: Codec = Codec::H264;
-    const PROCESSOR_NAME: &'static str = "H264Decoder";
+impl HardwareVideoCodecProcessorIdentity for H265DecoderCodecIdentity {
+    const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H265;
+    const VIDEO_SESSION_CODEC: Codec = Codec::H265;
+    const PROCESSOR_NAME: &'static str = "H265Decoder";
 }
 
 #[streamlib::sdk::processor(
-    description = "Decodes H.264 Annex-B encoded-frame bags to published video surfaces via Vulkan Video hardware decode",
+    description = "Decodes H.265 Annex-B encoded-frame bags to published video surfaces via Vulkan Video hardware decode",
     execution = reactive,
     scheduling = high,
     config = crate::encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig,
     input(
         "encoded_video",
         delivery_profile = "ordered",
-        description = "H.264 encoded-frame bags to decode"
+        description = "H.265 encoded-frame bags to decode"
     ),
     output("video", description = "Decoded video frames"),
 )]
-pub struct H264Decoder {
-    decode_body: EncodedFrameToPublishedSurfaceDecoder<H264DecoderCodecIdentity>,
+pub struct H265Decoder {
+    decode_body: EncodedFrameToPublishedSurfaceDecoder<H265DecoderCodecIdentity>,
 }
 
-impl ReactiveProcessor for H264Decoder::Processor {
+impl ReactiveProcessor for H265Decoder::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.decode_body.setup(ctx, &self.config)
     }

@@ -20,18 +20,28 @@ pub(crate) mod cumulative_count_report_threshold;
 pub mod display_window;
 #[cfg(test)]
 mod emitted_log_line_test_support;
+#[cfg(target_os = "linux")]
+pub mod encoded_frame_to_published_surface_decoder;
 pub mod encoded_video_frame;
 #[cfg(target_os = "linux")]
 pub mod h264_decoder;
 #[cfg(target_os = "linux")]
 pub mod h264_encoder;
 #[cfg(target_os = "linux")]
+pub mod h265_decoder;
+#[cfg(target_os = "linux")]
+pub mod h265_encoder;
+#[cfg(target_os = "linux")]
 pub mod h273_color_vui_translation;
+#[cfg(target_os = "linux")]
+pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod pooled_rgba_frame_staging;
 pub(crate) mod processor_thread_join;
+#[cfg(target_os = "linux")]
+pub mod published_surface_to_encoded_frame_encoder;
 pub mod speaker_sink;
 pub mod test_pattern_source;
 #[cfg(target_os = "linux")]
@@ -51,9 +61,17 @@ pub use encoded_video_frame::{
     read_encoded_video_frame_bag,
 };
 #[cfg(target_os = "linux")]
-pub use h264_decoder::{H264Decoder, H264DecoderConfig};
+pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 #[cfg(target_os = "linux")]
-pub use h264_encoder::{H264Encoder, H264EncoderConfig};
+pub use h264_decoder::H264Decoder;
+#[cfg(target_os = "linux")]
+pub use h264_encoder::H264Encoder;
+#[cfg(target_os = "linux")]
+pub use h265_decoder::H265Decoder;
+#[cfg(target_os = "linux")]
+pub use h265_encoder::H265Encoder;
+#[cfg(target_os = "linux")]
+pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
@@ -77,4 +95,8 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
+    #[cfg(target_os = "linux")]
+    PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
+    #[cfg(target_os = "linux")]
+    PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
 }

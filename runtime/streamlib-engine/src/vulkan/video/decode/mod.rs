@@ -640,7 +640,7 @@ impl SimpleDecoder {
     ) {
         self.coded_picture_width = coded_width;
         self.coded_picture_height = coded_height;
-        self.decoded_picture_display_window = Some(parsed_window.unwrap_or_else(|| {
+        let window = parsed_window.unwrap_or_else(|| {
             tracing::warn!(
                 codec_name,
                 coded_width,
@@ -649,7 +649,21 @@ impl SimpleDecoder {
                  publishing the whole coded picture"
             );
             DecodedPictureDisplayWindow::covering_the_whole_coded_picture(coded_width, coded_height)
-        }));
+        });
+        // Said once per SPS, because a run whose decoded extent does not
+        // match its coded one is exactly the thing a reader of these logs is
+        // trying to confirm.
+        if !window.crops_nothing(coded_width, coded_height) {
+            info!(
+                codec_name,
+                coded_width,
+                coded_height,
+                published_width = window.width,
+                published_height = window.height,
+                "SPS conformance window applied — decoded frames publish the cropped extent"
+            );
+        }
+        self.decoded_picture_display_window = Some(window);
     }
 
     /// Return the H.273 color VUI parsed from the active SPS, or `None` if
