@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.28](https://github.com/tatolab/streamlib/compare/v0.18.27...v0.18.28) (2026-08-31)
+
+
+### Features
+
+* **examples:** convert cuda-fisheye-detection to the current authoring idiom ([#2072](https://github.com/tatolab/streamlib/issues/2072)) ([1298c2f](https://github.com/tatolab/streamlib/commit/1298c2ff9bff49c18caecfb8a26f68bee710c214))
+
 ## [0.18.27](https://github.com/tatolab/streamlib/compare/v0.18.26...v0.18.27) (2026-08-30)
 
 
