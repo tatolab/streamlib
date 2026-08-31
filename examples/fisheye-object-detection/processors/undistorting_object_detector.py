@@ -55,8 +55,10 @@ STORAGE_AND_SAMPLED_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
 # Three `float`s, little-endian at the wire: the lens's own two coefficients
 # plus the radius past which this shader must not try to reconstruct anything.
-LENS_COEFFICIENT_FORMAT = "<3f"
-LENS_COEFFICIENT_SIZE = struct.calcsize(LENS_COEFFICIENT_FORMAT)
+LENS_COEFFICIENT_AND_RECOVERY_LIMIT_FORMAT = "<3f"
+LENS_COEFFICIENT_AND_RECOVERY_LIMIT_SIZE = struct.calcsize(
+    LENS_COEFFICIENT_AND_RECOVERY_LIMIT_FORMAT
+)
 
 # Newton converges on this polynomial in three steps for any coefficient pair
 # a real lens produces; the fourth is there for the ones it does not.
@@ -184,7 +186,7 @@ class UndistortingObjectDetector:
             float(radial_distortion_k1), float(radial_distortion_k2)
         )
         self.lens_coefficient_push_constants = struct.pack(
-            LENS_COEFFICIENT_FORMAT,
+            LENS_COEFFICIENT_AND_RECOVERY_LIMIT_FORMAT,
             float(radial_distortion_k1),
             float(radial_distortion_k2),
             self.largest_recoverable_radius,
@@ -199,7 +201,7 @@ class UndistortingObjectDetector:
         )
         self.fisheye_rectify_kernel = ctx.gpu_full_access.create_compute_kernel(
             source=FISHEYE_RECTIFY_GLSL,
-            push_constant_size=LENS_COEFFICIENT_SIZE,
+            push_constant_size=LENS_COEFFICIENT_AND_RECOVERY_LIMIT_SIZE,
             bindings={
                 FISHEYE_FRAME_BINDING: "sampled_texture",
                 UNDISTORTED_FRAME_BINDING: "storage_image",
@@ -340,8 +342,9 @@ class UndistortingObjectDetector:
         """
         height, _, _ = rectified_frame.shape
         # Scaled with the frame so the outline reads the same at any capture
-        # size, and never thinner than the two pixels a 1080p screen needs to
-        # show a line at all.
+        # size, with a floor for the small ones: below 480 rows the ratio alone
+        # rounds an edge down to a single pixel, which a window scaling to fit
+        # can drop entirely.
         edge = max(2, height // 240)
         for detection in detections:
             left, top, right, bottom = detection["box_xyxy"]

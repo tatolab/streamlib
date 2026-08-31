@@ -73,8 +73,10 @@ FISHEYE_FRAME_RING_DEPTH = 3
 # Two `float`s, little-endian at the wire like every push constant. The
 # rectifier packs a third alongside these — see its own module — because it
 # needs an answer this shader does not.
-LENS_COEFFICIENT_FORMAT = "<2f"
-LENS_COEFFICIENT_SIZE = struct.calcsize(LENS_COEFFICIENT_FORMAT)
+LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT = "<2f"
+LENS_COEFFICIENT_PUSH_CONSTANT_SIZE = struct.calcsize(
+    LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT
+)
 
 FISHEYE_WARP_GLSL = (
     RADIAL_DISTORTION_MODEL_GLSL
@@ -138,7 +140,7 @@ class SyntheticFisheyeLens:
         # constants travel with a dispatch and never persist on the kernel,
         # exactly as bindings do.
         self.lens_coefficient_push_constants = struct.pack(
-            LENS_COEFFICIENT_FORMAT,
+            LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT,
             float(radial_distortion_k1),
             float(radial_distortion_k2),
         )
@@ -160,7 +162,7 @@ class SyntheticFisheyeLens:
         )
         self.fisheye_warp_kernel = ctx.gpu_full_access.create_compute_kernel(
             source=FISHEYE_WARP_GLSL,
-            push_constant_size=LENS_COEFFICIENT_SIZE,
+            push_constant_size=LENS_COEFFICIENT_PUSH_CONSTANT_SIZE,
             # Asserted against the shader's own reflection, so renaming a
             # binding on one side of this file is refused here at construction
             # rather than at the first dispatch.
