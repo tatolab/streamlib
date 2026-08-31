@@ -15,9 +15,11 @@ sees the lens at all.
 That is the motivation, and this app demonstrates the *pipeline* rather than
 measuring the benefit — on any single scene the detection count moves in both
 directions, and a claim about detection quality needs a dataset and a metric,
-not a webcam. What it does show is that the correction is real: the rectified
-frame is geometrically the original again, to about 31.8 dB against it on a
-fixed photograph, where the distorted frame scores 13.0 dB.
+not a webcam. What it does show is that the correction is real, and you can
+check that yourself with two `exchange` calls (see *Observing it*): against a
+static test pattern the rectified frame scores about **36 dB** PSNR on the
+camera frame it came from, where the distorted frame in the other window
+scores about **15 dB**.
 
 There is no fisheye lens on your desk, so `SyntheticFisheyeLens` applies the
 distortion a real one would have baked in. Everything downstream of it is the
@@ -118,9 +120,10 @@ what radius a pixel is at and what the polynomial does to it. Kept apart they
 drift silently — a rectifier a hair off its lens still produces a
 plausible-looking picture, and the only symptom is a detector that quietly
 does worse near the edges. So both kernels are built from one GLSL prelude in
-`processors/radial_distortion_model.py`, which owns `normalised_radius` and
-`radial_scale` and nothing else, and both shaders are that prelude plus their
-own bindings and `main()`.
+`processors/radial_distortion_model.py` — `frame_centre`, `normalised_radius`,
+`radial_scale` and the texel-to-sampler coordinate convention, and nothing
+else — and each shader is that prelude plus its own bindings, push constants
+and `main()`.
 
 The same module owns the tile size, which reaches both shaders as a `#define`
 so the dispatch's group count and the shader's `local_size` cannot disagree.
@@ -153,22 +156,30 @@ both tests — radius, then whether the source texel is inside the frame at all
 — and what survives is their intersection: about 70% of a 16:9 frame at the
 default coefficient, in the rounded shape the black border traces.
 
-Both masks write black rather than sampling. Drop the radius test and Newton
-still returns a root, because the polynomial does not stop existing where the
-optics do, and the corners fill with a stretched mirrored copy of content from
-elsewhere in the frame. Drop the rectangle test and the engine's sampler
-clamps to the edge instead, painting a smeared band along the top and bottom
-that looks like motion blur and is not. Measured on a fixed photograph, adding
-the second test moved PSNR against the original from 22.6 dB to 31.8 dB — the
-band was most of the remaining error, and it was the most plausible-looking
-part of the picture.
+Both masks write black rather than sampling, and each has its own failure
+mode if you drop it. Without the radius test Newton still returns a root — the
+polynomial does not stop existing where the optics do — and the corners fill
+with a stretched mirrored copy of content from elsewhere in the frame. Without
+the rectangle test the engine's sampler clamps to the edge instead, painting a
+smeared band along the top and bottom that reads as motion blur and is not.
+The second one is the one to watch for: it is confined to the periphery, which
+is the part of the frame nobody checks and the part this whole app is about.
 
 Inside the disc, the rectifier solves `r_d · (1 + k1·r_d² + k2·r_d⁴) = r_u` for
 `r_d` by Newton iteration from `r_u` itself, four steps, unrolled. That is the
 true inverse rather than the `r_u / scale(r_u)` approximation the shape
-invites, and the difference is visible: the approximation is fine near the
-centre and drifts steadily outward, which is precisely the part of the frame
-this whole app exists to get right.
+invites, and the approximation is worth knowing about because of *where* it
+fails. Rectifying the same captured frame both ways:
+
+| inverse | whole frame | centre, `r ≤ 0.35` | outer, `r > 0.55` |
+| --- | --- | --- | --- |
+| Newton, four steps | 36.3 dB | 44.4 dB | 32.8 dB |
+| `r_u / scale(r_u)` | 18.9 dB | 43.4 dB | 14.5 dB |
+
+A degree apart in the middle and eighteen apart at the edge. An approximation
+that is excellent everywhere you would think to look and wrong exactly at the
+periphery is the worst possible shape for this particular application, which
+is the whole reason the four Newton steps are there.
 
 In a real deployment `k1` and `k2` come out of a checkerboard calibration and
 are a property of the hardware. A synthetic lens is the one case where the
@@ -209,9 +220,9 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 
 This app needs real hardware and says so rather than pretending: the kernels
 run on the engine's own Vulkan device and the detector wants a CUDA runtime, so
-a machine with neither fails while the graph is starting. It is also the
-heaviest example in the tree to install — `ultralytics` brings a detector, and
-`torch` brings CUDA.
+a machine with neither fails while the graph is starting. It is also a heavy
+install — `ultralytics` brings a detector and `torch` brings CUDA, several
+gigabytes between them.
 
 One environment note, because the error names nothing useful. On a machine
 that also has a **system** cuDNN on the loader's default path — anything with
@@ -233,7 +244,10 @@ Any path outside `.venv` in that list is the one being mixed in.
 Both shaders are strings in their processor's module, compiled by the engine at
 startup on the machine that runs the app. There is no `glslc` to install, no
 `.spv` to build and no build step between editing a shader and re-running —
-re-running `streamlib run` is the edit loop, and a warm restart is sub-second.
+re-running `streamlib run` is the edit loop. It costs a couple of seconds here
+rather than the sub-second restart the lighter examples get, and the shader
+compile is not why: each helper imports torch, and the detector's also loads a
+network onto the GPU.
 
 Three edits worth making on purpose, because each teaches something the code
 alone does not:
