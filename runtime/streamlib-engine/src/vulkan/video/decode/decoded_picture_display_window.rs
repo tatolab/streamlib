@@ -40,13 +40,6 @@ impl DecodedPictureDisplayWindow {
         }
     }
 
-    /// The extent an RGBA readback must cover to reach this window's far
-    /// edge — the origin is inside the coded picture, so a converter sized
-    /// for the window alone would have nothing to read at a non-zero origin.
-    pub(crate) fn extent_a_readback_must_span(&self) -> (u32, u32) {
-        (self.origin_x + self.width, self.origin_y + self.height)
-    }
-
     /// Whether the window is the whole coded picture, which is the case for
     /// every extent already aligned to the codec's block size.
     pub(crate) fn crops_nothing(&self, coded_width: u32, coded_height: u32) -> bool {
@@ -227,14 +220,13 @@ mod tests {
         let window = h265_conformance_window(1280, 704, 1, false, 0, 0, 0, 0)
             .expect("an absent window is not a malformed one");
         assert!(window.crops_nothing(1280, 704));
-        assert_eq!(window.extent_a_readback_must_span(), (1280, 704));
     }
 
     /// Left and top offsets move the origin rather than shrinking from the
     /// far edge, which is what a readback has to honour to copy the picture
     /// and not the padding.
     #[test]
-    fn a_left_top_offset_moves_the_origin_and_the_readback_spans_past_it() {
+    fn a_left_top_offset_moves_the_origin_rather_than_shrinking_the_far_edge() {
         let window = h265_conformance_window(1920, 1088, 1, true, 8, 8, 2, 2)
             .expect("an offset window is still a usable one");
         assert_eq!(
@@ -246,7 +238,6 @@ mod tests {
                 height: 1080,
             }
         );
-        assert_eq!(window.extent_a_readback_must_span(), (1904, 1084));
     }
 
     /// A window that would crop past the coded picture is malformed. The

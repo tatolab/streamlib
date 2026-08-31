@@ -61,15 +61,19 @@ impl SimpleDecoder {
         if !self.config.rgba_output {
             return Ok(());
         }
-        let (aligned_w, aligned_h) = self.aligned_extent();
-        if aligned_w == 0 || aligned_h == 0 {
+        // The extent `pre_initialize_session` hands `start_video_sequence`,
+        // and so the extent its DPB images are created at. The converter
+        // samples that DPB through normalized coordinates, so the two extents
+        // must agree exactly; the macroblock-aligned extent does not.
+        let (dpb_width, dpb_height) = (self.config.max_width, self.config.max_height);
+        if dpb_width == 0 || dpb_height == 0 {
             return Ok(());
         }
         let converter = unsafe {
             crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter::new(
                 &self.ctx,
-                aligned_w,
-                aligned_h,
+                dpb_width,
+                dpb_height,
                 self.compute_queue_family,
                 self.compute_queue,
                 self.decode_queue_family,
@@ -250,14 +254,19 @@ impl SimpleDecoder {
         // reuse it rather than reallocating — that path sized the converter to
         // the codec-aligned max extent so it handles any SPS up to that cap.
         if self.config.rgba_output && self.nv12_converter.is_none() {
-            let (readback_span_width, readback_span_height) = self
-                .decoded_picture_display_window_or_whole_picture()
-                .extent_a_readback_must_span();
+            // Exactly the extent `start_video_sequence` was handed above, which
+            // is what the DPB images were created at. The conversion shader
+            // samples the DPB through normalized coordinates derived from this
+            // extent (`shaders/nv12_to_rgb.comp`), so a converter sized to
+            // anything else rescales the picture instead of converting it —
+            // sizing it to the conformance-windowed extent cost 22 dB of Y
+            // PSNR on detailed content. The window is applied by the readback's
+            // copy region, never here.
             let converter = unsafe {
                 crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter::new(
                     &self.ctx,
-                    readback_span_width,
-                    readback_span_height,
+                    width,
+                    height,
                     self.compute_queue_family,
                     self.compute_queue,
                     self.decode_queue_family,
