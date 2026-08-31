@@ -221,13 +221,14 @@ pub mod sdk {
         /// Vulkan Video codec layer — engine-tier H.264/H.265
         /// encode/decode primitives (`SimpleEncoder`, `SimpleDecoder`,
         /// `Codec`, `Preset`, `EncodePacket`, codec configuration
-        /// types, `H273ColorVui`). Construction goes through
-        /// `SimpleEncoder::from_full_access` /
-        /// `SimpleDecoder::from_full_access`, which take the host
-        /// `&GpuContextFullAccess` and wire the host RHI's queue
-        /// mutex, allocator, and per-queue families internally.
-        /// Domain codec packages (`@tatolab/h264`, `@tatolab/h265`)
-        /// reach for the codec types here.
+        /// types, `H273ColorVui`). Sessions are minted through the
+        /// `GpuContext` session surface — `create_encoder_session` /
+        /// `create_decoder_session`, mirrored on `GpuContextFullAccess`
+        /// so a processor's `process()` reaches the mint via
+        /// `escalate(|full| ...)` — which wires the host RHI's queue
+        /// mutex, allocator, and per-queue families internally. The
+        /// codec built-ins in `streamlib-media-builtins` reach for the
+        /// codec types here.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::video;
     }
