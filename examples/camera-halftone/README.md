@@ -24,8 +24,8 @@ vec4 ink = texelFetch(camera_frame, centre, 0);
 
 What scales with brightness is the dot's **area**, not its radius — a cell
 twice as bright is twice as covered in ink — so the radius takes a square
-root. The mined original scaled the radius directly, which is why every tone
-below mid grey collapsed to a single-texel speck there and does not here. The
+root. The mined original scaled the radius directly, which loses the shadows:
+a quarter grey inks one texel of the sixty-four there, against nine here. The
 edge gets one texel of feather for a reason worth knowing too, and the shader
 says which.
 
@@ -266,8 +266,8 @@ for link in json.load(sys.stdin)["links"]:
 streamlib exchange --channel "$CHANNEL" --count 3 --out /tmp/halftone
 ```
 
-A halftone frame is the one effect in the showcase you can grade from a still:
-zoom a PNG in and the dot grid is either there or it is not.
+A halftone frame grades well from a still: zoom a PNG in and the dot grid is
+either there or it is not.
 
 `streamlib tap "$CHANNEL"` on the same channel shows the bag itself: a surface
 id, an extent, a timestamp, and no pixels. `exchange` is the door that turns

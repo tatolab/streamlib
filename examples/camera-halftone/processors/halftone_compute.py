@@ -76,13 +76,12 @@ WORKGROUP_TILE_SIZE = 8
 HALFTONE_DIAL_FORMAT = "<iff"
 HALFTONE_DIAL_SIZE = struct.calcsize(HALFTONE_DIAL_FORMAT)
 
-# The mined original's screen: 8-pixel cells, ink lifted 30% so a dot reads as
-# saturated against its background, and a paper of 0x10 on each channel — a
-# near-black rather than a white page, which is what makes this look like a
-# lit sign instead of a newspaper.
+# A near-black paper rather than a white page, which is what makes this read
+# as a lit sign instead of a newspaper; the boost lifts a dot far enough off it
+# to look saturated.
 DEFAULT_CELL_SIZE = 8
 DEFAULT_DOT_BOOST = 1.3
-DEFAULT_BACKGROUND_LEVEL = 0x10 / 0xFF
+DEFAULT_BACKGROUND_LEVEL = 0.0627
 
 # The `#define` is the only interpolated line: the body stays a plain string,
 # so the shader's own braces need no doubling and it reads as GLSL.
@@ -121,13 +120,13 @@ void main() {
     // texelFetch rather than texture(): the centre is an exact texel index, so
     // there is nothing to filter.
     vec4 ink = texelFetch(camera_frame, centre, 0);
-    // BT.709 luma, the weights the mined original screened on.
+    // BT.709 luma, the weights the HD standard published for it.
     float luma = dot(ink.rgb, vec3(0.2126, 0.7152, 0.0722));
 
     // Tone is carried by how much of the cell the ink covers, so it is the
     // dot's *area* that scales with luma and the radius that takes the square
-    // root. Scaling the radius directly — what the mined original did —
-    // crushes every tone below mid grey to a single-texel speck.
+    // root. A radius scaled by luma directly loses the shadows: at a quarter
+    // grey it inks a single texel of the sixty-four.
     //
     // 0.55 of the cell rather than 0.5, so dots in adjacent cells just touch
     // at full luma instead of leaving a permanent grid of background between
@@ -141,7 +140,9 @@ void main() {
 
     vec3 dot_colour = min(ink.rgb * dial.dot_boost, vec3(1.0));
     vec3 paper = vec3(dial.background_level);
-    imageStore(halftone_frame, at, vec4(mix(paper, dot_colour, coverage), ink.a));
+    // Opaque, and not the sampled alpha: that one belongs to the cell's centre
+    // texel, so carrying it would quantise transparency to the dot grid.
+    imageStore(halftone_frame, at, vec4(mix(paper, dot_colour, coverage), 1.0));
 }
 """
 )
