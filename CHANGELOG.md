@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.32](https://github.com/tatolab/streamlib/compare/v0.18.31...v0.18.32) (2026-08-31)
+
+
+### Features
+
+* **engine:** encoded-frame bag convention + H264Encoder built-in — camera frames leave as tapped Annex-B bags ([#2088](https://github.com/tatolab/streamlib/issues/2088)) ([054ed71](https://github.com/tatolab/streamlib/commit/054ed719a8e7a43281b38d3726b31809b30c0e9a))
+
 ## [0.18.31](https://github.com/tatolab/streamlib/compare/v0.18.30...v0.18.31) (2026-08-31)
 
 
