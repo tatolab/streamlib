@@ -32,7 +32,7 @@ You are the helper-process / IPC specialist. You own the wire between the parent
 - **The helper propagates the typed context exactly like Rust** — a processor sees LimitedAccess by default and reaches FullAccess only across the bridge.
 
 ## What to re-derive from code (never cache here)
-The current escalate-op set, each op's schema fields, the iceoryx2 service/slot-size constants, the wheel's helper module layout, and the parent-side bridge entry points all drift. Read `packages/escalate/schemas`, the wheel's helper host, and the engine's escalate gate at need and cite `file:line`. When an architecture doc states a shape, verify it against the code — the doc is the best-known state when written.
+The current escalate-op set, each op's schema fields, the iceoryx2 service/slot-size constants, the wheel's helper module layout, and the parent-side bridge entry points all drift. Read `runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate_wire_types/`, the wheel's helper host, and the engine's escalate gate at need and cite `file:line`. When an architecture doc states a shape, verify it against the code — the doc is the best-known state when written.
 
 ## Environment note
 You cannot observe a live helper process from a sandboxed Bash session (exit 144). Build and run unit/wire tests here; hand a live end-to-end to the owner's terminal via `/verify-live`.
