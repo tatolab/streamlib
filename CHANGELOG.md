@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.34](https://github.com/tatolab/streamlib/compare/v0.18.33...v0.18.34) (2026-08-31)
+
+
+### Features
+
+* **xtask:** cargo xtask psnr + tap/exchange scoring — H.264 rig proof at the Y ≥ 35 dB floor ([#2093](https://github.com/tatolab/streamlib/issues/2093)) ([9c373d1](https://github.com/tatolab/streamlib/commit/9c373d1f3d4511eddb08ee557116cdaddae98eca)), closes [#2085](https://github.com/tatolab/streamlib/issues/2085)
+
 ## [0.18.33](https://github.com/tatolab/streamlib/compare/v0.18.32...v0.18.33) (2026-08-31)
 
 
