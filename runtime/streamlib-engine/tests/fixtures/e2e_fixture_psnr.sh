@@ -184,7 +184,9 @@ if [ -n "$PSNR_INJECT_BUG" ]; then
 fi
 
 RIG_PID=""
+RIG_NEEDED_SIGKILL=0
 stop_rig() {
+    RIG_NEEDED_SIGKILL=0
     if [ -n "$RIG_PID" ] && kill -0 "$RIG_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does — a killed
         # rig would hide exactly the shutdown race #335 is about.
@@ -193,7 +195,13 @@ stop_rig() {
             kill -0 "$RIG_PID" 2>/dev/null || break
             sleep 0.2
         done
-        kill -9 "$RIG_PID" 2>/dev/null || true
+        # A rig still alive after 10 s of SIGTERM is the #335 shutdown race, not
+        # a slow exit. SIGKILL frees the GPU for the next arm; the caller is
+        # told, so the kill can never launder a hung teardown into a PASS.
+        if kill -0 "$RIG_PID" 2>/dev/null; then
+            RIG_NEEDED_SIGKILL=1
+            kill -9 "$RIG_PID" 2>/dev/null || true
+        fi
         wait "$RIG_PID" 2>/dev/null || true
     fi
     RIG_PID=""
@@ -272,8 +280,10 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
         sample_index=$(( sample_index + 1 ))
     done < "$arm_dir/exchanged_paths.txt"
 
-    if [ "$sample_index" -eq 0 ]; then
-        echo "[psnr] FAIL: $stem — the exchange printed no frame paths" >&2
+    if [ "$sample_index" -ne "$SAMPLES_PER_REFERENCE" ]; then
+        echo "[psnr] FAIL: $stem — copied $sample_index of $SAMPLES_PER_REFERENCE" \
+             "exchanged frames; scoring fewer samples than the run asked for would" \
+             "report a thinner gate as a full one" >&2
         cat "$exchange_log" >&2
         stop_rig
         exit 1
@@ -282,6 +292,12 @@ for reference_png in "${REFERENCE_PNGS[@]}"; do
     cat "$exchange_log"
 
     stop_rig
+    if [ "$RIG_NEEDED_SIGKILL" -eq 1 ]; then
+        echo "[psnr] FAIL: $stem — the rig did not exit on SIGTERM and needed SIGKILL." \
+             "A teardown that hangs is the #335 race class, not a slow exit." >&2
+        tail -30 "$pipeline_log" >&2
+        exit 1
+    fi
     # The control plane's port has to be free before the next arm binds it, and
     # the GPU has to release the encode/decode sessions.
     sleep 2

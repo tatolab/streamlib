@@ -147,7 +147,9 @@ if ! [[ "$ORIGINAL_PATTERN" =~ ^[0-9]+$ ]]; then
 fi
 
 RIG_PID=""
+RIG_NEEDED_SIGKILL=0
 stop_rig() {
+    RIG_NEEDED_SIGKILL=0
     if [ -n "$RIG_PID" ] && kill -0 "$RIG_PID" 2>/dev/null; then
         # SIGTERM so the graph tears down the way a real stop does — a killed
         # rig would hide exactly the shutdown race #335 is about.
@@ -156,7 +158,13 @@ stop_rig() {
             kill -0 "$RIG_PID" 2>/dev/null || break
             sleep 0.2
         done
-        kill -9 "$RIG_PID" 2>/dev/null || true
+        # A rig still alive after 10 s of SIGTERM is the #335 shutdown race, not
+        # a slow exit. SIGKILL releases the camera; the caller is told, so the
+        # kill can never launder a hung teardown into a PASS.
+        if kill -0 "$RIG_PID" 2>/dev/null; then
+            RIG_NEEDED_SIGKILL=1
+            kill -9 "$RIG_PID" 2>/dev/null || true
+        fi
         wait "$RIG_PID" 2>/dev/null || true
     fi
     RIG_PID=""
@@ -257,13 +265,21 @@ while read -r exchanged_png; do
     sample_index=$(( sample_index + 1 ))
 done < "$OUTPUT_DIR/exchanged_paths.txt"
 
-if [ "$sample_index" -eq 0 ]; then
-    echo "[vivid-color] FAIL: the exchange printed no frame paths" >&2
+if [ "$sample_index" -ne "$SAMPLE_COUNT" ]; then
+    echo "[vivid-color] FAIL: copied $sample_index of $SAMPLE_COUNT exchanged frames;" \
+         "a drift lock measured on fewer samples than the run asked for reports a" \
+         "thinner gate as a full one" >&2
     cat "$OUTPUT_DIR/exchange.log" >&2
     exit 1
 fi
 echo "[vivid-color] Captured $sample_index frames"
 stop_rig
+if [ "$RIG_NEEDED_SIGKILL" -eq 1 ]; then
+    echo "[vivid-color] FAIL: the rig did not exit on SIGTERM and needed SIGKILL." \
+         "A teardown that hangs is the #335 race class, not a slow exit." >&2
+    tail -30 "$LOG_FILE" >&2
+    exit 1
+fi
 
 # ── Measure ──────────────────────────────────────────────────────────
 MEASURE_ARGUMENTS=(
