@@ -12,7 +12,7 @@ the GPU or the engine's own device.
 
 Halftone is the trick newspapers print photographs with. Dice the picture into
 cells; measure each cell's brightness from a single sample at its centre; draw
-one dot there whose radius is that brightness. Light regions get fat dots that
+one dot there whose size is that brightness. Light regions get fat dots that
 touch their neighbours, dark ones get specks, and the eye averages the two back
 into a picture.
 
