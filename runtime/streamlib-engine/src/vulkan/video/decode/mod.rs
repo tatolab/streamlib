@@ -771,11 +771,21 @@ impl SimpleDecoder {
                 .size(total)
                 .usage(vk::BufferUsageFlags::TRANSFER_DST)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            // The CPU reads this buffer back every frame, so it must not
+            // land in write-combined memory: WC reads run at a few hundred
+            // MB/s and one 1080p RGBA frame is 8.3 MB, which turns the
+            // readback memcpy into tens of milliseconds — measured at 37 ms
+            // median (225 MB/s) on NVIDIA 595.84, 93% of the whole decode
+            // path. HOST_ACCESS_RANDOM declares the read access so VMA picks
+            // a HOST_CACHED type, the same trap
+            // `codec_utils/vulkan_bitstream_buffer_impl.rs` documents for the
+            // encoder's bitstream readback.
             let alloc_opts = vma::AllocationOptions {
                 flags: vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                 required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
+                preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
                 ..Default::default()
             };
             let (buf, alloc) = unsafe {
@@ -805,11 +815,15 @@ impl SimpleDecoder {
                 .size(total)
                 .usage(vk::BufferUsageFlags::TRANSFER_DST)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            // Same read-back constraint as `ensure_readback_staging` above:
+            // HOST_ACCESS_RANDOM + preferred HOST_CACHED, or the per-frame
+            // 8.3 MB memcpy runs at write-combined speed.
             let alloc_opts = vma::AllocationOptions {
                 flags: vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                    | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
                 required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
+                preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
                 ..Default::default()
             };
             let (buf, alloc) = unsafe {

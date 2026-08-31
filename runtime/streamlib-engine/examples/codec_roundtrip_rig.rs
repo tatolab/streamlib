@@ -30,6 +30,7 @@
 //! ```text
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
+//! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1
 //! streamlib exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
@@ -359,6 +360,11 @@ mod linux_rig {
         fixtures_directory: String,
         frames_per_reference: u32,
         control_plane_port: u16,
+        /// V4L2 node the camera arm opens. Absent: the first capture-capable
+        /// device the engine finds — which on a rig carrying both a virtual
+        /// and a real camera is whichever enumerates first, so the arm that
+        /// must run on real hardware names its node.
+        camera_device_id: Option<String>,
     }
 
     fn parse_arguments() -> Result<RoundTripRigArguments> {
@@ -368,6 +374,7 @@ mod linux_rig {
             fixtures_directory: source_defaults.fixtures_directory,
             frames_per_reference: source_defaults.frames_per_reference,
             control_plane_port: DEFAULT_CONTROL_PLANE_PORT,
+            camera_device_id: None,
         };
 
         let mut command_line = std::env::args().skip(1);
@@ -390,6 +397,7 @@ mod linux_rig {
                     }
                 }
                 "--fixtures" => arguments.fixtures_directory = next_value_for_this_flag()?,
+                "--camera" => arguments.camera_device_id = Some(next_value_for_this_flag()?),
                 "--control-plane-port" => {
                     arguments.control_plane_port = next_value_for_this_flag()?
                         .parse()
@@ -403,8 +411,8 @@ mod linux_rig {
                 }
                 unknown => {
                     return Err(Error::Runtime(format!(
-                        "unknown flag {unknown}; the rig takes --source, --fixtures, \
-                         --frames-per-reference and --control-plane-port"
+                        "unknown flag {unknown}; the rig takes --source, --camera, \
+                         --fixtures, --frames-per-reference and --control-plane-port"
                     )));
                 }
             }
@@ -428,7 +436,10 @@ mod linux_rig {
             )?,
             RoundTripSourceArm::Camera => app.add(
                 CameraSource::Processor::processor_class_import_path(),
-                serde_json::json!({}),
+                match &arguments.camera_device_id {
+                    Some(device_id) => serde_json::json!({ "device_id": device_id }),
+                    None => serde_json::json!({}),
+                },
                 Some("camera"),
             )?,
         };

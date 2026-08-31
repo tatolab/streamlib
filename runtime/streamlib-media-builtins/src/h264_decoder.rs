@@ -89,6 +89,12 @@ pub struct H264Decoder {
     /// The coded extent the minted session's parameter sets describe, learned
     /// from the first bag admitted and compared against every later one.
     session_coded_extent: Option<(u32, u32)>,
+    /// Latched by an extent renegotiation, spent at the next re-entry: only
+    /// then is the session's full reset owed. A plain gap re-enters with a
+    /// parser flush alone — the full reset rebuilds session parameters, and
+    /// that rebuild waits the whole device idle, which stalls every producer
+    /// once per gap exactly when the decoder most needs to catch up.
+    session_needs_full_reset: bool,
     frames_decoded: u64,
     /// The color the published frames carry, resolved once the stream's SPS
     /// has been parsed, and said once rather than per frame.
@@ -141,6 +147,7 @@ impl ReactiveProcessor for H264Decoder::Processor {
         self.decode_session.take();
         self.gpu_context.take();
         self.session_coded_extent = None;
+        self.session_needs_full_reset = false;
         Ok(())
     }
 
@@ -242,7 +249,8 @@ impl H264Decoder::Processor {
                     "H264Decoder: the producer renegotiated its coded extent — reconfiguring \
                      from the next sync point"
                 );
-                self.session_coded_extent = None;
+                self.session_coded_extent = Some(arriving_extent);
+                self.session_needs_full_reset = true;
                 self.sync_point_gate.break_continuity();
             }
             Some(_) => {}
@@ -251,9 +259,11 @@ impl H264Decoder::Processor {
     }
 
     /// Drop the decode state a broken stream left behind, so the sync point
-    /// about to be fed re-enters against nothing stale. A full reset, not a
-    /// discontinuity: the parameter sets themselves may have changed, and the
-    /// ones that replace them ride the sync point about to be fed.
+    /// about to be fed re-enters against nothing stale. A plain gap needs
+    /// only the parser flush — the same parameter sets ride the incoming
+    /// sync point. The full reset, whose session-parameter rebuild waits the
+    /// whole device idle, is owed only when the extent renegotiated and new
+    /// parameter sets are actually coming.
     fn reset_parser_state_before_re_entering(
         &mut self,
         encoded_frame: &EncodedVideoFrame,
@@ -262,7 +272,12 @@ impl H264Decoder::Processor {
             .decode_session
             .as_mut()
             .ok_or_else(|| Error::Runtime("H264Decoder: decoder session not initialized".into()))?;
-        session.reset();
+        if self.session_needs_full_reset {
+            session.reset();
+            self.session_needs_full_reset = false;
+        } else {
+            session.feed_discontinuity();
+        }
         self.session_coded_extent = Some((encoded_frame.width, encoded_frame.height));
 
         let stream_re_entries = self.sync_point_gate.sync_points_entered_at();
