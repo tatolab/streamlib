@@ -180,6 +180,10 @@ core-graphics = "0.24"
 # paths through the SDK (which transitively re-exports engine items).
 # Dev-dep cycles are permitted by Cargo because they don't propagate.
 streamlib = { path = "../../sdk/streamlib-sdk" }
+# The codec built-ins the `codec_roundtrip_rig` example wires into a graph.
+# Same permitted dev-dep cycle as the self-alias above: built-ins depend on
+# the SDK, which re-exports this crate.
+streamlib-media-builtins = { path = "../streamlib-media-builtins" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
@@ -199,6 +203,14 @@ harness = false
 [[bench]]
 name = "output_writer_ffi_hop"
 harness = false
+
+# The engine-owned codec round-trip rig: fixture source or camera → H.264
+# encode → H.264 decode → display. Rig-only to run (Vulkan Video queues, a
+# display server, optionally a /dev/video* device); CI compiles it so it
+# cannot rot between rig runs.
+[[example]]
+name = "codec_roundtrip_rig"
+path = "examples/codec_roundtrip_rig.rs"
 
 [[bin]]
 name = "log_emit_1000"

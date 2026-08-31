@@ -4920,6 +4920,7 @@ dependencies = [
  "streamlib-error",
  "streamlib-ipc-types",
  "streamlib-macros",
+ "streamlib-media-builtins",
  "streamlib-processor-schema",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
