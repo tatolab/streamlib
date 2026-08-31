@@ -5,18 +5,13 @@
 //! a reference frame, and the channel-mean drift lock the vivid colorimetry
 //! rig compares to its baseline.
 //!
-//! Both live here rather than in two tools because the bug-injection modes are
-//! shared, and a mode defined twice is a mode that can disagree with itself.
-//! They took ffmpeg and ImageMagick out of the scoring path: a rig failure is
-//! now never ambiguous between "the codec regressed" and "the scorer's
-//! external tool changed its defaults under us".
-//!
 //! Every conversion is BT.709 full-range, applied identically to both sides of
 //! a comparison. That is the colour the rig's fixture source declares on every
 //! frame it publishes (`ColorInfo { Bt709, Srgb, Full }`), so a score measures
 //! the codec round trip rather than a matrix disagreement between the scorer
 //! and the pipeline.
 
+use std::borrow::Cow;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -113,15 +108,17 @@ impl Rgba8Image {
     /// This is the conformance crop a scorer owes an H.265 decode: a CTU-padded
     /// stream codes 1920x1088 for a 1920x1080 picture, and the padding rows
     /// carry content nobody encoded. Scoring them would measure the padding.
-    pub fn cropped_to(&self, pixel_width: u32, pixel_height: u32) -> Result<Self> {
+    pub fn cropped_to(&self, pixel_width: u32, pixel_height: u32) -> Result<Cow<'_, Self>> {
         anyhow::ensure!(
             pixel_width <= self.pixel_width && pixel_height <= self.pixel_height,
             "cannot crop a {}x{} image up to {pixel_width}x{pixel_height}",
             self.pixel_width,
             self.pixel_height
         );
+        // The common path: only a CTU-padded decode arrives oversized, so an
+        // owning crop here would copy every scored frame for nothing.
         if (pixel_width, pixel_height) == (self.pixel_width, self.pixel_height) {
-            return Ok(self.clone());
+            return Ok(Cow::Borrowed(self));
         }
         let source_row_byte_len = (self.pixel_width as usize) * 4;
         let cropped_row_byte_len = (pixel_width as usize) * 4;
@@ -131,7 +128,11 @@ impl Rgba8Image {
             rgba_bytes
                 .extend_from_slice(&self.rgba_bytes[row_start..row_start + cropped_row_byte_len]);
         }
-        Self::from_rgba_bytes(pixel_width, pixel_height, rgba_bytes)
+        Ok(Cow::Owned(Self::from_rgba_bytes(
+            pixel_width,
+            pixel_height,
+            rgba_bytes,
+        )?))
     }
 
     /// Mean of each RGB channel over every pixel, on the `[0, 1]` scale the
@@ -169,7 +170,7 @@ impl Rgba8Image {
                     f32::from(pixel[1]),
                     f32::from(pixel[2]),
                 ]);
-            luma_plane[index] = round_to_u8(luma);
+            luma_plane[index] = round_to_eight_bit_sample(luma);
             full_resolution_blue_difference[index] = blue_difference;
             full_resolution_red_difference[index] = red_difference;
         }
@@ -194,9 +195,8 @@ impl Rgba8Image {
     /// The rig injects these to prove the gate is live: each mode must drop the
     /// Y PSNR of at least one reference below the fail floor, or the gate is
     /// passing because it measures nothing.
-    pub fn with_injected_color_regression(&self, regression: InjectedColorRegression) -> Self {
-        let mut injected = self.clone();
-        for pixel in injected.rgba_bytes.chunks_exact_mut(4) {
+    pub fn with_injected_color_regression(mut self, regression: InjectedColorRegression) -> Self {
+        for pixel in self.rgba_bytes.chunks_exact_mut(4) {
             let [red, green, blue] = match regression {
                 InjectedColorRegression::SwapRedAndBlueChannels => {
                     [pixel[2], pixel[1], pixel[0]].map(f32::from)
@@ -207,15 +207,18 @@ impl Rgba8Image {
                         f32::from(pixel[1]),
                         f32::from(pixel[2]),
                     ]);
-                    BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range(quantized(yuv))
+                    BT709_LUMA_COEFFICIENTS
+                        .yuv_to_rgb_full_range(quantized_to_eight_bit_wire_samples(yuv))
                 }
                 InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange => {
                     let [luma, blue_difference, red_difference] =
-                        quantized(BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
-                            f32::from(pixel[0]),
-                            f32::from(pixel[1]),
-                            f32::from(pixel[2]),
-                        ]));
+                        quantized_to_eight_bit_wire_samples(
+                            BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
+                                f32::from(pixel[0]),
+                                f32::from(pixel[1]),
+                                f32::from(pixel[2]),
+                            ]),
+                        );
                     BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
                         expand_limited_range_luma(luma),
                         expand_limited_range_chroma(blue_difference),
@@ -223,11 +226,11 @@ impl Rgba8Image {
                     ])
                 }
             };
-            pixel[0] = round_to_u8(red);
-            pixel[1] = round_to_u8(green);
-            pixel[2] = round_to_u8(blue);
+            pixel[0] = round_to_eight_bit_sample(red);
+            pixel[1] = round_to_eight_bit_sample(green);
+            pixel[2] = round_to_eight_bit_sample(blue);
         }
-        injected
+        self
     }
 }
 
@@ -273,8 +276,7 @@ pub struct Yuv420Planes {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlanePeakSignalToNoiseRatio {
     /// The two planes are byte-identical, so there is no noise and the ratio
-    /// is infinite. Kept distinct from a large finite value because a lossless
-    /// path and a very good lossy one are different claims.
+    /// is infinite.
     Identical,
     /// A finite ratio, in decibels.
     Decibels(f64),
@@ -402,33 +404,42 @@ impl InjectedColorRegression {
 
 /// Luma weights of one colour matrix, which is the whole difference between
 /// BT.601 and BT.709 for these conversions.
+///
+/// Green is derived, never stored: the inverse below divides by it on the
+/// assumption that the three weights sum to one, so a stored green could
+/// disagree with the pair it is built from and silently produce a wrong
+/// inverse. Same shape as the engine's own
+/// `runtime/streamlib-engine/src/core/color/matrix.rs`.
 struct LumaCoefficients {
     red: f32,
-    green: f32,
     blue: f32,
 }
 
-const BT709_LUMA_COEFFICIENTS: LumaCoefficients = LumaCoefficients {
-    red: 0.2126,
-    green: 0.7152,
-    blue: 0.0722,
-};
+impl LumaCoefficients {
+    const fn from_red_and_blue(red: f32, blue: f32) -> Self {
+        Self { red, blue }
+    }
 
-const BT601_LUMA_COEFFICIENTS: LumaCoefficients = LumaCoefficients {
-    red: 0.299,
-    green: 0.587,
-    blue: 0.114,
-};
+    fn green(&self) -> f32 {
+        1.0 - self.red - self.blue
+    }
+}
+
+const BT709_LUMA_COEFFICIENTS: LumaCoefficients =
+    LumaCoefficients::from_red_and_blue(0.2126, 0.0722);
+
+const BT601_LUMA_COEFFICIENTS: LumaCoefficients = LumaCoefficients::from_red_and_blue(0.299, 0.114);
 
 /// Where an 8-bit chroma sample sits when the difference is zero.
 const CHROMA_ZERO_LEVEL: f32 = 128.0;
 
 impl LumaCoefficients {
-    /// RGB in `[0, 255]` to full-range Y/Cb/Cr, chroma centred on 128. Not
-    /// rounded or clamped: an injection chains two of these, and quantising in
-    /// between would attribute the codec's rounding to the injected bug.
+    /// RGB in `[0, 255]` to full-range Y/Cb/Cr, chroma centred on 128.
+    ///
+    /// Unrounded and unclamped: the 4:2:0 chroma path averages a 2x2 box before
+    /// it rounds, and rounding here first would quantise twice.
     fn rgb_to_yuv_full_range(&self, [red, green, blue]: [f32; 3]) -> [f32; 3] {
-        let luma = self.red * red + self.green * green + self.blue * blue;
+        let luma = self.red * red + self.green() * green + self.blue * blue;
         [
             luma,
             (blue - luma) / (2.0 * (1.0 - self.blue)) + CHROMA_ZERO_LEVEL,
@@ -436,22 +447,21 @@ impl LumaCoefficients {
         ]
     }
 
-    /// The inverse of [`Self::rgb_to_yuv_full_range`], unclamped for the same
-    /// reason.
+    /// The inverse of [`Self::rgb_to_yuv_full_range`], unclamped to match it.
     fn yuv_to_rgb_full_range(&self, [luma, blue_difference, red_difference]: [f32; 3]) -> [f32; 3] {
         let blue_difference = blue_difference - CHROMA_ZERO_LEVEL;
         let red_difference = red_difference - CHROMA_ZERO_LEVEL;
         [
             luma + 2.0 * (1.0 - self.red) * red_difference,
-            luma - (2.0 * self.red * (1.0 - self.red) / self.green) * red_difference
-                - (2.0 * self.blue * (1.0 - self.blue) / self.green) * blue_difference,
+            luma - (2.0 * self.red * (1.0 - self.red) / self.green()) * red_difference
+                - (2.0 * self.blue * (1.0 - self.blue) / self.green()) * blue_difference,
             luma + 2.0 * (1.0 - self.blue) * blue_difference,
         ]
     }
 }
 
 /// Round to the nearest 8-bit sample, saturating at both ends.
-fn round_to_u8(sample: f32) -> u8 {
+fn round_to_eight_bit_sample(sample: f32) -> u8 {
     sample.round().clamp(0.0, EIGHT_BIT_SAMPLE_PEAK as f32) as u8
 }
 
@@ -460,8 +470,8 @@ fn round_to_u8(sample: f32) -> u8 {
 /// The injected regressions are round trips through a wire, so the intermediate
 /// has to be 8-bit: `solid_red` clips its Cr at 255 there, and a float-only
 /// chain would score a bug the pipeline could not actually produce.
-fn quantized(yuv: [f32; 3]) -> [f32; 3] {
-    yuv.map(|sample| f32::from(round_to_u8(sample)))
+fn quantized_to_eight_bit_wire_samples(yuv: [f32; 3]) -> [f32; 3] {
+    yuv.map(|sample| f32::from(round_to_eight_bit_sample(sample)))
 }
 
 /// Reinterpret a full-range luma sample as if it had been coded 16-235.
@@ -501,7 +511,7 @@ fn box_average_to_half_resolution(
                 }
             }
             chroma_plane[chroma_row * chroma_width + chroma_column] =
-                round_to_u8(total / sample_count);
+                round_to_eight_bit_sample(total / sample_count);
         }
     }
     chroma_plane
@@ -570,6 +580,7 @@ mod tests {
     ) -> PlanePeakSignalToNoiseRatio {
         let reference_planes = image.to_bt709_full_range_yuv420_planes();
         let injected_planes = image
+            .clone()
             .with_injected_color_regression(regression)
             .to_bt709_full_range_yuv420_planes();
         PlanePeakSignalToNoiseRatio::between(
@@ -577,6 +588,41 @@ mod tests {
             &reference_planes.luma_plane,
         )
         .unwrap()
+    }
+
+    /// The module's whole premise is that the scorer and the pipeline agree on
+    /// BT.709 full range. That agreement is derived here from Kr/Kb rather than
+    /// written down, so it is pinned against the same canonical numbers the
+    /// engine's own `core::color::matrix` test asserts — otherwise a drift in
+    /// either would read as a codec regression.
+    #[test]
+    fn the_derived_bt709_inverse_matches_the_engines_canonical_coefficients() {
+        // The engine pins [1.0, 0.0, 1.5748, 1.0, -0.1873, -0.4681, 1.0, 1.8556, 0.0]
+        // in `bt709_full_range_matches_canonical_coefficients`.
+        let unit_red_difference = BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
+            0.0,
+            CHROMA_ZERO_LEVEL,
+            CHROMA_ZERO_LEVEL + 1.0,
+        ]);
+        let unit_blue_difference = BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
+            0.0,
+            CHROMA_ZERO_LEVEL + 1.0,
+            CHROMA_ZERO_LEVEL,
+        ]);
+
+        for (derived, canonical, name) in [
+            (unit_red_difference[0], 1.5748, "R from Cr"),
+            (unit_red_difference[1], -0.4681, "G from Cr"),
+            (unit_blue_difference[1], -0.1873, "G from Cb"),
+            (unit_blue_difference[2], 1.8556, "B from Cb"),
+        ] {
+            assert!(
+                (derived - canonical).abs() < 1e-4,
+                "{name}: derived {derived}, canonical {canonical}"
+            );
+        }
+        assert!(unit_red_difference[2].abs() < 1e-6, "Cr does not reach B");
+        assert!(unit_blue_difference[0].abs() < 1e-6, "Cb does not reach R");
     }
 
     #[test]
@@ -647,7 +693,7 @@ mod tests {
         padded.extend(std::iter::repeat_n(0xA5u8, 8 * 2 * 4));
         let decoded = Rgba8Image::from_rgba_bytes(8, 6, padded).unwrap();
 
-        assert_eq!(decoded.cropped_to(8, 4).unwrap(), reference);
+        assert_eq!(decoded.cropped_to(8, 4).unwrap().into_owned(), reference);
         assert!(
             decoded.cropped_to(8, 8).is_err(),
             "cropping up would invent rows nobody decoded"
@@ -705,7 +751,9 @@ mod tests {
             InjectedColorRegression::Bt601EncodedDecodedAsBt709,
         ] {
             assert_eq!(
-                greyscale_ramp.with_injected_color_regression(chroma_only_mode),
+                greyscale_ramp
+                    .clone()
+                    .with_injected_color_regression(chroma_only_mode),
                 greyscale_ramp,
                 "{} is a chroma regression and a greyscale frame carries no chroma",
                 chroma_only_mode.as_command_line_value()
@@ -717,7 +765,7 @@ mod tests {
         // the vivid rig refuses `range-swap` and the gradients carry it.
         let saturated_red = solid_color_image(16, 16, [255, 0, 0]);
         assert_eq!(
-            saturated_red.with_injected_color_regression(
+            saturated_red.clone().with_injected_color_regression(
                 InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange
             ),
             saturated_red

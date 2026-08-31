@@ -4,19 +4,14 @@
 //! `cargo xtask psnr` — the codec proof's scorer.
 //!
 //! Two verbs over one set of measurements ([`crate::codec_proof_image_measurement`]):
-//! `score` compares a decoded frame set to the references that produced it,
-//! and `channel-means` is the vivid colorimetry rig's drift lock. They share a
-//! tool so the bug-injection modes are defined once — the modes are what make
-//! either gate non-vacuous, and two definitions of a mode can disagree.
+//! `score` compares a decoded frame set to the references that produced it, and
+//! `channel-means` is the vivid colorimetry rig's drift lock.
 //!
 //! Frames reach this tool as PNGs on disk, written by
-//! `streamlib exchange --channel`: the rig is tapped for bags, each sampled
-//! surface id is exchanged for that frame's exact pixels over the control
-//! plane, and the run's own graph is never altered to be observed. Nothing here
-//! touches a GPU, which is why its tests run in CI while the runs that produce
-//! its input do not.
+//! `streamlib exchange --channel`. Nothing here touches a GPU.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -28,13 +23,8 @@ use crate::codec_proof_image_measurement::{
 };
 
 /// What separates a decoded sample's reference stem from the rest of its file
-/// name: `solid_red__0.png` scores against `solid_red.png`.
-///
-/// The fixture script names the files, and this is the whole pairing contract
-/// between them. It is a name rather than a bag field because the decoded side
-/// carries nothing to pair on — `sequence_index` is an encoded-frame field and
-/// a decoded bag is an ordinary video frame — so the rig is driven once per
-/// reference and the pairing is exact by construction.
+/// name: `solid_red__0.png` scores against `solid_red.png`. The fixture script
+/// names the files, and this is the whole pairing contract between them.
 const DECODED_SAMPLE_REFERENCE_STEM_SEPARATOR: &str = "__";
 
 /// Default absolute drift a channel mean may carry from its baseline, on the
@@ -170,7 +160,7 @@ fn score_decoded_frames_against_references(
         );
     }
 
-    let mut scored: Vec<ScoredReferenceComparison> = Vec::new();
+    let mut scored_comparisons: Vec<ScoredReferenceComparison> = Vec::new();
     for decoded_path in &decoded_paths {
         let decoded_file_name = file_stem_of(decoded_path)?;
         let reference_stem = decoded_file_name
@@ -192,7 +182,7 @@ fn score_decoded_frames_against_references(
         if let Some(regression) = inject {
             decoded = decoded.with_injected_color_regression(regression);
         }
-        scored.push(score_one_pair(
+        scored_comparisons.push(score_one_pair(
             reference_stem,
             decoded_file_name,
             &decoded,
@@ -200,42 +190,31 @@ fn score_decoded_frames_against_references(
         )?);
     }
 
-    let sampled_reference_stems: std::collections::BTreeSet<&str> = scored
+    let sampled_reference_stems: std::collections::BTreeSet<&str> = scored_comparisons
         .iter()
         .map(|comparison| comparison.reference_stem.as_str())
         .collect();
-    let unsampled_reference_stems: Vec<&String> = references_by_stem
+    let unsampled_reference_stems: Vec<&str> = references_by_stem
         .keys()
-        .filter(|stem| !sampled_reference_stems.contains(stem.as_str()))
+        .map(String::as_str)
+        .filter(|stem| !sampled_reference_stems.contains(stem))
         .collect();
 
-    report_scored_comparisons(&scored, &unsampled_reference_stems, report_path)?;
+    report_scored_comparisons(&scored_comparisons, &unsampled_reference_stems, report_path)?;
 
-    let failed: Vec<&str> = scored
+    let failed_sample_names: Vec<&str> = scored_comparisons
         .iter()
         .filter(|comparison| comparison.verdict == ReferenceComparisonVerdict::Fail)
         .map(|comparison| comparison.decoded_file_name.as_str())
         .collect();
     anyhow::ensure!(
-        failed.is_empty() && unsampled_reference_stems.is_empty(),
+        failed_sample_names.is_empty() && unsampled_reference_stems.is_empty(),
         "PSNR gate FAILED — {} sample(s) below {LUMA_PSNR_WARN_FLOOR_DB} dB Y ({}), \
          {} reference(s) never sampled ({})",
-        failed.len(),
-        if failed.is_empty() {
-            "none".to_string()
-        } else {
-            failed.join(", ")
-        },
+        failed_sample_names.len(),
+        comma_joined_or_none(&failed_sample_names),
         unsampled_reference_stems.len(),
-        if unsampled_reference_stems.is_empty() {
-            "none".to_string()
-        } else {
-            unsampled_reference_stems
-                .iter()
-                .map(|stem| stem.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        }
+        comma_joined_or_none(&unsampled_reference_stems)
     );
     tracing::info!("[psnr] RESULT: PASS");
     Ok(())
@@ -285,9 +264,19 @@ fn score_one_pair(
     })
 }
 
+/// Names for a failure message, or the word that says there were none — so an
+/// empty list never reads as an omission.
+fn comma_joined_or_none(names: &[&str]) -> String {
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
 fn report_scored_comparisons(
-    scored: &[ScoredReferenceComparison],
-    unsampled_reference_stems: &[&String],
+    scored_comparisons: &[ScoredReferenceComparison],
+    unsampled_reference_stems: &[&str],
     report_path: Option<&Path>,
 ) -> Result<()> {
     tracing::info!("══════════════════════════════════════════════════════════════════");
@@ -307,7 +296,7 @@ fn report_scored_comparisons(
     );
 
     let mut report_tsv = String::from("reference\tdecoded_sample\ty_db\tu_db\tv_db\tverdict\n");
-    for comparison in scored {
+    for comparison in scored_comparisons {
         tracing::info!(
             "  {:<28}  {:>8}  {:>8}  {:>8}   {}",
             comparison.decoded_file_name,
@@ -316,15 +305,16 @@ fn report_scored_comparisons(
             comparison.red_difference_chroma_ratio.as_report_column(),
             comparison.verdict.as_report_column()
         );
-        report_tsv.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\n",
+        writeln!(
+            report_tsv,
+            "{}\t{}\t{}\t{}\t{}\t{}",
             comparison.reference_stem,
             comparison.decoded_file_name,
             comparison.luma_ratio.as_report_column(),
             comparison.blue_difference_chroma_ratio.as_report_column(),
             comparison.red_difference_chroma_ratio.as_report_column(),
             comparison.verdict.as_report_column()
-        ));
+        )?;
     }
     for unsampled_reference_stem in unsampled_reference_stems {
         tracing::error!(
@@ -335,9 +325,10 @@ fn report_scored_comparisons(
             "n/a",
             "NO-SAMPLE"
         );
-        report_tsv.push_str(&format!(
-            "{unsampled_reference_stem}\t-\tn/a\tn/a\tn/a\tNO-SAMPLE\n"
-        ));
+        writeln!(
+            report_tsv,
+            "{unsampled_reference_stem}\t-\tn/a\tn/a\tn/a\tNO-SAMPLE"
+        )?;
     }
     tracing::info!("══════════════════════════════════════════════════════════════════");
 
@@ -374,13 +365,14 @@ fn measure_channel_means(
             image = image.with_injected_color_regression(regression);
         }
         let means = image.rgb_channel_means();
-        report_tsv.push_str(&format!(
-            "{}\t{:.6}\t{:.6}\t{:.6}\n",
+        writeln!(
+            report_tsv,
+            "{}\t{:.6}\t{:.6}\t{:.6}",
             image_path.file_name().unwrap_or_default().to_string_lossy(),
             means.red,
             means.green,
             means.blue
-        ));
+        )?;
         per_frame_means.push(means);
     }
 
@@ -448,16 +440,12 @@ fn read_channel_mean_baseline(baseline_path: &Path) -> Result<RgbChannelMeans> {
         let Some((channel_name, mean)) = line.split_once('\t') else {
             continue;
         };
+        let channel_name = channel_name.trim();
+        if !matches!(channel_name, "r" | "g" | "b") {
+            continue;
+        }
         if let Ok(mean) = mean.trim().parse::<f64>() {
-            means_by_channel_name.insert(
-                match channel_name.trim() {
-                    "r" => "r",
-                    "g" => "g",
-                    "b" => "b",
-                    _ => continue,
-                },
-                mean,
-            );
+            means_by_channel_name.insert(channel_name, mean);
         }
     }
 
@@ -491,14 +479,15 @@ fn write_channel_mean_baseline(
          # Captured with: BASELINE_CAPTURE=1 e2e_fixture_psnr_vivid.sh <out> <codec>\n",
     );
     for baseline_note in baseline_notes {
-        baseline_tsv.push_str(&format!("# {baseline_note}\n"));
+        writeln!(baseline_tsv, "# {baseline_note}")?;
     }
-    baseline_tsv.push_str(&format!(
+    writeln!(
+        baseline_tsv,
         "# Default verification tolerance is ±{DEFAULT_CHANNEL_MEAN_DRIFT_TOLERANCE} absolute on \
-         the [0,1] scale.\nchannel\tmean\n"
-    ));
+         the [0,1] scale.\nchannel\tmean"
+    )?;
     for (channel_name, mean) in measured.by_baseline_channel_name() {
-        baseline_tsv.push_str(&format!("{channel_name}\t{mean:.4}\n"));
+        writeln!(baseline_tsv, "{channel_name}\t{mean:.4}")?;
     }
 
     write_file_creating_parents(baseline_path, &baseline_tsv)?;
