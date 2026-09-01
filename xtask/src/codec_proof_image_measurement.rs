@@ -27,20 +27,15 @@ pub const LUMA_PSNR_WARN_FLOOR_DB: f64 = 30.0;
 /// Chroma-plane PSNR below which a round trip is a regression, in dB. One floor
 /// for both planes and every reference, and no warn band above it.
 ///
-/// Derived from six cold rig runs (three per codec, 108 samples, #2094): the
-/// lowest finite clean chroma figure in the set is `complex_pattern` at 32.23 dB,
-/// reproducing to within 0.02 dB run-to-run and 0.13 dB across codecs. A warn
-/// band would be dead space — unlike luma, a clean chroma figure here is not a
-/// quality continuum but a constant of the colour-conversion cascade, so there
-/// is no legitimately-degraded region to warn about.
+/// Derived from six cold rig runs (three per codec, 108 samples): the lowest
+/// finite clean chroma figure in the set is `complex_pattern` at 32.23 dB,
+/// reproducing to 0.02 dB run-to-run and 0.13 dB across codecs. A warn band
+/// would be dead space, because a clean chroma figure here is not a quality
+/// continuum like luma but a constant of the colour-conversion cascade.
 ///
-/// What this floor gates is the round trip's colour path, not codec quality: a
-/// lossless codec pushed through the engine's own `rgb_to_nv12` and
-/// `nv12_to_rgb` scores `complex_pattern` within 0.2 dB of a real one, so the
-/// codec's own chroma contribution is smaller than the H.264/H.265 difference.
-/// Every regression class it is here to catch — a plane-order or plane-offset
-/// slip, a subsampling-filter change, a Cb/Cr transposition — reaches the
-/// decoded RGB and so reaches this measurement.
+/// Which is also the caveat: these are round-trip colour figures, not
+/// codec-quality ones. A lossless codec through the same two converters scores
+/// within 0.2 dB of a real one.
 pub const CHROMA_PSNR_PASS_FLOOR_DB: f64 = 30.0;
 
 /// The largest value an 8-bit sample can take, which is the peak the ratio is
@@ -220,24 +215,14 @@ impl Rgba8Image {
                 InjectedColorRegression::SwapRedAndBlueChannels => {
                     [pixel[2], pixel[1], pixel[0]].map(f32::from)
                 }
-                InjectedColorRegression::Bt601EncodedDecodedAsBt709 => {
-                    let yuv = BT601_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
-                        f32::from(pixel[0]),
-                        f32::from(pixel[1]),
-                        f32::from(pixel[2]),
-                    ]);
-                    BT709_LUMA_COEFFICIENTS
-                        .yuv_to_rgb_full_range(quantized_to_eight_bit_wire_samples(yuv))
-                }
+                InjectedColorRegression::Bt601EncodedDecodedAsBt709 => BT709_LUMA_COEFFICIENTS
+                    .yuv_to_rgb_full_range(quantized_wire_yuv_of_pixel(
+                        &BT601_LUMA_COEFFICIENTS,
+                        pixel,
+                    )),
                 InjectedColorRegression::ChromaPlanesTransposed => {
                     let [luma, blue_difference, red_difference] =
-                        quantized_to_eight_bit_wire_samples(
-                            BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
-                                f32::from(pixel[0]),
-                                f32::from(pixel[1]),
-                                f32::from(pixel[2]),
-                            ]),
-                        );
+                        quantized_wire_yuv_of_pixel(&BT709_LUMA_COEFFICIENTS, pixel);
                     BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
                         luma,
                         red_difference,
@@ -246,13 +231,7 @@ impl Rgba8Image {
                 }
                 InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange => {
                     let [luma, blue_difference, red_difference] =
-                        quantized_to_eight_bit_wire_samples(
-                            BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
-                                f32::from(pixel[0]),
-                                f32::from(pixel[1]),
-                                f32::from(pixel[2]),
-                            ]),
-                        );
+                        quantized_wire_yuv_of_pixel(&BT709_LUMA_COEFFICIENTS, pixel);
                     BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
                         expand_limited_range_luma(luma),
                         expand_limited_range_chroma(blue_difference),
@@ -575,6 +554,18 @@ fn quantized_to_eight_bit_wire_samples(yuv: [f32; 3]) -> [f32; 3] {
     yuv.map(|sample| f32::from(round_to_eight_bit_sample(sample)))
 }
 
+/// One RGBA pixel's colour taken through `encoding_coefficients` to the 8-bit
+/// YUV a bitstream would carry it as. The shared half of every injection mode
+/// that models a round trip through a wire; each mode differs only in what it
+/// does with the triple afterwards.
+fn quantized_wire_yuv_of_pixel(encoding_coefficients: &LumaCoefficients, pixel: &[u8]) -> [f32; 3] {
+    quantized_to_eight_bit_wire_samples(encoding_coefficients.rgb_to_yuv_full_range([
+        f32::from(pixel[0]),
+        f32::from(pixel[1]),
+        f32::from(pixel[2]),
+    ]))
+}
+
 /// Reinterpret a full-range luma sample as if it had been coded 16-235.
 fn expand_limited_range_luma(luma: f32) -> f32 {
     (luma - 16.0) * (255.0 / 219.0)
@@ -687,21 +678,38 @@ mod tests {
         Yuv420PlanePeakSignalToNoiseRatios::between(&injected_planes, &reference_planes).unwrap()
     }
 
-    /// Ratios of a frame that round-tripped perfectly except on the planes the
-    /// caller names, so a classification test can move one plane at a time.
-    fn ratios(
-        luma_db: Option<f64>,
-        blue_db: Option<f64>,
-        red_db: Option<f64>,
-    ) -> Yuv420PlanePeakSignalToNoiseRatios {
-        let ratio = |decibels: Option<f64>| match decibels {
-            Some(decibels) => PlanePeakSignalToNoiseRatio::Decibels(decibels),
-            None => PlanePeakSignalToNoiseRatio::Identical,
-        };
+    /// A frame that round-tripped byte-identically on every plane. The base a
+    /// classification test spreads to move one named plane at a time.
+    fn perfectly_round_tripped_plane_ratios() -> Yuv420PlanePeakSignalToNoiseRatios {
         Yuv420PlanePeakSignalToNoiseRatios {
-            luma_ratio: ratio(luma_db),
-            blue_difference_chroma_ratio: ratio(blue_db),
-            red_difference_chroma_ratio: ratio(red_db),
+            luma_ratio: PlanePeakSignalToNoiseRatio::Identical,
+            blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::Identical,
+            red_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::Identical,
+        }
+    }
+
+    fn plane_ratios_with_luma_at(decibels: f64) -> Yuv420PlanePeakSignalToNoiseRatios {
+        Yuv420PlanePeakSignalToNoiseRatios {
+            luma_ratio: PlanePeakSignalToNoiseRatio::Decibels(decibels),
+            ..perfectly_round_tripped_plane_ratios()
+        }
+    }
+
+    fn plane_ratios_with_blue_difference_chroma_at(
+        decibels: f64,
+    ) -> Yuv420PlanePeakSignalToNoiseRatios {
+        Yuv420PlanePeakSignalToNoiseRatios {
+            blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::Decibels(decibels),
+            ..perfectly_round_tripped_plane_ratios()
+        }
+    }
+
+    fn plane_ratios_with_red_difference_chroma_at(
+        decibels: f64,
+    ) -> Yuv420PlanePeakSignalToNoiseRatios {
+        Yuv420PlanePeakSignalToNoiseRatios {
+            red_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::Decibels(decibels),
+            ..perfectly_round_tripped_plane_ratios()
         }
     }
 
@@ -773,45 +781,36 @@ mod tests {
     #[test]
     fn the_verdict_reads_the_decided_floors_at_their_boundaries() {
         use ReferenceComparisonVerdict::{Fail, Pass, Warn};
-        for (plane_ratios, expected, what) in [
-            (ratios(None, None, None), Pass, "a perfect round trip"),
+        for (plane_ratios, expected) in [
+            (perfectly_round_tripped_plane_ratios(), Pass),
+            (plane_ratios_with_luma_at(LUMA_PSNR_PASS_FLOOR_DB), Pass),
             (
-                ratios(Some(LUMA_PSNR_PASS_FLOOR_DB), None, None),
-                Pass,
-                "luma exactly at its pass floor",
-            ),
-            (
-                ratios(Some(LUMA_PSNR_PASS_FLOOR_DB - 0.01), None, None),
+                plane_ratios_with_luma_at(LUMA_PSNR_PASS_FLOOR_DB - 0.01),
                 Warn,
-                "luma a hundredth under its pass floor",
             ),
+            (plane_ratios_with_luma_at(LUMA_PSNR_WARN_FLOOR_DB), Warn),
             (
-                ratios(Some(LUMA_PSNR_WARN_FLOOR_DB), None, None),
-                Warn,
-                "luma exactly at its warn floor",
-            ),
-            (
-                ratios(Some(LUMA_PSNR_WARN_FLOOR_DB - 0.01), None, None),
+                plane_ratios_with_luma_at(LUMA_PSNR_WARN_FLOOR_DB - 0.01),
                 Fail,
-                "luma a hundredth under its warn floor",
             ),
             (
-                ratios(None, Some(CHROMA_PSNR_PASS_FLOOR_DB), None),
+                plane_ratios_with_blue_difference_chroma_at(CHROMA_PSNR_PASS_FLOOR_DB),
                 Pass,
-                "Cb exactly at the chroma floor",
             ),
             (
-                ratios(None, Some(CHROMA_PSNR_PASS_FLOOR_DB - 0.01), None),
+                plane_ratios_with_blue_difference_chroma_at(CHROMA_PSNR_PASS_FLOOR_DB - 0.01),
                 Fail,
-                "Cb a hundredth under the chroma floor",
             ),
             (
-                ratios(None, None, Some(CHROMA_PSNR_PASS_FLOOR_DB - 0.01)),
+                plane_ratios_with_red_difference_chroma_at(CHROMA_PSNR_PASS_FLOOR_DB - 0.01),
                 Fail,
-                "Cr a hundredth under the chroma floor",
             ),
         ] {
-            assert_eq!(plane_ratios.verdict(), expected, "{what} classified wrong");
+            assert_eq!(
+                plane_ratios.verdict(),
+                expected,
+                "{plane_ratios:?} classified wrong"
+            );
         }
     }
 
@@ -820,20 +819,27 @@ mod tests {
     #[test]
     fn a_chroma_plane_under_its_floor_fails_a_frame_whose_luma_passes_comfortably() {
         assert_eq!(
-            ratios(Some(48.0), None, Some(24.0)).verdict(),
+            Yuv420PlanePeakSignalToNoiseRatios {
+                luma_ratio: PlanePeakSignalToNoiseRatio::Decibels(48.0),
+                ..plane_ratios_with_red_difference_chroma_at(24.0)
+            }
+            .verdict(),
             ReferenceComparisonVerdict::Fail,
             "a Cr plane 24 dB down is a regression however clean Y is"
         );
-        // And the inverse, so the floor cannot be satisfied by averaging the
-        // two chroma planes together: one healthy plane does not cover for the
-        // other.
+        // The floor cannot be satisfied by averaging the two chroma planes
+        // together: one healthy plane does not cover for the other.
         assert_eq!(
-            ratios(None, Some(60.0), Some(24.0)).verdict(),
+            Yuv420PlanePeakSignalToNoiseRatios {
+                blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::Decibels(60.0),
+                ..plane_ratios_with_red_difference_chroma_at(24.0)
+            }
+            .verdict(),
             ReferenceComparisonVerdict::Fail
         );
         // Chroma has no warn band, so a chroma-clean frame keeps luma's.
         assert_eq!(
-            ratios(Some(32.0), Some(40.0), Some(40.0)).verdict(),
+            plane_ratios_with_luma_at(32.0).verdict(),
             ReferenceComparisonVerdict::Warn
         );
     }
@@ -909,10 +915,6 @@ mod tests {
         );
     }
 
-    /// The regression the luma gate cannot see, and the reason the chroma floor
-    /// exists. Transposing Cb and Cr leaves Y untouched on the wire, so on a
-    /// saturated primary the frame keeps a comfortably-passing luma ratio while
-    /// both chroma planes collapse.
     #[test]
     fn a_chroma_transposition_is_caught_by_chroma_where_the_luma_gate_passes_it() {
         let plane_ratios = plane_ratios_against_itself_after_injecting(
@@ -966,18 +968,10 @@ mod tests {
         );
     }
 
-    /// The whole non-vacuity claim, on the bytes that actually ship: each mode
-    /// is run against a perfect round trip of the checked-in reference set and
-    /// must trip *exactly* the references whose content class carries it.
-    ///
-    /// An exact set rather than "at least one" because both directions are
-    /// failures. A mode that trips nothing passes a run carrying that
-    /// regression; a mode that trips everything would gate on the injection
-    /// itself and could hide a real chroma bug behind a guaranteed failure.
     /// The checked-in reference set, by stem, in sorted order. Read as a whole
-    /// because every expectation below is tuned to the content classes the set
-    /// carries, so a changed set has to be re-measured rather than have a test
-    /// relaxed around it.
+    /// because each caller's expectations are tuned to the content classes the
+    /// set carries, so a changed set has to be re-measured rather than have a
+    /// test relaxed around it.
     fn sorted_checked_in_references() -> Vec<(String, Rgba8Image)> {
         let mut reference_paths: Vec<std::path::PathBuf> =
             std::fs::read_dir(std::path::Path::new(CHECKED_IN_REFERENCE_DIRECTORY))
@@ -1006,6 +1000,14 @@ mod tests {
             .collect()
     }
 
+    /// The whole non-vacuity claim, on the bytes that actually ship: each mode
+    /// is run against a perfect round trip of the checked-in reference set and
+    /// must trip *exactly* the references whose content class carries it.
+    ///
+    /// An exact set rather than "at least one" because both directions are
+    /// failures. A mode that trips nothing passes a run carrying that
+    /// regression; a mode that trips everything would gate on the injection
+    /// itself and could hide a real chroma bug behind a guaranteed failure.
     #[test]
     fn every_injection_mode_trips_exactly_the_references_its_content_class_carries() {
         // Read once: the same reference is scored against every injection.

@@ -123,7 +123,6 @@ struct ScoredReferenceComparison {
     reference_stem: String,
     decoded_file_name: String,
     plane_ratios: Yuv420PlanePeakSignalToNoiseRatios,
-    verdict: ReferenceComparisonVerdict,
 }
 
 fn score_decoded_frames_against_references(
@@ -204,7 +203,7 @@ fn score_decoded_frames_against_references(
 
     let failed_sample_names: Vec<&str> = scored_comparisons
         .iter()
-        .filter(|comparison| comparison.verdict == ReferenceComparisonVerdict::Fail)
+        .filter(|comparison| comparison.plane_ratios.verdict() == ReferenceComparisonVerdict::Fail)
         .map(|comparison| comparison.decoded_file_name.as_str())
         .collect();
     anyhow::ensure!(
@@ -250,7 +249,6 @@ fn score_one_pair(
         reference_stem,
         decoded_file_name,
         plane_ratios,
-        verdict: plane_ratios.verdict(),
     })
 }
 
@@ -288,13 +286,14 @@ fn report_scored_comparisons(
     let mut report_tsv = String::from("reference\tdecoded_sample\ty_db\tu_db\tv_db\tverdict\n");
     for comparison in scored_comparisons {
         let plane_ratios = comparison.plane_ratios;
+        let verdict = plane_ratios.verdict();
         tracing::info!(
             "  {:<28}  {:>8}  {:>8}  {:>8}   {}",
             comparison.decoded_file_name,
             plane_ratios.luma_ratio.as_report_column(),
             plane_ratios.blue_difference_chroma_ratio.as_report_column(),
             plane_ratios.red_difference_chroma_ratio.as_report_column(),
-            comparison.verdict.as_report_column()
+            verdict.as_report_column()
         );
         writeln!(
             report_tsv,
@@ -304,7 +303,7 @@ fn report_scored_comparisons(
             plane_ratios.luma_ratio.as_report_column(),
             plane_ratios.blue_difference_chroma_ratio.as_report_column(),
             plane_ratios.red_difference_chroma_ratio.as_report_column(),
-            comparison.verdict.as_report_column()
+            verdict.as_report_column()
         )?;
     }
     for unsampled_reference_stem in unsampled_reference_stems {
