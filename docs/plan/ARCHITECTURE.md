@@ -634,7 +634,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ python-codec-block-api)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
