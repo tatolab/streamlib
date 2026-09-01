@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.37](https://github.com/tatolab/streamlib/compare/v0.18.36...v0.18.37) (2026-09-01)
+
+
+### Bug Fixes
+
+* **engine:** reconstruct chroma at the siting the bitstream implies ([#2103](https://github.com/tatolab/streamlib/issues/2103)) ([8448990](https://github.com/tatolab/streamlib/commit/8448990ffa28154e6a41e0d73b5a7c87b3732951)), closes [#2100](https://github.com/tatolab/streamlib/issues/2100)
+
 ## [0.18.36](https://github.com/tatolab/streamlib/compare/v0.18.35...v0.18.36) (2026-09-01)
 
 
