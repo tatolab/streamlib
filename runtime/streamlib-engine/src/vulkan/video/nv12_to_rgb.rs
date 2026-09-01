@@ -40,6 +40,22 @@ const BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_image(1),
 ];
 
+/// Horizontal siting the hardware reconstructs 4:2:0 chroma at.
+///
+/// Bitstream contract: H.264 §E.2.1 / H.265 §E.3.1 specify that an absent
+/// `chroma_loc_info_present_flag` is inferred as `chroma_sample_loc_type` 0 —
+/// chroma co-sited with the even luma column horizontally, midpoint vertically.
+/// Type 0 is also the MPEG-2/H.264/H.265 default a third-party stream carries when
+/// it signals nothing. `rgb_to_nv12.comp` downsamples to the same siting, and the
+/// tree's own encoder never sets the flag, so both our streams and the common
+/// third-party case are type 0. Reconstructing at `MIDPOINT` instead places chroma
+/// half a luma sample to the right of where the bitstream puts it.
+const RECONSTRUCTED_X_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::COSITED_EVEN;
+
+/// Vertical siting the hardware reconstructs 4:2:0 chroma at — `chroma_sample_loc_type`
+/// 0 is midpoint on this axis, which is what `rgb_to_nv12.comp` downsamples to.
+const RECONSTRUCTED_Y_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::MIDPOINT;
+
 /// Push constants passed to the compute shader.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -128,8 +144,8 @@ impl Nv12ToRgbConverter {
                         b: vk::ComponentSwizzle::IDENTITY,
                         a: vk::ComponentSwizzle::IDENTITY,
                     })
-                    .x_chroma_offset(vk::ChromaLocation::MIDPOINT)
-                    .y_chroma_offset(vk::ChromaLocation::MIDPOINT)
+                    .x_chroma_offset(RECONSTRUCTED_X_CHROMA_OFFSET)
+                    .y_chroma_offset(RECONSTRUCTED_Y_CHROMA_OFFSET)
                     .chroma_filter(vk::Filter::LINEAR)
                     .force_explicit_reconstruction(false),
                 None,
@@ -506,6 +522,44 @@ mod tests {
             SHADER_SPIRV[3],
         ]);
         assert_eq!(magic, 0x07230203, "Invalid SPIR-V magic number");
+    }
+
+    #[test]
+    fn chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies() {
+        use crate::vulkan::video::vk_video_encoder::vk_encoder_config::EncoderConfig;
+
+        // The encode side names a siting only by omission: H.264 §E.2.1 / H.265
+        // §E.3.1 specify an absent `chroma_loc_info_present_flag` as inferred
+        // `chroma_sample_loc_type` 0.
+        let encoder_defaults = EncoderConfig::default();
+        assert!(
+            !encoder_defaults.chroma_loc_info_present_flag,
+            "the encoder signals no chroma_loc_info, so decoders infer type 0"
+        );
+        assert_eq!(
+            encoder_defaults.chroma_sample_loc_type, 0,
+            "the unsignalled type must agree with the type decoders infer"
+        );
+
+        // Figure E-1: type 0 is left-sited horizontally and midpoint vertically;
+        // type 1 is midpoint on both axes.
+        let (bitstream_x, bitstream_y) = match encoder_defaults.chroma_sample_loc_type {
+            0 => (vk::ChromaLocation::COSITED_EVEN, vk::ChromaLocation::MIDPOINT),
+            1 => (vk::ChromaLocation::MIDPOINT, vk::ChromaLocation::MIDPOINT),
+            other => panic!(
+                "chroma_sample_loc_type {other} names a field siting this progressive \
+                 4:2:0 path has no reconstruction for"
+            ),
+        };
+
+        assert_eq!(
+            RECONSTRUCTED_X_CHROMA_OFFSET, bitstream_x,
+            "reconstructing at the wrong horizontal siting shifts chroma half a luma sample"
+        );
+        assert_eq!(
+            RECONSTRUCTED_Y_CHROMA_OFFSET, bitstream_y,
+            "reconstructing at the wrong vertical siting shifts chroma half a luma line"
+        );
     }
 
     #[test]

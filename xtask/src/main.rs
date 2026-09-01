@@ -434,6 +434,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::port_rendering_tests::a_settled_match_device_port_renders_the_five_values_its_device_gave",
                 "core::json_schema::port_rendering_tests::an_unsettled_match_device_port_still_renders_the_sentinel",
                 "core::json_schema::port_rendering_tests::the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own",
+                // The chroma-siting lock: the reconstruction offset against
+                // the chroma_sample_loc_type the encoder leaves unsignalled.
+                "vulkan::video::nv12_to_rgb::tests::chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies",
                 "vulkan::video::decode::tests::annex_b_framed_parameter_sets_open_a_decodable_stream",
                 "vulkan::video::decode::tests::either_start_code_length_frames_parameter_sets_the_reader_accepts",
                 "vulkan::video::decode::tests::parameter_sets_carrying_no_start_code_are_refused_rather_than_silently_dropped",

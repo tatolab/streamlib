@@ -193,6 +193,12 @@ jobs:
           # Named one by one rather than by module prefix: a prefix would
           # enrol whatever that module holds next, which is how a device test
           # joins this list without anyone deciding to add it.
+          # The chroma-siting entry ties the two ends of the colour path
+          # together. The decode path reconstructs 4:2:0 chroma at a siting the
+          # bitstream only ever implies — H.264 §E.2.1 / H.265 §E.3.1 infer
+          # `chroma_sample_loc_type` 0 from an absent flag, which is what this
+          # encoder emits — and nothing else in CI notices when the two drift
+          # apart. Pure constants here; the dB that drift costs is rig-measured.
           # The audio window contract's read-side stage. The only gate it
           # has: the stage's exactness, its overlap, the flush that resets the
           # resampler's filter state, its refusals, and the readiness floor
@@ -324,6 +330,7 @@ jobs:
             core::json_schema::port_rendering_tests::a_settled_match_device_port_renders_the_five_values_its_device_gave \
             core::json_schema::port_rendering_tests::an_unsettled_match_device_port_still_renders_the_sentinel \
             core::json_schema::port_rendering_tests::the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own \
+            vulkan::video::nv12_to_rgb::tests::chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies \
             vulkan::video::decode::tests::annex_b_framed_parameter_sets_open_a_decodable_stream \
             vulkan::video::decode::tests::either_start_code_length_frames_parameter_sets_the_reader_accepts \
             vulkan::video::decode::tests::parameter_sets_carrying_no_start_code_are_refused_rather_than_silently_dropped \
