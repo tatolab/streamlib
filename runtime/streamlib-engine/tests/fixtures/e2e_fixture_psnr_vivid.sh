@@ -60,9 +60,13 @@
 #                         the gate to be non-vacuous)
 #   BASELINE_CAPTURE   — set to 1 to overwrite the checked-in baseline TSV
 #                         instead of comparing
-#   INJECT_BUG         — bt601-bt709 | swap-channels (the matrix / channel-swap
-#                         modes from the main rig; range-swap is rejected here
-#                         for the reason above)
+#   INJECT_BUG         — bt601-bt709 | swap-channels | swap-chroma (the matrix,
+#                         channel-swap and Cb<->Cr modes from the main rig;
+#                         range-swap is rejected here for the reason above).
+#                         swap-chroma suits this rig well: transposing the
+#                         difference planes turns a saturated primary into
+#                         another one, which is the largest drift a channel
+#                         mean can carry.
 #
 # Exit codes: 0 = pass, 1 = fail, 77 = skip.
 
