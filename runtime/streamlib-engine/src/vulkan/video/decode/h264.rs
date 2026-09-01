@@ -13,6 +13,9 @@ use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
 };
 use crate::vulkan::video::video_context::VideoError;
 
+use super::decoded_picture_display_window::{
+    H264FrameCroppingSyntax, SpsCropOffsets, h264_frame_cropping_window,
+};
 use super::types::*;
 use super::{PendingFrame, SimpleDecoder};
 
@@ -42,27 +45,26 @@ impl SimpleDecoder {
 
         // Extract dimensions from parsed SPS
         let frame_mbs_only = sps.flags.frame_mbs_only_flag;
-        let mut width = (sps.pic_width_in_mbs_minus1 + 1) as u32 * 16;
-        let mut height = (if frame_mbs_only { 1 } else { 2 })
+        let width = (sps.pic_width_in_mbs_minus1 + 1) as u32 * 16;
+        let height = (if frame_mbs_only { 1 } else { 2 })
             * (sps.pic_height_in_map_units_minus1 + 1) as u32
             * 16;
-
-        // Apply frame cropping
-        if sps.flags.frame_cropping_flag {
-            let crop_unit_x: u32 = 2;
-            let crop_unit_y: u32 = 2 * if frame_mbs_only { 1 } else { 2 };
-            width -= crop_unit_x
-                * (sps.frame_crop_left_offset as u32 + sps.frame_crop_right_offset as u32);
-            height -= crop_unit_y
-                * (sps.frame_crop_top_offset as u32 + sps.frame_crop_bottom_offset as u32);
-        }
-
-        // Set as active SPS
-        parser.sps = Some(sps.clone());
-
-        self.cached_sps_nalu = Some(sps_nalu.to_vec());
-        self.sps_width = width;
-        self.sps_height = height;
+        let display_window = h264_frame_cropping_window(
+            width,
+            height,
+            H264FrameCroppingSyntax {
+                chroma_format_idc: sps.chroma_format_idc as u8,
+                separate_colour_plane_flag: sps.flags.separate_colour_plane_flag,
+                frame_mbs_only_flag: frame_mbs_only,
+                frame_cropping_flag: sps.flags.frame_cropping_flag,
+                offsets: SpsCropOffsets {
+                    left: sps.frame_crop_left_offset as u32,
+                    right: sps.frame_crop_right_offset as u32,
+                    top: sps.frame_crop_top_offset as u32,
+                    bottom: sps.frame_crop_bottom_offset as u32,
+                },
+            },
+        );
 
         debug!(width, height, sps_id, profile_idc = sps.profile_idc,
               level_idc = ?sps.level_idc,
@@ -71,6 +73,13 @@ impl SimpleDecoder {
               log2_max_frame_num_m4 = sps.log2_max_frame_num_minus4,
               chroma_format_idc = sps.chroma_format_idc,
               "H.264 SPS parsed");
+
+        // Set as active SPS. The `parser` borrow ends here, which is what
+        // lets the geometry below take `&mut self`.
+        parser.sps = Some(sps.clone());
+
+        self.cached_sps_nalu = Some(sps_nalu.to_vec());
+        self.adopt_parsed_sps_geometry(width, height, display_window);
 
         // Don't configure yet — wait for PPS to also be available.
         // Session will be configured in handle_pps or handle_slice.
@@ -196,7 +205,8 @@ impl SimpleDecoder {
         }
 
         // Auto-configure session now that both SPS and PPS are available
-        if !self.session_configured && self.sps_width > 0 && self.sps_height > 0 {
+        if !self.session_configured && self.coded_picture_width > 0 && self.coded_picture_height > 0
+        {
             if let Some(ref parser) = self.h264_parser {
                 if parser.sps.is_some() && parser.ppss.iter().any(|p| p.is_some()) {
                     self.configure_session()?;
@@ -465,8 +475,9 @@ impl SimpleDecoder {
 
         // Build output: skip inline NV12 staging copy when RGBA converter is active
         // (the DPB slot stays in VIDEO_DECODE_DPB_KHR for the converter to sample)
-        let width = self.sps_width;
-        let height = self.sps_height;
+        let width = self.coded_picture_width;
+        let height = self.coded_picture_height;
+        let display_window = self.decoded_picture_display_window_or_whole_picture();
 
         let mut output = if self.nv12_converter.is_some() {
             DecodedFrame {
@@ -531,8 +542,9 @@ impl SimpleDecoder {
 
         // Store as pending frame — staging buffer has data after sync decode
         self.pending_frame = Some(PendingFrame {
-            width,
-            height,
+            coded_width: width,
+            coded_height: height,
+            display_window,
             decode_order: self.frame_counter,
             poc: poc[0],
             setup_slot,

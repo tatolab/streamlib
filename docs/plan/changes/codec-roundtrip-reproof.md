@@ -49,8 +49,27 @@ block API the proof gates.
   auto-sized. Output publishes as ordinary surfaces a display or tap consumer
   reads. The H.265 CTU-padding crop (1920×1088 → 1920×1080, PR #328's lesson)
   is applied at the decoder's publish edge, never left to consumers.
+  > Located 2026-08-31 by #2086. "The decoder's publish edge" is the engine's
+  > decode session, not the built-in: the H.264 SPS handler already applied
+  > its frame crop while the H.265 one recorded `pic_*_in_luma_samples`
+  > verbatim, so the padding reached everything holding a `SimpleDecoder` —
+  > an engine-layer gap, fixed at the engine layer. Both codecs now derive the
+  > window through one helper
+  > (`vulkan/video/decode/decoded_picture_display_window.rs`), and the session
+  > keeps the coded extent (parameter sets, DPB) separate from what it
+  > publishes. Consequence worth knowing: `SimpleDecodedFrame` is cropped on
+  > the RGBA path and stays coded on the raw NV12 path, which is a direct DPB
+  > readback — the built-ins use RGBA only.
 - Both codecs, both directions, because the recorded proof (PRs #328, #827)
   covered both and they share every seam. AV1/VP9 stay unexposed per the plan.
+  > Delivered 2026-08-31 by #2086 as one encode body and one decode body
+  > specialised by a codec identity, rather than four processors: "share every
+  > seam" turned out to be literal — the pairs differ in a `Codec` enumerant,
+  > a bag `codec` string and a name. Each built-in is its port surface, its
+  > registration and its identity. The H.265 VUI needed no mining either:
+  > `packages/h265`'s translation file is byte-identical to `packages/h264`'s,
+  > already mined by #2083 into the codec-agnostic
+  > `h273_color_vui_translation`.
 
 ## ADDED: the encoded-frame bag convention
 
@@ -122,6 +141,13 @@ to the next `is_sync_point`, per the decided loss doctrine
   > → r 0.9792/g 0.0029/b 0.0068, identical to four decimals across three cold
   > runs, and the gate gained headroom: the bt601/bt709 green rise now reads
   > 0.0965 off a 0.0029 floor instead of a 0.0575 one.
+  > Amended 2026-08-31 by #2086: the lock is per codec, not per rig — the
+  > H.265 arm locks against `psnr_vivid_baseline_h265.tsv` and h264 keeps the
+  > unsuffixed file it was captured under. Measured, the two agree to 0.0001
+  > on every channel (r 0.9792 / g 0.0029 / b 0.0068 vs 0.0067) against a
+  > ±0.05 tolerance, so one shared file would in fact have passed both arms
+  > here. The split is headroom for a codec that does reconstruct a saturated
+  > primary differently, so that it cannot be read as a colour regression.
 
 ## ADDED: the adjudications
 

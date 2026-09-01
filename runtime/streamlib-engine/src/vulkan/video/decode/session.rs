@@ -8,6 +8,7 @@ use tracing::{debug, info};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+use super::SimpleDecoder;
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
     H264LevelIdc, H264PocType, PicParameterSet as H264Pps, SeqParameterSet as H264Sps,
 };
@@ -16,32 +17,8 @@ use crate::vulkan::video::video_context::VideoError;
 use crate::vulkan::video::vk_video_decoder::vk_video_decoder::{
     VkParserDetectedVideoFormat, VkVideoDecoder,
 };
-use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
-    H264_MB_SIZE_ALIGNMENT, align_size,
-};
-
-use super::SimpleDecoder;
 
 impl SimpleDecoder {
-    /// Returns the codec-aligned output extent (width, height) derived from
-    /// [`SimpleDecoderConfig::max_width`] / [`SimpleDecoderConfig::max_height`]
-    /// rounded up to the macroblock alignment (16 pixels).
-    ///
-    /// Returns `(0, 0)` if the config has no max dimensions set.
-    pub fn aligned_extent(&self) -> (u32, u32) {
-        let w = if self.config.max_width > 0 {
-            align_size(self.config.max_width, H264_MB_SIZE_ALIGNMENT)
-        } else {
-            0
-        };
-        let h = if self.config.max_height > 0 {
-            align_size(self.config.max_height, H264_MB_SIZE_ALIGNMENT)
-        } else {
-            0
-        };
-        (w, h)
-    }
-
     /// Eagerly allocate the GPU resources used during decode.
     ///
     /// Creates the NV12→RGBA compute converter now (when `rgba_output` is
@@ -61,15 +38,19 @@ impl SimpleDecoder {
         if !self.config.rgba_output {
             return Ok(());
         }
-        let (aligned_w, aligned_h) = self.aligned_extent();
-        if aligned_w == 0 || aligned_h == 0 {
+        // The extent `pre_initialize_session` hands `start_video_sequence`,
+        // and so the extent its DPB images are created at. The converter
+        // samples that DPB through normalized coordinates, so the two extents
+        // must agree exactly; the macroblock-aligned extent does not.
+        let (dpb_width, dpb_height) = (self.config.max_width, self.config.max_height);
+        if dpb_width == 0 || dpb_height == 0 {
             return Ok(());
         }
         let converter = unsafe {
             crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter::new(
                 &self.ctx,
-                aligned_w,
-                aligned_h,
+                dpb_width,
+                dpb_height,
                 self.compute_queue_family,
                 self.compute_queue,
                 self.decode_queue_family,
@@ -149,8 +130,8 @@ impl SimpleDecoder {
             ));
         }
 
-        self.sps_width = width;
-        self.sps_height = height;
+        self.coded_picture_width = width;
+        self.coded_picture_height = height;
         self.vk_decoder = Some(vk_dec);
 
         info!(width, height, dpb_size, "Decoder session pre-initialized");
@@ -162,15 +143,18 @@ impl SimpleDecoder {
     // ------------------------------------------------------------------
 
     pub(crate) fn configure_session(&mut self) -> Result<(), VideoError> {
+        // The video session and its DPB images hold the *coded* picture,
+        // padding rows and all. Sizing them from the conformance-windowed
+        // extent would under-allocate by up to a block on each axis.
         let width = if self.config.max_width > 0 {
             self.config.max_width
         } else {
-            self.sps_width
+            self.coded_picture_width
         };
         let height = if self.config.max_height > 0 {
             self.config.max_height
         } else {
-            self.sps_height
+            self.coded_picture_height
         };
 
         if width == 0 || height == 0 {
@@ -244,14 +228,21 @@ impl SimpleDecoder {
 
         // Create NV12→RGBA GPU converter if rgba_output is enabled.
         // If prepare_gpu_decode_resources() already created one (eager path),
-        // reuse it rather than reallocating — that path sized the converter to
-        // the codec-aligned max extent so it handles any SPS up to that cap.
+        // reuse it rather than reallocating — that path sized it to the same
+        // config caps this one hands start_video_sequence, so the converter
+        // and the DPB already agree.
         if self.config.rgba_output && self.nv12_converter.is_none() {
+            // Exactly the extent `start_video_sequence` was handed above, which
+            // is what the DPB images were created at. The conversion shader
+            // samples the DPB through normalized coordinates derived from this
+            // extent (`shaders/nv12_to_rgb.comp`), so a converter sized to
+            // anything else rescales the picture instead of converting it.
+            // The window is applied by the readback's copy region, never here.
             let converter = unsafe {
                 crate::vulkan::video::nv12_to_rgb::Nv12ToRgbConverter::new(
                     &self.ctx,
-                    self.sps_width,
-                    self.sps_height,
+                    width,
+                    height,
                     self.compute_queue_family,
                     self.compute_queue,
                     self.decode_queue_family,
@@ -515,9 +506,6 @@ impl SimpleDecoder {
     // ------------------------------------------------------------------
 
     pub(crate) fn create_session_params_h265(&mut self) -> Result<(), VideoError> {
-        let width = self.sps_width;
-        let height = self.sps_height;
-
         // Get parsed VPS/SPS/PPS from the parser if available
         let parsed_vps = self
             .h265_parser
@@ -642,6 +630,14 @@ impl SimpleDecoder {
             pHrdParameters: ptr::null(),
             pProfileTierLevel: &profile_tier_level,
         };
+
+        // `pic_*_in_luma_samples` is the coded extent by definition, so it
+        // comes off the parsed SPS itself rather than off the decoder's
+        // published extent, which the conformance window has already cropped.
+        let (width, height) = parsed_sps
+            .map_or((self.coded_picture_width, self.coded_picture_height), |s| {
+                (s.pic_width_in_luma_samples, s.pic_height_in_luma_samples)
+            });
 
         // Build SPS from parsed data
         let log2_min_cb = parsed_sps.map_or(0u8, |s| s.log2_min_luma_coding_block_size_minus3);

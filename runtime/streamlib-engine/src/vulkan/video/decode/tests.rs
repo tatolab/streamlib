@@ -221,16 +221,14 @@ fn test_simple_decoder_config_defaults() {
 }
 
 // ------------------------------------------------------------------
-// aligned_extent math
-//
-// `SimpleDecoder::aligned_extent()` rounds `config.max_width` /
-// `config.max_height` up to the codec macroblock alignment (16 pixels).
-// The full method requires a live Vulkan device; here we exercise the
-// underlying alignment math so non-1080p callers can't regress.
+// align_size — the macroblock rounding an encoder session's coded extent
+// is derived from. It is deliberately not what any decode-side converter is
+// sized from: that must be the DPB's own extent, or the conversion resamples
+// (docs/learnings/nv12-rgba-converter-extent-rescales.md).
 // ------------------------------------------------------------------
 
 #[test]
-fn test_aligned_extent_math_1080p() {
+fn align_size_rounds_1080_up_to_the_macroblock_grid() {
     use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
         H264_MB_SIZE_ALIGNMENT, align_size,
     };
@@ -239,7 +237,7 @@ fn test_aligned_extent_math_1080p() {
 }
 
 #[test]
-fn test_aligned_extent_math_720p() {
+fn align_size_leaves_an_already_aligned_extent_alone() {
     use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
         H264_MB_SIZE_ALIGNMENT, align_size,
     };
@@ -248,7 +246,7 @@ fn test_aligned_extent_math_720p() {
 }
 
 #[test]
-fn test_aligned_extent_math_4k() {
+fn align_size_leaves_4k_alone_on_both_axes() {
     use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
         H264_MB_SIZE_ALIGNMENT, align_size,
     };
@@ -257,7 +255,7 @@ fn test_aligned_extent_math_4k() {
 }
 
 #[test]
-fn test_aligned_extent_math_odd_extent() {
+fn align_size_rounds_an_arbitrary_extent_up() {
     use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
         H264_MB_SIZE_ALIGNMENT, align_size,
     };

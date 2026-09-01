@@ -11,6 +11,7 @@
 //! Supporting types ([`DecodeSubmitInfo`], [`DecodedFrame`], [`ReferenceSlot`],
 //! etc.) are shared with [`VkVideoDecoder`].
 
+pub(crate) mod decoded_picture_display_window;
 mod h264;
 mod h265;
 mod session;
@@ -28,6 +29,7 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma::{self as vma, Alloc};
 
+use self::decoded_picture_display_window::DecodedPictureDisplayWindow;
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
     MAX_DPB_SIZE as H264_MAX_DPB_SIZE, VulkanH264Decoder,
 };
@@ -147,9 +149,16 @@ pub struct SimpleDecoder {
     cached_sps_nalu: Option<Vec<u8>>,
     cached_pps_nalu: Option<Vec<u8>>,
 
-    // Parsed dimensions from SPS
-    sps_width: u32,
-    sps_height: u32,
+    // The coded extent the active SPS states — what the video session, its
+    // parameter sets and the DPB images are sized from. Both codecs pad this
+    // up to a block size, so it is not what a decoded frame is published at.
+    coded_picture_width: u32,
+    coded_picture_height: u32,
+
+    // The sub-region of the coded picture a decoded frame is published as,
+    // read off the active SPS's conformance window. `None` until an SPS has
+    // been parsed.
+    decoded_picture_display_window: Option<DecodedPictureDisplayWindow>,
 
     // Session state
     session_configured: bool,
@@ -200,8 +209,12 @@ pub struct SimpleDecoder {
 
 /// Metadata for a frame whose GPU decode has been submitted but not yet read back.
 struct PendingFrame {
-    width: u32,
-    height: u32,
+    /// The coded extent the DPB slot holds — what the raw NV12 readback
+    /// copies, since that path hands back the decoded picture as coded.
+    coded_width: u32,
+    coded_height: u32,
+    /// The sub-region the RGBA path converts and publishes.
+    display_window: DecodedPictureDisplayWindow,
     decode_order: u64,
     poc: i32,
     setup_slot: usize,
@@ -380,8 +393,9 @@ impl SimpleDecoder {
             cached_vps_nalu: None,
             cached_sps_nalu: None,
             cached_pps_nalu: None,
-            sps_width: 0,
-            sps_height: 0,
+            coded_picture_width: 0,
+            coded_picture_height: 0,
+            decoded_picture_display_window: None,
             session_configured: false,
             frame_counter: 0,
             frame_num: 0,
@@ -581,8 +595,9 @@ impl SimpleDecoder {
         self.cached_vps_nalu = None;
         self.cached_sps_nalu = None;
         self.cached_pps_nalu = None;
-        self.sps_width = 0;
-        self.sps_height = 0;
+        self.coded_picture_width = 0;
+        self.coded_picture_height = 0;
+        self.decoded_picture_display_window = None;
         self.frame_counter = 0;
         info!("Full reset: will reconfigure on next SPS");
     }
@@ -592,9 +607,62 @@ impl SimpleDecoder {
         self.frame_counter
     }
 
-    /// Return the detected stream dimensions (from SPS).
+    /// The extent decoded frames are published at — the active SPS's coded
+    /// extent with its conformance window applied, which is the picture the
+    /// stream meant to carry rather than the block-aligned one it codes.
     pub fn dimensions(&self) -> (u32, u32) {
-        (self.sps_width, self.sps_height)
+        let window = self.decoded_picture_display_window_or_whole_picture();
+        (window.width, window.height)
+    }
+
+    /// The active SPS's display window, or the whole coded picture when no
+    /// SPS has been parsed yet.
+    fn decoded_picture_display_window_or_whole_picture(&self) -> DecodedPictureDisplayWindow {
+        self.decoded_picture_display_window.unwrap_or_else(|| {
+            DecodedPictureDisplayWindow::covering_the_whole_coded_picture(
+                self.coded_picture_width,
+                self.coded_picture_height,
+            )
+        })
+    }
+
+    /// Record the coded extent and the display window a freshly parsed SPS
+    /// states. A window the SPS's own offsets make unusable is refused by
+    /// name and the whole coded picture published instead — a mis-cropped
+    /// frame is worse than an uncropped one, because its buffer and its
+    /// header agree on a picture that was never coded.
+    fn adopt_parsed_sps_geometry(
+        &mut self,
+        coded_width: u32,
+        coded_height: u32,
+        parsed_window: Option<DecodedPictureDisplayWindow>,
+    ) {
+        self.coded_picture_width = coded_width;
+        self.coded_picture_height = coded_height;
+        let window = parsed_window.unwrap_or_else(|| {
+            tracing::warn!(
+                codec = ?self.config.codec,
+                coded_width,
+                coded_height,
+                "SPS conformance window does not describe a region inside the coded picture; \
+                 publishing the whole coded picture"
+            );
+            DecodedPictureDisplayWindow::covering_the_whole_coded_picture(coded_width, coded_height)
+        });
+        // Said once per SPS, because a run whose decoded extent does not
+        // match its coded one is exactly the thing a reader of these logs is
+        // trying to confirm.
+        if !window.crops_nothing(coded_width, coded_height) {
+            info!(
+                codec = ?self.config.codec,
+                coded_width,
+                coded_height,
+                published_width = window.width,
+                published_height = window.height,
+                "SPS conformance window applied — decoded frames publish the cropped extent"
+            );
+        }
+        self.decoded_picture_display_window = Some(window);
     }
 
     /// Return the H.273 color VUI parsed from the active SPS, or `None` if
@@ -899,8 +967,10 @@ impl SimpleDecoder {
                 )?
             };
 
-            // Ensure RGBA staging buffer exists
-            self.ensure_rgba_staging(pending.width, pending.height)?;
+            // Sized for the copy below, which is the display window alone —
+            // the padding rows outside it never reach a consumer.
+            let display_window = pending.display_window;
+            self.ensure_rgba_staging(display_window.width, display_window.height)?;
             let &(stg_buf, _, stg_size, stg_ptr) = self.rgba_staging.as_ref().unwrap();
 
             // Copy RGBA image → staging buffer via transfer command buffer
@@ -926,10 +996,17 @@ impl SimpleDecoder {
                         base_array_layer: 0,
                         layer_count: 1,
                     },
-                    image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                    // The conformance window's origin, not the picture's:
+                    // a stream that offsets its window would otherwise copy
+                    // the padding and call it the picture.
+                    image_offset: vk::Offset3D {
+                        x: display_window.origin_x as i32,
+                        y: display_window.origin_y as i32,
+                        z: 0,
+                    },
                     image_extent: vk::Extent3D {
-                        width: pending.width,
-                        height: pending.height,
+                        width: display_window.width,
+                        height: display_window.height,
                         depth: 1,
                     },
                 };
@@ -964,7 +1041,7 @@ impl SimpleDecoder {
             }
 
             // Read RGBA data from staging buffer
-            let rgba_size = (pending.width * pending.height * 4) as usize;
+            let rgba_size = (display_window.width * display_window.height * 4) as usize;
             let read_size = rgba_size.min(stg_size as usize);
             let mut rgba_data = vec![0u8; read_size];
             unsafe {
@@ -982,8 +1059,8 @@ impl SimpleDecoder {
 
             return Ok(Some(SimpleDecodedFrame {
                 data: rgba_data,
-                width: pending.width,
-                height: pending.height,
+                width: display_window.width,
+                height: display_window.height,
                 decode_order: pending.decode_order,
                 picture_order_count: pending.poc,
                 is_rgba: true,
@@ -1001,8 +1078,8 @@ impl SimpleDecoder {
 
         Ok(Some(SimpleDecodedFrame {
             data: decoded_data,
-            width: pending.width,
-            height: pending.height,
+            width: pending.coded_width,
+            height: pending.coded_height,
             decode_order: pending.decode_order,
             picture_order_count: pending.poc,
             is_rgba: false,

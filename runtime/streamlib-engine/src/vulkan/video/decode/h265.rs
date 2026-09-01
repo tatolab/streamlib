@@ -12,6 +12,9 @@ use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
 };
 use crate::vulkan::video::video_context::VideoError;
 
+use super::decoded_picture_display_window::{
+    H265ConformanceWindowSyntax, SpsCropOffsets, h265_conformance_window,
+};
 use super::types::*;
 use super::{PendingFrame, SimpleDecoder};
 
@@ -72,8 +75,25 @@ impl SimpleDecoder {
         let height = sps.pic_height_in_luma_samples;
         let sps_id = sps.sps_seq_parameter_set_id as usize;
 
-        self.sps_width = width;
-        self.sps_height = height;
+        // H.265 codes in CTUs — 64 samples wide on every encoder this engine
+        // mints — so a 1080-tall source is coded at 1088 and only this window
+        // brings it back. The decoder applies it; a consumer handed the coded
+        // extent could not tell the two numbers apart.
+        let display_window = h265_conformance_window(
+            width,
+            height,
+            H265ConformanceWindowSyntax {
+                chroma_format_idc: sps.chroma_format_idc,
+                conformance_window_flag: sps.flags.conformance_window_flag,
+                offsets: SpsCropOffsets {
+                    left: sps.conf_win_left_offset as u32,
+                    right: sps.conf_win_right_offset as u32,
+                    top: sps.conf_win_top_offset as u32,
+                    bottom: sps.conf_win_bottom_offset as u32,
+                },
+            },
+        );
+        self.adopt_parsed_sps_geometry(width, height, display_window);
 
         debug!(
             width,
@@ -493,8 +513,9 @@ impl SimpleDecoder {
 
         // Build output: skip inline NV12 staging copy when RGBA converter is active
         // (the DPB slot stays in VIDEO_DECODE_DPB_KHR for the converter to sample)
-        let width = self.sps_width;
-        let height = self.sps_height;
+        let width = self.coded_picture_width;
+        let height = self.coded_picture_height;
+        let display_window = self.decoded_picture_display_window_or_whole_picture();
 
         let mut output = if self.nv12_converter.is_some() {
             DecodedFrame {
@@ -555,8 +576,9 @@ impl SimpleDecoder {
         // buffer will be read at the start of the next handle_h265_slice call
         // (or flush). This overlaps GPU decode with CPU prep for the next frame.
         self.pending_frame = Some(PendingFrame {
-            width,
-            height,
+            coded_width: width,
+            coded_height: height,
+            display_window,
             decode_order: self.frame_counter,
             poc: poc_val,
             setup_slot,

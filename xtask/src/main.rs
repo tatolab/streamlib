@@ -443,6 +443,20 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "vulkan::video::decode::tests::a_truncated_h265_nal_header_is_not_counted_as_a_parameter_set",
                 "vulkan::video::decode::tests::a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr",
                 "vulkan::video::decode::tests::trailing_zero_bytes_between_nal_units_stay_out_of_the_payload",
+                // The conformance-window crop, which is the whole of the
+                // H.265 CTU-pad contract in pure math: a 1088-tall coded
+                // picture publishes 1080, and the chroma format decides how
+                // many luma rows an offset takes.
+                "vulkan::video::decode::decoded_picture_display_window::tests::the_ctu_pad_this_engines_h265_encoder_emits_crops_back_to_1080",
+                "vulkan::video::decode::decoded_picture_display_window::tests::the_chroma_format_decides_how_many_luma_rows_an_offset_takes",
+                "vulkan::video::decode::decoded_picture_display_window::tests::an_aligned_extent_carries_no_window_and_crops_nothing",
+                "vulkan::video::decode::decoded_picture_display_window::tests::a_left_top_offset_moves_the_origin_rather_than_shrinking_the_far_edge",
+                "vulkan::video::decode::decoded_picture_display_window::tests::a_window_cropping_past_the_coded_picture_is_refused_rather_than_wrapped",
+                "vulkan::video::decode::decoded_picture_display_window::tests::offsets_that_overflow_their_own_sum_are_refused_rather_than_wrapped",
+                "vulkan::video::decode::decoded_picture_display_window::tests::h264_frame_cropping_takes_two_luma_rows_per_offset_when_frame_coded",
+                "vulkan::video::decode::decoded_picture_display_window::tests::h264_field_coding_doubles_the_rows_an_offset_takes",
+                "vulkan::video::decode::decoded_picture_display_window::tests::h264_separate_colour_planes_crop_in_monochrome_units",
+                "vulkan::video::decode::decoded_picture_display_window::tests::an_h264_window_cropping_past_the_coded_picture_is_refused_too",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
@@ -479,10 +493,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         // #1077 read forwards: test pattern -> encode -> decode in one
-        // graph. Compiled only — it needs Vulkan Video encode *and* decode
-        // queues, which no CI runner has.
+        // graph, once per codec off one shared harness. Compiled only — they
+        // need Vulkan Video encode *and* decode queues, which no CI runner
+        // has. The H.265 arm is where the CTU crop is asserted end to end.
         (
-            "the H264Decoder round-trip integration binary compiles",
+            "the codec round-trip integration binaries compile",
             "cargo",
             &[
                 "test",
@@ -491,6 +506,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-media-builtins",
                 "--test",
                 "h264_decoder_completes_the_round_trip",
+                "--test",
+                "h265_decoder_completes_the_round_trip",
                 "--no-run",
             ],
         ),

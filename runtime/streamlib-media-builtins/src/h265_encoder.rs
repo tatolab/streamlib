@@ -3,11 +3,11 @@
 
 #![cfg(target_os = "linux")]
 
-//! Built-in H.264 encoder: published video surfaces in, encoded-frame bags
+//! Built-in H.265 encoder: published video surfaces in, encoded-frame bags
 //! out.
 //!
 //! The state machine is [`PublishedSurfaceToEncodedFrameEncoder`], shared
-//! with the H.265 encoder because the two differ in nothing but which
+//! with the H.264 encoder because the two differ in nothing but which
 //! elementary stream they mint a session for. What lives here is the port
 //! surface, the registration name, and the codec identity.
 
@@ -22,27 +22,27 @@ use crate::published_surface_to_encoded_frame_encoder::PublishedSurfaceToEncoded
 use crate::video_frame::VideoFrame;
 
 /// What makes the shared encode body this built-in.
-pub struct H264EncoderCodecIdentity;
+pub struct H265EncoderCodecIdentity;
 
-impl HardwareVideoCodecProcessorIdentity for H264EncoderCodecIdentity {
-    const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H264;
-    const VIDEO_SESSION_CODEC: Codec = Codec::H264;
-    const PROCESSOR_NAME: &'static str = "H264Encoder";
+impl HardwareVideoCodecProcessorIdentity for H265EncoderCodecIdentity {
+    const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H265;
+    const VIDEO_SESSION_CODEC: Codec = Codec::H265;
+    const PROCESSOR_NAME: &'static str = "H265Encoder";
 }
 
 #[streamlib::sdk::processor(
-    description = "Encodes published video surfaces to H.264 Annex-B encoded-frame bags via Vulkan Video hardware encode",
+    description = "Encodes published video surfaces to H.265 Annex-B encoded-frame bags via Vulkan Video hardware encode",
     execution = reactive,
     scheduling = high,
     config = crate::published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig,
     input("video", delivery_profile = "ordered", description = "Video frames to encode"),
-    output("encoded_video", description = "H.264 encoded-frame bags"),
+    output("encoded_video", description = "H.265 encoded-frame bags"),
 )]
-pub struct H264Encoder {
-    encode_body: PublishedSurfaceToEncodedFrameEncoder<H264EncoderCodecIdentity>,
+pub struct H265Encoder {
+    encode_body: PublishedSurfaceToEncodedFrameEncoder<H265EncoderCodecIdentity>,
 }
 
-impl ReactiveProcessor for H264Encoder::Processor {
+impl ReactiveProcessor for H265Encoder::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.encode_body.setup(ctx)
     }

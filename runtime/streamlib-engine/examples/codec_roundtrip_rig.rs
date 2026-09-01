@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The engine-owned codec round-trip rig: a source → `H264Encoder` →
-//! `H264Decoder` → `DisplayWindow` graph, run against real hardware.
+//! The engine-owned codec round-trip rig: a source → encoder → decoder →
+//! `DisplayWindow` graph, run against real hardware.
 //!
 //! Two source arms. `--source fixture` replays the checked-in PSNR
 //! reference PNGs, each held for a run of frames long enough to cross a GOP
@@ -10,6 +10,16 @@
 //! produced it. `--source camera` runs `CameraSource` unchanged, which is
 //! the arm the real-hardware races are reproduced on — vivid hides that
 //! class.
+//!
+//! Two codec arms. `--codec h264` and `--codec h265` swap the encoder and
+//! decoder pair and change nothing else — the two built-in pairs share
+//! their whole body, so the graph, the scoring and the shutdown path are
+//! the same run twice.
+//!
+//! Neither arm gates the conformance crop: the scorer crops each decode to
+//! its reference extent first, and the window's origin is (0, 0), so a
+//! decoder publishing the padded extent scores identically. That contract
+//! belongs to `h265_decoder_completes_the_round_trip`.
 //!
 //! Rig-only to run: it needs Vulkan Video encode and decode queues, a
 //! display server, and for the camera arm a `/dev/video*` device. CI
@@ -29,8 +39,10 @@
 //!
 //! ```text
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig
+//! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --codec h265
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1
+//! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1 --camera-max-width 3840 --camera-max-height 2160
 //! streamlib exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
@@ -52,6 +64,7 @@ mod linux_rig {
     use serde::{Deserialize, Serialize};
     use streamlib::sdk::App;
     use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+    use streamlib::sdk::descriptors::ProcessorClassImportPath;
     use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::media_clock::MediaClock;
     use streamlib::sdk::processors::ContinuousProcessor;
@@ -60,7 +73,7 @@ mod linux_rig {
         ColorInfo, Primaries, Range, Transfer, VideoFrame,
     };
     use streamlib_media_builtins::{
-        CameraSource, DisplayWindow, H264Decoder, H264Encoder,
+        CameraSource, DisplayWindow, H264Decoder, H264Encoder, H265Decoder, H265Encoder,
         register_media_builtin_processor_types, stage_tightly_packed_rgba_into_pooled_pixel_buffer,
     };
 
@@ -87,6 +100,32 @@ mod linux_rig {
     /// run shorter than a GOP would leave some references carrying none.
     const DEFAULT_FRAMES_PER_REFERENCE: u32 =
         ENCODER_KEYFRAME_INTERVAL_SECONDS * FIXTURE_PUBLISH_FPS;
+
+    /// Which codec pair the round trip runs through. The pairs share their
+    /// whole body, so this picks two registration names and nothing else.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum RoundTripCodecArm {
+        H264,
+        H265,
+    }
+
+    impl RoundTripCodecArm {
+        /// The registered class paths of this arm's encoder and decoder.
+        fn encoder_and_decoder_class_import_paths(
+            self,
+        ) -> (ProcessorClassImportPath, ProcessorClassImportPath) {
+            match self {
+                RoundTripCodecArm::H264 => (
+                    H264Encoder::Processor::processor_class_import_path(),
+                    H264Decoder::Processor::processor_class_import_path(),
+                ),
+                RoundTripCodecArm::H265 => (
+                    H265Encoder::Processor::processor_class_import_path(),
+                    H265Decoder::Processor::processor_class_import_path(),
+                ),
+            }
+        }
+    }
 
     /// Which source arm feeds the encoder.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,6 +396,7 @@ mod linux_rig {
     /// What the command line asked for.
     struct RoundTripRigArguments {
         source_arm: RoundTripSourceArm,
+        codec_arm: RoundTripCodecArm,
         fixtures_directory: String,
         frames_per_reference: u32,
         control_plane_port: u16,
@@ -365,16 +405,26 @@ mod linux_rig {
         /// and a real camera is whichever enumerates first, so the arm that
         /// must run on real hardware names its node.
         camera_device_id: Option<String>,
+        /// Resolution caps the camera arm negotiates against. Absent: the
+        /// built-in's own 1920x1080 default. Naming a higher cap is how a
+        /// run asks for more decode load than 1080p60 presents — the lever
+        /// the decoder-lags-encoder scenario needs on hardware whose decode
+        /// path has headroom at 60 fps.
+        camera_max_width: Option<u32>,
+        camera_max_height: Option<u32>,
     }
 
     fn parse_arguments() -> Result<RoundTripRigArguments> {
         let source_defaults = PsnrReferenceFixtureSourceConfig::default();
         let mut arguments = RoundTripRigArguments {
             source_arm: RoundTripSourceArm::PsnrReferenceFixtures,
+            codec_arm: RoundTripCodecArm::H264,
             fixtures_directory: source_defaults.fixtures_directory,
             frames_per_reference: source_defaults.frames_per_reference,
             control_plane_port: DEFAULT_CONTROL_PLANE_PORT,
             camera_device_id: None,
+            camera_max_width: None,
+            camera_max_height: None,
         };
 
         let mut command_line = std::env::args().skip(1);
@@ -396,8 +446,31 @@ mod linux_rig {
                         }
                     }
                 }
+                "--codec" => {
+                    arguments.codec_arm = match next_value_for_this_flag()?.as_str() {
+                        "h264" => RoundTripCodecArm::H264,
+                        "h265" => RoundTripCodecArm::H265,
+                        unknown => {
+                            return Err(Error::Runtime(format!(
+                                "--codec {unknown} is neither `h264` nor `h265`"
+                            )));
+                        }
+                    }
+                }
                 "--fixtures" => arguments.fixtures_directory = next_value_for_this_flag()?,
                 "--camera" => arguments.camera_device_id = Some(next_value_for_this_flag()?),
+                "--camera-max-width" => {
+                    arguments.camera_max_width =
+                        Some(next_value_for_this_flag()?.parse().map_err(|_| {
+                            Error::Runtime("--camera-max-width takes a whole number".into())
+                        })?)
+                }
+                "--camera-max-height" => {
+                    arguments.camera_max_height =
+                        Some(next_value_for_this_flag()?.parse().map_err(|_| {
+                            Error::Runtime("--camera-max-height takes a whole number".into())
+                        })?)
+                }
                 "--control-plane-port" => {
                     arguments.control_plane_port = next_value_for_this_flag()?
                         .parse()
@@ -411,8 +484,9 @@ mod linux_rig {
                 }
                 unknown => {
                     return Err(Error::Runtime(format!(
-                        "unknown flag {unknown}; the rig takes --source, --camera, \
-                         --fixtures, --frames-per-reference and --control-plane-port"
+                        "unknown flag {unknown}; the rig takes --source, --codec, --camera, \
+                         --camera-max-width, --camera-max-height, --fixtures, \
+                         --frames-per-reference and --control-plane-port"
                     )));
                 }
             }
@@ -436,20 +510,23 @@ mod linux_rig {
             )?,
             RoundTripSourceArm::Camera => app.add(
                 CameraSource::Processor::processor_class_import_path(),
-                match &arguments.camera_device_id {
-                    Some(device_id) => serde_json::json!({ "device_id": device_id }),
-                    None => serde_json::json!({}),
-                },
+                serde_json::json!({
+                    "device_id": arguments.camera_device_id,
+                    "max_width": arguments.camera_max_width,
+                    "max_height": arguments.camera_max_height,
+                }),
                 Some("camera"),
             )?,
         };
+        let (encoder_class_import_path, decoder_class_import_path) =
+            arguments.codec_arm.encoder_and_decoder_class_import_paths();
         let encoder = app.add(
-            H264Encoder::Processor::processor_class_import_path(),
+            encoder_class_import_path,
             serde_json::json!({ "keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS }),
             Some("encoder"),
         )?;
         let decoder = app.add(
-            H264Decoder::Processor::processor_class_import_path(),
+            decoder_class_import_path,
             serde_json::json!({}),
             Some("decoder"),
         )?;
@@ -477,6 +554,7 @@ mod linux_rig {
 
         tracing::info!(
             source_arm = ?arguments.source_arm,
+            codec_arm = ?arguments.codec_arm,
             "codec_roundtrip_rig: {} -> encoder -> decoder -> display",
             source.display_name()
         );

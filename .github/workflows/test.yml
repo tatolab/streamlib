@@ -145,8 +145,12 @@ jobs:
           # Compiled but not run, same reason on the decode side: the
           # test-pattern -> encode -> decode round trip is #1077 read
           # forwards, and it needs Vulkan Video encode *and* decode queues.
+          # One binary per codec arm off one shared harness — each stands up
+          # its own App, and one process brings up one GpuContext. The H.265
+          # arm is where the CTU crop is asserted end to end.
           cargo test --locked -p streamlib-media-builtins \
-            --test h264_decoder_completes_the_round_trip --no-run
+            --test h264_decoder_completes_the_round_trip \
+            --test h265_decoder_completes_the_round_trip --no-run
           # The engine-owned codec round-trip rig. Examples are not a default
           # cargo target, so nothing above builds it and it would rot between
           # rig runs unnoticed; running it needs the queues, a display server
@@ -329,6 +333,16 @@ jobs:
             vulkan::video::decode::tests::a_truncated_h265_nal_header_is_not_counted_as_a_parameter_set \
             vulkan::video::decode::tests::a_sync_point_access_unit_reads_back_as_its_parameter_sets_then_its_idr \
             vulkan::video::decode::tests::trailing_zero_bytes_between_nal_units_stay_out_of_the_payload \
+            vulkan::video::decode::decoded_picture_display_window::tests::the_ctu_pad_this_engines_h265_encoder_emits_crops_back_to_1080 \
+            vulkan::video::decode::decoded_picture_display_window::tests::the_chroma_format_decides_how_many_luma_rows_an_offset_takes \
+            vulkan::video::decode::decoded_picture_display_window::tests::an_aligned_extent_carries_no_window_and_crops_nothing \
+            vulkan::video::decode::decoded_picture_display_window::tests::a_left_top_offset_moves_the_origin_rather_than_shrinking_the_far_edge \
+            vulkan::video::decode::decoded_picture_display_window::tests::a_window_cropping_past_the_coded_picture_is_refused_rather_than_wrapped \
+            vulkan::video::decode::decoded_picture_display_window::tests::offsets_that_overflow_their_own_sum_are_refused_rather_than_wrapped \
+            vulkan::video::decode::decoded_picture_display_window::tests::h264_frame_cropping_takes_two_luma_rows_per_offset_when_frame_coded \
+            vulkan::video::decode::decoded_picture_display_window::tests::h264_field_coding_doubles_the_rows_an_offset_takes \
+            vulkan::video::decode::decoded_picture_display_window::tests::h264_separate_colour_planes_crop_in_monochrome_units \
+            vulkan::video::decode::decoded_picture_display_window::tests::an_h264_window_cropping_past_the_coded_picture_is_refused_too \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
