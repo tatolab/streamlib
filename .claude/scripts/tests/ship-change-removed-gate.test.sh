@@ -198,7 +198,7 @@ expect_pass "an example that still uses the artifact is not residue"
 new_repo <<'EOF'
 - REMOVED: .fkpkg
 EOF
-plant packages/h264/src/lib.rs "// resolves a .fkpkg from the store"
+plant packages/fictional-consumer/src/lib.rs "// resolves a .fkpkg from the store"
 run_gate
 expect_pass "a consumer package is not residue"
 

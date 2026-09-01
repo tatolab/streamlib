@@ -8,7 +8,7 @@ extraction and parked here, **disabled** — there is no
 directory is in the module tree and none of it compiles. It is
 reference code only, mirroring the `_apple_impl_pending_/` convention
 used elsewhere in the codebase (e.g.
-`packages/h264/processors/_apple_impl_pending_/`).
+`packages/mp4/processors/_apple_impl_pending_/`).
 
 ## Why it was split out (and not shipped in `sdk/vulkan-jpeg`)
 
