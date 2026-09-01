@@ -21,6 +21,7 @@ mod tests;
 
 pub use color_vui::H273ColorVui;
 pub use config::*;
+pub(crate) use session::EMITTED_CHROMA_SAMPLE_LOC_TYPE;
 
 use std::ptr;
 use std::sync::Arc;

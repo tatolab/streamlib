@@ -48,8 +48,7 @@ const BINDINGS: &[ComputeBindingSpec] = &[
 /// Type 0 is also the MPEG-2/H.264/H.265 default a third-party stream carries when
 /// it signals nothing. `rgb_to_nv12.comp` downsamples to the same siting, and the
 /// tree's own encoder never sets the flag, so both our streams and the common
-/// third-party case are type 0. Reconstructing at `MIDPOINT` instead places chroma
-/// half a luma sample to the right of where the bitstream puts it.
+/// third-party case are type 0.
 const RECONSTRUCTED_X_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::COSITED_EVEN;
 
 /// Vertical siting the hardware reconstructs 4:2:0 chroma at — `chroma_sample_loc_type`
@@ -133,6 +132,35 @@ impl Nv12ToRgbConverter {
             let host_device = ctx.host_device().clone();
 
             // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
+            // VUID-VkSamplerYcbcrConversionCreateInfo-xChromaOffset-01651: COSITED_EVEN
+            // is only legal when the format advertises it, and a 4:2:0 format is
+            // required to support just one of the two chroma locations. Refuse by name
+            // rather than create a conversion the spec forbids.
+            let nv12_format_features = ctx
+                .instance()
+                .get_physical_device_format_properties(
+                    ctx.physical_device(),
+                    vk::Format::G8_B8R8_2PLANE_420_UNORM,
+                )
+                .optimal_tiling_features;
+            let required_chroma_feature = |location: vk::ChromaLocation| match location {
+                vk::ChromaLocation::COSITED_EVEN => vk::FormatFeatureFlags::COSITED_CHROMA_SAMPLES,
+                _ => vk::FormatFeatureFlags::MIDPOINT_CHROMA_SAMPLES,
+            };
+            for offset in [RECONSTRUCTED_X_CHROMA_OFFSET, RECONSTRUCTED_Y_CHROMA_OFFSET] {
+                let feature = required_chroma_feature(offset);
+                if !nv12_format_features.contains(feature) {
+                    tracing::error!(
+                        "G8_B8R8_2PLANE_420_UNORM does not advertise {feature:?}, so chroma \
+                         cannot be reconstructed at {offset:?} — the decoded picture would be \
+                         sited against its own bitstream"
+                    );
+                    return Err(VideoError::FormatNotSupported(
+                        vk::Format::G8_B8R8_2PLANE_420_UNORM,
+                    ));
+                }
+            }
+
             let ycbcr_conversion = device.create_sampler_ycbcr_conversion(
                 &vk::SamplerYcbcrConversionCreateInfo::builder()
                     .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
@@ -526,39 +554,28 @@ mod tests {
 
     #[test]
     fn chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies() {
-        use crate::vulkan::video::vk_video_encoder::vk_encoder_config::EncoderConfig;
+        use crate::vulkan::video::encode::EMITTED_CHROMA_SAMPLE_LOC_TYPE;
 
-        // The encode side names a siting only by omission: H.264 §E.2.1 / H.265
-        // §E.3.1 specify an absent `chroma_loc_info_present_flag` as inferred
-        // `chroma_sample_loc_type` 0.
-        let encoder_defaults = EncoderConfig::default();
-        assert!(
-            !encoder_defaults.chroma_loc_info_present_flag,
-            "the encoder signals no chroma_loc_info, so decoders infer type 0"
+        // Anchored on the value the SPS builder writes. `EncoderConfig` carries a
+        // `chroma_sample_loc_type` too, but nothing on the bitstream path reads it,
+        // so asserting against that field would lock nothing.
+        //
+        // Figure E-1: type 0 sites chroma on the even luma column horizontally and at
+        // the midpoint vertically; type 1 is midpoint on both axes.
+        assert_eq!(
+            EMITTED_CHROMA_SAMPLE_LOC_TYPE, 0,
+            "the emitted VUI names type 0; reconstructing anywhere else shifts chroma \
+             against our own wire"
         );
         assert_eq!(
-            encoder_defaults.chroma_sample_loc_type, 0,
-            "the unsignalled type must agree with the type decoders infer"
-        );
-
-        // Figure E-1: type 0 is left-sited horizontally and midpoint vertically;
-        // type 1 is midpoint on both axes.
-        let (bitstream_x, bitstream_y) = match encoder_defaults.chroma_sample_loc_type {
-            0 => (vk::ChromaLocation::COSITED_EVEN, vk::ChromaLocation::MIDPOINT),
-            1 => (vk::ChromaLocation::MIDPOINT, vk::ChromaLocation::MIDPOINT),
-            other => panic!(
-                "chroma_sample_loc_type {other} names a field siting this progressive \
-                 4:2:0 path has no reconstruction for"
-            ),
-        };
-
-        assert_eq!(
-            RECONSTRUCTED_X_CHROMA_OFFSET, bitstream_x,
-            "reconstructing at the wrong horizontal siting shifts chroma half a luma sample"
+            RECONSTRUCTED_X_CHROMA_OFFSET,
+            vk::ChromaLocation::COSITED_EVEN,
+            "type 0 is left-sited horizontally"
         );
         assert_eq!(
-            RECONSTRUCTED_Y_CHROMA_OFFSET, bitstream_y,
-            "reconstructing at the wrong vertical siting shifts chroma half a luma line"
+            RECONSTRUCTED_Y_CHROMA_OFFSET,
+            vk::ChromaLocation::MIDPOINT,
+            "type 0 is midpoint vertically"
         );
     }
 

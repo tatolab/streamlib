@@ -23,6 +23,16 @@ use crate::vulkan::video::vk_video_encoder::vk_video_encoder_h264::VkVideoEncode
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder_h265::VkVideoEncoderH265;
 
 use super::SimpleEncoder;
+
+/// The `chroma_sample_loc_type_*_field` value this encoder writes into every SPS VUI
+/// it emits, for both codecs.
+///
+/// Bitstream contract: the emitted VUI never sets `chroma_loc_info_present_flag`, so
+/// H.264 §E.2.1 / H.265 §E.3.1 have decoders infer this same type anyway — the written
+/// value and the inferred one agree, and both describe what `rgb_to_nv12.comp`
+/// produces. The decode side reconstructs at the siting this names; changing it here
+/// without moving `nv12_to_rgb`'s offsets shifts chroma against the wire.
+pub(crate) const EMITTED_CHROMA_SAMPLE_LOC_TYPE: u8 = 0;
 use super::config::{DpbSlot, EncodeConfig, RateControlMode};
 
 impl SimpleEncoder {
@@ -580,8 +590,8 @@ impl SimpleEncoder {
                     time_scale: config.framerate_numerator.saturating_mul(2),
                     max_num_reorder_frames: 0,
                     max_dec_frame_buffering: 0,
-                    chroma_sample_loc_type_top_field: 0,
-                    chroma_sample_loc_type_bottom_field: 0,
+                    chroma_sample_loc_type_top_field: EMITTED_CHROMA_SAMPLE_LOC_TYPE,
+                    chroma_sample_loc_type_bottom_field: EMITTED_CHROMA_SAMPLE_LOC_TYPE,
                     reserved1: 0,
                     pHrdParameters: ptr::null(),
                 };
@@ -764,8 +774,8 @@ impl SimpleEncoder {
                             colour_primaries: cv.primaries_byte(),
                             transfer_characteristics: cv.transfer_byte(),
                             matrix_coeffs: cv.matrix_byte(),
-                            chroma_sample_loc_type_top_field: 0,
-                            chroma_sample_loc_type_bottom_field: 0,
+                            chroma_sample_loc_type_top_field: EMITTED_CHROMA_SAMPLE_LOC_TYPE,
+                            chroma_sample_loc_type_bottom_field: EMITTED_CHROMA_SAMPLE_LOC_TYPE,
                             reserved1: 0,
                             reserved2: 0,
                             def_disp_win_left_offset: 0,

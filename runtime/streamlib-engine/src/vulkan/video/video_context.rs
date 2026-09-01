@@ -20,6 +20,13 @@ use vulkanalia_vma as vma;
 /// Vulkan 1.4 is required for video encode/decode extensions and
 /// `VK_KHR_video_maintenance1`.
 
+/// The NV12 conversion handle chained onto video-coding image views.
+///
+/// Its chroma offsets are inert and deliberately not the siting `nv12_to_rgb` uses: this
+/// handle is only ever attached to image views (DPB, encode-src, staging), where a
+/// multi-planar view requires a conversion but no sample operation ever reads the
+/// offsets. The one conversion that does drive reconstruction is the converter's own, so
+/// change the offsets there, not here.
 fn create_nv12_ycbcr_conversion(
     device: &vulkanalia::Device,
 ) -> VideoResult<vk::SamplerYcbcrConversion> {

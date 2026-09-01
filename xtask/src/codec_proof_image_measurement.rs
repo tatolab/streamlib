@@ -29,8 +29,11 @@ pub const LUMA_PSNR_WARN_FLOOR_DB: f64 = 30.0;
 ///
 /// Derived from six cold rig runs (three per codec, 108 samples) recorded in
 /// `docs/plan/ARCHITECTURE.md` §Media I/O: the lowest finite clean
-/// chroma figure in the set is `complex_pattern` at 32.23 dB, reproducing to
-/// 0.02 dB run-to-run and 0.13 dB across codecs. A warn band
+/// chroma figure in the set was `complex_pattern` at 32.23 dB, reproducing to
+/// 0.02 dB run-to-run and 0.13 dB across codecs. That derivation predates #2100,
+/// which corrected the decode path's chroma siting and moved the same figure to
+/// 33.5 dB; `complex_pattern` still carries the minimum and the floor is unchanged.
+/// A warn band
 /// would be dead space, because a clean chroma figure here is not a quality
 /// continuum like luma but a constant of the colour-conversion cascade.
 ///

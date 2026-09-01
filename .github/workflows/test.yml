@@ -190,15 +190,14 @@ jobs:
           # which is how a run encodes fifty frames and decodes none. Pure
           # byte walking; the round trip that proves it end to end needs
           # Vulkan Video queues and is compiled-only below.
+          # The chroma-siting entry sits beside them: it holds the decode path's
+          # reconstruction offsets against the chroma_sample_loc_type the SPS
+          # builder writes, so moving one without the other reddens here rather
+          # than on the rig. It gates the two values agreeing, not the emitted
+          # VUI — the dB that a disagreement costs is rig-measured.
           # Named one by one rather than by module prefix: a prefix would
           # enrol whatever that module holds next, which is how a device test
           # joins this list without anyone deciding to add it.
-          # The chroma-siting entry ties the two ends of the colour path
-          # together. The decode path reconstructs 4:2:0 chroma at a siting the
-          # bitstream only ever implies — H.264 §E.2.1 / H.265 §E.3.1 infer
-          # `chroma_sample_loc_type` 0 from an absent flag, which is what this
-          # encoder emits — and nothing else in CI notices when the two drift
-          # apart. Pure constants here; the dB that drift costs is rig-measured.
           # The audio window contract's read-side stage. The only gate it
           # has: the stage's exactness, its overlap, the flush that resets the
           # resampler's filter state, its refusals, and the readiness floor
