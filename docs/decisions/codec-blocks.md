@@ -84,6 +84,19 @@ GPU tests never run in CI (rig-only), so the ship bar is split by necessity: rig
 round-trip + PSNR floor through `/verify-live`, plus CI-named GPU-free tests for
 everything that parses, translates or resolves without a device.
 
+> Outcome, 2026-09-01 (`codec-roundtrip-reproof`, tickets #2083-#2087 and #2094).
+> The premise above is resolved and the paragraph opening it is history, not the
+> tree's state: decode is verified at HEAD for both codecs. #1077 closed **obsolete**
+> — the decoder enters at `sequence_index=0` with nothing discarded, and the wire its
+> first hypothesis was recorded against no longer exists (`ordered` at depth 16,
+> parameter sets on every IDR rather than only the first). Its second hypothesis was
+> never the cause either, though two latent silent paths in the encoder's header route
+> were hardened on the way past. #756 closed on 18 clean Cam Link runs; #335 closed
+> **not reproducible** — the pre-RHI-coupling teardown that produced it is gone, and
+> the decoder-lag condition that triggered it went with the decode path's 21-25 fps
+> cap (now 3.75 ms/frame). The four video blocks, the rebuilt rig and the chroma floor
+> are plan text in §Media I/O.
+
 ## Why the rig rebuilds on tap + exchange
 
 The historical PSNR examples scored by side effect: a display processor wrote decoded
@@ -113,16 +126,30 @@ rig; `h264-opus-validator` orchestrates ffmpeg and touches no engine machinery;
 `camera-audio-recorder` is the one with a future — it becomes the recording showcase
 and finally gives Linux the audio-in-MP4 path the old writer never had.
 
+> Executed in part, 2026-09-01 (#2087): `packages/h264`, `packages/h265`,
+> `examples/vulkan-video-roundtrip` and `examples/vulkan-video-psnr` are mined and
+> deleted. `packages/{jpeg,opus,mp4}`, `examples/jpeg-psnr`,
+> `examples/h264-opus-validator` and `examples/camera-audio-recorder` stay held on
+> their own rungs.
+
 ## Known landmines carried forward (from the audit, for the implementing tickets)
 
 - First-IDR loss over a late-attaching subscriber; driver-defined session-parameter
-  header framing (#1077's two hypotheses).
+  header framing (#1077's two hypotheses). **Discharged** — neither was the cause; see
+  the outcome note above.
 - Cam-Link-only 60 fps race class that vivid and validation layers both hide (#756);
-  decoder-lags-encoder shutdown race (#335).
-- H.265 CTU padding: 1920×1088 decoded extent needs crop (PR #328).
+  decoder-lags-encoder shutdown race (#335). **Discharged** — both closed on rig
+  evidence.
+- H.265 CTU padding: 1920×1088 decoded extent needs crop (PR #328). **Discharged** —
+  and it was an engine-layer gap, not a built-in's: both codecs now derive the display
+  window through one helper in the decode session, and the H.264 arm had been cropping
+  correctly all along while H.265 published its padding to everything holding a
+  `SimpleDecoder`.
 - `effort_level` (Vulkan encoder-effort index) vs `quality_level` are distinct knobs
-  (#306/#329, #330/#333).
-- H.273 `ColorInfo` ↔ VUI translation is solved and portable — mine
-  `packages/{h264,h265}/processors/color_vui_translate_linux.rs` (PR #828).
+  (#306/#329, #330/#333). Still live: no rate-control or GOP config surface has landed.
+- H.273 `ColorInfo` ↔ VUI translation is solved and portable (PR #828). **Mined** into
+  `runtime/streamlib-media-builtins/src/h273_color_vui_translation.rs`, codec-agnostic
+  — the two packages' translation files were byte-identical, so H.265 needed no mining
+  of its own — and both source packages are deleted.
 - The held Linux MP4 writer was raw-RGBA piped to an ffmpeg subprocess; the direct
   encoded-mux path was abandoned in April 2026 — `Mp4Sink` is new work, not a port.
