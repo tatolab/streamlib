@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.35](https://github.com/tatolab/streamlib/compare/v0.18.34...v0.18.35) (2026-09-01)
+
+
+### Features
+
+* **engine:** H265Encoder + H265Decoder with the conformance-window crop — H.265 rig proof at the floor ([#2096](https://github.com/tatolab/streamlib/issues/2096)) ([1650475](https://github.com/tatolab/streamlib/commit/1650475d3df678f117484ebb422f3dd966ea19d7))
+
 ## [0.18.34](https://github.com/tatolab/streamlib/compare/v0.18.33...v0.18.34) (2026-08-31)
 
 
