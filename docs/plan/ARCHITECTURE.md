@@ -257,8 +257,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
 - **DECIDED** — A consumer blocked on an undecided domain is held in-tree until the
   align covering that domain mines it for logic; its deletion rides that change's own
-  ship. Held on codec blocks: `packages/{h264,h265,jpeg,opus,mp4}`,
-  `examples/{jpeg-psnr,vulkan-video-roundtrip,vulkan-video-psnr,h264-opus-validator,camera-audio-recorder}`.
+  ship. Held on codec blocks: `packages/{jpeg,opus,mp4}`,
+  `examples/{jpeg-psnr,h264-opus-validator,camera-audio-recorder}` — `packages/h264`,
+  `packages/h265`, `examples/vulkan-video-roundtrip` and `examples/vulkan-video-psnr`
+  resolved this way and are gone, mined and deleted by the change that shipped their
+  blocks [codec-roundtrip-reproof — SHIPPED #2087].
   Held on networking: `packages/{moq,webrtc}`,
   `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}`. Held on audio
   plugins: `packages/clap`. Held on screen capture: `packages/screen-capture`,
@@ -631,7 +634,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ codec-roundtrip-reproof)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1128,15 +1131,55 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   parked). AV1 and VP9 remain ported but unexposed until a consumer demands them.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
-  GOP knobs are ticket-level, like every other built-in's config. [codec-blocks]
+  GOP knobs are ticket-level, like every other built-in's config. The four video blocks
+  are one encode body and one decode body specialised by a codec identity, not four
+  processors — the pair differs in an enumerant, the bag's `codec` string and a name —
+  and each built-in is its own port surface, registration and identity. The layering
+  wall holds at this fourth device class too: colour conversion into the codec's NV12
+  input rides the engine's existing `rgb_to_nv12` converter stage, and no new RHI
+  primitive was built for codecs. [codec-blocks — SHIPPED #2083, #2084, #2086 for the
+  four video blocks, engine half; `JpegDecoder`, the Opus pair and `Mp4Sink` are later
+  rungs, and the Python surface — marker classes, stub entries, `rt.add` reach — is the
+  next rung the proof below gates]
+  <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
 - **DECIDED** — An encoded frame is an ordinary bag: the bitstream rides inline as a
   msgpack `bin` field beside the producer-written stream metadata the delivery-profile
   decision already specified (sync-point flag, group index, sequence). No pooled-buffer
-  or surface-id carriage for encoded bytes unless a measured need appears. The
+  or surface-id carriage for encoded bytes unless a measured need appears. The keys are
+  the wire contract, the way `AudioBlock`'s six are: `codec` (`"h264"` / `"h265"`, the
+  elementary-stream identity), `bitstream` (msgpack `bin`, one Annex-B access unit),
+  `is_sync_point`, `group_index` and `sequence_index` (the MoQ-mappable ordering pair),
+  `width` and `height` (the coded extent, before crop), and `color` (the H.273 tuple).
+  Timestamp rides the frame header like every bag. A bag the decoder cannot read is
+  refused by name, never reshaped — the audio wire codec's doctrine — and the ordering
+  pair is an encoded-frame key that never reaches a decoded bag: a decoded frame is an
+  ordinary `VideoFrame`, so nothing downstream of the decoder joins on it. The
   ring-overwrite loss §Processor model leaves OPEN is stream-corrupting for an encoded
   link until the next sync point; the discard-to-sync-point doctrine makes it
-  survivable, and that OPEN stays its own decision — named here so a codec ship is
-  never read as having resolved it. [codec-blocks]
+  survivable — a reader enters a stream only at a sync point and discards back to one
+  after a `sequence_index` step other than exactly one, counting what it lost — and
+  that OPEN stays its own decision, named here so a codec ship is never read as having
+  resolved it. [codec-blocks — SHIPPED #2083 for the convention and the sync-point
+  gate; #2085 for the ordering pair's reach, which the proposal had assumed joined the
+  decoded side]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_video_frame -->
+- **DECIDED** — A decoder publishes the display window, never the coded picture. Both
+  codecs pad up to a block size — H.264 to the 16-sample macroblock, H.265 to the
+  64-sample CTU — so a 1920×1080 source is coded at 1920×1088 by both, and only the
+  window the SPS carries brings it back. Deriving that window is the engine's decode
+  session's job and not a built-in's, let alone a consumer's: a consumer handed the
+  coded extent cannot tell which of the two numbers it holds, and the padding rows are
+  edge-replicated garbage. One helper derives it for both codecs, the session keeps the
+  coded extent (parameter sets, DPB) separate from what it publishes, and a malformed
+  window off an untrusted producer's bitstream is refused rather than wrapped into a
+  plausible-looking one. Worth knowing at the seam: the decoded frame is cropped on the
+  RGBA path and stays coded on the raw NV12 path, which is a direct DPB readback.
+  [codec-blocks — SHIPPED #2086; an engine-layer gap the H.265 arm surfaced, fixed at
+  the engine layer for both codecs]
+  <!-- verify: cargo test -p streamlib-engine --lib vulkan::video::decode::decoded_picture_display_window -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
 - **DECIDED** — Proof precedes surface: the first codec work re-proves
   camera → encode → decode → display at HEAD through the engine-owned PSNR rig
   (`runtime/streamlib-engine/tests/fixtures/`, Y ≥ 35 dB floor), adjudicating the
@@ -1146,7 +1189,70 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   pixel bytes — with PSNR a first-class calculation in the proof tooling, never a
   display processor writing frames to disk for a script to score. A codec block ships only with (i) a rig round-trip carrying the
   PSNR floor, run through `/verify-live`, and (ii) CI-named GPU-free tests: bitstream
-  parsing, VUI/color translation, config resolution, container bytes. [codec-blocks]
+  parsing, VUI/color translation, config resolution, container bytes. The rig is an
+  engine-owned Rust fixture app, `cargo run -p streamlib-engine --example
+  codec_roundtrip_rig` — engine-owned means CI compiles it so it cannot rot between rig
+  runs while running it stays rig-only, and no test reaches into a consumer for its
+  fixtures. Pairing a decoded frame to its reference is a filename contract
+  (`<reference_stem>__<n>.png`) over one reference per run, not a key on the wire:
+  best-match pairing was rejected as vacuous, since it satisfies the `swap-channels`
+  injection by re-pairing a swapped red onto `solid_blue.png` — the exact regression
+  that mode exists to catch. [codec-blocks — SHIPPED #2084 for the rig, #2085 for the
+  scoring rebuild, #2085 and #2086 for the two codecs' rig proofs at the floor]
+  <!-- verify: cargo build -p streamlib-engine --example codec_roundtrip_rig -->
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh -->
+- **DECIDED** — The gate scores chroma, not luma alone: `cargo xtask psnr` classifies a
+  frame Y ≥ 35 dB pass / 30–35 warn / < 30 fail **and** fails it outright when either
+  chroma plane falls under 30 dB — one floor for every reference, no chroma warn band.
+  The chroma floor is derived, not chosen: six cold rig runs (three per codec, 108
+  samples) put the lowest finite clean chroma figure at `complex_pattern` 32.23 dB,
+  reproducing to 0.02 dB run-to-run and 0.13 dB across codecs. A fourth injection mode
+  `swap-chroma` (Cb↔Cr transposition) lands with it and is what makes the floor
+  non-vacuous — the other three (`swap-channels`, `bt601-bt709`, `range-swap`) are all
+  caught by luma as well, so without a chroma-only regression the new floor would gate
+  nothing. `solid_red` and `solid_green` are the two references that pass luma and fail
+  on chroma alone; the mode is not luma-invariant on `complex_pattern` or `solid_blue`,
+  where the inverse transform leaves gamut and the clamp moves Y too. What the chroma
+  columns measure is the round trip's colour path — the two converters and the 8-bit
+  TV-range wire — and not codec quality: a lossless codec through the same path scores
+  `complex_pattern` within 0.2 dB of a real one. Every regression class the gate exists
+  for (plane order, plane offset, subsampling filter, matrix, range) still reaches it,
+  because all of them reach the decoded RGB. The scoring is pure math, GPU-free and
+  CI-run; ffmpeg leaves the scoring path entirely. [codec-blocks — SHIPPED #2085 for
+  `xtask psnr` and the tap/exchange scoring, #2094 for the chroma floor and
+  `swap-chroma`]
+  <!-- verify: cargo test -p xtask psnr -->
+  <!-- verify: cargo test -p xtask codec_proof_image_measurement -->
+- **DECIDED** — The vivid drift lock is per codec, not per rig: the H.265 arm locks
+  against `psnr_vivid_baseline_h265.tsv` and H.264 keeps the unsuffixed file it was
+  captured under, tolerance ±0.05 and comparison semantics untouched. The numbers could
+  not carry over even though the mechanism did — the old baseline was sampled off the
+  display's composited output, which is precisely what the rebuilt rig removed from the
+  measurement path, so it failed against the new one outright (|0.9792 − 0.9180| =
+  0.0612). Re-measured over exact decoded pixels the lock gained headroom: the
+  bt601/bt709 green rise now reads 0.0965 off a 0.0029 floor instead of a 0.0575 one.
+  Measured, the two codecs agree to 0.0001 on every channel, so one shared file would
+  have passed both arms here; the split is headroom for a codec that does reconstruct a
+  saturated primary differently, so that it cannot be read as a colour regression.
+  [codec-blocks — SHIPPED #2085, #2086]
+  <!-- verify: bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+- **DECIDED** — The three recorded codec defects are adjudicated and closed on the
+  rebuilt rig's evidence, which is what the proof-precedes-surface bar was for. #1077
+  (decode unverified at HEAD) closed **obsolete**: the decoder enters at
+  `sequence_index=0` with zero frames discarded, and the wire its first hypothesis was
+  recorded against no longer exists — `ordered` at depth 16, with parameter sets on
+  every IDR rather than only the first, so even a genuinely late subscriber re-enters
+  within one GOP. Two latent silent paths in the encoder's header route were hardened
+  anyway (a failed header extraction no longer degrades to an empty header, and the
+  minted header is checked with the engine's own NAL reader), neither being the named
+  cause. #756 (Cam Link `DEVICE_LOST`) closed on 18 clean runs across release and debug,
+  1080p60 and 4K30. #335 (H.265 shutdown race) closed **not reproducible**: the pre-RHI-
+  coupling teardown that produced it does not exist any more, and the decoder-lag load
+  condition that triggered it is independently gone — the decode path's 21–25 fps cap
+  became 3.75 ms/frame. If sustained decoder lag ever reappears the scenario is worth
+  re-running rather than assumed fixed, and the rig is the runnable.
+  [codec-blocks — SHIPPED #2084 closing #1077, #2085 closing #756, #2086 closing #335]
+  <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
 - **DECIDED** — `Mp4Sink` muxes the encoded elementary streams the blocks produce
   (H.264/H.265 video, Opus audio) in pure Rust — no ffmpeg subprocess, no raw-frame
   transcode path, no new `DT_NEEDED` entry. [codec-blocks]
@@ -1162,7 +1268,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   rig's job, and a test owns its fixtures. `examples/h264-opus-validator` deletes
   outright. `examples/camera-audio-recorder` is conversion backlog: the recording
   showcase (camera + microphone → codec blocks → `Mp4Sink`) once the blocks exist.
-  [codec-blocks]
+  [codec-blocks — SHIPPED #2087 for the video half: `packages/h264` and `packages/h265`
+  mined and deleted, both vulkan-video examples deleted into the rig; the H.265 VUI
+  needed no mining of its own, its translation file being byte-identical to H.264's and
+  already mined codec-agnostic. `packages/{jpeg,opus,mp4}`, `examples/jpeg-psnr`,
+  `examples/h264-opus-validator` and `examples/camera-audio-recorder` stay held on
+  their own rungs. The lesson the sweep paid for: a path-literal search proves nothing
+  about a prose citation spelling a package without its directory — the residue it
+  missed named the same tree as a bare `h264`]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-01-codec-roundtrip-reproof.md -->
 - **OPEN** — Audio plugins (CLAP / VST3 / LV2): intended, do not build until a
   concrete consumer demands a specific plugin. Direction: CLAP first; the plugin runs
   out-of-process in its own helper over the engine's IPC transport, never in the app

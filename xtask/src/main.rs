@@ -726,7 +726,7 @@ enum Commands {
     /// lock, with the three bug-injection modes that keep either gate
     /// non-vacuous. Pure image math over PNGs `streamlib exchange` wrote —
     /// GPU-free, so it is tested in CI while the rig runs that feed it are
-    /// not. See `docs/plan/changes/codec-roundtrip-reproof.md`.
+    /// not. See `docs/plan/ARCHITECTURE.md` §Media I/O.
     #[command(subcommand)]
     Psnr(psnr::PsnrCommand),
 
