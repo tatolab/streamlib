@@ -230,21 +230,21 @@ impl Rgba8Image {
                         .yuv_to_rgb_full_range(quantized_to_eight_bit_wire_samples(yuv))
                 }
                 InjectedColorRegression::ChromaPlanesTransposed => {
-                let [luma, blue_difference, red_difference] =
-                    quantized_to_eight_bit_wire_samples(
-                        BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
-                            f32::from(pixel[0]),
-                            f32::from(pixel[1]),
-                            f32::from(pixel[2]),
-                        ]),
-                    );
-                BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
-                    luma,
-                    red_difference,
-                    blue_difference,
-                ])
-            }
-            InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange => {
+                    let [luma, blue_difference, red_difference] =
+                        quantized_to_eight_bit_wire_samples(
+                            BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
+                                f32::from(pixel[0]),
+                                f32::from(pixel[1]),
+                                f32::from(pixel[2]),
+                            ]),
+                        );
+                    BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
+                        luma,
+                        red_difference,
+                        blue_difference,
+                    ])
+                }
+                InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange => {
                     let [luma, blue_difference, red_difference] =
                         quantized_to_eight_bit_wire_samples(
                             BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
@@ -690,7 +690,11 @@ mod tests {
 
     /// Ratios of a frame that round-tripped perfectly except on the planes the
     /// caller names, so a classification test can move one plane at a time.
-    fn ratios(luma_db: Option<f64>, blue_db: Option<f64>, red_db: Option<f64>) -> Yuv420PlanePeakSignalToNoiseRatios {
+    fn ratios(
+        luma_db: Option<f64>,
+        blue_db: Option<f64>,
+        red_db: Option<f64>,
+    ) -> Yuv420PlanePeakSignalToNoiseRatios {
         let ratio = |decibels: Option<f64>| match decibels {
             Some(decibels) => PlanePeakSignalToNoiseRatio::Decibels(decibels),
             None => PlanePeakSignalToNoiseRatio::Identical,
@@ -1062,9 +1066,9 @@ mod tests {
                     &reference,
                     InjectedColorRegression::ChromaPlanesTransposed,
                 );
-                let caught_by_luma_too = ReferenceComparisonVerdict::for_luma_ratio(
-                    plane_ratios.luma_ratio,
-                ) == ReferenceComparisonVerdict::Fail;
+                let caught_by_luma_too =
+                    ReferenceComparisonVerdict::for_luma_ratio(plane_ratios.luma_ratio)
+                        == ReferenceComparisonVerdict::Fail;
                 (plane_ratios.verdict() == ReferenceComparisonVerdict::Fail && !caught_by_luma_too)
                     .then_some(reference_stem)
             })
