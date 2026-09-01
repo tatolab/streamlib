@@ -40,6 +40,21 @@ const BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_image(1),
 ];
 
+/// Horizontal siting the hardware reconstructs 4:2:0 chroma at.
+///
+/// Bitstream contract: H.264 §E.2.1 / H.265 §E.3.1 specify that an absent
+/// `chroma_loc_info_present_flag` is inferred as `chroma_sample_loc_type` 0 —
+/// chroma co-sited with the even luma column horizontally, midpoint vertically.
+/// Type 0 is also the MPEG-2/H.264/H.265 default a third-party stream carries when
+/// it signals nothing. `rgb_to_nv12.comp` downsamples to the same siting, and the
+/// tree's own encoder never sets the flag, so both our streams and the common
+/// third-party case are type 0.
+const RECONSTRUCTED_X_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::COSITED_EVEN;
+
+/// Vertical siting the hardware reconstructs 4:2:0 chroma at — `chroma_sample_loc_type`
+/// 0 is midpoint on this axis, which is what `rgb_to_nv12.comp` downsamples to.
+const RECONSTRUCTED_Y_CHROMA_OFFSET: vk::ChromaLocation = vk::ChromaLocation::MIDPOINT;
+
 /// Push constants passed to the compute shader.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -117,6 +132,37 @@ impl Nv12ToRgbConverter {
             let host_device = ctx.host_device().clone();
 
             // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
+            // VUID-VkSamplerYcbcrConversionCreateInfo-xChromaOffset-01651 and -01652: a
+            // chroma location is legal only when the format advertises its matching
+            // feature bit. This conversion sites the two axes differently, so it needs
+            // both COSITED_CHROMA_SAMPLES and MIDPOINT_CHROMA_SAMPLES, and each is a
+            // per-device format property rather than something the format guarantees.
+            // Refuse by name rather than create a conversion the spec forbids.
+            let nv12_format_features = ctx
+                .instance()
+                .get_physical_device_format_properties(
+                    ctx.physical_device(),
+                    vk::Format::G8_B8R8_2PLANE_420_UNORM,
+                )
+                .optimal_tiling_features;
+            let required_chroma_feature = |location: vk::ChromaLocation| match location {
+                vk::ChromaLocation::COSITED_EVEN => vk::FormatFeatureFlags::COSITED_CHROMA_SAMPLES,
+                _ => vk::FormatFeatureFlags::MIDPOINT_CHROMA_SAMPLES,
+            };
+            for offset in [RECONSTRUCTED_X_CHROMA_OFFSET, RECONSTRUCTED_Y_CHROMA_OFFSET] {
+                let feature = required_chroma_feature(offset);
+                if !nv12_format_features.contains(feature) {
+                    tracing::error!(
+                        "G8_B8R8_2PLANE_420_UNORM does not advertise {feature:?}, so chroma \
+                         cannot be reconstructed at {offset:?} — the decoded picture would be \
+                         sited against its own bitstream"
+                    );
+                    return Err(VideoError::FormatNotSupported(
+                        vk::Format::G8_B8R8_2PLANE_420_UNORM,
+                    ));
+                }
+            }
+
             let ycbcr_conversion = device.create_sampler_ycbcr_conversion(
                 &vk::SamplerYcbcrConversionCreateInfo::builder()
                     .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
@@ -128,8 +174,8 @@ impl Nv12ToRgbConverter {
                         b: vk::ComponentSwizzle::IDENTITY,
                         a: vk::ComponentSwizzle::IDENTITY,
                     })
-                    .x_chroma_offset(vk::ChromaLocation::MIDPOINT)
-                    .y_chroma_offset(vk::ChromaLocation::MIDPOINT)
+                    .x_chroma_offset(RECONSTRUCTED_X_CHROMA_OFFSET)
+                    .y_chroma_offset(RECONSTRUCTED_Y_CHROMA_OFFSET)
                     .chroma_filter(vk::Filter::LINEAR)
                     .force_explicit_reconstruction(false),
                 None,
@@ -506,6 +552,33 @@ mod tests {
             SHADER_SPIRV[3],
         ]);
         assert_eq!(magic, 0x07230203, "Invalid SPIR-V magic number");
+    }
+
+    #[test]
+    fn chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies() {
+        use crate::vulkan::video::encode::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
+
+        // Anchored on the value the SPS builder writes. `EncoderConfig` carries a
+        // `chroma_sample_loc_type` too, but nothing on the bitstream path reads it,
+        // so asserting against that field would lock nothing.
+        //
+        // Figure E-1: type 0 sites chroma on the even luma column horizontally and at
+        // the midpoint vertically; type 1 is midpoint on both axes.
+        assert_eq!(
+            SPS_VUI_CHROMA_SAMPLE_LOC_TYPE, 0,
+            "the SPS VUI carries type 0, and an absent present flag has decoders infer \
+             the same; reconstructing anywhere else sites chroma against our own stream"
+        );
+        assert_eq!(
+            RECONSTRUCTED_X_CHROMA_OFFSET,
+            vk::ChromaLocation::COSITED_EVEN,
+            "type 0 is left-sited horizontally"
+        );
+        assert_eq!(
+            RECONSTRUCTED_Y_CHROMA_OFFSET,
+            vk::ChromaLocation::MIDPOINT,
+            "type 0 is midpoint vertically"
+        );
     }
 
     #[test]
