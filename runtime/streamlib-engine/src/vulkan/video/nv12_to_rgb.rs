@@ -132,10 +132,12 @@ impl Nv12ToRgbConverter {
             let host_device = ctx.host_device().clone();
 
             // --- 1. YCbCr conversion (BT.709, ITU narrow range) ---
-            // VUID-VkSamplerYcbcrConversionCreateInfo-xChromaOffset-01651: COSITED_EVEN
-            // is only legal when the format advertises it, and a 4:2:0 format is
-            // required to support just one of the two chroma locations. Refuse by name
-            // rather than create a conversion the spec forbids.
+            // VUID-VkSamplerYcbcrConversionCreateInfo-xChromaOffset-01651 and -01652: a
+            // chroma location is legal only when the format advertises its matching
+            // feature bit. This conversion sites the two axes differently, so it needs
+            // both COSITED_CHROMA_SAMPLES and MIDPOINT_CHROMA_SAMPLES, and each is a
+            // per-device format property rather than something the format guarantees.
+            // Refuse by name rather than create a conversion the spec forbids.
             let nv12_format_features = ctx
                 .instance()
                 .get_physical_device_format_properties(
