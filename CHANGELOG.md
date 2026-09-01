@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.36](https://github.com/tatolab/streamlib/compare/v0.18.35...v0.18.36) (2026-09-01)
+
+
+### Features
+
+* **xtask:** psnr score gates on chroma, not luma alone — floor derived from six recorded rig runs ([#2099](https://github.com/tatolab/streamlib/issues/2099)) ([9b9429a](https://github.com/tatolab/streamlib/commit/9b9429a99c4f466d580ced4b4ced46286fd05dbf)), closes [#2094](https://github.com/tatolab/streamlib/issues/2094)
+
 ## [0.18.35](https://github.com/tatolab/streamlib/compare/v0.18.34...v0.18.35) (2026-09-01)
 
 
