@@ -6,8 +6,6 @@ pub mod audio_clock;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod media_clock;
-// AppleMp4Muxer lives in its domain package's `_apple_impl_pending_/`
-// directory (#786): packages/mp4.
 pub mod pixel_transfer;
 pub mod texture;
 pub mod texture_pool_macos;
