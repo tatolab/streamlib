@@ -35,7 +35,8 @@
 # byte-identically to one publishing the windowed 1080. What gates the crop is
 # the extent assertion in
 # `cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip`,
-# run on the rig. This harness gates colour and codec quality.
+# run on the rig. This harness gates colour and codec quality: Y against the
+# 35/30 dB bands, and either chroma plane under 30 dB failing outright.
 #
 # Environment overrides:
 #   SAMPLES_PER_REFERENCE — decoded frames exchanged per reference (default 2)
@@ -49,6 +50,8 @@
 #                              swap-channels  — R<->B channel swap
 #                              bt601-bt709    — matrix mis-interpretation
 #                              range-swap     — PC<->TV range mis-interpretation
+#                              swap-chroma    — Cb<->Cr transposition, the one
+#                                               mode the luma gate cannot see
 #                            Unknown values exit non-zero (no silent no-op);
 #                            the list is `cargo xtask psnr score --help`.
 #

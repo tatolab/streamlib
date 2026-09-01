@@ -128,6 +128,21 @@ to the next `is_sync_point`, per the decided loss doctrine
   (`swap-channels`, `bt601-bt709`, `range-swap`) so the gate stays provably
   non-vacuous. Pure math, GPU-free: its unit tests are CI-named. ffmpeg leaves
   the scoring path.
+  > Extended 2026-08-31 by #2094. The classification is no longer luma-only:
+  > either chroma plane under 30 dB fails a frame outright, one floor for
+  > every reference and no warn band. Derived from six cold rig runs (three
+  > per codec, 108 samples) whose lowest finite clean chroma figure is
+  > `complex_pattern` at 32.23 dB, reproducing to 0.02 dB run-to-run and
+  > 0.13 dB across codecs. A fourth injection mode `swap-chroma` (Cb↔Cr
+  > transposition) lands with it, because the three above are all caught by
+  > luma as well — without a chroma-only mode the new floor would gate
+  > nothing. What that floor measures is worth knowing: a lossless codec
+  > pushed through the engine's own `rgb_to_nv12` and `nv12_to_rgb` scores
+  > `complex_pattern` within 0.2 dB of a real one, so the chroma columns are
+  > the round trip's colour path — the two converters and the 8-bit TV-range
+  > wire — and carry no codec-quality signal. Every regression class the
+  > gate is for (plane order, plane offset, subsampling filter, matrix,
+  > range) still reaches it, because all of them reach the decoded RGB.
 - `e2e_fixture_psnr.sh` and `e2e_fixture_psnr_vivid.sh` re-point from the dead
   examples to the fixture app + `xtask psnr`; the vivid baseline
   (`psnr_vivid_baseline.tsv`) and ~~its drift lock carry over unchanged~~ its
