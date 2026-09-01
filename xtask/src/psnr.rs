@@ -18,8 +18,9 @@ use anyhow::{Context, Result};
 use clap::Subcommand;
 
 use crate::codec_proof_image_measurement::{
-    InjectedColorRegression, LUMA_PSNR_PASS_FLOOR_DB, LUMA_PSNR_WARN_FLOOR_DB,
-    PlanePeakSignalToNoiseRatio, ReferenceComparisonVerdict, RgbChannelMeans, Rgba8Image,
+    CHROMA_PSNR_PASS_FLOOR_DB, InjectedColorRegression, LUMA_PSNR_PASS_FLOOR_DB,
+    LUMA_PSNR_WARN_FLOOR_DB, ReferenceComparisonVerdict, RgbChannelMeans, Rgba8Image,
+    Yuv420PlanePeakSignalToNoiseRatios,
 };
 
 /// What separates a decoded sample's reference stem from the rest of its file
@@ -35,7 +36,8 @@ const DEFAULT_CHANNEL_MEAN_DRIFT_TOLERANCE: f64 = 0.05;
 pub enum PsnrCommand {
     /// Score decoded frames against the reference PNGs that produced them:
     /// per-plane Y/U/V PSNR, classified Y >= 35 dB pass / 30-35 warn / < 30
-    /// fail. Exits non-zero when any reference fails or went unsampled.
+    /// fail, and either chroma plane under 30 dB failing outright. Exits
+    /// non-zero when any reference fails or went unsampled.
     Score {
         /// Directory of decoded PNGs, each named `<reference_stem>__<n>.png`.
         #[arg(long)]
@@ -120,10 +122,7 @@ pub fn run(command: PsnrCommand) -> Result<()> {
 struct ScoredReferenceComparison {
     reference_stem: String,
     decoded_file_name: String,
-    luma_ratio: PlanePeakSignalToNoiseRatio,
-    blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio,
-    red_difference_chroma_ratio: PlanePeakSignalToNoiseRatio,
-    verdict: ReferenceComparisonVerdict,
+    plane_ratios: Yuv420PlanePeakSignalToNoiseRatios,
 }
 
 fn score_decoded_frames_against_references(
@@ -204,13 +203,13 @@ fn score_decoded_frames_against_references(
 
     let failed_sample_names: Vec<&str> = scored_comparisons
         .iter()
-        .filter(|comparison| comparison.verdict == ReferenceComparisonVerdict::Fail)
+        .filter(|comparison| comparison.plane_ratios.verdict() == ReferenceComparisonVerdict::Fail)
         .map(|comparison| comparison.decoded_file_name.as_str())
         .collect();
     anyhow::ensure!(
         failed_sample_names.is_empty() && unsampled_reference_stems.is_empty(),
-        "PSNR gate FAILED — {} sample(s) below {LUMA_PSNR_WARN_FLOOR_DB} dB Y ({}), \
-         {} reference(s) never sampled ({})",
+        "PSNR gate FAILED — {} sample(s) below {LUMA_PSNR_WARN_FLOOR_DB} dB Y or \
+         {CHROMA_PSNR_PASS_FLOOR_DB} dB chroma ({}), {} reference(s) never sampled ({})",
         failed_sample_names.len(),
         comma_joined_or_none(&failed_sample_names),
         unsampled_reference_stems.len(),
@@ -241,26 +240,15 @@ fn score_one_pair(
             )
         })?;
 
-    let decoded_planes = cropped.to_bt709_full_range_yuv420_planes();
-    let reference_planes = reference.to_bt709_full_range_yuv420_planes();
-    let luma_ratio = PlanePeakSignalToNoiseRatio::between(
-        &decoded_planes.luma_plane,
-        &reference_planes.luma_plane,
+    let plane_ratios = Yuv420PlanePeakSignalToNoiseRatios::between(
+        &cropped.to_bt709_full_range_yuv420_planes(),
+        &reference.to_bt709_full_range_yuv420_planes(),
     )?;
 
     Ok(ScoredReferenceComparison {
         reference_stem,
         decoded_file_name,
-        luma_ratio,
-        blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::between(
-            &decoded_planes.blue_difference_chroma_plane,
-            &reference_planes.blue_difference_chroma_plane,
-        )?,
-        red_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::between(
-            &decoded_planes.red_difference_chroma_plane,
-            &reference_planes.red_difference_chroma_plane,
-        )?,
-        verdict: ReferenceComparisonVerdict::for_luma_ratio(luma_ratio),
+        plane_ratios,
     })
 }
 
@@ -283,7 +271,7 @@ fn report_scored_comparisons(
     tracing::info!(
         "  Fixture PSNR (Y >= {LUMA_PSNR_PASS_FLOOR_DB} pass, \
          {LUMA_PSNR_WARN_FLOOR_DB}-{LUMA_PSNR_PASS_FLOOR_DB} warn, \
-         < {LUMA_PSNR_WARN_FLOOR_DB} fail)"
+         < {LUMA_PSNR_WARN_FLOOR_DB} fail; U and V >= {CHROMA_PSNR_PASS_FLOOR_DB} or fail)"
     );
     tracing::info!("══════════════════════════════════════════════════════════════════");
     tracing::info!(
@@ -297,23 +285,25 @@ fn report_scored_comparisons(
 
     let mut report_tsv = String::from("reference\tdecoded_sample\ty_db\tu_db\tv_db\tverdict\n");
     for comparison in scored_comparisons {
+        let plane_ratios = comparison.plane_ratios;
+        let verdict = plane_ratios.verdict();
         tracing::info!(
             "  {:<28}  {:>8}  {:>8}  {:>8}   {}",
             comparison.decoded_file_name,
-            comparison.luma_ratio.as_report_column(),
-            comparison.blue_difference_chroma_ratio.as_report_column(),
-            comparison.red_difference_chroma_ratio.as_report_column(),
-            comparison.verdict.as_report_column()
+            plane_ratios.luma_ratio.as_report_column(),
+            plane_ratios.blue_difference_chroma_ratio.as_report_column(),
+            plane_ratios.red_difference_chroma_ratio.as_report_column(),
+            verdict.as_report_column()
         );
         writeln!(
             report_tsv,
             "{}\t{}\t{}\t{}\t{}\t{}",
             comparison.reference_stem,
             comparison.decoded_file_name,
-            comparison.luma_ratio.as_report_column(),
-            comparison.blue_difference_chroma_ratio.as_report_column(),
-            comparison.red_difference_chroma_ratio.as_report_column(),
-            comparison.verdict.as_report_column()
+            plane_ratios.luma_ratio.as_report_column(),
+            plane_ratios.blue_difference_chroma_ratio.as_report_column(),
+            plane_ratios.red_difference_chroma_ratio.as_report_column(),
+            verdict.as_report_column()
         )?;
     }
     for unsampled_reference_stem in unsampled_reference_stems {
