@@ -132,6 +132,42 @@ and finally gives Linux the audio-in-MP4 path the old writer never had.
 > `examples/h264-opus-validator` and `examples/camera-audio-recorder` stay held on
 > their own rungs.
 
+## Why the Python surface is four markers and one cast
+
+A codec block is configured and never instantiated, so its Python spelling is the one
+every built-in already has: a marker class with no constructor, passed by type to
+`rt.add`, resolved to the processor's import path by type identity and nothing else.
+Four markers rather than one parameterised class, because each built-in is its own
+port surface, registration and identity — the same reason the engine half is four
+processors over two bodies. A string-import-path door on `rt.add` was rejected: it
+would put an unchecked spelling beside a checked one, and the registry miss it
+invites lands a node in `Error` state rather than raising.
+
+The encoded frame gets one cast, pure Python, composing no surface machinery. Its
+payload is an access unit of bytes riding inline as msgpack `bin`, so it has no
+surface, no claim and no lifetime contract — the audio block's reasoning verbatim. The
+constructor keywords are the wire keys because the read path calls the class with the
+bag's entries; the stored bitstream field takes the Rust struct's name so a reader of
+either language sees one vocabulary. No to-bag helper and no numpy property: an access
+unit is opaque to everything but a decoder, a container or a socket, and a second
+spelling of the wire contract is a second thing that can drift.
+
+No Python-side PSNR rig. Below the marker the path is byte-identical to the one the
+engine-owned rig scored, so the proof that the surface changed nothing is agreement —
+a Python-authored round trip locking to the same per-codec vivid baseline within the
+same tolerance. A separate rig could only measure the same converters twice.
+
+The decoded frame is buffer-backed, which puts it on the camera's side of the
+kernel-bindability line: a Python kernel reaches it through a DLPack landing copy, not
+by bare surface id. Carried, not created — the decoder publishes through the same
+pooled pixel-buffer hand-off the camera's non-DMA-BUF path uses, and moving it to a
+texture backing is an engine question no Python surface should answer in passing.
+
+Two things a Python author will meet are engine-wide and deliberately not fixed under
+a codec rung: no built-in refuses an unknown config key, and a device without Vulkan
+Video runs the app with an empty channel rather than refusing at `setup()`. Both are
+recorded as findings on the change; the stub docstrings state today's behavior.
+
 ## Known landmines carried forward (from the audit, for the implementing tickets)
 
 - First-IDR loss over a late-attaching subscriber; driver-defined session-parameter
