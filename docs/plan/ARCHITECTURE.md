@@ -1207,11 +1207,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   The chroma floor is derived, not chosen: six cold rig runs (three per codec, 108
   samples) put the lowest finite clean chroma figure at `complex_pattern` 32.23 dB,
   reproducing to 0.02 dB run-to-run and 0.13 dB across codecs. That derivation ran
-  against a decode path that reconstructed chroma half a luma sample off the siting
-  its own bitstream implies; #2100 corrected the siting and the figure rose to 33.52 dB
-  (H.264) / 33.42 dB (H.265), 0.10 dB across codecs. `complex_pattern` is still the
-  lowest finite clean chroma reading, and the floor stays 30 dB — the correction widens
-  its margin rather than moving it. A fourth injection mode
+  against a decode path that reconstructed chroma half a luma sample off the siting its
+  own bitstream implies; #2100 corrected the siting and the figure rose to 33.52 dB
+  (H.264) / 33.42 dB (H.265) — three cold runs per codec of that reference, identical to
+  0.00 dB run-to-run, and 0.10 dB across codecs. One whole-set run per codec confirms
+  `complex_pattern` still carries the minimum, the next finite chroma reading in the set
+  being 48.13 dB. The floor stays 30 dB: the correction widens its margin rather than
+  moving it. A fourth injection mode
   `swap-chroma` (Cb↔Cr transposition) lands with it and is what makes the floor
   non-vacuous — the other three (`swap-channels`, `bt601-bt709`, `range-swap`) are all
   caught by luma as well, so without a chroma-only regression the new floor would gate
