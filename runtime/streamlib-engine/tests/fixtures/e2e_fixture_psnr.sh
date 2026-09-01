@@ -50,8 +50,18 @@
 #                              swap-channels  — R<->B channel swap
 #                              bt601-bt709    — matrix mis-interpretation
 #                              range-swap     — PC<->TV range mis-interpretation
-#                              swap-chroma    — Cb<->Cr transposition, the one
-#                                               mode the luma gate cannot see
+#                              swap-chroma    — Cb<->Cr transposition, the mode
+#                                               the chroma floor exists for.
+#                                               Only solid_red and solid_green
+#                                               are luma-passing under it —
+#                                               out-of-gamut clamping drags Y
+#                                               down on complex_pattern and
+#                                               solid_blue — so a whole-set run
+#                                               would fail with the chroma floor
+#                                               deleted. Narrow with
+#                                               REFERENCE_STEMS="solid_red
+#                                               solid_green" to exercise the
+#                                               chroma floor specifically.
 #                            Unknown values exit non-zero (no silent no-op);
 #                            the list is `cargo xtask psnr score --help`.
 #

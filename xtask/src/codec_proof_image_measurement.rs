@@ -27,9 +27,10 @@ pub const LUMA_PSNR_WARN_FLOOR_DB: f64 = 30.0;
 /// Chroma-plane PSNR below which a round trip is a regression, in dB. One floor
 /// for both planes and every reference, and no warn band above it.
 ///
-/// Derived from six cold rig runs (three per codec, 108 samples): the lowest
-/// finite clean chroma figure in the set is `complex_pattern` at 32.23 dB,
-/// reproducing to 0.02 dB run-to-run and 0.13 dB across codecs. A warn band
+/// Derived from six cold rig runs (three per codec, 108 samples) recorded in
+/// `docs/plan/changes/codec-roundtrip-reproof.md`: the lowest finite clean
+/// chroma figure in the set is `complex_pattern` at 32.23 dB, reproducing to
+/// 0.02 dB run-to-run and 0.13 dB across codecs. A warn band
 /// would be dead space, because a clean chroma figure here is not a quality
 /// continuum like luma but a constant of the colour-conversion cascade.
 ///
@@ -453,10 +454,12 @@ pub enum InjectedColorRegression {
     /// one.
     #[value(name = "range-swap")]
     FullRangeEncodedDecodedAsLimitedRange,
-    /// Cb and Cr exchanged on the wire — the chroma plane-order class. The
-    /// only mode that is chroma-only by construction, because transposing the
-    /// two difference planes leaves Y untouched: it is the regression the luma
-    /// gate cannot see, and the one the chroma floor exists for.
+    /// Cb and Cr exchanged on the wire — the chroma plane-order class, and the
+    /// mode the chroma floor exists for: on `solid_red` and `solid_green` the
+    /// luma ratio passes and chroma alone fails the frame. The transposition
+    /// leaves Y untouched only where the result stays in gamut, so clamping
+    /// drags Y under its own floor on `complex_pattern` and `solid_blue` —
+    /// narrow a run to the first two to exercise the chroma floor specifically.
     /// Greyscale-invariant like the other two chroma modes.
     #[value(name = "swap-chroma")]
     ChromaPlanesTransposed,
@@ -983,7 +986,10 @@ mod tests {
         assert_eq!(
             reference_paths.len(),
             9,
-            "the reference set moved: six solids, two greyscale ramps, one detailed pattern"
+            "the reference set moved: six solids, two greyscale ramps, one detailed pattern. \
+             CHROMA_PSNR_PASS_FLOOR_DB was derived against this set — a reference carrying more \
+             saturated chroma detail than `complex_pattern` needs the floor re-measured, not \
+             this assertion relaxed"
         );
         reference_paths
             .iter()
@@ -1057,8 +1063,8 @@ mod tests {
 
     /// Each mode's effect on chroma *alone*, with luma set aside entirely — the
     /// verdict sets above cannot tell a chroma trip from luma collateral, and
-    /// two of these modes are chroma regressions whose whole claim is that they
-    /// move U and V.
+    /// three of these modes are chroma regressions whose whole claim is that
+    /// they move U and V.
     ///
     /// `range-swap` mapping to the empty set is the load-bearing negative: it
     /// is a luma regression, and a chroma floor that fired on it would be

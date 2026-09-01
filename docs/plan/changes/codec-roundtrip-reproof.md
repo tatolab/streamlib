@@ -135,8 +135,13 @@ to the next `is_sync_point`, per the decided loss doctrine
   > `complex_pattern` at 32.23 dB, reproducing to 0.02 dB run-to-run and
   > 0.13 dB across codecs. A fourth injection mode `swap-chroma` (Cb↔Cr
   > transposition) lands with it, because the three above are all caught by
-  > luma as well — without a chroma-only mode the new floor would gate
-  > nothing. What that floor measures is worth knowing: a lossless codec
+  > luma as well — without it the new floor would gate nothing. Worth knowing
+  > for a rig arm: `swap-chroma` is not luma-invariant as measured either.
+  > The transposition leaves Y untouched on the wire, but the inverse
+  > transform puts `complex_pattern` and `solid_blue` out of gamut and the
+  > clamp moves their Y, so a whole-set run fails on luma too. `solid_red`
+  > (Y 42.11) and `solid_green` (Y 38.59) are the two that pass luma and
+  > fail on chroma alone, and they are what makes the floor non-vacuous. What that floor measures is worth knowing: a lossless codec
   > pushed through the engine's own `rgb_to_nv12` and `nv12_to_rgb` scores
   > `complex_pattern` within 0.2 dB of a real one, so the chroma columns are
   > the round trip's colour path — the two converters and the 8-bit TV-range
