@@ -6,7 +6,7 @@ Decoded video looks right — correct colours, correct orientation, correct
 extent, no validation errors, no log warnings — but PSNR against the source
 collapses on detailed content while flat content scores unchanged:
 
-```
+```text
   decoded sample                   Y(dB)     U(dB)     V(dB)   verdict
   complex_pattern__0               26.96     28.25     23.60   FAIL     <- was 48.82
   gradient_horizontal__0           46.51       inf       inf   PASS     <- was 53.36

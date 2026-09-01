@@ -452,6 +452,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "vulkan::video::decode::decoded_picture_display_window::tests::an_aligned_extent_carries_no_window_and_crops_nothing",
                 "vulkan::video::decode::decoded_picture_display_window::tests::a_left_top_offset_moves_the_origin_rather_than_shrinking_the_far_edge",
                 "vulkan::video::decode::decoded_picture_display_window::tests::a_window_cropping_past_the_coded_picture_is_refused_rather_than_wrapped",
+                "vulkan::video::decode::decoded_picture_display_window::tests::offsets_that_overflow_their_own_sum_are_refused_rather_than_wrapped",
                 "vulkan::video::decode::decoded_picture_display_window::tests::h264_frame_cropping_takes_two_luma_rows_per_offset_when_frame_coded",
                 "vulkan::video::decode::decoded_picture_display_window::tests::h264_field_coding_doubles_the_rows_an_offset_takes",
                 "vulkan::video::decode::decoded_picture_display_window::tests::h264_separate_colour_planes_crop_in_monochrome_units",
