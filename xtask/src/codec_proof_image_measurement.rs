@@ -24,6 +24,25 @@ pub const LUMA_PSNR_PASS_FLOOR_DB: f64 = 35.0;
 /// investigate, not bad enough to have obviously broken.
 pub const LUMA_PSNR_WARN_FLOOR_DB: f64 = 30.0;
 
+/// Chroma-plane PSNR below which a round trip is a regression, in dB. One floor
+/// for both planes and every reference, and no warn band above it.
+///
+/// Derived from six cold rig runs (three per codec, 108 samples, #2094): the
+/// lowest finite clean chroma figure in the set is `complex_pattern` at 32.23 dB,
+/// reproducing to within 0.02 dB run-to-run and 0.13 dB across codecs. A warn
+/// band would be dead space — unlike luma, a clean chroma figure here is not a
+/// quality continuum but a constant of the colour-conversion cascade, so there
+/// is no legitimately-degraded region to warn about.
+///
+/// What this floor gates is the round trip's colour path, not codec quality: a
+/// lossless codec pushed through the engine's own `rgb_to_nv12` and
+/// `nv12_to_rgb` scores `complex_pattern` within 0.2 dB of a real one, so the
+/// codec's own chroma contribution is smaller than the H.264/H.265 difference.
+/// Every regression class it is here to catch — a plane-order or plane-offset
+/// slip, a subsampling-filter change, a Cb/Cr transposition — reaches the
+/// decoded RGB and so reaches this measurement.
+pub const CHROMA_PSNR_PASS_FLOOR_DB: f64 = 30.0;
+
 /// The largest value an 8-bit sample can take, which is the peak the ratio is
 /// taken against.
 const EIGHT_BIT_SAMPLE_PEAK: f64 = 255.0;
@@ -210,7 +229,22 @@ impl Rgba8Image {
                     BT709_LUMA_COEFFICIENTS
                         .yuv_to_rgb_full_range(quantized_to_eight_bit_wire_samples(yuv))
                 }
-                InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange => {
+                InjectedColorRegression::ChromaPlanesTransposed => {
+                let [luma, blue_difference, red_difference] =
+                    quantized_to_eight_bit_wire_samples(
+                        BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
+                            f32::from(pixel[0]),
+                            f32::from(pixel[1]),
+                            f32::from(pixel[2]),
+                        ]),
+                    );
+                BT709_LUMA_COEFFICIENTS.yuv_to_rgb_full_range([
+                    luma,
+                    red_difference,
+                    blue_difference,
+                ])
+            }
+            InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange => {
                     let [luma, blue_difference, red_difference] =
                         quantized_to_eight_bit_wire_samples(
                             BT709_LUMA_COEFFICIENTS.rgb_to_yuv_full_range([
@@ -328,21 +362,79 @@ impl PlanePeakSignalToNoiseRatio {
     }
 }
 
+/// All three of one decoded frame's plane ratios against its reference.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Yuv420PlanePeakSignalToNoiseRatios {
+    pub luma_ratio: PlanePeakSignalToNoiseRatio,
+    pub blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio,
+    pub red_difference_chroma_ratio: PlanePeakSignalToNoiseRatio,
+}
+
+impl Yuv420PlanePeakSignalToNoiseRatios {
+    /// Score a decoded frame's planes against the reference's, plane by plane.
+    pub fn between(measured: &Yuv420Planes, reference: &Yuv420Planes) -> Result<Self> {
+        Ok(Self {
+            luma_ratio: PlanePeakSignalToNoiseRatio::between(
+                &measured.luma_plane,
+                &reference.luma_plane,
+            )?,
+            blue_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::between(
+                &measured.blue_difference_chroma_plane,
+                &reference.blue_difference_chroma_plane,
+            )?,
+            red_difference_chroma_ratio: PlanePeakSignalToNoiseRatio::between(
+                &measured.red_difference_chroma_plane,
+                &reference.red_difference_chroma_plane,
+            )?,
+        })
+    }
+
+    /// The two chroma ratios, which share one floor and are interchangeable to
+    /// the classification.
+    fn chroma_ratios(&self) -> [PlanePeakSignalToNoiseRatio; 2] {
+        [
+            self.blue_difference_chroma_ratio,
+            self.red_difference_chroma_ratio,
+        ]
+    }
+
+    /// How the frame classifies.
+    ///
+    /// Luma carries the three-band judgement, and either chroma plane below
+    /// [`CHROMA_PSNR_PASS_FLOOR_DB`] fails the frame outright — a chroma
+    /// transposition or a plane-offset slip leaves Y at a passing ratio, so a
+    /// luma-only verdict would report it as a clean round trip.
+    pub fn verdict(&self) -> ReferenceComparisonVerdict {
+        if self
+            .chroma_ratios()
+            .iter()
+            .any(|chroma_ratio| !chroma_ratio.reaches_floor_db(CHROMA_PSNR_PASS_FLOOR_DB))
+        {
+            return ReferenceComparisonVerdict::Fail;
+        }
+        ReferenceComparisonVerdict::for_luma_ratio(self.luma_ratio)
+    }
+}
+
 /// How a decoded frame compares to the reference that produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceComparisonVerdict {
-    /// Y at or above [`LUMA_PSNR_PASS_FLOOR_DB`].
+    /// Y at or above [`LUMA_PSNR_PASS_FLOOR_DB`], both chroma planes at or
+    /// above [`CHROMA_PSNR_PASS_FLOOR_DB`].
     Pass,
     /// Y between the warn and pass floors — investigate, do not gate on it.
+    /// Chroma has no warn band, so it never lands here.
     Warn,
-    /// Y below [`LUMA_PSNR_WARN_FLOOR_DB`]: a colour-matrix, range, or
-    /// plane-layout regression.
+    /// Y below [`LUMA_PSNR_WARN_FLOOR_DB`], or either chroma plane below
+    /// [`CHROMA_PSNR_PASS_FLOOR_DB`]: a colour-matrix, range, or plane-layout
+    /// regression.
     Fail,
 }
 
 impl ReferenceComparisonVerdict {
-    /// Classify a luma ratio against the decided floors.
-    pub fn for_luma_ratio(luma_ratio: PlanePeakSignalToNoiseRatio) -> Self {
+    /// The three-band luma judgement, which chroma can only worsen. Private so
+    /// that a frame is never classified on luma alone.
+    fn for_luma_ratio(luma_ratio: PlanePeakSignalToNoiseRatio) -> Self {
         if luma_ratio.reaches_floor_db(LUMA_PSNR_PASS_FLOOR_DB) {
             Self::Pass
         } else if luma_ratio.reaches_floor_db(LUMA_PSNR_WARN_FLOOR_DB) {
@@ -382,14 +474,23 @@ pub enum InjectedColorRegression {
     /// one.
     #[value(name = "range-swap")]
     FullRangeEncodedDecodedAsLimitedRange,
+    /// Cb and Cr exchanged on the wire — the chroma plane-order class. The
+    /// only mode that is chroma-only by construction, because transposing the
+    /// two difference planes leaves Y untouched: it is the regression the luma
+    /// gate cannot see, and the one
+    /// [`CHROMA_PSNR_PASS_FLOOR_DB`] exists for. Greyscale-invariant like the
+    /// other two chroma modes.
+    #[value(name = "swap-chroma")]
+    ChromaPlanesTransposed,
 }
 
 impl InjectedColorRegression {
     /// Every mode, in the order the rig documents them.
-    pub const ALL: [InjectedColorRegression; 3] = [
+    pub const ALL: [InjectedColorRegression; 4] = [
         InjectedColorRegression::SwapRedAndBlueChannels,
         InjectedColorRegression::Bt601EncodedDecodedAsBt709,
         InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange,
+        InjectedColorRegression::ChromaPlanesTransposed,
     ];
 
     /// The spelling the command line and the fixture scripts use.
@@ -398,6 +499,7 @@ impl InjectedColorRegression {
             Self::SwapRedAndBlueChannels => "swap-channels",
             Self::Bt601EncodedDecodedAsBt709 => "bt601-bt709",
             Self::FullRangeEncodedDecodedAsLimitedRange => "range-swap",
+            Self::ChromaPlanesTransposed => "swap-chroma",
         }
     }
 }
@@ -574,20 +676,30 @@ mod tests {
         Rgba8Image::from_rgba_bytes(pixel_width, pixel_height, rgba_bytes).unwrap()
     }
 
-    fn luma_ratio_against_itself_after_injecting(
+    fn plane_ratios_against_itself_after_injecting(
         image: &Rgba8Image,
         regression: InjectedColorRegression,
-    ) -> PlanePeakSignalToNoiseRatio {
+    ) -> Yuv420PlanePeakSignalToNoiseRatios {
         let reference_planes = image.to_bt709_full_range_yuv420_planes();
         let injected_planes = image
             .clone()
             .with_injected_color_regression(regression)
             .to_bt709_full_range_yuv420_planes();
-        PlanePeakSignalToNoiseRatio::between(
-            &injected_planes.luma_plane,
-            &reference_planes.luma_plane,
-        )
-        .unwrap()
+        Yuv420PlanePeakSignalToNoiseRatios::between(&injected_planes, &reference_planes).unwrap()
+    }
+
+    /// Ratios of a frame that round-tripped perfectly except on the planes the
+    /// caller names, so a classification test can move one plane at a time.
+    fn ratios(luma_db: Option<f64>, blue_db: Option<f64>, red_db: Option<f64>) -> Yuv420PlanePeakSignalToNoiseRatios {
+        let ratio = |decibels: Option<f64>| match decibels {
+            Some(decibels) => PlanePeakSignalToNoiseRatio::Decibels(decibels),
+            None => PlanePeakSignalToNoiseRatio::Identical,
+        };
+        Yuv420PlanePeakSignalToNoiseRatios {
+            luma_ratio: ratio(luma_db),
+            blue_difference_chroma_ratio: ratio(blue_db),
+            red_difference_chroma_ratio: ratio(red_db),
+        }
     }
 
     /// The module's whole premise is that the scorer and the pipeline agree on
@@ -657,21 +769,70 @@ mod tests {
 
     #[test]
     fn the_verdict_reads_the_decided_floors_at_their_boundaries() {
-        use PlanePeakSignalToNoiseRatio::Decibels;
         use ReferenceComparisonVerdict::{Fail, Pass, Warn};
-        for (ratio, expected) in [
-            (PlanePeakSignalToNoiseRatio::Identical, Pass),
-            (Decibels(LUMA_PSNR_PASS_FLOOR_DB), Pass),
-            (Decibels(LUMA_PSNR_PASS_FLOOR_DB - 0.01), Warn),
-            (Decibels(LUMA_PSNR_WARN_FLOOR_DB), Warn),
-            (Decibels(LUMA_PSNR_WARN_FLOOR_DB - 0.01), Fail),
+        for (plane_ratios, expected, what) in [
+            (ratios(None, None, None), Pass, "a perfect round trip"),
+            (
+                ratios(Some(LUMA_PSNR_PASS_FLOOR_DB), None, None),
+                Pass,
+                "luma exactly at its pass floor",
+            ),
+            (
+                ratios(Some(LUMA_PSNR_PASS_FLOOR_DB - 0.01), None, None),
+                Warn,
+                "luma a hundredth under its pass floor",
+            ),
+            (
+                ratios(Some(LUMA_PSNR_WARN_FLOOR_DB), None, None),
+                Warn,
+                "luma exactly at its warn floor",
+            ),
+            (
+                ratios(Some(LUMA_PSNR_WARN_FLOOR_DB - 0.01), None, None),
+                Fail,
+                "luma a hundredth under its warn floor",
+            ),
+            (
+                ratios(None, Some(CHROMA_PSNR_PASS_FLOOR_DB), None),
+                Pass,
+                "Cb exactly at the chroma floor",
+            ),
+            (
+                ratios(None, Some(CHROMA_PSNR_PASS_FLOOR_DB - 0.01), None),
+                Fail,
+                "Cb a hundredth under the chroma floor",
+            ),
+            (
+                ratios(None, None, Some(CHROMA_PSNR_PASS_FLOOR_DB - 0.01)),
+                Fail,
+                "Cr a hundredth under the chroma floor",
+            ),
         ] {
-            assert_eq!(
-                ReferenceComparisonVerdict::for_luma_ratio(ratio),
-                expected,
-                "{ratio:?} classified wrong"
-            );
+            assert_eq!(plane_ratios.verdict(), expected, "{what} classified wrong");
         }
+    }
+
+    /// The whole point of the chroma floor: chroma is judged on its own, not
+    /// as a tie-break on a luma figure that already decided the frame.
+    #[test]
+    fn a_chroma_plane_under_its_floor_fails_a_frame_whose_luma_passes_comfortably() {
+        assert_eq!(
+            ratios(Some(48.0), None, Some(24.0)).verdict(),
+            ReferenceComparisonVerdict::Fail,
+            "a Cr plane 24 dB down is a regression however clean Y is"
+        );
+        // And the inverse, so the floor cannot be satisfied by averaging the
+        // two chroma planes together: one healthy plane does not cover for the
+        // other.
+        assert_eq!(
+            ratios(None, Some(60.0), Some(24.0)).verdict(),
+            ReferenceComparisonVerdict::Fail
+        );
+        // Chroma has no warn band, so a chroma-clean frame keeps luma's.
+        assert_eq!(
+            ratios(Some(32.0), Some(40.0), Some(40.0)).verdict(),
+            ReferenceComparisonVerdict::Warn
+        );
     }
 
     #[test]
@@ -702,40 +863,69 @@ mod tests {
 
     #[test]
     fn swapping_red_and_blue_moves_a_saturated_frame_below_the_fail_floor() {
-        let ratio = luma_ratio_against_itself_after_injecting(
+        let plane_ratios = plane_ratios_against_itself_after_injecting(
             &solid_color_image(16, 16, [255, 0, 0]),
             InjectedColorRegression::SwapRedAndBlueChannels,
         );
         assert_eq!(
-            ReferenceComparisonVerdict::for_luma_ratio(ratio),
+            plane_ratios.verdict(),
             ReferenceComparisonVerdict::Fail,
-            "R<->B on a saturated red must trip the gate; got {ratio:?}"
+            "R<->B on a saturated red must trip the gate; got {plane_ratios:?}"
         );
     }
 
     #[test]
     fn the_bt601_bt709_mismatch_moves_a_saturated_frame_below_the_fail_floor() {
-        let ratio = luma_ratio_against_itself_after_injecting(
+        let plane_ratios = plane_ratios_against_itself_after_injecting(
             &solid_color_image(16, 16, [255, 0, 0]),
             InjectedColorRegression::Bt601EncodedDecodedAsBt709,
         );
         assert_eq!(
-            ReferenceComparisonVerdict::for_luma_ratio(ratio),
+            plane_ratios.verdict(),
             ReferenceComparisonVerdict::Fail,
-            "a matrix mis-interpretation on a saturated red must trip the gate; got {ratio:?}"
+            "a matrix mis-interpretation on a saturated red must trip the gate; \
+             got {plane_ratios:?}"
         );
     }
 
     #[test]
     fn the_range_swap_moves_a_luma_ramp_below_the_fail_floor() {
-        let ratio = luma_ratio_against_itself_after_injecting(
+        let plane_ratios = plane_ratios_against_itself_after_injecting(
             &horizontal_luma_ramp_image(256, 8),
             InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange,
         );
         assert_eq!(
-            ReferenceComparisonVerdict::for_luma_ratio(ratio),
+            plane_ratios.verdict(),
             ReferenceComparisonVerdict::Fail,
-            "expanding 16-235 across a full ramp clips both ends; got {ratio:?}"
+            "expanding 16-235 across a full ramp clips both ends; got {plane_ratios:?}"
+        );
+        assert_eq!(
+            ReferenceComparisonVerdict::for_luma_ratio(plane_ratios.luma_ratio),
+            ReferenceComparisonVerdict::Fail,
+            "the range swap is a luma regression, and must trip the gate as one"
+        );
+    }
+
+    /// The regression the luma gate cannot see, and the reason the chroma floor
+    /// exists. Transposing Cb and Cr leaves Y untouched on the wire, so on a
+    /// saturated primary the frame keeps a comfortably-passing luma ratio while
+    /// both chroma planes collapse.
+    #[test]
+    fn a_chroma_transposition_is_caught_by_chroma_where_the_luma_gate_passes_it() {
+        let plane_ratios = plane_ratios_against_itself_after_injecting(
+            &solid_color_image(16, 16, [255, 0, 0]),
+            InjectedColorRegression::ChromaPlanesTransposed,
+        );
+        assert_eq!(
+            ReferenceComparisonVerdict::for_luma_ratio(plane_ratios.luma_ratio),
+            ReferenceComparisonVerdict::Pass,
+            "if luma caught this the test would prove nothing about chroma; \
+             got {plane_ratios:?}"
+        );
+        assert_eq!(
+            plane_ratios.verdict(),
+            ReferenceComparisonVerdict::Fail,
+            "a total chroma inversion must fail the frame; got {plane_ratios:?}"
         );
     }
 
@@ -749,6 +939,7 @@ mod tests {
         for chroma_only_mode in [
             InjectedColorRegression::SwapRedAndBlueChannels,
             InjectedColorRegression::Bt601EncodedDecodedAsBt709,
+            InjectedColorRegression::ChromaPlanesTransposed,
         ] {
             assert_eq!(
                 greyscale_ramp
@@ -780,25 +971,24 @@ mod tests {
     /// failures. A mode that trips nothing passes a run carrying that
     /// regression; a mode that trips everything would gate on the injection
     /// itself and could hide a real chroma bug behind a guaranteed failure.
-    #[test]
-    fn every_injection_mode_trips_exactly_the_references_its_content_class_carries() {
-        let reference_directory = std::path::Path::new(CHECKED_IN_REFERENCE_DIRECTORY);
-        let mut reference_paths: Vec<std::path::PathBuf> = std::fs::read_dir(reference_directory)
-            .expect("the checked-in reference set is part of the repo")
-            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
-            .collect();
+    /// The checked-in reference set, by stem, in sorted order. Read as a whole
+    /// because every expectation below is tuned to the content classes the set
+    /// carries, so a changed set has to be re-measured rather than have a test
+    /// relaxed around it.
+    fn sorted_checked_in_references() -> Vec<(String, Rgba8Image)> {
+        let mut reference_paths: Vec<std::path::PathBuf> =
+            std::fs::read_dir(std::path::Path::new(CHECKED_IN_REFERENCE_DIRECTORY))
+                .expect("the checked-in reference set is part of the repo")
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
+                .collect();
         reference_paths.sort();
         assert_eq!(
             reference_paths.len(),
             9,
-            "the reference set moved; the expectations below are tuned to its content classes \
-             (six solids, two greyscale ramps, one detailed pattern) and a changed set has to be \
-             re-measured rather than have this test relaxed"
+            "the reference set moved: six solids, two greyscale ramps, one detailed pattern"
         );
-
-        // Read once: the same reference is scored against three injections.
-        let references: Vec<(String, Rgba8Image)> = reference_paths
+        reference_paths
             .iter()
             .map(|reference_path| {
                 (
@@ -810,7 +1000,13 @@ mod tests {
                     Rgba8Image::read_png(reference_path).unwrap(),
                 )
             })
-            .collect();
+            .collect()
+    }
+
+    #[test]
+    fn every_injection_mode_trips_exactly_the_references_its_content_class_carries() {
+        // Read once: the same reference is scored against every injection.
+        let references = sorted_checked_in_references();
 
         for (regression, expected_to_trip) in [
             // Green survives an R<->B swap untouched, which is why the set
@@ -829,13 +1025,19 @@ mod tests {
                 InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange,
                 vec!["gradient_horizontal", "gradient_vertical"],
             ),
+            // Every reference carrying chroma at all. Two of them —
+            // `solid_green` and `solid_red` — trip on chroma while their luma
+            // ratio passes, which is what the next assertion pins.
+            (
+                InjectedColorRegression::ChromaPlanesTransposed,
+                vec!["complex_pattern", "solid_blue", "solid_green", "solid_red"],
+            ),
         ] {
             let tripped: Vec<&str> = references
                 .iter()
                 .filter(|(_, reference)| {
-                    ReferenceComparisonVerdict::for_luma_ratio(
-                        luma_ratio_against_itself_after_injecting(reference, regression),
-                    ) == ReferenceComparisonVerdict::Fail
+                    plane_ratios_against_itself_after_injecting(reference, regression).verdict()
+                        == ReferenceComparisonVerdict::Fail
                 })
                 .map(|(reference_stem, _)| reference_stem.as_str())
                 .collect();
@@ -846,6 +1048,33 @@ mod tests {
                 regression.as_command_line_value()
             );
         }
+    }
+
+    /// Non-vacuity of the chroma floor itself, on the bytes that ship. The
+    /// three older modes are all caught by luma as well, so the floor would be
+    /// pure decoration without a reference that only chroma catches.
+    #[test]
+    fn the_chroma_floor_catches_references_the_luma_gate_passes() {
+        let caught_by_chroma_alone: Vec<String> = sorted_checked_in_references()
+            .into_iter()
+            .filter_map(|(reference_stem, reference)| {
+                let plane_ratios = plane_ratios_against_itself_after_injecting(
+                    &reference,
+                    InjectedColorRegression::ChromaPlanesTransposed,
+                );
+                let caught_by_luma_too = ReferenceComparisonVerdict::for_luma_ratio(
+                    plane_ratios.luma_ratio,
+                ) == ReferenceComparisonVerdict::Fail;
+                (plane_ratios.verdict() == ReferenceComparisonVerdict::Fail && !caught_by_luma_too)
+                    .then_some(reference_stem)
+            })
+            .collect();
+
+        assert_eq!(
+            caught_by_chroma_alone,
+            ["solid_green", "solid_red"],
+            "a chroma floor that never catches what luma misses gates nothing"
+        );
     }
 
     #[test]
