@@ -186,7 +186,7 @@ expect_silent "listing then grepping for cargo run does not escalate"
 
 # The cargo key is anchored the same way its streamlib twin is; a read that
 # merely prints the phrase is not a build.
-run_hook 'tail -20 examples/vulkan-video-roundtrip/README.md'
+run_hook 'tail -20 examples/jpeg-psnr/README.md'
 expect_silent "reading an example README does not escalate"
 
 # ── Known-uncovered shapes, locked so a change to them fails loudly ──
@@ -194,6 +194,14 @@ expect_silent "reading an example README does not escalate"
 # inside it also reaches inside `bash -c "grep -rn 'streamlib run' examples/"`.
 run_hook 'bash -c "streamlib run --dir examples/camera-display"'
 expect_silent "a launch inside bash -c is NOT braked (unparsed string body)"
+
+# The rig's own runnable is an engine example — a workspace target reached by
+# `--example`, not a crate under examples/ — so the path key never sees it,
+# and it opens a camera, a Vulkan Video queue and a display window unbraked.
+# The gap arrived with the rig, not with a change to this hook. Locked so
+# closing it fails loudly here rather than silently widening the key.
+run_hook 'cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera'
+expect_silent "the codec rig is NOT braked (it names no examples/ path)"
 
 # A heredoc body line is indistinguishable from a command line, so writing an
 # evidence report that quotes the launch command asks. This is the one residual
@@ -221,7 +229,7 @@ expect_silent "streamlib dev outside examples/ is NOT braked (scoped by the tick
 run_hook 'cargo run -p camera-display'
 expect_silent "cargo run -p camera-display names a crate that no longer exists"
 
-run_hook 'cargo run -p vulkan-video-roundtrip'
+run_hook 'cargo run -p jpeg-psnr'
 expect_silent "no -p spelling reaches an example, so neither dead key survives"
 
 # The text-tool guard covers both launch keys, not just the streamlib one.
@@ -231,10 +239,10 @@ expect_silent "grepping for cargo run in examples/ does not escalate"
 run_hook 'git commit -m "docs: cargo run in examples/ still works"'
 expect_silent "a commit message naming cargo run in examples/ does not escalate"
 
-run_hook 'cargo run --release' '/home/dev/streamlib/examples/vulkan-video-roundtrip'
+run_hook 'cargo run --release' '/home/dev/streamlib/examples/jpeg-psnr'
 expect_ask "cargo run from inside an example directory escalates"
 
-run_hook 'cargo run --manifest-path examples/vulkan-video-roundtrip/Cargo.toml'
+run_hook 'cargo run --manifest-path examples/jpeg-psnr/Cargo.toml'
 expect_ask "cargo run against an example manifest escalates"
 
 run_hook 'cargo run -p xtask -- check-no-in-process-placement'

@@ -13,10 +13,15 @@ arguments:
 
 Capture a verification video using the streamlib processor pipeline (Camera → Encoder → MP4Writer) and send it to the user via Telegram. Use this when the user asks to verify the video pipeline, requests a test video, or wants confirmation that encoding works.
 
+> **Blocked on the muxer.** No `Mp4Sink` built-in exists yet — it lands with the recording
+> showcase. The codec rig below proves encode → decode end to end but writes no file, so steps
+> 3–5 have nothing to send. Until the muxer lands, verify with `/verify-live`, which reads the
+> decoded frames out of the running rig over the control plane.
+
 ## Arguments
 
 - `codec`: First argument — `h264` or `h265`. Default: `h265`
-- `duration`: Second argument — seconds to capture. Default: `5`
+- `duration`: Second argument — seconds the `timeout` wrapper gives the rig. Default: `5`
 
 ## Steps
 
@@ -25,11 +30,13 @@ Capture a verification video using the streamlib processor pipeline (Camera → 
    rm -f /tmp/streamlib_live_h264.mp4 /tmp/streamlib_live_h265.mp4 /tmp/streamlib_test_h265.mp4
    ```
 
-2. Run the streamlib pipeline example (**debug build only** — release has a known race condition, see #273):
+2. Run the codec rig (**debug build only** — release has a known race condition, see #273):
    ```bash
-   timeout $((duration + 15)) cargo run -p vulkan-video-roundtrip -- $codec /dev/video2 $duration 60
+   timeout $((duration + 15)) cargo run -p streamlib-engine --example codec_roundtrip_rig -- \
+     --codec $codec --source camera --camera /dev/video2
    ```
-   Output: `/tmp/streamlib_live_${codec}.mp4`
+   Output: none on disk — the rig hosts the control plane and stays up. Steps 3–5 resume when
+   the muxer lands.
 
 3. If codec is `h265`, re-mux with `hvc1` tag for Apple device playback:
    ```bash
@@ -51,4 +58,4 @@ Capture a verification video using the streamlib processor pipeline (Camera → 
 - **Always use debug build** (no `--release`) — release build has a threading race condition (#273)
 - The vivid virtual camera is at `/dev/video2` — outputs animated SMPTE color bars with frame counter
 - If vivid isn't available, check `v4l2-ctl --list-devices`
-- The pipeline auto-stops after `duration + 2` seconds; the `timeout` wrapper adds extra margin for compilation
+- The rig takes no duration flag and does not auto-stop — it hosts the control plane and runs until killed, so the `timeout` wrapper is the only bound; its margin also covers compilation

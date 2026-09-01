@@ -6,9 +6,6 @@ pub mod audio_clock;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod media_clock;
-// AppleMp4Muxer + VideoToolboxEncoder/Decoder live in their domain
-// packages' `_apple_impl_pending_/` directories (#786): muxer in
-// packages/mp4, videotoolbox in packages/h264.
 pub mod pixel_transfer;
 pub mod texture;
 pub mod texture_pool_macos;

@@ -16,10 +16,6 @@ pub(crate) mod signals;
 pub(crate) mod streamlib_home;
 #[cfg(test)]
 pub(crate) mod test_support;
-// Apple-flavored codec wrappers + VideoToolbox + AppleMp4Muxer live in
-// their domain packages' `_apple_impl_pending_/` directories (#786):
-// h264 (videotoolbox + video_codec/encoder/decoder + their configs),
-// mp4 (apple muxer + mp4_muxer + config), audio (audio_codec).
 
 // Customer-facing modules. Module-path stays `pub` so consumers
 // can reach `streamlib::sdk::<name>` via the SDK's per-module

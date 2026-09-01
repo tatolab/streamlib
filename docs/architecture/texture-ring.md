@@ -319,9 +319,8 @@ constructed in `setup()`).
   - `GpuContextFullAccess::create_texture_ring`,
     `GpuContextLimitedAccess::copy_pixel_buffer_to_texture` in
     `runtime/streamlib-engine/src/core/context/gpu_context.rs`
-- **First consumers (CPU-upload shape)**:
-  - `packages/h264/processors/decoder_linux.rs`
-  - `packages/h265/processors/decoder_linux.rs`
+- **Consumer (compute-kernel fill)**:
+  - `sdk/vulkan-jpeg/src/vulkan_compute_backend.rs`
 - **Related abstractions**:
   - [`texture-registration.md`](texture-registration.md) —
     per-surface lifecycle record the ring populates at
