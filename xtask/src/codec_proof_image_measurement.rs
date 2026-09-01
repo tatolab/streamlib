@@ -477,9 +477,8 @@ pub enum InjectedColorRegression {
     /// Cb and Cr exchanged on the wire — the chroma plane-order class. The
     /// only mode that is chroma-only by construction, because transposing the
     /// two difference planes leaves Y untouched: it is the regression the luma
-    /// gate cannot see, and the one
-    /// [`CHROMA_PSNR_PASS_FLOOR_DB`] exists for. Greyscale-invariant like the
-    /// other two chroma modes.
+    /// gate cannot see, and the one the chroma floor exists for.
+    /// Greyscale-invariant like the other two chroma modes.
     #[value(name = "swap-chroma")]
     ChromaPlanesTransposed,
 }
