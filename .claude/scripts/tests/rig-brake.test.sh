@@ -195,6 +195,14 @@ expect_silent "reading an example README does not escalate"
 run_hook 'bash -c "streamlib run --dir examples/camera-display"'
 expect_silent "a launch inside bash -c is NOT braked (unparsed string body)"
 
+# The rig's own runnable is an engine example — a workspace target reached by
+# `--example`, not a crate under examples/ — so the path key never sees it,
+# and it opens a camera, a Vulkan Video queue and a display window unbraked.
+# The gap arrived with the rig, not with a change to this hook. Locked so
+# closing it fails loudly here rather than silently widening the key.
+run_hook 'cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera'
+expect_silent "the codec rig is NOT braked (it names no examples/ path)"
+
 # A heredoc body line is indistinguishable from a command line, so writing an
 # evidence report that quotes the launch command asks. This is the one residual
 # FALSE POSITIVE, and it fires on the skill's own E2E report template.

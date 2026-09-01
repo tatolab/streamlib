@@ -177,11 +177,28 @@ sync-point discard), NAL/bitstream parse units for the seams #1077 implicates,
 ## MODIFIED: stale anchors the deletions expose
 
 - `docs/architecture/texture-ring.md:323-324` — cites
-  `packages/{h264,h265}/processors/decoder_linux.rs`; re-anchored to the
-  built-ins.
+  `packages/{h264,h265}/processors/decoder_linux.rs`; ~~re-anchored to the
+  built-ins~~.
+
+  > Superseded 2026-08-31 by #2087. The bullet those lines sat under claimed
+  > the two files were the ring's *first consumers*, and they were not:
+  > `decoder_linux.rs:19-20` disclaimed the ring outright ("No engine-only
+  > `TextureRing` / `copy_pixel_buffer_to_slot` reach from the cdylib"), and
+  > the built-ins that replaced them hold no `create_texture_ring` either — so
+  > re-anchoring "to the built-ins" would have restated a false claim against
+  > a new target. Re-anchored instead to the one shipped ring consumer,
+  > `sdk/vulkan-jpeg/src/vulkan_compute_backend.rs`, with the label corrected
+  > from CPU-upload to the compute-kernel fill it actually uses.
 - `runtime/streamlib-engine/src/apple/mod.rs:11` and
   `runtime/streamlib-engine/src/vulkan/_nvjpeg_impl_pending_/README.md:11` —
-  comments citing `packages/h264` / `packages/mp4` paths; re-anchored.
+  comments citing `packages/h264` / `packages/mp4` paths; ~~re-anchored~~.
+
+  > Amended 2026-08-31 by #2087. The README was re-anchored; `apple/mod.rs`
+  > was deleted instead. Its comment was the moved-to breadcrumb shape
+  > `.claude/rules/comments.md` bans by name — a where plus a carve-out ticket
+  > number, no why — and trimming it to its surviving `packages/mp4` clause
+  > would only re-arm the same rot, since `ARCHITECTURE.md:1157` deletes
+  > `packages/mp4` when `Mp4Sink` ships.
 - `.claude/skills/verify-live/SKILL.md:80` and
   `.claude/skills/verify-video/SKILL.md:30` — both name
   `vulkan-video-roundtrip` as the runnable; re-pointed at the fixture app
@@ -195,8 +212,18 @@ sync-point discard), NAL/bitstream parse units for the seams #1077 implicates,
 ## REMOVED: the mined four
 
 Per §Consumers and the codec disposition bullet: mined for logic in this change,
-deleted in this change. The residue enumerated above is the entire engine-side
-reference surface (gate-style search run 2026-08-31).
+deleted in this change. ~~The residue enumerated above is the entire engine-side
+reference surface (gate-style search run 2026-08-31).~~
+
+> Superseded 2026-08-31 by #2087. It was not the entire surface.
+> `runtime/streamlib-engine/src/core/mod.rs:19-22` named the same tree as bare
+> `h264` under "their domain packages'", which no `git grep -F packages/h264`
+> can see — the gate-style search that produced the enumeration is exactly the
+> search that missed it. That comment is deleted too (same reasoning as
+> `apple/mod.rs`), along with its third clause, `audio (audio_codec)`, which
+> had been dangling since the consumer-tree sweep took `packages/audio`.
+> The lesson for the next disposition: a path-literal sweep proves nothing
+> about a prose citation that spells the package without its directory.
 
 - REMOVED: examples/vulkan-video-roundtrip
 - REMOVED: examples/vulkan-video-psnr

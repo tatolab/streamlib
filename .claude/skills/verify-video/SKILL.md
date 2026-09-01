@@ -21,7 +21,7 @@ Capture a verification video using the streamlib processor pipeline (Camera → 
 ## Arguments
 
 - `codec`: First argument — `h264` or `h265`. Default: `h265`
-- `duration`: Second argument — seconds to capture. Default: `5`
+- `duration`: Second argument — seconds the `timeout` wrapper gives the rig. Default: `5`
 
 ## Steps
 
@@ -58,4 +58,4 @@ Capture a verification video using the streamlib processor pipeline (Camera → 
 - **Always use debug build** (no `--release`) — release build has a threading race condition (#273)
 - The vivid virtual camera is at `/dev/video2` — outputs animated SMPTE color bars with frame counter
 - If vivid isn't available, check `v4l2-ctl --list-devices`
-- The pipeline auto-stops after `duration + 2` seconds; the `timeout` wrapper adds extra margin for compilation
+- The rig takes no duration flag and does not auto-stop — it hosts the control plane and runs until killed, so the `timeout` wrapper is the only bound; its margin also covers compilation
