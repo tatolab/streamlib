@@ -1053,6 +1053,61 @@ mod tests {
         }
     }
 
+    /// Each mode's effect on chroma *alone*, with luma set aside entirely — the
+    /// verdict sets above cannot tell a chroma trip from luma collateral, and
+    /// two of these modes are chroma regressions whose whole claim is that they
+    /// move U and V.
+    ///
+    /// `range-swap` mapping to the empty set is the load-bearing negative: it
+    /// is a luma regression, and a chroma floor that fired on it would be
+    /// reading luma damage through the wrong plane.
+    #[test]
+    fn the_chroma_floor_fires_on_exactly_the_modes_that_are_chroma_regressions() {
+        let references = sorted_checked_in_references();
+
+        for (regression, expected_to_trip_on_chroma) in [
+            (
+                InjectedColorRegression::SwapRedAndBlueChannels,
+                vec!["complex_pattern", "solid_blue", "solid_red"],
+            ),
+            // `solid_blue` is absent: the matrix error puts its Cb at 34.15 dB
+            // and its Cr at 31.23 dB, both over the floor. Its luma catches it.
+            (
+                InjectedColorRegression::Bt601EncodedDecodedAsBt709,
+                vec!["complex_pattern", "solid_green", "solid_red"],
+            ),
+            (
+                InjectedColorRegression::FullRangeEncodedDecodedAsLimitedRange,
+                vec![],
+            ),
+            (
+                InjectedColorRegression::ChromaPlanesTransposed,
+                vec!["complex_pattern", "solid_blue", "solid_green", "solid_red"],
+            ),
+        ] {
+            let tripped_on_chroma: Vec<&str> = references
+                .iter()
+                .filter(|(_, reference)| {
+                    let plane_ratios =
+                        plane_ratios_against_itself_after_injecting(reference, regression);
+                    [
+                        plane_ratios.blue_difference_chroma_ratio,
+                        plane_ratios.red_difference_chroma_ratio,
+                    ]
+                    .iter()
+                    .any(|chroma_ratio| !chroma_ratio.reaches_floor_db(CHROMA_PSNR_PASS_FLOOR_DB))
+                })
+                .map(|(reference_stem, _)| reference_stem.as_str())
+                .collect();
+            assert_eq!(
+                tripped_on_chroma,
+                expected_to_trip_on_chroma,
+                "`{}` no longer moves chroma the way its class says it does",
+                regression.as_command_line_value()
+            );
+        }
+    }
+
     /// Non-vacuity of the chroma floor itself, on the bytes that ship. The
     /// three older modes are all caught by luma as well, so the floor would be
     /// pure decoration without a reference that only chroma catches.
