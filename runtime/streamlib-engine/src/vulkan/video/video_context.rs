@@ -14,12 +14,6 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia_vma as vma;
 
-/// The minimum Vulkan API version required by this library.
-///
-/// All instance/device creation in this crate must use this version.
-/// Vulkan 1.4 is required for video encode/decode extensions and
-/// `VK_KHR_video_maintenance1`.
-
 /// The NV12 conversion handle chained onto video-coding image views.
 ///
 /// Its chroma offsets are inert and deliberately not the siting `nv12_to_rgb` uses: this

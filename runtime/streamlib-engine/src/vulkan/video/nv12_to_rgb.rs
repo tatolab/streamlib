@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn chroma_is_reconstructed_at_the_siting_the_encoders_bitstream_implies() {
-        use crate::vulkan::video::encode::EMITTED_CHROMA_SAMPLE_LOC_TYPE;
+        use crate::vulkan::video::encode::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
 
         // Anchored on the value the SPS builder writes. `EncoderConfig` carries a
         // `chroma_sample_loc_type` too, but nothing on the bitstream path reads it,
@@ -563,9 +563,9 @@ mod tests {
         // Figure E-1: type 0 sites chroma on the even luma column horizontally and at
         // the midpoint vertically; type 1 is midpoint on both axes.
         assert_eq!(
-            EMITTED_CHROMA_SAMPLE_LOC_TYPE, 0,
-            "the emitted VUI names type 0; reconstructing anywhere else shifts chroma \
-             against our own wire"
+            SPS_VUI_CHROMA_SAMPLE_LOC_TYPE, 0,
+            "the SPS VUI carries type 0, and an absent present flag has decoders infer \
+             the same; reconstructing anywhere else sites chroma against our own stream"
         );
         assert_eq!(
             RECONSTRUCTED_X_CHROMA_OFFSET,
