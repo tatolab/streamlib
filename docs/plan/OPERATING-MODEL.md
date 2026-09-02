@@ -213,7 +213,10 @@ Nothing here reintroduces the retired automation loop — loop references in thi
 are historical evidence only. The system is single-session, owner-gated, skill-routed.
 And it lives entirely in-repo under `.claude/` (no user-level skills, no external repos),
 so **every agent that opens this repo runs the same system**, regardless of who launched
-it or how.
+it or how. The one per-machine knob is the advisory `rig-brake` note: the untracked
+`.claude/rig-brake.local.json` and `~/.claude/rig-brake.json` can tune it (warn, ask or off,
+plus glob exceptions) on that machine; the checked-in `.claude/rig-brake.json` is the shared
+baseline.
 
 ### Skill invocation is enforced, not hoped for
 

@@ -377,6 +377,24 @@ expect_warn "ffmpeg reading a camera device is noted" ffmpeg_v4l2
 run_hook 'git commit -m "ffmpeg -f v4l2 -i /dev/video0 is the capture path"'
 expect_silent "a commit message quoting an ffmpeg capture stays silent"
 
+run_hook 'ffmpeg -version; echo /dev/video0'
+expect_silent "indicators split across command segments do not combine into a match"
+
+run_hook 'ffmpeg -f v4l2 -i /dev/video0 -t 5 out.mp4 && echo done'
+expect_warn "a capture followed by another segment is still noted" ffmpeg_v4l2
+
+run_hook 'ffmpeg \
+  -f v4l2 -i /dev/video0 -t 5 out.mp4'
+expect_warn "a capture spread over continuation lines is noted" ffmpeg_v4l2
+
+run_hook 'mpv --version; ls /dev/video0'
+expect_silent "a player version check beside a device listing stays silent"
+
+run_hook 'cat <<\EOF
+ffmpeg -f v4l2 -i /dev/video0
+EOF'
+expect_silent "a backslash-quoted heredoc delimiter still hides the body"
+
 run_hook 'ffplay /dev/video0'
 expect_warn "ffplay pointed at a device node is noted" player_on_device
 
@@ -548,6 +566,23 @@ clear_config
 set_config project '{"mode": 7, "rules": "none", "allow": "x", "ask": [1, "cargo build*"]}'
 run_hook 'cargo build'
 expect_ask "wrong-typed entries are skipped without losing the valid ones"
+reason="$(field '.hookSpecificOutput.permissionDecisionReason')"
+[[ "$reason" == *'mode=7'* && "$reason" == *'rules="none"'* && "$reason" == *'allow="x"'* && "$reason" == *'ask=1'* ]] \
+  && ok "every wrong-shaped field is reported by name" || bad "a wrong-shaped field went unreported: $reason"
+clear_config
+
+set_config project '{"ask": "ffmpeg *"}'
+run_hook 'streamlib run --dir examples/camera-display'
+expect_warn "a scalar ask list falls back to mode and is reported" example_launch
+[[ "$(field '.systemMessage')" == *'ask="ffmpeg *"'* ]] \
+  && ok "the owner's line names the scalar ask list" || bad "the scalar ask list went unreported"
+clear_config
+
+set_config local '[1, 2]'
+run_hook 'streamlib run --dir examples/camera-display'
+expect_warn "a config file whose top-level value is not an object still notes" example_launch
+[[ "$(field '.systemMessage')" == *"not an object"* ]] \
+  && ok "the owner's line reports the non-object file" || bad "the non-object file went unreported"
 clear_config
 
 run_hook ''

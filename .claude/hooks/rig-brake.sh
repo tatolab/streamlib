@@ -44,16 +44,26 @@ config="$(printf '%s\n' "${fragments[@]}" | jq -s --arg names "$RULE_NAMES" '
   def outcome: type == "string" and (. as $v | ["warn", "ask", "off"] | index($v) != null);
   def object_or_empty: if type == "object" then . else {} end;
   def strings_or_empty: if type == "array" then map(strings) else [] end;
+  def wrong_shape($name; $value; $expected):
+    if $value != null and ($value | type) != $expected then ["\($name)=\($value | tojson)"] else [] end;
+  def non_strings($name; $value):
+    if ($value | type) == "array" then ($value | map(select(type != "string") | "\($name)=\(tojson)")) else [] end;
   ($names | split(" ")) as $known
-  | reduce (.[] | object_or_empty) as $c (
+  | reduce .[] as $raw (
       {mode: "warn", rules: {}, allow: [], ask: [], preferences: "", invalid: []};
-      .mode = (if ($c.mode | outcome) then $c.mode else .mode end)
+      ($raw | object_or_empty) as $c
+      | .invalid += (if ($raw | type) != "object" then ["a top-level value that is not an object: \($raw | tojson | .[0:40])"] else [] end)
+      | .mode = (if ($c.mode | outcome) then $c.mode else .mode end)
       | .invalid += (if $c.mode != null and ($c.mode | outcome | not) then ["mode=\($c.mode | tojson)"] else [] end)
+      | .invalid += wrong_shape("rules"; $c.rules; "object")
       | ($c.rules | object_or_empty) as $rules
       | .rules += ($rules | with_entries(select((.key | IN($known[])) and (.value | outcome))))
       | .invalid += ($rules | to_entries
                      | map(select((.key | IN($known[]) | not) or (.value | outcome | not))
                            | "rules.\(.key)=\(.value | tojson)"))
+      | .invalid += wrong_shape("allow"; $c.allow; "array") + non_strings("allow"; $c.allow)
+      | .invalid += wrong_shape("ask"; $c.ask; "array") + non_strings("ask"; $c.ask)
+      | .invalid += wrong_shape("preferences"; $c.preferences; "string")
       | .allow += ($c.allow | strings_or_empty)
       | .ask += ($c.ask | strings_or_empty)
       | .preferences = (if ($c.preferences | type) == "string" then $c.preferences else .preferences end))
@@ -85,9 +95,9 @@ in_body {
   next
 }
 { print }
-match($0, /(^|[^<])<<-?[[:space:]]*["']?[A-Za-z_][A-Za-z0-9_]*/) {
+match($0, /(^|[^<])<<-?[[:space:]]*["'\\]?[A-Za-z_][A-Za-z0-9_]*/) {
   tag = substr($0, RSTART, RLENGTH)
-  sub(/^.?<<-?[[:space:]]*["']?/, "", tag)
+  sub(/^.?<<-?[[:space:]]*["'\\]?/, "", tag)
   in_body = 1
 }
 AWK
@@ -99,6 +109,11 @@ ENV_ASSIGN="([A-Za-z_][A-Za-z0-9_]*=(\"[^\"]*\"|'[^']*'|[^[:space:]]*)[[:space:]
 TEXT_TOOL_LINE="^[[:space:]]*${ENV_ASSIGN}(git|gh|sed|grep|rg|awk|perl|python3?|node|echo|printf|cat|jq|diff|rev|tee)([[:space:]]|$)"
 candidates="$(printf '%s\n' "$stripped" | grep -Ev -- "$TEXT_TOOL_LINE")"
 
+# A rule's two indicators must share one command segment: `ffmpeg -version; echo
+# /dev/video0` opens no camera. Continuation lines are joined before the split.
+segments="$(printf '%s\n' "$candidates" \
+  | sed -E -e ':a' -e '/\\$/{N; s/\\\n/ /; ba}' -e 's/;|&&|\|\||\|/\n/g')"
+
 # Every key is anchored to a command position: the start of a line or just past a
 # separator, after env assignments and exec wrappers. `bash -c "…"` bodies stay
 # unparsed strings, so a launch inside one is not seen.
@@ -109,7 +124,7 @@ CARGO_RUN_KEY="${COMMAND_POSITION}cargo[[:space:]]+run([[:space:]]|$)"
 E2E_WRAPPER="(nohup|timeout|env|stdbuf|bash|sh|source|\\.)"
 E2E_SCRIPT_KEY="(^|[;&|(])[[:space:]]*${ENV_ASSIGN}(${E2E_WRAPPER}([[:space:]]+[^[:space:]]+)*[[:space:]]+)*([[:alnum:]_./-]*/)?tests/fixtures/e2e_[[:alnum:]_./-]*\\.sh([[:space:]]|$)"
 
-line_hit() { printf '%s\n' "$candidates" | grep -Eq -- "$1"; }
+segment_hit() { printf '%s\n' "$segments" | grep -E -- "$1" | grep -Eq -- "$2"; }
 cwd_has() { printf '%s' "$cwd" | grep -Eq -- "$1"; }
 names_an_example() {
   cwd_has '(^|/)examples(/|$)' || printf '%s\n' "$stripped" | grep -Eq -- '(^|[^[:alnum:]_.-])examples/'
@@ -124,7 +139,7 @@ remember_match() {
   matched_prefix="$(printf '%s\n' "$1" | grep -E -m1 -- "$2" | grep -Eo -- "^.*($2)" | head -1)"
 }
 
-if line_hit '\bffmpeg\b' && line_hit '(^|[[:space:]])-f[[:space:]]+v4l2|/dev/video[0-9]+'; then
+if segment_hit '\bffmpeg\b' '(^|[[:space:]])-f[[:space:]]+v4l2|/dev/video[0-9]+'; then
   note_rule ffmpeg_v4l2
   remember_match "$candidates" 'ffmpeg'
 fi
@@ -147,14 +162,13 @@ if printf '%s\n' "$e2e_lines" | grep -Eq -- "$E2E_SCRIPT_KEY"; then
   remember_match "$e2e_lines" 'e2e_[[:alnum:]_.-]*\.sh'
 fi
 
-if line_hit '\b(ffplay|mpv|gst-launch(-[0-9.]+)?)\b' && line_hit '/dev/video[0-9]+'; then
+if segment_hit '\b(ffplay|mpv|gst-launch(-[0-9.]+)?)\b' '/dev/video[0-9]+'; then
   note_rule player_on_device
   remember_match "$candidates" 'ffplay|mpv|gst-launch(-[0-9.]+)?'
 fi
 
 # Query verbs (--list-*, --get-*, --all, --info, -D) are not streaming.
-if line_hit '\bv4l2-ctl\b' \
-   && line_hit '--stream-(mmap|user|to|out|dmabuf|from|dqmax)|--stream[[:space:]=]'; then
+if segment_hit '\bv4l2-ctl\b' '--stream-(mmap|user|to|out|dmabuf|from|dqmax)|--stream[[:space:]=]'; then
   note_rule v4l2ctl_stream
   remember_match "$candidates" 'v4l2-ctl'
 fi
