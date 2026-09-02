@@ -34,6 +34,12 @@ DECODED_FRAMES_SEEN = re.compile(r"MARKER:DECODED_FRAMES_SEEN (\[.*\])")
 CODEC_NODE_TYPES = re.compile(r"MARKER:CODEC_NODE_TYPES (\{.*\})")
 ENCODED_FRAME = re.compile(r"MARKER:ENCODED_FRAME (\{.*\})")
 ENCODED_FRAME_STAMP = re.compile(r"MARKER:ENCODED_FRAME_STAMP (\{.*\})")
+DECODED_FRAME_STAMP = re.compile(r"MARKER:DECODED_FRAME_STAMP (\{.*\})")
+
+# How much of the decoded stream has to fall inside the encoded probe's own
+# report for the cross-check to be about the stream rather than about one
+# frame. Both probes run for the whole run, so the overlap is most of it.
+DECODED_STAMPS_TO_CROSS_CHECK = 5
 
 # The extent a 320×180 source codes at under both codecs: H.264 pads to the
 # 16-sample macroblock and H.265 to the 64-sample CTU, and 192 is the first
@@ -281,14 +287,28 @@ def test_each_decoded_frame_carries_the_stamp_of_the_encoded_frame_it_came_from(
         json.loads(report)["timestamp_ns"]
         for report in ENCODED_FRAME_STAMP.findall(app.output)
     }
+    decoded_stamps = [
+        json.loads(report)["timestamp_ns"]
+        for report in DECODED_FRAME_STAMP.findall(app.output)
+    ]
     assert encoded_stamps, f"the encoded link reported no stamps:\n{app.output}"
 
-    match = DECODED_FRAMES_SEEN.search(app.output)
-    assert match is not None, f"no parseable decoded-frame report:\n{app.output}"
-    decoded_frames = [VideoFrame.from_bag(bag) for bag in json.loads(match.group(1))]
+    # Bounded by the encoded probe's own report: the two probes are separate
+    # helper processes attaching at their own pace, and a decoded frame from
+    # before the encoded probe attached rode a bag nobody wrote down.
+    cross_checkable = [
+        stamp
+        for stamp in decoded_stamps
+        if min(encoded_stamps) <= stamp <= max(encoded_stamps)
+    ]
+    assert len(cross_checkable) >= DECODED_STAMPS_TO_CROSS_CHECK, (
+        f"only {len(cross_checkable)} decoded frames fell inside the encoded "
+        f"probe's report, which is too few to be about the stream; "
+        f"output:\n{app.output}"
+    )
 
-    for frame in decoded_frames:
-        assert frame.timestamp_ns in encoded_stamps, (
-            f"the decoded frame is stamped {frame.timestamp_ns}, which rode no "
-            f"encoded frame — the decoder re-stamped it at publication"
+    for stamp in cross_checkable:
+        assert stamp in encoded_stamps, (
+            f"the decoded frame is stamped {stamp}, which rode no encoded "
+            f"frame — the decoder re-stamped it at publication"
         )

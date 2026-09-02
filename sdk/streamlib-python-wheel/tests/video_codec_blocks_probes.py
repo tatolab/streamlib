@@ -13,6 +13,11 @@ with `into=EncodedVideoFrame`, which is the whole claim the cast makes.
 which `read_with_timestamp` is the only read that yields and which takes no
 `into=`. `DecodedVideoFrameProbe` reads the far side of the decoder, where the
 published output is an ordinary video-frame bag.
+
+The two stamp reports are uncapped, unlike the cast report. Each probe is its
+own helper process attaching at its own pace, so a short window on either side
+could close before the other opened, and a cross-check needs the two to
+overlap.
 """
 
 import json
@@ -20,6 +25,7 @@ import json
 from streamlib import EncodedVideoFrame, input, log, processor
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
+DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
 ENCODED_FRAME_MARKER = "MARKER:ENCODED_FRAME "
 ENCODED_FRAME_STAMP_MARKER = "MARKER:ENCODED_FRAME_STAMP "
 ENCODED_FRAMES_COMPLETE_MARKER = "MARKER:ENCODED_FRAMES_COMPLETE"
@@ -83,24 +89,18 @@ class EncodedFrameProbe:
 class EncodedFrameTimestampProbe:
     """Reports the frame-header stamp riding each of the encoder's bags.
 
-    No sync-point gate here: this decodes nothing, so every bag that arrives
-    is one whose stamp a decoded frame downstream may carry.
+    No sync-point gate: this decodes nothing, so every bag that arrives is one
+    whose stamp a decoded frame downstream may carry.
     """
-
-    def __init__(self) -> None:
-        self.stamps_reported = 0
 
     @input(delivery_profile="ordered")
     def encoded_video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        if self.stamps_reported >= ENCODED_FRAMES_REPORTED:
-            return
         bag, timestamp_ns = ctx.inputs.read_with_timestamp(ENCODED_PORT)
         if bag is None:
             return
         frame = EncodedVideoFrame.from_bag(bag)
-        self.stamps_reported += 1
         log.info(
             ENCODED_FRAME_STAMP_MARKER
             + json.dumps(
@@ -111,7 +111,12 @@ class EncodedFrameTimestampProbe:
 
 @processor
 class DecodedVideoFrameProbe:
-    """Reports the first two video-frame bags the decoder publishes."""
+    """Reports the decoder's first two bags whole, then every frame's stamp.
+
+    The first two carry the whole bag because that is what the extent, colour
+    and surface assertions read; the stamps keep coming so the encoded side's
+    report has something to overlap with.
+    """
 
     def __init__(self) -> None:
         self.bags_seen = []
@@ -120,11 +125,14 @@ class DecodedVideoFrameProbe:
     def video_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
-        if len(self.bags_seen) >= 2:
-            return
         bag = ctx.inputs.read("video_from_upstream")
         if bag is None:
             return
-        self.bags_seen.append(dict(bag))
-        if len(self.bags_seen) == 2:
-            log.info(DECODED_FRAMES_MARKER + json.dumps(self.bags_seen))
+        if len(self.bags_seen) < 2:
+            self.bags_seen.append(dict(bag))
+            if len(self.bags_seen) == 2:
+                log.info(DECODED_FRAMES_MARKER + json.dumps(self.bags_seen))
+        log.info(
+            DECODED_FRAME_STAMP_MARKER
+            + json.dumps({"timestamp_ns": bag["timestamp_ns"]})
+        )
