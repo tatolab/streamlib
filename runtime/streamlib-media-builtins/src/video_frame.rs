@@ -10,7 +10,8 @@
 //! producer may carry extra keys and this cast ignores them, matching the
 //! Python cast's behavior.
 
-use serde::{Deserialize, Serialize};
+use serde::de::{self, DeserializeOwned, IntoDeserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Video frame bag: references a GPU surface by id — pixels never ride the
 /// link. `surface_id` is the handoff contract (texture cache in-process,
@@ -57,18 +58,85 @@ pub struct VideoFrame {
 pub struct ColorInfo {
     /// YCbCr matrix coefficients (H.273 `MatrixCoefficients`). Absent =
     /// unspecified (H.273 value 2).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "matrix_axis_named",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub matrix: Option<Matrix>,
     /// Color primaries (H.273 `ColourPrimaries`). Absent = unspecified.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "primaries_axis_named",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub primaries: Option<Primaries>,
     /// Quantization range (VUI `video_full_range_flag`). Absent = unspecified.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "range_axis_named",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub range: Option<Range>,
     /// Transfer characteristic (H.273 `TransferCharacteristics`). Absent =
     /// unspecified.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "transfer_axis_named",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub transfer: Option<Transfer>,
+}
+
+/// One H.273 axis read by its wire name. A name the vocabulary cannot place
+/// is a producer's mistake — the engine's own producers narrow an unknown
+/// H.273 byte to absent before it reaches a bag — so it is refused naming
+/// the axis and the value, rather than failing the whole bag under serde's
+/// bare `unknown variant`.
+fn h273_axis_named<'de, D, Axis>(deserializer: D, axis_name: &str) -> Result<Option<Axis>, D::Error>
+where
+    D: Deserializer<'de>,
+    Axis: DeserializeOwned,
+{
+    let Some(axis_value) = Option::<String>::deserialize(deserializer).map_err(|error| {
+        de::Error::custom(format!(
+            "colour `{axis_name}` must be a string or absent ({error})"
+        ))
+    })?
+    else {
+        return Ok(None);
+    };
+    Axis::deserialize(IntoDeserializer::<de::value::Error>::into_deserializer(
+        axis_value.as_str(),
+    ))
+    .map(Some)
+    .map_err(|_| {
+        de::Error::custom(format!(
+            "colour `{axis_name}` is {axis_value:?}, which is not an H.273 {axis_name} name"
+        ))
+    })
+}
+
+fn matrix_axis_named<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Matrix>, D::Error> {
+    h273_axis_named(deserializer, "matrix")
+}
+
+fn primaries_axis_named<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Primaries>, D::Error> {
+    h273_axis_named(deserializer, "primaries")
+}
+
+fn range_axis_named<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Range>, D::Error> {
+    h273_axis_named(deserializer, "range")
+}
+
+fn transfer_axis_named<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Transfer>, D::Error> {
+    h273_axis_named(deserializer, "transfer")
 }
 
 /// YCbCr matrix coefficients (H.273 `MatrixCoefficients` enumerant).
@@ -464,5 +532,66 @@ mod tests {
         let bytes = serde_json::to_vec(&frame).expect("serialize");
         let back: VideoFrame = serde_json::from_slice(&bytes).expect("deserialize");
         assert_eq!(back, frame);
+    }
+
+    fn a_frame_bag_whose_colour_axis_is(axis: &str, wire_value: &str) -> Vec<u8> {
+        let bag: serde_json::Value = serde_json::from_str(&format!(
+            r#"{{"surface_id":"9","width":16,"height":16,"timestamp_ns":5,
+                "color_info":{{"{axis}":{wire_value}}}}}"#
+        ))
+        .expect("a bag literal");
+        rmp_serde::to_vec_named(&bag).expect("msgpack serialize")
+    }
+
+    /// Over the real wire, on every axis: the refusal names the axis and the
+    /// value, so a producer's typo reads as its own mistake rather than as
+    /// serde's bare `unknown variant`.
+    #[test]
+    fn a_colour_name_the_vocabulary_cannot_place_is_refused_naming_the_axis_and_the_value() {
+        for axis in ["primaries", "transfer", "matrix", "range"] {
+            let refusal = rmp_serde::from_slice::<VideoFrame>(&a_frame_bag_whose_colour_axis_is(
+                axis,
+                r#""bt_709""#,
+            ))
+            .expect_err("must be refused")
+            .to_string();
+            assert!(
+                refusal.contains(&format!("`{axis}`")) && refusal.contains("bt_709"),
+                "{axis}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_colour_axis_that_is_not_a_string_is_refused_naming_the_axis() {
+        let refusal = rmp_serde::from_slice::<VideoFrame>(&a_frame_bag_whose_colour_axis_is(
+            "primaries",
+            "6",
+        ))
+        .expect_err("must be refused")
+        .to_string();
+        assert!(
+            refusal.contains("`primaries`") && refusal.contains("must be a string"),
+            "{refusal}"
+        );
+    }
+
+    /// The refusal is scoped to the enumerant: a placeable name on one axis
+    /// beside an absent one still reads, so the stricter read costs a valid
+    /// bag nothing.
+    #[test]
+    fn a_placeable_colour_name_beside_absent_axes_still_reads() {
+        let frame = rmp_serde::from_slice::<VideoFrame>(&a_frame_bag_whose_colour_axis_is(
+            "transfer",
+            r#""smpte2084""#,
+        ))
+        .expect("a valid bag reads");
+        assert_eq!(
+            frame.color_info,
+            Some(ColorInfo {
+                transfer: Some(Transfer::Smpte2084),
+                ..ColorInfo::default()
+            })
+        );
     }
 }

@@ -16,6 +16,7 @@ keeps this half of the proof in CI.
 """
 
 import os
+import re
 from collections.abc import Iterator
 from typing import Any
 
@@ -247,6 +248,19 @@ def test_a_malformed_color_names_this_bag_rather_than_a_video_frame():
         match="bag is not an encoded video frame: 'color' must be a mapping",
     ):
         EncodedVideoFrame.from_bag(encoded_frame_bag(color="bt709"))
+
+
+def test_an_unplaceable_colour_name_is_refused_naming_this_bag_and_the_axis():
+    """The same reader serves both casts, so the refusal must carry this
+    bag's own key — `color`, never `color_info` — beside the axis and value."""
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "bag is not an encoded video frame: color.transfer is 'bt_709', "
+            "which is not an H.273 transfer name"
+        ),
+    ):
+        EncodedVideoFrame.from_bag(encoded_frame_bag(color={"transfer": "bt_709"}))
 
 
 def test_an_encoded_video_frame_takes_no_surface_and_holds_no_claim():

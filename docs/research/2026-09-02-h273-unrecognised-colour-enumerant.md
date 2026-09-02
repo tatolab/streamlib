@@ -2,14 +2,35 @@
 
 2026-09-02, for #2114 (milestone 48, Python Codec Block API). Question: when a bag
 carries a colour value a cast does not recognise, is the bag **refused by name** or does
-the value **pass through** as an opaque unknown? Today Python passes it through and Rust
-refuses, and the ticket asks which behaviour we want for both.
+the value **pass through** as an opaque unknown? As the tree stood when this was
+researched — before the fix that ships in the same PR — Python passed it through and Rust
+refused, and the ticket asked which behaviour we wanted for both.
 
 Evidence split **[V] verified** (primary source read at a pinned revision, or measured
 here) and **[I] inferred**. Specs read as text from the ITU-T PDFs; project sources read
 as raw files at the revisions named below.
 
-## Recommendation
+## Outcome — refuse by name, both languages
+
+**Adopted the same day, as a bug fix, not a plan change.** The section that follows this
+one was the memo's original recommendation — coerce an unrecognised enumerant to absent
+with a log line — and it was not taken. The reviewer's argument, which stands: the plan's
+cast doctrine already answers the question. `ColorInfo.primaries: Primaries | None` never
+admitted an arbitrary string; `from_bag` already promises to raise on a mistyped key;
+`show()` already refuses an unplaceable name by its axis and value; and the Rust cast
+already refused — it merely misreported. Enforcing a declared type is a bug fix
+(`propose-change` scale gate, tier 1). Coercing would have been the *contract change*: a
+carve-out to "refused by name, never reshaped" (`ARCHITECTURE.md:1156`) needing its own
+plan text — which is exactly why the proposal drafted for it ran to 233 lines. The
+research below is what showed an unrecognised string can only ever be a producer's
+mistake; a mistake should be loud.
+
+Shipped with this memo (#2114): the Python reader validates each axis against its
+`Literal` and refuses naming the axis and the value; the Rust `ColorInfo` reads each
+axis by name and refuses the same way instead of failing the bag under serde's bare
+`unknown variant`; the encoded-frame refusal no longer claims the keys are missing.
+
+## The recommendation as first written — not adopted
 
 **Neither. Coerce an unrecognised enumerant to absent — which is what our wire already
 spells "unspecified" — and say so in a log line naming the field and the value. Keep
@@ -17,8 +38,9 @@ every *shape* refusal exactly as it is.**
 
 The fork the ticket poses assumes an unrecognised string is a value the wire legitimately
 carries. It is not, and cannot be: both engine producers already narrow an unrecognised
-H.273 byte to `None` before it reaches a bag [V], which is precisely what H.264 and H.265
-Annex E mandate of a decoder. So spec growth cannot deliver an unknown string through any
+H.273 byte to `None` before it reaches a bag [V], which H.265 Annex E mandates of a decoder
+for all three fields, and H.264 Annex E for `transfer_characteristics` and
+`matrix_coefficients` only. So spec growth cannot deliver an unknown string through any
 engine path, and the forward-compatibility argument for pass-through has no mechanism
 behind it. What is left is a producer bug — and refusing it at the read punishes 20 call
 sites for a field none of them reads, to catch a mistake made at a seam the plan already
@@ -26,12 +48,15 @@ documents as unvalidated for every bag key.
 
 The split is principled rather than a compromise: **the bag's shape is our contract and we
 refuse violations of it; the enumerant set belongs to an external registry and we do not
-own it.** A non-mapping `color_info`, a non-string member, a `bool` where an int belongs —
-all still refused by name, unchanged. Only a well-formed string naming a colour we cannot
-place becomes `None`, loudly.
+own it.** A non-mapping `color_info` (refused at the time), a non-string member (not yet —
+the cast validated no member; the fix above now refuses it), a `bool` where an int belongs —
+all refused by name. Only a well-formed string naming a colour we cannot place becomes
+`None`, loudly.
 
-This is a recommendation, not a standards requirement. H.273 says nothing about a
-string-named tuple on an internal message; see §What the specs do not say.
+Why it lost: "punishes 20 call sites" is a cost paid only when a producer is already
+wrong, and then loud is the point. And the ecosystem's unanimity is a survey of silent
+coercion, the one pattern the plan bans by name — the memo noted that and then
+recommended it anyway.
 
 ## Key findings
 
@@ -83,7 +108,7 @@ string-named tuple on an internal message; see §What the specs do not say.
   parser struct, coerced enum at the public API. **Where the raw value dies, it dies at a
   hand-written public model — never at the wire.**
 
-## The tree today — three behaviours, not two
+## The tree as measured, before this PR's fix — three behaviours, not two
 
 The ticket describes a two-way split. There are three [V]:
 
@@ -93,7 +118,7 @@ The ticket describes a two-way split. There are three [V]:
 | Python `show()` (`python_processor_owned_window.rs:432-443`) | **refused by name** — deserialised through the same Rust enums, *"…which is not an H.273 {axis} name the bag carries"* |
 | Rust cast (`video_frame.rs`, `encoded_video_frame.rs`) | refuses — serde `unknown variant` |
 
-So pass-through is not an end-to-end contract today; it relocates the raise to the display
+So pass-through was never an end-to-end contract; it relocated the raise to the display
 seam. A Python author who hand-spells `ColorInfo(primaries="bt_709")` and calls `show()`
 already gets a good error — from the wheel's Rust side, not from the cast.
 
@@ -154,12 +179,14 @@ Measured here [V]:
   (`"zzz"` → `Unknown("zzz")` → `"zzz"`) and still refuses a non-string. Its refusal message
   degrades to *"data did not match any variant of untagged enum"*, so a named refusal wants a
   hand-written `Deserialize`.
-- `#[serde(from = "T")]` with an infallible `From` makes the deserialiser total by
-  construction — it cannot refuse. `try_from` is the refusing sibling.
+- `#[serde(from = "T")]` with an infallible `From` makes the *conversion* total by
+  construction — deserialising `T` itself can still refuse malformed input or a wrong
+  type; only the step after it cannot. `try_from` is the sibling whose conversion refuses.
 
 ## Three facts to record regardless of the ruling
 
-- The `NotAnEncodedVideoFrameBag` refusal misreports a colour failure (above).
+- The `NotAnEncodedVideoFrameBag` refusal misreported a colour failure (above) — fixed in
+  this PR.
 - **Nothing gates the two vocabularies against each other.** The Python `Literal`s and the
   Rust enums are byte-identical today — 11 primaries / 16 transfer / 13 matrix / 2 range,
   diffed mechanically [V] — but there is no colour entry in `ALL_SOURCE_WALKING_GATES`. They
@@ -187,9 +214,9 @@ Measured here [V]:
 
 ## What this memo does not do
 
-It does not decide. The ruling changes `VideoFrame`'s shipped contract whichever way it
-lands and applies to both casts at once, so it belongs in `/align` — and the three recorded
-facts above are ordinary records, not decisions.
+It records; the fix in the same PR is what decides. The three facts above are ordinary
+records, and the ruling needed no plan text because the plan's cast doctrine already
+stated it.
 
 Sources: ITU-T H.273 (V4) 07/2024 and the 2016 / 2021 / 2023 editions, H.265 (V11) 01/2026
 §E.3.1, H.264 (V16) 06/2026 and (08/2021) §E.2.1 — all `itu.int/rec/`. FFmpeg `9fc8c785`,
