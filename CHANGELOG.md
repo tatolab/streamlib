@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.39](https://github.com/tatolab/streamlib/compare/v0.18.38...v0.18.39) (2026-09-02)
+
+
+### Features
+
+* **wheel:** EncodedVideoFrame — the cast over the encoded-frame bag, proven on the encoded channel ([#2112](https://github.com/tatolab/streamlib/issues/2112)) ([34d4a58](https://github.com/tatolab/streamlib/commit/34d4a586ca37ffdca5352b94030c5c335d9f5e01))
+
 ## [0.18.38](https://github.com/tatolab/streamlib/compare/v0.18.37...v0.18.38) (2026-09-02)
 
 
