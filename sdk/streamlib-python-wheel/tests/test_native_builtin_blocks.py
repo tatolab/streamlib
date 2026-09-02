@@ -91,6 +91,31 @@ def test_video_frame_rejects_mistyped_optional_fields():
         VideoFrame.from_bag({**valid, "color_info": "srgb"})
 
 
+@pytest.mark.parametrize("axis", ["primaries", "transfer", "matrix", "range"])
+def test_video_frame_refuses_a_colour_name_it_cannot_place(axis: str):
+    """An unrecognised name is a producer's mistake — the engine's own
+    producers narrow an unknown H.273 byte to absent — so it is refused
+    naming the axis and the value rather than reaching the typed field as a
+    string nobody declared."""
+    valid = {"surface_id": "1", "width": 1, "height": 1, "timestamp_ns": 0}
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            f"color_info.{axis} is 'bt_709', which is not an H.273 {axis} name"
+        ),
+    ):
+        VideoFrame.from_bag({**valid, "color_info": {axis: "bt_709"}})
+
+
+def test_video_frame_refuses_a_colour_axis_that_is_not_a_string():
+    valid = {"surface_id": "1", "width": 1, "height": 1, "timestamp_ns": 0}
+    with pytest.raises(
+        ValueError,
+        match=re.escape("color_info.primaries must be a string or absent; got 6"),
+    ):
+        VideoFrame.from_bag({**valid, "color_info": {"primaries": 6}})
+
+
 def test_video_frame_rejects_bool_dimensions():
     # bool is an int subclass; a width of True is a bug, not a width.
     with pytest.raises(ValueError, match="must be int"):

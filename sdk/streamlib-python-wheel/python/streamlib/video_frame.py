@@ -108,6 +108,36 @@ def _nested_or_none(
     )
 
 
+# Every name a cast can place on each H.273 axis. An unrecognised name is a
+# producer's mistake and never a value the engine emits — its own producers
+# narrow an unknown H.273 byte to absent before it reaches a bag — so it is
+# refused rather than reaching the typed field as a string nobody declared.
+_H273_AXIS_NAMES: "dict[str, frozenset[str]]" = {
+    "primaries": frozenset(typing.get_args(Primaries)),
+    "transfer": frozenset(typing.get_args(Transfer)),
+    "matrix": frozenset(typing.get_args(Matrix)),
+    "range": frozenset(typing.get_args(Range)),
+}
+
+
+def _h273_axis_or_none(
+    refusal_subject: str, key: str, axis_name: str, value: Any
+) -> "str | None":
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{refusal_subject}: {key}.{axis_name} must be a string or absent; "
+            f"got {value!r}"
+        )
+    if value not in _H273_AXIS_NAMES[axis_name]:
+        raise ValueError(
+            f"{refusal_subject}: {key}.{axis_name} is {value!r}, which is not an "
+            f"H.273 {axis_name} name"
+        )
+    return value
+
+
 def _color_info_or_none(
     refusal_subject: str, key: str, value: Any
 ) -> "ColorInfo | None":
@@ -122,11 +152,17 @@ def _color_info_or_none(
     if value is None or isinstance(value, ColorInfo):
         return value
     color_info_bag = _require_mapping(refusal_subject, key, value)
+
+    def axis(axis_name: str) -> "str | None":
+        return _h273_axis_or_none(
+            refusal_subject, key, axis_name, color_info_bag.get(axis_name)
+        )
+
     return ColorInfo(
-        primaries=cast("Primaries | None", color_info_bag.get("primaries")),
-        transfer=cast("Transfer | None", color_info_bag.get("transfer")),
-        matrix=cast("Matrix | None", color_info_bag.get("matrix")),
-        range=cast("Range | None", color_info_bag.get("range")),
+        primaries=cast("Primaries | None", axis("primaries")),
+        transfer=cast("Transfer | None", axis("transfer")),
+        matrix=cast("Matrix | None", axis("matrix")),
+        range=cast("Range | None", axis("range")),
     )
 
 

@@ -100,7 +100,8 @@ pub struct EncodedVideoFrame {
 /// refusal names it by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodedVideoFrameBagRefusal {
-    /// The bag is not a named map carrying the encoded-frame keys.
+    /// The bag could not be decoded as the encoded-frame named map — a key
+    /// missing, or a value the reader cannot read, which the failure names.
     NotAnEncodedVideoFrameBag { decode_failure: String },
     /// `codec` names an elementary stream this reader does not know.
     UnknownCodec { codec: String },
@@ -116,9 +117,9 @@ impl std::fmt::Display for EncodedVideoFrameBagRefusal {
         match self {
             EncodedVideoFrameBagRefusal::NotAnEncodedVideoFrameBag { decode_failure } => write!(
                 formatter,
-                "the bag carries no encoded-video-frame keys ({decode_failure}) — the reader \
-                 reads `codec`, `bitstream`, `is_sync_point`, `group_index`, `sequence_index`, \
-                 `width`, `height` and `color`"
+                "the bag could not be read as an encoded video frame ({decode_failure}) — the \
+                 reader reads `codec`, `bitstream`, `is_sync_point`, `group_index`, \
+                 `sequence_index`, `width`, `height` and `color`"
             ),
             EncodedVideoFrameBagRefusal::UnknownCodec { codec } => write!(
                 formatter,
@@ -509,6 +510,41 @@ mod tests {
         assert!(
             refusal.to_string().contains("av1"),
             "the refusal names the codec it cannot decode: {refusal}"
+        );
+    }
+
+    /// One unplaceable colour name used to be reported as the bag carrying
+    /// no encoded-frame keys at all; the refusal names the axis and the
+    /// value, and never claims the keys are missing.
+    #[test]
+    fn a_colour_name_the_vocabulary_cannot_place_is_refused_naming_the_axis_not_the_keys() {
+        let mut entries = decode_msgpack_named_map_entries(
+            &rmp_serde::to_vec_named(&an_encoded_frame()).expect("msgpack serialize"),
+        );
+        for (key, entry_value) in &mut entries {
+            if key.as_str() == Some("color") {
+                *entry_value = rmpv::Value::Map(vec![(
+                    rmpv::Value::from("primaries"),
+                    rmpv::Value::from("bt_709"),
+                )]);
+            }
+        }
+        let mut wire_bytes = Vec::new();
+        rmpv::encode::write_value(&mut wire_bytes, &rmpv::Value::Map(entries)).expect("re-encode");
+
+        let refusal = read_encoded_video_frame_bag(&wire_bytes).expect_err("must be refused");
+        assert!(matches!(
+            refusal,
+            EncodedVideoFrameBagRefusal::NotAnEncodedVideoFrameBag { .. }
+        ));
+        let text = refusal.to_string();
+        assert!(
+            text.contains("`primaries`") && text.contains("bt_709"),
+            "the refusal names the axis and the value: {text}"
+        );
+        assert!(
+            !text.contains("carries no"),
+            "the refusal must not claim the keys are missing: {text}"
         );
     }
 
