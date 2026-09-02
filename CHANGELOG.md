@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.41](https://github.com/tatolab/streamlib/compare/v0.18.40...v0.18.41) (2026-09-02)
+
+
+### Bug Fixes
+
+* **wheel:** a colour enumerant a cast cannot place is refused by name, in both languages ([#2114](https://github.com/tatolab/streamlib/issues/2114)) ([#2119](https://github.com/tatolab/streamlib/issues/2119)) ([9bff9c4](https://github.com/tatolab/streamlib/commit/9bff9c47a74ab196d36d11a06054922fdd46e18a))
+
 ## [0.18.40](https://github.com/tatolab/streamlib/compare/v0.18.39...v0.18.40) (2026-09-02)
 
 
