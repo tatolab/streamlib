@@ -31,7 +31,10 @@ ONE core system per concern — extend the existing system, never build a parall
   than refusing, so a scope written months ago can't strand work that has to land. The
   doctrine still decides what is *right* — a prompt is not permission to bend a rule.
   Guards cover only what is genuinely hard to reverse — the licence files. They are not a
-  review queue for prose.
+  review queue for prose. The `rig-brake` hook is advisory: it notes a rig-consuming command
+  to the model and to the owner, and it prompts only where the owner set a rule or a glob to
+  `ask` in `.claude/rig-brake.json` or its local / user-level siblings
+  (`.claude/scripts/rig-brake` edits them).
 - Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (as few
   tracer bullets as the change honestly needs) →
   `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction

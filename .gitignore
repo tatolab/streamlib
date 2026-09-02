@@ -68,6 +68,8 @@ examples/camera-python-display/assets/*
 # Claude Code — ephemeral only
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+.claude/settings.local.json
+.claude/rig-brake.local.json
 
 # Operating-model session markers: plan-session, active-ticket.json.
 # Machine-local, created/removed by the lifecycle skills — never tracked.

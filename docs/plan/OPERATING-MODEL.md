@@ -213,7 +213,10 @@ Nothing here reintroduces the retired automation loop — loop references in thi
 are historical evidence only. The system is single-session, owner-gated, skill-routed.
 And it lives entirely in-repo under `.claude/` (no user-level skills, no external repos),
 so **every agent that opens this repo runs the same system**, regardless of who launched
-it or how.
+it or how. The one per-machine knob is the advisory `rig-brake` note: the untracked
+`.claude/rig-brake.local.json` and `~/.claude/rig-brake.json` can tune it (warn, ask or off,
+plus glob exceptions) on that machine; the checked-in `.claude/rig-brake.json` is the shared
+baseline.
 
 ### Skill invocation is enforced, not hoped for
 
@@ -226,7 +229,10 @@ skipping one physically fail, in layers from soft to hard:
    *records* are ordinary work and land with the change they describe.
 2. **Sharp descriptions** on the model-invoked primitives so they trigger on phrasing
    without being asked.
-3. **Hooks**: `rig-brake` (rig-consuming Bash) and `worktree-gc` (post-merge cleanup). The
+3. **Hooks**: `rig-brake` (an advisory note on rig-consuming Bash; each rule's outcome and
+   the owner's glob exceptions live in `.claude/rig-brake.json` and its local / user-level
+   siblings, edited with `.claude/scripts/rig-brake`) and `worktree-gc` (post-merge
+   cleanup). The
    source-edit gate that required `.claude/state/active-ticket.json` was unwired 2026-08-15 —
    it prompted on every engine edit, which is what taught sessions to click through. Routing
    source edits through `/implement` is now session-applied doctrine with no enforcement
