@@ -115,8 +115,8 @@ A Python processor reads that bag with the cast built for it:
 from streamlib import EncodedVideoFrame
 
 encoded = ctx.inputs.read("encoded_video", into=EncodedVideoFrame)
-encoded.sequence_index, encoded.is_sync_point
-len(encoded.annex_b_access_unit_bytes)
+if encoded is not None and encoded.is_sync_point:
+    sink.write(encoded.annex_b_access_unit_bytes)
 ```
 
 The one place the attribute and the wire key differ is the payload: the bag

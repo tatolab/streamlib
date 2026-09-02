@@ -53,7 +53,7 @@ def setup(rt: Runtime) -> None:
         camera_configuration["device_id"] = requested_camera_device
 
     camera = rt.add(CameraSource, config=camera_configuration)
-    # Both blocks bare: every config key either pair takes is optional, and the
+    # Both blocks bare: every config key either one takes is optional, and the
     # encoder sizes its session from the first frame the camera hands it.
     encoder = rt.add(encoder_marker)
     decoder = rt.add(decoder_marker)
