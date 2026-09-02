@@ -230,7 +230,7 @@ class VideoFrame(ClaimedSurfacePixelAccess):
         ):
             raise ValueError(
                 f"{VIDEO_FRAME_REFUSAL_SUBJECT}: surface_id must be str and "
-                f"width/height/timestamp_ns must be int"
+                "width/height/timestamp_ns must be int"
             )
         super().__init__(
             surface_id=surface_id,

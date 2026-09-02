@@ -119,7 +119,7 @@ class EncodedVideoFrame:
         if not isinstance(bitstream, bytes):
             raise ValueError(
                 f"{_REFUSAL_SUBJECT}: 'bitstream' must be bytes — one Annex-B "
-                f"access unit riding the bag as msgpack bin"
+                "access unit riding the bag as msgpack bin"
             )
         if codec not in _CODECS_ON_THE_WIRE:
             raise ValueError(
@@ -129,7 +129,7 @@ class EncodedVideoFrame:
         if not isinstance(is_sync_point, bool):
             raise ValueError(
                 f"{_REFUSAL_SUBJECT}: 'is_sync_point' must be bool — it is the "
-                f"decode entry point, not a count"
+                "decode entry point, not a count"
             )
         integer_bag_entries = (
             ("group_index", group_index),

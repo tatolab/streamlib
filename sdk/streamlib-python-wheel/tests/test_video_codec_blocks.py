@@ -229,7 +229,7 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
             frame["opening_bytes"][: len(start_code)] == start_code
             for start_code in ANNEX_B_START_CODES
         ), (
-            f"the payload must be one Annex-B access unit, and this one opens "
+            "the payload must be one Annex-B access unit, and this one opens "
             f"{frame['opening_bytes']}"
         )
         assert frame["byte_count"] > 0, "an access unit with no bytes decodes to nothing"
@@ -240,13 +240,13 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
 
     for earlier, later in zip(encoded_frames, encoded_frames[1:]):
         assert later["sequence_index"] == earlier["sequence_index"] + 1, (
-            f"`sequence_index` is monotonic in publication order and never "
+            "`sequence_index` is monotonic in publication order and never "
             f"resets, so the step {earlier['sequence_index']} → "
             f"{later['sequence_index']} is loss on the link"
         )
         expected_group = earlier["group_index"] + (1 if later["is_sync_point"] else 0)
         assert later["group_index"] == expected_group, (
-            f"`group_index` counts sync points, so it steps at one and nowhere "
+            "`group_index` counts sync points, so it steps at one and nowhere "
             f"else: {earlier['group_index']} → {later['group_index']} across a "
             f"frame with is_sync_point={later['is_sync_point']}"
         )
@@ -303,12 +303,12 @@ def test_each_decoded_frame_carries_the_stamp_of_the_encoded_frame_it_came_from(
     ]
     assert len(cross_checkable) >= DECODED_STAMPS_TO_CROSS_CHECK, (
         f"only {len(cross_checkable)} decoded frames fell inside the encoded "
-        f"probe's report, which is too few to be about the stream; "
+        "probe's report, which is too few to be about the stream; "
         f"output:\n{app.output}"
     )
 
     for stamp in cross_checkable:
         assert stamp in encoded_stamps, (
             f"the decoded frame is stamped {stamp}, which rode no encoded "
-            f"frame — the decoder re-stamped it at publication"
+            "frame — the decoder re-stamped it at publication"
         )
