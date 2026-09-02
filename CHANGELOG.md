@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.38](https://github.com/tatolab/streamlib/compare/v0.18.37...v0.18.38) (2026-09-02)
+
+
+### Features
+
+* **wheel:** the four video codec blocks reach rt.add as marker classes ([#2110](https://github.com/tatolab/streamlib/issues/2110)) ([8a167c3](https://github.com/tatolab/streamlib/commit/8a167c3a48cd7fb67b19384e669c73c9b6108989))
+
 ## [0.18.37](https://github.com/tatolab/streamlib/compare/v0.18.36...v0.18.37) (2026-09-01)
 
 
