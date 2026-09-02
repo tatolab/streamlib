@@ -239,9 +239,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `cuda-fisheye-detection`) rewritten in Python, `camera-compute-kernel` (was
   `camera-plugin-sdk-compute`) and `camera-halftone` (mined from the retired Deno
   example) rebuilt as kernel examples, and `tokio-integration` rewritten as a plain cargo
-  project — leaving `examples/` nine converted beside nine held.
-  [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059]
-  <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection -->
+  project. `examples/` now stands at ten converted beside seven held: the two
+  vulkan-video examples left the held column into the proof rig, and
+  `camera-codec-roundtrip` joined the converted one as the codec blocks' showcase — a
+  showcase authored in the current idiom is an ordinary addition under the convention
+  below, not conversion backlog.
+  [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
+  the count restated at codec-roundtrip-reproof #2087 and python-codec-block-api #2108]
+  <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip -->
 - **DECIDED** — Retired in one sweep, superseded by deleted machinery or shipped pivots:
   `examples/pipelines`, `examples/camera-deno-subprocess` (its halftone effect rebuilt as
   `examples/camera-halftone`), `examples/camera-python-subprocess`,
@@ -634,7 +639,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ python-codec-block-api)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1138,9 +1143,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   wall holds at this fourth device class too: colour conversion into the codec's NV12
   input rides the engine's existing `rgb_to_nv12` converter stage, and no new RHI
   primitive was built for codecs. [codec-blocks — SHIPPED #2083, #2084, #2086 for the
-  four video blocks, engine half; `JpegDecoder`, the Opus pair and `Mp4Sink` are later
-  rungs, and the Python surface — marker classes, stub entries, `rt.add` reach — is the
-  next rung the proof below gates]
+  four video blocks, engine half; python-codec-block-api — SHIPPED #2105 for their
+  Python surface; `JpegDecoder`, the Opus pair and `Mp4Sink` are later rungs]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
@@ -1260,6 +1264,74 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   re-running rather than assumed fixed, and the rig is the runnable.
   [codec-blocks — SHIPPED #2084 closing #1077, #2085 closing #756, #2086 closing #335]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
+- **DECIDED** — The four video blocks reach Python as marker classes beside
+  `CameraSource`, through the five touchpoints a native built-in owns and no sixth: a
+  constructor-less `#[pyclass]` unit struct, an `is()` arm resolving the type to the
+  processor's own minted import path, an `add_class` line, a re-export with its
+  `__all__` entry, and a stub entry gated by stubtest with no allowlist. Configured the
+  one way a built-in is configured — `rt.add(H265Encoder)`,
+  `rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and Linux-only at
+  the marker, the unsupported-platform arm raising by name rather than resolving a path
+  the codec modules do not build there. No engine registration was added: the wheel
+  already linked all four and already registered them at import, which is what makes
+  this rung five touchpoints and no engine change. The stub docstring is where a
+  block's config keys and port names are written down, as it is for every built-in, and
+  it states the engine's own behavior rather than an aspiration — the encoder's
+  `width`/`height` guardrails that a mismatching frame wins against with a warning, its
+  lazy session mint from the first frame, the decoder's eager mint at `setup()`, and
+  the `max_width`/`max_height` pair that warns and auto-detects from the first SPS when
+  half-specified. What a Python app may wire follows from the engine half and is stated
+  so the docstrings can say it: the encoder's `video` input takes any published
+  `VideoFrame`, buffer-backed or texture-backed, while the decoder's `video` output is
+  an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface — so a decoded frame
+  reaches a Python kernel through a DLPack landing copy and never by bare surface id,
+  which is the camera's existing gap carried, not a new one.
+  [python-codec-block-api — SHIPPED #2105]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_marker_class_cannot_be_instantiated -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_display_name_defaults_to_the_type_name -->
+- **DECIDED** — `streamlib.EncodedVideoFrame` is the Python cast over the encoded-frame
+  bag's wire keys: pure Python beside `audio_block.py`, read with
+  `ctx.inputs.read("encoded_video", into=EncodedVideoFrame)`, owing no `.pyi` entry
+  because pyright checks it from source. It composes nothing surface-shaped — the
+  access unit rides inline and arrives as `bytes`, so there is no surface, no claim and
+  no lifetime contract, `AudioBlock`'s reasoning verbatim. Construction is the
+  validation and the wire keys are the constructor keywords; the bitstream is stored
+  under the Rust struct's own field name so one vocabulary serves both languages, and
+  it stays off the repr. `color` is absent-means-unspecified — the H.273 rule — and
+  every other key is required and refused by name when missing or mistyped: a
+  `bitstream` that is not `bytes`, a `codec` naming neither elementary stream, a `bool`
+  where an integer field is required, and a colour enumerant H.273 cannot place, that
+  last naming this bag's own `color` key and the axis rather than a video frame's
+  `color_info`. A key this cast does not read is read past, never refused. There is no
+  to-bag helper and no numpy property: an access unit is opaque to everything but a
+  decoder, a container or a socket, and producing an encoded bag from Python is
+  spelling the keys as a bag literal and writing it with the timestamped write —
+  the implicit one would stamp the moment of publication rather than the frame's own
+  instant. [python-codec-block-api — SHIPPED #2106; the colour refusal, in both casts,
+  #2114]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py::test_an_encoded_video_frame_takes_no_surface_and_holds_no_claim -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py::test_the_bitstream_crosses_the_wire_as_bytes -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_encoded_video_frame_cast.py::test_the_cast_offers_no_way_back_onto_the_wire -->
+- **DECIDED** — The per-block ship bar the entry above states is met for a Python
+  surface by agreement, never by a second rig: below the marker the path is
+  byte-identical to the one the engine-owned rig scored, so the live proof is a
+  Python-authored round trip locking to the same per-codec vivid baseline within the
+  same ±0.05. `e2e_fixture_psnr_vivid.sh` carries a `PIPELINE=python` arm (default
+  `rust`) differing in its launch argv alone — one timeout, one environment, one
+  redirect, and the same tap, `exchange`, scoring and comparison after launch — over an
+  engine-owned fixture app of four `rt.add` calls beside `audio_loopback_node.py`,
+  taking its codec, camera and control-plane port as arguments the way the Rust rig
+  does. Two refusals ride the arm rather than a note: `BASELINE_CAPTURE=1` is refused
+  on it, because a baseline written through the arm whose whole proof is locking to the
+  Rust rig's number leaves nothing to lock to; and a venv whose extension predates the
+  markers exits naming `maturin develop`, since a stale wheel would score the old code.
+  Both codecs PASS through the arm, log gates at zero, clean exit. The reference-PNG rig
+  gets no Python arm — nothing Python-specific sits on the colour path.
+  [python-codec-block-api — SHIPPED #2107]
+  <!-- verify: PIPELINE=python bash runtime/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh -->
+  <!-- verify: git ls-files runtime/streamlib-engine/tests/fixtures/codec_roundtrip_node.py -->
 - **DECIDED** — `Mp4Sink` muxes the encoded elementary streams the blocks produce
   (H.264/H.265 video, Opus audio) in pure Rust — no ffmpeg subprocess, no raw-frame
   transcode path, no new `DT_NEEDED` entry. [codec-blocks]
