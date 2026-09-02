@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.40](https://github.com/tatolab/streamlib/compare/v0.18.39...v0.18.40) (2026-09-02)
+
+
+### Features
+
+* **examples:** camera-codec-roundtrip — the codec blocks in the current authoring idiom ([#2116](https://github.com/tatolab/streamlib/issues/2116)) ([36d3703](https://github.com/tatolab/streamlib/commit/36d3703bf9a3d0c487e6f8cba17a77a48a327b40))
+
 ## [0.18.39](https://github.com/tatolab/streamlib/compare/v0.18.38...v0.18.39) (2026-09-02)
 
 
