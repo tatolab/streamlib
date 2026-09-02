@@ -103,8 +103,11 @@ An encoded bag is **not** shaped like a video bag. A video bag is metadata —
 that stay in engine-owned GPU memory, and it is around 250 bytes whatever the
 resolution. An encoded bag carries its payload inline: `bitstream` is one
 Annex-B access unit as raw bytes, beside `codec`, `is_sync_point`,
-`group_index`, `sequence_index`, `width`, `height` and `color`. It is the whole
-frame, so a keyframe bag is orders of magnitude larger.
+`group_index`, `sequence_index`, `width`, `height` and `color`. So an encoded
+bag's size is the bitstream's size — it moves with the picture and with the
+frame type, where a video bag never does. On a static 1080p test pattern the
+predicted frames measure a few hundred bytes each and the keyframes between
+them tens of kilobytes.
 
 A Python processor reads that bag with the cast built for it:
 
