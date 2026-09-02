@@ -32,6 +32,10 @@ from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
 from ._engine import CameraSource as CameraSource
 from ._engine import DisplayWindow as DisplayWindow
+from ._engine import H264Decoder as H264Decoder
+from ._engine import H264Encoder as H264Encoder
+from ._engine import H265Decoder as H265Decoder
+from ._engine import H265Encoder as H265Encoder
 from ._engine import MicrophoneSource as MicrophoneSource
 from ._engine import Runtime as _NativeRuntime
 from ._engine import SpeakerSink as SpeakerSink
@@ -77,6 +81,10 @@ __all__ = [
     "GpuSurfaceCheckOutLease",
     "GpuSurfaceDeviceTensorScope",
     "GpuSurfaceHandle",
+    "H264Decoder",
+    "H264Encoder",
+    "H265Decoder",
+    "H265Encoder",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MasteringDisplay",
