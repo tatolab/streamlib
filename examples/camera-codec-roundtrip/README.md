@@ -59,19 +59,26 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 ## What the hardware has to have
 
 This app needs a GPU with **Vulkan Video encode and decode queues** for the
-codec it is running. The two halves fail differently, and knowing which you are
-looking at saves the diagnosis:
+codec it is running. Lacking either, the app still **starts** and the window
+stays black — `streamlib run` boots the graph and never waits on readiness, and
+a processor that fails is logged, not raised. So the diagnosis is in the log and
+in `streamlib graph`, and the two halves put it in different places:
 
 - **No decode queue.** The decoder mints its session in `setup()`, so it
-  refuses by name before a frame moves: the processor never reaches Running and
-  the app raises rather than starting.
-- **No encode queue.** The encoder mints lazily, on the first frame. The app
-  starts, the failure latches, every later frame is discarded with one `error`
-  line in the log — and the window stays black because nothing is ever encoded
-  for the decoder to decode.
+  refuses before a frame moves: one `ERROR` reading
+  `[<id>] Setup failed: H264Decoder: failed to mint the decoder session: …`, and
+  the decoder sits in state `Error` in `streamlib graph` while everything
+  upstream of it runs.
+- **No encode queue.** The encoder mints lazily, on the first frame, so the
+  refusal lands later: one `ERROR` reading `the encoder session could not be
+  minted; every later frame is discarded`. The encoder stays in state `Running`
+  — it is consuming frames, just dropping them.
 
-That asymmetry is today's engine behaviour, described here rather than papered
-over. `streamlib logs` is where the encoder's line lands.
+That is today's engine behaviour, described here rather than papered over. An
+app launched from its own code rather than by the CLI can turn either into an
+exception by calling `rt.wait_until_every_processor_is_running()` — before
+`rt.run()`, or from another thread while it blocks. The CLI never calls it, so
+here `streamlib logs` and `streamlib graph` are the tools.
 
 ## Observing it
 
@@ -105,9 +112,9 @@ resolution. An encoded bag carries its payload inline: `bitstream` is one
 Annex-B access unit as raw bytes, beside `codec`, `is_sync_point`,
 `group_index`, `sequence_index`, `width`, `height` and `color`. So an encoded
 bag's size is the bitstream's size — it moves with the picture and with the
-frame type, where a video bag never does. On a static 1080p test pattern the
-predicted frames measure a few hundred bytes each and the keyframes between
-them tens of kilobytes.
+frame type, where a video bag never does. The keyframes are the big ones, by a
+wide margin: a keyframe carries a whole picture, and the predicted frames
+between it and the next carry only what changed.
 
 A Python processor reads that bag with the cast built for it:
 
