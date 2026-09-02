@@ -57,9 +57,9 @@ _NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
 _REQUIRED_BAG_KEYS = ("surface_id", "width", "height", "timestamp_ns")
 
 # How every refusal from this cast names what the bag failed to be. Spelled
-# once because `color_info_or_none` serves the encoded-frame cast too, which
+# once because `_color_info_or_none` serves the encoded-frame cast too, which
 # names itself differently.
-VIDEO_FRAME_REFUSAL_SUBJECT = "bag is not a video frame"
+_VIDEO_FRAME_REFUSAL_SUBJECT = "bag is not a video frame"
 
 
 def _is_plain_int(value: Any) -> bool:
@@ -70,7 +70,7 @@ def _is_plain_int(value: Any) -> bool:
 def _require_int_or_none(key: str, value: Any) -> "int | None":
     if value is not None and not _is_plain_int(value):
         raise ValueError(
-            f"{VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} must be int or absent"
+            f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} must be int or absent"
         )
     return value
 
@@ -91,7 +91,7 @@ def _cast_nested(
         return nested_type(**nested_bag)
     except TypeError as construction_error:
         raise ValueError(
-            f"{VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} is malformed "
+            f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} is malformed "
             f"({construction_error})"
         ) from None
 
@@ -104,11 +104,11 @@ def _nested_or_none(
     if value is None or isinstance(value, nested_type):
         return value
     return _cast_nested(
-        key, nested_type, _require_mapping(VIDEO_FRAME_REFUSAL_SUBJECT, key, value)
+        key, nested_type, _require_mapping(_VIDEO_FRAME_REFUSAL_SUBJECT, key, value)
     )
 
 
-def color_info_or_none(
+def _color_info_or_none(
     refusal_subject: str, key: str, value: Any
 ) -> "ColorInfo | None":
     """`ColorInfo` reads field by field rather than by construction: every
@@ -229,7 +229,7 @@ class VideoFrame(ClaimedSurfacePixelAccess):
             or not _is_plain_int(timestamp_ns)
         ):
             raise ValueError(
-                f"{VIDEO_FRAME_REFUSAL_SUBJECT}: surface_id must be str and "
+                f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: surface_id must be str and "
                 "width/height/timestamp_ns must be int"
             )
         super().__init__(
@@ -239,8 +239,8 @@ class VideoFrame(ClaimedSurfacePixelAccess):
             timestamp_ns=timestamp_ns,
             fps=_require_int_or_none("fps", fps),
             texture_layout=_require_int_or_none("texture_layout", texture_layout),
-            color_info=color_info_or_none(
-                VIDEO_FRAME_REFUSAL_SUBJECT, "color_info", color_info
+            color_info=_color_info_or_none(
+                _VIDEO_FRAME_REFUSAL_SUBJECT, "color_info", color_info
             ),
             content_light=_nested_or_none("content_light", ContentLight, content_light),
             mastering_display=_nested_or_none(
@@ -277,6 +277,6 @@ class VideoFrame(ClaimedSurfacePixelAccess):
         missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
         if missing:
             raise ValueError(
-                f"{VIDEO_FRAME_REFUSAL_SUBJECT}: missing key {missing[0]!r}"
+                f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: missing key {missing[0]!r}"
             )
         return cls(**bag)

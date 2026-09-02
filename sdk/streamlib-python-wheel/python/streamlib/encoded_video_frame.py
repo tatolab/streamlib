@@ -28,7 +28,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from .video_frame import ColorInfo, color_info_or_none
+from .video_frame import ColorInfo, _color_info_or_none
 
 __all__ = ["EncodedVideoFrame"]
 
@@ -153,7 +153,7 @@ class EncodedVideoFrame:
         # The same H.273 four-tuple a video-frame bag carries as `color_info`,
         # read by the same field-by-field reader under this convention's key.
         object.__setattr__(
-            self, "color", color_info_or_none(_REFUSAL_SUBJECT, "color", color)
+            self, "color", _color_info_or_none(_REFUSAL_SUBJECT, "color", color)
         )
 
     @classmethod

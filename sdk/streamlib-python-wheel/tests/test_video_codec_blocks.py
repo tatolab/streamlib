@@ -309,6 +309,7 @@ def test_each_decoded_frame_carries_the_stamp_of_the_encoded_frame_it_came_from(
 
     for stamp in cross_checkable:
         assert stamp in encoded_stamps, (
-            f"the decoded frame is stamped {stamp}, which rode no encoded "
-            "frame — the decoder re-stamped it at publication"
+            f"the decoded frame is stamped {stamp}, which rode no encoded frame "
+            "this run wrote down — either the decoder re-stamped it at "
+            "publication, or the encoded probe's own link lost the bag it came on"
         )
