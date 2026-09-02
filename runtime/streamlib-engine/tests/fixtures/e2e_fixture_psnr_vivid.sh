@@ -42,6 +42,15 @@
 #                primary differently cannot then be read as a colour regression.
 #
 # Environment overrides:
+#   PIPELINE           — which authoring surface builds the graph: `rust`
+#                         (default) runs the `codec_roundtrip_rig` example,
+#                         `python` runs `codec_roundtrip_node.py` through the
+#                         wheel's marker classes. Only the argv differs; both
+#                         arms lock to the same baseline at the same tolerance,
+#                         so a python-arm mismatch is a finding, and the arm is
+#                         refused BASELINE_CAPTURE outright. It scores whatever
+#                         `_engine.abi3.so` the venv holds — rebuild the wheel
+#                         (`maturin develop`) before running it.
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
 #                         8=Green, 9=Blue work the same shape if a future
 #                         regression-classifier wants per-primary sensitivity)
@@ -94,6 +103,7 @@ TOLERANCE="${TOLERANCE:-0.05}"
 BASELINE_CAPTURE="${BASELINE_CAPTURE:-}"
 INJECT_BUG="${INJECT_BUG:-}"
 VIVID_TEST_PATTERN="${VIVID_TEST_PATTERN:-7}"  # 7 = "100% Red"
+PIPELINE="${PIPELINE:-rust}"
 
 # ── Prerequisites ────────────────────────────────────────────────────
 need() { command -v "$1" >/dev/null || { echo "[vivid-color] missing: $1" >&2; exit 77; }; }
@@ -108,10 +118,25 @@ case "$CODEC" in
         exit 1
         ;;
 esac
+case "$PIPELINE" in
+    rust|python) ;;
+    *)
+        echo "[vivid-color] FAIL: PIPELINE '$PIPELINE' is neither rust nor python" >&2
+        exit 1
+        ;;
+esac
 BASELINE_TSV="$(baseline_tsv_for_codec "$CODEC")"
 if [ ! -f "$BASELINE_TSV" ] && [ "$BASELINE_CAPTURE" != "1" ]; then
     echo "[vivid-color] FAIL: no baseline for $CODEC at $BASELINE_TSV." >&2
     echo "[vivid-color] Capture one on the rig with BASELINE_CAPTURE=1 before gating on it." >&2
+    exit 1
+fi
+
+if [ "$BASELINE_CAPTURE" = "1" ] && [ "$PIPELINE" = "python" ]; then
+    echo "[vivid-color] ERROR: the python arm never writes a baseline" >&2
+    echo "[vivid-color] Its whole proof is locking to the number the Rust rig captured, so a" >&2
+    echo "[vivid-color] baseline written through it would have nothing left to lock to." >&2
+    echo "[vivid-color] Capture with PIPELINE=rust; a python-arm mismatch is a finding." >&2
     exit 1
 fi
 
@@ -130,6 +155,35 @@ fi
 if [ ! -x "$STREAMLIB_CLI" ]; then
     echo "[vivid-color] SKIP: no streamlib CLI on PATH or at $STREAMLIB_CLI" >&2
     exit 77
+fi
+
+FIXTURE_NODE_PYTHON=""
+if [ "$PIPELINE" = "python" ]; then
+    # The interpreter beside the CLI, because that is the one whose environment
+    # the CLI ships in; a bare `python3` can be an unrelated one that happens to
+    # be first on PATH.
+    FIXTURE_NODE_PYTHON="$(dirname "$STREAMLIB_CLI")/python3"
+    if [ ! -x "$FIXTURE_NODE_PYTHON" ]; then
+        FIXTURE_NODE_PYTHON="$(command -v python3)"
+    fi
+    # This arm scores whatever `_engine.abi3.so` that interpreter imports, so an
+    # extension predating the codec markers would be measured and reported as a
+    # PASS for code that is not in the tree. Refused by name instead.
+    if ! MARKER_IMPORT_FAILURE="$("$FIXTURE_NODE_PYTHON" -c '
+import sys
+
+import streamlib
+
+codec = sys.argv[1].upper()
+for role in ("Encoder", "Decoder"):
+    getattr(streamlib, codec + role)
+' "$CODEC" 2>&1)"; then
+        echo "[vivid-color] SKIP: $FIXTURE_NODE_PYTHON cannot import streamlib's" >&2
+        echo "[vivid-color] $CODEC blocks. Rebuild the wheel with \`maturin develop\` before" >&2
+        echo "[vivid-color] running the python arm — it measures the extension, not the tree." >&2
+        echo "$MARKER_IMPORT_FAILURE" >&2
+        exit 77
+    fi
 fi
 
 # vivid is an in-kernel V4L2 test driver — no DKMS or out-of-tree modules.
@@ -209,16 +263,24 @@ echo "[vivid-color] Output dir:        $OUTPUT_DIR"
 echo "[vivid-color] Vivid device:      $VIVID_DEVICE"
 echo "[vivid-color] Test pattern:      $VIVID_TEST_PATTERN (was $ORIGINAL_PATTERN, restored on exit)"
 echo "[vivid-color] Codec:             $CODEC"
+echo "[vivid-color] Pipeline:          $PIPELINE"
 echo "[vivid-color] Control plane:     $CONTROL_PLANE_URL"
 
 # ── Build ────────────────────────────────────────────────────────────
 cd "$REPO_ROOT"
-echo "[vivid-color] Building codec_roundtrip_rig + xtask (release)..."
-if ! cargo build --release --locked -p streamlib-engine --example codec_roundtrip_rig \
-        > "$OUTPUT_DIR/build.log" 2>&1; then
-    echo "[vivid-color] FAIL: rig build failed" >&2
-    tail -40 "$OUTPUT_DIR/build.log" >&2
-    exit 1
+if [ "$PIPELINE" = "python" ]; then
+    echo "[vivid-color] Building xtask (release)..."
+    # The node has no build step, and the xtask build below appends — so the
+    # log is opened here rather than carrying a previous run's contents.
+    : > "$OUTPUT_DIR/build.log"
+else
+    echo "[vivid-color] Building codec_roundtrip_rig + xtask (release)..."
+    if ! cargo build --release --locked -p streamlib-engine --example codec_roundtrip_rig \
+            > "$OUTPUT_DIR/build.log" 2>&1; then
+        echo "[vivid-color] FAIL: rig build failed" >&2
+        tail -40 "$OUTPUT_DIR/build.log" >&2
+        exit 1
+    fi
 fi
 if ! cargo build --release --locked -p xtask >> "$OUTPUT_DIR/build.log" 2>&1; then
     echo "[vivid-color] FAIL: xtask build failed" >&2
@@ -228,14 +290,28 @@ fi
 
 # ── Run ──────────────────────────────────────────────────────────────
 echo "[vivid-color] Running the round trip against $VIVID_DEVICE..."
+# The arms differ in their argv and nowhere else: same environment, same
+# budget, same log, and everything downstream reads the same control plane.
+if [ "$PIPELINE" = "python" ]; then
+    PIPELINE_LAUNCH_COMMAND=(
+        "$FIXTURE_NODE_PYTHON" "$SCRIPT_DIR/codec_roundtrip_node.py"
+        --codec "$CODEC"
+        --camera "$VIVID_DEVICE"
+        --control-plane-port "$CONTROL_PLANE_PORT"
+    )
+else
+    PIPELINE_LAUNCH_COMMAND=(
+        "$REPO_ROOT/target/release/examples/codec_roundtrip_rig"
+        --source camera
+        --codec "$CODEC"
+        --camera "$VIVID_DEVICE"
+        --control-plane-port "$CONTROL_PLANE_PORT"
+    )
+fi
 DISPLAY="${DISPLAY:-:0}" \
 RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
     timeout --kill-after=5 "$RUN_SECONDS" \
-        "$REPO_ROOT/target/release/examples/codec_roundtrip_rig" \
-        --source camera \
-        --codec "$CODEC" \
-        --camera "$VIVID_DEVICE" \
-        --control-plane-port "$CONTROL_PLANE_PORT" \
+        "${PIPELINE_LAUNCH_COMMAND[@]}" \
         > "$LOG_FILE" 2>&1 &
 RIG_PID=$!
 
