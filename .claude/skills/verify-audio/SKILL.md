@@ -54,10 +54,10 @@ runtime/streamlib-engine/tests/fixtures/virtual_audio_device.sh check
 
 ## Running it
 
-The rig is real, so these need the Bash `dangerouslyDisableSandbox` bypass. `rig-brake` prompts on
-any `tests/fixtures/e2e_*.sh` path, which covers the rig-only fixture; the through-engine one does
-not match that pattern but still brings up a GPU context and an iceoryx2 node, so give it the
-bypass too.
+The rig is real, so these need the Bash `dangerouslyDisableSandbox` bypass. `rig-brake` never
+prompts here: it can note an executed `tests/fixtures/e2e_*.sh` script, and the project baseline
+turns even that note off. Both fixtures bring up a GPU context and an iceoryx2 node, so give both
+the bypass.
 
 ```bash
 # through-engine (default)

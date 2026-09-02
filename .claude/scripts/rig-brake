@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# rig-brake: edit, inspect and dry-run the config the rig-brake hook reads.
+set -uo pipefail
+
+claude_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+hook="$claude_dir/hooks/rig-brake.sh"
+root="${CLAUDE_PROJECT_DIR:-$(dirname "$claude_dir")}"
+RULE_NAMES=(ffmpeg_v4l2 example_launch e2e_fixture player_on_device v4l2ctl_stream)
+
+usage() {
+  cat <<'USAGE'
+rig-brake — the rig-brake hook's config (.claude/rig-brake.json and its siblings)
+
+  rig-brake allow  [--project|--user] '<glob>'          stay silent on commands matching the glob
+  rig-brake ask    [--project|--user] '<glob>'          prompt on commands matching the glob
+  rig-brake remove [--project|--user] '<glob>'          drop the glob from both lists
+  rig-brake rule   [--project|--user] <rule> <outcome>  set one rule's outcome: warn | ask | off
+  rig-brake mode   [--project|--user] <outcome>         set the default outcome for every rule
+  rig-brake show                                        the effective merged config and its sources
+  rig-brake test   [--cwd <dir>] '<command>'            dry-run the hook on a command
+
+Globs match the whole command text with bash pattern syntax (* and ?). Rules:
+ffmpeg_v4l2, example_launch, e2e_fixture, player_on_device, v4l2ctl_stream.
+Writes go to .claude/rig-brake.local.json (yours, untracked) unless --project
+(.claude/rig-brake.json, checked in) or --user (~/.claude/rig-brake.json) is given.
+USAGE
+}
+
+scope=local
+cwd_override=""
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project) scope=project ;;
+    --user) scope=user ;;
+    --cwd) shift; cwd_override="${1:-}" ;;
+    -h|--help) usage; exit 0 ;;
+    *) args+=("$1") ;;
+  esac
+  shift
+done
+verb="${args[0]:-}"
+[ ${#args[@]} -eq 0 ] || args=("${args[@]:1}")
+
+target() {
+  case "$scope" in
+    local) printf '%s' "$root/.claude/rig-brake.local.json" ;;
+    project) printf '%s' "$root/.claude/rig-brake.json" ;;
+    user) printf '%s' "$HOME/.claude/rig-brake.json" ;;
+  esac
+}
+
+# Applies a jq filter to the target config file in place, creating it when absent.
+edit_target() {
+  local file temp
+  file="$(target)"
+  mkdir -p "$(dirname "$file")"
+  [ -f "$file" ] || printf '{}\n' >"$file"
+  jq -e . "$file" >/dev/null 2>&1 || { echo "rig-brake: $file is not valid JSON, fix it first" >&2; return 1; }
+  temp="$(mktemp "$file.XXXXXX")"
+  if jq "$@" "$file" >"$temp"; then
+    mv "$temp" "$file"
+    echo "rig-brake: wrote $file"
+  else
+    rm -f "$temp"
+    return 1
+  fi
+}
+
+valid_outcome() {
+  case "$1" in
+    warn|ask|off) return 0 ;;
+    *) echo "rig-brake: outcome must be warn, ask or off, got '$1'" >&2; return 1 ;;
+  esac
+}
+valid_rule() {
+  local rule
+  for rule in "${RULE_NAMES[@]}"; do
+    [ "$rule" = "$1" ] && return 0
+  done
+  echo "rig-brake: unknown rule '$1' (rules: ${RULE_NAMES[*]})" >&2
+  return 1
+}
+
+case "$verb" in
+  allow|ask)
+    glob="${args[0]:-}"
+    [ -n "$glob" ] || { usage >&2; exit 1; }
+    edit_target --arg list "$verb" --arg glob "$glob" \
+      '.[$list] = (((.[$list] // []) + [$glob]) | unique)'
+    ;;
+  remove)
+    glob="${args[0]:-}"
+    [ -n "$glob" ] || { usage >&2; exit 1; }
+    edit_target --arg glob "$glob" \
+      '.allow = ((.allow // []) - [$glob]) | .ask = ((.ask // []) - [$glob])'
+    ;;
+  rule)
+    rule="${args[0]:-}"
+    outcome="${args[1]:-}"
+    [ -n "$rule" ] && [ -n "$outcome" ] || { usage >&2; exit 1; }
+    valid_rule "$rule" && valid_outcome "$outcome" || exit 1
+    edit_target --arg rule "$rule" --arg outcome "$outcome" \
+      '.rules = ((.rules // {}) + {($rule): $outcome})'
+    ;;
+  mode)
+    outcome="${args[0]:-}"
+    [ -n "$outcome" ] || { usage >&2; exit 1; }
+    valid_outcome "$outcome" || exit 1
+    edit_target --arg outcome "$outcome" '.mode = $outcome'
+    ;;
+  show)
+    CLAUDE_PROJECT_DIR="$root" bash "$hook" --show-config
+    for file in "$HOME/.claude/rig-brake.json" "$root/.claude/rig-brake.json" "$root/.claude/rig-brake.local.json"; do
+      printf '\n== %s ==\n' "$file"
+      if [ ! -f "$file" ]; then
+        echo "(absent)"
+      elif ! jq -e . "$file" >/dev/null 2>&1; then
+        echo "(not valid JSON, ignored by the hook)"
+      else
+        jq . "$file"
+      fi
+    done
+    ;;
+  test)
+    command_text="${args[0]:-}"
+    [ -n "$command_text" ] || { usage >&2; exit 1; }
+    output="$(jq -n --arg c "$command_text" --arg d "${cwd_override:-$PWD}" '{tool_input: {command: $c}, cwd: $d}' \
+      | CLAUDE_PROJECT_DIR="$root" bash "$hook")"
+    if [ -z "$output" ]; then
+      echo "outcome: silent (no note, no prompt)"
+    elif [ "$(jq -r '.hookSpecificOutput.permissionDecision // ""' <<<"$output")" = "ask" ]; then
+      echo "outcome: ask (a permission prompt)"
+      jq . <<<"$output"
+    else
+      echo "outcome: warn (a note to the model and a line to you, no prompt)"
+      jq . <<<"$output"
+    fi
+    ;;
+  ""|help)
+    usage
+    ;;
+  *)
+    echo "rig-brake: unknown verb '$verb'" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
