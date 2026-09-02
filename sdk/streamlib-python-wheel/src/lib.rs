@@ -42,6 +42,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_native_builtin_blocks::PythonDisplayWindowBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonMicrophoneSourceBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonSpeakerSinkBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonH264EncoderBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonH264DecoderBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonH265EncoderBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonH265DecoderBlock>()?;
     module.add_class::<python_test_harness_endpoints::PythonTestBagFeederBlock>()?;
     module.add_class::<python_test_harness_endpoints::PythonTestBagCollectorBlock>()?;
     module.add_class::<python_added_processor::PythonAddedProcessor>()?;

@@ -48,6 +48,10 @@ __all__ = [
     "ProcessorOutputPortReference",
     "CameraSource",
     "DisplayWindow",
+    "H264Decoder",
+    "H264Encoder",
+    "H265Decoder",
+    "H265Encoder",
     "MicrophoneSource",
     "Runtime",
     "RuntimeContextFullAccess",
@@ -90,6 +94,132 @@ class DisplayWindow:
     with the engine's shared event pump and renders on its own thread. An
     instance that cannot get a window drains its input without showing
     anything, so upstream still sees a live consumer.
+    """
+
+@final
+class H264Decoder:
+    """Native built-in block: H.264 encoded-frame bags to decoded video
+    frames via Vulkan Video hardware decode (Linux).
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(H264Decoder)`); it is never instantiated and its per-frame path
+    never enters the interpreter.
+
+    Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
+    shape `H264Encoder` publishes; a bag the decoder cannot read is refused
+    by name, never reshaped. Output `video` publishes an ordinary
+    `streamlib.VideoFrame` on a pooled RGBA pixel-buffer surface at the
+    conformance-windowed extent — never the coded picture — carrying the
+    encoded frame's own timestamp and `color_info`, with `fps`,
+    `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a
+    `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is
+    buffer-backed, so it reaches a Python kernel through a DLPack landing
+    copy, never by bare surface id — the camera's own gap, not a new one.
+
+    Config keys, all optional (`rt.add(H264Decoder)` bare is legal):
+    `max_width` and `max_height` cap the decoded-picture-buffer allocation
+    together or not at all — a half-specified pair warns and auto-detects
+    both from the stream's first SPS, as an absent pair does.
+
+    The decode session is minted at `setup()`, sized by the caps above. On a
+    device with no Vulkan Video decode queue for the codec, setup refuses by
+    name: the processor never reaches Running, and
+    `Runtime.wait_until_every_processor_is_running` raises rather than the
+    graph running with an empty channel.
+    """
+
+@final
+class H264Encoder:
+    """Native built-in block: video frames to H.264 encoded-frame bags via
+    Vulkan Video hardware encode (Linux).
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
+    never instantiated and its per-frame path never enters the interpreter.
+
+    Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
+    buffer-backed (camera, test pattern) or texture-backed (a kernel
+    output). Output `encoded_video` publishes encoded-frame bags: one
+    Annex-B access unit per bag, beside the stream metadata keys. A frame
+    the encoder cannot consume is logged and dropped while the processor
+    keeps running.
+
+    Config keys, every one an optional non-negative integer
+    (`rt.add(H264Encoder)` bare is legal): `width` and `height` are
+    guardrails, not a resize — a mismatching frame wins with a warning;
+    `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
+    absent means constant-QP encoding at the medium preset;
+    `keyframe_interval_seconds` is the IDR cadence, defaulting to 2;
+    `effort_level` is the Vulkan encoder-effort index (driver analysis
+    budget, not a codec quality knob). The session mints from the first
+    frame's dimensions and re-mints when the upstream extent changes.
+
+    On a device without Vulkan Video encode the session fails to mint: the
+    failure latches and every later frame is discarded with one error line —
+    no exception reaches Python.
+    """
+
+@final
+class H265Decoder:
+    """Native built-in block: H.265 encoded-frame bags to decoded video
+    frames via Vulkan Video hardware decode (Linux).
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(H265Decoder)`); it is never instantiated and its per-frame path
+    never enters the interpreter.
+
+    Input `encoded_video` (`ordered`) takes encoded-frame bags in the wire
+    shape `H265Encoder` publishes; a bag the decoder cannot read is refused
+    by name, never reshaped. Output `video` publishes an ordinary
+    `streamlib.VideoFrame` on a pooled RGBA pixel-buffer surface at the
+    conformance-windowed extent — never the coded picture — carrying the
+    encoded frame's own timestamp and `color_info`, with `fps`,
+    `texture_layout` and the HDR sidecars absent, so `DisplayWindow` and a
+    `read(port, into=VideoFrame)` consume it unchanged. A decoded frame is
+    buffer-backed, so it reaches a Python kernel through a DLPack landing
+    copy, never by bare surface id — the camera's own gap, not a new one.
+
+    Config keys, all optional (`rt.add(H265Decoder)` bare is legal):
+    `max_width` and `max_height` cap the decoded-picture-buffer allocation
+    together or not at all — a half-specified pair warns and auto-detects
+    both from the stream's first SPS, as an absent pair does.
+
+    The decode session is minted at `setup()`, sized by the caps above. On a
+    device with no Vulkan Video decode queue for the codec, setup refuses by
+    name: the processor never reaches Running, and
+    `Runtime.wait_until_every_processor_is_running` raises rather than the
+    graph running with an empty channel.
+    """
+
+@final
+class H265Encoder:
+    """Native built-in block: video frames to H.265 encoded-frame bags via
+    Vulkan Video hardware encode (Linux).
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
+    never instantiated and its per-frame path never enters the interpreter.
+
+    Input `video` (`ordered`) takes any published `streamlib.VideoFrame` —
+    buffer-backed (camera, test pattern) or texture-backed (a kernel
+    output). Output `encoded_video` publishes encoded-frame bags: one
+    Annex-B access unit per bag, beside the stream metadata keys. A frame
+    the encoder cannot consume is logged and dropped while the processor
+    keeps running.
+
+    Config keys, every one an optional non-negative integer
+    (`rt.add(H265Encoder)` bare is legal): `width` and `height` are
+    guardrails, not a resize — a mismatching frame wins with a warning;
+    `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
+    absent means constant-QP encoding at the medium preset;
+    `keyframe_interval_seconds` is the IDR cadence, defaulting to 2;
+    `effort_level` is the Vulkan encoder-effort index (driver analysis
+    budget, not a codec quality knob). The session mints from the first
+    frame's dimensions and re-mints when the upstream extent changes.
+
+    On a device without Vulkan Video encode the session fails to mint: the
+    failure latches and every later frame is discarded with one error line —
+    no exception reaches Python.
     """
 
 @final

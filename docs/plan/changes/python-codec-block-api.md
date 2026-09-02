@@ -263,6 +263,13 @@ folded into a codec rung:
   the lazy mint and gives the codec blocks the same refuse-at-setup shape the
   other device classes have. An engine-half ticket if the owner wants it; the
   stub docstring states today's behavior either way.
+  > Correction while implementing #2105 (2026-09-01): the shape above is the
+  > encoder's alone. The decoder mints eagerly at `setup()`
+  > (`encoded_frame_to_published_surface_decoder.rs:129-153`), so a device
+  > with no decode queue already refuses by name — the processor reaches
+  > `Error` and the readiness wait raises. The recommended capability probe
+  > is owed on the encoder only, and the decoder stub docstrings state the
+  > eager shape.
 
 ## Validation
 
