@@ -5,12 +5,9 @@
 """The Python arm of the codec round trip: camera -> encoder -> decoder -> window.
 
 The twin of the camera arm of `codec_roundtrip_rig.rs` under the engine's
-`examples/`, authored through the wheel's marker classes instead of `App::add`.
-It exists so the vivid drift lock can be measured through a Python-authored
-graph and compared against the baseline the Rust rig captured: the codec path
-below a marker is the same code, so agreement is the proof that the Python
-surface changed nothing on it, and a disagreement is a regression to diagnose
-rather than a third baseline to write.
+`examples/`, authored through the wheel's marker classes instead of `App::add`,
+so the vivid drift lock can be measured through a Python-authored graph and
+compared against the baseline the Rust rig captured.
 
 All four blocks are native built-ins, so this app declares no Python processor
 and the graph spawns no helper process — what runs under the markers is the

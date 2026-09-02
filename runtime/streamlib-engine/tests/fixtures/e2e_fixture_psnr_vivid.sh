@@ -45,17 +45,12 @@
 #   PIPELINE           — which authoring surface builds the graph: `rust`
 #                         (default) runs the `codec_roundtrip_rig` example,
 #                         `python` runs `codec_roundtrip_node.py` through the
-#                         wheel's marker classes. Everything after launch is
-#                         the same run: the same graph wait, the same channel
-#                         derivation, the same exchange, the same baseline and
-#                         tolerance. That is the point — the codec path below a
-#                         marker is the code the Rust arm scored, so the Python
-#                         surface is proven by locking to the same baseline,
-#                         not by a second one. A python-arm number outside
-#                         tolerance is a regression to diagnose, never a
-#                         calibration. The python arm scores whatever
-#                         `_engine.abi3.so` the venv holds, so rebuild the
-#                         wheel (`maturin develop`) before running it.
+#                         wheel's marker classes. Only the argv differs; both
+#                         arms lock to the same baseline at the same tolerance,
+#                         so a python-arm mismatch is a finding, and the arm is
+#                         refused BASELINE_CAPTURE outright. It scores whatever
+#                         `_engine.abi3.so` the venv holds — rebuild the wheel
+#                         (`maturin develop`) before running it.
 #   VIVID_TEST_PATTERN — vivid test_pattern index (default 7 = "100% Red";
 #                         8=Green, 9=Blue work the same shape if a future
 #                         regression-classifier wants per-primary sensitivity)
@@ -134,6 +129,14 @@ BASELINE_TSV="$(baseline_tsv_for_codec "$CODEC")"
 if [ ! -f "$BASELINE_TSV" ] && [ "$BASELINE_CAPTURE" != "1" ]; then
     echo "[vivid-color] FAIL: no baseline for $CODEC at $BASELINE_TSV." >&2
     echo "[vivid-color] Capture one on the rig with BASELINE_CAPTURE=1 before gating on it." >&2
+    exit 1
+fi
+
+if [ "$BASELINE_CAPTURE" = "1" ] && [ "$PIPELINE" = "python" ]; then
+    echo "[vivid-color] ERROR: the python arm never writes a baseline" >&2
+    echo "[vivid-color] Its whole proof is locking to the number the Rust rig captured, so a" >&2
+    echo "[vivid-color] baseline written through it would have nothing left to lock to." >&2
+    echo "[vivid-color] Capture with PIPELINE=rust; a python-arm mismatch is a finding." >&2
     exit 1
 fi
 
