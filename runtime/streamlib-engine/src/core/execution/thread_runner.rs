@@ -722,7 +722,7 @@ mod tests {
         crate::iceoryx2::ResolvedAudioWindowContract::from_declared_values(
             &crate::core::descriptors::AudioWindowContractDeclaredValues {
                 sample_rate: 16_000,
-                channels: 1,
+                channels: Some(1),
                 dtype: "f32".to_string(),
                 window_size: 512,
                 hop: 512,

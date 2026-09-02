@@ -1888,7 +1888,7 @@ mod tests {
             panic!("a port stating five values resolves to them at wire time");
         };
         assert_eq!(contract.sample_rate, 16_000);
-        assert_eq!(contract.channels, 1);
+        assert_eq!(contract.channels, Some(1));
         assert_eq!(contract.window_size, 512);
         assert_eq!(contract.hop, 512);
     }

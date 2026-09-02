@@ -535,7 +535,7 @@ mod port_rendering_tests {
         crate::core::descriptors::AudioWindowContract::Declaration(
             crate::core::descriptors::AudioWindowContractDeclaredValues {
                 sample_rate: 16_000,
-                channels: 1,
+                channels: Some(1),
                 dtype: "f32".to_string(),
                 window_size: 512,
                 hop: 512,

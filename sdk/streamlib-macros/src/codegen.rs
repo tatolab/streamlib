@@ -806,7 +806,10 @@ fn audio_window_contract_tokens(
         },
         Some(AudioWindowContract::Declaration(values)) => {
             let sample_rate = values.sample_rate;
-            let channels = values.channels;
+            let channels = match values.channels {
+                Some(channels) => quote! { ::std::option::Option::Some(#channels) },
+                None => quote! { ::std::option::Option::None },
+            };
             let dtype = &values.dtype;
             let window_size = values.window_size;
             let hop = values.hop;

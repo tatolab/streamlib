@@ -30,6 +30,7 @@ use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
 use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 
 /// One processor's links, as seen from Python.
@@ -738,11 +739,11 @@ mod tests {
 
 /// Read the window contract the parent wired this input port with.
 ///
-/// The parent sends the five values resolved — a `match_device` sentinel
-/// resolves in the process that opened the device stream — so a child reads one
-/// shape and never a sentinel it could not settle. Field by field rather than
-/// through a serde bridge, so a key the parent got wrong is named here rather
-/// than surfacing as an anonymous decode failure.
+/// The parent sends the values resolved — a `match_device` sentinel resolves in
+/// the process that opened the device stream — so a child reads one shape and
+/// never a sentinel it could not settle. Field by field rather than through a
+/// serde bridge, so a key the parent got wrong is named here rather than
+/// surfacing as an anonymous decode failure.
 fn read_the_window_contract_the_parent_wired(
     port_name: &str,
     declared: &Bound<'_, PyAny>,
@@ -765,7 +766,7 @@ fn read_the_window_contract_the_parent_wired(
 
     let values = AudioWindowContractDeclaredValues {
         sample_rate: field(port_name, declared, "sample_rate")?,
-        channels: field(port_name, declared, "channels")?,
+        channels: channel_count_the_parent_wired(port_name, declared)?,
         dtype: field(port_name, declared, "dtype")?,
         window_size: field(port_name, declared, "window_size")?,
         hop: field(port_name, declared, "hop")?,
@@ -774,6 +775,26 @@ fn read_the_window_contract_the_parent_wired(
         PyValueError::new_err(format!(
             "input port {port_name:?} was wired with an `audio_window` the stage cannot \
              honour: {refusal}"
+        ))
+    })
+}
+
+/// Read the channel count off the contract the parent wired, or `None` where
+/// the port follows whatever count its source sends.
+///
+/// The one field of the envelope that may be absent, and the one that may
+/// arrive as a word rather than a number.
+fn channel_count_the_parent_wired(
+    port_name: &str,
+    declared: &Bound<'_, PyAny>,
+) -> PyResult<Option<u32>> {
+    let Ok(value) = declared.get_item("channels") else {
+        return Ok(None);
+    };
+    read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?} was wired with an `audio_window` whose \"channels\" \
+             the helper could not read: it {refusal}"
         ))
     })
 }

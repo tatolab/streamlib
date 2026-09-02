@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The window contract an audio input port may declare beside its delivery
-//! profile — the rate, channels, dtype, window size and hop it wants.
+//! profile — the rate, dtype, window size and hop it wants, and the channel
+//! count it wants only if it needs a particular one.
 //!
 //! Declaration only: this type is what an author writes and what `graph`
 //! renders. Resampling, mixdown and framing are the read-side stage's, and it
@@ -23,17 +24,28 @@ use serde::{Deserialize, Serialize};
 /// `#[processor]` grammar and the wheel's declaration bridge call.
 pub const AUDIO_WINDOW_DTYPE_DECLARATION_VALUES: [&str; 2] = ["f32", "i16"];
 
-/// A window contract on an audio input port: either the five values the port
+/// How an undeclared channel count renders wherever a contract is written
+/// down — `graph`, the parent→child wiring envelope, and the dict a Python
+/// author's declaration becomes.
+///
+/// Spelled rather than omitted. A missing key and a `null` both read as
+/// "nothing was said here", which is indistinguishable from a writer that
+/// forgot the field; `"source"` says the count follows whatever the source
+/// sends, which is the whole of what an absent count means.
+pub const AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE: &str = "source";
+
+/// A window contract on an audio input port: either the values the port
 /// declared, or the sentinel that resolves them from the device.
 ///
-/// All-or-nothing by construction. There is no partial form, because a
+/// All-or-nothing but for the channel count, which is the one value a port may
+/// leave to its source. Everything else has no partial form, because a
 /// half-declared contract leaves the read-side stage guessing at exactly the
 /// values a model asserts on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(tag = "resolved_from", deny_unknown_fields)]
 pub enum AudioWindowContract {
-    /// The five values as the port itself declared them.
+    /// The values as the port itself declared them.
     #[serde(rename = "declaration")]
     Declaration(AudioWindowContractDeclaredValues),
     /// `audio_window = match_device`: the five values resolve at `setup()`
@@ -62,15 +74,27 @@ pub enum AudioWindowContract {
     Device(AudioWindowContractDeclaredValues),
 }
 
-/// The five values an `audio_window` declaration states.
+/// The values an `audio_window` declaration states.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AudioWindowContractDeclaredValues {
     /// Output sample rate in hertz.
     pub sample_rate: u32,
-    /// Output channel count every emitted window is interleaved by.
-    pub channels: u32,
+    /// Output channel count every emitted window is interleaved by, or `None`
+    /// — the source's own count, whatever it is.
+    ///
+    /// The one value a contract may leave unstated. Absent, the stage skips
+    /// channel conversion and every emitted window carries the count the block
+    /// arrived with, so a consumer reads `channels` off the block rather than
+    /// assuming it. A consumer that needs a particular count — a model trained
+    /// on mono — declares one and is converted to it.
+    #[serde(
+        default,
+        with = "channel_count_declared_or_following_the_source",
+    )]
+    #[schemars(schema_with = "audio_window_channels_json_schema")]
+    pub channels: Option<u32>,
     /// How to read the scalars an emitted window carries — `"f32"` or
     /// `"i16"`.
     pub dtype: String,
@@ -95,11 +119,14 @@ impl AudioWindowContractDeclaredValues {
     /// runs no check; the two authoring surfaces are what this guards.
     pub fn refuse_if_unhonourable(&self) -> Result<(), String> {
         for (field_name, value) in [
-            ("sample_rate", self.sample_rate),
+            ("sample_rate", Some(self.sample_rate)),
             ("channels", self.channels),
-            ("window_size", self.window_size),
-            ("hop", self.hop),
-        ] {
+            ("window_size", Some(self.window_size)),
+            ("hop", Some(self.hop)),
+        ]
+        .into_iter()
+        .filter_map(|(field_name, value)| value.map(|value| (field_name, value)))
+        {
             if value == 0 {
                 return Err(format!(
                     "`audio_window` field `{field_name}` is {value} — every numeric field \
@@ -128,6 +155,110 @@ impl AudioWindowContractDeclaredValues {
 
         Ok(())
     }
+}
+
+/// `channels` as it crosses a wire: the declared count as an integer, or
+/// [`AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE`] for a port that takes
+/// whatever its source sends.
+///
+/// Hand-written rather than left to `Option<u32>`'s own rendering, which would
+/// write `null` — a value every JSON writer also produces by accident. A reader
+/// that sees `"source"` knows the absence was meant.
+mod channel_count_declared_or_following_the_source {
+    use serde::de::{Unexpected, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    use super::AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE;
+
+    pub(super) fn serialize<S: Serializer>(
+        channels: &Option<u32>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match channels {
+            Some(channels) => serializer.serialize_u32(*channels),
+            None => serializer.serialize_str(AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u32>, D::Error> {
+        deserializer.deserialize_any(ChannelCountOrTheSourceSpelling)
+    }
+
+    struct ChannelCountOrTheSourceSpelling;
+
+    impl Visitor<'_> for ChannelCountOrTheSourceSpelling {
+        type Value = Option<u32>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "a channel count, or `\"{AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE}\"` to \
+                 take the source's own"
+            )
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, channels: u64) -> Result<Self::Value, E> {
+            u32::try_from(channels)
+                .map(Some)
+                .map_err(|_| E::invalid_value(Unexpected::Unsigned(channels), &self))
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, channels: i64) -> Result<Self::Value, E> {
+            u32::try_from(channels)
+                .map(Some)
+                .map_err(|_| E::invalid_value(Unexpected::Signed(channels), &self))
+        }
+
+        fn visit_str<E: serde::de::Error>(self, spelling: &str) -> Result<Self::Value, E> {
+            if spelling == AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE {
+                return Ok(None);
+            }
+            Err(E::invalid_value(Unexpected::Str(spelling), &self))
+        }
+    }
+}
+
+/// The JSON Schema for `channels`, matching what the field actually writes.
+///
+/// The derive would render `Option<u32>` as an integer-or-null, which is not a
+/// shape this field ever takes.
+fn audio_window_channels_json_schema(
+    _: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    use schemars::schema::{InstanceType, NumberValidation, Schema, SchemaObject, SubschemaValidation};
+
+    let declared_count = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Integer.into()),
+        number: Some(Box::new(NumberValidation {
+            minimum: Some(1.0),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    let follows_the_source = Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        enum_values: Some(vec![serde_json::Value::String(
+            AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE.into(),
+        )]),
+        ..Default::default()
+    });
+
+    Schema::Object(SchemaObject {
+        metadata: Some(Box::new(schemars::schema::Metadata {
+            description: Some(
+                "Output channel count, or `source` to carry whatever count the source sends."
+                    .into(),
+            ),
+            ..Default::default()
+        })),
+        subschemas: Some(Box::new(SubschemaValidation {
+            one_of: Some(vec![declared_count, follows_the_source]),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 /// A declaration vocabulary as a quoted, comma-joined list, for the refusal
@@ -169,7 +300,7 @@ mod tests {
     fn declared_values() -> AudioWindowContractDeclaredValues {
         AudioWindowContractDeclaredValues {
             sample_rate: 16_000,
-            channels: 1,
+            channels: Some(1),
             dtype: "f32".to_string(),
             window_size: 512,
             hop: 512,
@@ -287,7 +418,7 @@ mod tests {
             let mut values = declared_values();
             match field_name {
                 "sample_rate" => values.sample_rate = 0,
-                "channels" => values.channels = 0,
+                "channels" => values.channels = Some(0),
                 "window_size" => values.window_size = 0,
                 _ => values.hop = 0,
             }
@@ -357,6 +488,145 @@ mod tests {
                 .refuse_if_unhonourable()
                 .unwrap_or_else(|refusal| panic!("`{dtype}` is legal; got {refusal}"));
         }
+    }
+
+
+    /// The rendering an absent count takes, spelled rather than omitted: a
+    /// reader of `graph` learns the count follows the source instead of
+    /// learning nothing.
+    #[test]
+    fn an_undeclared_channel_count_renders_as_following_the_source() {
+        let json = serde_json::to_value(AudioWindowContract::Declaration(
+            AudioWindowContractDeclaredValues {
+                channels: None,
+                ..declared_values()
+            },
+        ))
+        .expect("a contract with no declared count serializes");
+
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": "source",
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 512,
+            })
+        );
+    }
+
+    #[test]
+    fn a_contract_following_the_source_round_trips_through_its_rendering() {
+        let following_the_source = AudioWindowContract::Declaration(
+            AudioWindowContractDeclaredValues {
+                channels: None,
+                ..declared_values()
+            },
+        );
+
+        let rendered = serde_json::to_string(&following_the_source).expect("serializes");
+        let read_back: AudioWindowContract =
+            serde_json::from_str(&rendered).expect("deserializes");
+
+        assert_eq!(read_back, following_the_source);
+    }
+
+    /// A writer that omits the key entirely means the same thing as one that
+    /// spells it, so a hand-written declaration is not refused for terseness.
+    #[test]
+    fn an_omitted_channels_key_reads_as_following_the_source() {
+        let without_the_key = serde_json::json!({
+            "resolved_from": "declaration",
+            "sample_rate": 16_000,
+            "dtype": "f32",
+            "window_size": 512,
+            "hop": 512,
+        });
+
+        let read: AudioWindowContract =
+            serde_json::from_value(without_the_key).expect("an omitted count is legal");
+
+        assert_eq!(
+            read,
+            AudioWindowContract::Declaration(AudioWindowContractDeclaredValues {
+                channels: None,
+                ..declared_values()
+            })
+        );
+    }
+
+    /// `channels` is the one value that may be left out; the rest are refused
+    /// exactly as before, so relaxing one field did not relax the contract.
+    #[test]
+    fn every_value_but_the_channel_count_is_still_required() {
+        for omitted in ["sample_rate", "dtype", "window_size"] {
+            let mut declaration = serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 512,
+            });
+            declaration
+                .as_object_mut()
+                .expect("an object")
+                .remove(omitted);
+
+            serde_json::from_value::<AudioWindowContract>(declaration).expect_err(&format!(
+                "`{omitted}` is required and its absence must be refused"
+            ));
+        }
+    }
+
+    /// A string that is not the one spelling is a writer that meant something
+    /// else, and guessing which count it meant is exactly the reshaping the
+    /// contract refuses everywhere else.
+    #[test]
+    fn a_channels_value_that_is_neither_a_count_nor_the_source_spelling_is_refused() {
+        for stray in [
+            serde_json::json!("stereo"),
+            serde_json::json!("2"),
+            serde_json::json!(null),
+            serde_json::json!(-1),
+        ] {
+            let declaration = serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": stray,
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 512,
+            });
+
+            serde_json::from_value::<AudioWindowContract>(declaration)
+                .expect_err(&format!("`{stray}` names no channel count"));
+        }
+    }
+
+    /// The relaxation is about a count nobody stated, never about a count
+    /// stated wrong: a declared zero is as unhonourable as it ever was.
+    #[test]
+    fn a_declared_zero_is_still_refused_while_an_absent_count_is_accepted() {
+        AudioWindowContractDeclaredValues {
+            channels: None,
+            ..declared_values()
+        }
+        .refuse_if_unhonourable()
+        .expect("a contract may leave its count to the source");
+
+        let refusal = AudioWindowContractDeclaredValues {
+            channels: Some(0),
+            ..declared_values()
+        }
+        .refuse_if_unhonourable()
+        .expect_err("a declared zero is refused");
+        assert!(
+            refusal.contains("channels") && refusal.contains(" is 0 "),
+            "the refusal must name the field and the value; got {refusal}"
+        );
     }
 
     #[test]

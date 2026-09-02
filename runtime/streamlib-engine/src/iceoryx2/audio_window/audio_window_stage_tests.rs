@@ -6,14 +6,15 @@
 //! gap that flushes the filter instead of blending audio across it.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use streamlib_processor_schema::AudioWindowContractDeclaredValues;
 
 use super::audio_block_bag_wire_codec::{
     AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire, read_an_audio_block_off_the_wire,
 };
-use super::audio_window_accumulator::AudioWindowAccumulator;
+use super::audio_window_accumulator::{
+    AudioWindowAccumulator, LatestQueuedSourceAudioFormat, SourceAudioFormat,
+};
 use super::resolved_audio_window_contract::ResolvedAudioWindowContract;
 
 const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
@@ -21,6 +22,27 @@ const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
 fn contract(
     sample_rate: u32,
     channels: u32,
+    dtype: &str,
+    window_size: u32,
+    hop: u32,
+) -> ResolvedAudioWindowContract {
+    declared(sample_rate, Some(channels), dtype, window_size, hop)
+}
+
+/// A contract that states everything but its channel count, so every emitted
+/// window carries whatever count the source sent.
+fn contract_following_the_sources_channels(
+    sample_rate: u32,
+    dtype: &str,
+    window_size: u32,
+    hop: u32,
+) -> ResolvedAudioWindowContract {
+    declared(sample_rate, None, dtype, window_size, hop)
+}
+
+fn declared(
+    sample_rate: u32,
+    channels: Option<u32>,
     dtype: &str,
     window_size: u32,
     hop: u32,
@@ -38,23 +60,27 @@ fn contract(
 /// A stage on a port nothing has queued a bag into yet — every test drives it
 /// through `accept`, which is what a read does once the gate has cleared.
 fn stage_on(contract: ResolvedAudioWindowContract) -> AudioWindowAccumulator {
-    AudioWindowAccumulator::new("audio", contract, Arc::new(AtomicU32::new(0)))
+    AudioWindowAccumulator::new(
+        "audio",
+        contract,
+        Arc::new(LatestQueuedSourceAudioFormat::default()),
+    )
 }
 
-/// A stage plus the source-rate cell its port's mailbox measure writes into.
+/// A stage plus the source-format cell its port's mailbox measure writes into.
 /// The readiness tests drive that cell themselves, because it is what makes the
 /// floor exact before a single bag has been consumed.
-fn stage_and_the_rate_its_mailbox_reports(
+fn stage_and_the_format_its_mailbox_reports(
     contract: ResolvedAudioWindowContract,
-) -> (AudioWindowAccumulator, Arc<AtomicU32>) {
-    let latest_queued_source_sample_rate = Arc::new(AtomicU32::new(0));
+) -> (AudioWindowAccumulator, Arc<LatestQueuedSourceAudioFormat>) {
+    let latest_queued_source_audio_format = Arc::new(LatestQueuedSourceAudioFormat::default());
     (
         AudioWindowAccumulator::new(
             "audio",
             contract,
-            Arc::clone(&latest_queued_source_sample_rate),
+            Arc::clone(&latest_queued_source_audio_format),
         ),
-        latest_queued_source_sample_rate,
+        latest_queued_source_audio_format,
     )
 }
 
@@ -595,8 +621,8 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
 fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 1)] {
         let contract = contract(16_000, 1, "f32", 512, 512);
-        let (mut stage, rate_the_mailbox_reports) =
-            stage_and_the_rate_its_mailbox_reports(contract);
+        let (mut stage, format_the_mailbox_reports) =
+            stage_and_the_format_its_mailbox_reports(contract);
 
         // Small quanta on purpose: the queue must cross one window's worth in
         // steps smaller than the priming and chunk slack, or a floor blind to
@@ -620,7 +646,10 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
             ));
             queued_equivalents +=
                 source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
-            rate_the_mailbox_reports.store(source_rate, Ordering::Relaxed);
+            format_the_mailbox_reports.record(SourceAudioFormat {
+                sample_rate: source_rate,
+                channels: source_channels,
+            });
 
             if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
                 continue;
@@ -648,8 +677,11 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
 #[test]
 fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
-    rate_the_mailbox_reports.store(16_000, Ordering::Relaxed);
+    let (mut stage, format_the_mailbox_reports) = stage_and_the_format_its_mailbox_reports(contract);
+    format_the_mailbox_reports.record(SourceAudioFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    });
 
     // Three 160-sample bags — 480 of the 512 a window needs.
     let mut queued: Vec<Vec<u8>> = (0..3u64)
@@ -720,8 +752,11 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
 #[test]
 fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
-    rate_the_mailbox_reports.store(16_000, Ordering::Relaxed);
+    let (mut stage, format_the_mailbox_reports) = stage_and_the_format_its_mailbox_reports(contract);
+    format_the_mailbox_reports.record(SourceAudioFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    });
 
     assert!(!stage.has_said_a_full_mailbox_cannot_fill_a_window());
 
@@ -747,8 +782,11 @@ fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
 #[test]
 fn the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to() {
     let contract = contract(16_000, 1, "f32", 16_000, 160);
-    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
-    rate_the_mailbox_reports.store(48_000, Ordering::Relaxed);
+    let (mut stage, format_the_mailbox_reports) = stage_and_the_format_its_mailbox_reports(contract);
+    format_the_mailbox_reports.record(SourceAudioFormat {
+        sample_rate: 48_000,
+        channels: 1,
+    });
 
     let depth = contract.windowed_port_mailbox_depth() as u64;
     let mut queued_equivalents = 0u64;

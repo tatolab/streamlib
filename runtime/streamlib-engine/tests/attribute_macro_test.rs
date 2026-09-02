@@ -295,7 +295,7 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
             streamlib_engine::core::descriptors::AudioWindowContract::Declaration(
                 streamlib_engine::core::descriptors::AudioWindowContractDeclaredValues {
                     sample_rate: 16_000,
-                    channels: 1,
+                    channels: Some(1),
                     dtype: "f32".to_string(),
                     window_size: 512,
                     hop: 160,

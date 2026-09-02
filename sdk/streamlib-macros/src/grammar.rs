@@ -427,11 +427,12 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     })
 }
 
-/// Parse the `audio_window` body — the call form carrying five values, or
+/// Parse the `audio_window` body — the call form carrying the values, or
 /// `= match_device`, the whole-contract sentinel.
 ///
 /// The values are validated here rather than at the read seam so a contract
-/// the stage could not honour never compiles.
+/// the stage could not honour never compiles. `channels` may be omitted and
+/// then means the source's own count, whatever it is.
 fn parse_audio_window_contract(
     content: ParseStream<'_>,
     port_name: &str,
@@ -448,7 +449,7 @@ fn parse_audio_window_contract(
                      only sentinel is `match_device`, which resolves the contract at \
                      `setup()` from the device stream the processor opened. To state the \
                      values instead, spell the contract as a call: \
-                     `audio_window(sample_rate = 16_000, channels = 1, dtype = \"f32\", \
+                     `audio_window(sample_rate = 16_000, dtype = \"f32\", \
                      window_size = 512, hop = 512)`"
                 ),
             ));
@@ -461,7 +462,7 @@ fn parse_audio_window_contract(
             key_span,
             format!(
                 "port `{port_name}` declares `audio_window` with no contract — spell it as \
-                 `audio_window(sample_rate = …, channels = …, dtype = …, window_size = …)` \
+                 `audio_window(sample_rate = …, dtype = …, window_size = …)` \
                  or as `audio_window = match_device`"
             ),
         ));
@@ -507,12 +508,10 @@ fn parse_audio_window_contract(
 
     let absent_required_fields = [
         ("sample_rate", sample_rate.is_none()),
-        ("channels", channels.is_none()),
         ("dtype", dtype.is_none()),
         ("window_size", window_size.is_none()),
     ];
-    let (Some(sample_rate), Some(channels), Some(dtype), Some(window_size)) =
-        (sample_rate, channels, dtype, window_size)
+    let (Some(sample_rate), Some(dtype), Some(window_size)) = (sample_rate, dtype, window_size)
     else {
         let missing = absent_required_fields
             .into_iter()
@@ -523,9 +522,10 @@ fn parse_audio_window_contract(
             key_span,
             format!(
                 "port `{port_name}` declares a partial `audio_window` — missing {missing}. \
-                 The contract is all-or-nothing, because a half-declared one leaves the \
-                 engine guessing at exactly the values a model asserts on. `hop` is the one \
-                 omittable field and defaults to `window_size`"
+                 The contract is all-or-nothing but for two fields, because a half-declared \
+                 one leaves the engine guessing at exactly the values a model asserts on. \
+                 `hop` defaults to `window_size`, and `channels` defaults to the source's \
+                 own count"
             ),
         ));
     };
@@ -1000,7 +1000,7 @@ mod tests {
             declared_contract(&parsed),
             &AudioWindowContractDeclaredValues {
                 sample_rate: 16_000,
-                channels: 1,
+                channels: Some(1),
                 dtype: "f32".to_string(),
                 window_size: 512,
                 hop: 512,
@@ -1061,7 +1061,7 @@ mod tests {
         });
 
         assert!(
-            msg.contains("partial") && msg.contains("`channels`") && msg.contains("`dtype`"),
+            msg.contains("partial") && msg.contains("`dtype`"),
             "the refusal must name the missing fields; got {msg}"
         );
     }
@@ -1286,6 +1286,92 @@ mod tests {
                 "dtype": "f32",
                 "window_size": 512,
                 "hop": 160,
+            })
+        );
+    }
+
+
+    /// The count is the one value a port may leave to whatever is upstream of
+    /// it, so a graph can grow a source without every consumer being edited.
+    #[test]
+    fn a_contract_omitting_its_channel_count_parses_as_following_the_source() {
+        let parsed = parse_ok(quote! {
+            execution = reactive,
+            input(
+                "audio",
+                delivery_profile = "ordered",
+                audio_window(
+                    sample_rate = 48_000,
+                    dtype = "f32",
+                    window_size = 960,
+                    hop = 960
+                )
+            ),
+        });
+
+        assert_eq!(
+            declared_contract(&parsed),
+            &AudioWindowContractDeclaredValues {
+                sample_rate: 48_000,
+                channels: None,
+                dtype: "f32".to_string(),
+                window_size: 960,
+                hop: 960,
+            }
+        );
+    }
+
+    /// Relaxing the count relaxed nothing else: the refusal still names each
+    /// value the stage cannot run without.
+    #[test]
+    fn a_contract_missing_a_value_other_than_the_count_is_still_refused_by_name() {
+        for (declaration, expected) in [
+            (
+                quote! { audio_window(dtype = "f32", window_size = 512) },
+                "`sample_rate`",
+            ),
+            (
+                quote! { audio_window(sample_rate = 16_000, window_size = 512) },
+                "`dtype`",
+            ),
+            (
+                quote! { audio_window(sample_rate = 16_000, dtype = "f32") },
+                "`window_size`",
+            ),
+        ] {
+            let msg = parse_err(quote! {
+                execution = reactive,
+                input("audio", delivery_profile = "ordered", #declaration),
+            });
+
+            assert!(
+                msg.contains("partial") && msg.contains(expected),
+                "the refusal must name {expected}; got {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_port_following_the_source_projects_its_count_as_the_source() {
+        let parsed = parse_ok(quote! {
+            execution = reactive,
+            input(
+                "audio",
+                delivery_profile = "ordered",
+                audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960)
+            ),
+        });
+
+        let schema = parsed.to_processor_schema();
+        assert_eq!(
+            serde_json::to_value(&schema.inputs[0].audio_window).unwrap(),
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 48_000,
+                "channels": "source",
+                "dtype": "f32",
+                "window_size": 960,
+                "hop": 960,
             })
         );
     }

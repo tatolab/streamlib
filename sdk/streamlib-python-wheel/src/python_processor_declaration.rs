@@ -11,7 +11,8 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    AudioWindowContract, AudioWindowContractDeclaredValues, PortDescriptor,
+    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
+    AudioWindowContractDeclaredValues, PortDescriptor,
     ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
     ProcessorScheduling,
 };
@@ -218,7 +219,7 @@ fn read_audio_window_contract(
                     "sample_rate",
                     port_name,
                 )?,
-                channels: read_audio_window_numeric_field(declaration, "channels", port_name)?,
+                channels: read_audio_window_channel_count(declaration, port_name)?,
                 dtype: read_audio_window_string_field(declaration, "dtype", port_name)?,
                 window_size: read_audio_window_numeric_field(
                     declaration,
@@ -237,6 +238,57 @@ fn read_audio_window_contract(
              \"declaration\" or \"match_device\""
         ))),
     }
+}
+
+/// Read the `audio_window` channel count an author declared, or `None` where
+/// they left it to the source.
+///
+/// The count is the one value a contract may omit, so an absent key is legal
+/// here where every other field's absence is refused.
+fn read_audio_window_channel_count(
+    declaration: &Bound<'_, PyDict>,
+    port_name: &str,
+) -> PyResult<Option<u32>> {
+    let Some(value) = declaration.get_item("channels")? else {
+        return Ok(None);
+    };
+    read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
+        PyValueError::new_err(format!(
+            "input port {port_name:?}: audio_window field \"channels\" {refusal}"
+        ))
+    })
+}
+
+/// Read a `channels` value written either as a count or as the
+/// source-following spelling.
+///
+/// The one parse both wheel-side readers call — the bridge from an author's
+/// declaration and the helper's reading of what the parent wired. The refusal
+/// comes back bare so each frames it in its own terms, the way the contract's
+/// own validator does: one names a declaration, the other names a wiring.
+pub(crate) fn read_a_channel_count_or_the_source_spelling(
+    value: &Bound<'_, PyAny>,
+) -> Result<Option<u32>, String> {
+    if let Ok(spelling) = value.extract::<String>() {
+        if spelling == AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE {
+            return Ok(None);
+        }
+        return Err(format!(
+            "is {spelling:?} — expected a channel count, or \
+             {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry whatever count the \
+             source sends"
+        ));
+    }
+
+    let declared = value.extract::<i64>().map_err(|_| {
+        format!(
+            "must be an int, or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry \
+             whatever count the source sends"
+        )
+    })?;
+    u32::try_from(declared)
+        .map(Some)
+        .map_err(|_| format!("is {declared} — every numeric field is strictly positive"))
 }
 
 /// Read one strictly-positive `audio_window` numeric field, refusing a
