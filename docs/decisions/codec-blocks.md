@@ -164,11 +164,18 @@ pooled pixel-buffer hand-off the camera's non-DMA-BUF path uses, and moving it t
 texture backing is an engine question no Python surface should answer in passing.
 
 Two things a Python author will meet are engine-wide and deliberately not fixed under
-a codec rung: no built-in refuses an unknown config key, and a device without a Vulkan
-Video *encode* queue runs the app with an empty channel rather than refusing at
-`setup()` — the encoder mints lazily from its first frame where the decoder mints
-eagerly and already refuses by name. Both are recorded as findings on the change; the
-stub docstrings state today's behavior.
+a codec rung: no built-in refuses an unknown config key, and a device without Vulkan
+Video runs the app with an empty channel rather than refusing at `setup()`. Both are
+recorded as findings on the change; the stub docstrings state today's behavior.
+
+> ~~a device without Vulkan Video runs the app with an empty channel rather than
+> refusing at `setup()`~~ — Superseded 2026-09-01 by #2105's read of
+> `encoded_frame_to_published_surface_decoder.rs:129-153`. It is the encoder's shape
+> alone: the encoder mints its session lazily from the first frame, so a failed mint
+> is one `error!` line and a latch, while the decoder mints eagerly at `setup()` and
+> a device with no decode queue already refuses by name — the processor reaches
+> `Error` and the readiness wait raises. The capability probe the finding recommends
+> is owed on the encoder only.
 
 ## Known landmines carried forward (from the audit, for the implementing tickets)
 

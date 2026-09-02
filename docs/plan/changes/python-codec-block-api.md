@@ -160,6 +160,13 @@ count lives.
   wired ports as `bytes` through `streamlib.testing`'s feeder and collector,
   each refusal naming its key or its codec, an unknown key read past, `bool`
   refused for every integer field, and the cast holding no surface and no claim.
+  > Correction while implementing #2106 (2026-09-01): the wired-ports round
+  > trip is `test_audio_block_cast.py`'s own live-link fixture
+  > (`ProcessorLinkDataAccess.wire_output_link` / `wire_input_link`), not
+  > `streamlib.testing`'s feeder and collector. `SingleProcessorTestPipeline`
+  > builds a `Runtime`, so every test using it carries `requires_gpu` and runs
+  > nowhere in CI — the mirror-the-audio-cast half of this bullet and the
+  > GPU-free half were in conflict, and CI-run is what the bullet is for.
 - **DECIDED** — Rig-only, `requires_gpu`, `test_video_codec_blocks.py` over a
   `video_codec_blocks_app.py` and its probes, parameterized over both codecs:
   `TestPatternSource → <codec>Encoder → EncodedFrameProbe` asserts every bag
@@ -173,6 +180,12 @@ count lives.
   codecs — with each `timestamp_ns` equal to the encoded bag's and `color_info`
   present. These carry the marker like every graph test here and run nowhere in
   CI; the module docstring says so, as `test_microphone_source.py:5-8` does.
+  > Correction while implementing #2106 (2026-09-01): the encoded link carries
+  > two probes, not one. `read_with_timestamp` takes no `into=`, so the probe
+  > that proves the cast on a bag the encoder wrote cannot also read the
+  > frame-header stamp the decoded cross-check compares against.
+  > `EncodedFrameProbe` does the first and `EncodedFrameTimestampProbe` the
+  > second, both fanned off the same output beside the decoder.
 - **DECIDED** — The per-block ship bar the plan states (`ARCHITECTURE.md:1190-1192`)
   is met by agreement, not by a second rig: the codec path below the marker is
   byte-identical to the one the Rust rig scored, so the live proof for the
