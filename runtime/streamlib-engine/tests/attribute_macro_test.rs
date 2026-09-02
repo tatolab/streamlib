@@ -305,6 +305,54 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
     );
 }
 
+// A windowed consumer that names no channel count: its windows carry whatever
+// its source sends, which is what lets a graph grow a source without editing
+// every consumer downstream of it.
+#[streamlib::sdk::processor(
+    execution = reactive,
+    input(
+        "audio",
+        delivery_profile = "ordered",
+        audio_window(sample_rate = 48_000, dtype = "f32", window_size = 960, hop = 960)
+    ),
+)]
+pub struct SourceFollowingAudioConsumer;
+
+impl streamlib_engine::ReactiveProcessor for SourceFollowingAudioConsumer::Processor {
+    fn process(
+        &mut self,
+        _ctx: &streamlib_engine::core::RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_port_declaring_no_channel_count_carries_the_source_following_contract() {
+    let descriptor = <SourceFollowingAudioConsumer::Processor as GeneratedProcessor>::descriptor()
+        .expect("the macro emits a descriptor");
+    let audio = descriptor
+        .inputs
+        .iter()
+        .find(|port| port.name == "audio")
+        .expect("the audio port is in the descriptor");
+
+    assert_eq!(
+        audio.audio_window,
+        Some(
+            streamlib_engine::core::descriptors::AudioWindowContract::Declaration(
+                streamlib_engine::core::descriptors::AudioWindowContractDeclaredValues {
+                    sample_rate: 48_000,
+                    channels: None,
+                    dtype: "f32".to_string(),
+                    window_size: 960,
+                    hop: 960,
+                }
+            )
+        )
+    );
+}
+
 #[test]
 fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
     let descriptor = <WindowedAudioConsumer::Processor as GeneratedProcessor>::descriptor()
