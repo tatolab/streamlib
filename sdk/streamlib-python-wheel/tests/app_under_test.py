@@ -105,6 +105,30 @@ class AppUnderTest:
     def await_marker(self, marker: str) -> None:
         self.await_output_containing(f"{MARKER_PREFIX}{marker}", f"marker {marker}")
 
+    def await_every_marker(self, *markers: str) -> None:
+        """Wait until each of `markers` has been seen, in any order.
+
+        Every wait here scans forward only, so awaiting two markers one after
+        the other silently requires them to arrive in that order — and two
+        probes in two helper processes have no such contract. This consumes
+        one stream of lines and ticks them off as they come.
+        """
+        awaited = {f"{MARKER_PREFIX}{marker}" for marker in markers}
+        deadline = time.monotonic() + ENGINE_READY_TIMEOUT_SECONDS
+        while awaited:
+            what = f"markers {sorted(awaited)}"
+            try:
+                line = self._next_line(deadline)
+            except TimeoutError:
+                raise AssertionError(
+                    f"timed out waiting for {what}; output:\n{self.output}"
+                ) from None
+            if line is None:
+                raise AssertionError(
+                    f"the app exited before {what}; output:\n{self.output}"
+                )
+            awaited -= {marker for marker in awaited if marker in line}
+
     def markers(self) -> set[str]:
         # Matched anywhere in the line, not just at its start: while the engine
         # is alive its stdio interceptor captures the app's `print()` and

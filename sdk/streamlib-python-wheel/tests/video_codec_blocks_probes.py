@@ -26,6 +26,7 @@ from streamlib import EncodedVideoFrame, input, log, processor
 
 DECODED_FRAMES_MARKER = "MARKER:DECODED_FRAMES_SEEN "
 DECODED_FRAME_STAMP_MARKER = "MARKER:DECODED_FRAME_STAMP "
+DECODED_FRAME_STAMPS_COMPLETE_MARKER = "MARKER:DECODED_FRAME_STAMPS_COMPLETE"
 ENCODED_FRAME_MARKER = "MARKER:ENCODED_FRAME "
 ENCODED_FRAME_STAMP_MARKER = "MARKER:ENCODED_FRAME_STAMP "
 ENCODED_FRAMES_COMPLETE_MARKER = "MARKER:ENCODED_FRAMES_COMPLETE"
@@ -35,6 +36,11 @@ ENCODED_FRAMES_COMPLETE_MARKER = "MARKER:ENCODED_FRAMES_COMPLETE"
 # frames and this window holds two groups. Without a second group, "the group
 # index steps only at a sync point" is an assertion about nothing.
 ENCODED_FRAMES_REPORTED = 40
+
+# Enough decoded stamps that the cross-check is about the stream, and enough
+# that the run cannot end before the decoder has produced its own evidence —
+# the encoded probe's window is not a bound on the decoded one.
+DECODED_STAMPS_REPORTED = 30
 
 ENCODED_PORT = "encoded_video_from_upstream"
 
@@ -120,6 +126,7 @@ class DecodedVideoFrameProbe:
 
     def __init__(self) -> None:
         self.bags_seen = []
+        self.stamps_reported = 0
 
     @input(delivery_profile="ordered")
     def video_from_upstream(self) -> None: ...
@@ -132,7 +139,10 @@ class DecodedVideoFrameProbe:
             self.bags_seen.append(dict(bag))
             if len(self.bags_seen) == 2:
                 log.info(DECODED_FRAMES_MARKER + json.dumps(self.bags_seen))
+        self.stamps_reported += 1
         log.info(
             DECODED_FRAME_STAMP_MARKER
             + json.dumps({"timestamp_ns": bag["timestamp_ns"]})
         )
+        if self.stamps_reported == DECODED_STAMPS_REPORTED:
+            log.info(DECODED_FRAME_STAMPS_COMPLETE_MARKER)

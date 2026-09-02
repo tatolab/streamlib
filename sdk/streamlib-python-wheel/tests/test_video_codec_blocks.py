@@ -26,7 +26,10 @@ import pytest
 
 import streamlib
 from streamlib import H264Decoder, H264Encoder, H265Decoder, H265Encoder, VideoFrame
-from video_codec_blocks_probes import ENCODED_FRAMES_REPORTED
+from video_codec_blocks_probes import (
+    DECODED_STAMPS_REPORTED,
+    ENCODED_FRAMES_REPORTED,
+)
 
 VIDEO_CODEC_BLOCKS_APP = Path(__file__).parent / "video_codec_blocks_app.py"
 
@@ -38,8 +41,10 @@ DECODED_FRAME_STAMP = re.compile(r"MARKER:DECODED_FRAME_STAMP (\{.*\})")
 
 # How much of the decoded stream has to fall inside the encoded probe's own
 # report for the cross-check to be about the stream rather than about one
-# frame. Both probes run for the whole run, so the overlap is most of it.
-DECODED_STAMPS_TO_CROSS_CHECK = 5
+# frame. Both stamp reports run to shutdown and the run outlives both probes'
+# completion markers, so the measured overlap is the whole of the shorter
+# report — this is the floor under it, not the expectation.
+DECODED_STAMPS_TO_CROSS_CHECK = DECODED_STAMPS_REPORTED // 2
 
 # The extent a 320×180 source codes at under both codecs: H.264 pads to the
 # 16-sample macroblock and H.265 to the 64-sample CTU, and 192 is the first
@@ -196,14 +201,7 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
     """
     app = start_app_under_test(VIDEO_CODEC_BLOCKS_APP, codec)
     app.await_marker("EVERY_PROCESSOR_RUNNING")
-    # Decoded first: it needs two frames where the encoded probe needs forty,
-    # and each wait scans forward only.
-    app.await_output_containing(
-        "MARKER:DECODED_FRAMES_SEEN", "the probe's first two decoded frames"
-    )
-    app.await_output_containing(
-        "MARKER:ENCODED_FRAMES_COMPLETE", "the encoded probe's full window"
-    )
+    app.await_marker("ENCODED_FRAMES_COMPLETE")
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
@@ -273,12 +271,10 @@ def test_each_decoded_frame_carries_the_stamp_of_the_encoded_frame_it_came_from(
     """
     app = start_app_under_test(VIDEO_CODEC_BLOCKS_APP, codec)
     app.await_marker("EVERY_PROCESSOR_RUNNING")
-    app.await_output_containing(
-        "MARKER:DECODED_FRAMES_SEEN", "the probe's first two decoded frames"
-    )
-    app.await_output_containing(
-        "MARKER:ENCODED_FRAMES_COMPLETE", "the encoded probe's full window"
-    )
+    # Both, in whichever order they arrive: the run must not end before each
+    # side has produced its own evidence, and neither probe's window bounds
+    # the other's.
+    app.await_every_marker("ENCODED_FRAMES_COMPLETE", "DECODED_FRAME_STAMPS_COMPLETE")
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
