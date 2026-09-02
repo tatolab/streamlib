@@ -65,20 +65,23 @@ a processor that fails is logged, not raised. So the diagnosis is in the log and
 in `streamlib graph`, and the two halves put it in different places:
 
 - **No decode queue.** The decoder mints its session in `setup()`, so it
-  refuses before a frame moves: one `ERROR` reading
-  `[<id>] Setup failed: H264Decoder: failed to mint the decoder session: …`, and
-  the decoder sits in state `Error` in `streamlib graph` while everything
-  upstream of it runs.
-- **No encode queue.** The encoder mints lazily, on the first frame, so the
-  refusal lands later: one `ERROR` reading `the encoder session could not be
-  minted; every later frame is discarded`. The encoder stays in state `Running`
-  — it is consuming frames, just dropping them.
+  refuses before a frame moves: one `ERROR` carrying `Setup failed:` and
+  `failed to mint the decoder session`, and the decoder sits in state `Error`
+  in `streamlib graph` while everything upstream of it runs.
+- **No encode queue.** The encoder's `setup()` touches no queue at all — the
+  mint is deferred to the first frame so its dimensions can track upstream — so
+  the refusal lands later: one `ERROR` reading `the encoder session could not be
+  minted; every later frame is discarded`. The encoder reaches state `Running`
+  and stays there. It is consuming frames, just dropping them.
 
-That is today's engine behaviour, described here rather than papered over. An
-app launched from its own code rather than by the CLI can turn either into an
-exception by calling `rt.wait_until_every_processor_is_running()` — before
-`rt.run()`, or from another thread while it blocks. The CLI never calls it, so
-here `streamlib logs` and `streamlib graph` are the tools.
+That is today's engine behaviour, described here rather than papered over, and
+the asymmetry runs deeper than timing. Only the decoder's failure can be turned
+into an exception: an app launched from its own code rather than by the CLI can
+call `rt.wait_until_every_processor_is_running()` — before `rt.run()`, or from
+another thread while it blocks — and a processor settled in `Error` raises
+there. The encoder never settles in `Error`, so nothing raises for it anywhere,
+by design; its only signal is the log line. The CLI never calls the readiness
+wait, so here `streamlib logs` and `streamlib graph` are the tools for both.
 
 ## Observing it
 
