@@ -4,8 +4,10 @@ There is no StreamLib image here. The one that used to live in this repo built a
 image-local package-source tree, linked the engine into it, served the
 Deno SDK over an HTTP mount, and let the runtime compile the api-server from source on
 first boot — every mechanism of which the importable-Python-library pivot deletes. It was
-removed rather than rewritten; nothing in CI built it. Issue #1781 records the commit to
-read it at, and which parts of it are still worth reading.
+removed rather than rewritten; nothing in CI built it. Commit `73078185` is the last one that
+carried it (`git show 73078185:Dockerfile`), and the parts of it still worth reading, the
+CUDA runtime base, the package set and the PipeWire startup order, are captured in the
+learning linked below.
 
 What remains are the two pieces that are about the *host and the hardware*, not about
 packaging, and that survive the pivot unchanged:
