@@ -164,9 +164,11 @@ pooled pixel-buffer hand-off the camera's non-DMA-BUF path uses, and moving it t
 texture backing is an engine question no Python surface should answer in passing.
 
 Two things a Python author will meet are engine-wide and deliberately not fixed under
-a codec rung: no built-in refuses an unknown config key, and a device without Vulkan
-Video runs the app with an empty channel rather than refusing at `setup()`. Both are
-recorded as findings on the change; the stub docstrings state today's behavior.
+a codec rung: no built-in refuses an unknown config key, and a device without a Vulkan
+Video *encode* queue runs the app with an empty channel rather than refusing at
+`setup()` — the encoder mints lazily from its first frame where the decoder mints
+eagerly and already refuses by name. Both are recorded as findings on the change; the
+stub docstrings state today's behavior.
 
 ## Known landmines carried forward (from the audit, for the implementing tickets)
 
