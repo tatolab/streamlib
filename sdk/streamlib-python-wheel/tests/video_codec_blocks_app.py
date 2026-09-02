@@ -5,10 +5,16 @@
 
 `TestPatternSource → <codec>Encoder → <codec>Decoder → DecodedVideoFrameProbe`,
 the codec chosen by argv so one app serves both hardware video codec pairs.
-Every block is added without config except the pattern's extent — 320×180, an
-extent both codecs pad (to 320×192: the 16-sample macroblock and the 64-sample
-CTU agree on it), so the probe seeing 320×180 is the conformance crop proven
-from Python.
+The pattern's extent is 320×180, an extent both codecs pad (to 320×192: the
+16-sample macroblock and the 64-sample CTU agree on it), so the decoded probe
+seeing 320×180 is the conformance crop proven from Python.
+
+Two more probes fan off the encoded link beside the decoder, which is what
+makes one run prove both halves: what the encoder published, and that the
+decoder carried each frame's own stamp through. The encoder asks for a
+1-second keyframe interval — at the pattern's 30 fps that is a sync point
+every 30 frames — so the probes' window spans a group boundary rather than
+asserting about a single group.
 
 The control plane is hosted so the run can read its own graph and report what
 `type` each codec node renders — the import path the marker class resolved to,
@@ -21,11 +27,19 @@ import sys
 import threading
 
 import streamlib
-from video_codec_blocks_probes import DecodedVideoFrameProbe
+from video_codec_blocks_probes import (
+    DecodedVideoFrameProbe,
+    EncodedFrameProbe,
+    EncodedFrameTimestampProbe,
+)
 from streamlib._control_plane_client import call_tool
 from streamlib._node_registry import live_nodes
 
 READINESS_TIMEOUT_SECONDS = 20.0
+
+# One second at the pattern's 30 fps. The encoder resolves its rate from the
+# frame, and the pattern's bag carries 30, so this is 30 frames per group.
+KEYFRAME_INTERVAL_SECONDS = 1
 
 CODEC_BLOCKS = {
     "h264": (streamlib.H264Encoder, streamlib.H264Decoder),
@@ -67,12 +81,27 @@ def main() -> None:
     pattern = runtime.add(
         streamlib.TestPatternSource, config={"width": 320, "height": 180}
     )
-    encoder = runtime.add(encoder_class)
+    encoder = runtime.add(
+        encoder_class,
+        config={"keyframe_interval_seconds": KEYFRAME_INTERVAL_SECONDS},
+    )
     decoder = runtime.add(decoder_class)
-    probe = runtime.add(DecodedVideoFrameProbe)
+    encoded_frame_probe = runtime.add(EncodedFrameProbe)
+    encoded_frame_timestamp_probe = runtime.add(EncodedFrameTimestampProbe)
+    decoded_frame_probe = runtime.add(DecodedVideoFrameProbe)
     runtime.connect(pattern.output("video"), encoder.input("video"))
     runtime.connect(encoder.output("encoded_video"), decoder.input("encoded_video"))
-    runtime.connect(decoder.output("video"), probe.input("video_from_upstream"))
+    runtime.connect(
+        encoder.output("encoded_video"),
+        encoded_frame_probe.input("encoded_video_from_upstream"),
+    )
+    runtime.connect(
+        encoder.output("encoded_video"),
+        encoded_frame_timestamp_probe.input("encoded_video_from_upstream"),
+    )
+    runtime.connect(
+        decoder.output("video"), decoded_frame_probe.input("video_from_upstream")
+    )
 
     def watch_readiness() -> None:
         try:

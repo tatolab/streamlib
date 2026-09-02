@@ -168,6 +168,15 @@ a codec rung: no built-in refuses an unknown config key, and a device without Vu
 Video runs the app with an empty channel rather than refusing at `setup()`. Both are
 recorded as findings on the change; the stub docstrings state today's behavior.
 
+> ~~a device without Vulkan Video runs the app with an empty channel rather than
+> refusing at `setup()`~~ — Superseded 2026-09-01 by #2105's read of
+> `encoded_frame_to_published_surface_decoder.rs:129-153`. It is the encoder's shape
+> alone: the encoder mints its session lazily from the first frame, so a failed mint
+> is one `error!` line and a latch, while the decoder mints eagerly at `setup()` and
+> a device with no decode queue already refuses by name — the processor reaches
+> `Error` and the readiness wait raises. The capability probe the finding recommends
+> is owed on the encoder only.
+
 ## Known landmines carried forward (from the audit, for the implementing tickets)
 
 - First-IDR loss over a late-attaching subscriber; driver-defined session-parameter

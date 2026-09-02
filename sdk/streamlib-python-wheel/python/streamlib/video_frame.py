@@ -56,6 +56,11 @@ _NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
 # bag carries is optional, this cast's or somebody else's.
 _REQUIRED_BAG_KEYS = ("surface_id", "width", "height", "timestamp_ns")
 
+# How every refusal from this cast names what the bag failed to be. Spelled
+# once because `_color_info_or_none` serves the encoded-frame cast too, which
+# names itself differently.
+_VIDEO_FRAME_REFUSAL_SUBJECT = "bag is not a video frame"
+
 
 def _is_plain_int(value: Any) -> bool:
     """`bool` is an `int` subclass; a frame dimension of `True` is a bug."""
@@ -64,13 +69,17 @@ def _is_plain_int(value: Any) -> bool:
 
 def _require_int_or_none(key: str, value: Any) -> "int | None":
     if value is not None and not _is_plain_int(value):
-        raise ValueError(f"bag is not a video frame: {key!r} must be int or absent")
+        raise ValueError(
+            f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} must be int or absent"
+        )
     return value
 
 
-def _require_mapping(key: str, value: Any) -> "Mapping[str, Any]":
+def _require_mapping(
+    refusal_subject: str, key: str, value: Any
+) -> "Mapping[str, Any]":
     if not isinstance(value, Mapping):
-        raise ValueError(f"bag is not a video frame: {key!r} must be a mapping or absent")
+        raise ValueError(f"{refusal_subject}: {key!r} must be a mapping or absent")
     return value
 
 
@@ -82,7 +91,8 @@ def _cast_nested(
         return nested_type(**nested_bag)
     except TypeError as construction_error:
         raise ValueError(
-            f"bag is not a video frame: {key!r} is malformed ({construction_error})"
+            f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: {key!r} is malformed "
+            f"({construction_error})"
         ) from None
 
 
@@ -93,16 +103,25 @@ def _nested_or_none(
     the bag's nested map."""
     if value is None or isinstance(value, nested_type):
         return value
-    return _cast_nested(key, nested_type, _require_mapping(key, value))
+    return _cast_nested(
+        key, nested_type, _require_mapping(_VIDEO_FRAME_REFUSAL_SUBJECT, key, value)
+    )
 
 
-def _color_info_or_none(value: Any) -> "ColorInfo | None":
+def _color_info_or_none(
+    refusal_subject: str, key: str, value: Any
+) -> "ColorInfo | None":
     """`ColorInfo` reads field by field rather than by construction: every
     field is optional and a bag may carry a key this version does not know,
-    where the H.273 tuple's absent-means-unspecified rule still applies."""
+    where the H.273 tuple's absent-means-unspecified rule still applies.
+
+    `refusal_subject` and `key` are the caller's because the same four-tuple
+    rides a video-frame bag as `color_info` and an encoded-frame bag as
+    `color`.
+    """
     if value is None or isinstance(value, ColorInfo):
         return value
-    color_info_bag = _require_mapping("color_info", value)
+    color_info_bag = _require_mapping(refusal_subject, key, value)
     return ColorInfo(
         primaries=cast("Primaries | None", color_info_bag.get("primaries")),
         transfer=cast("Transfer | None", color_info_bag.get("transfer")),
@@ -210,7 +229,7 @@ class VideoFrame(ClaimedSurfacePixelAccess):
             or not _is_plain_int(timestamp_ns)
         ):
             raise ValueError(
-                "bag is not a video frame: surface_id must be str and "
+                f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: surface_id must be str and "
                 "width/height/timestamp_ns must be int"
             )
         super().__init__(
@@ -220,7 +239,9 @@ class VideoFrame(ClaimedSurfacePixelAccess):
             timestamp_ns=timestamp_ns,
             fps=_require_int_or_none("fps", fps),
             texture_layout=_require_int_or_none("texture_layout", texture_layout),
-            color_info=_color_info_or_none(color_info),
+            color_info=_color_info_or_none(
+                _VIDEO_FRAME_REFUSAL_SUBJECT, "color_info", color_info
+            ),
             content_light=_nested_or_none("content_light", ContentLight, content_light),
             mastering_display=_nested_or_none(
                 "mastering_display", MasteringDisplay, mastering_display
@@ -255,5 +276,7 @@ class VideoFrame(ClaimedSurfacePixelAccess):
         """
         missing = [key for key in _REQUIRED_BAG_KEYS if key not in bag]
         if missing:
-            raise ValueError(f"bag is not a video frame: missing key {missing[0]!r}")
+            raise ValueError(
+                f"{_VIDEO_FRAME_REFUSAL_SUBJECT}: missing key {missing[0]!r}"
+            )
         return cls(**bag)
