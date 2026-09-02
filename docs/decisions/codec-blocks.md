@@ -198,3 +198,75 @@ recorded as findings on the change; the stub docstrings state today's behavior.
   of its own — and both source packages are deleted.
 - The held Linux MP4 writer was raw-RGBA piped to an ffmpeg subprocess; the direct
   encoded-mux path was abandoned in April 2026 — `Mp4Sink` is new work, not a port.
+
+## Why the recording rung is shaped this way
+
+Written with `opus-mp4-recording-rung` (proposed 2026-09-02), before its approval.
+
+**The encoded-audio bag is the video convention applied, not a second one.** `EncodedAudioPacket`
+carries `codec`, `bitstream`, the ordering pair and the sync-point flag exactly as
+`EncodedVideoFrame` does, plus the three numbers a container and a decoder need that a video bag
+carries as extent and colour — `sample_rate`, `channels`, `sample_count` — and `pre_skip`,
+because `OpusHead` needs it and the decoder must trim it. Every packet is a sync point and its
+own group because an Opus decoder enters at any packet. "Packet" rather than "frame" because Opus
+uses *frame* for a subdivision of one, and a name that means two things at the seam it crosses
+is the wrong name.
+
+**Framing is the window contract, not the encoder — and the contract follows the source's
+channels.** The held `packages/opus` refused any input that was not already 48 kHz stereo `f32`
+in 960-sample frames and told the author to add a rechunker; the plan put resampling and framing
+into the read-side stage precisely so no processor does that. The encoder declares a 960/960
+window at 48 kHz and reads one Opus frame per dispatch. The first draft fixed a channel count in
+that declaration because the contract required one; the owner rejected the hard-coding the same
+day — a graph is dynamic, a microphone added later must not require touching its consumers, and
+a fixed count belongs only where a model asserts on it. So `channels` became the contract's one
+optional value, absent meaning the source's count, and the encoder mints from the first block it
+sees exactly as the video encoder mints from its first frame, multistream for surround.
+
+**Many tracks by connection, not two fixed inputs.** The first draft gave the sink one video and
+one audio input, the shape every held consumer had, and the shape the owner named as what bit
+the tree before: no second camera, no second microphone, no data track. A link is already the
+engine's unit of a stream, every queued frame already carries its inbound link for drop
+attribution, and MP4, CMAF, MoQ and WebRTC all model a stream as a track — so the sink takes any
+number of links on one input and each becomes a track named after its producer, and the read
+seam gains the one thing it lacked: telling the reader which link a bag arrived on. Caption and
+data tracks then need only a bag convention, not a sink change.
+
+**No concealment.** The audio doctrine is that a device edge drops and counts and the stage
+flushes rather than interpolates: no sample is ever invented. A decoder that concealed a lost
+packet would invent 20 ms of audio, so it does not; it resets, re-enters, logs the count and
+leaves the gap derivable from the stamps. FEC and DTX are networking-rung questions with no
+consumer today.
+
+**Fragmented MP4 because teardown is not a promise.** `teardown()` runs after a processor's loop
+exits, in graph-traversal order, and never on a panicked thread; the runtime's stop is Ctrl-C.
+A flat file whose trailing `moov` is never written is nothing. A fragmented file plays to its
+last closed fragment whatever happened to the process, and the fragment closes at the video
+sync point the discard-to-sync-point doctrine already made a meaningful boundary. It is also the
+shape (CMAF) a MoQ or WHEP sender would emit, so the writer is not a dead end when networking
+lands.
+
+**`avc1`/`hvc1` with parameter sets stripped from samples.** The encoder prepends the parameter
+sets to every IDR so a live subscriber can join mid-stream; a container has a sample entry for
+exactly that, and ISO/IEC 14496-15 forbids in-band parameter sets under `avc1`/`hvc1`, which is
+what Apple hardware plays. Stripping them is what makes the ffmpeg re-tag in `/verify-video`
+unnecessary. The H.265 sample entry's profile-tier-level fields come from the engine's own
+parameter-set parser; a second parser for the same bytes would be the parallel-system mistake.
+
+**Nanosecond video timescale.** `u32` holds 1 000 000 000, so the monotonic stamps the whole
+data plane already shares land in the container exactly, with no 90 kHz rounding carry across a
+long recording. Audio stays at 48 000 with the packet's own sample count as its duration. A/V
+sync is then the plan's own subtraction: one epoch, two offsets, no edit list.
+
+**Static libopus through `opusic-sys`, `mp4-atom` for the boxes.** `opusic-sys` carries libopus
+1.6.1 and its BSD-3-Clause `COPYING` inside the crate and builds it with cmake, which the wheel
+builder already has for shaderc; static by default means `DT_NEEDED` does not grow, which is the
+portability gate's whole demand. `audiopus_sys` was rejected as a 2021 crate carrying an old
+libopus. `mp4-atom` is pure Rust and encodes every box the sink needs including `dOps`, which the
+`mp4` crate's writer lacks; a hand-written box writer would be a maintenance burden and no
+capability.
+
+**Nothing was a port.** The MP4 package was an ffmpeg subprocess transcoder, the recorder a
+deferral stub, the validator an ffmpeg orchestrator whose AVCC "reference" was a comment over
+`None`. All three delete in the change; the rule that the session epoch is the first stamp and
+earlier audio is dropped is the one line carried from the dead Apple writer.
