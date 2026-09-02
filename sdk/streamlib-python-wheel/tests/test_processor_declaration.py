@@ -460,12 +460,58 @@ def test_an_unknown_dtype_is_refused_listing_the_legal_values():
 
 
 def test_a_partial_contract_is_refused_naming_the_missing_fields():
-    """All-or-nothing: a half-declared contract leaves the engine guessing."""
+    """All-or-nothing but for the count: the rest leave the engine guessing."""
     with pytest.raises(TypeError) as refusal:
         AudioWindowContract(sample_rate=16_000, window_size=512)  # type: ignore[call-arg]
 
-    message = str(refusal.value)
-    assert "channels" in message and "dtype" in message
+    assert "dtype" in str(refusal.value)
+
+
+def test_an_omitted_channel_count_follows_the_source():
+    """The default a graph needs: a microphone added later must not require
+    editing every consumer downstream of it."""
+    contract = AudioWindowContract(sample_rate=48_000, dtype="f32", window_size=960)
+
+    assert contract.channels is None
+    assert contract._as_declaration()["channels"] == "source"
+
+
+def test_a_declared_channel_count_still_renders_as_the_number_it_declared():
+    contract = AudioWindowContract(
+        sample_rate=48_000, dtype="f32", window_size=960, channels=1
+    )
+
+    assert contract.channels == 1
+    assert contract._as_declaration()["channels"] == 1
+
+
+@pytest.mark.parametrize("omitted", ["sample_rate", "dtype", "window_size"])
+def test_every_value_but_the_channel_count_is_still_required(omitted: str):
+    """Relaxing one field must not have relaxed the contract."""
+    fields = {"sample_rate": 16_000, "dtype": "f32", "window_size": 512}
+    del fields[omitted]
+
+    with pytest.raises(TypeError) as refusal:
+        AudioWindowContract(**fields)  # type: ignore[arg-type]
+
+    assert omitted in str(refusal.value)
+
+
+def test_a_declared_channel_count_of_zero_is_still_refused():
+    """The relaxation is about a count nobody stated, never one stated wrong."""
+    with pytest.raises(ValueError) as refusal:
+        AudioWindowContract(
+            sample_rate=16_000, dtype="f32", window_size=512, channels=0
+        )
+
+    assert "channels" in str(refusal.value) and "0" in str(refusal.value)
+
+
+def test_the_contract_takes_no_positional_arguments():
+    """Keyword-only, so a positional call fails loudly rather than binding
+    `dtype` to whatever used to sit second."""
+    with pytest.raises(TypeError):
+        AudioWindowContract(16_000, "f32", 512)  # type: ignore[misc]
 
 
 def test_a_contract_beside_a_skipping_delivery_profile_is_refused_naming_both_knobs():
