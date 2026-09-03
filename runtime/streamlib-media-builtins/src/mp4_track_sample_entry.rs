@@ -71,6 +71,17 @@ pub enum Mp4SampleEntryRefusal {
         inbound_link_name: String,
         channels: u32,
     },
+    /// A parameter set with nothing after its NAL header.
+    ParameterSetCarriesNoPayload {
+        inbound_link_name: String,
+        nal_unit_type: u8,
+        nal_unit_bytes: usize,
+    },
+    /// A `pre_skip` past what `dOps` can state.
+    PreSkipThisContainerCannotState {
+        inbound_link_name: String,
+        pre_skip: u32,
+    },
 }
 
 impl std::error::Error for Mp4SampleEntryRefusal {}
@@ -102,6 +113,26 @@ impl std::fmt::Display for Mp4SampleEntryRefusal {
                 "the h265 sequence parameter set on `{inbound_link_name}` could not be read by \
                  the engine's own parser, so the chroma format and bit depths `hvcC` must state \
                  are unknown"
+            ),
+            Self::ParameterSetCarriesNoPayload {
+                inbound_link_name,
+                nal_unit_type,
+                nal_unit_bytes,
+            } => write!(
+                formatter,
+                "the h265 parameter set of type {nal_unit_type} on `{inbound_link_name}` is \
+                 {nal_unit_bytes} bytes, which is its NAL header and nothing else — writing it \
+                 into `hvcC` would describe the track with a record no decoder can read"
+            ),
+            Self::PreSkipThisContainerCannotState {
+                inbound_link_name,
+                pre_skip,
+            } => write!(
+                formatter,
+                "the opus track on `{inbound_link_name}` declares a `pre_skip` of {pre_skip} \
+                 samples, past the {} a `dOps` PreSkip can state — truncating it would silently \
+                 change how much a decoder trims",
+                u16::MAX
             ),
             Self::ChannelCountThisContainerWriterCannotPlace {
                 inbound_link_name,
@@ -218,6 +249,25 @@ pub fn build_hvc1_sample_entry(
             }
         })?;
 
+    // A parameter set that is only a NAL header configures nothing, and `hvc1`
+    // gives a decoder no second source for it.
+    for (nal_unit_type, nal_units) in [
+        (32u8, &parameter_sets.video_parameter_set_nal_units),
+        (33, &parameter_sets.sequence_parameter_set_nal_units),
+        (34, &parameter_sets.picture_parameter_set_nal_units),
+    ] {
+        if let Some(too_short) = nal_units
+            .iter()
+            .find(|nal_unit| nal_unit.len() <= H265_NAL_UNIT_HEADER_BYTES)
+        {
+            return Err(Mp4SampleEntryRefusal::ParameterSetCarriesNoPayload {
+                inbound_link_name: inbound_link_name.to_string(),
+                nal_unit_type,
+                nal_unit_bytes: too_short.len(),
+            });
+        }
+    }
+
     let mut hvcc = Hvcc::new();
     hvcc.general_profile_space = (profile_tier_level[0] >> 6) & 0b11;
     hvcc.general_tier_flag = (profile_tier_level[0] >> 5) & 0b1 == 1;
@@ -279,6 +329,12 @@ pub fn build_opus_sample_entry(
             },
         );
     }
+    let pre_skip: u16 = pre_skip.try_into().map_err(|_| {
+        Mp4SampleEntryRefusal::PreSkipThisContainerCannotState {
+            inbound_link_name: inbound_link_name.to_string(),
+            pre_skip,
+        }
+    })?;
     let layout = OpusStreamLayoutForSourceChannelCount::resolve(channels).map_err(|_| {
         Mp4SampleEntryRefusal::ChannelCountThisContainerWriterCannotPlace {
             inbound_link_name: inbound_link_name.to_string(),
@@ -303,7 +359,7 @@ pub fn build_opus_sample_entry(
         },
         dops: Dops {
             output_channel_count: channels as u8,
-            pre_skip: pre_skip as u16,
+            pre_skip,
             input_sample_rate: OPUS_TRACK_TIMESCALE_HZ,
             output_gain: 0,
         },
@@ -638,5 +694,67 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_parameter_set_that_is_only_a_nal_header_never_reaches_hvcc() {
+        // `0x40` reads as `nal_unit_type` 32 from its first byte, so a truncated
+        // VPS would be filed as one and written into `hvcC` verbatim.
+        let split = crate::mp4_annex_b_access_unit::length_prefix_annex_b_access_unit(
+            &[
+                &[0x00, 0x00, 0x00, 0x01][..],
+                &[0x40][..],
+                &[0x00, 0x00, 0x00, 0x01][..],
+                &[0x44][..],
+            ]
+            .concat(),
+            AnnexBNalHeaderGrammar::H265,
+        );
+        assert!(
+            split
+                .parameter_sets
+                .video_parameter_set_nal_units
+                .is_empty()
+                && split
+                    .parameter_sets
+                    .picture_parameter_set_nal_units
+                    .is_empty(),
+            "a parameter set that is only a header configures nothing and must not be filed"
+        );
+
+        // The builder defends itself too: it is public, so it cannot assume
+        // its caller ran the walk.
+        let mut sets = h265_parameter_sets();
+        sets.video_parameter_set_nal_units = vec![vec![0x40]];
+        let refusal = build_hvc1_sample_entry("camera/video", &sets, 320, 240)
+            .expect_err("a header-only VPS describes the track with an unreadable record");
+        assert!(matches!(
+            refusal,
+            Mp4SampleEntryRefusal::ParameterSetCarriesNoPayload {
+                nal_unit_type: 32,
+                nal_unit_bytes: 1,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_pre_skip_past_what_dops_can_state_is_refused_rather_than_truncated() {
+        // `dOps.PreSkip` is a `u16` and the wire field a `u32`; 65_536 casts to
+        // 0, which silently tells a decoder to trim nothing.
+        let refusal = build_opus_sample_entry("microphone/audio", 2, 65_536)
+            .expect_err("truncating would change the trim");
+        assert!(matches!(
+            refusal,
+            Mp4SampleEntryRefusal::PreSkipThisContainerCannotState {
+                pre_skip: 65_536,
+                ..
+            }
+        ));
+        assert!(refusal.to_string().contains("microphone/audio"));
+
+        let highest_statable = build_opus_sample_entry("microphone/audio", 2, u16::MAX as u32)
+            .expect("the largest value dOps can state is legal");
+        assert_eq!(highest_statable.dops.pre_skip, u16::MAX);
     }
 }

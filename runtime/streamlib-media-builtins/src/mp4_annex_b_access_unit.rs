@@ -41,8 +41,25 @@ const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
 pub const NAL_UNIT_LENGTH_PREFIX_BYTES: u8 = 4;
 
 impl AnnexBNalHeaderGrammar {
+    /// How many bytes this grammar's NAL header occupies — one for H.264
+    /// (ITU-T H.264 §7.3.1), two for H.265 (§7.3.1.2).
+    fn nal_unit_header_bytes(self) -> usize {
+        match self {
+            Self::H264 => 1,
+            Self::H265 => 2,
+        }
+    }
+
     /// The `nal_unit_type` this grammar reads out of a NAL unit's header.
+    ///
+    /// `None` for a unit shorter than the header itself: H.265 reads its type
+    /// from the first byte but the header is two, so classifying a one-byte
+    /// unit would file a truncated `0x40` as a video parameter set and let it
+    /// reach `hvcC` as an unplayable configuration record.
     fn nal_unit_type(self, nal_unit_bytes: &[u8]) -> Option<u8> {
+        if nal_unit_bytes.len() < self.nal_unit_header_bytes() {
+            return None;
+        }
         match self {
             Self::H264 => nal_unit_bytes.first().map(|header| header & 0x1F),
             Self::H265 => nal_unit_bytes.first().map(|header| (header >> 1) & 0x3F),
@@ -173,6 +190,12 @@ pub fn length_prefix_annex_b_access_unit(
             continue;
         };
         if grammar.is_parameter_set(nal_unit_type) {
+            if nal_unit.len() <= grammar.nal_unit_header_bytes() {
+                // A parameter set that is only a header configures nothing.
+                // Dropping it here leaves the pile incomplete, so the track is
+                // refused by name rather than described by a malformed record.
+                continue;
+            }
             let pile = match (grammar, nal_unit_type) {
                 (AnnexBNalHeaderGrammar::H264, H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET)
                 | (AnnexBNalHeaderGrammar::H265, H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET) => {

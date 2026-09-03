@@ -37,6 +37,18 @@ use crate::mp4_track_sample_entry::{
 /// exactly. A legal `u32`, which is what lets the subtraction stay integral.
 pub const VIDEO_TRACK_TIMESCALE_HZ: u32 = 1_000_000_000;
 
+/// How many bytes of samples may be held while a link is still silent.
+///
+/// `moov` cannot be written until every track can be described, and nothing
+/// can be flushed before it, so a link that never delivers a first sync point
+/// would otherwise hold every healthy track's samples for the whole run — a
+/// camera that fails to open turning a long recording into unbounded growth
+/// and an empty file. At the budget the silent links are latched by name so
+/// the tracks that did deliver can write `moov` and start flushing. Sized to
+/// hold several seconds of 1080p at a normal bitrate; a recording that trips
+/// it has a broken producer, not a busy one.
+const HIGHEST_BYTES_HELD_AWAITING_THE_HEADER: usize = 64 * 1024 * 1024;
+
 /// How long a fragment runs when no video track is wired to pace it.
 const AUDIO_ONLY_FRAGMENT_SPAN_NS: i64 = 1_000_000_000;
 
@@ -127,6 +139,9 @@ struct Mp4TrackFromInboundLink {
     next_fragment_decode_time_in_track_timescale: u64,
     samples_awaiting_fragment: Vec<Mp4SampleAwaitingFragment>,
     held_back_video_sample: Option<HeldBackVideoSample>,
+    /// Survives the close that empties `samples_awaiting_fragment`, so a final
+    /// held-back frame still has a predecessor's duration to take.
+    last_written_sample_duration_in_track_timescale: Option<u32>,
     latched_refusal: Option<String>,
     bags_discarded_after_latch: u64,
     bags_dropped_out_of_order: u64,
@@ -147,6 +162,7 @@ impl Mp4TrackFromInboundLink {
             next_fragment_decode_time_in_track_timescale: 0,
             samples_awaiting_fragment: Vec::new(),
             held_back_video_sample: None,
+            last_written_sample_duration_in_track_timescale: None,
             latched_refusal: None,
             bags_discarded_after_latch: 0,
             bags_dropped_out_of_order: 0,
@@ -556,6 +572,15 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
 
     /// The first video track still recording paces fragment closes; if it
     /// latches, pacing moves to the next healthy one.
+    ///
+    /// One pacer, not a rendezvous across all of them: with two cameras on
+    /// independent sync schedules, only the pacer's fragments are guaranteed to
+    /// open on a sync sample, and a second camera's `traf` may open mid-GOP.
+    /// Waiting for every video track to reach a sync point together would bound
+    /// nothing — two free-running encoders need never agree — so it is a
+    /// deliberate limit rather than an oversight. Whether a recording owes
+    /// every video track aligned random-access points is a plan question; the
+    /// single-camera showcase this rung is for does not raise it.
     fn is_pacing_video_track(&self, track_index: usize) -> bool {
         self.tracks
             .iter()
@@ -565,10 +590,50 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             .is_some_and(|pacing| pacing == track_index)
     }
 
+    /// Bytes of samples held across every track, none of them writable until
+    /// `moov` lands.
+    fn bytes_held_awaiting_the_header(&self) -> usize {
+        self.tracks
+            .iter()
+            .map(|track| {
+                track
+                    .samples_awaiting_fragment
+                    .iter()
+                    .map(|sample| sample.sample_bytes.len())
+                    .sum::<usize>()
+                    + track
+                        .held_back_video_sample
+                        .as_ref()
+                        .map_or(0, |held| held.sample_bytes.len())
+            })
+            .sum()
+    }
+
+    /// Latch every link that has not delivered a first sync point, so the
+    /// tracks that did can be described and the held samples can be written.
+    fn latch_links_still_silent_at_the_budget(&mut self) {
+        let bytes_held = self.bytes_held_awaiting_the_header();
+        for index in 0..self.tracks.len() {
+            if self.tracks[index].sample_entry.is_some() || self.tracks[index].is_latched() {
+                continue;
+            }
+            let refusal = format!(
+                "`{}` had not delivered a first sync-point bag by the time {bytes_held} bytes \
+                 were held waiting for it, and nothing can be written until every track can be \
+                 described — this link records nothing and the rest of the file proceeds",
+                self.tracks[index].inbound_link_name
+            );
+            self.latch_track(index, refusal);
+        }
+    }
+
     /// `ftyp` + `moov`, once every track has delivered a sync point.
     fn write_header_once_every_track_can_be_described(&mut self) -> Result<()> {
         if self.header_already_written {
             return Ok(());
+        }
+        if self.bytes_held_awaiting_the_header() > HIGHEST_BYTES_HELD_AWAITING_THE_HEADER {
+            self.latch_links_still_silent_at_the_budget();
         }
         let every_track_describable = self
             .tracks
@@ -791,6 +856,10 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 .sum();
             self.tally.samples_written += self.tracks[index].samples_awaiting_fragment.len() as u64;
             self.tracks[index].next_fragment_decode_time_in_track_timescale += written;
+            if let Some(last) = self.tracks[index].samples_awaiting_fragment.last() {
+                self.tracks[index].last_written_sample_duration_in_track_timescale =
+                    Some(last.duration_in_track_timescale);
+            }
             self.tracks[index].samples_awaiting_fragment.clear();
         }
         self.next_fragment_sequence_number += 1;
@@ -861,10 +930,14 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             let Some(held_back) = self.tracks[index].held_back_video_sample.take() else {
                 continue;
             };
+            // A run whose last frame is a sync point closed a fragment on the
+            // way in, so the pending list is empty and the predecessor is the
+            // last sample that fragment carried.
             let predecessor_duration = self.tracks[index]
                 .samples_awaiting_fragment
                 .last()
                 .map(|sample| sample.duration_in_track_timescale)
+                .or(self.tracks[index].last_written_sample_duration_in_track_timescale)
                 .unwrap_or(0);
             self.tracks[index]
                 .samples_awaiting_fragment
@@ -981,6 +1054,21 @@ mod tests {
             width: 320,
             height: 240,
             color: None,
+        })
+        .expect("msgpack serialize")
+    }
+
+    fn opus_bag_of_size(sequence_index: u64, channels: u32, packet_bytes: usize) -> Vec<u8> {
+        rmp_serde::to_vec_named(&EncodedAudioPacket {
+            codec: EncodedAudioCodec::Opus,
+            opus_packet_bytes: vec![0xFC; packet_bytes],
+            is_sync_point: true,
+            group_index: sequence_index,
+            sequence_index,
+            sample_rate: 48_000,
+            channels,
+            sample_count: 960,
+            pre_skip: 312,
         })
         .expect("msgpack serialize")
     }
@@ -1891,5 +1979,81 @@ mod tests {
              regenerate it with STREAMLIB_WRITE_MP4_INSPECT_FIXTURE set, and read the \
              inspector's diff before trusting the new bytes"
         );
+    }
+
+    #[test]
+    fn a_run_ending_on_a_sync_point_still_gives_its_last_frame_a_duration() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
+        // The last frame is a sync point, so the close it triggers empties the
+        // pending list and `finish` has no predecessor left in it.
+        for index in 0..7usize {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 3 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let durations: Vec<u32> = every_moof(&atoms)
+            .iter()
+            .flat_map(|moof| moof.traf.iter())
+            .flat_map(|traf| traf.trun.iter())
+            .flat_map(|trun| trun.entries.iter())
+            .filter_map(|entry| entry.duration)
+            .collect();
+        assert!(
+            durations.iter().all(|duration| *duration > 0),
+            "a zero-duration sample makes the last fragment span no time: {durations:?}"
+        );
+        assert_eq!(
+            *durations.last().expect("samples were written"),
+            ONE_VIDEO_FRAME_NS as u32,
+            "the final held-back frame takes its predecessor's duration"
+        );
+    }
+
+    #[test]
+    fn a_link_that_never_delivers_cannot_hold_the_others_samples_without_bound() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        // The camera never delivers a sync point, so nothing is writable — the
+        // audio would otherwise accumulate for the whole run.
+        let mut sequence_index = 0u64;
+        while writer.tally().tracks_latched == 0 {
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag_of_size(sequence_index, 2, 64 * 1024),
+                    sequence_index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+            sequence_index += 1;
+            assert!(
+                sequence_index < 20_000,
+                "the hold is unbounded: {} bytes and still no latch",
+                sequence_index * 64 * 1024
+            );
+        }
+
+        let tally = writer.finish().expect("closes");
+        assert_eq!(
+            tally.tracks_latched, 1,
+            "the silent link is latched, not the one that delivered"
+        );
+        let atoms = parse_written_atoms(&file).expect("the file is written at all");
+        assert_eq!(
+            only_moov(&atoms).trak.len(),
+            1,
+            "the track that did deliver is described and its samples reach the file"
+        );
+        assert_eq!(only_moov(&atoms).trak[0].mdia.hdlr.name, "microphone/audio");
     }
 }

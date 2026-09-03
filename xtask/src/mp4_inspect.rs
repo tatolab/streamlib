@@ -8,11 +8,12 @@
 //! tests, the Python surface's tests and `/verify-video` all read a real file
 //! through this.
 
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use mp4_atom::{Any, Codec, DecodeMaybe, Moof, Moov};
+use mp4_atom::{Atom, Codec, Ftyp, Header, Moof, Moov, ReadAtom, ReadFrom};
 use serde_json::{Value, json};
 
 #[derive(Args, Debug)]
@@ -29,21 +30,40 @@ pub fn run(command: Mp4InspectCommand) -> Result<()> {
 
 /// Read one file into the report `mp4-inspect` prints.
 pub fn inspect_file(path: &Path) -> Result<Value> {
-    let file_bytes =
-        std::fs::read(path).with_context(|| format!("{} could not be read", path.display()))?;
-    inspect_bytes(&file_bytes)
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("{} could not be read", path.display()))?;
+    inspect_reader(&mut std::io::BufReader::new(file))
 }
 
 /// The same read over bytes, which is what the tests below drive.
 pub fn inspect_bytes(file_bytes: &[u8]) -> Result<Value> {
-    let mut cursor = std::io::Cursor::new(file_bytes);
+    inspect_reader(&mut std::io::Cursor::new(file_bytes))
+}
+
+/// Walk a recording's top-level boxes, decoding only the ones that describe it.
+///
+/// Every box is stepped over by its declared size, so a `mdat` — which is all
+/// of a recording but a few kilobytes — is seeked past rather than read into
+/// memory. A metadata dump must not need the recording's own size to run.
+pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<Value> {
     let mut brands = Value::Null;
     let mut moov: Option<Moov> = None;
     let mut fragments: Vec<Moof> = Vec::new();
 
     loop {
-        match Any::decode_maybe(&mut cursor) {
-            Ok(Some(Any::Ftyp(ftyp))) => {
+        // A read that cannot produce a header is the end of the file, or a
+        // trailing box a killed run never finished — both stop the walk rather
+        // than fail it, which is what the fragmented layout exists for.
+        let Ok(header) = Header::read_from(reader) else {
+            break;
+        };
+        let Ok(body_start) = reader.stream_position() else {
+            break;
+        };
+        match header.kind {
+            kind if kind == Ftyp::KIND => {
+                let ftyp = Ftyp::read_atom(&header, reader)
+                    .map_err(|failure| anyhow::anyhow!("the `ftyp` did not parse: {failure}"))?;
                 brands = json!({
                     "major_brand": fourcc_string(&ftyp.major_brand),
                     "compatible_brands": ftyp
@@ -53,13 +73,42 @@ pub fn inspect_bytes(file_bytes: &[u8]) -> Result<Value> {
                         .collect::<Vec<_>>(),
                 });
             }
-            Ok(Some(Any::Moov(parsed))) => moov = Some(parsed),
-            Ok(Some(Any::Moof(parsed))) => fragments.push(parsed),
-            Ok(Some(_)) => {}
-            Ok(None) => break,
-            Err(failure) => bail!("the file did not parse as ISOBMFF: {failure}"),
+            kind if kind == Moov::KIND => {
+                moov = Some(Moov::read_atom(&header, reader).map_err(|failure| {
+                    anyhow::anyhow!("the file did not parse as ISOBMFF: {failure}")
+                })?);
+            }
+            kind if kind == Moof::KIND => {
+                fragments.push(Moof::read_atom(&header, reader).map_err(|failure| {
+                    anyhow::anyhow!("the file did not parse as ISOBMFF: {failure}")
+                })?);
+            }
+            _ => {}
+        }
+        // A box with no declared size runs to the end of the file.
+        let Some(body_bytes) = header.size else {
+            break;
+        };
+        if reader
+            .seek(SeekFrom::Start(body_start + body_bytes as u64))
+            .is_err()
+        {
+            break;
         }
     }
+
+    // A `trun` entry may omit its duration and inherit it, so the defaults are
+    // read once here: 14496-12 §8.8.7.1 lets `tfhd` override §8.8.3.2's `trex`.
+    let default_sample_duration_per_track: std::collections::BTreeMap<u32, u32> = moov
+        .as_ref()
+        .and_then(|moov| moov.mvex.as_ref())
+        .map(|mvex| {
+            mvex.trex
+                .iter()
+                .map(|trex| (trex.track_id, trex.default_sample_duration))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let Some(moov) = moov else {
         bail!(
@@ -83,10 +132,17 @@ pub fn inspect_bytes(file_bytes: &[u8]) -> Result<Value> {
                 .iter()
                 .flat_map(|moof| moof.traf.iter())
                 .filter(|traf| traf.tfhd.track_id == track_id)
-                .flat_map(|traf| traf.trun.iter())
-                .flat_map(|trun| trun.entries.iter())
-                .filter_map(|entry| entry.duration)
-                .map(u64::from)
+                .flat_map(|traf| {
+                    let inherited = traf
+                        .tfhd
+                        .default_sample_duration
+                        .or_else(|| default_sample_duration_per_track.get(&track_id).copied())
+                        .unwrap_or(0);
+                    traf.trun
+                        .iter()
+                        .flat_map(move |trun| trun.entries.iter())
+                        .map(move |entry| u64::from(entry.duration.unwrap_or(inherited)))
+                })
                 .sum();
             let timescale = trak.mdia.mdhd.timescale;
             json!({
