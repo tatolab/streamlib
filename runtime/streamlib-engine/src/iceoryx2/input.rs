@@ -551,7 +551,7 @@ impl InputMailboxesInner {
     ///
     /// **Only a port that declared the sentinel and is still waiting on it can
     /// be settled.** A wired port carries what its author declared, so the port
-    /// itself is the check: one that declared five values, or none at all, or
+    /// itself is the check: one that declared its values, or none at all, or
     /// one already settled, is refused naming what it is. Without that a
     /// processor could window a port whose author asked for nothing, or replace
     /// a declared contract with its own — and `graph` would go on rendering the

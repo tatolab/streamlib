@@ -252,11 +252,9 @@ fn read_audio_window_channel_count(
         return Ok(None);
     };
     read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
-        let framed = format!(
-            "input port {port_name:?}: audio_window field \"channels\" {}",
-            refusal.reason()
-        );
-        refusal.raised_as(framed)
+        refusal.framed_as(format!(
+            "input port {port_name:?}: audio_window field \"channels\""
+        ))
     })
 }
 
@@ -274,17 +272,12 @@ pub(crate) enum AudioWindowFieldRefusal {
 }
 
 impl AudioWindowFieldRefusal {
-    /// Raise this refusal in the caller's own framing, keeping its kind.
-    pub(crate) fn raised_as(self, framed: String) -> PyErr {
+    /// Raise this refusal behind the caller's own naming of what was being
+    /// read, keeping the kind the value earned.
+    pub(crate) fn framed_as(self, naming: impl std::fmt::Display) -> PyErr {
         match self {
-            Self::WrongKindOfValue(_) => PyTypeError::new_err(framed),
-            Self::UnusableValue(_) => PyValueError::new_err(framed),
-        }
-    }
-
-    pub(crate) fn reason(&self) -> &str {
-        match self {
-            Self::WrongKindOfValue(reason) | Self::UnusableValue(reason) => reason,
+            Self::WrongKindOfValue(reason) => PyTypeError::new_err(format!("{naming} {reason}")),
+            Self::UnusableValue(reason) => PyValueError::new_err(format!("{naming} {reason}")),
         }
     }
 }
@@ -348,11 +341,9 @@ fn read_audio_window_numeric_field(
 ) -> PyResult<u32> {
     let value = audio_window_field(declaration, key, port_name)?;
     a_strictly_positive_count(&value).map_err(|refusal| {
-        let framed = format!(
-            "input port {port_name:?}: audio_window field {key:?} {}",
-            refusal.reason()
-        );
-        refusal.raised_as(framed)
+        refusal.framed_as(format!(
+            "input port {port_name:?}: audio_window field {key:?}"
+        ))
     })
 }
 

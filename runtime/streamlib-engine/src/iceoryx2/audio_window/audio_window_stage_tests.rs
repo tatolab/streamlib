@@ -625,10 +625,13 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
 /// steps straight over the gap where it would overclaim.
 fn assert_the_readiness_floor_holds_for(
     contract: ResolvedAudioWindowContract,
-    source_rate: u32,
-    source_channels: u32,
+    source: SourceAudioFormat,
     channels_each_window_carries: u32,
 ) {
+    let SourceAudioFormat {
+        sample_rate: source_rate,
+        channels: source_channels,
+    } = source;
     let (mut stage, format_the_mailbox_reports) =
         stage_and_the_format_its_mailbox_reports(contract);
 
@@ -652,10 +655,7 @@ fn assert_the_readiness_floor_holds_for(
         ));
         queued_equivalents +=
             source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
-        format_the_mailbox_reports.record(SourceAudioFormat {
-            sample_rate: source_rate,
-            channels: source_channels,
-        });
+        format_the_mailbox_reports.record(source);
 
         if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
             continue;
@@ -698,8 +698,10 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 1)] {
         assert_the_readiness_floor_holds_for(
             contract(16_000, 1, "f32", 512, 512),
-            source_rate,
-            source_channels,
+            SourceAudioFormat {
+                sample_rate: source_rate,
+                channels: source_channels,
+            },
             1,
         );
     }
@@ -1014,8 +1016,10 @@ fn readiness_on_a_channel_free_contract_never_claims_a_window_the_read_cannot_pr
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 6)] {
         assert_the_readiness_floor_holds_for(
             contract_following_the_sources_channels(16_000, "f32", 512, 512),
-            source_rate,
-            source_channels,
+            SourceAudioFormat {
+                sample_rate: source_rate,
+                channels: source_channels,
+            },
             source_channels,
         );
     }

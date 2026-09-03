@@ -209,7 +209,7 @@ def _audio_window_declaration(
             f"sentinel settles at setup() from the device stream the declaring processor "
             f"opened, and every Python processor is helper-placed — it opens no device "
             f"stream, and its window is its model's compile-time knowledge, not a "
-            f"machine-varying device format. Declare an AudioWindowContract with the five "
+            f"machine-varying device format. Declare an AudioWindowContract with the "
             f"values the model wants and the engine converts every block to them"
         )
 

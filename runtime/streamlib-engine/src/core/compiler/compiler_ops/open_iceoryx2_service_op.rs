@@ -974,7 +974,7 @@ fn wire_subprocess_dest(
         "notify_max_notifiers": notify_max_notifiers,
     });
     // The window contract rides the envelope beside `read_mode`, or the child's
-    // own stage windows nothing. The five values go over resolved, so the child
+    // own stage windows nothing. The values go over resolved, so the child
     // reads one shape and never a sentinel it could not settle — and a helper
     // can never settle one: the format comes from a device stream a processor
     // opens in the app process, and nothing crosses to say so. A sentinel on a

@@ -60,6 +60,28 @@ def readings_from(app, pattern, what: str):
     return json.loads(match.group(1))
 
 
+def assert_windows_are_contiguous_once_the_run_has_settled(readings):
+    """Every window after the first advances by exactly one window's duration.
+
+    The first step is excluded, and deliberately: a Python source publishes as
+    soon as `process()` first runs, which can be before the consumer's child
+    has its subscriber live, so the opening blocks are lost on the producer's
+    ring and the stage flushes and re-anchors — leaving one wide step between
+    the pre-flush window and the run that follows. That loss is the plan's
+    open question about uncounted publisher-side drops, not something the
+    window contract promises against. What the contract does promise is
+    contiguity *within* a run, and asserting from the second window on still
+    catches a flush anywhere later in the stream.
+    """
+    stamps = [reading["first_sample_timestamp_ns"] for reading in readings]
+    steps = [later - earlier for earlier, later in zip(stamps, stamps[1:])]
+    assert len(steps) >= 2, f"too few windows to judge a cadence: {stamps}"
+    assert steps[1:] == [SOURCE_FOLLOWING_HOP_NS] * len(steps[1:]), (
+        "960 samples at 48 kHz is exactly 20 ms whatever the channel count — "
+        f"got {steps}"
+    )
+
+
 def assert_every_window_matches_the_contract(readings):
     for reading in readings:
         assert reading["sample_count"] == CONTRACT_WINDOW_SIZE, (
@@ -157,7 +179,7 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
     following = readings_from(
         app, SOURCE_FOLLOWING_WINDOWS_SEEN, "source-following window"
     )
-    assert len(following) >= 2
+    assert len(following) >= 3
     for reading in following:
         assert reading["channels"] == STEREO_SOURCE_CHANNELS, (
             "the contract declared no count, so every window must carry the "
@@ -171,23 +193,19 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
             STEREO_SOURCE_CHANNELS,
         ]
 
-    stamps = [reading["first_sample_timestamp_ns"] for reading in following]
-    steps = [later - earlier for earlier, later in zip(stamps, stamps[1:])]
-    assert steps == [SOURCE_FOLLOWING_HOP_NS] * len(steps), (
-        "960 samples at 48 kHz is exactly 20 ms whatever the channel count — "
-        f"got {steps}"
-    )
+    assert_windows_are_contiguous_once_the_run_has_settled(following)
 
     declared_mono = readings_from(
         app, DECLARED_MONO_WINDOWS_SEEN, "declared-mono window"
     )
-    assert len(declared_mono) >= 2
+    assert len(declared_mono) >= 3
     for reading in declared_mono:
         assert reading["channels"] == 1, (
             "a declared count is still converted to by the fixed rule, off the "
             f"same stereo source: {reading}"
         )
         assert reading["shape"] == [SOURCE_FOLLOWING_WINDOW_SIZE, 1]
+    assert_windows_are_contiguous_once_the_run_has_settled(declared_mono)
 
 
 # ---- the child's own reading of the envelope (no device, no GPU) ------------

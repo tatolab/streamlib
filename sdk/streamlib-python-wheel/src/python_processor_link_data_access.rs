@@ -804,12 +804,10 @@ fn channel_count_the_parent_wired(
         }
     };
     read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
-        let framed = format!(
+        refusal.framed_as(format!(
             "input port {port_name:?} was wired with an `audio_window` whose \"channels\" \
-             the helper could not read: it {}",
-            refusal.reason()
-        );
-        refusal.raised_as(framed)
+             the helper could not read: it"
+        ))
     })
 }
 

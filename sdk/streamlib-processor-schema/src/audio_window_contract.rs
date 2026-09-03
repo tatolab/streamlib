@@ -683,10 +683,13 @@ mod tests {
             serde_json::json!(AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE)
         );
 
-        let json_schema = serde_json::to_value(audio_window_channels_json_schema(
-            &mut schemars::r#gen::SchemaGenerator::default(),
-        ))
-        .expect("the JSON Schema renders");
+        // Through the derive, not through the helper: the attribute wiring is
+        // what these tests exist to hold, and a helper asserted directly stays
+        // green with the attribute deleted.
+        let json_schema =
+            serde_json::to_value(schemars::schema_for!(AudioWindowContractDeclaredValues))
+                .expect("the JSON Schema renders")["properties"]["channels"]
+                .clone();
         let arms = json_schema["oneOf"]
             .as_array()
             .expect("the schema offers both arms");
@@ -706,8 +709,12 @@ mod tests {
     #[cfg(feature = "utoipa")]
     #[test]
     fn the_openapi_schema_for_the_channel_count_offers_the_same_two_arms() {
-        let rendered = serde_json::to_value(audio_window_channels_openapi_schema())
-            .expect("the OpenAPI schema renders");
+        use utoipa::PartialSchema;
+
+        let rendered =
+            serde_json::to_value(<AudioWindowContractDeclaredValues as PartialSchema>::schema())
+                .expect("the OpenAPI schema renders")["properties"]["channels"]
+                .clone();
 
         let arms = rendered["oneOf"]
             .as_array()

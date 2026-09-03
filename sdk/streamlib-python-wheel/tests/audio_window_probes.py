@@ -45,9 +45,11 @@ SOURCE_CHANNELS = 2
 SOURCE_FRAMES_PER_BLOCK = 480
 WINDOW_SIZE = 960
 
-# How far ahead of real time the publishing runs. Enough that a late
-# `process()` costs the consumer nothing, and well inside the depth its
-# windowed port is sized to, so no block is evicted between the two.
+# How far ahead of real time the publishing runs, so a late `process()` costs
+# the consumer nothing. It does not make the stream gapless: this source starts
+# publishing the moment its own `process()` first runs, which can precede the
+# consumer child's subscriber going live, and those opening blocks are lost on
+# the producer's ring before any mailbox sees them.
 PUBLISHING_LEAD_NS = 100_000_000
 
 

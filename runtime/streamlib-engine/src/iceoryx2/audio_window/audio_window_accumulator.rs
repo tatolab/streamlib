@@ -82,6 +82,10 @@ pub(crate) struct LatestQueuedSourceAudioFormat {
 
 impl LatestQueuedSourceAudioFormat {
     pub(crate) fn record(&self, format: SourceAudioFormat) {
+        debug_assert!(
+            format.sample_rate != 0 && format.channels != 0,
+            "zero is this cell's unset state, so neither half may be recorded at zero"
+        );
         self.rate_and_channels.store(
             u64::from(format.sample_rate) << 32 | u64::from(format.channels),
             Ordering::Relaxed,
@@ -91,7 +95,7 @@ impl LatestQueuedSourceAudioFormat {
     /// What the mailbox last saw, or `None` before any bag has reached it.
     pub(crate) fn read(&self) -> Option<SourceAudioFormat> {
         let packed = self.rate_and_channels.load(Ordering::Relaxed);
-        (packed != 0).then(|| SourceAudioFormat {
+        (packed != 0).then_some(SourceAudioFormat {
             sample_rate: (packed >> 32) as u32,
             channels: packed as u32,
         })
@@ -325,7 +329,10 @@ impl AudioWindowAccumulator {
                 self.rate_conversion.priming_output_frames();
         }
 
-        self.append_the_blocks_samples_in_the_count_windows_are_emitted_in(&block)?;
+        self.append_the_blocks_samples_in_the_count_windows_are_emitted_in(
+            &block,
+            rate_conversion_inputs.channels_converted,
+        )?;
 
         let block_duration_ns =
             frames_as_nanoseconds(u64::from(block.sample_count), arriving.sample_rate);
@@ -648,13 +655,12 @@ impl AudioWindowAccumulator {
     fn append_the_blocks_samples_in_the_count_windows_are_emitted_in(
         &mut self,
         block: &AudioBlockReadFromTheWire<'_>,
+        contract_channels: u32,
     ) -> Result<()> {
         let source_channels = block.channels;
-        let Some(contract_channels) = self.contract.channels else {
-            self.channel_converted_source_scalars
-                .extend(block.interleaved_samples_as_f32());
-            return Ok(());
-        };
+        // Under a contract following its source the two counts are equal by
+        // construction, so neither the refusal nor either conversion arm below
+        // is reachable — the equality arm passes the samples through.
         if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {
             return Err(Error::AudioWindowStageChannelConversionRefused {
                 port: self.port_name.clone(),
