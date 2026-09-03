@@ -45,6 +45,20 @@ if ! compgen -G "/dev/dri/renderD*" >/dev/null; then
     exit 77
 fi
 
+# A busy control port misdirects this run rather than failing it, so it is
+# refused up front. The API server walks up to ten ports when the one it was
+# given is taken and says which it landed on only at INFO, while this script
+# keeps asking for the one it passed — so a second node already on this port,
+# declaring an OpusDecoder of its own, would be measured instead and could
+# report PASS for a graph that is not the one under test. Bash's own /dev/tcp
+# rather than `ss`, so nothing extra has to be installed.
+if (echo >"/dev/tcp/127.0.0.1/$CONTROL_PORT") 2>/dev/null; then
+    echo "ERROR: something is already listening on 127.0.0.1:$CONTROL_PORT." >&2
+    echo "       This run would measure that node instead of its own. Stop it," >&2
+    echo "       or pass --port with a free one." >&2
+    exit 1
+fi
+
 OUTPUT_DIR="$(mktemp -d -t streamlib-opus-roundtrip-XXXXXX)"
 CONTROL_URL="http://127.0.0.1:$CONTROL_PORT"
 CAPTURED_WAVEFORM="$OUTPUT_DIR/decoded.wav"
@@ -80,6 +94,17 @@ for _ in $(seq 60); do
     fi
     sleep 0.5
 done
+
+# The other half of the port guard, closing the gap between the check above and
+# the node's own bind: if it walked, the control plane answering on the
+# requested port belongs to somebody else and every verdict below would be
+# about their graph.
+if grep -q "in use, bound to" "$OUTPUT_DIR/node.log"; then
+    echo "ERROR: the node could not take port $CONTROL_PORT and walked —" >&2
+    grep "in use, bound to" "$OUTPUT_DIR/node.log" >&2
+    echo "       whatever answered on $CONTROL_PORT is not this run's node." >&2
+    exit 1
+fi
 
 # A bag either block refused, by name rather than left to show up as silence —
 # silence is also what a stalled graph looks like and the two need different

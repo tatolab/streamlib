@@ -25,6 +25,25 @@ sample-exact match, which no codec would give.
 import argparse
 import os
 
+import known_audio_signal
+import known_audio_signal_source
+
+# What the source will ever publish, derived rather than named so it cannot
+# drift when the signal changes.
+PUBLISHED_SECONDS = (
+    len(known_audio_signal.generate_signal())
+    + int(
+        known_audio_signal_source.TRAILING_SILENCE_SECONDS
+        * known_audio_signal.SAMPLE_RATE
+    )
+) / known_audio_signal.SAMPLE_RATE
+
+# The decoder emits less than the source published, because it discards the
+# encoder's lookahead at entry. The lookahead is whatever libopus reports —
+# 312 samples at 48 kHz, 120 at `lowdelay` — so the bound gives back one whole
+# 20 ms packet rather than a number that would rot if it changed.
+LONGEST_RECORDABLE_SECONDS = PUBLISHED_SECONDS - 0.02
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -43,6 +62,17 @@ def main() -> None:
         ),
     )
     arguments = parser.parse_args()
+
+    # Refused here rather than left to the recorder, which would simply never
+    # reach its window and never write — costing the caller a timeout and a log
+    # tail instead of a sentence naming the mistake.
+    if arguments.record_seconds > LONGEST_RECORDABLE_SECONDS:
+        parser.error(
+            f"--record-seconds {arguments.record_seconds} is past the "
+            f"{LONGEST_RECORDABLE_SECONDS:.4f} s this graph can ever record: the "
+            f"source publishes {PUBLISHED_SECONDS:.4f} s once and then stops, and "
+            "the decoder discards the encoder's lookahead on top of that"
+        )
 
     # The recorder reads both of these, and it runs in its own helper process —
     # an argument reaches this process alone, while the environment is the seam
