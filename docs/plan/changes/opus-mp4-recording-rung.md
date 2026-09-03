@@ -223,7 +223,7 @@ marker remains in this file.
   codec: `OpusEncoder` still mints such a stream (`opus_stream_layout.rs` places 1–8), and
   only recording it does not follow. Owner ruling 2026-09-03, taken over hand-splicing the
   `dOps` bytes (which is the hand-written box writer this change rejected) and over
-  carrying a second vendored fork. The gap is tracked; `camera-audio-recorder` is mono or
+  carrying a second vendored fork. The gap is tracked as #2139; `camera-audio-recorder` is mono or
   stereo, so the showcase is unaffected.
 - **DECIDED** — Time is the plan's subtraction written into the container (`:833-851`): the
   epoch is the earliest first stamp across tracks, each track's first `tfdt` is its own
