@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.46](https://github.com/tatolab/streamlib/compare/v0.18.45...v0.18.46) (2026-09-03)
+
+
+### Features
+
+* **codec:** Mp4Sink, engine half — one track per inbound link, a fragmented pure-Rust writer, container-bytes tests and cargo xtask mp4-inspect ([#2140](https://github.com/tatolab/streamlib/issues/2140)) ([965ff8d](https://github.com/tatolab/streamlib/commit/965ff8d8022303a228ac0b8af51647835ad02efc))
+
 ## [0.18.45](https://github.com/tatolab/streamlib/compare/v0.18.44...v0.18.45) (2026-09-03)
 
 
