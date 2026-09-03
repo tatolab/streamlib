@@ -7,11 +7,13 @@ Each probe reports what it saw as JSON marker lines riding the child→parent
 log forwarding — one line per packet or block rather than one array at the
 end, so a run that stalls half way still says how far it got.
 
-`EncodedAudioPacketProbe` is the one under test on the encoded side: it reads
-the encoder's own output with `into=EncodedAudioPacket`, which is the whole
-claim the cast makes. `DecodedAudioBlockProbe` reads the far side of the
-decoder with `read_with_timestamp`, because the frame-header stamp is what the
-trim and the derived-stamp assertions are about and no `into=` read yields it.
+Both probes read with `read_with_timestamp` and cast what it hands back,
+rather than with `into=`: the frame-header stamp is what the trim and the
+derived-stamp assertions are about, and no `into=` read yields it. Nothing is
+given up by that — `into=T` is `T(**bag)`, which is what `from_bag` calls once
+it has named any missing key, so the two are one validation path. `into=` over
+a live link is locked in `test_encoded_audio_packet_cast.py`; what these prove
+is that the path holds over bags libopus actually wrote.
 
 `StereoToneSource` states its own format rather than discovering one, so the
 count the encoder follows is the test's fact and not the machine's. It carries
@@ -126,8 +128,8 @@ class StereoToneSource:
 class EncodedAudioPacketProbe:
     """Casts the encoder's output and reports each packet's wire fields.
 
-    No sync-point gate, unlike the video probe: every Opus packet is one, so
-    a reader enters wherever it attached.
+    No sync-point gate, unlike the video probe: every Opus packet is one, so a
+    reader enters wherever it attached.
     """
 
     def __init__(self) -> None:
