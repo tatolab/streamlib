@@ -28,7 +28,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{
@@ -57,9 +57,72 @@ const RESAMPLER_SINC_FILTER_LENGTH: usize = 128;
 /// The rate and channel count a run's source blocks arrive in. A block that
 /// disagrees with the run's is a format change, handled like a gap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SourceAudioFormat {
-    sample_rate: u32,
-    channels: u32,
+pub(crate) struct SourceAudioFormat {
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u32,
+}
+
+/// The format of the most recent bag pushed into a windowed port's mailbox,
+/// written by that mailbox's measure as the bag arrives.
+///
+/// Shared with the stage so its readiness floor is exact before it has
+/// consumed anything at all: the rate settles the resampler's ratio, and for a
+/// contract that declared no channel count the count settles how many channels
+/// that resampler runs across.
+#[derive(Debug, Default)]
+pub(crate) struct LatestQueuedSourceAudioFormat {
+    /// The rate in the high half and the channel count in the low, so the pair
+    /// is written and read as one value and no reader can pair one bag's rate
+    /// with another's count.
+    ///
+    /// Zero is the unset state, which no real format collides with: the
+    /// measure that writes here refuses a bag stating zero in either half.
+    rate_and_channels: AtomicU64,
+}
+
+impl LatestQueuedSourceAudioFormat {
+    pub(crate) fn record(&self, format: SourceAudioFormat) {
+        debug_assert!(
+            format.sample_rate != 0 && format.channels != 0,
+            "zero is this cell's unset state, so neither half may be recorded at zero"
+        );
+        self.rate_and_channels.store(
+            u64::from(format.sample_rate) << 32 | u64::from(format.channels),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// What the mailbox last saw, or `None` before any bag has reached it.
+    pub(crate) fn read(&self) -> Option<SourceAudioFormat> {
+        let packed = self.rate_and_channels.load(Ordering::Relaxed);
+        (packed != 0).then_some(SourceAudioFormat {
+            sample_rate: (packed >> 32) as u32,
+            channels: packed as u32,
+        })
+    }
+}
+
+/// What a rate conversion was built for.
+///
+/// A resampler is built for one ratio across one channel count, so a change in
+/// either rebuilds it — which is how a contract following its source re-mints
+/// when the source's channel count changes, exactly as it does when the rate
+/// does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RateConversionInputs {
+    source_sample_rate: u32,
+    channels_converted: u32,
+}
+
+impl RateConversionInputs {
+    /// What a conversion must be built for when blocks arrive in this format
+    /// under this contract.
+    fn for_a_source_in(format: SourceAudioFormat, contract: ResolvedAudioWindowContract) -> Self {
+        Self {
+            source_sample_rate: format.sample_rate,
+            channels_converted: contract.channels_a_window_carries_from(format),
+        }
+    }
 }
 
 /// How the stage gets from the source rate to the contract's.
@@ -73,8 +136,8 @@ enum AudioWindowRateConversion {
 }
 
 impl AudioWindowRateConversion {
-    fn build(source_sample_rate: u32, contract: ResolvedAudioWindowContract) -> Result<Self> {
-        if source_sample_rate == contract.sample_rate {
+    fn build(inputs: RateConversionInputs, contract_sample_rate: u32) -> Result<Self> {
+        if inputs.source_sample_rate == contract_sample_rate {
             return Ok(AudioWindowRateConversion::RatesAlreadyAgree);
         }
         let parameters = SincInterpolationParameters {
@@ -85,20 +148,20 @@ impl AudioWindowRateConversion {
             window: WindowFunction::BlackmanHarris2,
         };
         let resampler = Async::<f32>::new_sinc(
-            f64::from(contract.sample_rate) / f64::from(source_sample_rate),
+            f64::from(contract_sample_rate) / f64::from(inputs.source_sample_rate),
             // The ratio is fixed for the life of a run: a source that changes
             // format rebuilds the resampler rather than retuning it.
             1.0,
             &parameters,
             RESAMPLER_SOURCE_FRAMES_PER_CHUNK,
-            contract.channels as usize,
+            inputs.channels_converted as usize,
             FixedAsync::Input,
         )
         .map_err(|construction_failure| {
             Error::Configuration(format!(
-                "no resampler could be built from {source_sample_rate} Hz to {} Hz across \
+                "no resampler could be built from {} Hz to {contract_sample_rate} Hz across \
                  {} channels: {construction_failure}",
-                contract.sample_rate, contract.channels
+                inputs.source_sample_rate, inputs.channels_converted
             ))
         })?;
         Ok(AudioWindowRateConversion::Resampled(Box::new(resampler)))
@@ -143,18 +206,19 @@ pub(crate) struct AudioWindowAccumulator {
     /// that changes format mid-stream.
     source_format: Option<SourceAudioFormat>,
     rate_conversion: AudioWindowRateConversion,
-    /// The source rate [`Self::rate_conversion`] was built for. A flush keeps
-    /// the conversion and resets it; only a rate change rebuilds it.
-    rate_conversion_built_for_source_rate: Option<u32>,
-    /// The rate of the most recent bag pushed into the port's mailbox, written
-    /// by that mailbox's measure. Lets the readiness floor be exact before the
-    /// stage has consumed anything at all.
-    latest_queued_source_sample_rate: Arc<AtomicU32>,
-    /// Source-rate scalars already converted to the contract's channel count,
+    /// What [`Self::rate_conversion`] was built for. A flush keeps the
+    /// conversion and resets it; only a change of rate or channel count
+    /// rebuilds it.
+    rate_conversion_built_for: Option<RateConversionInputs>,
+    /// The format of the most recent bag pushed into the port's mailbox,
+    /// written by that mailbox's measure. Lets the readiness floor be exact
+    /// before the stage has consumed anything at all.
+    latest_queued_source_audio_format: Arc<LatestQueuedSourceAudioFormat>,
+    /// Source-rate scalars already in the count windows are emitted in,
     /// waiting for a whole resampler chunk.
     channel_converted_source_scalars: Vec<f32>,
-    /// Contract-rate scalars, interleaved by the contract's channels, whose
-    /// front frame is [`Self::next_window_start_output_frame`].
+    /// Contract-rate scalars, interleaved by the count windows are emitted in,
+    /// whose front frame is [`Self::next_window_start_output_frame`].
     windowable_output_scalars: VecDeque<f32>,
     /// Where the resampler writes one call's output before it is appended.
     /// Held rather than allocated per bag: this is the per-block read path.
@@ -185,20 +249,20 @@ pub(crate) struct AudioWindowAccumulator {
 impl AudioWindowAccumulator {
     /// Build the stage one windowed port reads through.
     ///
-    /// `latest_queued_source_sample_rate` is shared with the mailbox's measure,
-    /// which writes every arriving bag's rate into it.
+    /// `latest_queued_source_audio_format` is shared with the mailbox's
+    /// measure, which writes every arriving bag's format into it.
     pub(crate) fn new(
         port_name: &str,
         contract: ResolvedAudioWindowContract,
-        latest_queued_source_sample_rate: Arc<AtomicU32>,
+        latest_queued_source_audio_format: Arc<LatestQueuedSourceAudioFormat>,
     ) -> Self {
         Self {
             port_name: port_name.to_string(),
             contract,
             source_format: None,
             rate_conversion: AudioWindowRateConversion::RatesAlreadyAgree,
-            rate_conversion_built_for_source_rate: None,
-            latest_queued_source_sample_rate,
+            rate_conversion_built_for: None,
+            latest_queued_source_audio_format,
             channel_converted_source_scalars: Vec::new(),
             windowable_output_scalars: VecDeque::new(),
             resampler_output_scratch: Vec::new(),
@@ -246,7 +310,8 @@ impl AudioWindowAccumulator {
             self.flush("the source changed format mid-stream");
         }
         self.source_format = Some(arriving);
-        self.build_the_rate_conversion_if_this_rate_is_new(arriving.sample_rate)?;
+        let rate_conversion_inputs = RateConversionInputs::for_a_source_in(arriving, self.contract);
+        self.build_the_rate_conversion_if_its_inputs_are_new(rate_conversion_inputs)?;
 
         let arrived_away_from_where_the_last_block_ended = self
             .expected_next_source_timestamp_ns
@@ -264,7 +329,10 @@ impl AudioWindowAccumulator {
                 self.rate_conversion.priming_output_frames();
         }
 
-        self.append_the_blocks_samples_in_the_contracts_channel_count(&block)?;
+        self.append_the_blocks_samples_in_the_count_windows_are_emitted_in(
+            &block,
+            rate_conversion_inputs.channels_converted,
+        )?;
 
         let block_duration_ns =
             frames_as_nanoseconds(u64::from(block.sample_count), arriving.sample_rate);
@@ -272,7 +340,9 @@ impl AudioWindowAccumulator {
             Some(block.first_sample_timestamp_ns + block_duration_ns);
         self.gap_tolerance_ns = block_duration_ns / 2;
 
-        self.push_whole_chunks_through_the_rate_conversion()
+        self.push_whole_chunks_through_the_rate_conversion(
+            rate_conversion_inputs.channels_converted,
+        )
     }
 
     /// The next full window, encoded as an ordinary audio-block bag, with the
@@ -281,7 +351,12 @@ impl AudioWindowAccumulator {
     /// `None` means the stage holds less than one window — the caller feeds it
     /// another bag and asks again.
     pub(crate) fn next_ready_window(&mut self) -> Result<Option<BagBodyForTheReader>> {
-        let scalars_per_window = self.contract.scalars_per_window();
+        // `None` only before the first block of a run has been accepted on a
+        // contract that declared no count, at which point nothing is held.
+        let Some(channels) = self.channels_windows_are_emitted_in() else {
+            return Ok(None);
+        };
+        let scalars_per_window = self.scalars_per_window_at(channels);
         if self.windowable_output_scalars.len() < scalars_per_window {
             return Ok(None);
         }
@@ -305,7 +380,7 @@ impl AudioWindowAccumulator {
         let bag = encode_an_audio_block_onto_the_wire(
             &self.window_scratch,
             self.contract.sample_rate,
-            self.contract.channels,
+            channels,
             self.contract.window_size,
             self.contract.dtype,
             first_sample_timestamp_ns,
@@ -314,7 +389,7 @@ impl AudioWindowAccumulator {
 
         // A hop below the window size leaves the overlap in place for the next
         // window; a hop equal to it drains the whole one.
-        let scalars_per_hop = self.contract.hop as usize * self.contract.channels as usize;
+        let scalars_per_hop = self.contract.hop as usize * channels as usize;
         self.windowable_output_scalars.drain(..scalars_per_hop);
         self.next_window_start_output_frame += u64::from(self.contract.hop);
 
@@ -338,7 +413,35 @@ impl AudioWindowAccumulator {
     /// Whether a full window can be emitted right now.
     pub(crate) fn holds_a_full_window(&self) -> bool {
         self.run_anchor_timestamp_ns.is_some()
-            && self.windowable_output_scalars.len() >= self.contract.scalars_per_window()
+            && self
+                .scalars_per_window()
+                .is_some_and(|scalars| self.windowable_output_scalars.len() >= scalars)
+    }
+
+    /// The channel count the windows this stage emits are interleaved by: the
+    /// contract's when it declared one, and otherwise the source's own.
+    ///
+    /// `None` only before the first block of a run has been accepted on a
+    /// contract that declared no count — the one moment at which the stage
+    /// holds nothing to measure and has nothing to emit. A flush keeps the
+    /// last accepted format, so it is `None` at most once per port.
+    fn channels_windows_are_emitted_in(&self) -> Option<u32> {
+        match self.source_format {
+            Some(format) => Some(self.contract.channels_a_window_carries_from(format)),
+            // Nothing has arrived yet: a contract that stated a count already
+            // knows it, and one that follows its source does not.
+            None => self.contract.channels,
+        }
+    }
+
+    /// Scalars one emitted window carries: `window_size × channels`.
+    fn scalars_per_window_at(&self, channels: u32) -> usize {
+        self.contract.window_size as usize * channels as usize
+    }
+
+    fn scalars_per_window(&self) -> Option<usize> {
+        self.channels_windows_are_emitted_in()
+            .map(|channels| self.scalars_per_window_at(channels))
     }
 
     /// Whether a full window would be emittable once the bags still queued in
@@ -371,22 +474,24 @@ impl AudioWindowAccumulator {
         if self.holds_a_full_window() {
             return true;
         }
-        // Building the conversion from the rate the mailbox last saw is what
+        // Building the conversion from the format the mailbox last saw is what
         // makes the floor exact rather than worst-case on the first question,
         // before any bag has been consumed. It costs one construction, reused
-        // by the read that follows, and touches nothing a run depends on.
+        // by the read that follows, and touches nothing a run depends on. The
+        // channel count is part of that format because a contract declaring
+        // none resamples across the source's own.
         //
         // Only between runs: mid-run the conversion is already built for the
-        // rate the run is on, and a queued bag announcing a new one is a format
-        // change for `accept` to flush — rebuilding here would throw away the
-        // filter state and the remainder a reader is still owed.
-        let latest_queued_rate = self
-            .latest_queued_source_sample_rate
-            .load(Ordering::Relaxed);
+        // format the run is on, and a queued bag announcing a new one is a
+        // format change for `accept` to flush — rebuilding here would throw
+        // away the filter state and the remainder a reader is still owed.
+        let latest_queued = self.latest_queued_source_audio_format.read();
         if self.run_anchor_timestamp_ns.is_none()
-            && latest_queued_rate != 0
+            && let Some(queued) = latest_queued
             && self
-                .build_the_rate_conversion_if_this_rate_is_new(latest_queued_rate)
+                .build_the_rate_conversion_if_its_inputs_are_new(
+                    RateConversionInputs::for_a_source_in(queued, self.contract),
+                )
                 .is_err()
         {
             // The read path reports the failure with the bag that caused it;
@@ -395,8 +500,9 @@ impl AudioWindowAccumulator {
         }
 
         let held = self.output_frames_held() as u64;
-        let (staged_equivalents, slack) =
-            self.staged_output_frame_equivalents_and_slack(latest_queued_rate);
+        let (staged_equivalents, slack) = self.staged_output_frame_equivalents_and_slack(
+            latest_queued.map_or(0, |queued| queued.sample_rate),
+        );
         let reachable = held
             .saturating_add(staged_equivalents)
             .saturating_add(queued_output_frame_equivalents);
@@ -436,18 +542,26 @@ impl AudioWindowAccumulator {
 
     /// Output frames the stage already holds, whole windows included.
     fn output_frames_held(&self) -> usize {
-        self.windowable_output_scalars.len() / self.contract.channels as usize
+        self.frames_in(self.windowable_output_scalars.len())
     }
 
     /// Source frames staged for the rate conversion but not yet consumed by
     /// it — under one resampler chunk.
-    ///
-    /// Neither this nor [`Self::output_frames_held`] guards the divisor: a
-    /// contract can only be built through
-    /// [`ResolvedAudioWindowContract::from_declared_values`], which refuses a
-    /// zero in any numeric field.
     fn staged_source_frames_held(&self) -> usize {
-        self.channel_converted_source_scalars.len() / self.contract.channels as usize
+        self.frames_in(self.channel_converted_source_scalars.len())
+    }
+
+    /// Interleaved scalars as frames, in the count windows are emitted in.
+    ///
+    /// A count the stage does not know yet can only mean a contract that
+    /// declared none and has accepted no block, and both buffers are empty
+    /// then — so there is nothing to divide rather than a divisor to guess.
+    /// A known count is never zero: a declared one is refused at zero by
+    /// [`ResolvedAudioWindowContract::from_declared_values`] and a source's own
+    /// by `accept`.
+    fn frames_in(&self, interleaved_scalars: usize) -> usize {
+        self.channels_windows_are_emitted_in()
+            .map_or(0, |channels| interleaved_scalars / channels as usize)
     }
 
     /// What the staged source frames are worth at the contract's rate, and the
@@ -486,17 +600,17 @@ impl AudioWindowAccumulator {
         )
     }
 
-    /// Build the rate conversion when this source rate is the first the stage
-    /// has seen, or differs from the one it was built for.
-    fn build_the_rate_conversion_if_this_rate_is_new(
+    /// Build the rate conversion when these are the first inputs the stage has
+    /// seen, or differ from the ones it was built for.
+    fn build_the_rate_conversion_if_its_inputs_are_new(
         &mut self,
-        source_sample_rate: u32,
+        inputs: RateConversionInputs,
     ) -> Result<()> {
-        if self.rate_conversion_built_for_source_rate == Some(source_sample_rate) {
+        if self.rate_conversion_built_for == Some(inputs) {
             return Ok(());
         }
-        self.rate_conversion = AudioWindowRateConversion::build(source_sample_rate, self.contract)?;
-        self.rate_conversion_built_for_source_rate = Some(source_sample_rate);
+        self.rate_conversion = AudioWindowRateConversion::build(inputs, self.contract.sample_rate)?;
+        self.rate_conversion_built_for = Some(inputs);
         Ok(())
     }
 
@@ -526,22 +640,27 @@ impl AudioWindowAccumulator {
         );
     }
 
-    /// Append this block's samples to the staging buffer in the contract's
-    /// channel count.
+    /// Append this block's samples to the staging buffer in the count windows
+    /// are emitted in.
     ///
-    /// Both directions by fixed rule: N→1 averages, 1→N duplicates, and any
+    /// A contract that declared no count converts nothing: the block's samples
+    /// are already in the count its windows carry. A declared count converts
+    /// both directions by fixed rule — N→1 averages, 1→N duplicates, and any
     /// other N→M is refused naming both counts. The source count arrives with
     /// the bags, so declaration could not have seen it.
     ///
     /// Written straight into the buffer the stage keeps, from the decode's own
     /// iterator: the samples are being reshaped anyway, so neither the decoded
     /// scalars nor the converted ones need a buffer of their own first.
-    fn append_the_blocks_samples_in_the_contracts_channel_count(
+    fn append_the_blocks_samples_in_the_count_windows_are_emitted_in(
         &mut self,
         block: &AudioBlockReadFromTheWire<'_>,
+        contract_channels: u32,
     ) -> Result<()> {
         let source_channels = block.channels;
-        let contract_channels = self.contract.channels;
+        // Under a contract following its source the two counts are equal by
+        // construction, so neither the refusal nor either conversion arm below
+        // is reachable — the equality arm passes the samples through.
         if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {
             return Err(Error::AudioWindowStageChannelConversionRefused {
                 port: self.port_name.clone(),
@@ -572,8 +691,14 @@ impl AudioWindowAccumulator {
 
     /// Run every whole chunk the staging buffer holds through the rate
     /// conversion, appending what survives priming to the windowable output.
-    fn push_whole_chunks_through_the_rate_conversion(&mut self) -> Result<()> {
-        let contract_channels = self.contract.channels as usize;
+    /// The count is passed in rather than re-derived: `accept` is the only
+    /// caller and has just settled it against the block it accepted, which is
+    /// also the count the conversion was built for.
+    fn push_whole_chunks_through_the_rate_conversion(
+        &mut self,
+        channels_windows_are_emitted_in: u32,
+    ) -> Result<()> {
+        let emitted_channels = channels_windows_are_emitted_in as usize;
         let AudioWindowRateConversion::Resampled(resampler) = &mut self.rate_conversion else {
             let passed_through = std::mem::take(&mut self.channel_converted_source_scalars);
             self.windowable_output_scalars.extend(passed_through);
@@ -581,23 +706,23 @@ impl AudioWindowAccumulator {
         };
 
         let source_frames_per_call = resampler.input_frames_next();
-        let scalars_per_call = source_frames_per_call * contract_channels;
+        let scalars_per_call = source_frames_per_call * emitted_channels;
         let output_scratch = &mut self.resampler_output_scratch;
-        output_scratch.resize(resampler.output_frames_max() * contract_channels, 0.0);
-        let output_frames_available = output_scratch.len() / contract_channels;
+        output_scratch.resize(resampler.output_frames_max() * emitted_channels, 0.0);
+        let output_frames_available = output_scratch.len() / emitted_channels;
         let mut consumed_scalars = 0usize;
 
         while self.channel_converted_source_scalars.len() - consumed_scalars >= scalars_per_call {
             let input = InterleavedSlice::new(
                 &self.channel_converted_source_scalars
                     [consumed_scalars..consumed_scalars + scalars_per_call],
-                contract_channels,
+                emitted_channels,
                 source_frames_per_call,
             )
             .map_err(refused_resampler_buffer)?;
             let mut output = InterleavedSlice::new_mut(
                 output_scratch,
-                contract_channels,
+                emitted_channels,
                 output_frames_available,
             )
             .map_err(refused_resampler_buffer)?;
@@ -617,7 +742,7 @@ impl AudioWindowAccumulator {
             self.priming_output_frames_still_to_discard -= discarded;
             self.windowable_output_scalars.extend(
                 &output_scratch
-                    [discarded * contract_channels..output_frames_written * contract_channels],
+                    [discarded * emitted_channels..output_frames_written * emitted_channels],
             );
         }
 

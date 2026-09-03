@@ -796,7 +796,7 @@ fn audio_window_contract_tokens(
         Some(AudioWindowContract::Device(_)) => quote! {
             compile_error!(
                 "`audio_window` resolved from a device is a rendering, not a declaration \
-                 — a port states its five values or `match_device`"
+                 — a port states its own values or `match_device`"
             )
         },
         Some(AudioWindowContract::MatchDevice {}) => quote! {
@@ -806,7 +806,10 @@ fn audio_window_contract_tokens(
         },
         Some(AudioWindowContract::Declaration(values)) => {
             let sample_rate = values.sample_rate;
-            let channels = values.channels;
+            let channels = match values.channels {
+                Some(channels) => quote! { ::std::option::Option::Some(#channels) },
+                None => quote! { ::std::option::Option::None },
+            };
             let dtype = &values.dtype;
             let window_size = values.window_size;
             let hop = values.hop;

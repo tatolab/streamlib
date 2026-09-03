@@ -33,6 +33,12 @@ _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
 _DELIVERY_PROFILES = ("newest", "ordered")
 _AUDIO_WINDOW_DTYPES = ("f32", "i16")
 
+AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE = "source"
+"""How an omitted channel count is spelled on the wire the native half reads.
+
+The same word Rust renders, so `graph` shows one spelling whichever language
+declared the port."""
+
 
 class AudioWindowMatchDeviceSentinel:
     """The type of [`AUDIO_WINDOW_MATCH_DEVICE`] — never constructed by an author."""
@@ -54,44 +60,61 @@ processor never holds one.
 
 
 class AudioWindowContract:
-    """The rate, channels, dtype, window size and hop an audio input port wants.
+    """The rate, dtype, window size and hop an audio input port wants, and the
+    channel count only if it needs a particular one.
 
     Declared beside `delivery_profile` on an `@input`, which must be
-    `"ordered"`. `window_size` counts per-channel samples — the unit
-    `AudioBlock.sample_count` uses — so one window carries
-    `window_size * channels` scalars. `hop` may be omitted and then resolves to
-    `window_size`: contiguous, non-overlapping windows by default, a rolling
-    window below that. The attribute always holds the resolved hop, never
-    `None`, which is why the constructor takes the omittable spelling and the
-    attribute does not.
+    `"ordered"`. Every argument is keyword-only. `window_size` counts
+    per-channel samples — the unit `AudioBlock.sample_count` uses — so one
+    window carries `window_size * channels` scalars. `hop` may be omitted and
+    then resolves to `window_size`: contiguous, non-overlapping windows by
+    default, a rolling window below that. The attribute always holds the
+    resolved hop, never `None`, which is why the constructor takes the
+    omittable spelling and the attribute does not.
 
-    All-or-nothing: there is no partial form, because a half-declared contract
-    would leave the engine guessing at exactly the values a model asserts on.
+    `channels` may be omitted too, and then means *the source's own count,
+    whatever it is*: the engine converts nothing and every window carries the
+    count its block arrived with, so read `channels` off each block rather than
+    assuming it. That is the default because a graph is dynamic — a microphone
+    added later must not require editing every consumer downstream of it. State
+    a count only where something asserts on it, such as a model trained on
+    mono, and the engine converts to it by the fixed rule. Unlike `hop`, the
+    attribute stays `None` when it was omitted: there is no count to resolve it
+    to until a block arrives.
+
+    All-or-nothing otherwise: the remaining values have no partial form,
+    because a half-declared contract would leave the engine guessing at exactly
+    the values a model asserts on.
     """
 
     __slots__ = ("sample_rate", "channels", "dtype", "window_size", "hop")
 
     sample_rate: int
-    channels: int
+    channels: Optional[int]
     dtype: str
     window_size: int
     hop: int
 
     def __init__(
         self,
+        *,
         sample_rate: int,
-        channels: int,
         dtype: str,
         window_size: int,
         hop: Optional[int] = None,
+        channels: Optional[int] = None,
     ) -> None:
         resolved_hop = window_size if hop is None else hop
-        for field_name, value in (
+        numeric_fields = [
             ("sample_rate", sample_rate),
-            ("channels", channels),
             ("window_size", window_size),
             ("hop", resolved_hop),
-        ):
+        ]
+        # There is nothing to check about a count nobody wrote: absent means the
+        # source's own, which arrives with the blocks rather than here.
+        if channels is not None:
+            numeric_fields.append(("channels", channels))
+        for field_name, value in numeric_fields:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise TypeError(
                     f"AudioWindowContract field {field_name!r} must be an int; got "
@@ -154,11 +177,19 @@ class AudioWindowContract:
         )
 
     def _as_declaration(self) -> "dict[str, Any]":
-        """The wire shape the native half reads — identical to Rust's rendering."""
+        """The wire shape the native half reads — identical to Rust's rendering.
+
+        An omitted count is spelled rather than left out, so a reader learns it
+        follows the source where a missing key would tell it nothing.
+        """
         return {
             "resolved_from": "declaration",
             "sample_rate": self.sample_rate,
-            "channels": self.channels,
+            "channels": (
+                AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE
+                if self.channels is None
+                else self.channels
+            ),
             "dtype": self.dtype,
             "window_size": self.window_size,
             "hop": self.hop,
@@ -178,7 +209,7 @@ def _audio_window_declaration(
             f"sentinel settles at setup() from the device stream the declaring processor "
             f"opened, and every Python processor is helper-placed — it opens no device "
             f"stream, and its window is its model's compile-time knowledge, not a "
-            f"machine-varying device format. Declare an AudioWindowContract with the five "
+            f"machine-varying device format. Declare an AudioWindowContract with the "
             f"values the model wants and the engine converts every block to them"
         )
 
@@ -224,8 +255,10 @@ def input(
     `ctx.inputs.read(port_name)`.
 
     `audio_window` is optional and opt-in: an audio input may declare an
-    [`AudioWindowContract`], stating the rate, channels, dtype, window size and
-    hop it wants. A port declaring none is unchanged in every respect.
+    [`AudioWindowContract`], stating the rate, dtype, window size and hop it
+    wants, and a channel count only where it needs a particular one — absent,
+    every window carries the source's own count. A port declaring no contract
+    at all is unchanged in every respect.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(

@@ -21,7 +21,8 @@ pub use thread_priority::ThreadPriority;
 
 // Processor schema re-exports
 pub use audio_window_contract::{
-    AUDIO_WINDOW_DTYPE_DECLARATION_VALUES, AudioWindowContract, AudioWindowContractDeclaredValues,
+    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,
+    AudioWindowContract, AudioWindowContractDeclaredValues,
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 pub use error::{SchemaError, SchemaResult};

@@ -9,11 +9,11 @@
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBool, PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    AudioWindowContract, AudioWindowContractDeclaredValues, PortDescriptor,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling,
+    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
+    AudioWindowContractDeclaredValues, PortDescriptor, ProcessorClassImportPath,
+    ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 
@@ -218,7 +218,7 @@ fn read_audio_window_contract(
                     "sample_rate",
                     port_name,
                 )?,
-                channels: read_audio_window_numeric_field(declaration, "channels", port_name)?,
+                channels: read_audio_window_channel_count(declaration, port_name)?,
                 dtype: read_audio_window_string_field(declaration, "dtype", port_name)?,
                 window_size: read_audio_window_numeric_field(
                     declaration,
@@ -239,6 +239,112 @@ fn read_audio_window_contract(
     }
 }
 
+/// Read the `audio_window` channel count an author declared, or `None` where
+/// they left it to the source.
+///
+/// The count is the one value a contract may omit, so an absent key is legal
+/// here where every other field's absence is refused by name.
+fn read_audio_window_channel_count(
+    declaration: &Bound<'_, PyDict>,
+    port_name: &str,
+) -> PyResult<Option<u32>> {
+    let Some(value) = declaration.get_item("channels")? else {
+        return Ok(None);
+    };
+    read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
+        refusal.framed_as(format!(
+            "input port {port_name:?}: audio_window field \"channels\""
+        ))
+    })
+}
+
+/// Why an `audio_window` field could not be read: the tail of the sentence,
+/// and which Python exception carries it.
+///
+/// The kind travels with the refusal so the same mistake raises the same
+/// exception whichever field it was made on — `channels=1.5` and
+/// `window_size=1.5` are one error, not two.
+pub(crate) enum AudioWindowFieldRefusal {
+    /// The value is not the kind of thing the field takes at all.
+    WrongKindOfValue(String),
+    /// The right kind, but not one the field may hold.
+    UnusableValue(String),
+}
+
+impl AudioWindowFieldRefusal {
+    /// Raise this refusal behind the caller's own naming of what was being
+    /// read, keeping the kind the value earned.
+    pub(crate) fn framed_as(self, naming: impl std::fmt::Display) -> PyErr {
+        match self {
+            Self::WrongKindOfValue(reason) => PyTypeError::new_err(format!("{naming} {reason}")),
+            Self::UnusableValue(reason) => PyValueError::new_err(format!("{naming} {reason}")),
+        }
+    }
+}
+
+/// Read a `channels` value written either as a count or as the
+/// source-following spelling.
+///
+/// The one parse both wheel-side readers call — the bridge from an author's
+/// declaration and the helper's reading of what the parent wired. The refusal
+/// comes back bare so each frames it in its own terms, the way the contract's
+/// own validator does: one names a declaration, the other names a wiring.
+pub(crate) fn read_a_channel_count_or_the_source_spelling(
+    value: &Bound<'_, PyAny>,
+) -> Result<Option<u32>, AudioWindowFieldRefusal> {
+    if let Ok(spelling) = value.extract::<String>() {
+        if spelling == AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE {
+            return Ok(None);
+        }
+        return Err(AudioWindowFieldRefusal::UnusableValue(format!(
+            "is {spelling:?} — expected a channel count, or \
+             {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry whatever count the \
+             source sends"
+        )));
+    }
+
+    // The sentinel is offered on top of whatever the shared core said, rather
+    // than in place of it: "must be an int" and "must be an int, and a bool is
+    // not one" are different things to tell an author, and only the second one
+    // explains why `True` was rejected.
+    a_strictly_positive_count(value)
+        .map(Some)
+        .map_err(|refusal| match refusal {
+            AudioWindowFieldRefusal::WrongKindOfValue(reason) => {
+                AudioWindowFieldRefusal::WrongKindOfValue(format!(
+                    "{reason} — or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry \
+                     whatever count the source sends"
+                ))
+            }
+            unusable => unusable,
+        })
+}
+
+/// One strictly-positive count off a Python value, telling a value of the
+/// wrong kind apart from a number the field cannot hold.
+///
+/// The shared core of every numeric `audio_window` field, `channels` included,
+/// so one spelling of "strictly positive" serves them all.
+fn a_strictly_positive_count(value: &Bound<'_, PyAny>) -> Result<u32, AudioWindowFieldRefusal> {
+    // `bool` is an `int` subclass, so `True` extracts as 1 and reaches the stage
+    // as a plausible count. The Python constructor refuses one by name; this is
+    // the same rule at the two seams that constructor does not guard — a
+    // hand-built marker, and the envelope a parent wires a child with.
+    if value.is_instance_of::<PyBool>() {
+        return Err(AudioWindowFieldRefusal::WrongKindOfValue(
+            "must be an int, and a bool is not one".to_string(),
+        ));
+    }
+    let declared = value
+        .extract::<i64>()
+        .map_err(|_| AudioWindowFieldRefusal::WrongKindOfValue("must be an int".to_string()))?;
+    u32::try_from(declared).map_err(|_| {
+        AudioWindowFieldRefusal::UnusableValue(format!(
+            "is {declared} — every numeric field is strictly positive"
+        ))
+    })
+}
+
 /// Read one strictly-positive `audio_window` numeric field, refusing a
 /// negative integer by name rather than as an extraction failure.
 fn read_audio_window_numeric_field(
@@ -247,15 +353,9 @@ fn read_audio_window_numeric_field(
     port_name: &str,
 ) -> PyResult<u32> {
     let value = audio_window_field(declaration, key, port_name)?;
-    let declared = value.extract::<i64>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "input port {port_name:?}: audio_window field {key:?} must be an int"
-        ))
-    })?;
-    u32::try_from(declared).map_err(|_| {
-        PyValueError::new_err(format!(
-            "input port {port_name:?}: audio_window field {key:?} is {declared} — every \
-             numeric field is strictly positive"
+    a_strictly_positive_count(&value).map_err(|refusal| {
+        refusal.framed_as(format!(
+            "input port {port_name:?}: audio_window field {key:?}"
         ))
     })
 }
@@ -618,14 +718,89 @@ class AudioConsumer:
         );
     }
 
-    /// Every field of the contract names the port and the contract when it is
-    /// missing — none falls through to a bare `missing key`.
+    /// `bool` is an `int` subclass in Python, so a marker carrying `True` would
+    /// otherwise reach the stage as one channel — a plausible count nobody
+    /// wrote. The declaration constructor refuses one by name and so does this.
     #[test]
-    fn a_marker_missing_any_contract_field_is_refused_naming_the_port_and_the_field() {
+    fn a_hand_built_marker_carrying_a_bool_where_a_number_belongs_is_refused() {
+        for (field, spelling) in [
+            ("channels", "'channels': True"),
+            ("sample_rate", "'sample_rate': True"),
+            ("window_size", "'window_size': True"),
+            ("hop", "'hop': True"),
+        ] {
+            let mut fields = vec![
+                "'resolved_from': 'declaration'",
+                "'sample_rate': 48000",
+                "'channels': 2",
+                "'dtype': 'f32'",
+                "'window_size': 960",
+                "'hop': 960",
+            ];
+            fields.retain(|written| !written.starts_with(&format!("'{field}'")));
+            fields.push(spelling);
+
+            let refusal = hand_built_marker_refusal(&fields.join(", "));
+            assert!(
+                refusal.contains(field) && refusal.contains("bool"),
+                "a bool in {field:?} must be refused naming the field and the kind; \
+                 got {refusal}"
+            );
+        }
+    }
+
+    /// The count is the one value a marker may leave out, and the bridge must
+    /// carry the omission through rather than refuse it: a port that follows
+    /// its source is spelled by saying nothing.
+    #[test]
+    fn a_hand_built_marker_omitting_its_channel_count_follows_the_source() {
+        for spelling in [
+            "'resolved_from': 'declaration', 'sample_rate': 48000, 'dtype': 'f32', \
+             'window_size': 960, 'hop': 960",
+            "'resolved_from': 'declaration', 'sample_rate': 48000, 'channels': 'source', \
+             'dtype': 'f32', 'window_size': 960, 'hop': 960",
+        ] {
+            let declaration =
+                read_hand_built_marker(spelling).expect("an omitted count is a whole contract");
+
+            assert_eq!(
+                declaration.descriptor.inputs[0].audio_window,
+                Some(AudioWindowContract::Declaration(
+                    AudioWindowContractDeclaredValues {
+                        sample_rate: 48_000,
+                        channels: None,
+                        dtype: "f32".to_string(),
+                        window_size: 960,
+                        hop: 960,
+                    }
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn a_hand_built_marker_whose_channels_names_no_count_is_refused_offering_the_spelling() {
+        let refusal = hand_built_marker_refusal(
+            "'resolved_from': 'declaration', 'sample_rate': 48000, 'channels': 'stereo', \
+             'dtype': 'f32', 'window_size': 960, 'hop': 960",
+        );
+
+        assert!(
+            refusal.contains("channels") && refusal.contains("source"),
+            "the refusal must name the field and offer the spelling that works; got {refusal}"
+        );
+    }
+
+    /// Every field the contract requires names the port and the contract when
+    /// it is missing — none falls through to a bare `missing key`.
+    ///
+    /// `channels` is not among them: it is the one value a port may leave to
+    /// its source, and its own test below is that omitting it is *accepted*.
+    #[test]
+    fn a_marker_missing_any_required_contract_field_is_refused_naming_the_port_and_the_field() {
         for missing_field in [
             "resolved_from",
             "sample_rate",
-            "channels",
             "dtype",
             "window_size",
             "hop",

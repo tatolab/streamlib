@@ -32,8 +32,8 @@ use serde::de::DeserializeOwned;
 
 use super::audio_window::{
     AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream,
-    DeviceMatchedAudioWindowContractsByInputPort, ResolvedAudioWindowContract,
-    queued_audio_window_frame_measure,
+    DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
+    ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
@@ -355,15 +355,15 @@ fn windowed_port_config(
     read_mode: ReadMode,
     contract: ResolvedAudioWindowContract,
 ) -> PortConfig {
-    // Shared by the mailbox's measure, which writes every arriving bag's rate
-    // into it, and the stage, which reads it so its readiness floor is exact
-    // before it has consumed anything.
-    let latest_queued_source_sample_rate = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    // Shared by the mailbox's measure, which writes every arriving bag's
+    // format into it, and the stage, which reads it so its readiness floor is
+    // exact before it has consumed anything.
+    let latest_queued_source_audio_format = Arc::new(LatestQueuedSourceAudioFormat::default());
     PortConfig {
         mailbox: PortMailbox::new(contract.windowed_port_mailbox_depth())
             .measuring_every_queued_frame_with(queued_audio_window_frame_measure(
                 contract,
-                Arc::clone(&latest_queued_source_sample_rate),
+                Arc::clone(&latest_queued_source_audio_format),
             )),
         read_mode,
         staged_oversized: None,
@@ -371,7 +371,7 @@ fn windowed_port_config(
             parking_lot::Mutex::new(AudioWindowAccumulator::new(
                 port,
                 contract,
-                latest_queued_source_sample_rate,
+                latest_queued_source_audio_format,
             )),
         )),
     }
@@ -531,7 +531,7 @@ impl InputMailboxesInner {
             buffer_size = contract.windowed_port_mailbox_depth(),
             read_mode = ?read_mode,
             sample_rate = contract.sample_rate,
-            channels = contract.channels,
+            channels = %contract.rendered_channel_count(),
             window_size = contract.window_size,
             hop = contract.hop,
             "InputMailboxes: add_windowed_port"
@@ -551,7 +551,7 @@ impl InputMailboxesInner {
     ///
     /// **Only a port that declared the sentinel and is still waiting on it can
     /// be settled.** A wired port carries what its author declared, so the port
-    /// itself is the check: one that declared five values, or none at all, or
+    /// itself is the check: one that declared its values, or none at all, or
     /// one already settled, is refused naming what it is. Without that a
     /// processor could window a port whose author asked for nothing, or replace
     /// a declared contract with its own — and `graph` would go on rendering the
@@ -609,7 +609,7 @@ impl InputMailboxesInner {
         tracing::info!(
             port = port,
             sample_rate = contract.sample_rate,
-            channels = contract.channels,
+            channels = %contract.rendered_channel_count(),
             window_size = contract.window_size,
             hop = contract.hop,
             "InputMailboxes: `audio_window = match_device` settled from the device stream"
@@ -1544,7 +1544,7 @@ mod tests {
         ResolvedAudioWindowContract::from_declared_values(
             &crate::core::descriptors::AudioWindowContractDeclaredValues {
                 sample_rate,
-                channels,
+                channels: Some(channels),
                 dtype: "f32".to_string(),
                 window_size: 512,
                 hop: 512,
@@ -2030,7 +2030,7 @@ mod tests {
             .settled_declaration_for_input_port("in")
             .expect("the wiring path finds what setup() settled");
         assert_eq!(settled.sample_rate, 44_100);
-        assert_eq!(settled.channels, 2);
+        assert_eq!(settled.channels, Some(2));
         assert_eq!(settled.window_size, 441);
         assert_eq!(settled.hop, 441);
     }
@@ -2238,7 +2238,7 @@ mod tests {
         let one_second_rolling = ResolvedAudioWindowContract::from_declared_values(
             &crate::core::descriptors::AudioWindowContractDeclaredValues {
                 sample_rate: 16_000,
-                channels: 1,
+                channels: Some(1),
                 dtype: "f32".to_string(),
                 window_size: 16_000,
                 hop: 160,

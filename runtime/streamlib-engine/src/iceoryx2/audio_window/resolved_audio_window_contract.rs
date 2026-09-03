@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The five values the read-side stage is driven by, and how a declaration
-//! becomes them.
+//! The values the read-side stage is driven by, and how a declaration becomes
+//! them.
 //!
 //! [`AudioWindowContract`] is what an author writes; this is what the stage
 //! runs on. The two differ in exactly one way: the declaration may carry the
@@ -14,9 +14,13 @@
 use streamlib_processor_schema::ProcessorClassImportPath;
 
 use super::audio_block_bag_wire_codec::AudioBlockSampleDtype;
+use super::audio_window_accumulator::SourceAudioFormat;
 use super::device_matched_audio_window_contracts::AudioWindowContractMatchingADeviceStream;
 use crate::core::context::AudioSampleFormat;
-use crate::core::descriptors::{AudioWindowContract, AudioWindowContractDeclaredValues};
+use crate::core::descriptors::{
+    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
+    AudioWindowContractDeclaredValues,
+};
 use crate::core::error::{Error, Result};
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::iceoryx2::DeliveryProfile;
@@ -30,8 +34,14 @@ use crate::iceoryx2::DeliveryProfile;
 pub struct ResolvedAudioWindowContract {
     /// Rate every emitted window is at.
     pub(crate) sample_rate: u32,
-    /// Channel count every emitted window is interleaved by.
-    pub(crate) channels: u32,
+    /// Channel count every emitted window is interleaved by, or `None` — the
+    /// count the source's own blocks arrive in, whatever it is.
+    ///
+    /// Absent, the stage skips channel conversion entirely and a window
+    /// carries what arrived. The count is then a property of the run rather
+    /// than of the contract, which is why the stage reads it off each block
+    /// and re-anchors when it changes.
+    pub(crate) channels: Option<u32>,
     /// How an emitted window's scalars are written.
     pub(crate) dtype: AudioBlockSampleDtype,
     /// Per-channel samples in one emitted window.
@@ -77,8 +87,8 @@ const MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS: usize = 8_192;
 const WINDOWED_PORT_MAILBOX_DEPTH_MARGIN: usize = 4;
 
 impl ResolvedAudioWindowContract {
-    /// Read the five values a declaration states, refusing one the stage
-    /// could not honour.
+    /// Read the values a declaration states, refusing one the stage could not
+    /// honour.
     ///
     /// The refusal is returned bare so each caller frames it in its own terms:
     /// the engine names the processor and the port, a helper child names the
@@ -120,7 +130,9 @@ impl ResolvedAudioWindowContract {
         let format = matching.device_stream_format;
         Self::from_declared_values(&AudioWindowContractDeclaredValues {
             sample_rate: format.sample_rate,
-            channels: format.channels,
+            // A device stream resolves a count, so a settled contract always
+            // states one.
+            channels: Some(format.channels),
             dtype: audio_window_dtype_of(format.sample_format).to_string(),
             window_size: matching.window_size_in_per_channel_samples,
             hop: matching.hop_in_per_channel_samples,
@@ -130,7 +142,7 @@ impl ResolvedAudioWindowContract {
     /// Read a declaration the author wrote, refusing one the stage could not
     /// honour. A sentinel is not a declaration the stage can run on, so it
     /// comes back as [`AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream`]
-    /// rather than as five values.
+    /// rather than as values.
     pub(crate) fn read_declaration(
         contract: &AudioWindowContract,
         processor_type: &ProcessorClassImportPath,
@@ -155,14 +167,34 @@ impl ResolvedAudioWindowContract {
             AudioWindowContract::Device(_) => Err(Error::Configuration(format!(
                 "input port '{port_name}' on '{processor_type}' declares an `audio_window` \
                  resolved from a device, which is how `graph` renders a settled contract \
-                 and not something a port may declare. State the five values, or \
+                 and not something a port may declare. State the values, or \
                  `match_device` to take them from the device this processor opens"
             ))),
         }
     }
 
-    /// The five values as a declaration states them, for the parent→child
-    /// wiring envelope.
+    /// The channel count a window carries for a source arriving in this
+    /// format: the contract's when it declared one, otherwise the source's own.
+    ///
+    /// The one statement of that rule. The stage asks it to size a window, to
+    /// build a rate conversion, and to encode — and those three must never
+    /// disagree.
+    pub(crate) fn channels_a_window_carries_from(&self, source: SourceAudioFormat) -> u32 {
+        self.channels.unwrap_or(source.channels)
+    }
+
+    /// The channel count as every other surface spells it — the number, or the
+    /// word an absent count renders as — so a log line reads the same as
+    /// `graph` does.
+    pub(crate) fn rendered_channel_count(&self) -> String {
+        self.channels.map_or_else(
+            || AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE.to_string(),
+            |channels| channels.to_string(),
+        )
+    }
+
+    /// The values as a declaration states them, for the parent→child wiring
+    /// envelope.
     pub(crate) fn as_declared_values(&self) -> AudioWindowContractDeclaredValues {
         AudioWindowContractDeclaredValues {
             sample_rate: self.sample_rate,
@@ -193,11 +225,6 @@ impl ResolvedAudioWindowContract {
             .min(MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS);
         derived.max(DeliveryProfile::ORDERED_DEPTH)
     }
-
-    /// Scalars one emitted window carries: `window_size × channels`.
-    pub(crate) fn scalars_per_window(&self) -> usize {
-        self.window_size as usize * self.channels as usize
-    }
 }
 
 /// How a wire dtype is spelled for a device stream's scalar encoding.
@@ -220,7 +247,7 @@ fn audio_window_dtype_of(sample_format: AudioSampleFormat) -> &'static str {
 /// at all: a port with no contract never produces one of these.
 ///
 /// The sentinel is the reason this is not just `Option<ResolvedAudioWindowContract>`:
-/// a port declaring it windows, but its five values are not knowable until the
+/// a port declaring it windows, but its values are not knowable until the
 /// declaring processor opens its device in `setup()` — which the compiler runs
 /// *after* it has wired every link. So the wiring path installs a port that
 /// windows nothing yet and hands a reader nothing, and `setup()` completes it.
@@ -228,7 +255,7 @@ fn audio_window_dtype_of(sample_format: AudioSampleFormat) -> &'static str {
 /// [`InstalledInputPortAudioWindowing`]: crate::iceoryx2::InputMailboxesInner
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AudioWindowDeclarationOfAnInputPort {
-    /// The author wrote the five values, and these are they.
+    /// The author wrote the values, and these are they.
     StatedOutright(ResolvedAudioWindowContract),
     /// The author wrote `audio_window = match_device`, so the five values come
     /// from the device stream the declaring processor opens.
@@ -251,7 +278,7 @@ pub(crate) fn refuse_an_unsettled_match_device_sentinel(
          `audio_window = match_device`, which resolves at `setup()` from the format \
          of the device stream the declaring processor opened — and nothing has \
          resolved it. Only a processor that opens a device stream can satisfy the \
-         sentinel; declare the five values outright, or give this port a processor \
+         sentinel; declare the values outright, or give this port a processor \
          that opens one"
     ))
 }
@@ -293,7 +320,7 @@ mod tests {
     fn declared_values() -> AudioWindowContractDeclaredValues {
         AudioWindowContractDeclaredValues {
             sample_rate: 16_000,
-            channels: 1,
+            channels: Some(1),
             dtype: "f32".to_string(),
             window_size: 512,
             hop: 512,
@@ -320,7 +347,7 @@ mod tests {
             .expect("a declared contract resolves");
 
         assert_eq!(resolved.sample_rate, 16_000);
-        assert_eq!(resolved.channels, 1);
+        assert_eq!(resolved.channels, Some(1));
         assert_eq!(resolved.dtype, AudioBlockSampleDtype::F32);
         assert_eq!(resolved.window_size, 512);
         assert_eq!(resolved.hop, 512);
@@ -393,7 +420,7 @@ mod tests {
         .expect("a device format resolves");
 
         assert_eq!(resolved.sample_rate, 48_000);
-        assert_eq!(resolved.channels, 2);
+        assert_eq!(resolved.channels, Some(2));
         assert_eq!(resolved.dtype, AudioBlockSampleDtype::I16);
         assert_eq!(resolved.window_size, 512);
         assert_eq!(resolved.hop, 512);

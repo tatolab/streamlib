@@ -6,14 +6,15 @@
 //! gap that flushes the filter instead of blending audio across it.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use streamlib_processor_schema::AudioWindowContractDeclaredValues;
 
 use super::audio_block_bag_wire_codec::{
     AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire, read_an_audio_block_off_the_wire,
 };
-use super::audio_window_accumulator::AudioWindowAccumulator;
+use super::audio_window_accumulator::{
+    AudioWindowAccumulator, LatestQueuedSourceAudioFormat, SourceAudioFormat,
+};
 use super::resolved_audio_window_contract::ResolvedAudioWindowContract;
 
 const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
@@ -21,6 +22,27 @@ const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
 fn contract(
     sample_rate: u32,
     channels: u32,
+    dtype: &str,
+    window_size: u32,
+    hop: u32,
+) -> ResolvedAudioWindowContract {
+    a_contract_stating(sample_rate, Some(channels), dtype, window_size, hop)
+}
+
+/// A contract that states everything but its channel count, so every emitted
+/// window carries whatever count the source sent.
+fn contract_following_the_sources_channels(
+    sample_rate: u32,
+    dtype: &str,
+    window_size: u32,
+    hop: u32,
+) -> ResolvedAudioWindowContract {
+    a_contract_stating(sample_rate, None, dtype, window_size, hop)
+}
+
+fn a_contract_stating(
+    sample_rate: u32,
+    channels: Option<u32>,
     dtype: &str,
     window_size: u32,
     hop: u32,
@@ -38,23 +60,27 @@ fn contract(
 /// A stage on a port nothing has queued a bag into yet — every test drives it
 /// through `accept`, which is what a read does once the gate has cleared.
 fn stage_on(contract: ResolvedAudioWindowContract) -> AudioWindowAccumulator {
-    AudioWindowAccumulator::new("audio", contract, Arc::new(AtomicU32::new(0)))
+    AudioWindowAccumulator::new(
+        "audio",
+        contract,
+        Arc::new(LatestQueuedSourceAudioFormat::default()),
+    )
 }
 
-/// A stage plus the source-rate cell its port's mailbox measure writes into.
+/// A stage plus the source-format cell its port's mailbox measure writes into.
 /// The readiness tests drive that cell themselves, because it is what makes the
 /// floor exact before a single bag has been consumed.
-fn stage_and_the_rate_its_mailbox_reports(
+fn stage_and_the_format_its_mailbox_reports(
     contract: ResolvedAudioWindowContract,
-) -> (AudioWindowAccumulator, Arc<AtomicU32>) {
-    let latest_queued_source_sample_rate = Arc::new(AtomicU32::new(0));
+) -> (AudioWindowAccumulator, Arc<LatestQueuedSourceAudioFormat>) {
+    let latest_queued_source_audio_format = Arc::new(LatestQueuedSourceAudioFormat::default());
     (
         AudioWindowAccumulator::new(
             "audio",
             contract,
-            Arc::clone(&latest_queued_source_sample_rate),
+            Arc::clone(&latest_queued_source_audio_format),
         ),
-        latest_queued_source_sample_rate,
+        latest_queued_source_audio_format,
     )
 }
 
@@ -588,55 +614,96 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
     }
 }
 
+/// Drive the readiness floor over one source format, asserting the two things
+/// that together make it meaningful: every window it promises can actually be
+/// produced, in the count the contract resolves to — and it clears at all,
+/// since a floor that never says yes satisfies the first vacuously and would
+/// leave a reactive processor undispatched forever.
+///
+/// Small quanta on purpose: the queue must cross one window's worth in steps
+/// smaller than the priming and chunk slack, or a floor blind to that slack
+/// steps straight over the gap where it would overclaim.
+fn assert_the_readiness_floor_holds_for(
+    contract: ResolvedAudioWindowContract,
+    source: SourceAudioFormat,
+    channels_each_window_carries: u32,
+) {
+    let SourceAudioFormat {
+        sample_rate: source_rate,
+        channels: source_channels,
+    } = source;
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
+
+    let source_frames_per_block = 160u64;
+    let mut queued_equivalents = 0u64;
+    let mut blocks = Vec::new();
+    let mut the_floor_cleared = false;
+    for block_index in 0..60u64 {
+        let first_frame = block_index * source_frames_per_block;
+        blocks.push(source_block(
+            &interleaved_sine(
+                first_frame,
+                source_frames_per_block as usize,
+                source_channels,
+                source_rate,
+                440.0,
+            ),
+            source_rate,
+            source_channels,
+            nanoseconds_for(first_frame, source_rate),
+        ));
+        queued_equivalents +=
+            source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
+        format_the_mailbox_reports.record(source);
+
+        if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
+            continue;
+        }
+        // The gate said yes, so feeding exactly what was queued must produce a
+        // window.
+        for block in blocks.drain(..) {
+            stage.accept(&block).expect("accepted");
+        }
+        queued_equivalents = 0;
+        let window = stage
+            .next_ready_window()
+            .expect("a window emits")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the readiness floor claimed a window at {source_rate} Hz / \
+                     {source_channels} channels that the read could not produce"
+                )
+            });
+        let emitted = read_an_audio_block_off_the_wire(&window.body).expect("reads back");
+        assert_eq!(
+            emitted.channels, channels_each_window_carries,
+            "the window the floor promised carries the count the contract resolves to"
+        );
+        the_floor_cleared = true;
+    }
+
+    assert!(
+        the_floor_cleared,
+        "the floor never cleared at {source_rate} Hz across {source_channels} channels, so \
+         it never claimed anything to check"
+    );
+}
+
 /// The readiness floor must never claim a window the read then cannot produce:
 /// a reactive `process()` that woke and found nothing is the shape the window
 /// contract exists to rule out.
 #[test]
 fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 1)] {
-        let contract = contract(16_000, 1, "f32", 512, 512);
-        let (mut stage, rate_the_mailbox_reports) =
-            stage_and_the_rate_its_mailbox_reports(contract);
-
-        // Small quanta on purpose: the queue must cross one window's worth in
-        // steps smaller than the priming and chunk slack, or a floor blind to
-        // that slack steps straight over the gap where it would overclaim.
-        let source_frames_per_block = 160u64;
-        let mut queued_equivalents = 0u64;
-        let mut blocks = Vec::new();
-        for block_index in 0..60u64 {
-            let first_frame = block_index * source_frames_per_block;
-            blocks.push(source_block(
-                &interleaved_sine(
-                    first_frame,
-                    source_frames_per_block as usize,
-                    source_channels,
-                    source_rate,
-                    440.0,
-                ),
-                source_rate,
-                source_channels,
-                nanoseconds_for(first_frame, source_rate),
-            ));
-            queued_equivalents +=
-                source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
-            rate_the_mailbox_reports.store(source_rate, Ordering::Relaxed);
-
-            if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
-                continue;
-            }
-            // The gate said yes, so feeding exactly what was queued must
-            // produce a window.
-            for block in blocks.drain(..) {
-                stage.accept(&block).expect("accepted");
-            }
-            queued_equivalents = 0;
-            assert!(
-                stage.next_ready_window().expect("a window emits").is_some(),
-                "the readiness floor claimed a window at {source_rate} Hz / \
-                 {source_channels} channels that the read could not produce"
-            );
-        }
+        assert_the_readiness_floor_holds_for(
+            contract(16_000, 1, "f32", 512, 512),
+            SourceAudioFormat {
+                sample_rate: source_rate,
+                channels: source_channels,
+            },
+            1,
+        );
     }
 }
 
@@ -648,8 +715,12 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
 #[test]
 fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
-    rate_the_mailbox_reports.store(16_000, Ordering::Relaxed);
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
+    format_the_mailbox_reports.record(SourceAudioFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    });
 
     // Three 160-sample bags — 480 of the 512 a window needs.
     let mut queued: Vec<Vec<u8>> = (0..3u64)
@@ -720,8 +791,12 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
 #[test]
 fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
-    rate_the_mailbox_reports.store(16_000, Ordering::Relaxed);
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
+    format_the_mailbox_reports.record(SourceAudioFormat {
+        sample_rate: 16_000,
+        channels: 1,
+    });
 
     assert!(!stage.has_said_a_full_mailbox_cannot_fill_a_window());
 
@@ -747,8 +822,12 @@ fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
 #[test]
 fn the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to() {
     let contract = contract(16_000, 1, "f32", 16_000, 160);
-    let (mut stage, rate_the_mailbox_reports) = stage_and_the_rate_its_mailbox_reports(contract);
-    rate_the_mailbox_reports.store(48_000, Ordering::Relaxed);
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
+    format_the_mailbox_reports.record(SourceAudioFormat {
+        sample_rate: 48_000,
+        channels: 1,
+    });
 
     let depth = contract.windowed_port_mailbox_depth() as u64;
     let mut queued_equivalents = 0u64;
@@ -767,4 +846,216 @@ fn the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to() 
         said_yes_after <= depth,
         "the gate cleared only after {said_yes_after} blocks, past the {depth} the mailbox holds"
     );
+}
+
+// ---- a contract that declares no channel count ----------------------------
+
+/// The ticket's flagship case: a contract stating everything but its count
+/// carries the source's own through untouched, so a graph can grow a stereo
+/// microphone without every consumer downstream of it being edited.
+#[test]
+fn a_contract_declaring_no_channels_emits_the_sources_own_count() {
+    let mut stage = stage_on(contract_following_the_sources_channels(
+        48_000, "f32", 960, 960,
+    ));
+
+    let mut windows = Vec::new();
+    for block_index in 0..8u64 {
+        let first_frame = block_index * 960;
+        stage
+            .accept(&source_block(
+                &interleaved_sine(first_frame, 960, 2, 48_000, 440.0),
+                48_000,
+                2,
+                nanoseconds_for(first_frame, 48_000),
+            ))
+            .expect("the stage accepts a stereo block");
+        windows.extend(drain_every_ready_window(&mut stage));
+    }
+
+    assert_eq!(
+        windows.len(),
+        8,
+        "one 960-frame block is exactly one window"
+    );
+    for window in &windows {
+        assert_eq!(window.channels, 2, "the source's count, not a declared one");
+        assert_eq!(window.sample_count, 960);
+        assert_eq!(window.sample_rate, 48_000);
+        assert_eq!(
+            window.scalars.len(),
+            1_920,
+            "a window carries window_size × the source's channels"
+        );
+    }
+    for pair in windows.windows(2) {
+        assert_eq!(
+            pair[1].first_sample_timestamp_ns - pair[0].first_sample_timestamp_ns,
+            20_000_000,
+            "960 samples at 48 kHz is exactly 20 ms"
+        );
+    }
+}
+
+/// The same contract against a mono source: following means following, not
+/// defaulting to a count the contract secretly holds.
+#[test]
+fn the_same_channel_free_contract_emits_mono_from_a_mono_source() {
+    let mut stage = stage_on(contract_following_the_sources_channels(
+        48_000, "f32", 960, 960,
+    ));
+
+    stage
+        .accept(&source_block(
+            &interleaved_sine(0, 960, 1, 48_000, 440.0),
+            48_000,
+            1,
+            0,
+        ))
+        .expect("the stage accepts a mono block");
+
+    let windows = drain_every_ready_window(&mut stage);
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].channels, 1);
+    assert_eq!(windows[0].scalars.len(), 960);
+}
+
+/// Following the source still resamples: only the channel-convert step is
+/// skipped, and the rest of the fixed order is exactly as it was.
+#[test]
+fn a_channel_free_contract_still_resamples_to_the_rate_it_declared() {
+    let mut stage = stage_on(contract_following_the_sources_channels(
+        16_000, "f32", 512, 512,
+    ));
+
+    for block_index in 0..40u64 {
+        let first_frame = block_index * 512;
+        stage
+            .accept(&source_block(
+                &interleaved_sine(first_frame, 512, 2, 48_000, 440.0),
+                48_000,
+                2,
+                nanoseconds_for(first_frame, 48_000),
+            ))
+            .expect("accepted");
+    }
+
+    let windows = drain_every_ready_window(&mut stage);
+    assert!(
+        !windows.is_empty(),
+        "40 blocks make several 512-sample windows"
+    );
+    for window in &windows {
+        assert_eq!(window.sample_rate, 16_000, "the declared rate is honoured");
+        assert_eq!(window.channels, 2, "the source's count rode through it");
+        assert_eq!(window.scalars.len(), 1_024);
+    }
+}
+
+/// A source that changes its channel count mid-run is a format change like any
+/// other: the accumulator flushes rather than emitting one window whose front
+/// is stereo and whose back is mono.
+#[test]
+fn a_source_that_changes_its_channel_count_flushes_rather_than_mixing_two_counts() {
+    let mut stage = stage_on(contract_following_the_sources_channels(
+        48_000, "f32", 960, 960,
+    ));
+
+    // Two thirds of a window in stereo, then the source drops to mono at the
+    // sample where the stereo run would have continued.
+    stage
+        .accept(&source_block(
+            &interleaved_sine(0, 640, 2, 48_000, 440.0),
+            48_000,
+            2,
+            0,
+        ))
+        .expect("accepted");
+    assert!(
+        stage.next_ready_window().expect("asked").is_none(),
+        "640 of 960 frames is not a window"
+    );
+
+    for block_index in 0..3u64 {
+        let first_frame = 640 + block_index * 480;
+        stage
+            .accept(&source_block(
+                &interleaved_sine(first_frame, 480, 1, 48_000, 440.0),
+                48_000,
+                1,
+                nanoseconds_for(first_frame, 48_000),
+            ))
+            .expect("accepted");
+    }
+
+    let windows = drain_every_ready_window(&mut stage);
+    assert_eq!(
+        windows.len(),
+        1,
+        "the stereo remainder was discarded, and the mono run made one window of \
+         its own"
+    );
+    assert_eq!(windows[0].channels, 1);
+    assert_eq!(
+        windows[0].scalars.len(),
+        960,
+        "no window carries a scalar from before the count changed"
+    );
+    assert_eq!(
+        windows[0].first_sample_timestamp_ns,
+        nanoseconds_for(640, 48_000),
+        "the mono run is anchored at its own first block, not the stereo one's"
+    );
+}
+
+/// The readiness floor is asked before any bag has been consumed, so on a
+/// contract that declares no count it must answer from the count the mailbox's
+/// measure saw — and the windows it promises must carry that count.
+#[test]
+fn readiness_on_a_channel_free_contract_never_claims_a_window_the_read_cannot_produce() {
+    for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 6)] {
+        assert_the_readiness_floor_holds_for(
+            contract_following_the_sources_channels(16_000, "f32", 512, 512),
+            SourceAudioFormat {
+                sample_rate: source_rate,
+                channels: source_channels,
+            },
+            source_channels,
+        );
+    }
+}
+
+/// A count nobody declared cannot be an N→M pair, so the refusal that guards a
+/// declared one must not fire here — six channels reach a channel-free port
+/// untouched where a declared stereo contract would have refused them.
+#[test]
+fn a_source_a_declared_pair_would_refuse_rides_a_channel_free_contract_through() {
+    let mut stage = stage_on(contract_following_the_sources_channels(
+        48_000, "f32", 960, 960,
+    ));
+
+    stage
+        .accept(&source_block(
+            &interleaved_sine(0, 960, 6, 48_000, 440.0),
+            48_000,
+            6,
+            0,
+        ))
+        .expect("six channels into a contract that declared none is not a conversion");
+
+    let windows = drain_every_ready_window(&mut stage);
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0].channels, 6);
+    assert_eq!(windows[0].scalars.len(), 5_760);
+
+    let declared_stereo = contract(48_000, 2, "f32", 960, 960);
+    let mut refusing = stage_on(declared_stereo);
+    refusing
+        .accept(&source_block(
+            &interleaved_sine(0, 960, 6, 48_000, 440.0),
+            48_000,
+            6,
+            0,
+        ))
+        .expect_err("a declared 6→2 pair with neither side at one is still refused");
 }

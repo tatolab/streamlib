@@ -32,9 +32,10 @@ mod resolved_audio_window_contract;
 mod audio_window_stage_tests;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
-pub(crate) use audio_window_accumulator::AudioWindowAccumulator;
+pub(crate) use audio_window_accumulator::{
+    AudioWindowAccumulator, LatestQueuedSourceAudioFormat, SourceAudioFormat,
+};
 pub use device_matched_audio_window_contracts::{
     AudioWindowContractMatchingADeviceStream, DeviceMatchedAudioWindowContractsByInputPort,
 };
@@ -50,7 +51,7 @@ use super::FrameHeader;
 use super::mailbox::PortMailboxQueuedFrameMeasure;
 
 /// A measure over one queued wire frame: what the audio block it carries is
-/// worth in frames at `contract`'s rate, and the rate it stated.
+/// worth in frames at `contract`'s rate, and the format it stated.
 ///
 /// Installed on a windowed port's mailbox so the readiness gate can ask how
 /// much is queued without consuming any of it. `crossbeam`'s `ArrayQueue`
@@ -60,13 +61,14 @@ use super::mailbox::PortMailboxQueuedFrameMeasure;
 /// name, and a readiness gate that raised there would refuse it before any
 /// reader could be told which port it arrived on.
 ///
-/// `latest_source_sample_rate` is the same reading in the units the stage
+/// `latest_source_audio_format` is the same reading in the terms the stage
 /// needs to build its rate conversion, so the very first readiness question —
 /// asked before any bag has been consumed — is answered against the real
-/// filter delay rather than a worst case.
+/// filter delay rather than a worst case. The channel count is part of it
+/// because a contract that declared none resamples across the source's own.
 pub(crate) fn queued_audio_window_frame_measure(
     contract: ResolvedAudioWindowContract,
-    latest_source_sample_rate: Arc<AtomicU32>,
+    latest_source_audio_format: Arc<LatestQueuedSourceAudioFormat>,
 ) -> PortMailboxQueuedFrameMeasure {
     Arc::new(move |wire_frame: &[u8]| -> u64 {
         // `read_payload_from_slice` is the one place the frame's stamped
@@ -80,10 +82,14 @@ pub(crate) fn queued_audio_window_frame_measure(
         let Ok(block) = read_an_audio_block_off_the_wire(body) else {
             return 0;
         };
-        if block.sample_rate == 0 {
+        if block.sample_rate == 0 || block.channels == 0 {
             return 0;
         }
-        latest_source_sample_rate.store(block.sample_rate, Ordering::Relaxed);
+        latest_source_audio_format.record(SourceAudioFormat {
+            sample_rate: block.sample_rate,
+            channels: block.channels,
+        });
+        // Per-channel frames on both sides, so the measure needs no count.
         u64::from(block.sample_count) * u64::from(contract.sample_rate)
             / u64::from(block.sample_rate)
     })

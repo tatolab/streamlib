@@ -130,7 +130,7 @@ mod tests {
             .settled_declaration_for_input_port("audio")
             .expect("the port was settled");
         assert_eq!(declaration.sample_rate, 48_000);
-        assert_eq!(declaration.channels, 2);
+        assert_eq!(declaration.channels, Some(2));
         assert_eq!(declaration.dtype, "f32");
         assert_eq!(declaration.window_size, 512);
         assert_eq!(declaration.hop, 512);

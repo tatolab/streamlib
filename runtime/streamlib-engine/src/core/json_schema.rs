@@ -535,7 +535,7 @@ mod port_rendering_tests {
         crate::core::descriptors::AudioWindowContract::Declaration(
             crate::core::descriptors::AudioWindowContractDeclaredValues {
                 sample_rate: 16_000,
-                channels: 1,
+                channels: Some(1),
                 dtype: "f32".to_string(),
                 window_size: 512,
                 hop: 512,
@@ -567,6 +567,42 @@ mod port_rendering_tests {
         );
         assert_renders_exactly(&json, &PORT_INFO_WITH_A_CONTRACT_KEYS);
         assert_carries_no_type_key(&json);
+    }
+
+    /// A count the port left to its source is spelled in the rendering rather
+    /// than left out of it: a reader learns the count follows the source,
+    /// where a missing key would tell it nothing.
+    #[test]
+    fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
+        let port = crate::core::graph::PortInfo {
+            name: "audio".to_string(),
+            description: String::new(),
+            port_kind: crate::core::graph::PortKind::Data,
+            delivery_profile: Some("ordered".to_string()),
+            audio_window: Some(crate::core::descriptors::AudioWindowContract::Declaration(
+                crate::core::descriptors::AudioWindowContractDeclaredValues {
+                    sample_rate: 48_000,
+                    channels: None,
+                    dtype: "f32".to_string(),
+                    window_size: 960,
+                    hop: 960,
+                },
+            )),
+        };
+        let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+
+        assert_eq!(
+            json["audio_window"],
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 48_000,
+                "channels": "source",
+                "dtype": "f32",
+                "window_size": 960,
+                "hop": 960,
+            })
+        );
+        assert_renders_exactly(&json, &PORT_INFO_WITH_A_CONTRACT_KEYS);
     }
 
     #[test]
