@@ -216,8 +216,8 @@ impl EncodedPacketToAudioBlockDecoder {
 /// Per-channel sample offset as nanoseconds at Opus's rate, in integer
 /// rational arithmetic widened so a long run cannot overflow the multiply.
 fn timestamp_offset_ns_for(samples_emitted_since_anchor: u64) -> i64 {
-    (u128::from(samples_emitted_since_anchor) * 1_000_000_000u128
-        / u128::from(OPUS_SAMPLE_RATE_HZ)) as i64
+    (u128::from(samples_emitted_since_anchor) * 1_000_000_000u128 / u128::from(OPUS_SAMPLE_RATE_HZ))
+        as i64
 }
 
 fn mint_decoder_for_packet(
@@ -293,8 +293,7 @@ mod tests {
         for sample in 0..total_samples {
             for channel in 0..channels {
                 let hz = 220.0 * (channel as f32 + 1.0);
-                let phase =
-                    sample as f32 * hz * std::f32::consts::TAU / OPUS_SAMPLE_RATE_HZ as f32;
+                let phase = sample as f32 * hz * std::f32::consts::TAU / OPUS_SAMPLE_RATE_HZ as f32;
                 interleaved.push(0.4 * phase.sin());
             }
         }
@@ -365,11 +364,7 @@ mod tests {
                 .packets
                 .push((packet.clone(), window.first_sample_timestamp_ns));
             if let Some(block) = decoder
-                .decode_one_arriving_packet(
-                    &packet,
-                    window.first_sample_timestamp_ns,
-                    DECODER_NAME,
-                )
+                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns, DECODER_NAME)
                 .expect("decodes")
             {
                 round_trip
@@ -449,8 +444,8 @@ mod tests {
         // stamp of the packet whose input it actually holds.
         let mut emitted_so_far = 0i64;
         for (block_index, block) in round_trip.blocks.iter().enumerate() {
-            let expected =
-                anchor_ns + emitted_so_far * NANOSECONDS_PER_SECOND / i64::from(OPUS_SAMPLE_RATE_HZ);
+            let expected = anchor_ns
+                + emitted_so_far * NANOSECONDS_PER_SECOND / i64::from(OPUS_SAMPLE_RATE_HZ);
             assert_eq!(
                 block.first_sample_timestamp_ns, expected,
                 "block {block_index} is stamped from the anchor, not from a clock"
@@ -579,6 +574,9 @@ mod tests {
             .expect_err("refused")
             .to_string();
         assert!(refusal.contains("12"), "names the count: {refusal}");
-        assert!(refusal.contains(DECODER_NAME), "names the processor: {refusal}");
+        assert!(
+            refusal.contains(DECODER_NAME),
+            "names the processor: {refusal}"
+        );
     }
 }

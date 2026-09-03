@@ -41,8 +41,7 @@ use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::encoded_stream_ordering::{ArrivingEncodedBagDisposition, EncodedStreamSyncPointGate};
 use crate::encoded_video_frame::{
-    EncodedVideoCodec,
-    EncodedVideoFrame, read_encoded_video_frame_bag,
+    EncodedVideoCodec, EncodedVideoFrame, read_encoded_video_frame_bag,
 };
 use crate::h273_color_vui_translation::h273_color_vui_to_color_info;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
@@ -171,9 +170,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         tracing::info!(
             frames_decoded = self.frames_decoded,
             frames_lost_to_gaps = self.sync_point_gate.bags_lost_to_gaps(),
-            frames_discarded_awaiting_a_sync_point = self
-                .sync_point_gate
-                .bags_discarded_awaiting_a_sync_point(),
+            frames_discarded_awaiting_a_sync_point =
+                self.sync_point_gate.bags_discarded_awaiting_a_sync_point(),
             "{}: teardown",
             Identity::PROCESSOR_NAME
         );
@@ -329,9 +327,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 group_index = encoded_frame.group_index,
                 stream_re_entries,
                 frames_lost_to_gaps = self.sync_point_gate.bags_lost_to_gaps(),
-                frames_discarded_awaiting_a_sync_point = self
-                    .sync_point_gate
-                    .bags_discarded_awaiting_a_sync_point(),
+                frames_discarded_awaiting_a_sync_point =
+                    self.sync_point_gate.bags_discarded_awaiting_a_sync_point(),
                 "{}: entering the stream at a sync point",
                 Identity::PROCESSOR_NAME
             );

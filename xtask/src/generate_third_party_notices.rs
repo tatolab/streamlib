@@ -37,8 +37,8 @@
 //! `unlicensed`.
 
 use anyhow::{Context, Result};
-use std::fmt::Write as _;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 /// Generated at the workspace root, and reached from the wheel and the SDK

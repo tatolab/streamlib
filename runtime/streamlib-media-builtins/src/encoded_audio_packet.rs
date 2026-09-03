@@ -41,10 +41,7 @@ mod bitstream_as_msgpack_bin {
     use serde::de::{Error, Visitor};
     use serde::{Deserializer, Serializer};
 
-    pub(super) fn serialize<S: Serializer>(
-        bytes: &[u8],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_bytes(bytes)
     }
 
@@ -264,10 +261,7 @@ mod tests {
         let wire_bytes = rmp_serde::to_vec_named(&an_encoded_packet()).expect("msgpack serialize");
         let entries = decode_msgpack_named_map_entries(&wire_bytes);
 
-        let keys: Vec<&str> = entries
-            .iter()
-            .filter_map(|(key, _)| key.as_str())
-            .collect();
+        let keys: Vec<&str> = entries.iter().filter_map(|(key, _)| key.as_str()).collect();
         assert_eq!(
             keys,
             vec![
@@ -299,10 +293,7 @@ mod tests {
             matches!(bitstream, rmpv::Value::Binary(_)),
             "an Opus packet is msgpack `bin`, never an array of numbers — got {bitstream:?}"
         );
-        assert_eq!(
-            bitstream.as_slice(),
-            Some(&[0x78u8, 0x01, 0x02, 0x03][..])
-        );
+        assert_eq!(bitstream.as_slice(), Some(&[0x78u8, 0x01, 0x02, 0x03][..]));
     }
 
     #[test]
@@ -327,7 +318,10 @@ mod tests {
                 Some(codec.as_wire_str()),
                 "the serde rename and `as_wire_str` are one spelling, not two"
             );
-            assert_eq!(EncodedAudioCodec::from_wire_str(codec.as_wire_str()), Some(codec));
+            assert_eq!(
+                EncodedAudioCodec::from_wire_str(codec.as_wire_str()),
+                Some(codec)
+            );
         }
     }
 
@@ -442,10 +436,7 @@ mod tests {
         .map(|(key, value)| match key.as_str() {
             Some("bitstream") => (
                 key,
-                rmpv::Value::Array(vec![
-                    rmpv::Value::from(0x78),
-                    rmpv::Value::from(0x01),
-                ]),
+                rmpv::Value::Array(vec![rmpv::Value::from(0x78), rmpv::Value::from(0x01)]),
             ),
             _ => (key, value),
         })

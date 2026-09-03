@@ -200,10 +200,7 @@ mod tests {
             gate.admit(9, true),
             ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint
         );
-        assert_eq!(
-            gate.admit(10, false),
-            ArrivingEncodedBagDisposition::Decode
-        );
+        assert_eq!(gate.admit(10, false), ArrivingEncodedBagDisposition::Decode);
         assert_eq!(gate.bags_discarded_awaiting_a_sync_point(), 2);
         // Contiguous arrivals are not loss, however late the join was.
         assert_eq!(gate.bags_lost_to_gaps(), 0);
@@ -219,10 +216,7 @@ mod tests {
             gate.admit(0, true),
             ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint
         );
-        assert_eq!(
-            gate.admit(1, false),
-            ArrivingEncodedBagDisposition::Decode
-        );
+        assert_eq!(gate.admit(1, false), ArrivingEncodedBagDisposition::Decode);
 
         // 2 and 3 were overwritten in the ring; 4 is a non-sync-point.
         assert_eq!(
@@ -237,10 +231,7 @@ mod tests {
             gate.admit(6, true),
             ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint
         );
-        assert_eq!(
-            gate.admit(7, false),
-            ArrivingEncodedBagDisposition::Decode
-        );
+        assert_eq!(gate.admit(7, false), ArrivingEncodedBagDisposition::Decode);
 
         assert_eq!(gate.bags_lost_to_gaps(), 2);
         assert_eq!(gate.bags_discarded_awaiting_a_sync_point(), 2);
@@ -273,10 +264,7 @@ mod tests {
             gate.admit(0, true),
             ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint
         );
-        assert_eq!(
-            gate.admit(1, false),
-            ArrivingEncodedBagDisposition::Decode
-        );
+        assert_eq!(gate.admit(1, false), ArrivingEncodedBagDisposition::Decode);
         assert_eq!(
             gate.admit(1, false),
             ArrivingEncodedBagDisposition::DiscardUntilTheNextSyncPoint
@@ -348,10 +336,7 @@ mod tests {
             gate.admit(0, true),
             ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint
         );
-        assert_eq!(
-            gate.admit(1, false),
-            ArrivingEncodedBagDisposition::Decode
-        );
+        assert_eq!(gate.admit(1, false), ArrivingEncodedBagDisposition::Decode);
         gate.break_continuity();
         assert_eq!(
             gate.admit(2, false),

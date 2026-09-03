@@ -29,9 +29,9 @@ use streamlib::sdk::error::{Error, Result};
 use crate::audio_block::{AudioBlock, AudioSampleDtype};
 use crate::encoded_audio_packet::{EncodedAudioCodec, EncodedAudioPacket};
 use crate::encoded_stream_ordering::EncodedStreamOrderingPairCounter;
-use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 #[cfg(test)]
 use crate::opus_stream_layout::HIGHEST_CHANNEL_COUNT_OPUS_PLACES;
+use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 
 /// Opus's own clock. Every packet is stamped in it whatever the source rate
 /// was, and the input port's window contract resamples to it.
@@ -128,7 +128,9 @@ impl MintedOpusEncoderInstance {
                 Error::Runtime(format!("libopus would not report its lookahead: {failure}"))
             })?;
         u32::try_from(lookahead).map_err(|_| {
-            Error::Runtime(format!("libopus reported a negative lookahead of {lookahead}"))
+            Error::Runtime(format!(
+                "libopus reported a negative lookahead of {lookahead}"
+            ))
         })
     }
 
@@ -136,7 +138,9 @@ impl MintedOpusEncoderInstance {
     /// minted instance.
     fn apply_settings(&mut self, config: &OpusEncoderConfig, processor_name: &str) -> Result<()> {
         let named = |what: &str, failure: opus::Error| {
-            Error::Runtime(format!("{processor_name}: libopus refused {what}: {failure}"))
+            Error::Runtime(format!(
+                "{processor_name}: libopus refused {what}: {failure}"
+            ))
         };
         if let Some(bitrate_bps) = config.bitrate_bps {
             let bitrate_bps = i32::try_from(bitrate_bps).map_err(|_| {
@@ -435,11 +439,17 @@ mod tests {
                 .expect("encodes")
                 .expect("publishes a packet");
 
-            assert_eq!(packet.channels, channels, "the packet carries the source's count");
+            assert_eq!(
+                packet.channels, channels,
+                "the packet carries the source's count"
+            );
             assert_eq!(packet.sample_rate, OPUS_SAMPLE_RATE_HZ);
             assert_eq!(packet.sample_count, WINDOW_SAMPLE_COUNT);
             assert_eq!(packet.codec, EncodedAudioCodec::Opus);
-            assert!(packet.is_sync_point, "every Opus packet is a decode entry point");
+            assert!(
+                packet.is_sync_point,
+                "every Opus packet is a decode entry point"
+            );
             assert!(!packet.opus_packet_bytes.is_empty());
         }
     }
@@ -494,7 +504,10 @@ mod tests {
             "every packet declares the count its own window arrived with"
         );
         assert_eq!(
-            published.iter().map(|p| p.sequence_index).collect::<Vec<_>>(),
+            published
+                .iter()
+                .map(|p| p.sequence_index)
+                .collect::<Vec<_>>(),
             vec![0, 1, 2, 3, 4],
             "the counter belongs to the encoder, not the instance, so a re-mint is not a restart"
         );
@@ -515,7 +528,10 @@ mod tests {
             .expect_err("refused")
             .to_string();
         assert!(refusal.contains('9'), "names the count: {refusal}");
-        assert!(refusal.contains(PROCESSOR_NAME), "names the processor: {refusal}");
+        assert!(
+            refusal.contains(PROCESSOR_NAME),
+            "names the processor: {refusal}"
+        );
 
         // Latched: a `reactive` processor cannot reach `Error`, so the
         // alternative to discarding is the same refusal logged per dispatch
@@ -549,7 +565,10 @@ mod tests {
             .encode_one_window(&config, &short_payload, PROCESSOR_NAME)
             .expect_err("refused")
             .to_string();
-        assert!(refusal.contains("64"), "names the length it was handed: {refusal}");
+        assert!(
+            refusal.contains("64"),
+            "names the length it was handed: {refusal}"
+        );
 
         let mut wrong_dtype = a_window_of(2, 0);
         wrong_dtype.dtype = AudioSampleDtype::I16;
@@ -566,7 +585,10 @@ mod tests {
             .encode_one_window(&config, &wrong_rate, PROCESSOR_NAME)
             .expect_err("refused")
             .to_string();
-        assert!(refusal.contains("44100"), "names the rate it was handed: {refusal}");
+        assert!(
+            refusal.contains("44100"),
+            "names the rate it was handed: {refusal}"
+        );
     }
 
     #[test]

@@ -10,8 +10,8 @@
 //! pool, texture cache, present target — never private engine guts.
 
 pub mod audio_block;
-pub mod audio_window_to_encoded_packet_encoder;
 pub(crate) mod audio_samples_awaiting_playback_ring;
+pub mod audio_window_to_encoded_packet_encoder;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
@@ -58,26 +58,23 @@ pub mod video_frame;
 mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
+pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 #[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
 #[cfg(target_os = "linux")]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
-#[cfg(target_os = "linux")]
-pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
-pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
-pub use opus_decoder::OpusDecoder;
-pub use opus_encoder::OpusEncoder;
 pub use encoded_audio_packet::{
     EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
     read_encoded_audio_packet_bag,
 };
+#[cfg(target_os = "linux")]
+pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 pub use encoded_stream_ordering::{
     ArrivingEncodedBagDisposition, EncodedStreamOrderingPair, EncodedStreamOrderingPairCounter,
     EncodedStreamSyncPointGate,
 };
 pub use encoded_video_frame::{
-    EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal,
-    read_encoded_video_frame_bag,
+    EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal, read_encoded_video_frame_bag,
 };
 #[cfg(target_os = "linux")]
 pub use h264_decoder::H264Decoder;
@@ -88,6 +85,8 @@ pub use h265_decoder::H265Decoder;
 #[cfg(target_os = "linux")]
 pub use h265_encoder::H265Encoder;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
+pub use opus_decoder::OpusDecoder;
+pub use opus_encoder::OpusEncoder;
 pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 #[cfg(target_os = "linux")]
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
