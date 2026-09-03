@@ -72,12 +72,14 @@ pub(crate) struct PythonH265EncoderBlock;
 pub(crate) struct PythonH265DecoderBlock;
 
 /// `streamlib.OpusEncoder` — 20 ms windows of audio to Opus
-/// encoded-audio-packet bags via libopus.
+/// encoded-audio-packet bags via statically linked libopus, on every
+/// platform the wheel builds for.
 #[pyclass(name = "OpusEncoder", module = "streamlib", frozen)]
 pub(crate) struct PythonOpusEncoderBlock;
 
 /// `streamlib.OpusDecoder` — Opus encoded-audio-packet bags to decoded
-/// audio blocks via libopus.
+/// audio blocks via statically linked libopus, on every platform the wheel
+/// builds for.
 #[pyclass(name = "OpusDecoder", module = "streamlib", frozen)]
 pub(crate) struct PythonOpusDecoderBlock;
 
