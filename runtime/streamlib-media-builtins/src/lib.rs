@@ -42,6 +42,8 @@ pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
+pub mod opus_decoder;
+pub mod opus_encoder;
 pub mod opus_stream_layout;
 pub mod pooled_rgba_frame_staging;
 pub(crate) mod processor_thread_join;
@@ -63,6 +65,8 @@ pub use display_window::{DisplayWindow, DisplayWindowConfig};
 #[cfg(target_os = "linux")]
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
+pub use opus_decoder::OpusDecoder;
+pub use opus_encoder::OpusEncoder;
 pub use encoded_audio_packet::{
     EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
     read_encoded_audio_packet_bag,
@@ -100,6 +104,8 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
     PROCESSOR_REGISTRY.register::<microphone_source::MicrophoneSource::Processor>();
     PROCESSOR_REGISTRY.register::<speaker_sink::SpeakerSink::Processor>();
+    PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
+    PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(target_os = "linux")]
