@@ -51,8 +51,10 @@ SHORTEST_CREDIBLE_TRACK_SECONDS = 1.0
 # between two helper processes, which is milliseconds.
 WIDEST_CREDIBLE_DISAGREEMENT_BETWEEN_THE_TRACKS_SECONDS = 1.0
 
-# The recording cannot outlast the run that wrote it; the slack covers the
-# publishing lead the source runs at and the last fragment teardown closes.
+# The recording cannot outlast the process that wrote it. The clock below
+# starts before the app is spawned, so the only thing this slack has to cover
+# is the source's own publishing lead — it runs ahead of the monotonic clock,
+# so the last stamp it wrote can name an instant a little past now.
 SLACK_OVER_THE_OBSERVED_RUN_SECONDS = 2.0
 
 
@@ -165,9 +167,12 @@ def test_two_sources_record_two_tracks_named_after_their_producers(
     gives, which is the open fragment closed and every track's duration whole.
     """
     recording_path = tmp_path / "recording.mp4"
+    # Before the spawn, not after the readiness marker: the sink opens the file
+    # in `setup()`, which is over by the time that marker lands, so a clock
+    # started there would under-measure the run it is bounding the file against.
+    run_started_at = time.monotonic()
     app = start_app_under_test(MP4_SINK_APP, "--path", str(recording_path))
     app.await_marker("EVERY_PROCESSOR_RUNNING")
-    recording_started_at = time.monotonic()
 
     named_tracks = RECORDED_TRACK_NAMES.findall(app.output)
     assert named_tracks, f"the app never named its tracks; output:\n{app.output}"
@@ -192,7 +197,7 @@ def test_two_sources_record_two_tracks_named_after_their_producers(
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
-    observed_run_seconds = time.monotonic() - recording_started_at
+    observed_run_seconds = time.monotonic() - run_started_at
 
     recorded = inspect_recording(mp4_inspect_binary, recording_path)
     assert recorded is not None, f"{recording_path} did not parse after a clean stop"

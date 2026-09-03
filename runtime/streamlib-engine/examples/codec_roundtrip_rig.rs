@@ -75,10 +75,10 @@ mod linux_rig {
     use streamlib::sdk::media_clock::MediaClock;
     use streamlib::sdk::processors::ContinuousProcessor;
     use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
+    use streamlib_media_builtins::mp4_annex_b_access_unit::NAL_UNIT_LENGTH_PREFIX_BYTES;
     use streamlib_media_builtins::video_frame::{
         ColorInfo, Primaries, Range, Transfer, VideoFrame,
     };
-    use streamlib_media_builtins::mp4_annex_b_access_unit::NAL_UNIT_LENGTH_PREFIX_BYTES;
     use streamlib_media_builtins::{
         CameraSource, DisplayWindow, EncodedVideoCodec, EncodedVideoFrame, H264Decoder,
         H264Encoder, H265Decoder, H265Encoder, register_media_builtin_processor_types,
@@ -413,12 +413,12 @@ mod linux_rig {
     const RECORDED_MP4_SOURCE_PREFIX: &str = "mp4:";
 
     /// The Annex-B start code every NAL unit is re-prefixed with on the way
-    /// out of a sample. Four bytes rather than three because that is what the
-    /// encoder emitted and what the decoder was proven against.
+    /// out of a sample. Three and four bytes are both legal and a decoder
+    /// reads either (ITU-T H.264 Annex B), so the width here is free.
     const ANNEX_B_START_CODE: [u8; 4] = [0, 0, 0, 1];
 
-    /// `sample_is_non_sync_sample`, ISO/IEC 14496-12 §8.8.3.1. A sample entry
-    /// without it set is a sync sample.
+    /// `sample_is_non_sync_sample`, ISO/IEC 14496-12 §8.8.3.1. A sample whose
+    /// flags leave it clear is a sync sample.
     const SAMPLE_FLAG_IS_NON_SYNC_SAMPLE: u32 = 0x0001_0000;
 
     /// One access unit read back out of a recording, already in the Annex-B
@@ -428,19 +428,18 @@ mod linux_rig {
         is_sync_point: bool,
     }
 
-    /// A recording's video track, demuxed into the bags a decoder reads.
+    /// A recording's video track: what its sample entry describes, and the
+    /// access units that were stored under it.
     struct RecordedVideoTrackReplay {
-        codec: EncodedVideoCodec,
-        /// The coded extent the sample entry states — before the conformance
-        /// crop, as an encoded frame's own `width`/`height` are.
-        coded_width: u32,
-        coded_height: u32,
+        sample_entry: RecordedVideoSampleEntry,
         access_units: Vec<ReplayableAccessUnit>,
     }
 
     /// What a track's sample entry says about the elementary stream inside it.
     struct RecordedVideoSampleEntry {
         codec: EncodedVideoCodec,
+        /// The coded extent — before the conformance crop, as an encoded
+        /// frame's own `width`/`height` are.
         coded_width: u32,
         coded_height: u32,
         /// The parameter sets `avcC`/`hvcC` carries, in the order a decoder
@@ -602,7 +601,7 @@ mod linux_rig {
         is_sync_point: bool,
         recording_path: &str,
     ) -> Result<Vec<u8>> {
-        let mut access_unit = Vec::with_capacity(sample_bytes.len() + ANNEX_B_START_CODE.len());
+        let mut access_unit = Vec::with_capacity(sample_bytes.len());
         if is_sync_point {
             for parameter_set in &sample_entry.parameter_set_nal_units {
                 access_unit.extend_from_slice(&ANNEX_B_START_CODE);
@@ -652,26 +651,15 @@ mod linux_rig {
         let (moov, fragments) = read_moov_and_fragments(&file_bytes, recording_path)?;
         let (video_track_id, sample_entry) = read_video_sample_entry(&moov, recording_path)?;
 
-        // A `trun` entry may omit its size and inherit it: 14496-12 §8.8.7.1
-        // lets `tfhd` override §8.8.3.2's `trex`.
-        let default_sample_size_from_trex = moov
-            .mvex
-            .as_ref()
-            .and_then(|mvex| {
-                mvex.trex
-                    .iter()
-                    .find(|trex| trex.track_id == video_track_id)
-            })
-            .map(|trex| trex.default_sample_size);
-        let default_sample_flags_from_trex = moov
-            .mvex
-            .as_ref()
-            .and_then(|mvex| {
-                mvex.trex
-                    .iter()
-                    .find(|trex| trex.track_id == video_track_id)
-            })
-            .map(|trex| trex.default_sample_flags);
+        // A `trun` entry may omit its size or its flags and inherit them:
+        // 14496-12 §8.8.7.1 lets `tfhd` override §8.8.3.2's `trex`.
+        let track_defaults = moov.mvex.as_ref().and_then(|mvex| {
+            mvex.trex
+                .iter()
+                .find(|trex| trex.track_id == video_track_id)
+        });
+        let default_sample_size_from_trex = track_defaults.map(|trex| trex.default_sample_size);
+        let default_sample_flags_from_trex = track_defaults.map(|trex| trex.default_sample_flags);
 
         let mut access_units = Vec::new();
         for (moof_start, fragment) in &fragments {
@@ -683,7 +671,9 @@ mod linux_rig {
                 for run in &track_fragment.trun {
                     let mut at = i64::try_from(*moof_start)
                         .ok()
-                        .and_then(|start| start.checked_add(i64::from(run.data_offset.unwrap_or(0))))
+                        .and_then(|start| {
+                            start.checked_add(i64::from(run.data_offset.unwrap_or(0)))
+                        })
                         .and_then(|offset| usize::try_from(offset).ok())
                         .ok_or_else(|| {
                             Error::Runtime(format!(
@@ -741,9 +731,7 @@ mod linux_rig {
             )));
         }
         Ok(RecordedVideoTrackReplay {
-            codec: sample_entry.codec,
-            coded_width: sample_entry.coded_width,
-            coded_height: sample_entry.coded_height,
+            sample_entry,
             access_units,
         })
     }
@@ -766,27 +754,25 @@ mod linux_rig {
     impl ContinuousProcessor for RecordedMp4TrackReplaySource::Processor {
         fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             let replay = demux_recorded_video_track(&self.config.recording_path)?;
-            if replay.codec.as_wire_str() != self.config.expected_codec {
+            let recorded_codec = replay.sample_entry.codec.as_wire_str();
+            if recorded_codec != self.config.expected_codec {
                 return Err(Error::Runtime(format!(
-                    "RecordedMp4TrackReplaySource: {} holds a `{}` track and this run wired the \
-                     `{}` decoder — run the arm with `--codec {}`",
-                    self.config.recording_path,
-                    replay.codec.as_wire_str(),
-                    self.config.expected_codec,
-                    replay.codec.as_wire_str(),
+                    "RecordedMp4TrackReplaySource: {} holds a `{recorded_codec}` track and this \
+                     run wired the `{}` decoder — run the arm with `--codec {recorded_codec}`",
+                    self.config.recording_path, self.config.expected_codec,
                 )));
             }
             tracing::info!(
                 recording = self.config.recording_path,
-                codec = replay.codec.as_wire_str(),
+                codec = recorded_codec,
                 access_units = replay.access_units.len(),
                 sync_points = replay
                     .access_units
                     .iter()
                     .filter(|access_unit| access_unit.is_sync_point)
                     .count(),
-                width = replay.coded_width,
-                height = replay.coded_height,
+                width = replay.sample_entry.coded_width,
+                height = replay.sample_entry.coded_height,
                 "RecordedMp4TrackReplaySource: recording demuxed"
             );
             self.replay = Some(replay);
@@ -814,15 +800,15 @@ mod linux_rig {
                 self.sync_points_published += 1;
             }
             let frame = EncodedVideoFrame {
-                codec: replay.codec,
+                codec: replay.sample_entry.codec,
                 annex_b_access_unit_bytes: access_unit.annex_b_access_unit_bytes.clone(),
                 is_sync_point: access_unit.is_sync_point,
                 // The first access unit is a sync point, so the first group is
                 // zero and the count is one ahead of the index.
                 group_index: self.sync_points_published.saturating_sub(1),
                 sequence_index: self.access_units_published as u64,
-                width: replay.coded_width,
-                height: replay.coded_height,
+                width: replay.sample_entry.coded_width,
+                height: replay.sample_entry.coded_height,
                 // The re-prepended SPS carries the VUI the encoder minted, and
                 // a parsed VUI outranks a producer's attestation — so stating
                 // one here could only disagree with the bitstream.
@@ -985,18 +971,19 @@ mod linux_rig {
                 }),
                 Some("camera"),
             )?,
-            RoundTripSourceArm::RecordedMp4File { recording_path } => app
-                .add_local::<RecordedMp4TrackReplaySource::Processor>(
-                RecordedMp4TrackReplaySourceConfig {
-                    recording_path: recording_path.clone(),
-                    expected_codec: arguments
-                        .codec_arm
-                        .encoded_video_codec()
-                        .as_wire_str()
-                        .to_string(),
-                },
-                Some("mp4_replay"),
-            )?,
+            RoundTripSourceArm::RecordedMp4File { recording_path } => {
+                app.add_local::<RecordedMp4TrackReplaySource::Processor>(
+                    RecordedMp4TrackReplaySourceConfig {
+                        recording_path: recording_path.clone(),
+                        expected_codec: arguments
+                            .codec_arm
+                            .encoded_video_codec()
+                            .as_wire_str()
+                            .to_string(),
+                    },
+                    Some("mp4_replay"),
+                )?
+            }
         };
         let (encoder_class_import_path, decoder_class_import_path) =
             arguments.codec_arm.encoder_and_decoder_class_import_paths();
