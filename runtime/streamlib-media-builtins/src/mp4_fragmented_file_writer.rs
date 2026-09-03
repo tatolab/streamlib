@@ -24,7 +24,7 @@ use mp4_atom::{
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
 
-use crate::encoded_audio_packet::read_encoded_audio_packet_bag;
+use crate::encoded_audio_packet::{EncodedAudioCodec, read_encoded_audio_packet_bag};
 use crate::encoded_video_frame::{EncodedVideoCodec, read_encoded_video_frame_bag};
 use crate::mp4_annex_b_access_unit::{
     AnnexBNalHeaderGrammar, ParameterSetsFromAnnexBAccessUnit, length_prefix_annex_b_access_unit,
@@ -40,6 +40,11 @@ pub const VIDEO_TRACK_TIMESCALE_HZ: u32 = 1_000_000_000;
 
 /// How long a fragment runs when no video track is wired to pace it.
 const AUDIO_ONLY_FRAGMENT_SPAN_NS: i64 = 1_000_000_000;
+
+/// A `mdat` header is the 32-bit size and the four-character code; `mp4-atom`
+/// refuses a box past `u32::MAX` rather than promoting to a 64-bit largesize,
+/// so this is exact for every box this writer emits.
+const MDAT_BOX_HEADER_BYTES: usize = 8;
 
 /// `sample_depends_on = 2` (an I-picture), `sample_is_non_sync_sample = 0`.
 const SAMPLE_FLAGS_SYNC: u32 = 0x0200_0000;
@@ -64,7 +69,7 @@ impl Mp4TrackMedia {
     fn wire_name(self) -> &'static str {
         match self {
             Self::Video(codec) => codec.as_wire_str(),
-            Self::Audio => "opus",
+            Self::Audio => EncodedAudioCodec::Opus.as_wire_str(),
         }
     }
 
@@ -153,9 +158,11 @@ impl Mp4TrackFromInboundLink {
     /// track that stops appearing is a legal file needing no extra machinery —
     /// which is why one microphone's format change must not end two cameras'
     /// recording.
-    fn latch(&mut self, refusal: String) {
+    /// Returns whether this call is what latched it, so the tally counts a
+    /// track once however many refusals it goes on to meet.
+    fn latch(&mut self, refusal: String) -> bool {
         if self.latched_refusal.is_some() {
-            return;
+            return false;
         }
         tracing::error!(
             inbound_link_name = %self.inbound_link_name,
@@ -165,6 +172,7 @@ impl Mp4TrackFromInboundLink {
         self.latched_refusal = Some(refusal);
         self.samples_awaiting_fragment.clear();
         self.held_back_video_sample = None;
+        true
     }
 
     fn is_latched(&self) -> bool {
@@ -186,7 +194,6 @@ pub struct Mp4SinkRunTally {
 pub struct Mp4FragmentedFileWriter<W: Write> {
     sink: W,
     tracks: Vec<Mp4TrackFromInboundLink>,
-    epoch_ns: Option<i64>,
     header_already_written: bool,
     next_fragment_sequence_number: u32,
     open_fragment_started_at_ns: Option<i64>,
@@ -204,11 +211,17 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         Self {
             sink,
             tracks,
-            epoch_ns: None,
             header_already_written: false,
             next_fragment_sequence_number: 1,
             open_fragment_started_at_ns: None,
             tally: Mp4SinkRunTally::default(),
+        }
+    }
+
+    /// Stop one track and count it once.
+    fn latch_track(&mut self, track_index: usize, refusal: String) {
+        if self.tracks[track_index].latch(refusal) {
+            self.tally.tracks_latched += 1;
         }
     }
 
@@ -259,22 +272,38 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                  route: {decode_failure}"
             ))
         })?;
-        match peeked.codec.as_deref() {
-            Some("h264") | Some("h265") => {
-                self.accept_video_bag(track_index, bag_bytes, timestamp_ns)
-            }
-            Some("opus") => self.accept_audio_bag(track_index, bag_bytes, timestamp_ns),
-            other => {
-                let refusal = format!(
-                    "the bag on `{inbound_link_name}` names codec {} — a track is `h264`, \
-                     `h265` or `opus`, and a caption or data convention is its own rung",
-                    other.map(|c| format!("`{c}`")).unwrap_or("nothing".into())
-                );
-                self.tracks[track_index].latch(refusal);
-                self.tally.tracks_latched += 1;
-                Ok(())
-            }
+        let named_codec = peeked.codec.as_deref();
+        if named_codec
+            .and_then(EncodedVideoCodec::from_wire_str)
+            .is_some()
+        {
+            return self.accept_video_bag(track_index, bag_bytes, timestamp_ns);
         }
+        if named_codec
+            .and_then(EncodedAudioCodec::from_wire_str)
+            .is_some()
+        {
+            return self.accept_audio_bag(track_index, bag_bytes, timestamp_ns);
+        }
+        let track_kinds = EncodedVideoCodec::ALL
+            .iter()
+            .map(|codec| codec.as_wire_str())
+            .chain(
+                EncodedAudioCodec::ALL
+                    .iter()
+                    .map(|codec| codec.as_wire_str()),
+            )
+            .collect::<Vec<_>>()
+            .join("`, `");
+        let refusal = format!(
+            "the bag on `{inbound_link_name}` names codec {} — a track is one of \
+             `{track_kinds}`, and a caption or data convention is its own rung",
+            named_codec
+                .map(|codec| format!("`{codec}`"))
+                .unwrap_or("nothing".into())
+        );
+        self.latch_track(track_index, refusal);
+        Ok(())
     }
 
     fn accept_video_bag(
@@ -307,8 +336,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                          only in the one `moov` — there is no second entry to switch to",
                         self.tracks[track_index].inbound_link_name
                     );
-                    self.tracks[track_index].latch(refusal);
-                    self.tally.tracks_latched += 1;
+                    self.latch_track(track_index, refusal);
                     return Ok(());
                 }
                 Some(_) => {}
@@ -336,8 +364,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                                 Some(split.parameter_sets.clone());
                         }
                         Err(refusal) => {
-                            self.tracks[track_index].latch(refusal.to_string());
-                            self.tally.tracks_latched += 1;
+                            self.latch_track(track_index, refusal.to_string());
                             return Ok(());
                         }
                     }
@@ -405,8 +432,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                      (Opus-in-ISOBMFF §4.3.2) — there is no second sample entry to switch to",
                     self.tracks[track_index].inbound_link_name, packet.channels
                 );
-                self.tracks[track_index].latch(refusal);
-                self.tally.tracks_latched += 1;
+                self.latch_track(track_index, refusal);
                 return Ok(());
             }
             Some(_) => {}
@@ -421,8 +447,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                         self.tracks[track_index].committed_channel_count = Some(packet.channels);
                     }
                     Err(refusal) => {
-                        self.tracks[track_index].latch(refusal.to_string());
-                        self.tally.tracks_latched += 1;
+                        self.latch_track(track_index, refusal.to_string());
                         return Ok(());
                     }
                 }
@@ -462,8 +487,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                     committed.wire_name(),
                     media.wire_name()
                 );
-                self.tracks[track_index].latch(refusal);
-                self.tally.tracks_latched += 1;
+                self.latch_track(track_index, refusal);
                 false
             }
             Some(_) => true,
@@ -539,7 +563,6 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         else {
             return Ok(());
         };
-        self.epoch_ns = Some(epoch_ns);
 
         let mut header_bytes = Vec::new();
         Ftyp {
@@ -674,7 +697,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         let moof_bytes = sized.len();
 
         let mut data_offsets = BTreeMap::new();
-        let mut running = moof_bytes + Mdat::default_header_bytes();
+        let mut running = moof_bytes + MDAT_BOX_HEADER_BYTES;
         for &index in &contributing {
             data_offsets.insert(index, running as i32);
             running += self.tracks[index]
@@ -688,11 +711,17 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         let mut fragment_bytes = Vec::new();
         moof.encode(&mut fragment_bytes)
             .map_err(box_write_failure)?;
-        debug_assert_eq!(
-            fragment_bytes.len(),
-            moof_bytes,
-            "replacing a placeholder offset must not move the box"
-        );
+        if fragment_bytes.len() != moof_bytes {
+            // Every `trun.data_offset` is `Some`, so it encodes as four bytes
+            // whatever its value and pass two cannot move. If that ever stops
+            // holding, every sample offset in the fragment is wrong and the
+            // file is silently unplayable — worth one `usize` compare.
+            return Err(Error::Runtime(format!(
+                "Mp4Sink: the fragment moved between sizing and writing ({moof_bytes} then {} \
+                 bytes), so every sample offset in it would be wrong",
+                fragment_bytes.len()
+            )));
+        }
 
         let mut media_data = Vec::new();
         for &index in &contributing {
@@ -799,18 +828,20 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         }
         self.close_open_fragment()?;
         self.sink.flush()?;
+        // The tally cannot say *which* link misbehaved, and that is the only
+        // thing an operator can act on.
+        for track in &self.tracks {
+            if track.bags_dropped_out_of_order > 0 || track.bags_discarded_after_latch > 0 {
+                tracing::info!(
+                    inbound_link_name = %track.inbound_link_name,
+                    bags_dropped_out_of_order = track.bags_dropped_out_of_order,
+                    bags_discarded_after_latch = track.bags_discarded_after_latch,
+                    latched_refusal = ?track.latched_refusal,
+                    "Mp4Sink: this link did not record everything it sent"
+                );
+            }
+        }
         Ok(self.tally)
-    }
-}
-
-/// A `mdat` header is the 32-bit size and the four-character code.
-trait MdatHeaderBytes {
-    fn default_header_bytes() -> usize;
-}
-
-impl MdatHeaderBytes for Mdat {
-    fn default_header_bytes() -> usize {
-        8
     }
 }
 
@@ -1521,7 +1552,11 @@ mod tests {
             .accept_bag("captions/text", &caption_shaped_bag, 0)
             .expect("the refusal is a latch");
         writer
-            .accept_bag("camera/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
             .expect("accepted");
         writer
             .accept_bag(
@@ -1530,7 +1565,9 @@ mod tests {
                 ONE_VIDEO_FRAME_NS,
             )
             .expect("accepted");
-        let tally = writer.finish().expect("the header lands despite the latched link");
+        let tally = writer
+            .finish()
+            .expect("the header lands despite the latched link");
 
         assert_eq!(tally.tracks_latched, 1);
         let atoms = parse_written_atoms(&file).expect("re-parses");
