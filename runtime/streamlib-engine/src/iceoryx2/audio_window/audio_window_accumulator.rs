@@ -77,7 +77,8 @@ pub(crate) struct LatestQueuedSourceAudioFormat {
 
 impl LatestQueuedSourceAudioFormat {
     pub(crate) fn record(&self, format: SourceAudioFormat) {
-        self.sample_rate.store(format.sample_rate, Ordering::Relaxed);
+        self.sample_rate
+            .store(format.sample_rate, Ordering::Relaxed);
         self.channels.store(format.channels, Ordering::Relaxed);
     }
 
@@ -121,10 +122,7 @@ enum AudioWindowRateConversion {
 }
 
 impl AudioWindowRateConversion {
-    fn build(
-        inputs: RateConversionInputs,
-        contract_sample_rate: u32,
-    ) -> Result<Self> {
+    fn build(inputs: RateConversionInputs, contract_sample_rate: u32) -> Result<Self> {
         if inputs.source_sample_rate == contract_sample_rate {
             return Ok(AudioWindowRateConversion::RatesAlreadyAgree);
         }
@@ -298,9 +296,10 @@ impl AudioWindowAccumulator {
             self.flush("the source changed format mid-stream");
         }
         self.source_format = Some(arriving);
+        let channels_windows_are_emitted_in = self.contract.channels.unwrap_or(arriving.channels);
         self.build_the_rate_conversion_if_its_inputs_are_new(RateConversionInputs {
             source_sample_rate: arriving.sample_rate,
-            channels_converted: self.contract.channels.unwrap_or(arriving.channels),
+            channels_converted: channels_windows_are_emitted_in,
         })?;
 
         let arrived_away_from_where_the_last_block_ended = self
@@ -327,7 +326,7 @@ impl AudioWindowAccumulator {
             Some(block.first_sample_timestamp_ns + block_duration_ns);
         self.gap_tolerance_ns = block_duration_ns / 2;
 
-        self.push_whole_chunks_through_the_rate_conversion()
+        self.push_whole_chunks_through_the_rate_conversion(channels_windows_are_emitted_in)
     }
 
     /// The next full window, encoded as an ordinary audio-block bag, with the
@@ -452,15 +451,17 @@ impl AudioWindowAccumulator {
         if self.holds_a_full_window() {
             return true;
         }
-        // Building the conversion from the rate the mailbox last saw is what
+        // Building the conversion from the format the mailbox last saw is what
         // makes the floor exact rather than worst-case on the first question,
         // before any bag has been consumed. It costs one construction, reused
-        // by the read that follows, and touches nothing a run depends on.
+        // by the read that follows, and touches nothing a run depends on. The
+        // channel count is part of that format because a contract declaring
+        // none resamples across the source's own.
         //
         // Only between runs: mid-run the conversion is already built for the
-        // rate the run is on, and a queued bag announcing a new one is a format
-        // change for `accept` to flush — rebuilding here would throw away the
-        // filter state and the remainder a reader is still owed.
+        // format the run is on, and a queued bag announcing a new one is a
+        // format change for `accept` to flush — rebuilding here would throw
+        // away the filter state and the remainder a reader is still owed.
         let latest_queued = self.latest_queued_source_audio_format.read();
         if self.run_anchor_timestamp_ns.is_none()
             && let Some(queued) = latest_queued
@@ -669,10 +670,14 @@ impl AudioWindowAccumulator {
 
     /// Run every whole chunk the staging buffer holds through the rate
     /// conversion, appending what survives priming to the windowable output.
-    fn push_whole_chunks_through_the_rate_conversion(&mut self) -> Result<()> {
-        // Called only from `accept`, which has just recorded the block's own
-        // format, so the count is known here whatever the contract declared.
-        let contract_channels = self.channels_windows_are_emitted_in().unwrap_or(1) as usize;
+    /// The count is passed in rather than re-derived: `accept` is the only
+    /// caller and has just settled it against the block it accepted, which is
+    /// also the count the conversion was built for.
+    fn push_whole_chunks_through_the_rate_conversion(
+        &mut self,
+        channels_windows_are_emitted_in: u32,
+    ) -> Result<()> {
+        let contract_channels = channels_windows_are_emitted_in as usize;
         let AudioWindowRateConversion::Resampled(resampler) = &mut self.rate_conversion else {
             let passed_through = std::mem::take(&mut self.channel_converted_source_scalars);
             self.windowable_output_scalars.extend(passed_through);

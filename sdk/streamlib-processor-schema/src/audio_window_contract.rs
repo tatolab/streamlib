@@ -89,10 +89,7 @@ pub struct AudioWindowContractDeclaredValues {
     /// arrived with, so a consumer reads `channels` off the block rather than
     /// assuming it. A consumer that needs a particular count — a model trained
     /// on mono — declares one and is converted to it.
-    #[serde(
-        default,
-        with = "channel_count_declared_or_following_the_source",
-    )]
+    #[serde(default, with = "channel_count_declared_or_following_the_source")]
     #[schemars(schema_with = "audio_window_channels_json_schema")]
     pub channels: Option<u32>,
     /// How to read the scalars an emitted window carries — `"f32"` or
@@ -227,7 +224,9 @@ mod channel_count_declared_or_following_the_source {
 fn audio_window_channels_json_schema(
     _: &mut schemars::r#gen::SchemaGenerator,
 ) -> schemars::schema::Schema {
-    use schemars::schema::{InstanceType, NumberValidation, Schema, SchemaObject, SubschemaValidation};
+    use schemars::schema::{
+        InstanceType, NumberValidation, Schema, SchemaObject, SubschemaValidation,
+    };
 
     let declared_count = Schema::Object(SchemaObject {
         instance_type: Some(InstanceType::Integer.into()),
@@ -490,7 +489,6 @@ mod tests {
         }
     }
 
-
     /// The rendering an absent count takes, spelled rather than omitted: a
     /// reader of `graph` learns the count follows the source instead of
     /// learning nothing.
@@ -519,16 +517,14 @@ mod tests {
 
     #[test]
     fn a_contract_following_the_source_round_trips_through_its_rendering() {
-        let following_the_source = AudioWindowContract::Declaration(
-            AudioWindowContractDeclaredValues {
+        let following_the_source =
+            AudioWindowContract::Declaration(AudioWindowContractDeclaredValues {
                 channels: None,
                 ..declared_values()
-            },
-        );
+            });
 
         let rendered = serde_json::to_string(&following_the_source).expect("serializes");
-        let read_back: AudioWindowContract =
-            serde_json::from_str(&rendered).expect("deserializes");
+        let read_back: AudioWindowContract = serde_json::from_str(&rendered).expect("deserializes");
 
         assert_eq!(read_back, following_the_source);
     }

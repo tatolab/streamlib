@@ -678,7 +678,8 @@ fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
 #[test]
 fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let (mut stage, format_the_mailbox_reports) = stage_and_the_format_its_mailbox_reports(contract);
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
     format_the_mailbox_reports.record(SourceAudioFormat {
         sample_rate: 16_000,
         channels: 1,
@@ -753,7 +754,8 @@ fn a_gap_hidden_in_the_queue_costs_one_empty_read_and_no_more() {
 #[test]
 fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
     let contract = contract(16_000, 1, "f32", 512, 512);
-    let (mut stage, format_the_mailbox_reports) = stage_and_the_format_its_mailbox_reports(contract);
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
     format_the_mailbox_reports.record(SourceAudioFormat {
         sample_rate: 16_000,
         channels: 1,
@@ -783,7 +785,8 @@ fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
 #[test]
 fn the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to() {
     let contract = contract(16_000, 1, "f32", 16_000, 160);
-    let (mut stage, format_the_mailbox_reports) = stage_and_the_format_its_mailbox_reports(contract);
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
     format_the_mailbox_reports.record(SourceAudioFormat {
         sample_rate: 48_000,
         channels: 1,
@@ -833,7 +836,11 @@ fn a_contract_declaring_no_channels_emits_the_sources_own_count() {
         windows.extend(drain_every_ready_window(&mut stage));
     }
 
-    assert_eq!(windows.len(), 8, "one 960-frame block is exactly one window");
+    assert_eq!(
+        windows.len(),
+        8,
+        "one 960-frame block is exactly one window"
+    );
     for window in &windows {
         assert_eq!(window.channels, 2, "the source's count, not a declared one");
         assert_eq!(window.sample_count, 960);
@@ -897,7 +904,10 @@ fn a_channel_free_contract_still_resamples_to_the_rate_it_declared() {
     }
 
     let windows = drain_every_ready_window(&mut stage);
-    assert!(!windows.is_empty(), "40 blocks make several 512-sample windows");
+    assert!(
+        !windows.is_empty(),
+        "40 blocks make several 512-sample windows"
+    );
     for window in &windows {
         assert_eq!(window.sample_rate, 16_000, "the declared rate is honoured");
         assert_eq!(window.channels, 2, "the source's count rode through it");

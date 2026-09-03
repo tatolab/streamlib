@@ -12,9 +12,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, PortDescriptor,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling,
+    AudioWindowContractDeclaredValues, PortDescriptor, ProcessorClassImportPath,
+    ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 
@@ -244,7 +243,7 @@ fn read_audio_window_contract(
 /// they left it to the source.
 ///
 /// The count is the one value a contract may omit, so an absent key is legal
-/// here where every other field's absence is refused.
+/// here where every other field's absence is refused by name.
 fn read_audio_window_channel_count(
     declaration: &Bound<'_, PyDict>,
     port_name: &str,
@@ -670,14 +669,58 @@ class AudioConsumer:
         );
     }
 
-    /// Every field of the contract names the port and the contract when it is
-    /// missing — none falls through to a bare `missing key`.
+    /// The count is the one value a marker may leave out, and the bridge must
+    /// carry the omission through rather than refuse it: a port that follows
+    /// its source is spelled by saying nothing.
     #[test]
-    fn a_marker_missing_any_contract_field_is_refused_naming_the_port_and_the_field() {
+    fn a_hand_built_marker_omitting_its_channel_count_follows_the_source() {
+        for spelling in [
+            "'resolved_from': 'declaration', 'sample_rate': 48000, 'dtype': 'f32', \
+             'window_size': 960, 'hop': 960",
+            "'resolved_from': 'declaration', 'sample_rate': 48000, 'channels': 'source', \
+             'dtype': 'f32', 'window_size': 960, 'hop': 960",
+        ] {
+            let declaration =
+                read_hand_built_marker(spelling).expect("an omitted count is a whole contract");
+
+            assert_eq!(
+                declaration.descriptor.inputs[0].audio_window,
+                Some(AudioWindowContract::Declaration(
+                    AudioWindowContractDeclaredValues {
+                        sample_rate: 48_000,
+                        channels: None,
+                        dtype: "f32".to_string(),
+                        window_size: 960,
+                        hop: 960,
+                    }
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn a_hand_built_marker_whose_channels_names_no_count_is_refused_offering_the_spelling() {
+        let refusal = hand_built_marker_refusal(
+            "'resolved_from': 'declaration', 'sample_rate': 48000, 'channels': 'stereo', \
+             'dtype': 'f32', 'window_size': 960, 'hop': 960",
+        );
+
+        assert!(
+            refusal.contains("channels") && refusal.contains("source"),
+            "the refusal must name the field and offer the spelling that works; got {refusal}"
+        );
+    }
+
+    /// Every field the contract requires names the port and the contract when
+    /// it is missing — none falls through to a bare `missing key`.
+    ///
+    /// `channels` is not among them: it is the one value a port may leave to
+    /// its source, and its own test below is that omitting it is *accepted*.
+    #[test]
+    fn a_marker_missing_any_required_contract_field_is_refused_naming_the_port_and_the_field() {
         for missing_field in [
             "resolved_from",
             "sample_rate",
-            "channels",
             "dtype",
             "window_size",
             "hop",

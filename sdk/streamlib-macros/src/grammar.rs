@@ -1290,7 +1290,6 @@ mod tests {
         );
     }
 
-
     /// The count is the one value a port may leave to whatever is upstream of
     /// it, so a graph can grow a source without every consumer being edited.
     #[test]

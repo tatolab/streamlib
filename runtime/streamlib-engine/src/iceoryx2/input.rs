@@ -33,8 +33,7 @@ use serde::de::DeserializeOwned;
 use super::audio_window::{
     AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream,
     DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
-    ResolvedAudioWindowContract,
-    queued_audio_window_frame_measure,
+    ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};

@@ -579,17 +579,15 @@ mod port_rendering_tests {
             description: String::new(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
-            audio_window: Some(
-                crate::core::descriptors::AudioWindowContract::Declaration(
-                    crate::core::descriptors::AudioWindowContractDeclaredValues {
-                        sample_rate: 48_000,
-                        channels: None,
-                        dtype: "f32".to_string(),
-                        window_size: 960,
-                        hop: 960,
-                    },
-                ),
-            ),
+            audio_window: Some(crate::core::descriptors::AudioWindowContract::Declaration(
+                crate::core::descriptors::AudioWindowContractDeclaredValues {
+                    sample_rate: 48_000,
+                    channels: None,
+                    dtype: "f32".to_string(),
+                    window_size: 960,
+                    hop: 960,
+                },
+            )),
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
 

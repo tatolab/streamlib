@@ -30,8 +30,8 @@ use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
 use crate::python_logging::monotonic_clock_now_ns;
-use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
+use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 
 /// One processor's links, as seen from Python.
 ///
@@ -788,6 +788,10 @@ fn channel_count_the_parent_wired(
     port_name: &str,
     declared: &Bound<'_, PyAny>,
 ) -> PyResult<Option<u32>> {
+    // A lookup that fails is an absent key, which is a port following its
+    // source. It cannot hide an envelope that is not a mapping at all: the
+    // caller reads `sample_rate` through `field` first, and that names the
+    // failure.
     let Ok(value) = declared.get_item("channels") else {
         return Ok(None);
     };
