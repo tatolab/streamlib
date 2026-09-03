@@ -53,6 +53,8 @@ __all__ = [
     "H265Decoder",
     "H265Encoder",
     "MicrophoneSource",
+    "OpusDecoder",
+    "OpusEncoder",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
@@ -237,6 +239,71 @@ class MicrophoneSource:
     cannot open raises rather than landing on a different device.
 
     Blocks arrive on the `audio` output as bags `streamlib.AudioBlock` casts.
+    """
+
+@final
+class OpusDecoder:
+    """Native built-in block: Opus encoded-audio-packet bags to decoded audio
+    blocks via libopus.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(OpusDecoder)`); it is never instantiated and its per-packet path
+    never enters the interpreter. There is no config.
+
+    Input `encoded_audio` (`ordered`) takes encoded-audio-packet bags in the
+    wire shape `OpusEncoder` publishes, and declares no window contract — an
+    encoded link carries whole packets, and reframing a compressed bitstream
+    is not a thing the stage could do. A bag the decoder cannot read is
+    refused by name: a `codec` other than `"opus"`, a `bitstream` that is not
+    msgpack bin, a `sample_rate` other than 48 000, or a `pre_skip` past the
+    5 760 samples one Opus packet can span. Output `audio` publishes ordinary
+    `streamlib.AudioBlock` bags — `f32` at 48 000 Hz in the packet's own
+    channel count.
+
+    It enters the stream at any packet, since every Opus packet is a sync
+    point, and trims the encoder's `pre_skip` lookahead at entry — so the
+    first block after entry is short by exactly that many samples and every
+    block after it spans the packet's full `sample_count`. Stamps are derived
+    from the entry packet's own stamp plus the samples emitted since, so the
+    first emitted sample is the stamped instant rather than one lookahead
+    later.
+
+    A `sequence_index` step other than one is a gap: the decoder resets,
+    re-enters at that packet, and logs how many it did not see. Nothing is
+    invented to bridge it — no concealment, no FEC decode — so the gap stays
+    derivable from the stamps either side.
+    """
+
+@final
+class OpusEncoder:
+    """Native built-in block: 20 ms windows of audio to Opus
+    encoded-audio-packet bags via libopus.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(OpusEncoder, config={"bitrate_bps": 96000})`); it is never
+    instantiated and its per-window path never enters the interpreter.
+
+    Input `audio` (`ordered`) declares
+    `audio_window(sample_rate=48000, dtype="f32", window_size=960, hop=960)`
+    and states no channel count, so the engine resamples to Opus's own clock,
+    converts to `f32` and frames into 20 ms windows while the count follows
+    whatever the source publishes — one microphone and one ambisonic rig
+    reach this encoder with nothing configured between them. One to eight
+    channels; more is refused by name. Output `encoded_audio` publishes
+    encoded-audio-packet bags: one Opus packet per bag, beside the codec,
+    ordering pair and stream format.
+
+    The libopus encoder is minted from the first window's channel count — one
+    or two channels as a single stream, three to eight as a multistream under
+    channel mapping family 1 — and re-mints when the source's count changes,
+    which libopus offers no other mechanism for. A re-mint costs prediction
+    state, not decodability, and `sequence_index` does not reset across it, so
+    a consumer still reads a gap as loss and never as a restart.
+
+    Config keys, both optional (`rt.add(OpusEncoder)` bare is legal):
+    `bitrate_bps` absent means libopus picks its own rate from the sample rate
+    and channel count; `application` is `"audio"`, `"voip"` or `"lowdelay"`,
+    absent meaning `"audio"`. In-band FEC and DTX are off and are not knobs.
     """
 
 @final
