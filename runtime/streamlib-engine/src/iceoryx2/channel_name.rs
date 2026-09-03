@@ -32,6 +32,7 @@
 
 use crate::core::error::{Error, Result};
 use std::fmt;
+use std::sync::Arc;
 use streamlib_ipc_types::PortKey;
 
 /// Maximum channel-name length in UTF-8 bytes — the fixed `PortKey` wire
@@ -199,6 +200,32 @@ pub fn source_channel_name(source_processor: &str, source_output: &str) -> Resul
     ));
     debug_assert!(validate_channel_name(name.as_str()).is_ok());
     Ok(name)
+}
+
+/// The name a destination knows one of its inbound links by: the source channel
+/// name that link subscribed to, as [`source_channel_name`] derives it.
+///
+/// Cheap to clone because every queued frame carries one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InboundLinkName(Arc<str>);
+
+impl InboundLinkName {
+    /// Borrow the name as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for InboundLinkName {
+    fn from(source_channel_name: &str) -> Self {
+        Self(Arc::from(source_channel_name))
+    }
+}
+
+impl fmt::Display for InboundLinkName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Shorten one chunk to fit `budget` bytes while staying a grammar-legal chunk

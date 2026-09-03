@@ -50,7 +50,7 @@ held-consumer disposition (`:1342-1357`), the window-contract entries this amend
   frame already carries its inbound link's drop counter so an eviction names the right link
   (`iceoryx2/mailbox.rs:128-140`), but no read returns the link: `read_raw` yields bytes and a
   stamp only (`input.rs:933`). The set of inbound links is readable per destination
-  (`input.rs:680`). A port's mailbox exists only once a link is wired into it (`:789-804` of
+  (`input.rs:718`). A port's mailbox exists only once a link is wired into it (`:789-804` of
   the service op), and WIRE precedes `setup()`.
 - The window contract's `channels` is a required `u32` on every carrier
   (`sdk/streamlib-processor-schema/src/audio_window_contract.rs:66-86`,
@@ -98,14 +98,15 @@ marker remains in this file.
 
 - **DECIDED** — Beside `read_raw`, a reader offers a read that returns the bag, its stamp
   and the *inbound link* it arrived on, named by the source channel name the link
-  subscribed to — `<producer display name>/<output port>`, the name `graph` and `tap`
-  already show (`iceoryx2/channel_name.rs:171`). The mailbox already queues each frame
+  subscribed to — `<lowercased producer processor id>/<output port>`, the name `graph` and
+  `tap` already show (`iceoryx2/channel_name.rs:172`). The mailbox already queues each frame
   holding its link's counter; this exposes the identity the counter is keyed by, so no
   frame carries anything it did not carry before and counting is unchanged. In Python,
-  `LinkInputDataReader` gains the same read (`read_from_link(port, into=T)` returning the
-  cast and the link name) so a Python-authored many-input sink is possible — the parity bar
-  states this rather than deferring it. A destination can also enumerate its inbound links
-  at `setup()` (`input.rs:680`), which is how a sink learns how many tracks it owes.
+  `LinkInputDataReader` gains the same read (`read_from_inbound_link(port, into=T)`
+  returning the cast and the link name) so a Python-authored many-input sink is possible —
+  the parity bar states this rather than deferring it. A destination can also enumerate its
+  inbound links at `setup()` (`input.rs:718`), which is how a sink learns how many tracks
+  it owes.
   [opus-mp4-recording-rung]
 
 ## ADDED: §Media I/O — the encoded-audio bag

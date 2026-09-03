@@ -527,6 +527,37 @@ class LinkInputDataReader:
     def read_with_timestamp(
         self, port_name: str
     ) -> tuple[Any, int] | tuple[None, None]: ...
+    @overload
+    def read_from_inbound_link(
+        self, port_name: str, *, into: None = None
+    ) -> tuple[Any, str] | None: ...
+    @overload
+    def read_from_inbound_link(
+        self, port_name: str, *, into: Callable[..., _BagReadTarget]
+    ) -> tuple[_BagReadTarget, str] | None:
+        """The next bag on `port_name` with the link it arrived on, or `None`.
+
+        Any number of links may enter one input port, and each one is a
+        separate producer. This is how a many-input processor tells them
+        apart: the name is the source channel the link subscribed to —
+        `{source processor id}/{source output port}`, the name `graph` and
+        `tap` show — which the engine knows and a producer cannot misstate.
+
+        Bags from one link arrive in that link's order. Nothing is promised
+        about how two links interleave, so a reader that needs time order
+        reasons per link.
+
+        `into` is the same strictness dial `read` carries.
+        """
+
+    def inbound_link_names(self, port_name: str) -> list[str]:
+        """Every link feeding `port_name`, in wiring order.
+
+        Readable in `setup()` — links are wired before it runs — which is how
+        a sink learns how many producers it owes before the first bag
+        arrives. A port nothing is connected to lists none.
+        """
+
     def has_data(self, port_name: str) -> bool: ...
 
 @final

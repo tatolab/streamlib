@@ -292,6 +292,7 @@ impl Iceoryx2EventService {
 mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+    use crate::iceoryx2::InboundLinkName;
 
     fn unique_service_name(tag: &str) -> String {
         format!(
@@ -871,6 +872,7 @@ mod tests {
             in_inner.add_channel_subscriber(
                 "in",
                 link_id,
+                &InboundLinkName::from("psource/out"),
                 data.create_subscriber().expect("dest subscriber"),
             );
             if !in_inner.has_listener() {
