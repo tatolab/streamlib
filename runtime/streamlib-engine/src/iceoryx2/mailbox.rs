@@ -58,10 +58,6 @@ impl PortMailboxQueuedFrame {
 }
 
 /// One frame handed to a reader, with the inbound link it arrived on.
-///
-/// The name rides the entry the whole way rather than being resolved at the
-/// read, because a port fanning in N links holds bags from all of them at once
-/// and only the entry knows which one each came from.
 pub struct PortMailboxDeliveredBag {
     /// The raw wire frame (header + body), exactly as it was queued.
     pub payload: Vec<u8>,
@@ -297,8 +293,7 @@ mod tests {
         InboundLinkName::from("psource/out")
     }
 
-    /// The payload alone, for the assertions that predate the link name and
-    /// still only care about which bag survived.
+    /// The payload alone, for the assertions that care only which bag survived.
     fn payload_of(bag: Option<PortMailboxDeliveredBag>) -> Option<Vec<u8>> {
         bag.map(|bag| bag.payload)
     }
@@ -495,7 +490,7 @@ mod tests {
         assert_eq!(delivered.payload, vec![2]);
         assert_eq!(
             delivered.inbound_link_name, None,
-            "a frame nothing delivered names no link, and a read must see that              rather than a borrowed one"
+            "a frame nothing delivered names no link, and a read must see that rather than a borrowed one"
         );
     }
 }

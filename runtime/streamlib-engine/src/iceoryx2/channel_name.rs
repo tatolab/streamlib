@@ -205,11 +205,7 @@ pub fn source_channel_name(source_processor: &str, source_output: &str) -> Resul
 /// The name a destination knows one of its inbound links by: the source channel
 /// name that link subscribed to, as [`source_channel_name`] derives it.
 ///
-/// Cheap to clone because every queued frame carries one — the identity the
-/// per-link dropped-bag counter is already keyed by, made readable. It borrows
-/// the channel's own name rather than the internal link id: a link id names a
-/// graph edge and means nothing to a processor, while this is the name `graph`
-/// and `tap` show.
+/// Cheap to clone because every queued frame carries one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InboundLinkName(Arc<str>);
 
@@ -223,12 +219,6 @@ impl InboundLinkName {
 impl From<&str> for InboundLinkName {
     fn from(source_channel_name: &str) -> Self {
         Self(Arc::from(source_channel_name))
-    }
-}
-
-impl From<&ChannelName> for InboundLinkName {
-    fn from(source_channel_name: &ChannelName) -> Self {
-        Self::from(source_channel_name.as_str())
     }
 }
 

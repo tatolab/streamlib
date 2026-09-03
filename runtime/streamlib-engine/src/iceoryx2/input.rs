@@ -62,6 +62,12 @@ pub(super) struct BagBodyForTheReader {
     pub(super) inbound_link_name: Option<InboundLinkName>,
 }
 
+/// Decode one bag body into the type a reader named.
+fn deserialize_bag_body<T: DeserializeOwned>(body: &[u8]) -> Result<T> {
+    rmp_serde::from_slice(body)
+        .map_err(|failure| Error::Link(format!("Failed to deserialize frame: {failure}")))
+}
+
 /// The one spelling of "this port was never configured".
 fn unknown_input_port(port: &str) -> Error {
     Error::Link(format!("Unknown input port: {port}"))
@@ -1071,9 +1077,7 @@ impl InputMailboxesInner {
         else {
             return Ok(None);
         };
-        let value = rmp_serde::from_slice(&body)
-            .map_err(|e| Error::Link(format!("Failed to deserialize frame: {}", e)))?;
-        Ok(Some((value, inbound_link_name)))
+        Ok(Some((deserialize_bag_body(&body)?, inbound_link_name)))
     }
 
     /// Check if a port has any payloads available. This first
@@ -1269,8 +1273,7 @@ impl InputMailboxes {
         let raw = self
             .read_raw(port)?
             .ok_or_else(|| Error::Link(format!("No data available on port: {}", port)))?;
-        rmp_serde::from_slice(&raw.0)
-            .map_err(|e| Error::Link(format!("Failed to deserialize frame: {}", e)))
+        deserialize_bag_body(&raw.0)
     }
 
     /// Read raw bytes and timestamp from the given port without
@@ -1885,6 +1888,58 @@ mod tests {
             counts.values().sum::<u64>() + delivered as u64,
             (FRAMES_PER_LINK * 2) as u64,
             "counted plus delivered must still account for every bag published",
+        );
+    }
+
+    /// The typed read, and the one place it diverges from
+    /// [`InputMailboxes::read`]: a drained port is `Ok(None)` here where `read`
+    /// is an error. A destination fanning in N links reads until its port runs
+    /// dry, and an empty port is that loop ending rather than a failure.
+    #[test]
+    fn the_typed_read_deserializes_the_bag_and_a_drained_port_is_not_an_error() {
+        #[derive(serde::Serialize, serde::Deserialize, PartialEq, Debug)]
+        struct OneTrackBag {
+            track: String,
+        }
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let (publisher, subscriber) = open_channel_for_one_link(&node, "naming/typed", 4);
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-camera",
+            &InboundLinkName::from("pcamera/video_out"),
+            subscriber,
+        );
+        publish_one_frame(
+            &publisher,
+            "video_out",
+            &rmp_serde::to_vec_named(&OneTrackBag {
+                track: "front".to_string(),
+            })
+            .expect("the bag encodes"),
+        );
+
+        let (bag, inbound_link_name) = mailboxes
+            .read_from_inbound_link::<OneTrackBag>("in")
+            .expect("a well-formed bag deserializes")
+            .expect("one bag was published");
+        assert_eq!(
+            bag,
+            OneTrackBag {
+                track: "front".to_string()
+            }
+        );
+        assert_eq!(inbound_link_name.as_str(), "pcamera/video_out");
+
+        assert!(
+            mailboxes
+                .read_from_inbound_link::<OneTrackBag>("in")
+                .expect("a drained port is not a failure")
+                .is_none(),
+            "a drained port must end a sink's read loop rather than raise",
         );
     }
 

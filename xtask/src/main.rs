@@ -337,6 +337,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none",
                 "iceoryx2::input::tests::a_windowed_ports_read_names_the_one_link_that_feeds_it",
                 "iceoryx2::input::tests::an_injected_bag_with_no_inbound_link_is_refused_by_name_rather_than_borrowing_one",
+                "iceoryx2::input::tests::the_typed_read_deserializes_the_bag_and_a_drained_port_is_not_an_error",
                 "core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name",
                 "core::graph::components::processor_metrics::tests::a_processor_that_has_lost_nothing_says_so_rather_than_staying_silent",
                 "core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests::connect_wires_a_producer_to_a_consumer_without_warning",

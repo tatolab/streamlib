@@ -207,7 +207,7 @@ pub fn open_iceoryx2_service(
             &dest_processor,
             &dest_port,
             link_id,
-            &channel_service_name,
+            &InboundLinkName::from(channel_service_name.as_str()),
             drain_order,
             max_queued_messages,
             &service,
@@ -774,7 +774,7 @@ fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
-    inbound_link_name: &str,
+    inbound_link_name: &InboundLinkName,
     drain_order: crate::iceoryx2::ReadMode,
     depth: usize,
     service: &Iceoryx2Service,
@@ -814,12 +814,7 @@ fn wire_rust_dest(
     }
 
     let subscriber = service.create_subscriber()?;
-    input_inner.add_channel_subscriber(
-        dest_port,
-        link_id.as_str(),
-        &InboundLinkName::from(inbound_link_name),
-        subscriber,
-    );
+    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), inbound_link_name, subscriber);
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port
@@ -1650,7 +1645,7 @@ mod tests {
             &dest,
             "in1",
             &link_id,
-            "psource/out1",
+            &InboundLinkName::from("psource/out1"),
             crate::iceoryx2::ReadMode::SkipToLatest,
             8,
             &channel,
@@ -1713,7 +1708,7 @@ mod tests {
             &dest,
             "in1",
             &link_id,
-            "psource/out1",
+            &InboundLinkName::from("psource/out1"),
             crate::iceoryx2::ReadMode::ReadNextInOrder,
             DESTINATION_MAILBOX_DEPTH,
             &channel,
@@ -1967,7 +1962,7 @@ mod tests {
             &dest,
             "audio",
             &"L-match-device".into(),
-            "psource/audio_out",
+            &InboundLinkName::from("psource/audio_out"),
             crate::iceoryx2::ReadMode::ReadNextInOrder,
             crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             &channel,
