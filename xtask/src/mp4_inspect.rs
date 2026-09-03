@@ -35,7 +35,9 @@ pub fn inspect_file(path: &Path) -> Result<Value> {
     inspect_reader(&mut std::io::BufReader::new(file))
 }
 
-/// The same read over bytes, which is what the tests below drive.
+/// The same walk over bytes, which is what the tests below drive — so they
+/// exercise the reader the CLI runs, not a second one.
+#[cfg(test)]
 pub fn inspect_bytes(file_bytes: &[u8]) -> Result<Value> {
     inspect_reader(&mut std::io::Cursor::new(file_bytes))
 }
