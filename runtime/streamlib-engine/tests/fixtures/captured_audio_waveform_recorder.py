@@ -24,10 +24,15 @@ from streamlib import AudioBlock, RuntimeContextLimitedAccess, input, log, proce
 
 RESULT_MARKER = "MARKER:WAVEFORM_WRITTEN "
 
-# The signal occupies ~2.8 s and the source publishes a second of silence after
+# The signal occupies ~2.7 s and the source publishes a second of silence after
 # it, so this covers the whole thing with runway for a capture that started
 # late.
-SECONDS_TO_RECORD = 5.0
+#
+# Settable because the runway depends on what is upstream, not on the signal: a
+# microphone captures forever and overshooting costs nothing, while a graph fed
+# straight from the finite source runs out at 3.7 s and a window past that
+# writes no waveform at all.
+SECONDS_TO_RECORD = float(os.environ.get("STREAMLIB_CAPTURED_WAVEFORM_SECONDS", "5.0"))
 
 
 @processor
