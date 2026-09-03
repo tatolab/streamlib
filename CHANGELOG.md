@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.43](https://github.com/tatolab/streamlib/compare/v0.18.42...v0.18.43) (2026-09-03)
+
+
+### Features
+
+* **engine:** a read that names the inbound link it drained — in Rust and on LinkInputDataReader ([#2133](https://github.com/tatolab/streamlib/issues/2133)) ([89d4caf](https://github.com/tatolab/streamlib/commit/89d4caff87a3d61763b785b70f3966a20774c06d))
+
 ## [0.18.42](https://github.com/tatolab/streamlib/compare/v0.18.41...v0.18.42) (2026-09-03)
 
 
