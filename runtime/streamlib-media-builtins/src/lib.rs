@@ -22,6 +22,7 @@ pub mod display_window;
 mod emitted_log_line_test_support;
 #[cfg(target_os = "linux")]
 pub mod encoded_frame_to_published_surface_decoder;
+pub mod encoded_stream_ordering;
 pub mod encoded_video_frame;
 #[cfg(target_os = "linux")]
 pub mod h264_decoder;
@@ -57,9 +58,12 @@ pub use camera_source::{CameraSource, CameraSourceConfig};
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
 #[cfg(target_os = "linux")]
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
+pub use encoded_stream_ordering::{
+    ArrivingEncodedBagDisposition, EncodedStreamOrderingPair, EncodedStreamOrderingPairCounter,
+    EncodedStreamSyncPointGate,
+};
 pub use encoded_video_frame::{
-    ArrivingEncodedFrameDisposition, EncodedFrameOrderingPair, EncodedFrameOrderingPairCounter,
-    EncodedStreamSyncPointGate, EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal,
+    EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal,
     read_encoded_video_frame_bag,
 };
 #[cfg(target_os = "linux")]
