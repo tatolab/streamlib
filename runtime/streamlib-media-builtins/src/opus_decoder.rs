@@ -16,10 +16,9 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::encoded_audio_packet::read_encoded_audio_packet_bag;
-use crate::encoded_packet_to_audio_block_decoder::EncodedPacketToAudioBlockDecoder;
-
-/// Registration name, and what every refusal and log line names itself by.
-pub const OPUS_DECODER_PROCESSOR_NAME: &str = "OpusDecoder";
+use crate::encoded_packet_to_audio_block_decoder::{
+    EncodedPacketToAudioBlockDecoder, OPUS_DECODER_PROCESSOR_NAME,
+};
 
 #[streamlib::sdk::processor(
     description = "Decodes Opus encoded-audio-packet bags to audio blocks via libopus",
@@ -59,11 +58,10 @@ impl ReactiveProcessor for OpusDecoder::Processor {
                 Error::Runtime(format!("{OPUS_DECODER_PROCESSOR_NAME}: {refusal}"))
             })?;
 
-            if let Some(block) = self.decode_body.decode_one_arriving_packet(
-                &packet,
-                frame_header_timestamp_ns,
-                OPUS_DECODER_PROCESSOR_NAME,
-            )? {
+            if let Some(block) = self
+                .decode_body
+                .decode_one_arriving_packet(&packet, frame_header_timestamp_ns)?
+            {
                 let block_timestamp_ns = block.first_sample_timestamp_ns;
                 self.outputs
                     .write_with_timestamp("audio", &block, block_timestamp_ns)?;

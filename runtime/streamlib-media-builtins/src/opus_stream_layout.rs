@@ -22,8 +22,6 @@
 //! channel count would catch, so the table is locked by a test that builds
 //! a real encoder at every count.
 
-use streamlib::sdk::error::{Error, Result};
-
 /// The most channels Opus mapping family 1 places on named speakers.
 pub const HIGHEST_CHANNEL_COUNT_OPUS_PLACES: u32 = 8;
 
@@ -107,10 +105,38 @@ const VORBIS_CHANNEL_ORDER_STREAM_LAYOUTS: [OpusMappingFamilyOneStreamLayout;
     },
 ];
 
+/// Why a channel count resolves to no Opus stream layout.
+///
+/// Typed rather than a formatted string, so the caller names itself: the same
+/// count is refused on the encode side and the decode side, and a refusal that
+/// hard-coded "cannot be encoded" would be wrong in one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpusStreamLayoutRefusal {
+    /// Opus places 1 to 8 channels on named speakers and nothing else.
+    ChannelCountOpusCannotPlace { channels: u32 },
+}
+
+impl std::error::Error for OpusStreamLayoutRefusal {}
+
+impl std::fmt::Display for OpusStreamLayoutRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpusStreamLayoutRefusal::ChannelCountOpusCannotPlace { channels } => write!(
+                formatter,
+                "{channels} channels resolve to no Opus stream layout — Opus places 1 to \
+                 {HIGHEST_CHANNEL_COUNT_OPUS_PLACES} channels on named speakers (mapping \
+                 family 0 for 1 and 2, family 1 in Vorbis order for 3 to \
+                 {HIGHEST_CHANNEL_COUNT_OPUS_PLACES}), and the arbitrary-layout family is \
+                 deliberately not offered because nothing downstream could place its channels"
+            ),
+        }
+    }
+}
+
 impl OpusStreamLayoutForSourceChannelCount {
     /// Resolve a source channel count, refusing by name one Opus cannot
     /// place on named speakers.
-    pub fn resolve(source_channels: u32, processor_name: &str) -> Result<Self> {
+    pub fn resolve(source_channels: u32) -> std::result::Result<Self, OpusStreamLayoutRefusal> {
         match source_channels {
             1 => Ok(Self::MappingFamilyZeroSingleStream {
                 channels: opus::Channels::Mono,
@@ -121,13 +147,7 @@ impl OpusStreamLayoutForSourceChannelCount {
             3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES => Ok(Self::MappingFamilyOneMultistream(
                 VORBIS_CHANNEL_ORDER_STREAM_LAYOUTS[source_channels as usize - 1],
             )),
-            refused => Err(Error::Runtime(format!(
-                "{processor_name}: a source of {refused} channels cannot be encoded — Opus \
-                 places 1 to {HIGHEST_CHANNEL_COUNT_OPUS_PLACES} channels on named speakers \
-                 (mapping family 0 for 1 and 2, family 1 in Vorbis order for 3 to \
-                 {HIGHEST_CHANNEL_COUNT_OPUS_PLACES}), and the arbitrary-layout family is \
-                 deliberately not offered because nothing downstream could place its channels"
-            ))),
+            channels => Err(OpusStreamLayoutRefusal::ChannelCountOpusCannotPlace { channels }),
         }
     }
 
@@ -145,25 +165,23 @@ impl OpusStreamLayoutForSourceChannelCount {
 mod tests {
     use super::*;
 
-    const PROCESSOR_NAME: &str = "OpusEncoder";
-
     #[test]
     fn one_and_two_channels_ride_mapping_family_zero() {
         assert_eq!(
-            OpusStreamLayoutForSourceChannelCount::resolve(1, PROCESSOR_NAME).expect("resolves"),
+            OpusStreamLayoutForSourceChannelCount::resolve(1).expect("resolves"),
             OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream {
                 channels: opus::Channels::Mono
             }
         );
         assert_eq!(
-            OpusStreamLayoutForSourceChannelCount::resolve(2, PROCESSOR_NAME).expect("resolves"),
+            OpusStreamLayoutForSourceChannelCount::resolve(2).expect("resolves"),
             OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream {
                 channels: opus::Channels::Stereo
             }
         );
         for channels in [1, 2] {
             assert_eq!(
-                OpusStreamLayoutForSourceChannelCount::resolve(channels, PROCESSOR_NAME)
+                OpusStreamLayoutForSourceChannelCount::resolve(channels)
                     .expect("resolves")
                     .channel_mapping_family(),
                 0
@@ -174,8 +192,8 @@ mod tests {
     #[test]
     fn three_to_eight_channels_ride_mapping_family_one_in_vorbis_order() {
         for channels in 3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
-            let layout = OpusStreamLayoutForSourceChannelCount::resolve(channels, PROCESSOR_NAME)
-                .expect("resolves");
+            let layout =
+                OpusStreamLayoutForSourceChannelCount::resolve(channels).expect("resolves");
             assert_eq!(layout.channel_mapping_family(), 1);
             let OpusStreamLayoutForSourceChannelCount::MappingFamilyOneMultistream(multistream) =
                 layout
@@ -220,8 +238,7 @@ mod tests {
     fn every_family_one_layout_builds_a_real_multistream_encoder_and_decoder() {
         for channels in 3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
             let OpusStreamLayoutForSourceChannelCount::MappingFamilyOneMultistream(multistream) =
-                OpusStreamLayoutForSourceChannelCount::resolve(channels, PROCESSOR_NAME)
-                    .expect("resolves")
+                OpusStreamLayoutForSourceChannelCount::resolve(channels).expect("resolves")
             else {
                 panic!("{channels} channels must resolve to family 1");
             };
@@ -250,7 +267,7 @@ mod tests {
     #[test]
     fn a_channel_count_opus_cannot_place_is_refused_naming_the_count_and_the_range() {
         for refused in [0, 9, 16] {
-            let refusal = OpusStreamLayoutForSourceChannelCount::resolve(refused, PROCESSOR_NAME)
+            let refusal = OpusStreamLayoutForSourceChannelCount::resolve(refused)
                 .expect_err("refused")
                 .to_string();
             assert!(
@@ -258,8 +275,12 @@ mod tests {
                 "the refusal names the count it was handed: {refusal}"
             );
             assert!(
-                refusal.contains('8') && refusal.contains(PROCESSOR_NAME),
-                "the refusal names the range and the processor: {refusal}"
+                refusal.contains('8'),
+                "the refusal names the range Opus can place: {refusal}"
+            );
+            assert!(
+                !refusal.contains("encoded") && !refusal.contains("decoded"),
+                "the refusal is shared by both directions, so it names neither: {refusal}"
             );
         }
     }

@@ -18,10 +18,9 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
 use crate::audio_block::AudioBlock;
-use crate::audio_window_to_encoded_packet_encoder::AudioWindowToEncodedPacketEncoder;
-
-/// Registration name, and what every refusal and log line names itself by.
-pub const OPUS_ENCODER_PROCESSOR_NAME: &str = "OpusEncoder";
+use crate::audio_window_to_encoded_packet_encoder::{
+    AudioWindowToEncodedPacketEncoder, OPUS_ENCODER_PROCESSOR_NAME,
+};
 
 #[streamlib::sdk::processor(
     description = "Encodes 20 ms windows of audio to Opus encoded-audio-packet bags via libopus",
@@ -59,12 +58,7 @@ impl ReactiveProcessor for OpusEncoder::Processor {
         let window: AudioBlock = self.inputs.read("audio")?;
         let window_timestamp_ns = window.first_sample_timestamp_ns;
 
-        let Some(packet) = self.encode_body.encode_one_window(
-            &self.config,
-            &window,
-            OPUS_ENCODER_PROCESSOR_NAME,
-        )?
-        else {
+        let Some(packet) = self.encode_body.encode_one_window(&self.config, &window)? else {
             return Ok(());
         };
         // The timestamped write, never the implicit one: the packet names

@@ -33,6 +33,9 @@ use crate::encoded_stream_ordering::EncodedStreamOrderingPairCounter;
 use crate::opus_stream_layout::HIGHEST_CHANNEL_COUNT_OPUS_PLACES;
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 
+/// Registration name, and what every refusal and log line names itself by.
+pub const OPUS_ENCODER_PROCESSOR_NAME: &str = "OpusEncoder";
+
 /// Opus's own clock. Every packet is stamped in it whatever the source rate
 /// was, and the input port's window contract resamples to it.
 pub const OPUS_SAMPLE_RATE_HZ: u32 = 48_000;
@@ -136,16 +139,16 @@ impl MintedOpusEncoderInstance {
 
     /// Everything the config and the doctrine fix, applied to a freshly
     /// minted instance.
-    fn apply_settings(&mut self, config: &OpusEncoderConfig, processor_name: &str) -> Result<()> {
+    fn apply_settings(&mut self, config: &OpusEncoderConfig) -> Result<()> {
         let named = |what: &str, failure: opus::Error| {
             Error::Runtime(format!(
-                "{processor_name}: libopus refused {what}: {failure}"
+                "{OPUS_ENCODER_PROCESSOR_NAME}: libopus refused {what}: {failure}"
             ))
         };
         if let Some(bitrate_bps) = config.bitrate_bps {
             let bitrate_bps = i32::try_from(bitrate_bps).map_err(|_| {
                 Error::Runtime(format!(
-                    "{processor_name}: a bitrate of {bitrate_bps} bit/s is past what libopus \
+                    "{OPUS_ENCODER_PROCESSOR_NAME}: a bitrate of {bitrate_bps} bit/s is past what libopus \
                      takes"
                 ))
             })?;
@@ -199,12 +202,11 @@ impl AudioWindowToEncodedPacketEncoder {
         &mut self,
         config: &OpusEncoderConfig,
         window: &AudioBlock,
-        processor_name: &str,
     ) -> Result<Option<EncodedAudioPacket>> {
         if self.mint_already_failed {
             return Ok(None);
         }
-        let interleaved_samples = read_window_as_interleaved_f32(window, processor_name)?;
+        let interleaved_samples = read_window_as_interleaved_f32(window)?;
 
         if let Some(stale) = self
             .minted
@@ -213,18 +215,18 @@ impl AudioWindowToEncodedPacketEncoder {
             tracing::info!(
                 minted_for_source_channels = stale.minted_for_source_channels,
                 window_channels = window.channels,
-                "{processor_name}: the source's channel count changed — re-minting the encoder"
+                "{OPUS_ENCODER_PROCESSOR_NAME}: the source's channel count changed — re-minting the encoder"
             );
         }
 
         let minted = match &mut self.minted {
             Some(minted) => minted,
-            empty_slot => match mint_encoder_for_window(config, window, processor_name) {
+            empty_slot => match mint_encoder_for_window(config, window) {
                 Ok(minted) => empty_slot.insert(minted),
                 Err(mint_failure) => {
                     self.mint_already_failed = true;
                     tracing::error!(
-                        "{processor_name}: the encoder could not be minted; every later window \
+                        "{OPUS_ENCODER_PROCESSOR_NAME}: the encoder could not be minted; every later window \
                          is discarded: {mint_failure}"
                     );
                     return Err(mint_failure);
@@ -263,17 +265,17 @@ impl AudioWindowToEncodedPacketEncoder {
 /// Read a window's payload as interleaved `f32`, refusing by name a block
 /// that is not what the port's window contract promised rather than
 /// reinterpreting its bytes.
-fn read_window_as_interleaved_f32(window: &AudioBlock, processor_name: &str) -> Result<Vec<f32>> {
+fn read_window_as_interleaved_f32(window: &AudioBlock) -> Result<Vec<f32>> {
     if window.dtype != AudioSampleDtype::F32 {
         return Err(Error::Runtime(format!(
-            "{processor_name}: a window arrived as {:?}, but the port's `audio_window` contract \
+            "{OPUS_ENCODER_PROCESSOR_NAME}: a window arrived as {:?}, but the port's `audio_window` contract \
              declares `f32` — the stage converts, so this is a bag that did not come through it",
             window.dtype
         )));
     }
     if window.sample_rate != OPUS_SAMPLE_RATE_HZ {
         return Err(Error::Runtime(format!(
-            "{processor_name}: a window arrived at {} Hz, but Opus codes at \
+            "{OPUS_ENCODER_PROCESSOR_NAME}: a window arrived at {} Hz, but Opus codes at \
              {OPUS_SAMPLE_RATE_HZ} Hz and the port's `audio_window` contract resamples to it",
             window.sample_rate
         )));
@@ -282,7 +284,7 @@ fn read_window_as_interleaved_f32(window: &AudioBlock, processor_name: &str) -> 
     let expected_bytes = expected_scalars * AudioSampleDtype::F32.bytes_per_sample();
     if window.interleaved_sample_bytes.len() != expected_bytes {
         return Err(Error::Runtime(format!(
-            "{processor_name}: a window carries {} payload bytes, but {} samples in {} channels \
+            "{OPUS_ENCODER_PROCESSOR_NAME}: a window carries {} payload bytes, but {} samples in {} channels \
              of `f32` is {expected_bytes} — refused rather than reshaped into a plausible \
              wrong answer",
             window.interleaved_sample_bytes.len(),
@@ -300,9 +302,13 @@ fn read_window_as_interleaved_f32(window: &AudioBlock, processor_name: &str) -> 
 fn mint_encoder_for_window(
     config: &OpusEncoderConfig,
     window: &AudioBlock,
-    processor_name: &str,
 ) -> Result<MintedOpusEncoder> {
-    let layout = OpusStreamLayoutForSourceChannelCount::resolve(window.channels, processor_name)?;
+    let layout =
+        OpusStreamLayoutForSourceChannelCount::resolve(window.channels).map_err(|refusal| {
+            Error::Runtime(format!(
+                "{OPUS_ENCODER_PROCESSOR_NAME}: this window cannot be encoded — {refusal}"
+            ))
+        })?;
     let application = config
         .application
         .unwrap_or_default()
@@ -314,7 +320,7 @@ fn mint_encoder_for_window(
                 opus::Encoder::new(OPUS_SAMPLE_RATE_HZ, channels, application).map_err(
                     |failure| {
                         Error::Runtime(format!(
-                            "{processor_name}: libopus refused a {} channel encoder: {failure}",
+                            "{OPUS_ENCODER_PROCESSOR_NAME}: libopus refused a {} channel encoder: {failure}",
                             window.channels
                         ))
                     },
@@ -333,7 +339,7 @@ fn mint_encoder_for_window(
                 )
                 .map_err(|failure| {
                     Error::Runtime(format!(
-                        "{processor_name}: libopus refused a {} channel multistream encoder: \
+                        "{OPUS_ENCODER_PROCESSOR_NAME}: libopus refused a {} channel multistream encoder: \
                          {failure}",
                         window.channels
                     ))
@@ -343,7 +349,7 @@ fn mint_encoder_for_window(
         ),
     };
 
-    instance.apply_settings(config, processor_name)?;
+    instance.apply_settings(config)?;
     let pre_skip = instance.lookahead_samples()?;
 
     tracing::info!(
@@ -353,7 +359,7 @@ fn mint_encoder_for_window(
         pre_skip,
         application = ?config.application.unwrap_or_default(),
         bitrate_bps = ?config.bitrate_bps,
-        "{processor_name}: minted the Opus encoder from the first window's channel count"
+        "{OPUS_ENCODER_PROCESSOR_NAME}: minted the Opus encoder from the first window's channel count"
     );
 
     Ok(MintedOpusEncoder {
@@ -369,7 +375,6 @@ fn mint_encoder_for_window(
 mod tests {
     use super::*;
 
-    const PROCESSOR_NAME: &str = "OpusEncoder";
     const WINDOW_SAMPLE_COUNT: u32 = 960;
 
     /// One 20 ms window of a 440 Hz tone, the shape the port's window
@@ -431,11 +436,7 @@ mod tests {
         for channels in 1..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
             let mut encoder = AudioWindowToEncodedPacketEncoder::default();
             let packet = encoder
-                .encode_one_window(
-                    &OpusEncoderConfig::default(),
-                    &a_window_of(channels, 0),
-                    PROCESSOR_NAME,
-                )
+                .encode_one_window(&OpusEncoderConfig::default(), &a_window_of(channels, 0))
                 .expect("encodes")
                 .expect("publishes a packet");
 
@@ -460,11 +461,7 @@ mod tests {
         for channels in 1..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
             let mut encoder = AudioWindowToEncodedPacketEncoder::default();
             let packet = encoder
-                .encode_one_window(
-                    &OpusEncoderConfig::default(),
-                    &a_window_of(channels, 0),
-                    PROCESSOR_NAME,
-                )
+                .encode_one_window(&OpusEncoderConfig::default(), &a_window_of(channels, 0))
                 .expect("encodes")
                 .expect("publishes a packet");
             pre_skips.push(packet.pre_skip);
@@ -491,7 +488,6 @@ mod tests {
                     .encode_one_window(
                         &config,
                         &a_window_of(channels, window_index as u32 * WINDOW_SAMPLE_COUNT),
-                        PROCESSOR_NAME,
                     )
                     .expect("encodes across the re-mint")
                     .expect("publishes a packet"),
@@ -524,12 +520,12 @@ mod tests {
         let config = OpusEncoderConfig::default();
 
         let refusal = encoder
-            .encode_one_window(&config, &a_window_of(9, 0), PROCESSOR_NAME)
+            .encode_one_window(&config, &a_window_of(9, 0))
             .expect_err("refused")
             .to_string();
         assert!(refusal.contains('9'), "names the count: {refusal}");
         assert!(
-            refusal.contains(PROCESSOR_NAME),
+            refusal.contains(OPUS_ENCODER_PROCESSOR_NAME),
             "names the processor: {refusal}"
         );
 
@@ -539,11 +535,7 @@ mod tests {
         for window_index in 1..4 {
             assert_eq!(
                 encoder
-                    .encode_one_window(
-                        &config,
-                        &a_window_of(9, window_index * WINDOW_SAMPLE_COUNT),
-                        PROCESSOR_NAME
-                    )
+                    .encode_one_window(&config, &a_window_of(9, window_index * WINDOW_SAMPLE_COUNT))
                     .expect("discards rather than refusing again"),
                 None
             );
@@ -562,7 +554,7 @@ mod tests {
         let mut short_payload = a_window_of(2, 0);
         short_payload.interleaved_sample_bytes.truncate(64);
         let refusal = AudioWindowToEncodedPacketEncoder::default()
-            .encode_one_window(&config, &short_payload, PROCESSOR_NAME)
+            .encode_one_window(&config, &short_payload)
             .expect_err("refused")
             .to_string();
         assert!(
@@ -574,7 +566,7 @@ mod tests {
         wrong_dtype.dtype = AudioSampleDtype::I16;
         assert!(
             AudioWindowToEncodedPacketEncoder::default()
-                .encode_one_window(&config, &wrong_dtype, PROCESSOR_NAME)
+                .encode_one_window(&config, &wrong_dtype)
                 .is_err(),
             "an `i16` window is refused, not read as `f32` bytes"
         );
@@ -582,7 +574,7 @@ mod tests {
         let mut wrong_rate = a_window_of(2, 0);
         wrong_rate.sample_rate = 44_100;
         let refusal = AudioWindowToEncodedPacketEncoder::default()
-            .encode_one_window(&config, &wrong_rate, PROCESSOR_NAME)
+            .encode_one_window(&config, &wrong_rate)
             .expect_err("refused")
             .to_string();
         assert!(
@@ -607,7 +599,6 @@ mod tests {
                         application: None,
                     },
                     &window,
-                    PROCESSOR_NAME,
                 )
                 .expect("encodes")
                 .expect("publishes")
@@ -620,7 +611,6 @@ mod tests {
                         application: None,
                     },
                     &window,
-                    PROCESSOR_NAME,
                 )
                 .expect("encodes")
                 .expect("publishes")

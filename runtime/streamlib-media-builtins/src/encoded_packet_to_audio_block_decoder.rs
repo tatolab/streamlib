@@ -33,6 +33,30 @@ use crate::encoded_audio_packet::EncodedAudioPacket;
 use crate::encoded_stream_ordering::{ArrivingEncodedBagDisposition, EncodedStreamSyncPointGate};
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 
+/// Registration name, and what every refusal and log line names itself by.
+pub const OPUS_DECODER_PROCESSOR_NAME: &str = "OpusDecoder";
+
+/// The most per-channel samples one Opus packet can span: RFC 6716 §2.1.4
+/// caps a packet at 120 ms, which is 5 760 samples at Opus's 48 kHz clock.
+///
+/// This, not the bag's `sample_count`, sizes the decode buffer. `sample_count`
+/// is an unvalidated `u32` off the wire that any producer in any language can
+/// write, so believing it would let one declare `u32::MAX` and ask for a
+/// hundred gigabytes. The packet's own TOC byte is the authority on how long
+/// it is, and libopus reports that as the decoded count.
+const HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_OPUS_PACKET: usize = 5_760;
+
+/// A `pre_skip` past this is a producer bug rather than an encoder lookahead.
+///
+/// Real lookahead at 48 kHz is 312 samples — `Fs/400 + Fs/250` — or 120 at
+/// `lowdelay`. The bound is a whole packet rather than 312 so a future libopus
+/// cannot fail here for having grown, while still refusing a value that would
+/// otherwise trim the stream away silently: an unbounded `pre_skip` makes
+/// every decode emit nothing at all, and a decoder that goes quiet without
+/// saying why is exactly the concealment this module refuses to do.
+const HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES: u32 =
+    HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_OPUS_PACKET as u32;
+
 /// Dispatch one expression over either shape of instance. Same reason the
 /// encode body has one: the two libopus wrappers share ctl names but no
 /// trait.
@@ -77,6 +101,9 @@ struct MintedOpusDecoder {
     /// The count this instance was constructed for. A packet declaring any
     /// other count re-mints, because libopus cannot be told a new one.
     minted_for_channels: u32,
+    /// Interleaved output, allocated once at mint to the longest packet the
+    /// format allows so no arriving bag can size an allocation.
+    decode_scratch: Vec<f32>,
 }
 
 /// Where a contiguous run of decoded audio started, and how far into it the
@@ -109,7 +136,6 @@ impl EncodedPacketToAudioBlockDecoder {
         &mut self,
         packet: &EncodedAudioPacket,
         packet_timestamp_ns: i64,
-        processor_name: &str,
     ) -> Result<Option<AudioBlock>> {
         let mut re_entering = match self
             .sync_point_gate
@@ -121,7 +147,7 @@ impl EncodedPacketToAudioBlockDecoder {
                     tracing::warn!(
                         packets_not_seen = self.sync_point_gate.bags_lost_to_gaps(),
                         sequence_index = packet.sequence_index,
-                        "{processor_name}: a gap in the encoded stream — resetting and \
+                        "{OPUS_DECODER_PROCESSOR_NAME}: a gap in the encoded stream — resetting and \
                          re-entering here. Nothing is invented to bridge it; the gap stays \
                          derivable from the stamps either side"
                     );
@@ -143,19 +169,16 @@ impl EncodedPacketToAudioBlockDecoder {
             tracing::info!(
                 minted_for_channels = stale.minted_for_channels,
                 packet_channels = packet.channels,
-                "{processor_name}: the producer's channel count changed — re-minting the decoder"
+                "{OPUS_DECODER_PROCESSOR_NAME}: the producer's channel count changed — re-minting the decoder"
             );
             // A new instance holds none of the old one's state and primes
             // again, so the run restarts exactly as it does after a gap.
             re_entering = true;
         }
-        if self.minted.is_none() {
-            self.minted = Some(mint_decoder_for_packet(packet, processor_name)?);
-        }
-        let minted = self
-            .minted
-            .as_mut()
-            .expect("a decoder was just minted for this packet");
+        let minted = match &mut self.minted {
+            Some(minted) => minted,
+            empty_slot => empty_slot.insert(mint_decoder_for_packet(packet)?),
+        };
 
         if re_entering {
             minted.instance.reset_state()?;
@@ -163,12 +186,20 @@ impl EncodedPacketToAudioBlockDecoder {
         }
 
         let channels = packet.channels as usize;
-        let mut interleaved_output = vec![0f32; packet.sample_count as usize * channels];
         let decoded_samples = minted
             .instance
-            .decode_into_interleaved_f32(&packet.opus_packet_bytes, &mut interleaved_output)?;
-        interleaved_output.truncate(decoded_samples * channels);
+            .decode_into_interleaved_f32(&packet.opus_packet_bytes, &mut minted.decode_scratch)?;
+        let decoded_interleaved = &minted.decode_scratch[..decoded_samples * channels];
 
+        if packet.pre_skip > HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES {
+            return Err(Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: the packet declares a `pre_skip` of {} samples, \
+                 past the {HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES} one whole Opus packet spans — an \
+                 encoder's lookahead at 48 kHz is 312. Refused rather than trimmed, because \
+                 honouring it would emit nothing for the rest of the run without saying why",
+                packet.pre_skip
+            )));
+        }
         let anchor = self.anchor.get_or_insert(DecodedRunAnchor {
             first_emitted_sample_timestamp_ns: packet_timestamp_ns,
             samples_emitted_since_anchor: 0,
@@ -186,10 +217,10 @@ impl EncodedPacketToAudioBlockDecoder {
             + timestamp_offset_ns_for(anchor.samples_emitted_since_anchor);
         anchor.samples_emitted_since_anchor += emitted_samples as u64;
 
-        let mut interleaved_sample_bytes = Vec::with_capacity(emitted_samples * channels * 4);
-        for scalar in &interleaved_output[trimmed * channels..] {
-            interleaved_sample_bytes.extend_from_slice(&scalar.to_le_bytes());
-        }
+        let interleaved_sample_bytes: Vec<u8> = decoded_interleaved[trimmed * channels..]
+            .iter()
+            .flat_map(|scalar| scalar.to_le_bytes())
+            .collect();
 
         self.blocks_published += 1;
         Ok(Some(AudioBlock {
@@ -220,17 +251,19 @@ fn timestamp_offset_ns_for(samples_emitted_since_anchor: u64) -> i64 {
         as i64
 }
 
-fn mint_decoder_for_packet(
-    packet: &EncodedAudioPacket,
-    processor_name: &str,
-) -> Result<MintedOpusDecoder> {
-    let layout = OpusStreamLayoutForSourceChannelCount::resolve(packet.channels, processor_name)?;
+fn mint_decoder_for_packet(packet: &EncodedAudioPacket) -> Result<MintedOpusDecoder> {
+    let layout =
+        OpusStreamLayoutForSourceChannelCount::resolve(packet.channels).map_err(|refusal| {
+            Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: this packet cannot be decoded — {refusal}"
+            ))
+        })?;
     let instance = match layout {
         OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream { channels } => {
             MintedOpusDecoderInstance::SingleStream(
                 opus::Decoder::new(OPUS_SAMPLE_RATE_HZ, channels).map_err(|failure| {
                     Error::Runtime(format!(
-                        "{processor_name}: libopus refused a {} channel decoder: {failure}",
+                        "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused a {} channel decoder: {failure}",
                         packet.channels
                     ))
                 })?,
@@ -246,7 +279,7 @@ fn mint_decoder_for_packet(
                 )
                 .map_err(|failure| {
                     Error::Runtime(format!(
-                        "{processor_name}: libopus refused a {} channel multistream decoder: \
+                        "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused a {} channel multistream decoder: \
                          {failure}",
                         packet.channels
                     ))
@@ -258,11 +291,16 @@ fn mint_decoder_for_packet(
         channels = packet.channels,
         channel_mapping_family = layout.channel_mapping_family(),
         pre_skip = packet.pre_skip,
-        "{processor_name}: minted the Opus decoder from the packet's channel count"
+        "{OPUS_DECODER_PROCESSOR_NAME}: minted the Opus decoder from the packet's channel count"
     );
     Ok(MintedOpusDecoder {
         instance,
         minted_for_channels: packet.channels,
+        decode_scratch: vec![
+            0f32;
+            HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_OPUS_PACKET
+                * packet.channels as usize
+        ],
     })
 }
 
@@ -273,8 +311,6 @@ mod tests {
         AudioWindowToEncodedPacketEncoder, OpusEncoderConfig,
     };
 
-    const ENCODER_NAME: &str = "OpusEncoder";
-    const DECODER_NAME: &str = "OpusDecoder";
     const WINDOW_SAMPLE_COUNT: u32 = 960;
     const NANOSECONDS_PER_SECOND: i64 = 1_000_000_000;
 
@@ -357,14 +393,14 @@ mod tests {
         for window_index in 0..windows {
             let window = a_window_from(&source, channels, window_index, anchor_ns);
             let packet = encoder
-                .encode_one_window(&config, &window, ENCODER_NAME)
+                .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes a packet");
             round_trip
                 .packets
                 .push((packet.clone(), window.first_sample_timestamp_ns));
             if let Some(block) = decoder
-                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns, DECODER_NAME)
+                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns)
                 .expect("decodes")
             {
                 round_trip
@@ -479,7 +515,7 @@ mod tests {
         for window_index in 0..12u32 {
             let window = a_window_from(&source, channels, window_index, 0);
             let packet = encoder
-                .encode_one_window(&config, &window, ENCODER_NAME)
+                .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes");
             // Four packets never reach the decoder.
@@ -487,7 +523,7 @@ mod tests {
                 continue;
             }
             let block = decoder
-                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns, DECODER_NAME)
+                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns)
                 .expect("decodes across the gap");
             if window_index >= 8 {
                 published_after_the_gap.push(block.expect("re-enters and publishes"));
@@ -525,11 +561,11 @@ mod tests {
             let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
             let window = a_window_from(&source, channels, 0, window_index as i64 * 20_000_000);
             let packet = encoder
-                .encode_one_window(&config, &window, ENCODER_NAME)
+                .encode_one_window(&config, &window)
                 .expect("encodes")
                 .expect("publishes");
             if let Some(block) = decoder
-                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns, DECODER_NAME)
+                .decode_one_arriving_packet(&packet, window.first_sample_timestamp_ns)
                 .expect("decodes across the re-mint")
             {
                 published.push(block);
@@ -552,6 +588,70 @@ mod tests {
         );
     }
 
+    /// `sample_count` is an unvalidated `u32` any producer can write. It must
+    /// not size an allocation: at eight channels a declared `u32::MAX` would
+    /// ask for about 137 GB. The packet's own TOC byte is the authority on how
+    /// long it is, and the buffer is sized from the format's own ceiling.
+    #[test]
+    fn a_packet_over_declaring_its_sample_count_neither_allocates_nor_misreports() {
+        let channels = 2;
+        let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let window = a_window_from(&source, channels, 0, 0);
+        let mut packet = encoder
+            .encode_one_window(&OpusEncoderConfig::default(), &window)
+            .expect("encodes")
+            .expect("publishes");
+        packet.sample_count = u32::MAX;
+
+        let block = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_arriving_packet(&packet, 0)
+            .expect("decodes from the packet, not from the declaration")
+            .expect("publishes a block");
+        assert_eq!(
+            block.sample_count,
+            WINDOW_SAMPLE_COUNT - 312,
+            "the emitted count comes from what libopus actually decoded, less the priming"
+        );
+    }
+
+    /// An unbounded `pre_skip` would trim every sample of every packet for the
+    /// rest of the run, and a decoder that goes silent without saying why is
+    /// the concealment this module refuses to do.
+    #[test]
+    fn a_pre_skip_past_a_whole_packet_is_refused_rather_than_silently_swallowing_the_run() {
+        let channels = 2;
+        let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let window = a_window_from(&source, channels, 0, 0);
+        let mut packet = encoder
+            .encode_one_window(&OpusEncoderConfig::default(), &window)
+            .expect("encodes")
+            .expect("publishes");
+        packet.pre_skip = u32::MAX;
+
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_arriving_packet(&packet, 0)
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            refusal.contains(&u32::MAX.to_string()),
+            "names the value it was handed: {refusal}"
+        );
+        assert!(
+            refusal.contains(OPUS_DECODER_PROCESSOR_NAME),
+            "names the processor: {refusal}"
+        );
+
+        // The bound refuses only the incredible: a real lookahead still trims.
+        packet.pre_skip = 312;
+        let block = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_arriving_packet(&packet, 0)
+            .expect("a real lookahead decodes")
+            .expect("publishes a block");
+        assert_eq!(block.sample_count, WINDOW_SAMPLE_COUNT - 312);
+    }
+
     #[test]
     fn a_packet_naming_a_channel_count_opus_cannot_place_is_refused_by_name() {
         let mut decoder = EncodedPacketToAudioBlockDecoder::default();
@@ -569,13 +669,12 @@ mod tests {
                     pre_skip: 312,
                 },
                 0,
-                DECODER_NAME,
             )
             .expect_err("refused")
             .to_string();
         assert!(refusal.contains("12"), "names the count: {refusal}");
         assert!(
-            refusal.contains(DECODER_NAME),
+            refusal.contains(OPUS_DECODER_PROCESSOR_NAME),
             "names the processor: {refusal}"
         );
     }
