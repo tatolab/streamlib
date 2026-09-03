@@ -29,9 +29,9 @@ default = []
 moq = ["dep:streamlib-moq"]
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.42" }
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.42" }
-streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.18.42", optional = true }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.43" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.43" }
+streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.18.43", optional = true }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
@@ -63,7 +63,7 @@ percent-encoding = "2.3"
 # Enables the engine's `test-support` in-memory `TapSubscription` constructor
 # for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent
 # from the production `cargo build` dependency graph.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.42", features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.43", features = ["test-support"] }
 tempfile = "3"
 tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"
