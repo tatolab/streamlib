@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.42](https://github.com/tatolab/streamlib/compare/v0.18.41...v0.18.42) (2026-09-03)
+
+
+### Features
+
+* **engine:** an audio window contract follows the source's channel count unless one is declared ([#2131](https://github.com/tatolab/streamlib/issues/2131)) ([34215fd](https://github.com/tatolab/streamlib/commit/34215fd9f455198d744e04c64e22465084aea123))
+
 ## [0.18.41](https://github.com/tatolab/streamlib/compare/v0.18.40...v0.18.41) (2026-09-02)
 
 
