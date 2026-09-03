@@ -1042,9 +1042,11 @@ impl InputMailboxesInner {
     /// promised about how two links interleave: that follows the receive pass,
     /// not the stamps, so a reader that needs time order reasons per link.
     ///
-    /// A bag no link delivered — the manual-injection path — is refused by name
-    /// rather than borrowing another link's identity. [`Self::read_raw`] reads
-    /// it unchanged.
+    /// A bag no link delivered has no link to name. It is refused by name
+    /// rather than given another link's, and the refusal **consumes** it: the
+    /// mailbox admits no peek, so a frame is off the queue before its link is
+    /// looked at. [`Self::read_raw`] names no link and is the read for such a
+    /// bag.
     pub fn read_raw_from_inbound_link(
         &self,
         port: &str,
@@ -1055,8 +1057,9 @@ impl InputMailboxesInner {
         };
         let Some(inbound_link_name) = inbound_link_name else {
             return Err(Error::Link(format!(
-                "a bag on input port '{port}' was injected rather than delivered by a link, \
-                 so there is no inbound link to name. Read it with `read_raw`"
+                "a bag on input port '{port}' arrived with no inbound link behind it, so \
+                 there is no link to name and the bag is consumed. Read such a port with \
+                 `read_raw`, which names no link"
             )));
         };
         Ok(Some((data, timestamp_ns, inbound_link_name)))
@@ -1304,7 +1307,8 @@ impl InputMailboxes {
     /// having to identify themselves in their bags.
     ///
     /// Bags from one link keep that link's order; no interleaving is promised
-    /// between two links.
+    /// between two links. A bag no link delivered is refused by name, and the
+    /// refusal consumes it.
     pub fn read_raw_from_inbound_link(
         &self,
         port: &str,
@@ -2042,8 +2046,11 @@ mod tests {
     }
 
     /// A bag nothing delivered has no link to name, and the read says so
-    /// instead of borrowing one. `read_raw` still reads it — this is the
-    /// naming read's own refusal, not a new restriction on injection.
+    /// instead of borrowing one.
+    ///
+    /// The refusal consumes the bag it refused — the mailbox admits no peek, so
+    /// the frame leaves the queue before its link is looked at — and `read_raw`,
+    /// which names no link, is the read for such a port.
     #[test]
     fn an_injected_bag_with_no_inbound_link_is_refused_by_name_rather_than_borrowing_one() {
         let mailboxes = InputMailboxesInner::new();
@@ -2061,16 +2068,23 @@ mod tests {
             refusal.contains("'in'") && refusal.contains("read_raw"),
             "the refusal must name the port and the read that does work; got {refusal}"
         );
+        assert!(
+            mailboxes
+                .read_raw("in")
+                .expect("the plain read is untouched by the refusal")
+                .is_none(),
+            "the refusal consumes the bag it refused, so nothing is left behind it"
+        );
 
         assert!(
-            mailboxes.route(wire_frame_stamping("in", 0, 5, b"hello")),
+            mailboxes.route(wire_frame_stamping("in", 0, 5, b"world")),
             "the frame must route to port 'in'"
         );
         let (body, _stamp) = mailboxes
             .read_raw("in")
             .expect("the plain read is untouched")
-            .expect("the injected bag is still there to read");
-        assert_eq!(body, b"hello");
+            .expect("a read that names no link reads an injected bag whole");
+        assert_eq!(body, b"world");
     }
 
     // =========================================================================
