@@ -25,6 +25,9 @@ tracing = { workspace = true }
 # beside the audio built-ins, and nothing in it is platform-bound. The static
 # link is load-bearing — `test_wheel_portability.py` fails if `DT_NEEDED` grows.
 opus = "0.4"
+# Pure-Rust ISOBMFF box codec for `Mp4Sink`. No ffmpeg and no new `DT_NEEDED` —
+# `test_wheel_portability.py` is the pass/fail on that.
+mp4-atom = "0.15"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 v4l = "0.14"

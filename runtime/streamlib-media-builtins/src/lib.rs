@@ -40,6 +40,7 @@ pub mod h273_color_vui_translation;
 #[cfg(target_os = "linux")]
 pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
+pub mod mp4_annex_b_access_unit;
 #[cfg(test)]
 mod msgpack_wire_test_support;
 pub mod opus_decoder;
