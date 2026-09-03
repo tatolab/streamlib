@@ -24,6 +24,7 @@ mod emitted_log_line_test_support;
 pub mod encoded_audio_packet;
 #[cfg(target_os = "linux")]
 pub mod encoded_frame_to_published_surface_decoder;
+pub mod encoded_packet_to_audio_block_decoder;
 pub mod encoded_stream_ordering;
 pub mod encoded_video_frame;
 #[cfg(target_os = "linux")]
