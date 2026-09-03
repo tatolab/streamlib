@@ -37,6 +37,7 @@
 //! `unlicensed`.
 
 use anyhow::{Context, Result};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -52,8 +53,8 @@ const CARGO_ABOUT_TEMPLATE_FILE_NAME: &str = "about.hbs";
 /// The crate whose build directory holds the extracted vendored C++ trees.
 const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
 
-/// Where that crate extracts them, relative to its own manifest directory.
-const SHADERC_VENDORED_SOURCES_DIR_NAME: &str = "build";
+/// The crate whose checkout carries libopus's own sources and `COPYING`.
+const OPUSIC_VENDORING_CRATE_NAME: &str = "opusic-sys";
 
 /// Which bullet of the appendix's roster a project belongs under.
 ///
@@ -64,13 +65,15 @@ const SHADERC_VENDORED_SOURCES_DIR_NAME: &str = "build";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VendoredCppNoticeRoster {
     LinkedThroughShadercSys,
+    LinkedThroughOpusicSys,
     CompiledByTheVulkanaliaVmaForksBuildScript,
     CompiledByTheEnginesBuildScript,
 }
 
 impl VendoredCppNoticeRoster {
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 4] = [
         Self::LinkedThroughShadercSys,
+        Self::LinkedThroughOpusicSys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
         Self::CompiledByTheEnginesBuildScript,
     ];
@@ -80,6 +83,10 @@ impl VendoredCppNoticeRoster {
         match self {
             Self::LinkedThroughShadercSys => {
                 "Through the `shaderc-sys` crate, linked into `libshaderc_combined.a`"
+            }
+            Self::LinkedThroughOpusicSys => {
+                "Through the `opusic-sys` crate, linked statically into the engine as \
+                 `libopus.a`"
             }
             Self::CompiledByTheVulkanaliaVmaForksBuildScript => {
                 "Checked into this repository, compiled by \
@@ -95,13 +102,19 @@ impl VendoredCppNoticeRoster {
 
 /// Where a vendored C++ project's notice text is read from.
 ///
-/// One shape per tree because they genuinely differ, not as a convenience:
-/// `shaderc-sys` ships a licence file per project, the trees the vulkanalia VMA
-/// fork vendors ship none, and `vendor/pipewire-headers/` carries its own.
+/// One shape per tree because they genuinely differ, not as a convenience: a
+/// build-script crate in the registry checkout ships a licence file, the trees
+/// the vulkanalia VMA fork vendors ship none, and `vendor/pipewire-headers/`
+/// carries its own.
 enum VendoredCppNoticeSource {
-    /// A licence file, reproduced whole.
-    ShadercSysLicenseFile {
-        path_relative_to_shaderc_sys_build_dir: &'static str,
+    /// A licence file inside a build-script crate's own registry checkout,
+    /// reproduced whole. The path is relative to the crate root rather than to
+    /// any one crate's layout, because the two that use this differ:
+    /// `shaderc-sys` extracts its trees under `build/`, and `opusic-sys`
+    /// carries libopus's `COPYING` at its root.
+    RegistryCrateLicenseFile {
+        vendoring_crate_name: &'static str,
+        path_relative_to_crate_root: &'static str,
     },
     /// The comment block heading a header — the only place these projects state
     /// their copyright.
@@ -115,27 +128,14 @@ enum VendoredCppNoticeSource {
     },
 }
 
-impl VendoredCppNoticeSource {
-    fn roster(&self) -> VendoredCppNoticeRoster {
-        match self {
-            Self::ShadercSysLicenseFile { .. } => VendoredCppNoticeRoster::LinkedThroughShadercSys,
-            Self::LeadingCommentBlockOf { .. } => {
-                VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript
-            }
-            Self::VendoredLicenseFile { .. } => {
-                VendoredCppNoticeRoster::CompiledByTheEnginesBuildScript
-            }
-        }
-    }
-}
-
 /// The two trees the notices are read out of, resolved once per run.
 ///
 /// One argument rather than two adjacent `&Path`s: they are the same type, and
 /// a transposition would compile clean and reproduce the wrong file's text.
 struct VendoredCppSourceTrees {
-    /// `<shaderc-sys>/build/`, in the cargo registry checkout.
-    shaderc_sys_vendored_sources_dir: PathBuf,
+    /// Registry checkout root per vendoring crate, keyed by crate name.
+    /// Resolved once per run for each distinct crate the roster names.
+    registry_crate_roots: BTreeMap<&'static str, PathBuf>,
     /// This repository's root, which `vendor/tatolab-vulkanalia-vma/` hangs off.
     workspace_root: PathBuf,
 }
@@ -151,6 +151,11 @@ struct VendoredCppProjectLinkedIntoTheEngine {
     /// it is 54 KB and the others are 11–23 KB.
     license_summary: &'static str,
     notice_source: VendoredCppNoticeSource,
+    /// Which bullet of the roster this project is named under. Explicit
+    /// rather than derived from `notice_source`, because where a notice is
+    /// read from and how the code reached the binary are different questions
+    /// — two crates now share one notice source and sit on different bullets.
+    roster: VendoredCppNoticeRoster,
 }
 
 const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
@@ -158,9 +163,11 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         display_name: "shaderc",
         upstream_repository_url: "https://github.com/google/shaderc",
         license_summary: "Apache-2.0",
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
-            path_relative_to_shaderc_sys_build_dir: "shaderc/LICENSE",
+        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
+            path_relative_to_crate_root: "build/shaderc/LICENSE",
         },
+        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "glslang",
@@ -169,25 +176,31 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         // `LICENSE.txt`, where the other three are `LICENSE`. Spelled out per
         // project rather than globbed for exactly this reason: a glob hides the
         // asymmetry, and hiding it is how a rename becomes a dropped notice.
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
-            path_relative_to_shaderc_sys_build_dir: "glslang/LICENSE.txt",
+        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
+            path_relative_to_crate_root: "build/glslang/LICENSE.txt",
         },
+        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "SPIRV-Tools",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Tools",
         license_summary: "Apache-2.0",
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
-            path_relative_to_shaderc_sys_build_dir: "spirv-tools/LICENSE",
+        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
+            path_relative_to_crate_root: "build/spirv-tools/LICENSE",
         },
+        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "SPIRV-Headers",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Headers",
         license_summary: "MIT, with an Apache-2.0 carve-out the file names",
-        notice_source: VendoredCppNoticeSource::ShadercSysLicenseFile {
-            path_relative_to_shaderc_sys_build_dir: "spirv-headers/LICENSE",
+        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
+            path_relative_to_crate_root: "build/spirv-headers/LICENSE",
         },
+        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "VulkanMemoryAllocator",
@@ -196,6 +209,7 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/VulkanMemoryAllocator/include/vk_mem_alloc.h",
         },
+        roster: VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript,
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "Vulkan-Headers",
@@ -207,6 +221,7 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/Vulkan-Headers/include/vulkan/vulkan_core.h",
         },
+        roster: VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript,
     },
     VendoredCppProjectLinkedIntoTheEngine {
         display_name: "PipeWire",
@@ -220,6 +235,23 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         notice_source: VendoredCppNoticeSource::VendoredLicenseFile {
             path_relative_to_workspace_root: "vendor/pipewire-headers/COPYING",
         },
+        roster: VendoredCppNoticeRoster::CompiledByTheEnginesBuildScript,
+    },
+    VendoredCppProjectLinkedIntoTheEngine {
+        display_name: "libopus",
+        upstream_repository_url: "https://gitlab.xiph.org/xiph/opus",
+        license_summary: "BSD-3-Clause",
+        // libopus's own `COPYING`, inside the sources `opusic-sys` bundles —
+        // the same relationship shaderc's `build/shaderc/LICENSE` has to its
+        // vendoring crate, rather than the crate's own root `LICENSE`, which
+        // is opusic-sys's copy of the same text. Different layout, same
+        // mechanism, which is why the path is relative to the crate root
+        // rather than to any one crate's convention.
+        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name: OPUSIC_VENDORING_CRATE_NAME,
+            path_relative_to_crate_root: "opus/COPYING",
+        },
+        roster: VendoredCppNoticeRoster::LinkedThroughOpusicSys,
     },
 ];
 
@@ -227,7 +259,7 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
 pub fn run(workspace_root: &Path) -> Result<()> {
     let mut notices = run_cargo_about_generate(workspace_root)?;
     let source_trees = VendoredCppSourceTrees {
-        shaderc_sys_vendored_sources_dir: locate_shaderc_sys_vendored_sources_dir(workspace_root)?,
+        registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
         workspace_root: workspace_root.to_path_buf(),
     };
 
@@ -296,45 +328,63 @@ fn run_cargo_about_generate(workspace_root: &Path) -> Result<String> {
     String::from_utf8(output.stdout).context("`cargo about generate` emitted non-UTF-8")
 }
 
-/// Find `<shaderc-sys>/build/` through `cargo metadata`.
+/// Find every vendoring crate's registry checkout through `cargo metadata`.
 ///
 /// Resolved rather than hard-coded: the sources live in the registry checkout,
-/// whose path carries a version and a registry hash that both move.
-fn locate_shaderc_sys_vendored_sources_dir(workspace_root: &Path) -> Result<PathBuf> {
+/// whose path carries a version and a registry hash that both move. Driven off
+/// the roster itself, so a project added with a new vendoring crate resolves
+/// without a second list to keep in step.
+fn locate_registry_crate_roots(workspace_root: &Path) -> Result<BTreeMap<&'static str, PathBuf>> {
     let metadata = crate::run_cargo_metadata_resolve_document(workspace_root)?;
-    let sources_dir = shaderc_sys_vendored_sources_dir_in(&metadata)?;
-
-    anyhow::ensure!(
-        sources_dir.is_dir(),
-        "{} does not exist — run `cargo fetch` first",
-        sources_dir.display()
-    );
-
-    Ok(sources_dir)
+    let mut roots = BTreeMap::new();
+    for project in VENDORED_CPP_PROJECTS {
+        let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name,
+            ..
+        } = project.notice_source
+        else {
+            continue;
+        };
+        if roots.contains_key(vendoring_crate_name) {
+            continue;
+        }
+        let crate_root = registry_crate_root_in(&metadata, vendoring_crate_name)?;
+        anyhow::ensure!(
+            crate_root.is_dir(),
+            "{} does not exist — run `cargo fetch` first",
+            crate_root.display()
+        );
+        roots.insert(vendoring_crate_name, crate_root);
+    }
+    Ok(roots)
 }
 
-/// The `<shaderc-sys>/build/` path a `cargo metadata` document points at.
+/// The registry checkout root a `cargo metadata` document points a vendoring
+/// crate at.
 ///
 /// Split from the spawn so both refusals are reachable from a test. They are
-/// not hypothetical: renaming, replacing or feature-gating the vendoring crate
-/// silently drops four notices, and two copies of it in one graph means the
+/// not hypothetical: renaming, replacing or feature-gating a vendoring crate
+/// silently drops its notices, and two copies of it in one graph means the
 /// appendix covers whichever the iterator saw first.
-fn shaderc_sys_vendored_sources_dir_in(metadata: &serde_json::Value) -> Result<PathBuf> {
+fn registry_crate_root_in(
+    metadata: &serde_json::Value,
+    vendoring_crate_name: &str,
+) -> Result<PathBuf> {
     let manifest_paths: Vec<&str> = metadata["packages"]
         .as_array()
         .context("cargo metadata has no packages array")?
         .iter()
-        .filter(|package| package["name"].as_str() == Some(SHADERC_VENDORING_CRATE_NAME))
+        .filter(|package| package["name"].as_str() == Some(vendoring_crate_name))
         .filter_map(|package| package["manifest_path"].as_str())
         .collect();
 
     let [manifest_path] = manifest_paths.as_slice() else {
         anyhow::bail!(
-            "expected exactly one {SHADERC_VENDORING_CRATE_NAME} in the graph, found {}. {}",
+            "expected exactly one {vendoring_crate_name} in the graph, found {}. {}",
             manifest_paths.len(),
             if manifest_paths.is_empty() {
-                "Four vendored C++ notices would be dropped entirely — update \
-                 SHADERC_VENDORING_CRATE_NAME if the GLSL compiler moved to another crate"
+                "Its vendored C++ notices would be dropped entirely — update the vendoring \
+                 crate name on the roster if the code moved to another crate"
             } else {
                 "The appendix would cover whichever copy came first, and say nothing about \
                  the rest"
@@ -345,7 +395,7 @@ fn shaderc_sys_vendored_sources_dir_in(metadata: &serde_json::Value) -> Result<P
     Ok(Path::new(manifest_path)
         .parent()
         .with_context(|| format!("{manifest_path} has no parent directory"))?
-        .join(SHADERC_VENDORED_SOURCES_DIR_NAME))
+        .to_path_buf())
 }
 
 /// Render the appended half: one section per vendored C++ project.
@@ -410,7 +460,7 @@ fn vendored_cpp_roster_bullets() -> String {
 fn joined_vendored_cpp_project_display_names(roster: VendoredCppNoticeRoster) -> String {
     let names: Vec<&str> = VENDORED_CPP_PROJECTS
         .iter()
-        .filter(|project| project.notice_source.roster() == roster)
+        .filter(|project| project.roster == roster)
         .map(|project| project.display_name)
         .collect();
 
@@ -427,12 +477,21 @@ fn read_vendored_cpp_notice(
     source_trees: &VendoredCppSourceTrees,
 ) -> Result<String> {
     let (path, notice) = match project.notice_source {
-        VendoredCppNoticeSource::ShadercSysLicenseFile {
-            path_relative_to_shaderc_sys_build_dir,
+        VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name,
+            path_relative_to_crate_root,
         } => {
-            let path = source_trees
-                .shaderc_sys_vendored_sources_dir
-                .join(path_relative_to_shaderc_sys_build_dir);
+            let crate_root = source_trees
+                .registry_crate_roots
+                .get(vendoring_crate_name)
+                .with_context(|| {
+                    format!(
+                        "no registry checkout was resolved for {vendoring_crate_name}, which \
+                         the {} notice is read out of",
+                        project.display_name
+                    )
+                })?;
+            let path = crate_root.join(path_relative_to_crate_root);
             let text = read_notice_file(&path, project.display_name)?;
             (path, text)
         }
@@ -556,14 +615,20 @@ mod tests {
     /// trees, so a re-vendor that drops a copyright line fails here.
     fn vendored_cpp_source_trees_fixture() -> (TempDir, VendoredCppSourceTrees) {
         let fixture = TempDir::new().expect("temp dir");
+        let mut registry_crate_roots = BTreeMap::new();
         for project in VENDORED_CPP_PROJECTS {
-            let VendoredCppNoticeSource::ShadercSysLicenseFile {
-                path_relative_to_shaderc_sys_build_dir,
+            let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+                vendoring_crate_name,
+                path_relative_to_crate_root,
             } = project.notice_source
             else {
                 continue;
             };
-            let path = fixture.path().join(path_relative_to_shaderc_sys_build_dir);
+            // One checkout per vendoring crate, so a path that is right for
+            // one crate's layout and wrong for another's fails here.
+            let crate_root = fixture.path().join(vendoring_crate_name);
+            registry_crate_roots.insert(vendoring_crate_name, crate_root.clone());
+            let path = crate_root.join(path_relative_to_crate_root);
             fs::create_dir_all(path.parent().expect("a licence file sits in a directory"))
                 .expect("fixture dir");
             fs::write(
@@ -573,7 +638,7 @@ mod tests {
             .expect("fixture licence file");
         }
         let source_trees = VendoredCppSourceTrees {
-            shaderc_sys_vendored_sources_dir: fixture.path().to_path_buf(),
+            registry_crate_roots,
             workspace_root: workspace_root(),
         };
         (fixture, source_trees)
@@ -608,14 +673,20 @@ mod tests {
             .iter()
             .find(|project| project.display_name == "glslang")
             .expect("glslang is one of the vendored projects");
-        let VendoredCppNoticeSource::ShadercSysLicenseFile {
-            path_relative_to_shaderc_sys_build_dir,
+        let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+            vendoring_crate_name,
+            path_relative_to_crate_root,
         } = moved.notice_source
         else {
-            panic!("glslang's notice comes from a shaderc-sys licence file")
+            panic!("glslang's notice comes from a registry crate's licence file")
         };
-        fs::remove_file(fixture.path().join(path_relative_to_shaderc_sys_build_dir))
-            .expect("remove");
+        fs::remove_file(
+            fixture
+                .path()
+                .join(vendoring_crate_name)
+                .join(path_relative_to_crate_root),
+        )
+        .expect("remove");
 
         let failure = render_vendored_cpp_appendix(&source_trees)
             .expect_err("a missing licence file must not render as an omitted section");
@@ -625,7 +696,7 @@ mod tests {
             "unhelpful failure: {reported}"
         );
         assert!(
-            reported.contains(path_relative_to_shaderc_sys_build_dir),
+            reported.contains(path_relative_to_crate_root),
             "unhelpful failure: {reported}"
         );
     }
@@ -668,8 +739,9 @@ mod tests {
             .filter(|project| {
                 matches!(
                     project.notice_source,
-                    VendoredCppNoticeSource::ShadercSysLicenseFile {
-                        path_relative_to_shaderc_sys_build_dir: path,
+                    VendoredCppNoticeSource::RegistryCrateLicenseFile {
+                        path_relative_to_crate_root: path,
+                        ..
                     } if path.ends_with("LICENSE.txt")
                 )
             })
@@ -713,12 +785,13 @@ mod tests {
             notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
                 header_path_relative_to_workspace_root: "header.h",
             },
+            roster: VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript,
         };
         let workspace = TempDir::new().expect("temp dir");
         fs::write(workspace.path().join("header.h"), "// just a description\n").expect("write");
 
         let source_trees = VendoredCppSourceTrees {
-            shaderc_sys_vendored_sources_dir: workspace.path().to_path_buf(),
+            registry_crate_roots: BTreeMap::new(),
             workspace_root: workspace.path().to_path_buf(),
         };
 
@@ -733,7 +806,7 @@ mod tests {
     #[test]
     fn a_graph_without_the_vendoring_crate_names_what_would_be_dropped() {
         let metadata = serde_json::json!({ "packages": [{ "name": "serde" }] });
-        let failure = shaderc_sys_vendored_sources_dir_in(&metadata)
+        let failure = registry_crate_root_in(&metadata, SHADERC_VENDORING_CRATE_NAME)
             .expect_err("no shaderc-sys means four notices vanish");
         let reported = format!("{failure:#}");
         assert!(
@@ -754,7 +827,7 @@ mod tests {
                 { "name": SHADERC_VENDORING_CRATE_NAME, "manifest_path": "/b/Cargo.toml" },
             ]
         });
-        let failure = shaderc_sys_vendored_sources_dir_in(&metadata)
+        let failure = registry_crate_root_in(&metadata, SHADERC_VENDORING_CRATE_NAME)
             .expect_err("two copies means the appendix silently covers one");
         assert!(
             format!("{failure:#}").contains("found 2"),
@@ -763,17 +836,57 @@ mod tests {
     }
 
     #[test]
-    fn the_vendoring_crates_build_directory_is_what_gets_scanned() {
+    fn a_vendoring_crates_own_checkout_root_is_what_gets_resolved() {
         let metadata = serde_json::json!({
-            "packages": [{
-                "name": SHADERC_VENDORING_CRATE_NAME,
-                "manifest_path": "/registry/shaderc-sys-0.10.1/Cargo.toml",
-            }]
+            "packages": [
+                {
+                    "name": SHADERC_VENDORING_CRATE_NAME,
+                    "manifest_path": "/registry/shaderc-sys-0.10.1/Cargo.toml",
+                },
+                {
+                    "name": OPUSIC_VENDORING_CRATE_NAME,
+                    "manifest_path": "/registry/opusic-sys-0.7.5/Cargo.toml",
+                },
+            ]
         });
         assert_eq!(
-            shaderc_sys_vendored_sources_dir_in(&metadata).expect("resolve"),
-            PathBuf::from("/registry/shaderc-sys-0.10.1/build")
+            registry_crate_root_in(&metadata, SHADERC_VENDORING_CRATE_NAME).expect("resolve"),
+            PathBuf::from("/registry/shaderc-sys-0.10.1")
         );
+        assert_eq!(
+            registry_crate_root_in(&metadata, OPUSIC_VENDORING_CRATE_NAME).expect("resolve"),
+            PathBuf::from("/registry/opusic-sys-0.7.5")
+        );
+    }
+
+    /// The two vendoring crates lay their notices out differently — one under
+    /// `build/`, one at the crate root — and the roster is what says so. A
+    /// path written for the wrong crate's convention reads nothing, so the
+    /// prefixes are locked rather than left to a reviewer to notice.
+    #[test]
+    fn each_vendoring_crates_notice_paths_follow_that_crates_own_layout() {
+        for project in VENDORED_CPP_PROJECTS {
+            let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+                vendoring_crate_name,
+                path_relative_to_crate_root,
+            } = project.notice_source
+            else {
+                continue;
+            };
+            match vendoring_crate_name {
+                SHADERC_VENDORING_CRATE_NAME => assert!(
+                    path_relative_to_crate_root.starts_with("build/"),
+                    "{} extracts its trees under build/, got {path_relative_to_crate_root}",
+                    project.display_name
+                ),
+                OPUSIC_VENDORING_CRATE_NAME => assert_eq!(
+                    path_relative_to_crate_root, "opus/COPYING",
+                    "{} reads libopus's own COPYING inside the bundled sources",
+                    project.display_name
+                ),
+                other => panic!("{other} has no stated notice layout"),
+            }
+        }
     }
 
     /// The wheel and the SDK crate both reach the notices by symlink, which a

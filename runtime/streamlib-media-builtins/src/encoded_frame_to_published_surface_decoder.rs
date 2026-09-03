@@ -39,9 +39,9 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
+use crate::encoded_stream_ordering::{ArrivingEncodedBagDisposition, EncodedStreamSyncPointGate};
 use crate::encoded_video_frame::{
-    ArrivingEncodedFrameDisposition, EncodedStreamSyncPointGate, EncodedVideoCodec,
-    EncodedVideoFrame, read_encoded_video_frame_bag,
+    EncodedVideoCodec, EncodedVideoFrame, read_encoded_video_frame_bag,
 };
 use crate::h273_color_vui_translation::h273_color_vui_to_color_info;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
@@ -169,10 +169,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     pub fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
-            frames_lost_to_gaps = self.sync_point_gate.frames_lost_to_gaps(),
-            frames_discarded_awaiting_a_sync_point = self
-                .sync_point_gate
-                .frames_discarded_awaiting_a_sync_point(),
+            frames_lost_to_gaps = self.sync_point_gate.bags_lost_to_gaps(),
+            frames_discarded_awaiting_a_sync_point =
+                self.sync_point_gate.bags_discarded_awaiting_a_sync_point(),
             "{}: teardown",
             Identity::PROCESSOR_NAME
         );
@@ -222,11 +221,11 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             .sync_point_gate
             .admit(encoded_frame.sequence_index, encoded_frame.is_sync_point)
         {
-            ArrivingEncodedFrameDisposition::Decode => {}
-            ArrivingEncodedFrameDisposition::ReEnterAtThisSyncPoint => {
+            ArrivingEncodedBagDisposition::Decode => {}
+            ArrivingEncodedBagDisposition::ReEnterAtThisSyncPoint => {
                 self.reset_parser_state_before_re_entering(&encoded_frame)?;
             }
-            ArrivingEncodedFrameDisposition::DiscardUntilTheNextSyncPoint => return Ok(()),
+            ArrivingEncodedBagDisposition::DiscardUntilTheNextSyncPoint => return Ok(()),
         }
 
         let (decoded_frames, published_color) = {
@@ -327,10 +326,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 sequence_index = encoded_frame.sequence_index,
                 group_index = encoded_frame.group_index,
                 stream_re_entries,
-                frames_lost_to_gaps = self.sync_point_gate.frames_lost_to_gaps(),
-                frames_discarded_awaiting_a_sync_point = self
-                    .sync_point_gate
-                    .frames_discarded_awaiting_a_sync_point(),
+                frames_lost_to_gaps = self.sync_point_gate.bags_lost_to_gaps(),
+                frames_discarded_awaiting_a_sync_point =
+                    self.sync_point_gate.bags_discarded_awaiting_a_sync_point(),
                 "{}: entering the stream at a sync point",
                 Identity::PROCESSOR_NAME
             );

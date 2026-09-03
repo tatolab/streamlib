@@ -25,7 +25,8 @@ use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess}
 use streamlib::sdk::engine::video::{EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
 use streamlib::sdk::error::{Error, Result};
 
-use crate::encoded_video_frame::{EncodedFrameOrderingPairCounter, EncodedVideoFrame};
+use crate::encoded_stream_ordering::EncodedStreamOrderingPairCounter;
+use crate::encoded_video_frame::EncodedVideoFrame;
 use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
 use crate::video_frame::{ColorInfo, VideoFrame};
@@ -111,7 +112,7 @@ pub struct PublishedSurfaceToEncodedFrameEncoder<Identity: HardwareVideoCodecPro
     /// escalate gate — and its device-idle drain — on every camera frame.
     session_mint_already_failed: bool,
     gpu_context: Option<GpuContextLimitedAccess>,
-    ordering_pair_counter: EncodedFrameOrderingPairCounter,
+    ordering_pair_counter: EncodedStreamOrderingPairCounter,
     frames_encoded: u64,
     frames_that_failed_to_encode: u64,
     codec_identity: PhantomData<Identity>,
@@ -127,7 +128,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
             encode_session: None,
             session_mint_already_failed: false,
             gpu_context: None,
-            ordering_pair_counter: EncodedFrameOrderingPairCounter::default(),
+            ordering_pair_counter: EncodedStreamOrderingPairCounter::default(),
             frames_encoded: 0,
             frames_that_failed_to_encode: 0,
             codec_identity: PhantomData,
@@ -272,7 +273,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     ) -> EncodedFrameAwaitingPublication {
         let ordering_pair = self
             .ordering_pair_counter
-            .account_published_frame(packet.is_keyframe);
+            .account_published_bag(packet.is_keyframe);
         EncodedFrameAwaitingPublication {
             timestamp_ns: packet.timestamp_ns.unwrap_or(source_frame_timestamp_ns),
             frame: EncodedVideoFrame {

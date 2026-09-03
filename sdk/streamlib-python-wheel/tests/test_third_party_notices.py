@@ -19,7 +19,9 @@ from importlib.metadata import distribution
 import pytest
 
 # The C++ projects compiled into the engine from vendored sources. Four arrive
-# through `shaderc-sys` as `libshaderc_combined.a`; VulkanMemoryAllocator and
+# through `shaderc-sys` as `libshaderc_combined.a`; libopus arrives through
+# `opusic-sys`, statically linked as `libopus.a` so the wheel carries the Opus
+# codec without a `DT_NEEDED` entry; VulkanMemoryAllocator and
 # Vulkan-Headers are checked into `vendor/tatolab-vulkanalia-vma/` and compiled
 # by its build script; PipeWire's SPA layer is checked into
 # `vendor/pipewire-headers/` and compiled by the engine's own build script — no
@@ -32,6 +34,7 @@ VENDORED_CPP_PROJECT_NAMES = (
     "glslang",
     "SPIRV-Tools",
     "SPIRV-Headers",
+    "libopus",
     "VulkanMemoryAllocator",
     "Vulkan-Headers",
     "PipeWire",

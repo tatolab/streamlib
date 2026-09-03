@@ -11,6 +11,7 @@
 
 pub mod audio_block;
 pub(crate) mod audio_samples_awaiting_playback_ring;
+pub mod audio_window_to_encoded_packet_encoder;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
@@ -20,8 +21,11 @@ pub(crate) mod cumulative_count_report_threshold;
 pub mod display_window;
 #[cfg(test)]
 mod emitted_log_line_test_support;
+pub mod encoded_audio_packet;
 #[cfg(target_os = "linux")]
 pub mod encoded_frame_to_published_surface_decoder;
+pub mod encoded_packet_to_audio_block_decoder;
+pub mod encoded_stream_ordering;
 pub mod encoded_video_frame;
 #[cfg(target_os = "linux")]
 pub mod h264_decoder;
@@ -38,6 +42,9 @@ pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
+pub mod opus_decoder;
+pub mod opus_encoder;
+pub mod opus_stream_layout;
 pub mod pooled_rgba_frame_staging;
 pub(crate) mod processor_thread_join;
 #[cfg(target_os = "linux")]
@@ -51,16 +58,23 @@ pub mod video_frame;
 mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
+pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 #[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
 #[cfg(target_os = "linux")]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
+pub use encoded_audio_packet::{
+    EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
+    read_encoded_audio_packet_bag,
+};
 #[cfg(target_os = "linux")]
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
+pub use encoded_stream_ordering::{
+    ArrivingEncodedBagDisposition, EncodedStreamOrderingPair, EncodedStreamOrderingPairCounter,
+    EncodedStreamSyncPointGate,
+};
 pub use encoded_video_frame::{
-    ArrivingEncodedFrameDisposition, EncodedFrameOrderingPair, EncodedFrameOrderingPairCounter,
-    EncodedStreamSyncPointGate, EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal,
-    read_encoded_video_frame_bag,
+    EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal, read_encoded_video_frame_bag,
 };
 #[cfg(target_os = "linux")]
 pub use h264_decoder::H264Decoder;
@@ -71,6 +85,8 @@ pub use h265_decoder::H265Decoder;
 #[cfg(target_os = "linux")]
 pub use h265_encoder::H265Encoder;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
+pub use opus_decoder::OpusDecoder;
+pub use opus_encoder::OpusEncoder;
 pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 #[cfg(target_os = "linux")]
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
@@ -87,6 +103,8 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<test_pattern_source::TestPatternSource::Processor>();
     PROCESSOR_REGISTRY.register::<microphone_source::MicrophoneSource::Processor>();
     PROCESSOR_REGISTRY.register::<speaker_sink::SpeakerSink::Processor>();
+    PROCESSOR_REGISTRY.register::<opus_encoder::OpusEncoder::Processor>();
+    PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(target_os = "linux")]
