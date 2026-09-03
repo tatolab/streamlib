@@ -85,9 +85,14 @@ done
 # silence is also what a stalled graph looks like and the two need different
 # fixes. The decoder refuses a packet it cannot read; the encoder refuses a
 # channel count Opus cannot place.
-if grep -qE "Opus(Encoder|Decoder):" "$OUTPUT_DIR/node.log"; then
+#
+# Gated on the level, because both blocks narrate their healthy mint and their
+# teardown counts at INFO and a gap at WARN — a bare name match would call
+# every passing run a refusal.
+OPUS_REFUSALS='\[ERROR\].*Opus(Encoder|Decoder)'
+if grep -qE "$OPUS_REFUSALS" "$OUTPUT_DIR/node.log"; then
     echo "ERROR: an Opus block refused what it was handed — see the reason below" >&2
-    grep -E "Opus(Encoder|Decoder):" "$OUTPUT_DIR/node.log" >&2
+    grep -E "$OPUS_REFUSALS" "$OUTPUT_DIR/node.log" >&2
     exit 1
 fi
 
