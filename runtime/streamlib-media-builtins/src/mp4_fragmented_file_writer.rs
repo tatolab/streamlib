@@ -1392,4 +1392,65 @@ mod tests {
         assert!(writer.header_already_written(), "every track can now be described");
         assert!(writer.inbound_links_still_silent().is_empty());
     }
+
+    #[test]
+    fn a_fragment_closes_at_the_pacing_video_tracks_sync_points() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        // Interleaved the way a real recording arrives: both links deliver
+        // from the start, so `moov` lands on the first pair.
+        for index in 0..18usize {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 6 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+        }
+        let tally = writer.finish().expect("closes");
+
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let fragments = every_moof(&atoms);
+        assert!(
+            fragments.len() >= 3,
+            "a fragment closes at each sync point of the pacing video track, got {}",
+            fragments.len()
+        );
+        assert_eq!(tally.fragments_written as usize, fragments.len());
+
+        let sequence_numbers: Vec<u32> =
+            fragments.iter().map(|moof| moof.mfhd.sequence_number).collect();
+        let mut expected: Vec<u32> = (1..=fragments.len() as u32).collect();
+        expected.sort_unstable();
+        assert_eq!(
+            sequence_numbers, expected,
+            "fragment sequence numbers run 1..n with no gap"
+        );
+
+        // Each track's decode time advances monotonically across fragments,
+        // which is what keeps the two tracks aligned to the one epoch.
+        for track_id in [1u32, 2u32] {
+            let decode_times: Vec<u64> = fragments
+                .iter()
+                .flat_map(|moof| moof.traf.iter())
+                .filter(|traf| traf.tfhd.track_id == track_id)
+                .filter_map(|traf| traf.tfdt.as_ref().map(|tfdt| tfdt.base_media_decode_time))
+                .collect();
+            assert!(
+                decode_times.windows(2).all(|pair| pair[0] < pair[1]),
+                "track {track_id} decode times must advance: {decode_times:?}"
+            );
+        }
+    }
 }

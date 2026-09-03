@@ -20,6 +20,7 @@ pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
+mod mp4_inspect;
 pub mod normal_build_dep_graph;
 pub mod psnr;
 
@@ -746,6 +747,12 @@ enum Commands {
     #[command(subcommand)]
     Psnr(psnr::PsnrCommand),
 
+    /// Report what a recording actually contains — tracks and the inbound
+    /// link each one was named after, sample entries, fragments and durations
+    /// — as JSON. Pure Rust over `mp4-atom`, the same pin `Mp4Sink` writes
+    /// with, so nothing downstream needs ffprobe.
+    Mp4Inspect(mp4_inspect::Mp4InspectCommand),
+
     /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
     /// via `cargo about generate`, plus the vendored C++ projects that are not
     /// packages in the Cargo resolve graph and so reach the file only by being
@@ -798,6 +805,7 @@ fn main() -> Result<()> {
         Commands::CheckAllSourceGates => run_all_source_walking_gates(&workspace_root()?)?,
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
+        Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,
         Commands::GenerateThirdPartyNotices => {
             generate_third_party_notices::run(&workspace_root()?)?
         }
