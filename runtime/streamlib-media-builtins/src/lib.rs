@@ -41,6 +41,7 @@ pub mod h273_color_vui_translation;
 pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 pub mod mp4_annex_b_access_unit;
+pub mod mp4_fragmented_file_writer;
 pub mod mp4_track_sample_entry;
 #[cfg(test)]
 mod msgpack_wire_test_support;
