@@ -10,9 +10,7 @@
 //! known before the first fragment closes, which is why the writer holds bags
 //! until every track has delivered a sync point.
 
-use mp4_atom::{
-    Audio, Avc1, Avcc, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual,
-};
+use mp4_atom::{Audio, Avc1, Avcc, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual};
 use streamlib::sdk::engine::video::nv_video_parser::byte_stream_parser::remove_emulation_prevention_bytes;
 use streamlib::sdk::engine::video::nv_video_parser::vulkan_h265_decoder::{
     BitstreamReader as H265BitstreamReader, VulkanH265Decoder,
@@ -185,7 +183,8 @@ pub fn build_hvc1_sample_entry(
     let sequence_parameter_set = &parameter_sets.sequence_parameter_set_nal_units[0];
     // Two-byte NAL header, then the RBSP the bit reader and the fixed-offset
     // read both work over.
-    let sequence_parameter_set_rbsp = remove_emulation_prevention_bytes(&sequence_parameter_set[2..]);
+    let sequence_parameter_set_rbsp =
+        remove_emulation_prevention_bytes(&sequence_parameter_set[2..]);
     let profile_tier_level_end =
         H265_PROFILE_TIER_LEVEL_OFFSET_IN_SPS_RBSP + H265_PROFILE_TIER_LEVEL_BYTES;
     if sequence_parameter_set_rbsp.len() < profile_tier_level_end {
@@ -199,11 +198,12 @@ pub fn build_hvc1_sample_entry(
         [H265_PROFILE_TIER_LEVEL_OFFSET_IN_SPS_RBSP..profile_tier_level_end];
 
     let mut reader = H265BitstreamReader::new(&sequence_parameter_set_rbsp);
-    let parsed_sequence_parameter_set = VulkanH265Decoder::parse_sps(&mut reader).ok_or_else(|| {
-        Mp4SampleEntryRefusal::SequenceParameterSetUnparsable {
-            inbound_link_name: inbound_link_name.to_string(),
-        }
-    })?;
+    let parsed_sequence_parameter_set =
+        VulkanH265Decoder::parse_sps(&mut reader).ok_or_else(|| {
+            Mp4SampleEntryRefusal::SequenceParameterSetUnparsable {
+                inbound_link_name: inbound_link_name.to_string(),
+            }
+        })?;
 
     let mut hvcc = Hvcc::new();
     hvcc.general_profile_space = (profile_tier_level[0] >> 6) & 0b11;

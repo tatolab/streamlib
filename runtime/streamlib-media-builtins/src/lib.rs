@@ -89,8 +89,8 @@ pub use h265_decoder::H265Decoder;
 #[cfg(target_os = "linux")]
 pub use h265_encoder::H265Encoder;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
-pub use opus_decoder::OpusDecoder;
 pub use mp4_sink::Mp4Sink;
+pub use opus_decoder::OpusDecoder;
 pub use opus_encoder::OpusEncoder;
 pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 #[cfg(target_os = "linux")]

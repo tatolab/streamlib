@@ -29,8 +29,8 @@ pub fn run(command: Mp4InspectCommand) -> Result<()> {
 
 /// Read one file into the report `mp4-inspect` prints.
 pub fn inspect_file(path: &Path) -> Result<Value> {
-    let file_bytes = std::fs::read(path)
-        .with_context(|| format!("{} could not be read", path.display()))?;
+    let file_bytes =
+        std::fs::read(path).with_context(|| format!("{} could not be read", path.display()))?;
     inspect_bytes(&file_bytes)
 }
 
@@ -62,7 +62,9 @@ pub fn inspect_bytes(file_bytes: &[u8]) -> Result<Value> {
     }
 
     let Some(moov) = moov else {
-        bail!("the file carries no `moov`, so it describes no track — a recording whose header never landed");
+        bail!(
+            "the file carries no `moov`, so it describes no track — a recording whose header never landed"
+        );
     };
 
     let tracks: Vec<Value> = moov
@@ -205,9 +207,9 @@ mod tests {
     /// and the reader cannot drift apart.
     fn one_opus_track_file() -> Vec<u8> {
         use mp4_atom::{
-            Audio, Dinf, Dops, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd,
-            Minf, Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak,
-            Trex, Trun, TrunEntry, Url,
+            Audio, Dinf, Dops, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd, Minf,
+            Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex,
+            Trun, TrunEntry, Url,
         };
 
         let mut bytes = Vec::new();

@@ -17,8 +17,9 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use mp4_atom::{
-    Any, DecodeMaybe, Codec, Dinf, Dref, Encode, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd, Minf, Moof, Moov,
-    Mvex, Mvhd, Smhd, Stbl, Stsd, Tfdt, Tfhd, Trak, Traf, Trex, Trun, TrunEntry, Tkhd, Url, Vmhd,
+    Any, Codec, DecodeMaybe, Dinf, Dref, Encode, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd, Minf, Moof,
+    Moov, Mvex, Mvhd, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url,
+    Vmhd,
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
@@ -293,7 +294,9 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             return Ok(());
         }
 
-        let grammar = media.nal_header_grammar().expect("a video track has a grammar");
+        let grammar = media
+            .nal_header_grammar()
+            .expect("a video track has a grammar");
         let split = length_prefix_annex_b_access_unit(&frame.annex_b_access_unit_bytes, grammar);
 
         if frame.is_sync_point && split.parameter_sets.is_complete_for(grammar) {
@@ -356,13 +359,14 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             self.close_open_fragment()?;
         }
 
-        let previous = self.tracks[track_index].held_back_video_sample.replace(
-            HeldBackVideoSample {
-                sample_bytes: split.length_prefixed_sample_bytes,
-                timestamp_ns,
-                is_sync_point: frame.is_sync_point,
-            },
-        );
+        let previous =
+            self.tracks[track_index]
+                .held_back_video_sample
+                .replace(HeldBackVideoSample {
+                    sample_bytes: split.length_prefixed_sample_bytes,
+                    timestamp_ns,
+                    is_sync_point: frame.is_sync_point,
+                });
         if let Some(previous) = previous {
             let duration_ns = timestamp_ns.saturating_sub(previous.timestamp_ns).max(0);
             self.tracks[track_index]
@@ -545,7 +549,9 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         }
         .encode(&mut header_bytes)
         .map_err(box_write_failure)?;
-        self.build_moov()?.encode(&mut header_bytes).map_err(box_write_failure)?;
+        self.build_moov()?
+            .encode(&mut header_bytes)
+            .map_err(box_write_failure)?;
         self.sink.write_all(&header_bytes)?;
 
         // Each track's first `tfdt` is its own offset from the epoch.
@@ -609,8 +615,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                         name: track.inbound_link_name.clone(),
                     },
                     minf: Minf {
-                        vmhd: matches!(media, Mp4TrackMedia::Video(_))
-                            .then(|| Vmhd::default()),
+                        vmhd: matches!(media, Mp4TrackMedia::Video(_)).then(Vmhd::default),
                         smhd: matches!(media, Mp4TrackMedia::Audio).then(Smhd::default),
                         dinf: Dinf {
                             dref: Dref {
@@ -677,7 +682,8 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         moof = self.build_moof(&contributing, &data_offsets)?;
 
         let mut fragment_bytes = Vec::new();
-        moof.encode(&mut fragment_bytes).map_err(box_write_failure)?;
+        moof.encode(&mut fragment_bytes)
+            .map_err(box_write_failure)?;
         debug_assert_eq!(
             fragment_bytes.len(),
             moof_bytes,
@@ -702,8 +708,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 .iter()
                 .map(|sample| sample.duration_in_track_timescale)
                 .sum();
-            self.tally.samples_written +=
-                self.tracks[index].samples_awaiting_fragment.len() as u64;
+            self.tally.samples_written += self.tracks[index].samples_awaiting_fragment.len() as u64;
             self.tracks[index].next_fragment_decode_time_in_track_timescale += written as u64;
             self.tracks[index].samples_awaiting_fragment.clear();
         }
@@ -862,14 +867,22 @@ mod tests {
         bytes
     }
 
-    fn h264_bag(sequence_index: u64, is_sync_point: bool, sequence_parameter_set: &[u8]) -> Vec<u8> {
+    fn h264_bag(
+        sequence_index: u64,
+        is_sync_point: bool,
+        sequence_parameter_set: &[u8],
+    ) -> Vec<u8> {
         let coded_slice: &[u8] = if is_sync_point {
             &[0x65, 0x88, 0x84, 0x21]
         } else {
             &[0x41, 0x9A, 0x22, 0x33]
         };
         let access_unit = if is_sync_point {
-            annex_b(&[sequence_parameter_set, H264_PICTURE_PARAMETER_SET, coded_slice])
+            annex_b(&[
+                sequence_parameter_set,
+                H264_PICTURE_PARAMETER_SET,
+                coded_slice,
+            ])
         } else {
             annex_b(&[coded_slice])
         };
@@ -908,8 +921,7 @@ mod tests {
 
     fn write_one_video_track(frames: usize) -> (Vec<u8>, Mp4SinkRunTally) {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
         for index in 0..frames {
             writer
                 .accept_bag(
@@ -951,7 +963,11 @@ mod tests {
             &["camera/video".to_string(), "microphone/audio".to_string()],
         );
         writer
-            .accept_bag("camera/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
             .expect("accepted");
         writer
             .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
@@ -985,7 +1001,11 @@ mod tests {
             "each track is named by the source channel name its link subscribed to"
         );
         assert_eq!(
-            moov.mvex.as_ref().expect("a fragmented file has mvex").trex.len(),
+            moov.mvex
+                .as_ref()
+                .expect("a fragmented file has mvex")
+                .trex
+                .len(),
             2,
             "every track has a trex"
         );
@@ -1017,8 +1037,7 @@ mod tests {
     #[test]
     fn an_opus_track_states_its_channels_and_the_encoders_pre_skip() {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         for index in 0..3u64 {
             writer
                 .accept_bag(
@@ -1110,7 +1129,11 @@ mod tests {
         // The camera is the epoch; the microphone starts 100 ms later.
         let microphone_offset_ns = 100_000_000i64;
         writer
-            .accept_bag("camera/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
             .expect("accepted");
         writer
             .accept_bag("microphone/audio", &opus_bag(0, 2), microphone_offset_ns)
@@ -1174,8 +1197,7 @@ mod tests {
     #[test]
     fn an_opus_samples_duration_is_its_own_sample_count() {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         for index in 0..5u64 {
             writer
                 .accept_bag(
@@ -1195,14 +1217,17 @@ mod tests {
             .flat_map(|trun| trun.entries.iter())
             .filter_map(|entry| entry.duration)
             .collect();
-        assert_eq!(durations, vec![960; 5], "each sample spans its sample_count");
+        assert_eq!(
+            durations,
+            vec![960; 5],
+            "each sample spans its sample_count"
+        );
     }
 
     #[test]
     fn a_file_truncated_at_any_fragment_boundary_re_parses_cleanly() {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
         // Four sync points, so four fragment boundaries land in the file.
         for index in 0..12usize {
             writer
@@ -1247,7 +1272,11 @@ mod tests {
             &["camera/video".to_string(), "microphone/audio".to_string()],
         );
         writer
-            .accept_bag("camera/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
             .expect("accepted");
         writer
             .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
@@ -1279,7 +1308,10 @@ mod tests {
         }
         let tally = writer.finish().expect("closes");
 
-        assert_eq!(tally.tracks_latched, 1, "exactly the offending track stopped");
+        assert_eq!(
+            tally.tracks_latched, 1,
+            "exactly the offending track stopped"
+        );
         let atoms = parse_written_atoms(&file).expect("the file stays readable");
         assert_eq!(
             only_moov(&atoms).trak.len(),
@@ -1302,8 +1334,7 @@ mod tests {
     #[test]
     fn an_opus_track_whose_channel_count_changes_stops_naming_both_counts() {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         writer
             .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
             .expect("accepted");
@@ -1322,8 +1353,7 @@ mod tests {
     #[test]
     fn a_bag_stamped_at_or_before_the_last_written_one_is_dropped_and_counted() {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         writer
             .accept_bag("microphone/audio", &opus_bag(0, 1), 5_000)
             .expect("accepted");
@@ -1362,10 +1392,13 @@ mod tests {
     #[test]
     fn a_bag_on_a_link_the_sink_never_enumerated_is_an_error_not_a_latch() {
         let mut file = Vec::new();
-        let mut writer =
-            Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
         let failure = writer
-            .accept_bag("ghost/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .accept_bag(
+                "ghost/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
             .expect_err("a link that was never wired cannot have a track");
         assert!(failure.to_string().contains("ghost/video"));
     }
@@ -1378,18 +1411,28 @@ mod tests {
             &["camera/video".to_string(), "microphone/audio".to_string()],
         );
         writer
-            .accept_bag("camera/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
             .expect("accepted");
         assert!(
             !writer.header_already_written(),
             "a sample entry needs the Opus header, so moov waits on the silent link"
         );
-        assert_eq!(writer.inbound_links_still_silent(), vec!["microphone/audio"]);
+        assert_eq!(
+            writer.inbound_links_still_silent(),
+            vec!["microphone/audio"]
+        );
 
         writer
             .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
             .expect("accepted");
-        assert!(writer.header_already_written(), "every track can now be described");
+        assert!(
+            writer.header_already_written(),
+            "every track can now be described"
+        );
         assert!(writer.inbound_links_still_silent().is_empty());
     }
 
@@ -1429,8 +1472,10 @@ mod tests {
         );
         assert_eq!(tally.fragments_written as usize, fragments.len());
 
-        let sequence_numbers: Vec<u32> =
-            fragments.iter().map(|moof| moof.mfhd.sequence_number).collect();
+        let sequence_numbers: Vec<u32> = fragments
+            .iter()
+            .map(|moof| moof.mfhd.sequence_number)
+            .collect();
         let mut expected: Vec<u32> = (1..=fragments.len() as u32).collect();
         expected.sort_unstable();
         assert_eq!(

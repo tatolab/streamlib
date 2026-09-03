@@ -282,10 +282,8 @@ mod tests {
         three_byte_prefixed.extend_from_slice(&[0x00, 0x00, 0x01]);
         three_byte_prefixed.extend_from_slice(&[0x41, 0xCC, 0xDD]);
 
-        let split = length_prefix_annex_b_access_unit(
-            &three_byte_prefixed,
-            AnnexBNalHeaderGrammar::H264,
-        );
+        let split =
+            length_prefix_annex_b_access_unit(&three_byte_prefixed, AnnexBNalHeaderGrammar::H264);
 
         let mut expected = Vec::new();
         expected.extend_from_slice(&3u32.to_be_bytes());
