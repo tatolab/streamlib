@@ -37,6 +37,7 @@ use super::audio_window::{
 };
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
+use super::channel_name::InboundLinkName;
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
@@ -55,6 +56,10 @@ type SharedAudioWindowStage = Arc<parking_lot::Mutex<AudioWindowAccumulator>>;
 pub(super) struct BagBodyForTheReader {
     pub(super) body: Vec<u8>,
     pub(super) first_sample_or_publish_timestamp_ns: i64,
+    /// The link this body came in on. `None` where nothing delivered it — a
+    /// manually injected frame — and filled in for a window by the port that
+    /// staged it, since a window is cut from bags rather than being one.
+    pub(super) inbound_link_name: Option<InboundLinkName>,
 }
 
 /// The one spelling of "this port was never configured".
@@ -79,6 +84,10 @@ struct PortBoundSubscriber {
     /// one must go.
     link_id: String,
     local_port: String,
+    /// The source channel name this subscriber subscribed to — the name a read
+    /// hands back for every frame it delivers, and the name `graph` and `tap`
+    /// show for the same link.
+    inbound_link_name: InboundLinkName,
     subscriber: Subscriber<ipc::Service, [u8], ()>,
     /// This link's share of the destination's dropped-bag counts. Every frame
     /// this subscriber delivers is queued holding it, so an eviction names the
@@ -110,6 +119,7 @@ impl SendableChannelSubscribers {
         &self,
         link_id: String,
         local_port: String,
+        inbound_link_name: InboundLinkName,
         subscriber: Subscriber<ipc::Service, [u8], ()>,
         dropped_bag_counter: InboundLinkDroppedBagCounter,
     ) {
@@ -118,6 +128,7 @@ impl SendableChannelSubscribers {
             (*self.0.get()).push(PortBoundSubscriber {
                 link_id,
                 local_port,
+                inbound_link_name,
                 subscriber,
                 dropped_bag_counter,
             });
@@ -144,9 +155,20 @@ impl SendableChannelSubscribers {
         unsafe { (*self.0.get()).iter().any(|b| b.local_port == local_port) }
     }
 
-    fn iter(&self) -> &[PortBoundSubscriber] {
+    fn as_slice(&self) -> &[PortBoundSubscriber] {
         // SAFETY: Only called from the processor's execution thread.
         unsafe { &*self.0.get() }
+    }
+
+    /// The bindings feeding one local input port, in wiring order — a
+    /// destination fanning in N links holds N of them on that one port.
+    fn bound_to_local_port<'a>(
+        &'a self,
+        local_port: &'a str,
+    ) -> impl Iterator<Item = &'a PortBoundSubscriber> {
+        self.as_slice()
+            .iter()
+            .filter(move |bound| bound.local_port == local_port)
     }
 
     fn is_empty(&self) -> bool {
@@ -208,6 +230,9 @@ pub enum BoundedReadOutcome {
         data: Vec<u8>,
         /// The frame's monotonic timestamp.
         timestamp_ns: i64,
+        /// The inbound link it arrived on; `None` for a manually injected
+        /// frame, which no link delivered.
+        inbound_link_name: Option<InboundLinkName>,
     },
     /// The next frame is `required_bytes` long — larger than the caller's
     /// buffer. The caller must resize to at least this many bytes and read
@@ -663,14 +688,47 @@ impl InputMailboxesInner {
         &self,
         local_port: &str,
         link_id: &str,
+        inbound_link_name: &InboundLinkName,
         subscriber: Subscriber<ipc::Service, [u8], ()>,
     ) {
         self.subscribers.push(
             link_id.to_string(),
             local_port.to_string(),
+            inbound_link_name.clone(),
             subscriber,
             self.dropped_bag_counts.counter_for_inbound_link(link_id),
         );
+    }
+
+    /// Every inbound link feeding `port`, in wiring order.
+    ///
+    /// Readable from `setup()`: a port's mailbox exists only once a link is
+    /// wired into it, and WIRE runs before `setup()`, so a destination asking
+    /// here learns how many producers it owes before the first bag arrives. A
+    /// port with no links lists none rather than refusing — an unconnected
+    /// input is a legal graph, not an error.
+    ///
+    /// Note: This should only be called from the processor's execution thread.
+    pub fn inbound_link_names(&self, port: &str) -> Vec<InboundLinkName> {
+        self.subscribers
+            .bound_to_local_port(port)
+            .map(|bound| bound.inbound_link_name.clone())
+            .collect()
+    }
+
+    /// The one link feeding `port`, or `None` where it has none or several.
+    ///
+    /// What a windowed port reads its name off: a window is cut from bags
+    /// rather than being one, so no entry carries the name — but a windowed
+    /// port takes exactly one link (a second is refused at wire time), so the
+    /// port itself answers.
+    fn the_single_inbound_link_name_of(&self, port: &str) -> Option<InboundLinkName> {
+        let mut feeding = self.subscribers.bound_to_local_port(port);
+        let only = feeding.next()?;
+        feeding
+            .next()
+            .is_none()
+            .then(|| only.inbound_link_name.clone())
     }
 
     /// This processor's per-inbound-link dropped-bag counts, shared with the
@@ -756,7 +814,7 @@ impl InputMailboxesInner {
     ///
     /// Note: This should only be called from the thread that owns the subscribers.
     pub fn receive_pending(&self) {
-        for bound in self.subscribers.iter() {
+        for bound in self.subscribers.as_slice() {
             loop {
                 match bound.subscriber.receive() {
                     Ok(Some(sample)) => {
@@ -787,6 +845,7 @@ impl InputMailboxesInner {
                             port_config.mailbox.push_frame_from_inbound_link(
                                 slice.to_vec(),
                                 &bound.dropped_bag_counter,
+                                &bound.inbound_link_name,
                             );
                         } else {
                             tracing::warn!(
@@ -855,6 +914,7 @@ impl InputMailboxesInner {
             return Ok(BoundedReadOutcome::Frame {
                 data: candidate.body,
                 timestamp_ns: candidate.first_sample_or_publish_timestamp_ns,
+                inbound_link_name: candidate.inbound_link_name,
             });
         }
 
@@ -878,9 +938,11 @@ impl InputMailboxesInner {
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
             }
         };
-        let Some(mut frame_bytes_from_wire) = raw else {
+        let Some(delivered) = raw else {
             return Ok(None);
         };
+        let inbound_link_name = delivered.inbound_link_name;
+        let mut frame_bytes_from_wire = delivered.payload;
 
         let header = FrameHeader::read_from_slice(&frame_bytes_from_wire);
         let stamped_payload_bytes = header.len as usize;
@@ -900,6 +962,7 @@ impl InputMailboxesInner {
         Ok(Some(BagBodyForTheReader {
             body: frame_bytes_from_wire,
             first_sample_or_publish_timestamp_ns: header.timestamp_ns,
+            inbound_link_name,
         }))
     }
 
@@ -917,7 +980,10 @@ impl InputMailboxesInner {
     ) -> Result<Option<BagBodyForTheReader>> {
         loop {
             if let Some(window) = stage.lock().next_ready_window()? {
-                return Ok(Some(window));
+                return Ok(Some(BagBodyForTheReader {
+                    inbound_link_name: self.the_single_inbound_link_name_of(port),
+                    ..window
+                }));
             }
             let Some(bag) = self.pop_one_bag_off_the_mailbox(port)? else {
                 return Ok(None);
@@ -933,12 +999,73 @@ impl InputMailboxesInner {
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         match self.read_raw_bounded(port, usize::MAX)? {
             BoundedReadOutcome::Empty => Ok(None),
-            BoundedReadOutcome::Frame { data, timestamp_ns } => Ok(Some((data, timestamp_ns))),
+            BoundedReadOutcome::Frame {
+                data, timestamp_ns, ..
+            } => Ok(Some((data, timestamp_ns))),
             // Unreachable: usize::MAX cap always fits.
             BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => Err(Error::Link(format!(
                 "read_raw: frame of {required_bytes} bytes did not fit an unbounded buffer"
             ))),
         }
+    }
+
+    /// The next frame for `port` with the inbound link it arrived on.
+    ///
+    /// The read a destination fanning in N links uses: the mailbox already
+    /// queues every frame holding the link it came in on — that is how an
+    /// eviction is charged to the right one — and this hands that identity back
+    /// rather than leaving a reader unable to tell its producers apart.
+    ///
+    /// Bags from one link arrive in the order that link sent them. Nothing is
+    /// promised about how two links interleave: that follows the receive pass,
+    /// not the stamps, so a reader that needs time order reasons per link.
+    ///
+    /// A bag no link delivered — the manual-injection path — is refused by name
+    /// rather than borrowing another link's identity. [`Self::read_raw`] reads
+    /// it unchanged.
+    pub fn read_raw_from_inbound_link(
+        &self,
+        port: &str,
+    ) -> Result<Option<(Vec<u8>, i64, InboundLinkName)>> {
+        match self.read_raw_bounded(port, usize::MAX)? {
+            BoundedReadOutcome::Empty => Ok(None),
+            BoundedReadOutcome::Frame {
+                data,
+                timestamp_ns,
+                inbound_link_name,
+            } => match inbound_link_name {
+                Some(inbound_link_name) => Ok(Some((data, timestamp_ns, inbound_link_name))),
+                None => Err(Error::Link(format!(
+                    "a bag on input port '{port}' was injected rather than delivered by a \
+                     link, so there is no inbound link to name. Read it with `read_raw`"
+                ))),
+            },
+            // Unreachable: usize::MAX cap always fits.
+            BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => Err(Error::Link(format!(
+                "read_raw_from_inbound_link: frame of {required_bytes} bytes did not fit an \
+                 unbounded buffer"
+            ))),
+        }
+    }
+
+    /// The next frame for `port` deserialized into `T`, with the inbound link
+    /// it arrived on, or `None` when the mailbox is empty.
+    ///
+    /// `None` rather than an error on an empty mailbox, unlike
+    /// [`InputMailboxes::read`]: a destination fanning in N links reads until
+    /// its port runs dry, and an empty port is that loop ending.
+    pub fn read_from_inbound_link<T: DeserializeOwned>(
+        &self,
+        port: &str,
+    ) -> Result<Option<(T, InboundLinkName)>> {
+        let Some((body, _timestamp_ns, inbound_link_name)) =
+            self.read_raw_from_inbound_link(port)?
+        else {
+            return Ok(None);
+        };
+        let value = rmp_serde::from_slice(&body)
+            .map_err(|e| Error::Link(format!("Failed to deserialize frame: {}", e)))?;
+        Ok(Some((value, inbound_link_name)))
     }
 
     /// Check if a port has any payloads available. This first
@@ -1156,6 +1283,58 @@ impl InputMailboxes {
             return Ok(None);
         };
         inner.read_raw(port)
+    }
+
+    /// The next bag on `port` with the inbound link it arrived on.
+    ///
+    /// What a destination taking many links on one port reads with: each
+    /// inbound link is one producer, named by the source channel name it
+    /// subscribed to, so a sink can tell N streams apart without the producers
+    /// having to identify themselves in their bags.
+    ///
+    /// Bags from one link keep that link's order; no interleaving is promised
+    /// between two links.
+    pub fn read_raw_from_inbound_link(
+        &self,
+        port: &str,
+    ) -> Result<Option<(Vec<u8>, i64, InboundLinkName)>> {
+        let Some(inner) = self.host_inner() else {
+            return Ok(None);
+        };
+        inner.read_raw_from_inbound_link(port)
+    }
+
+    /// The next bag on `port` deserialized into `T`, with the inbound link it
+    /// arrived on, or `None` when the mailbox is empty.
+    pub fn read_from_inbound_link<T: DeserializeOwned>(
+        &self,
+        port: &str,
+    ) -> Result<Option<(T, InboundLinkName)>> {
+        let Some(inner) = self.host_inner() else {
+            return Ok(None);
+        };
+        inner.read_from_inbound_link(port)
+    }
+
+    /// Every inbound link feeding `port`, in wiring order.
+    ///
+    /// Readable in `setup()` — WIRE runs before it — which is how a sink learns
+    /// how many producers it owes before the first bag arrives. A port with no
+    /// links lists none.
+    pub fn inbound_link_names(&self, port: &str) -> Vec<InboundLinkName> {
+        match self.host_inner() {
+            Some(inner) => inner.inbound_link_names(port),
+            None => Vec::new(),
+        }
+    }
+
+    /// Whether `port` has been configured — a port has a mailbox only once a
+    /// link is wired into it.
+    pub fn has_port(&self, port: &str) -> bool {
+        match self.host_inner() {
+            Some(inner) => inner.has_port(port),
+            None => false,
+        }
     }
 
     /// Check if a port has any payloads available.
@@ -1458,8 +1637,18 @@ mod tests {
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber("in", "L-fanin-a", sub_a);
-        mailboxes.add_channel_subscriber("in", "L-fanin-b", sub_b);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-fanin-a",
+            &InboundLinkName::from("pfanin-a/out"),
+            sub_a,
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-fanin-b",
+            &InboundLinkName::from("pfanin-b/out"),
+            sub_b,
+        );
 
         let mut payloads: Vec<Vec<u8>> = Vec::new();
         while let Some((data, _ts)) = mailboxes.read_raw("in").unwrap() {
@@ -1502,8 +1691,18 @@ mod tests {
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber("in", "L-first", subscriber_a);
-        mailboxes.add_channel_subscriber("in", "L-second", subscriber_b);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-first",
+            &InboundLinkName::from("pfirst/out"),
+            subscriber_a,
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-second",
+            &InboundLinkName::from("psecond/out"),
+            subscriber_b,
+        );
 
         for _ in 0..FRAMES_PER_LINK {
             publish_one_frame(&publisher_a, "src_a_out", b"from-a");
@@ -1572,7 +1771,12 @@ mod tests {
             ReadMode::ReadNextInOrder,
             a_512_512_contract_at(16_000, 1),
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         // 160-frame quanta, so the queue crosses one window's worth in steps
         // smaller than the priming and chunk slack. A floor that cannot see
@@ -1697,7 +1901,12 @@ mod tests {
             crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             ReadMode::ReadNextInOrder,
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         for block in 0..4u64 {
             publish_one_frame(
@@ -1748,7 +1957,12 @@ mod tests {
             MAILBOX_DEPTH,
             ReadMode::ReadNextInOrder,
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         let ((), warnings) = CapturedTracingWarnings::captured_while(|| {
             for _ in 0..FRAMES_PUBLISHED {
@@ -1799,7 +2013,12 @@ mod tests {
             crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             ReadMode::ReadNextInOrder,
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
         mailboxes
             .settle_a_ports_device_matched_audio_window_contract(
                 "in",
@@ -1851,7 +2070,12 @@ mod tests {
         fn publish_four_mono_blocks_into(mailboxes: &InputMailboxesInner, tag: &str) {
             let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
             let (publisher, subscriber) = open_channel_for_one_link_loaning(&node, tag, 16, 16_384);
-            mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+            mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
             for block in 0..4u64 {
                 publish_one_frame(
                     &publisher,
@@ -2079,7 +2303,12 @@ mod tests {
             ReadMode::ReadNextInOrder,
             a_512_512_contract_at(16_000, 1),
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         // A third of a window is not a window.
         publish_one_frame(
@@ -2129,7 +2358,12 @@ mod tests {
             ReadMode::ReadNextInOrder,
             a_512_512_contract_at(16_000, 1),
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
         publish_one_frame(
             &publisher,
             "mic_out",
@@ -2161,7 +2395,12 @@ mod tests {
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         let published = mono_audio_block_body(1024, 16_000, 77);
         publish_one_frame(&publisher, "mic_out", &published);
@@ -2198,7 +2437,12 @@ mod tests {
                 }
                 None => mailboxes.add_port("in", depth, ReadMode::ReadNextInOrder),
             }
-            mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+            mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
             for block in 0..published_bags {
                 publish_one_frame(
@@ -2250,7 +2494,12 @@ mod tests {
         let (publisher, subscriber) = open_channel_for_one_link(&node, "window/depth", 4);
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port("in", ReadMode::ReadNextInOrder, one_second_rolling);
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         // Deeper than ORDERED_DEPTH: publishing that many must lose nothing.
         for block in 0..(crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH + 8) {
@@ -2286,7 +2535,12 @@ mod tests {
             ReadMode::ReadNextInOrder,
             a_512_512_contract_at(16_000, 1),
         );
-        mailboxes.add_channel_subscriber("in", "L-only", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-only",
+            &InboundLinkName::from("ponly/out"),
+            subscriber,
+        );
 
         let not_an_audio_block =
             rmp_serde::to_vec_named(&std::collections::BTreeMap::from([("width", 1920)]))
@@ -2316,8 +2570,18 @@ mod tests {
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber("in", "L-first", subscriber_a);
-        mailboxes.add_channel_subscriber("in", "L-second", subscriber_b);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-first",
+            &InboundLinkName::from("pfirst/out"),
+            subscriber_a,
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-second",
+            &InboundLinkName::from("psecond/out"),
+            subscriber_b,
+        );
 
         for _ in 0..2 {
             publish_one_frame(&publisher_a, "src_a_out", b"from-a");
@@ -2348,7 +2612,12 @@ mod tests {
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 1, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber("in", "L-departing", subscriber);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-departing",
+            &InboundLinkName::from("pdeparting/out"),
+            subscriber,
+        );
         for _ in 0..3 {
             publish_one_frame(&publisher, "src_out", b"body");
             mailboxes.receive_pending();
@@ -2408,8 +2677,18 @@ mod tests {
 
         let inner = InputMailboxesInner::new();
         inner.add_port("in", 64, ReadMode::ReadNextInOrder);
-        inner.add_channel_subscriber("in", "L-link-a", open_subscriber("reclaim/a"));
-        inner.add_channel_subscriber("in", "L-link-b", open_subscriber("reclaim/b"));
+        inner.add_channel_subscriber(
+            "in",
+            "L-link-a",
+            &InboundLinkName::from("plink-a/out"),
+            open_subscriber("reclaim/a",
+        ));
+        inner.add_channel_subscriber(
+            "in",
+            "L-link-b",
+            &InboundLinkName::from("plink-b/out"),
+            open_subscriber("reclaim/b",
+        ));
         inner.set_listener(listener);
         assert!(inner.has_port("in"));
         assert!(inner.has_listener());
@@ -2496,7 +2775,9 @@ mod tests {
             .read_raw_bounded("in", body.len())
             .expect("bounded read retry")
         {
-            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+            BoundedReadOutcome::Frame {
+                data, timestamp_ns, ..
+            } => {
                 assert_eq!(data, body, "staged frame must re-deliver byte-for-byte");
                 assert_eq!(timestamp_ns, 42);
             }
@@ -2570,7 +2851,9 @@ mod tests {
             .read_raw_bounded("in", usize::MAX)
             .expect("bounded read")
         {
-            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+            BoundedReadOutcome::Frame {
+                data, timestamp_ns, ..
+            } => {
                 assert_eq!(data, body, "a well-formed frame still delivers intact");
                 assert_eq!(timestamp_ns, 43);
             }
@@ -2601,7 +2884,9 @@ mod tests {
             .read_raw_bounded("in", usize::MAX)
             .expect("bounded read")
         {
-            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+            BoundedReadOutcome::Frame {
+                data, timestamp_ns, ..
+            } => {
                 assert_eq!(
                     data.len(),
                     STAMPED,

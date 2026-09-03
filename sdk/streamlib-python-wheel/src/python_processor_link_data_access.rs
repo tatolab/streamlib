@@ -22,8 +22,8 @@ use pyo3::prelude::*;
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InputMailboxesInner, OutputWriterInner,
-    ReadMode, ResolvedAudioWindowContract,
+    ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner,
+    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
 
 use crate::python_bag_conversion::{
@@ -280,6 +280,7 @@ impl PythonProcessorLinkDataAccess {
                 input_mailboxes.add_channel_subscriber(
                     port_name,
                     link_id,
+                    &InboundLinkName::from(channel_service_name),
                     channel.create_subscriber()?,
                 );
                 if !input_mailboxes.has_listener() {

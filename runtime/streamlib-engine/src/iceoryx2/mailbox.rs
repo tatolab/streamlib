@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crossbeam_queue::ArrayQueue;
 
+use super::channel_name::InboundLinkName;
 use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
 
 /// A per-frame measure a port may install so it can ask what its mailbox holds
@@ -39,6 +40,9 @@ pub type PortMailboxEvictionNotice = Arc<dyn Fn() + Send + Sync>;
 struct PortMailboxQueuedFrame {
     payload: Vec<u8>,
     dropped_bag_counter: Option<InboundLinkDroppedBagCounter>,
+    /// The link this frame arrived on, so a read can name it. `None` on the
+    /// manual-injection path, which has no link behind it.
+    inbound_link_name: Option<InboundLinkName>,
     /// This frame's share of [`PortMailbox::queued_frame_measure_total`], taken
     /// when it was pushed. Zero on a mailbox with no measure installed.
     measure: u64,
@@ -49,6 +53,27 @@ impl PortMailboxQueuedFrame {
     fn record_eviction(self) {
         if let Some(counter) = self.dropped_bag_counter {
             counter.record_one_dropped_bag();
+        }
+    }
+}
+
+/// One frame handed to a reader, with the inbound link it arrived on.
+///
+/// The name rides the entry the whole way rather than being resolved at the
+/// read, because a port fanning in N links holds bags from all of them at once
+/// and only the entry knows which one each came from.
+pub struct PortMailboxDeliveredBag {
+    /// The raw wire frame (header + body), exactly as it was queued.
+    pub payload: Vec<u8>,
+    /// The link it arrived on; `None` for a manually injected frame.
+    pub inbound_link_name: Option<InboundLinkName>,
+}
+
+impl From<PortMailboxQueuedFrame> for PortMailboxDeliveredBag {
+    fn from(frame: PortMailboxQueuedFrame) -> Self {
+        Self {
+            payload: frame.payload,
+            inbound_link_name: frame.inbound_link_name,
         }
     }
 }
@@ -129,11 +154,13 @@ impl PortMailbox {
         &self,
         payload: Vec<u8>,
         dropped_bag_counter: &InboundLinkDroppedBagCounter,
+        inbound_link_name: &InboundLinkName,
     ) {
         let measure = self.measure_of(&payload);
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             dropped_bag_counter: Some(dropped_bag_counter.clone()),
+            inbound_link_name: Some(inbound_link_name.clone()),
             measure,
         });
     }
@@ -145,6 +172,7 @@ impl PortMailbox {
         self.push_frame(PortMailboxQueuedFrame {
             payload,
             dropped_bag_counter: None,
+            inbound_link_name: None,
             measure,
         });
     }
@@ -195,11 +223,11 @@ impl PortMailbox {
         })
     }
 
-    /// Pop the oldest entry from the mailbox (FIFO).
+    /// Pop the oldest entry from the mailbox (FIFO), with the link it arrived on.
     ///
     /// Thread-safe: can be called from any thread.
-    pub fn pop(&self) -> Option<Vec<u8>> {
-        self.pop_frame().map(|frame| frame.payload)
+    pub fn pop(&self) -> Option<PortMailboxDeliveredBag> {
+        self.pop_frame().map(PortMailboxDeliveredBag::from)
     }
 
     /// Drain buffer and return only the newest entry.
@@ -208,10 +236,10 @@ impl PortMailbox {
     /// the port, and are not counted.
     ///
     /// Thread-safe: can be called from any thread.
-    pub fn pop_latest(&self) -> Option<Vec<u8>> {
+    pub fn pop_latest(&self) -> Option<PortMailboxDeliveredBag> {
         let mut latest = None;
         while let Some(frame) = self.pop_frame() {
-            latest = Some(frame.payload);
+            latest = Some(PortMailboxDeliveredBag::from(frame));
         }
         latest
     }
@@ -235,7 +263,7 @@ impl PortMailbox {
     ///
     /// Thread-safe: can be called from any thread.
     pub fn drain(&self) -> impl Iterator<Item = Vec<u8>> + '_ {
-        std::iter::from_fn(move || self.pop())
+        std::iter::from_fn(move || self.pop().map(|bag| bag.payload))
     }
 
     /// Hand every queued frame over to the mailbox replacing this one, oldest
@@ -264,15 +292,28 @@ mod tests {
     use super::*;
     use crate::iceoryx2::dropped_bag_counters::DroppedBagCountsByInboundLink;
 
+    /// The name a test that is not itself about naming pushes under.
+    fn any_inbound_link_name() -> InboundLinkName {
+        InboundLinkName::from("psource/out")
+    }
+
+    /// The payload alone, for the assertions that predate the link name and
+    /// still only care about which bag survived.
+    fn payload_of(bag: Option<PortMailboxDeliveredBag>) -> Option<Vec<u8>> {
+        bag.map(|bag| bag.payload)
+    }
+
     #[test]
     fn an_eviction_is_counted_against_the_link_whose_bag_was_lost() {
         let counts = DroppedBagCountsByInboundLink::default();
         let from_first_link = counts.counter_for_inbound_link("L-a");
         let from_second_link = counts.counter_for_inbound_link("L-b");
+        let first_link_name = InboundLinkName::from("pfirst/out");
+        let second_link_name = InboundLinkName::from("psecond/out");
         let mailbox = PortMailbox::new(1);
 
-        mailbox.push_frame_from_inbound_link(vec![1], &from_first_link);
-        mailbox.push_frame_from_inbound_link(vec![2], &from_second_link);
+        mailbox.push_frame_from_inbound_link(vec![1], &from_first_link, &first_link_name);
+        mailbox.push_frame_from_inbound_link(vec![2], &from_second_link, &second_link_name);
 
         assert_eq!(
             from_first_link.dropped_bag_count(),
@@ -284,7 +325,7 @@ mod tests {
             0,
             "the link that made room lost nothing and must not be charged for it"
         );
-        assert_eq!(mailbox.pop(), Some(vec![2]));
+        assert_eq!(payload_of(mailbox.pop()), Some(vec![2]));
     }
 
     #[test]
@@ -294,7 +335,7 @@ mod tests {
         let mailbox = PortMailbox::new(4);
 
         for byte in 0..4u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
 
         assert_eq!(counter.dropped_bag_count(), 0);
@@ -309,19 +350,27 @@ mod tests {
         let counts = DroppedBagCountsByInboundLink::default();
         let from_first_link = counts.counter_for_inbound_link("L-a");
         let from_second_link = counts.counter_for_inbound_link("L-b");
+        let first_link_name = InboundLinkName::from("pfirst/out");
+        let second_link_name = InboundLinkName::from("psecond/out");
         let settling = PortMailbox::new(4);
-        settling.push_frame_from_inbound_link(vec![1], &from_first_link);
-        settling.push_frame_from_inbound_link(vec![2], &from_first_link);
-        settling.push_frame_from_inbound_link(vec![3], &from_second_link);
+        settling.push_frame_from_inbound_link(vec![1], &from_first_link, &first_link_name);
+        settling.push_frame_from_inbound_link(vec![2], &from_first_link, &first_link_name);
+        settling.push_frame_from_inbound_link(vec![3], &from_second_link, &second_link_name);
 
         let replacement = PortMailbox::new(1);
         settling.hand_every_queued_frame_over_to(&replacement);
 
         assert!(settling.is_empty(), "every frame moved");
+        let survivor = replacement.pop().expect("the newest frame survives");
         assert_eq!(
-            replacement.pop(),
-            Some(vec![3]),
+            survivor.payload,
+            vec![3],
             "the newest survives a shallower replacement, as under any other burst"
+        );
+        assert_eq!(
+            survivor.inbound_link_name,
+            Some(second_link_name),
+            "a frame that moved mailboxes still names the link it arrived on"
         );
         assert_eq!(
             from_first_link.dropped_bag_count(),
@@ -340,7 +389,7 @@ mod tests {
         let counter = counts.counter_for_inbound_link("L-unmeasured");
         let settling = PortMailbox::new(4);
         for byte in 0..3u8 {
-            settling.push_frame_from_inbound_link(vec![byte], &counter);
+            settling.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
         assert_eq!(
             settling.queued_frame_measure_total(),
@@ -368,7 +417,7 @@ mod tests {
         let mailbox = PortMailbox::new(2);
 
         for byte in 0..10u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
         let delivered = mailbox.drain().count() as u64;
 
@@ -387,10 +436,10 @@ mod tests {
         let mailbox = PortMailbox::new(4);
 
         for byte in 0..4u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
 
-        assert_eq!(mailbox.pop_latest(), Some(vec![3]));
+        assert_eq!(payload_of(mailbox.pop_latest()), Some(vec![3]));
         assert_eq!(
             counter.dropped_bag_count(),
             0,
@@ -412,7 +461,7 @@ mod tests {
         }));
 
         for byte in 0..2u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
         assert_eq!(
             evictions_heard.load(Ordering::Relaxed),
@@ -421,7 +470,7 @@ mod tests {
         );
 
         for byte in 2..6u8 {
-            mailbox.push_frame_from_inbound_link(vec![byte], &counter);
+            mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
         assert_eq!(
             counter.dropped_bag_count(),
@@ -442,6 +491,11 @@ mod tests {
         mailbox.push_frame_without_inbound_link_attribution(vec![1]);
         mailbox.push_frame_without_inbound_link_attribution(vec![2]);
 
-        assert_eq!(mailbox.pop(), Some(vec![2]));
+        let delivered = mailbox.pop().expect("the surviving frame is delivered");
+        assert_eq!(delivered.payload, vec![2]);
+        assert_eq!(
+            delivered.inbound_link_name, None,
+            "a frame nothing delivered names no link, and a read must see that              rather than a borrowed one"
+        );
     }
 }

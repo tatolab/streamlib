@@ -53,8 +53,8 @@ use iceoryx2::prelude::*;
 
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriter, OutputWriterInner,
-    ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+    ChannelEgressConfig, ChannelTrustTier, InboundLinkName, InputMailboxesInner, OutputWriter,
+    OutputWriterInner, ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 
 /// Per-bench-run unique service-name suffix so parallel benches
@@ -326,7 +326,12 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
 
     let input_mailboxes_inner = InputMailboxesInner::new();
     input_mailboxes_inner.add_port("in", 8, ReadMode::ReadNextInOrder);
-    input_mailboxes_inner.add_channel_subscriber("in", "L-bench-round-trip", subscriber);
+    input_mailboxes_inner.add_channel_subscriber(
+        "in",
+        "L-bench-round-trip",
+        &InboundLinkName::from("pbench/out"),
+        subscriber,
+    );
 
     RoundTripFixture {
         output_writer_inner,

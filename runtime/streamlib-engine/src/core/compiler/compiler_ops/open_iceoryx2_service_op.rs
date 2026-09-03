@@ -27,7 +27,7 @@ use crate::core::graph::{
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelTrustTier,
-    DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService, Iceoryx2Service,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, audio_windowing_declared_by_input_port,
     delivery_profile_for_input_port, effective_channel_ceiling_bytes,
     refuse_an_unsettled_match_device_sentinel,
@@ -207,6 +207,7 @@ pub fn open_iceoryx2_service(
             &dest_processor,
             &dest_port,
             link_id,
+            &channel_service_name,
             drain_order,
             max_queued_messages,
             &service,
@@ -773,6 +774,7 @@ fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
+    inbound_link_name: &str,
     drain_order: crate::iceoryx2::ReadMode,
     depth: usize,
     service: &Iceoryx2Service,
@@ -812,7 +814,12 @@ fn wire_rust_dest(
     }
 
     let subscriber = service.create_subscriber()?;
-    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), subscriber);
+    input_inner.add_channel_subscriber(
+        dest_port,
+        link_id.as_str(),
+        &InboundLinkName::from(inbound_link_name),
+        subscriber,
+    );
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port
@@ -1643,6 +1650,7 @@ mod tests {
             &dest,
             "in1",
             &link_id,
+            "psource/out1",
             crate::iceoryx2::ReadMode::SkipToLatest,
             8,
             &channel,
@@ -1705,6 +1713,7 @@ mod tests {
             &dest,
             "in1",
             &link_id,
+            "psource/out1",
             crate::iceoryx2::ReadMode::ReadNextInOrder,
             DESTINATION_MAILBOX_DEPTH,
             &channel,
@@ -1958,6 +1967,7 @@ mod tests {
             &dest,
             "audio",
             &"L-match-device".into(),
+            "psource/audio_out",
             crate::iceoryx2::ReadMode::ReadNextInOrder,
             crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
             &channel,

@@ -396,6 +396,10 @@ impl AudioWindowAccumulator {
         Ok(Some(BagBodyForTheReader {
             body: bag,
             first_sample_or_publish_timestamp_ns: first_sample_timestamp_ns,
+            // A window is cut from bags rather than being one, so the stage has
+            // no entry to read a link off. The port fills it in: a windowed
+            // port takes exactly one link, so there is only one answer.
+            inbound_link_name: None,
         }))
     }
 
