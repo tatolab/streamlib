@@ -89,8 +89,7 @@ impl Mp4TrackMedia {
 
     fn nal_header_grammar(self) -> Option<AnnexBNalHeaderGrammar> {
         match self {
-            Self::Video(EncodedVideoCodec::H264) => Some(AnnexBNalHeaderGrammar::H264),
-            Self::Video(EncodedVideoCodec::H265) => Some(AnnexBNalHeaderGrammar::H265),
+            Self::Video(codec) => Some(codec.into()),
             Self::Audio => None,
         }
     }
@@ -723,16 +722,28 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             )));
         }
 
-        let mut media_data = Vec::new();
+        self.sink.write_all(&fragment_bytes)?;
+
+        // The samples are already contiguous per sample and the payload length
+        // was measured above, so the `mdat` header is written directly and each
+        // sample goes straight to the sink. Building the box would copy the
+        // whole payload twice, once to concatenate and once to encode, on a
+        // path that runs at every sync point.
+        let media_data_bytes = running - moof_bytes - MDAT_BOX_HEADER_BYTES;
+        let mdat_box_bytes = MDAT_BOX_HEADER_BYTES + media_data_bytes;
+        let mdat_box_bytes: u32 = mdat_box_bytes.try_into().map_err(|_| {
+            Error::Runtime(format!(
+                "Mp4Sink: this fragment's media is {media_data_bytes} bytes, past what a \
+                 32-bit box size can name — close fragments more often"
+            ))
+        })?;
+        self.sink.write_all(&mdat_box_bytes.to_be_bytes())?;
+        self.sink.write_all(b"mdat")?;
         for &index in &contributing {
             for sample in &self.tracks[index].samples_awaiting_fragment {
-                media_data.extend_from_slice(&sample.sample_bytes);
+                self.sink.write_all(&sample.sample_bytes)?;
             }
         }
-        Mdat { data: media_data }
-            .encode(&mut fragment_bytes)
-            .map_err(box_write_failure)?;
-        self.sink.write_all(&fragment_bytes)?;
         self.sink.flush()?;
 
         for &index in &contributing {
@@ -856,9 +867,12 @@ fn box_write_failure(failure: mp4_atom::Error) -> Error {
     Error::Runtime(format!("Mp4Sink: a box could not be written: {failure}"))
 }
 
-/// Re-parse a written file, which is what the container-bytes tests assert
-/// over and what `cargo xtask mp4-inspect` reports.
-pub fn parse_written_atoms(file_bytes: &[u8]) -> Result<Vec<Any>> {
+/// Re-parse a written file, for the container-bytes tests below.
+///
+/// `cargo xtask mp4-inspect` does not come through here — `xtask` does not
+/// depend on this crate and walks the boxes itself.
+#[cfg(test)]
+fn parse_written_atoms(file_bytes: &[u8]) -> Result<Vec<Any>> {
     let mut cursor = std::io::Cursor::new(file_bytes);
     let mut atoms = Vec::new();
     loop {

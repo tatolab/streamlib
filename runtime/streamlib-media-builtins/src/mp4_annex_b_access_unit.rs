@@ -68,6 +68,15 @@ impl AnnexBNalHeaderGrammar {
     }
 }
 
+impl From<crate::encoded_video_frame::EncodedVideoCodec> for AnnexBNalHeaderGrammar {
+    fn from(codec: crate::encoded_video_frame::EncodedVideoCodec) -> Self {
+        match codec {
+            crate::encoded_video_frame::EncodedVideoCodec::H264 => Self::H264,
+            crate::encoded_video_frame::EncodedVideoCodec::H265 => Self::H265,
+        }
+    }
+}
+
 /// The parameter sets one access unit carried, in the piles `avcC` and
 /// `hvcC` keep them in. Empty for a non-sync-point access unit, which the
 /// engine's encoder prepends nothing to.
