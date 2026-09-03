@@ -295,6 +295,30 @@ def test_a_child_refuses_a_channels_value_that_names_no_count():
     )
 
 
+def test_a_child_refuses_a_bool_where_a_channel_count_belongs():
+    """`bool` is an `int` subclass, so `True` would otherwise wire as one
+    channel — a plausible count nobody wrote. The declaration constructor
+    refuses one by name; the envelope must too, since nothing else guards it."""
+    data_plane = a_helper_process_data_plane()
+
+    with pytest.raises(TypeError) as refusal:
+        wire_with_window(
+            data_plane,
+            {
+                "sample_rate": 48_000,
+                "channels": True,
+                "dtype": "f32",
+                "window_size": 960,
+                "hop": 960,
+            },
+        )
+
+    rendered = str(refusal.value)
+    assert "channels" in rendered and "bool" in rendered, (
+        f"the refusal must name the field and the kind; got {rendered}"
+    )
+
+
 def test_a_child_refuses_a_window_contract_the_stage_could_not_honour():
     """The same validator both languages' declaration paths call, applied again
     where the child receives the contract: a hop above the window would silently

@@ -9,7 +9,7 @@
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBool, PyDict, PyList};
 use streamlib::sdk::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
     AudioWindowContractDeclaredValues, PortDescriptor, ProcessorClassImportPath,
@@ -303,13 +303,17 @@ pub(crate) fn read_a_channel_count_or_the_source_spelling(
         )));
     }
 
+    // The sentinel is offered on top of whatever the shared core said, rather
+    // than in place of it: "must be an int" and "must be an int, and a bool is
+    // not one" are different things to tell an author, and only the second one
+    // explains why `True` was rejected.
     a_strictly_positive_count(value)
         .map(Some)
         .map_err(|refusal| match refusal {
-            AudioWindowFieldRefusal::WrongKindOfValue(_) => {
+            AudioWindowFieldRefusal::WrongKindOfValue(reason) => {
                 AudioWindowFieldRefusal::WrongKindOfValue(format!(
-                    "must be an int, or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to \
-                     carry whatever count the source sends"
+                    "{reason} — or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry \
+                     whatever count the source sends"
                 ))
             }
             unusable => unusable,
@@ -322,6 +326,15 @@ pub(crate) fn read_a_channel_count_or_the_source_spelling(
 /// The shared core of every numeric `audio_window` field, `channels` included,
 /// so one spelling of "strictly positive" serves them all.
 fn a_strictly_positive_count(value: &Bound<'_, PyAny>) -> Result<u32, AudioWindowFieldRefusal> {
+    // `bool` is an `int` subclass, so `True` extracts as 1 and reaches the stage
+    // as a plausible count. The Python constructor refuses one by name; this is
+    // the same rule at the two seams that constructor does not guard — a
+    // hand-built marker, and the envelope a parent wires a child with.
+    if value.is_instance_of::<PyBool>() {
+        return Err(AudioWindowFieldRefusal::WrongKindOfValue(
+            "must be an int, and a bool is not one".to_string(),
+        ));
+    }
     let declared = value
         .extract::<i64>()
         .map_err(|_| AudioWindowFieldRefusal::WrongKindOfValue("must be an int".to_string()))?;
@@ -703,6 +716,37 @@ class AudioConsumer:
             refusal.contains("sample_rate") && refusal.contains("-1"),
             "the refusal must name the field and the value; got {refusal}"
         );
+    }
+
+    /// `bool` is an `int` subclass in Python, so a marker carrying `True` would
+    /// otherwise reach the stage as one channel — a plausible count nobody
+    /// wrote. The declaration constructor refuses one by name and so does this.
+    #[test]
+    fn a_hand_built_marker_carrying_a_bool_where_a_number_belongs_is_refused() {
+        for (field, spelling) in [
+            ("channels", "'channels': True"),
+            ("sample_rate", "'sample_rate': True"),
+            ("window_size", "'window_size': True"),
+            ("hop", "'hop': True"),
+        ] {
+            let mut fields = vec![
+                "'resolved_from': 'declaration'",
+                "'sample_rate': 48000",
+                "'channels': 2",
+                "'dtype': 'f32'",
+                "'window_size': 960",
+                "'hop': 960",
+            ];
+            fields.retain(|written| !written.starts_with(&format!("'{field}'")));
+            fields.push(spelling);
+
+            let refusal = hand_built_marker_refusal(&fields.join(", "));
+            assert!(
+                refusal.contains(field) && refusal.contains("bool"),
+                "a bool in {field:?} must be refused naming the field and the kind; \
+                 got {refusal}"
+            );
+        }
     }
 
     /// The count is the one value a marker may leave out, and the bridge must

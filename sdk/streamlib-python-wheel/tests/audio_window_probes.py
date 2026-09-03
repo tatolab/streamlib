@@ -137,7 +137,7 @@ class StereoToneSource:
 
     def __init__(self) -> None:
         self._frames_published = 0
-        self._first_sample_timestamp_ns: "Optional[int]" = None
+        self._first_sample_timestamp_ns: Optional[int] = None
 
     def _is_far_enough_ahead(self, anchor_ns: int) -> bool:
         published_ns = self._frames_published * 1_000_000_000 // SOURCE_SAMPLE_RATE

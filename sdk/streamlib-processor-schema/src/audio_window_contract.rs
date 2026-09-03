@@ -28,10 +28,16 @@ pub const AUDIO_WINDOW_DTYPE_DECLARATION_VALUES: [&str; 2] = ["f32", "i16"];
 /// down — `graph`, the parent→child wiring envelope, and the dict a Python
 /// author's declaration becomes.
 ///
-/// Spelled rather than omitted. A missing key and a `null` both read as
-/// "nothing was said here", which is indistinguishable from a writer that
-/// forgot the field; `"source"` says the count follows whatever the source
-/// sends, which is the whole of what an absent count means.
+/// Spelled rather than omitted, because omission says nothing a reader can
+/// tell apart from a writer that forgot the field. `"source"` says the count
+/// follows whatever the source sends, which is the whole of what an absent
+/// count means.
+///
+/// A key that is simply missing is accepted and means the same thing, so a
+/// terse hand-written declaration is not refused for terseness. An explicit
+/// `null` is not: it is the one spelling that looks deliberate while naming
+/// nothing, and it is refused like any other value that is neither a count nor
+/// this word.
 pub const AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE: &str = "source";
 
 /// A window contract on an audio input port: either the values the port
