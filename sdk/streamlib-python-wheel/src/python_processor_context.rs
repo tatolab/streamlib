@@ -2089,6 +2089,40 @@ impl PythonLinkInputDataReader {
             .read_from_input_port_with_timestamp(python, port_name)
     }
 
+    /// The next bag on `port_name` with the link it arrived on, or `None`.
+    ///
+    /// Any number of links may enter one input port, and each is one producer.
+    /// This is how a many-input processor tells them apart: the name is the
+    /// source channel the link subscribed to, which the engine knows and a
+    /// producer cannot misstate.
+    #[pyo3(signature = (port_name, *, into = None))]
+    fn read_from_link<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Option<(Bound<'py, PyAny>, String)>> {
+        self.link_data_access
+            .get()
+            .read_from_input_port_naming_its_inbound_link(
+                python,
+                port_name,
+                into,
+                Some(self.gpu_limited_access_context.bind(python)),
+            )
+    }
+
+    /// Every link feeding `port_name`, in wiring order.
+    ///
+    /// Readable in `setup()`, which is how a sink learns how many producers it
+    /// owes before the first bag arrives. A port nothing is connected to lists
+    /// none.
+    fn inbound_links(&self, port_name: &str) -> PyResult<Vec<String>> {
+        self.link_data_access
+            .get()
+            .inbound_links_of_input_port(port_name)
+    }
+
     /// Whether a bag is waiting on `port_name`, without consuming it.
     fn has_data(&self, python: Python<'_>, port_name: &str) -> PyResult<bool> {
         self.link_data_access

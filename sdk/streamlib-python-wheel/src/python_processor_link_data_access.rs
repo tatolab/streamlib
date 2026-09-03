@@ -90,21 +90,83 @@ impl PythonProcessorLinkDataAccess {
             .detach(|| input_mailboxes.read_raw(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
-            Some((encoded, _timestamp_ns)) => {
-                let bag = decode_msgpack_to_python_object(python, &encoded)?;
-                match into {
-                    Some(read_target_type) => cast_decoded_bag_into_read_target(
-                        port_name,
-                        bag,
-                        read_target_type,
-                        offered_gpu_limited_access,
-                    )
-                    .map(Some),
-                    None => Ok(Some(bag)),
-                }
-            }
+            Some((encoded, _timestamp_ns)) => decode_one_bag_into(
+                python,
+                port_name,
+                &encoded,
+                into,
+                offered_gpu_limited_access,
+            )
+            .map(Some),
             None => Ok(None),
         }
+    }
+
+    /// The next bag on `port_name` with the inbound link it arrived on, or
+    /// `None` when the mailbox is empty.
+    ///
+    /// The read a destination taking many links on one port uses: each inbound
+    /// link is one producer, named by the source channel name it subscribed to.
+    pub(crate) fn read_from_input_port_naming_its_inbound_link<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+    ) -> PyResult<Option<(Bound<'py, PyAny>, String)>> {
+        let Some(input_mailboxes) = self.input_mailboxes.get() else {
+            return Err(unwired_port_error("input", port_name));
+        };
+        let read = python
+            .detach(|| input_mailboxes.read_raw_from_inbound_link(port_name))
+            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
+        let Some((encoded, _timestamp_ns, inbound_link_name)) = read else {
+            return Ok(None);
+        };
+        let bag = decode_one_bag_into(
+            python,
+            port_name,
+            &encoded,
+            into,
+            offered_gpu_limited_access,
+        )?;
+        Ok(Some((bag, inbound_link_name.as_str().to_string())))
+    }
+
+    /// Every inbound link feeding `port_name`, in wiring order.
+    pub(crate) fn inbound_links_of_input_port(
+        &self,
+        port_name: &str,
+    ) -> PyResult<Vec<String>> {
+        let Some(input_mailboxes) = self.input_mailboxes.get() else {
+            return Err(unwired_port_error("input", port_name));
+        };
+        Ok(input_mailboxes
+            .inbound_link_names(port_name)
+            .iter()
+            .map(|inbound_link_name| inbound_link_name.as_str().to_string())
+            .collect())
+    }
+}
+
+/// Decode one bag's msgpack and, where `into` names a target, cast into it —
+/// the half every read shares once the bytes are in hand.
+fn decode_one_bag_into<'py>(
+    python: Python<'py>,
+    port_name: &str,
+    encoded: &[u8],
+    into: Option<&Bound<'py, PyAny>>,
+    offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let bag = decode_msgpack_to_python_object(python, encoded)?;
+    match into {
+        Some(read_target_type) => cast_decoded_bag_into_read_target(
+            port_name,
+            bag,
+            read_target_type,
+            offered_gpu_limited_access,
+        ),
+        None => Ok(bag),
     }
 }
 
