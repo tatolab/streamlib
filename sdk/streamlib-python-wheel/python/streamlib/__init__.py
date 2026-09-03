@@ -37,6 +37,8 @@ from ._engine import H264Encoder as H264Encoder
 from ._engine import H265Decoder as H265Decoder
 from ._engine import H265Encoder as H265Encoder
 from ._engine import MicrophoneSource as MicrophoneSource
+from ._engine import OpusDecoder as OpusDecoder
+from ._engine import OpusEncoder as OpusEncoder
 from ._engine import Runtime as _NativeRuntime
 from ._engine import SpeakerSink as SpeakerSink
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
@@ -95,6 +97,8 @@ __all__ = [
     "MicrophoneSource",
     "MonotonicTimer",
     "OpaqueFdTextureExport",
+    "OpusDecoder",
+    "OpusEncoder",
     "PixelAccessToOneClaimedSurface",
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",

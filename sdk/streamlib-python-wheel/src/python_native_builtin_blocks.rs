@@ -71,6 +71,16 @@ pub(crate) struct PythonH265EncoderBlock;
 #[pyclass(name = "H265Decoder", module = "streamlib", frozen)]
 pub(crate) struct PythonH265DecoderBlock;
 
+/// `streamlib.OpusEncoder` — 20 ms windows of audio to Opus
+/// encoded-audio-packet bags via libopus.
+#[pyclass(name = "OpusEncoder", module = "streamlib", frozen)]
+pub(crate) struct PythonOpusEncoderBlock;
+
+/// `streamlib.OpusDecoder` — Opus encoded-audio-packet bags to decoded
+/// audio blocks via libopus.
+#[pyclass(name = "OpusDecoder", module = "streamlib", frozen)]
+pub(crate) struct PythonOpusDecoderBlock;
+
 /// Resolve a Python object to a native built-in's class import path, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins
@@ -160,6 +170,16 @@ pub(crate) fn native_builtin_class_import_path(
         return Err(PyRuntimeError::new_err(
             "H265Decoder is Linux-only (Vulkan Video hardware decode); this platform is \
              not supported by the streamlib wheel yet",
+        ));
+    }
+    if processor_class.is(python.get_type::<PythonOpusEncoderBlock>()) {
+        return Ok(Some(
+            streamlib_media_builtins::OpusEncoder::Processor::processor_class_import_path(),
+        ));
+    }
+    if processor_class.is(python.get_type::<PythonOpusDecoderBlock>()) {
+        return Ok(Some(
+            streamlib_media_builtins::OpusDecoder::Processor::processor_class_import_path(),
         ));
     }
     Ok(None)
