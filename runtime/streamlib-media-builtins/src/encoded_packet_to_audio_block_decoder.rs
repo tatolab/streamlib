@@ -115,8 +115,16 @@ struct DecodedRunAnchor {
     /// Per-channel samples emitted since the anchor, which is the offset
     /// every later block's stamp is derived from.
     samples_emitted_since_anchor: u64,
-    /// Per-channel samples of encoder priming still to discard before any
-    /// sample is emitted.
+    /// Per-channel samples to discard before this run emits anything.
+    ///
+    /// At stream start these are the encoder's priming — output produced
+    /// before the encoder had real input to produce it from. At a re-entry
+    /// after a gap they are *not*: the encoder never reset, so its output is
+    /// still input-delayed by the same lookahead, and what these samples hold
+    /// is real input that arrived inside the re-entry packet but sits before
+    /// the stamp the run re-anchored on. Discarding them is what makes the
+    /// first emitted sample exactly the anchoring stamp; the count is named
+    /// in the re-entry line rather than dropped silently.
     samples_still_to_trim: u32,
 }
 
@@ -147,9 +155,11 @@ impl EncodedPacketToAudioBlockDecoder {
                     tracing::warn!(
                         packets_not_seen = self.sync_point_gate.bags_lost_to_gaps(),
                         sequence_index = packet.sequence_index,
-                        "{OPUS_DECODER_PROCESSOR_NAME}: a gap in the encoded stream — resetting and \
-                         re-entering here. Nothing is invented to bridge it; the gap stays \
-                         derivable from the stamps either side"
+                        samples_discarded_realigning = packet.pre_skip,
+                        "{OPUS_DECODER_PROCESSOR_NAME}: a gap in the encoded stream — resetting \
+                         and re-entering here. Nothing is invented to bridge it; the gap stays \
+                         derivable from the stamps either side, and the samples discarded to \
+                         re-align on this packet's stamp are counted rather than dropped quietly"
                     );
                 }
                 true
@@ -191,6 +201,15 @@ impl EncodedPacketToAudioBlockDecoder {
             .decode_into_interleaved_f32(&packet.opus_packet_bytes, &mut minted.decode_scratch)?;
         let decoded_interleaved = &minted.decode_scratch[..decoded_samples * channels];
 
+        if packet.sample_rate != OPUS_SAMPLE_RATE_HZ {
+            return Err(Error::Runtime(format!(
+                "{OPUS_DECODER_PROCESSOR_NAME}: the packet declares {} Hz, but Opus codes at \
+                 {OPUS_SAMPLE_RATE_HZ} Hz and a decoder reconstructs at that rate whatever the \
+                 source was resampled from — refused rather than decoded at 48 kHz and \
+                 published as though it had always been 48 kHz",
+                packet.sample_rate
+            )));
+        }
         if packet.pre_skip > HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES {
             return Err(Error::Runtime(format!(
                 "{OPUS_DECODER_PROCESSOR_NAME}: the packet declares a `pre_skip` of {} samples, \
@@ -465,7 +484,15 @@ mod tests {
         let round_trip = round_trip(2, 4, anchor_ns);
         assert_eq!(
             round_trip.blocks[0].first_sample_timestamp_ns, anchor_ns,
-            "the `pre_skip` trim is what makes the first emitted sample the stamped instant"
+            "the run anchors on the first packet's stamp"
+        );
+        // Without this the assertion above holds with the trim disabled
+        // entirely, and would lock nothing about `pre_skip` at all.
+        assert_eq!(
+            round_trip.blocks[0].sample_count,
+            WINDOW_SAMPLE_COUNT - round_trip.packets[0].0.pre_skip,
+            "the first block is short by exactly the priming the trim discarded, which is what \
+             makes its first sample the stamped instant rather than 6.5 ms of encoder warm-up"
         );
     }
 
@@ -612,6 +639,32 @@ mod tests {
             block.sample_count,
             WINDOW_SAMPLE_COUNT - 312,
             "the emitted count comes from what libopus actually decoded, less the priming"
+        );
+    }
+
+    #[test]
+    fn a_packet_that_does_not_claim_opuss_own_clock_is_refused_rather_than_relabelled() {
+        let channels = 2;
+        let source = a_tone(channels, WINDOW_SAMPLE_COUNT);
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let window = a_window_from(&source, channels, 0, 0);
+        let mut packet = encoder
+            .encode_one_window(&OpusEncoderConfig::default(), &window)
+            .expect("encodes")
+            .expect("publishes");
+        packet.sample_rate = 44_100;
+
+        let refusal = EncodedPacketToAudioBlockDecoder::default()
+            .decode_one_arriving_packet(&packet, 0)
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            refusal.contains("44100"),
+            "names the rate it was handed: {refusal}"
+        );
+        assert!(
+            refusal.contains("48000"),
+            "names the rate Opus codes at: {refusal}"
         );
     }
 

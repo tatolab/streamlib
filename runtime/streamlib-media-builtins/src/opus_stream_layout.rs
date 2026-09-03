@@ -230,10 +230,53 @@ mod tests {
         }
     }
 
-    /// The table is libopus's own, and a transcription slip in it produces a
-    /// stream that decodes to the right channel count with the speakers
-    /// permuted. Building the real encoder is what catches that: libopus
-    /// validates the stream counts and the mapping against each other.
+    /// A second, independent transcription of libopus's `vorbis_mappings`
+    /// (`opus/src/opus_multistream_encoder.c:53-62` in the `opusic-sys`
+    /// checkout), written out here rather than derived from the table above.
+    ///
+    /// This is the only thing that locks the first transcription, and it has
+    /// to be a second copy to do that. Every other test in this file passes
+    /// with a corrupted table: libopus's own `validate_layout` only
+    /// range-checks the mapping entries, the structural test below only reads
+    /// length, sum and distinctness, and the round trip cannot see a
+    /// permutation because the encoder and the decoder read the same wrong
+    /// row, so it cancels. What a slip actually produces is an MP4 whose
+    /// `dOps` StreamCount, CoupledCount and ChannelMapping send 5.1 audio to
+    /// the wrong speakers in every third-party player — silent here,
+    /// obvious there.
+    #[test]
+    fn the_family_one_table_matches_libopus_vorbis_mappings_transcribed_a_second_time() {
+        let libopus_vorbis_mappings: [(u8, u8, &[u8]); 8] = [
+            (1, 0, &[0]),
+            (1, 1, &[0, 1]),
+            (2, 1, &[0, 2, 1]),
+            (2, 2, &[0, 1, 2, 3]),
+            (3, 2, &[0, 4, 1, 2, 3]),
+            (4, 2, &[0, 4, 1, 2, 3, 5]),
+            (4, 3, &[0, 4, 1, 2, 3, 5, 6]),
+            (5, 3, &[0, 6, 1, 2, 3, 4, 5, 7]),
+        ];
+        for (channel_count_less_one, (streams, coupled_streams, mapping)) in
+            libopus_vorbis_mappings.into_iter().enumerate()
+        {
+            let ours = VORBIS_CHANNEL_ORDER_STREAM_LAYOUTS[channel_count_less_one];
+            assert_eq!(
+                (
+                    ours.streams,
+                    ours.coupled_streams,
+                    ours.vorbis_channel_order_mapping
+                ),
+                (streams, coupled_streams, mapping),
+                "row for {} channels drifted from libopus's own table",
+                channel_count_less_one + 1
+            );
+        }
+    }
+
+    /// The table is libopus's own. Building the real encoder proves the stream
+    /// counts and the mapping are consistent with each other — it does not
+    /// prove they are the *right* ones, which is what the transcription test
+    /// above is for.
     #[test]
     fn every_family_one_layout_builds_a_real_multistream_encoder_and_decoder() {
         for channels in 3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
