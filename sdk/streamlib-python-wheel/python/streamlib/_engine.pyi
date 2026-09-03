@@ -528,11 +528,11 @@ class LinkInputDataReader:
         self, port_name: str
     ) -> tuple[Any, int] | tuple[None, None]: ...
     @overload
-    def read_from_link(
+    def read_from_inbound_link(
         self, port_name: str, *, into: None = None
     ) -> tuple[Any, str] | None: ...
     @overload
-    def read_from_link(
+    def read_from_inbound_link(
         self, port_name: str, *, into: Callable[..., _BagReadTarget]
     ) -> tuple[_BagReadTarget, str] | None:
         """The next bag on `port_name` with the link it arrived on, or `None`.
@@ -550,7 +550,7 @@ class LinkInputDataReader:
         `into` is the same strictness dial `read` carries.
         """
 
-    def inbound_links(self, port_name: str) -> list[str]:
+    def inbound_link_names(self, port_name: str) -> list[str]:
         """Every link feeding `port_name`, in wiring order.
 
         Readable in `setup()` — links are wired before it runs — which is how

@@ -2096,7 +2096,7 @@ impl PythonLinkInputDataReader {
     /// source channel the link subscribed to, which the engine knows and a
     /// producer cannot misstate.
     #[pyo3(signature = (port_name, *, into = None))]
-    fn read_from_link<'py>(
+    fn read_from_inbound_link<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
@@ -2117,7 +2117,7 @@ impl PythonLinkInputDataReader {
     /// Readable in `setup()`, which is how a sink learns how many producers it
     /// owes before the first bag arrives. A port nothing is connected to lists
     /// none.
-    fn inbound_links(&self, port_name: &str) -> PyResult<Vec<String>> {
+    fn inbound_link_names(&self, port_name: &str) -> PyResult<Vec<String>> {
         self.link_data_access
             .get()
             .inbound_links_of_input_port(port_name)
