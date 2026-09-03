@@ -48,6 +48,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_native_builtin_blocks::PythonH265DecoderBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonOpusEncoderBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonOpusDecoderBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonMp4SinkBlock>()?;
     module.add_class::<python_test_harness_endpoints::PythonTestBagFeederBlock>()?;
     module.add_class::<python_test_harness_endpoints::PythonTestBagCollectorBlock>()?;
     module.add_class::<python_added_processor::PythonAddedProcessor>()?;

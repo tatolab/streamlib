@@ -37,6 +37,7 @@ from ._engine import H264Encoder as H264Encoder
 from ._engine import H265Decoder as H265Decoder
 from ._engine import H265Encoder as H265Encoder
 from ._engine import MicrophoneSource as MicrophoneSource
+from ._engine import Mp4Sink as Mp4Sink
 from ._engine import OpusDecoder as OpusDecoder
 from ._engine import OpusEncoder as OpusEncoder
 from ._engine import Runtime as _NativeRuntime
@@ -96,6 +97,7 @@ __all__ = [
     "MasteringDisplay",
     "MicrophoneSource",
     "MonotonicTimer",
+    "Mp4Sink",
     "OpaqueFdTextureExport",
     "OpusDecoder",
     "OpusEncoder",
