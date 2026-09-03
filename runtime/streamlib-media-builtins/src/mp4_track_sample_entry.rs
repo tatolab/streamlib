@@ -34,6 +34,10 @@ pub const OPUS_TRACK_TIMESCALE_HZ: u32 = 48_000;
 /// than the codec.
 pub const HIGHEST_CHANNEL_COUNT_THIS_CONTAINER_WRITER_PLACES: u32 = 2;
 
+/// `forbidden_zero_bit`, `nal_unit_type`, `nuh_layer_id` and
+/// `nuh_temporal_id_plus1` — ITU-T H.265 §7.3.1.2.
+const H265_NAL_UNIT_HEADER_BYTES: usize = 2;
+
 /// H.265 profile-tier-level is 12 bytes at a fixed position in the SPS RBSP:
 /// `sps_video_parameter_set_id` (4), `sps_max_sub_layers_minus1` (3) and
 /// `sps_temporal_id_nesting_flag` (1) fill the first byte exactly, so the
@@ -181,10 +185,19 @@ pub fn build_hvc1_sample_entry(
         });
     }
     let sequence_parameter_set = &parameter_sets.sequence_parameter_set_nal_units[0];
+    // The walk admits a one-byte NAL, and `0x42` reads as `nal_unit_type` 33
+    // under the H.265 grammar — so the header has to be there before it is cut.
+    if sequence_parameter_set.len() <= H265_NAL_UNIT_HEADER_BYTES {
+        return Err(Mp4SampleEntryRefusal::SequenceParameterSetTooShort {
+            inbound_link_name: inbound_link_name.to_string(),
+            codec: "h265",
+            sequence_parameter_set_bytes: sequence_parameter_set.len(),
+        });
+    }
     // Two-byte NAL header, then the RBSP the bit reader and the fixed-offset
     // read both work over.
     let sequence_parameter_set_rbsp =
-        remove_emulation_prevention_bytes(&sequence_parameter_set[2..]);
+        remove_emulation_prevention_bytes(&sequence_parameter_set[H265_NAL_UNIT_HEADER_BYTES..]);
     let profile_tier_level_end =
         H265_PROFILE_TIER_LEVEL_OFFSET_IN_SPS_RBSP + H265_PROFILE_TIER_LEVEL_BYTES;
     if sequence_parameter_set_rbsp.len() < profile_tier_level_end {
@@ -607,6 +620,23 @@ mod tests {
         assert!(matches!(
             refusal,
             Mp4SampleEntryRefusal::SequenceParameterSetTooShort { .. }
+        ));
+    }
+
+    #[test]
+    fn an_h265_sps_shorter_than_its_nal_header_is_refused_rather_than_panicking() {
+        let mut sets = h265_parameter_sets();
+        // `0x42` alone reads as `nal_unit_type` 33 under the H.265 grammar, so
+        // the walk files it as an SPS and this is reachable from a producer.
+        sets.sequence_parameter_set_nal_units = vec![vec![0x42]];
+        let refusal = build_hvc1_sample_entry("camera/video", &sets, 320, 240)
+            .expect_err("a one-byte SPS carries no RBSP at all");
+        assert!(matches!(
+            refusal,
+            Mp4SampleEntryRefusal::SequenceParameterSetTooShort {
+                sequence_parameter_set_bytes: 1,
+                ..
+            }
         ));
     }
 }

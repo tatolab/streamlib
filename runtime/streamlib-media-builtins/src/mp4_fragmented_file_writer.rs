@@ -556,7 +556,11 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
 
         // Each track's first `tfdt` is its own offset from the epoch.
         for track in &mut self.tracks {
-            let media = track.media.expect("a describable track has media");
+            // A track latched before it ever named a codec has no media and no
+            // `trak`, exactly as `build_moov` skips it.
+            let Some(media) = track.media else {
+                continue;
+            };
             let offset_ns = track
                 .first_timestamp_ns
                 .unwrap_or(epoch_ns)
@@ -1497,5 +1501,44 @@ mod tests {
                 "track {track_id} decode times must advance: {decode_times:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_link_latched_before_it_named_a_codec_leaves_the_healthy_track_recording() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "captions/text".to_string()],
+        );
+        // The caption link latches without ever committing a media kind, so it
+        // has no track to describe while the camera still needs its `moov`.
+        let caption_shaped_bag = rmp_serde::to_vec_named(&serde_json::json!({
+            "codec": "webvtt",
+            "bitstream": "hello",
+        }))
+        .expect("msgpack serialize");
+        writer
+            .accept_bag("captions/text", &caption_shaped_bag, 0)
+            .expect("the refusal is a latch");
+        writer
+            .accept_bag("camera/video", &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET), 0)
+            .expect("accepted");
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
+                ONE_VIDEO_FRAME_NS,
+            )
+            .expect("accepted");
+        let tally = writer.finish().expect("the header lands despite the latched link");
+
+        assert_eq!(tally.tracks_latched, 1);
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        assert_eq!(
+            only_moov(&atoms).trak.len(),
+            1,
+            "a link that never named a codec describes no track, and the camera still records"
+        );
+        assert_eq!(only_moov(&atoms).trak[0].mdia.hdlr.name, "camera/video");
     }
 }
