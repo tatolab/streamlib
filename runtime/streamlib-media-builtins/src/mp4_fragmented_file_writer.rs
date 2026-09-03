@@ -1847,4 +1847,49 @@ mod tests {
             "an audio track has no extent"
         );
     }
+
+    /// Writes the checked-in fixture `xtask` inspects, so `mp4-inspect` is
+    /// exercised over bytes this writer actually produced rather than a
+    /// second hand-built file. Regenerate with
+    /// `STREAMLIB_WRITE_MP4_INSPECT_FIXTURE=<path> cargo test -p
+    /// streamlib-media-builtins --lib the_checked_in_inspector_fixture`.
+    #[test]
+    fn the_checked_in_inspector_fixture_is_what_this_writer_produces() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        for index in 0..12usize {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../xtask/tests/fixtures/two_track_recording.mp4");
+        if std::env::var_os("STREAMLIB_WRITE_MP4_INSPECT_FIXTURE").is_some() {
+            std::fs::write(&fixture_path, &file).expect("the fixture is writable");
+            return;
+        }
+        let checked_in = std::fs::read(&fixture_path).expect("the fixture is checked in");
+        assert_eq!(
+            file, checked_in,
+            "this writer's output moved away from the fixture `xtask mp4-inspect` reads — \
+             regenerate it with STREAMLIB_WRITE_MP4_INSPECT_FIXTURE set, and read the \
+             inspector's diff before trusting the new bytes"
+        );
+    }
 }

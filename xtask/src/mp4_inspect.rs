@@ -435,4 +435,56 @@ mod tests {
             "the refusal says what went wrong: {failure}"
         );
     }
+
+    /// A real `Mp4Sink` recording — two tracks, several fragments — written by
+    /// the sink itself and checked in, so this command is exercised over bytes
+    /// the writer produced rather than a second hand-built file. The built-ins
+    /// test `the_checked_in_inspector_fixture_is_what_this_writer_produces`
+    /// fails if the writer drifts from it.
+    const TWO_TRACK_RECORDING: &[u8] = include_bytes!("../tests/fixtures/two_track_recording.mp4");
+
+    #[test]
+    fn a_real_sink_recording_reports_both_tracks_under_their_link_names() {
+        let report = inspect_bytes(TWO_TRACK_RECORDING).expect("a written recording parses");
+
+        let names: Vec<&str> = report["tracks"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|track| track["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, vec!["camera/video", "microphone/audio"]);
+        assert_eq!(report["tracks"][0]["sample_entry"]["kind"], "avc1");
+        assert_eq!(report["tracks"][1]["sample_entry"]["kind"], "Opus");
+        assert_eq!(report["brands"]["major_brand"], "iso6");
+    }
+
+    #[test]
+    fn a_real_sink_recording_reports_its_fragments_and_per_track_durations() {
+        let report = inspect_bytes(TWO_TRACK_RECORDING).expect("parses");
+
+        assert!(
+            report["fragment_count"].as_u64().expect("a count") >= 2,
+            "the recording was written in several fragments"
+        );
+        // The fixture is 12 video frames 33 1/3 ms apart and 12 Opus packets
+        // of 960 samples, so each track's reported duration is its own count
+        // in its own timescale — the two spans differ, and that is the point:
+        // the inspector reports what each track holds, not a movie duration.
+        assert_eq!(report["tracks"][0]["timescale"], 1_000_000_000u64);
+        assert_eq!(report["tracks"][0]["samples"], 12);
+        assert_eq!(
+            report["tracks"][0]["duration_in_timescale"],
+            12 * 33_333_333u64
+        );
+
+        assert_eq!(report["tracks"][1]["timescale"], 48_000);
+        assert_eq!(report["tracks"][1]["samples"], 12);
+        assert_eq!(
+            report["tracks"][1]["duration_in_timescale"],
+            12 * 960u64,
+            "each Opus sample spans its own sample_count"
+        );
+        assert_eq!(report["tracks"][1]["duration_seconds"], 0.24);
+    }
 }
