@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.45](https://github.com/tatolab/streamlib/compare/v0.18.44...v0.18.45) (2026-09-03)
+
+
+### Features
+
+* **wheel:** the Opus pair reach Python — EncodedAudioPacket cast, markers, stubs, the rig test and the known-signal round trip ([#2137](https://github.com/tatolab/streamlib/issues/2137)) ([751af4a](https://github.com/tatolab/streamlib/commit/751af4a6bf4c5ef9dbad8fa84d02d520ef71fd3b))
+
 ## [0.18.44](https://github.com/tatolab/streamlib/compare/v0.18.43...v0.18.44) (2026-09-03)
 
 
