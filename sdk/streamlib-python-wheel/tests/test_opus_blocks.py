@@ -29,7 +29,6 @@ from opus_blocks_probes import (
     DECODED_BLOCKS_REPORTED,
     ENCODED_PACKETS_REPORTED,
     SOURCE_CHANNELS,
-    SOURCE_SAMPLE_RATE,
 )
 
 OPUS_BLOCKS_APP = Path(__file__).parent / "opus_blocks_app.py"
@@ -49,6 +48,12 @@ NANOSECONDS_PER_OPUS_PACKET = SAMPLES_IN_ONE_OPUS_PACKET * 1_000_000_000 // 48_0
 # either — what is under test is that the decoder trims exactly what the
 # encoder reported, not what this file believes libopus reports.
 PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS = range(1, SAMPLES_IN_ONE_OPUS_PACKET)
+
+# How much of the decoded report has to pair with the encoded one for the trim
+# assertion to be about the stream rather than one block. The two probes are
+# separate helper processes attaching at their own pace, so this is the floor
+# under the overlap, not the expectation.
+DECODED_BLOCKS_TO_CROSS_CHECK = DECODED_BLOCKS_REPORTED // 2
 
 
 # ---- marker semantics (no GPU) ---------------------------------------------
@@ -160,19 +165,27 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
 
 
 @pytest.mark.requires_gpu
-def test_the_decoded_blocks_carry_the_sources_format_and_the_trimmed_priming(
+def test_the_decoded_blocks_are_one_per_packet_and_stamped_a_lookahead_earlier(
     start_app_under_test,
 ):
     """The far side of the pair: what libopus reconstructed, read back as
     ordinary audio blocks.
 
-    The first block is the assertion that matters. The decoder trims the
-    encoder's lookahead at entry, so that block is short by exactly `pre_skip`
-    and is stamped at the entry packet's own instant — a decoder that skipped
-    the trim would emit a full 960 there, and one that trimmed but then copied
-    each packet's stamp would put every block a lookahead later than the audio
-    it holds. From the second block on the stream is uniform: 960 samples,
-    20 ms apart.
+    One block per packet and no re-framing — 960 samples every time, 20 ms
+    apart, nothing held back — and each block stamped exactly `pre_skip`
+    samples *earlier* than the packet whose audio it carries. That offset is
+    the trim, observable from anywhere in the stream: a decoder that did not
+    trim would emit each block at its packet's own stamp and so run a
+    lookahead late against the audio it holds, which on a recording is the
+    audio drifting against the video.
+
+    The *entry* block — short by exactly `pre_skip`, stamped at the anchoring
+    packet's instant — is not assertable here and is not this test's job. Both
+    probes are helper processes that attach at their own pace, well after the
+    decoder entered the stream, so the entry block is already gone by the time
+    either exists. The engine test owns it, driving the decode body with no
+    `Runtime` at all:
+    `encoded_packet_to_audio_block_decoder.rs::a_later_blocks_derived_stamp_lands_on_the_stamp_of_the_packet_whose_input_it_carries`.
     """
     app = start_app_under_test(OPUS_BLOCKS_APP)
     app.await_marker("EVERY_PROCESSOR_RUNNING")
@@ -190,58 +203,64 @@ def test_the_decoded_blocks_carry_the_sources_format_and_the_trimmed_priming(
     assert packets, f"the encoded link reported nothing to compare against:\n{app.output}"
 
     for block in blocks:
-        assert block["sample_rate"] == SOURCE_SAMPLE_RATE, (
-            "a decoder reconstructs at Opus's own 48 kHz clock"
+        assert block["sample_rate"] == 48_000, (
+            "a decoder reconstructs at Opus's own clock whatever the source "
+            "was resampled from"
         )
         assert block["channels"] == SOURCE_CHANNELS, (
             "the decoded block carries the packet's own channel count, which "
             "followed the source's"
         )
         assert block["dtype"] == "f32", "libopus reconstructs float samples"
+        assert block["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET, (
+            "one block per packet and no re-framing — a decoder that re-framed "
+            "would be a second framing system beside the window stage that "
+            "already owns the concern"
+        )
         assert block["sample_count"] * block["channels"] == block["scalars_read"], (
             "the block's declared count and the samples it actually carries "
             "have to be the same fact"
         )
 
-    # The probe attaches at its own pace, so the first block it saw is the
-    # decoder's first only when the decoder's entry packet is one the encoded
-    # probe also wrote down. Bounded that way rather than assumed.
-    entry_packet = next(
-        (packet for packet in packets if packet["timestamp_ns"] == blocks[0]["timestamp_ns"]),
-        None,
-    )
-    assert entry_packet is not None, (
-        f"the first decoded block is stamped {blocks[0]['timestamp_ns']}, which "
-        "rode no encoded packet this run wrote down — either the decoder "
-        "re-stamped it at publication, or the two probes' windows did not "
-        f"overlap; output:\n{app.output}"
-    )
-    assert blocks[0]["sample_count"] == (
-        SAMPLES_IN_ONE_OPUS_PACKET - entry_packet["pre_skip"]
-    ), (
-        "the first block after entry is short by exactly the encoder's "
-        "lookahead — the decoder trims the priming so its first emitted sample "
-        "is the stamped instant"
-    )
-
-    for block in blocks[1:]:
-        assert block["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET, (
-            "only the entry block is trimmed; the decoder holds nothing back "
-            "and re-frames nothing, so every later block is one whole packet"
-        )
-    for earlier, later in zip(blocks[1:], blocks[2:]):
+    for earlier, later in zip(blocks, blocks[1:]):
         assert (
             later["timestamp_ns"] - earlier["timestamp_ns"]
         ) == NANOSECONDS_PER_OPUS_PACKET, (
-            "past the trimmed entry block the stamps are exactly 20 ms apart, "
-            "derived from the anchor rather than read off a clock: "
+            "the stamps are exactly 20 ms apart, derived from the run's anchor "
+            "in integer rational arithmetic rather than read off a clock: "
             f"{earlier['timestamp_ns']} → {later['timestamp_ns']}"
         )
 
-    assert blocks[1]["timestamp_ns"] - blocks[0]["timestamp_ns"] == (
-        blocks[0]["sample_count"] * 1_000_000_000 // SOURCE_SAMPLE_RATE
-    ), (
-        "the second block starts exactly where the short first one ended, "
-        "which is what makes the trim a discarded lookahead rather than a hole "
-        "in the audio"
+    # One minted encoder for the whole run — the channel count never changes,
+    # so nothing re-mints and there is one lookahead to reason about.
+    reported_lookaheads = {packet["pre_skip"] for packet in packets}
+    assert len(reported_lookaheads) == 1, (
+        f"the run reported {reported_lookaheads} lookaheads; a second one means "
+        "the encoder re-minted, which nothing in this graph asks it to do"
+    )
+    trim_ns = reported_lookaheads.pop() * 1_000_000_000 // 48_000
+
+    # Bounded by the encoded probe's own report: the two probes attach
+    # independently, and a decoded block whose packet fell outside that window
+    # rode a bag nobody wrote down.
+    packet_stamps = {packet["timestamp_ns"] for packet in packets}
+    paired = [
+        block for block in blocks if block["timestamp_ns"] + trim_ns in packet_stamps
+    ]
+    assert len(paired) >= DECODED_BLOCKS_TO_CROSS_CHECK, (
+        f"only {len(paired)} of {len(blocks)} decoded blocks paired with an "
+        "encoded packet a lookahead later, which is too few to be about the "
+        f"stream; output:\n{app.output}"
+    )
+
+    # The un-trimmed signature, and why the pairing above is the trim rather
+    # than an arbitrary offset that happened to fit: packets are 20 ms apart
+    # and the lookahead is a fraction of that, so a block stamped at any
+    # packet's own instant is a decoder that emitted its priming.
+    assert not [
+        block for block in blocks if block["timestamp_ns"] in packet_stamps
+    ], (
+        "a decoded block is stamped at its packet's own instant, so the "
+        "encoder's priming was never discarded — every block then holds audio "
+        "a lookahead older than the moment it claims"
     )
