@@ -14,9 +14,13 @@
 use streamlib_processor_schema::ProcessorClassImportPath;
 
 use super::audio_block_bag_wire_codec::AudioBlockSampleDtype;
+use super::audio_window_accumulator::SourceAudioFormat;
 use super::device_matched_audio_window_contracts::AudioWindowContractMatchingADeviceStream;
 use crate::core::context::AudioSampleFormat;
-use crate::core::descriptors::{AudioWindowContract, AudioWindowContractDeclaredValues};
+use crate::core::descriptors::{
+    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
+    AudioWindowContractDeclaredValues,
+};
 use crate::core::error::{Error, Result};
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::iceoryx2::DeliveryProfile;
@@ -127,8 +131,7 @@ impl ResolvedAudioWindowContract {
         Self::from_declared_values(&AudioWindowContractDeclaredValues {
             sample_rate: format.sample_rate,
             // A device stream resolves a count, so a settled contract always
-            // states one: `match_device` is unchanged by the source-following
-            // default.
+            // states one.
             channels: Some(format.channels),
             dtype: audio_window_dtype_of(format.sample_format).to_string(),
             window_size: matching.window_size_in_per_channel_samples,
@@ -168,6 +171,26 @@ impl ResolvedAudioWindowContract {
                  `match_device` to take them from the device this processor opens"
             ))),
         }
+    }
+
+    /// The channel count a window carries for a source arriving in this
+    /// format: the contract's when it declared one, otherwise the source's own.
+    ///
+    /// The one statement of that rule. The stage asks it to size a window, to
+    /// build a rate conversion, and to encode — and those three must never
+    /// disagree.
+    pub(crate) fn channels_a_window_carries_from(&self, source: SourceAudioFormat) -> u32 {
+        self.channels.unwrap_or(source.channels)
+    }
+
+    /// The channel count as every other surface spells it — the number, or the
+    /// word an absent count renders as — so a log line reads the same as
+    /// `graph` does.
+    pub(crate) fn rendered_channel_count(&self) -> String {
+        self.channels.map_or_else(
+            || AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE.to_string(),
+            |channels| channels.to_string(),
+        )
     }
 
     /// The values as a declaration states them, for the parent→child wiring

@@ -531,7 +531,7 @@ impl InputMailboxesInner {
             buffer_size = contract.windowed_port_mailbox_depth(),
             read_mode = ?read_mode,
             sample_rate = contract.sample_rate,
-            channels = ?contract.channels,
+            channels = %contract.rendered_channel_count(),
             window_size = contract.window_size,
             hop = contract.hop,
             "InputMailboxes: add_windowed_port"
@@ -609,7 +609,7 @@ impl InputMailboxesInner {
         tracing::info!(
             port = port,
             sample_rate = contract.sample_rate,
-            channels = ?contract.channels,
+            channels = %contract.rendered_channel_count(),
             window_size = contract.window_size,
             hop = contract.hop,
             "InputMailboxes: `audio_window = match_device` settled from the device stream"

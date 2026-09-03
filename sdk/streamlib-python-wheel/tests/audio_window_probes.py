@@ -175,7 +175,6 @@ class StereoToneSource:
         self._frames_published += SOURCE_FRAMES_PER_BLOCK
 
 
-
 @processor
 class SourceFollowingWindowProbe:
     """Declares no channel count, so its windows carry the source's own."""

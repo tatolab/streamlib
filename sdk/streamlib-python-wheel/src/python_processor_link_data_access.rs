@@ -17,7 +17,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
@@ -788,18 +788,28 @@ fn channel_count_the_parent_wired(
     port_name: &str,
     declared: &Bound<'_, PyAny>,
 ) -> PyResult<Option<u32>> {
-    // A lookup that fails is an absent key, which is a port following its
-    // source. It cannot hide an envelope that is not a mapping at all: the
-    // caller reads `sample_rate` through `field` first, and that names the
-    // failure.
-    let Ok(value) = declared.get_item("channels") else {
-        return Ok(None);
+    let value = match declared.get_item("channels") {
+        Ok(value) => value,
+        // Only a missing key means "follows its source". Anything else is an
+        // envelope the helper could not read, and swallowing it here would
+        // turn a wiring bug into a silently different contract.
+        Err(lookup_failure) if lookup_failure.is_instance_of::<PyKeyError>(declared.py()) => {
+            return Ok(None);
+        }
+        Err(lookup_failure) => {
+            return Err(PyValueError::new_err(format!(
+                "input port {port_name:?} was wired with an `audio_window` the helper could \
+                 not read `channels` out of: {lookup_failure}"
+            )));
+        }
     };
     read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
-        PyValueError::new_err(format!(
+        let framed = format!(
             "input port {port_name:?} was wired with an `audio_window` whose \"channels\" \
-             the helper could not read: it {refusal}"
-        ))
+             the helper could not read: it {}",
+            refusal.reason()
+        );
+        refusal.raised_as(framed)
     })
 }
 

@@ -26,7 +26,7 @@ fn contract(
     window_size: u32,
     hop: u32,
 ) -> ResolvedAudioWindowContract {
-    declared(sample_rate, Some(channels), dtype, window_size, hop)
+    a_contract_stating(sample_rate, Some(channels), dtype, window_size, hop)
 }
 
 /// A contract that states everything but its channel count, so every emitted
@@ -37,10 +37,10 @@ fn contract_following_the_sources_channels(
     window_size: u32,
     hop: u32,
 ) -> ResolvedAudioWindowContract {
-    declared(sample_rate, None, dtype, window_size, hop)
+    a_contract_stating(sample_rate, None, dtype, window_size, hop)
 }
 
-fn declared(
+fn a_contract_stating(
     sample_rate: u32,
     channels: Option<u32>,
     dtype: &str,
@@ -614,59 +614,94 @@ fn an_i16_contract_emits_windows_whose_scalars_are_written_as_i16() {
     }
 }
 
+/// Drive the readiness floor over one source format, asserting the two things
+/// that together make it meaningful: every window it promises can actually be
+/// produced, in the count the contract resolves to — and it clears at all,
+/// since a floor that never says yes satisfies the first vacuously and would
+/// leave a reactive processor undispatched forever.
+///
+/// Small quanta on purpose: the queue must cross one window's worth in steps
+/// smaller than the priming and chunk slack, or a floor blind to that slack
+/// steps straight over the gap where it would overclaim.
+fn assert_the_readiness_floor_holds_for(
+    contract: ResolvedAudioWindowContract,
+    source_rate: u32,
+    source_channels: u32,
+    channels_each_window_carries: u32,
+) {
+    let (mut stage, format_the_mailbox_reports) =
+        stage_and_the_format_its_mailbox_reports(contract);
+
+    let source_frames_per_block = 160u64;
+    let mut queued_equivalents = 0u64;
+    let mut blocks = Vec::new();
+    let mut the_floor_cleared = false;
+    for block_index in 0..60u64 {
+        let first_frame = block_index * source_frames_per_block;
+        blocks.push(source_block(
+            &interleaved_sine(
+                first_frame,
+                source_frames_per_block as usize,
+                source_channels,
+                source_rate,
+                440.0,
+            ),
+            source_rate,
+            source_channels,
+            nanoseconds_for(first_frame, source_rate),
+        ));
+        queued_equivalents +=
+            source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
+        format_the_mailbox_reports.record(SourceAudioFormat {
+            sample_rate: source_rate,
+            channels: source_channels,
+        });
+
+        if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
+            continue;
+        }
+        // The gate said yes, so feeding exactly what was queued must produce a
+        // window.
+        for block in blocks.drain(..) {
+            stage.accept(&block).expect("accepted");
+        }
+        queued_equivalents = 0;
+        let window = stage
+            .next_ready_window()
+            .expect("a window emits")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the readiness floor claimed a window at {source_rate} Hz / \
+                     {source_channels} channels that the read could not produce"
+                )
+            });
+        let emitted = read_an_audio_block_off_the_wire(&window.body).expect("reads back");
+        assert_eq!(
+            emitted.channels, channels_each_window_carries,
+            "the window the floor promised carries the count the contract resolves to"
+        );
+        the_floor_cleared = true;
+    }
+
+    assert!(
+        the_floor_cleared,
+        "the floor never cleared at {source_rate} Hz across {source_channels} channels, so \
+         it never claimed anything to check"
+    );
+}
+
 /// The readiness floor must never claim a window the read then cannot produce:
 /// a reactive `process()` that woke and found nothing is the shape the window
 /// contract exists to rule out.
 #[test]
 fn the_readiness_floor_never_claims_a_window_the_read_cannot_then_produce() {
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 1)] {
-        let contract = contract(16_000, 1, "f32", 512, 512);
-        let (mut stage, format_the_mailbox_reports) =
-            stage_and_the_format_its_mailbox_reports(contract);
-
-        // Small quanta on purpose: the queue must cross one window's worth in
-        // steps smaller than the priming and chunk slack, or a floor blind to
-        // that slack steps straight over the gap where it would overclaim.
-        let source_frames_per_block = 160u64;
-        let mut queued_equivalents = 0u64;
-        let mut blocks = Vec::new();
-        let mut the_floor_cleared = false;
-        for block_index in 0..60u64 {
-            let first_frame = block_index * source_frames_per_block;
-            blocks.push(source_block(
-                &interleaved_sine(
-                    first_frame,
-                    source_frames_per_block as usize,
-                    source_channels,
-                    source_rate,
-                    440.0,
-                ),
-                source_rate,
-                source_channels,
-                nanoseconds_for(first_frame, source_rate),
-            ));
-            queued_equivalents +=
-                source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
-            format_the_mailbox_reports.record(SourceAudioFormat {
-                sample_rate: source_rate,
-                channels: source_channels,
-            });
-
-            if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
-                continue;
-            }
-            // The gate said yes, so feeding exactly what was queued must
-            // produce a window.
-            for block in blocks.drain(..) {
-                stage.accept(&block).expect("accepted");
-            }
-            queued_equivalents = 0;
-            assert!(
-                stage.next_ready_window().expect("a window emits").is_some(),
-                "the readiness floor claimed a window at {source_rate} Hz / \
-                 {source_channels} channels that the read could not produce"
-            );
-        }
+        assert_the_readiness_floor_holds_for(
+            contract(16_000, 1, "f32", 512, 512),
+            source_rate,
+            source_channels,
+            1,
+        );
     }
 }
 
@@ -973,65 +1008,15 @@ fn a_source_that_changes_its_channel_count_flushes_rather_than_mixing_two_counts
 
 /// The readiness floor is asked before any bag has been consumed, so on a
 /// contract that declares no count it must answer from the count the mailbox's
-/// measure saw — and still never claim a window the read cannot produce.
+/// measure saw — and the windows it promises must carry that count.
 #[test]
 fn readiness_on_a_channel_free_contract_never_claims_a_window_the_read_cannot_produce() {
     for (source_rate, source_channels) in [(48_000u32, 2u32), (16_000, 1), (44_100, 6)] {
-        let contract = contract_following_the_sources_channels(16_000, "f32", 512, 512);
-        let (mut stage, format_the_mailbox_reports) =
-            stage_and_the_format_its_mailbox_reports(contract);
-
-        let source_frames_per_block = 160u64;
-        let mut queued_equivalents = 0u64;
-        let mut blocks = Vec::new();
-        let mut the_floor_cleared = false;
-        for block_index in 0..60u64 {
-            let first_frame = block_index * source_frames_per_block;
-            blocks.push(source_block(
-                &interleaved_sine(
-                    first_frame,
-                    source_frames_per_block as usize,
-                    source_channels,
-                    source_rate,
-                    440.0,
-                ),
-                source_rate,
-                source_channels,
-                nanoseconds_for(first_frame, source_rate),
-            ));
-            queued_equivalents +=
-                source_frames_per_block * u64::from(contract.sample_rate) / u64::from(source_rate);
-            format_the_mailbox_reports.record(SourceAudioFormat {
-                sample_rate: source_rate,
-                channels: source_channels,
-            });
-
-            if !stage.a_full_window_would_be_ready_after(queued_equivalents, false) {
-                continue;
-            }
-            for block in blocks.drain(..) {
-                stage.accept(&block).expect("accepted");
-            }
-            let window = stage
-                .next_ready_window()
-                .expect("asked")
-                .unwrap_or_else(|| {
-                    panic!(
-                        "the floor claimed a window at {source_rate} Hz across \
-                         {source_channels} channels and the read produced none"
-                    )
-                });
-            let block = read_an_audio_block_off_the_wire(&window.body).expect("reads back");
-            assert_eq!(
-                block.channels, source_channels,
-                "the window the floor promised carries the source's own count"
-            );
-            the_floor_cleared = true;
-            break;
-        }
-        assert!(
-            the_floor_cleared,
-            "the floor never cleared at {source_rate} Hz across {source_channels} channels"
+        assert_the_readiness_floor_holds_for(
+            contract_following_the_sources_channels(16_000, "f32", 512, 512),
+            source_rate,
+            source_channels,
+            source_channels,
         );
     }
 }

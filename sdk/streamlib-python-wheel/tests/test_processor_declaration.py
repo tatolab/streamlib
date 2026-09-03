@@ -508,8 +508,8 @@ def test_a_declared_channel_count_of_zero_is_still_refused():
 
 
 def test_the_contract_takes_no_positional_arguments():
-    """Keyword-only, so a positional call fails loudly rather than binding
-    `dtype` to whatever used to sit second."""
+    """Keyword-only, so a positional call fails loudly rather than binding a
+    value to the wrong keyword."""
     with pytest.raises(TypeError):
         AudioWindowContract(16_000, "f32", 512)  # type: ignore[misc]
 

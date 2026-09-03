@@ -252,10 +252,41 @@ fn read_audio_window_channel_count(
         return Ok(None);
     };
     read_a_channel_count_or_the_source_spelling(&value).map_err(|refusal| {
-        PyValueError::new_err(format!(
-            "input port {port_name:?}: audio_window field \"channels\" {refusal}"
-        ))
+        let framed = format!(
+            "input port {port_name:?}: audio_window field \"channels\" {}",
+            refusal.reason()
+        );
+        refusal.raised_as(framed)
     })
+}
+
+/// Why an `audio_window` field could not be read: the tail of the sentence,
+/// and which Python exception carries it.
+///
+/// The kind travels with the refusal so the same mistake raises the same
+/// exception whichever field it was made on — `channels=1.5` and
+/// `window_size=1.5` are one error, not two.
+pub(crate) enum AudioWindowFieldRefusal {
+    /// The value is not the kind of thing the field takes at all.
+    WrongKindOfValue(String),
+    /// The right kind, but not one the field may hold.
+    UnusableValue(String),
+}
+
+impl AudioWindowFieldRefusal {
+    /// Raise this refusal in the caller's own framing, keeping its kind.
+    pub(crate) fn raised_as(self, framed: String) -> PyErr {
+        match self {
+            Self::WrongKindOfValue(_) => PyTypeError::new_err(framed),
+            Self::UnusableValue(_) => PyValueError::new_err(framed),
+        }
+    }
+
+    pub(crate) fn reason(&self) -> &str {
+        match self {
+            Self::WrongKindOfValue(reason) | Self::UnusableValue(reason) => reason,
+        }
+    }
 }
 
 /// Read a `channels` value written either as a count or as the
@@ -267,27 +298,45 @@ fn read_audio_window_channel_count(
 /// own validator does: one names a declaration, the other names a wiring.
 pub(crate) fn read_a_channel_count_or_the_source_spelling(
     value: &Bound<'_, PyAny>,
-) -> Result<Option<u32>, String> {
+) -> Result<Option<u32>, AudioWindowFieldRefusal> {
     if let Ok(spelling) = value.extract::<String>() {
         if spelling == AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE {
             return Ok(None);
         }
-        return Err(format!(
+        return Err(AudioWindowFieldRefusal::UnusableValue(format!(
             "is {spelling:?} — expected a channel count, or \
              {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry whatever count the \
              source sends"
-        ));
+        )));
     }
 
-    let declared = value.extract::<i64>().map_err(|_| {
-        format!(
-            "must be an int, or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to carry \
-             whatever count the source sends"
-        )
-    })?;
-    u32::try_from(declared)
+    a_strictly_positive_count(value)
         .map(Some)
-        .map_err(|_| format!("is {declared} — every numeric field is strictly positive"))
+        .map_err(|refusal| match refusal {
+            AudioWindowFieldRefusal::WrongKindOfValue(_) => {
+                AudioWindowFieldRefusal::WrongKindOfValue(format!(
+                    "must be an int, or {AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE:?} to \
+                     carry whatever count the source sends"
+                ))
+            }
+            unusable => unusable,
+        })
+}
+
+/// One strictly-positive count off a Python value, telling a value of the
+/// wrong kind apart from a number the field cannot hold.
+///
+/// The shared core of every numeric `audio_window` field, `channels` included,
+/// so one spelling of "strictly positive" serves them all.
+fn a_strictly_positive_count(value: &Bound<'_, PyAny>) -> Result<u32, AudioWindowFieldRefusal> {
+    let declared = value
+        .extract::<i64>()
+        .map_err(|_| AudioWindowFieldRefusal::WrongKindOfValue("must be an int".to_string()))?;
+    u32::try_from(declared).map_err(|_| {
+        AudioWindowFieldRefusal::UnusableValue(format!(
+            "is {declared} — every numeric field is strictly positive"
+        ))
+    })
 }
 
 /// Read one strictly-positive `audio_window` numeric field, refusing a
@@ -298,16 +347,12 @@ fn read_audio_window_numeric_field(
     port_name: &str,
 ) -> PyResult<u32> {
     let value = audio_window_field(declaration, key, port_name)?;
-    let declared = value.extract::<i64>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "input port {port_name:?}: audio_window field {key:?} must be an int"
-        ))
-    })?;
-    u32::try_from(declared).map_err(|_| {
-        PyValueError::new_err(format!(
-            "input port {port_name:?}: audio_window field {key:?} is {declared} — every \
-             numeric field is strictly positive"
-        ))
+    a_strictly_positive_count(&value).map_err(|refusal| {
+        let framed = format!(
+            "input port {port_name:?}: audio_window field {key:?} {}",
+            refusal.reason()
+        );
+        refusal.raised_as(framed)
     })
 }
 
