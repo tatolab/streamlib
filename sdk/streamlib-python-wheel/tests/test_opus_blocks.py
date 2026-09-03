@@ -3,9 +3,10 @@
 
 """The Opus codec pair, marker class to decoded audio block.
 
-The marker tests are pure Python. The graph tests boot a real engine, so they
-carry `requires_gpu` like every other graph test here and run nowhere in CI —
-libopus needs no device, but `Runtime` needs a GPU context.
+The marker tests are pure Python — constructing a `Runtime` and wiring a graph
+needs no device, which is why they run in CI. The graph tests start one, so
+they carry `requires_gpu` like every other graph test here and run nowhere in
+CI: libopus needs no device, but a running processor does.
 
 No microphone: a Python source publishes a stereo tone at a stated rate, so
 the channel count the encoder follows and the rate the decoder reconstructs at
@@ -44,9 +45,12 @@ SAMPLES_IN_ONE_OPUS_PACKET = 960
 NANOSECONDS_PER_OPUS_PACKET = SAMPLES_IN_ONE_OPUS_PACKET * 1_000_000_000 // 48_000
 
 # libopus's lookahead at 48 kHz is `Fs/400 + Fs/250` = 312 samples, and 120 at
-# `lowdelay`. The assertions read `pre_skip` off the bag rather than assuming
+# `lowdelay`. The assertions read `pre_skip` off the bag rather than naming
 # either — what is under test is that the decoder trims exactly what the
-# encoder reported, not what this file believes libopus reports.
+# encoder reported, not what this file believes libopus reports. The pairing
+# below does assume the reported lookahead divides evenly into nanoseconds at
+# 48 kHz, which both of those do; a lookahead that did not would need the
+# comparison to carry the rounding rather than be exact.
 PRE_SKIP_SAMPLES_A_CREDIBLE_ENCODER_REPORTS = range(1, SAMPLES_IN_ONE_OPUS_PACKET)
 
 # How much of the decoded report has to pair with the encoded one for the trim
@@ -194,13 +198,39 @@ def test_the_decoded_blocks_are_one_per_packet_and_stamped_a_lookahead_earlier(
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
 
-    blocks = _reported(DECODED_BLOCK, app.output)
-    assert len(blocks) == DECODED_BLOCKS_REPORTED, (
-        f"the probe reported {len(blocks)} blocks, not "
+    reported = _reported(DECODED_BLOCK, app.output)
+    assert len(reported) == DECODED_BLOCKS_REPORTED, (
+        f"the probe reported {len(reported)} blocks, not "
         f"{DECODED_BLOCKS_REPORTED}; output:\n{app.output}"
     )
     packets = _reported(ENCODED_PACKET, app.output)
     assert packets, f"the encoded link reported nothing to compare against:\n{app.output}"
+
+    # The entry block is short by `pre_skip` and stamped at its packet's own
+    # instant, so it fails both steady-state assertions below by construction.
+    # In practice the probe attaches long after the decoder entered and never
+    # sees it — but "in practice" is helper-process start latency, not a
+    # guarantee, so it is dropped by shape rather than left to timing. It can
+    # only ever be the first block of the report.
+    blocks = reported
+    entry_blocks = [
+        block
+        for block in reported[:1]
+        if block["sample_count"] != SAMPLES_IN_ONE_OPUS_PACKET
+    ]
+    if entry_blocks:
+        blocks = reported[1:]
+        lookahead = {packet["pre_skip"] for packet in packets}
+        assert entry_blocks[0]["sample_count"] in {
+            SAMPLES_IN_ONE_OPUS_PACKET - pre_skip for pre_skip in lookahead
+        }, (
+            "the probe caught the decoder's entry block, and a short block "
+            "there is the trimmed priming — it must be short by exactly the "
+            f"encoder's lookahead, not by {entry_blocks[0]['sample_count']}"
+        )
+    assert all(
+        block["sample_count"] == SAMPLES_IN_ONE_OPUS_PACKET for block in reported[1:]
+    ), "only the entry block can ever be short; the decoder re-frames nothing"
 
     for block in blocks:
         assert block["sample_rate"] == 48_000, (

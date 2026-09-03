@@ -10,8 +10,9 @@ and the measurement is a resampler, and the channel count the encoder follows
 is this app's own fact.
 
 Two probes off one run rather than two runs is what makes the trim assertion
-possible: the decoded side's entry block has to be matched against the stamp
-of the encoded packet the decoder anchored on, and only one run has both.
+possible: a decoded block's stamp is paired against the stamp of the encoded
+packet a lookahead later, and two runs would have two anchors and nothing to
+pair across.
 
 The source publishes 480-sample blocks and the encoder's port declares
 960/960, so the window stage frames two source blocks into each Opus packet —

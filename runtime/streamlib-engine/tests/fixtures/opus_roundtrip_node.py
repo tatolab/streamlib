@@ -39,7 +39,7 @@ def main() -> None:
         default=3.0,
         help=(
             "how much decoded audio to record before writing; the signal is "
-            "2.7 s and the source stops at 3.7 s, so this sits between them"
+            "2.78 s and the source stops at 3.78 s, so this sits between them"
         ),
     )
     arguments = parser.parse_args()

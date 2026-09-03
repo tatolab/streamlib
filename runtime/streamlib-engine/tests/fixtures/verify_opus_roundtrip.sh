@@ -24,7 +24,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 
 CONTROL_PORT="${CONTROL_PORT:-9078}"
-# The signal is 2.7 s and the source stops publishing at 3.7 s, so the record
+# The signal is 2.78 s and the source stops publishing at 3.78 s, so the record
 # window sits between them: past the source's end nothing further arrives and
 # the recorder would never write.
 RECORD_SECONDS=3.0
@@ -86,10 +86,16 @@ done
 # fixes. The decoder refuses a packet it cannot read; the encoder refuses a
 # channel count Opus cannot place.
 #
-# Gated on the level, because both blocks narrate their healthy mint and their
-# teardown counts at INFO and a gap at WARN — a bare name match would call
-# every passing run a refusal.
-OPUS_REFUSALS='\[ERROR\].*Opus(Encoder|Decoder)'
+# Two patterns because a refusal reaches the log two ways. A reactive
+# processor reports by returning `Err`, which the thread runner renders at
+# WARN as `process() failed: <the refusal>` — the decoder's only channel, since
+# it calls `tracing::error!` nowhere. The encoder additionally logs its own
+# errors directly.
+#
+# Neither pattern matches the healthy run: both blocks narrate their mint and
+# their teardown counts at INFO, and the decoder's gap line is a WARN whose
+# message is "a gap in the encoded stream" rather than "process() failed".
+OPUS_REFUSALS='process\(\) failed: .*Opus(Encoder|Decoder)|\[ERROR\].*Opus(Encoder|Decoder)'
 if grep -qE "$OPUS_REFUSALS" "$OUTPUT_DIR/node.log"; then
     echo "ERROR: an Opus block refused what it was handed — see the reason below" >&2
     grep -E "$OPUS_REFUSALS" "$OUTPUT_DIR/node.log" >&2
