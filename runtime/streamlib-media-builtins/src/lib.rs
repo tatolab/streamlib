@@ -20,6 +20,7 @@ pub(crate) mod cumulative_count_report_threshold;
 pub mod display_window;
 #[cfg(test)]
 mod emitted_log_line_test_support;
+pub mod encoded_audio_packet;
 #[cfg(target_os = "linux")]
 pub mod encoded_frame_to_published_surface_decoder;
 pub mod encoded_stream_ordering;
@@ -58,6 +59,10 @@ pub use camera_source::{CameraSource, CameraSourceConfig};
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
 #[cfg(target_os = "linux")]
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
+pub use encoded_audio_packet::{
+    EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
+    read_encoded_audio_packet_bag,
+};
 pub use encoded_stream_ordering::{
     ArrivingEncodedBagDisposition, EncodedStreamOrderingPair, EncodedStreamOrderingPairCounter,
     EncodedStreamSyncPointGate,
