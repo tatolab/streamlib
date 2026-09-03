@@ -57,6 +57,7 @@ from .claimed_surface_pixel_access import (
 from .claimed_surface_pixel_access import (
     PixelAccessToOneClaimedSurface as PixelAccessToOneClaimedSurface,
 )
+from .encoded_audio_packet import EncodedAudioPacket as EncodedAudioPacket
 from .encoded_video_frame import EncodedVideoFrame as EncodedVideoFrame
 from .processor_output_texture_ring import (
     ProcessorOutputTextureRing as ProcessorOutputTextureRing,
@@ -77,6 +78,7 @@ __all__ = [
     "ColorInfo",
     "ContentLight",
     "DisplayWindow",
+    "EncodedAudioPacket",
     "EncodedVideoFrame",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
