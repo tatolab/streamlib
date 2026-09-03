@@ -10,6 +10,7 @@
 //! pool, texture cache, present target — never private engine guts.
 
 pub mod audio_block;
+pub mod audio_window_to_encoded_packet_encoder;
 pub(crate) mod audio_samples_awaiting_playback_ring;
 #[cfg(target_os = "linux")]
 pub mod camera_source;
@@ -60,6 +61,7 @@ pub use camera_source::{CameraSource, CameraSourceConfig};
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
 #[cfg(target_os = "linux")]
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
+pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 pub use encoded_audio_packet::{
     EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
     read_encoded_audio_packet_bag,

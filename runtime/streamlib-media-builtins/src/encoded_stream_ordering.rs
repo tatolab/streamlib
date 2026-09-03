@@ -47,6 +47,12 @@ impl EncodedStreamOrderingPairCounter {
         self.bags_accounted += 1;
         pair
     }
+
+    /// How many bags this producer has published, for its progress and
+    /// teardown lines.
+    pub fn bags_accounted(&self) -> u64 {
+        self.bags_accounted
+    }
 }
 
 /// What the loss doctrine says to do with one arriving encoded bag, given
