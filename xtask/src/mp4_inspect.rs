@@ -1,0 +1,548 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! `cargo xtask mp4-inspect <file>` — what a written recording actually
+//! contains, as JSON.
+//!
+//! Pure Rust over `mp4-atom`, so nothing downstream needs ffprobe: the rig
+//! tests, the Python surface's tests and `/verify-video` all read a real file
+//! through this.
+
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use clap::Args;
+use mp4_atom::{Atom, Codec, Ftyp, Header, Moof, Moov, ReadAtom, ReadFrom};
+use serde_json::{Value, json};
+
+#[derive(Args, Debug)]
+pub struct Mp4InspectCommand {
+    /// The recording to read.
+    pub file: PathBuf,
+}
+
+pub fn run(command: Mp4InspectCommand) -> Result<()> {
+    let report = inspect_file(&command.file)?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+/// Read one file into the report `mp4-inspect` prints.
+pub fn inspect_file(path: &Path) -> Result<Value> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("{} could not be read", path.display()))?;
+    inspect_reader(&mut std::io::BufReader::new(file))
+}
+
+/// The same walk over bytes, which is what the tests below drive — so they
+/// exercise the reader the CLI runs, not a second one.
+#[cfg(test)]
+pub fn inspect_bytes(file_bytes: &[u8]) -> Result<Value> {
+    inspect_reader(&mut std::io::Cursor::new(file_bytes))
+}
+
+/// Walk a recording's top-level boxes, decoding only the ones that describe it.
+///
+/// Every box is stepped over by its declared size, so a `mdat` — which is all
+/// of a recording but a few kilobytes — is seeked past rather than read into
+/// memory. A metadata dump must not need the recording's own size to run.
+pub fn inspect_reader<R: Read + Seek>(reader: &mut R) -> Result<Value> {
+    let mut brands = Value::Null;
+    let mut moov: Option<Moov> = None;
+    let mut fragments: Vec<Moof> = Vec::new();
+
+    loop {
+        // A read that cannot produce a header is the end of the file, or a
+        // trailing box a killed run never finished — both stop the walk rather
+        // than fail it, which is what the fragmented layout exists for.
+        let Ok(header) = Header::read_from(reader) else {
+            break;
+        };
+        let Ok(body_start) = reader.stream_position() else {
+            break;
+        };
+        match header.kind {
+            kind if kind == Ftyp::KIND => {
+                let ftyp = Ftyp::read_atom(&header, reader)
+                    .map_err(|failure| anyhow::anyhow!("the `ftyp` did not parse: {failure}"))?;
+                brands = json!({
+                    "major_brand": fourcc_string(&ftyp.major_brand),
+                    "compatible_brands": ftyp
+                        .compatible_brands
+                        .iter()
+                        .map(fourcc_string)
+                        .collect::<Vec<_>>(),
+                });
+            }
+            kind if kind == Moov::KIND => {
+                moov = Some(Moov::read_atom(&header, reader).map_err(|failure| {
+                    anyhow::anyhow!("the file did not parse as ISOBMFF: {failure}")
+                })?);
+            }
+            kind if kind == Moof::KIND => {
+                fragments.push(Moof::read_atom(&header, reader).map_err(|failure| {
+                    anyhow::anyhow!("the file did not parse as ISOBMFF: {failure}")
+                })?);
+            }
+            _ => {}
+        }
+        // A box with no declared size runs to the end of the file.
+        let Some(body_bytes) = header.size else {
+            break;
+        };
+        if reader
+            .seek(SeekFrom::Start(body_start + body_bytes as u64))
+            .is_err()
+        {
+            break;
+        }
+    }
+
+    // A `trun` entry may omit its duration and inherit it, so the defaults are
+    // read once here: 14496-12 §8.8.7.1 lets `tfhd` override §8.8.3.2's `trex`.
+    let default_sample_duration_per_track: std::collections::BTreeMap<u32, u32> = moov
+        .as_ref()
+        .and_then(|moov| moov.mvex.as_ref())
+        .map(|mvex| {
+            mvex.trex
+                .iter()
+                .map(|trex| (trex.track_id, trex.default_sample_duration))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let Some(moov) = moov else {
+        bail!(
+            "the file carries no `moov`, so it describes no track — a recording whose header never landed"
+        );
+    };
+
+    let tracks: Vec<Value> = moov
+        .trak
+        .iter()
+        .map(|trak| {
+            let track_id = trak.tkhd.track_id;
+            let samples: u64 = fragments
+                .iter()
+                .flat_map(|moof| moof.traf.iter())
+                .filter(|traf| traf.tfhd.track_id == track_id)
+                .flat_map(|traf| traf.trun.iter())
+                .map(|trun| trun.entries.len() as u64)
+                .sum();
+            let duration_in_timescale: u64 = fragments
+                .iter()
+                .flat_map(|moof| moof.traf.iter())
+                .filter(|traf| traf.tfhd.track_id == track_id)
+                .flat_map(|traf| {
+                    let inherited = traf
+                        .tfhd
+                        .default_sample_duration
+                        .or_else(|| default_sample_duration_per_track.get(&track_id).copied())
+                        .unwrap_or(0);
+                    traf.trun
+                        .iter()
+                        .flat_map(move |trun| trun.entries.iter())
+                        .map(move |entry| u64::from(entry.duration.unwrap_or(inherited)))
+                })
+                .sum();
+            let timescale = trak.mdia.mdhd.timescale;
+            json!({
+                "track_id": track_id,
+                // The track's name is the inbound link it recorded, which is
+                // what makes a recording self-describing.
+                "name": trak.mdia.hdlr.name,
+                "handler": fourcc_string(&trak.mdia.hdlr.handler),
+                "timescale": timescale,
+                "sample_entry": trak
+                    .mdia
+                    .minf
+                    .stbl
+                    .stsd
+                    .codecs
+                    .first()
+                    .map(describe_sample_entry)
+                    .unwrap_or(Value::Null),
+                "samples": samples,
+                "duration_in_timescale": duration_in_timescale,
+                "duration_seconds": if timescale == 0 {
+                    Value::Null
+                } else {
+                    json!(duration_in_timescale as f64 / timescale as f64)
+                },
+            })
+        })
+        .collect();
+
+    let inspected_fragments: Vec<Value> = fragments
+        .iter()
+        .map(|moof| {
+            json!({
+                "sequence_number": moof.mfhd.sequence_number,
+                "tracks": moof
+                    .traf
+                    .iter()
+                    .map(|traf| json!({
+                        "track_id": traf.tfhd.track_id,
+                        "base_media_decode_time": traf
+                            .tfdt
+                            .as_ref()
+                            .map(|tfdt| tfdt.base_media_decode_time),
+                        "samples": traf.trun.iter().map(|trun| trun.entries.len()).sum::<usize>(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "brands": brands,
+        "tracks": tracks,
+        "fragments": inspected_fragments,
+        "fragment_count": fragments.len(),
+    }))
+}
+
+fn describe_sample_entry(codec: &Codec) -> Value {
+    match codec {
+        Codec::Avc1(avc1) => json!({
+            "kind": "avc1",
+            "width": avc1.visual.width,
+            "height": avc1.visual.height,
+            "profile_indication": avc1.avcc.avc_profile_indication,
+            "profile_compatibility": avc1.avcc.profile_compatibility,
+            "level_indication": avc1.avcc.avc_level_indication,
+            "length_size": avc1.avcc.length_size,
+            "sequence_parameter_sets": avc1.avcc.sequence_parameter_sets.len(),
+            "picture_parameter_sets": avc1.avcc.picture_parameter_sets.len(),
+        }),
+        Codec::Hvc1(hvc1) => json!({
+            "kind": "hvc1",
+            "width": hvc1.visual.width,
+            "height": hvc1.visual.height,
+            "general_profile_idc": hvc1.hvcc.general_profile_idc,
+            "general_level_idc": hvc1.hvcc.general_level_idc,
+            "general_tier_flag": hvc1.hvcc.general_tier_flag,
+            "chroma_format_idc": hvc1.hvcc.chroma_format_idc,
+            "bit_depth_luma_minus8": hvc1.hvcc.bit_depth_luma_minus8,
+            "bit_depth_chroma_minus8": hvc1.hvcc.bit_depth_chroma_minus8,
+            "length_size_minus_one": hvc1.hvcc.length_size_minus_one,
+            "parameter_set_arrays": hvc1.hvcc.arrays.len(),
+        }),
+        Codec::Opus(opus) => json!({
+            "kind": "Opus",
+            "channel_count": opus.audio.channel_count,
+            "output_channel_count": opus.dops.output_channel_count,
+            "pre_skip": opus.dops.pre_skip,
+            "input_sample_rate": opus.dops.input_sample_rate,
+            "output_gain": opus.dops.output_gain,
+        }),
+        // A sample entry this sink never writes; name the variant and move on
+        // rather than pretending to describe fields that are not there.
+        other => {
+            let debug_rendering = format!("{other:?}");
+            json!({
+                "kind": debug_rendering
+                    .split('(')
+                    .next()
+                    .unwrap_or("unknown")
+                    .to_string(),
+            })
+        }
+    }
+}
+
+fn fourcc_string(fourcc: &mp4_atom::FourCC) -> String {
+    String::from_utf8_lossy(&<[u8; 4]>::from(*fourcc)).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The smallest legal fragmented file: `ftyp`, a `moov` with one Opus
+    /// track, and one `moof` + `mdat`. Built with `mp4-atom` so the fixture
+    /// and the reader cannot drift apart.
+    fn one_opus_track_file() -> Vec<u8> {
+        use mp4_atom::{
+            Audio, Dinf, Dops, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd, Minf,
+            Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex,
+            Trun, TrunEntry, Url,
+        };
+
+        let mut bytes = Vec::new();
+        Ftyp {
+            major_brand: b"iso6".into(),
+            minor_version: 512,
+            compatible_brands: vec![b"iso6".into(), b"cmfc".into()],
+        }
+        .encode(&mut bytes)
+        .unwrap();
+
+        Moov {
+            mvhd: Mvhd {
+                timescale: 1_000_000_000,
+                next_track_id: 2,
+                ..Default::default()
+            },
+            mvex: Some(Mvex {
+                mehd: None,
+                trex: vec![Trex {
+                    track_id: 1,
+                    default_sample_description_index: 1,
+                    default_sample_duration: 0,
+                    default_sample_size: 0,
+                    default_sample_flags: 0x0101_0000,
+                }],
+            }),
+            trak: vec![Trak {
+                tkhd: Tkhd {
+                    track_id: 1,
+                    enabled: true,
+                    in_movie: true,
+                    ..Default::default()
+                },
+                mdia: Mdia {
+                    mdhd: Mdhd {
+                        timescale: 48_000,
+                        language: "und".into(),
+                        ..Default::default()
+                    },
+                    hdlr: Hdlr {
+                        handler: b"soun".into(),
+                        name: "microphone/audio".into(),
+                    },
+                    minf: Minf {
+                        smhd: Some(Smhd::default()),
+                        dinf: Dinf {
+                            dref: Dref {
+                                urls: vec![Url {
+                                    location: String::new(),
+                                }],
+                            },
+                        },
+                        stbl: Stbl {
+                            stsd: Stsd {
+                                codecs: vec![Codec::Opus(Opus {
+                                    audio: Audio {
+                                        data_reference_index: 1,
+                                        channel_count: 2,
+                                        sample_size: 16,
+                                        sample_rate: FixedPoint::new(48_000, 0),
+                                    },
+                                    dops: Dops {
+                                        output_channel_count: 2,
+                                        pre_skip: 312,
+                                        input_sample_rate: 48_000,
+                                        output_gain: 0,
+                                    },
+                                    btrt: None,
+                                })],
+                            },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+        .encode(&mut bytes)
+        .unwrap();
+
+        Moof {
+            mfhd: Mfhd { sequence_number: 1 },
+            traf: vec![Traf {
+                tfhd: Tfhd {
+                    track_id: 1,
+                    default_base_is_moof: true,
+                    ..Default::default()
+                },
+                tfdt: Some(Tfdt {
+                    base_media_decode_time: 0,
+                }),
+                trun: vec![Trun {
+                    data_offset: Some(0),
+                    entries: vec![
+                        TrunEntry {
+                            duration: Some(960),
+                            size: Some(4),
+                            flags: Some(0x0200_0000),
+                            cts: None,
+                        },
+                        TrunEntry {
+                            duration: Some(960),
+                            size: Some(4),
+                            flags: Some(0x0200_0000),
+                            cts: None,
+                        },
+                    ],
+                }],
+                ..Default::default()
+            }],
+        }
+        .encode(&mut bytes)
+        .unwrap();
+        Mdat {
+            data: vec![0xFC; 8],
+        }
+        .encode(&mut bytes)
+        .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_track_is_reported_under_the_link_name_it_recorded() {
+        let report = inspect_bytes(&one_opus_track_file()).expect("the fixture parses");
+        let track = &report["tracks"][0];
+        assert_eq!(track["name"], "microphone/audio");
+        assert_eq!(track["handler"], "soun");
+        assert_eq!(track["track_id"], 1);
+        assert_eq!(track["timescale"], 48_000);
+    }
+
+    #[test]
+    fn an_opus_sample_entry_reports_its_dops_fields() {
+        let report = inspect_bytes(&one_opus_track_file()).expect("parses");
+        let entry = &report["tracks"][0]["sample_entry"];
+        assert_eq!(entry["kind"], "Opus");
+        assert_eq!(entry["output_channel_count"], 2);
+        assert_eq!(entry["pre_skip"], 312);
+        assert_eq!(entry["input_sample_rate"], 48_000);
+    }
+
+    #[test]
+    fn durations_are_summed_per_track_and_converted_to_seconds() {
+        let report = inspect_bytes(&one_opus_track_file()).expect("parses");
+        let track = &report["tracks"][0];
+        assert_eq!(track["samples"], 2);
+        assert_eq!(track["duration_in_timescale"], 1920);
+        assert_eq!(
+            track["duration_seconds"].as_f64().expect("a number"),
+            1920.0 / 48_000.0,
+            "two 20 ms packets are 40 ms"
+        );
+    }
+
+    #[test]
+    fn fragments_are_reported_with_their_sequence_and_decode_time() {
+        let report = inspect_bytes(&one_opus_track_file()).expect("parses");
+        assert_eq!(report["fragment_count"], 1);
+        let fragment = &report["fragments"][0];
+        assert_eq!(fragment["sequence_number"], 1);
+        assert_eq!(fragment["tracks"][0]["base_media_decode_time"], 0);
+        assert_eq!(fragment["tracks"][0]["samples"], 2);
+    }
+
+    #[test]
+    fn the_brands_the_file_opens_with_are_reported() {
+        let report = inspect_bytes(&one_opus_track_file()).expect("parses");
+        assert_eq!(report["brands"]["major_brand"], "iso6");
+        assert_eq!(
+            report["brands"]["compatible_brands"]
+                .as_array()
+                .expect("a list")
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_file_whose_header_never_landed_is_refused_by_name() {
+        use mp4_atom::{Encode, Ftyp};
+        let mut header_only = Vec::new();
+        Ftyp {
+            major_brand: b"iso6".into(),
+            minor_version: 512,
+            compatible_brands: vec![],
+        }
+        .encode(&mut header_only)
+        .unwrap();
+
+        let failure = inspect_bytes(&header_only).expect_err("no moov means no tracks");
+        assert!(
+            failure.to_string().contains("no `moov`"),
+            "the refusal says what is missing: {failure}"
+        );
+    }
+
+    #[test]
+    fn a_recording_cut_off_mid_box_still_reports_what_landed() {
+        let whole = one_opus_track_file();
+        // Teardown is not a promise: a run killed mid-`mdat` must still
+        // inspect, which is the whole reason the layout is fragmented. The
+        // partial trailing box is ignored rather than failing the read.
+        let report = inspect_bytes(&whole[..whole.len() - 3])
+            .expect("the boxes that landed are still a readable recording");
+
+        assert_eq!(report["tracks"][0]["name"], "microphone/audio");
+        assert_eq!(
+            report["fragment_count"], 1,
+            "the closed fragment is reported even though the file stops mid-box"
+        );
+    }
+
+    #[test]
+    fn a_file_whose_first_box_is_not_isobmff_is_refused_by_name() {
+        let failure = inspect_bytes(b"this is not an mp4 file at all, not even close")
+            .expect_err("garbage is not a recording");
+        assert!(
+            failure.to_string().contains("did not parse")
+                || failure.to_string().contains("no `moov`"),
+            "the refusal says what went wrong: {failure}"
+        );
+    }
+
+    /// A real `Mp4Sink` recording — two tracks, several fragments — written by
+    /// the sink itself and checked in, so this command is exercised over bytes
+    /// the writer produced rather than a second hand-built file. The built-ins
+    /// test `the_checked_in_inspector_fixture_is_what_this_writer_produces`
+    /// fails if the writer drifts from it.
+    const TWO_TRACK_RECORDING: &[u8] = include_bytes!("../tests/fixtures/two_track_recording.mp4");
+
+    #[test]
+    fn a_real_sink_recording_reports_both_tracks_under_their_link_names() {
+        let report = inspect_bytes(TWO_TRACK_RECORDING).expect("a written recording parses");
+
+        let names: Vec<&str> = report["tracks"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|track| track["name"].as_str().expect("a name"))
+            .collect();
+        assert_eq!(names, vec!["camera/video", "microphone/audio"]);
+        assert_eq!(report["tracks"][0]["sample_entry"]["kind"], "avc1");
+        assert_eq!(report["tracks"][1]["sample_entry"]["kind"], "Opus");
+        assert_eq!(report["brands"]["major_brand"], "iso6");
+    }
+
+    #[test]
+    fn a_real_sink_recording_reports_its_fragments_and_per_track_durations() {
+        let report = inspect_bytes(TWO_TRACK_RECORDING).expect("parses");
+
+        assert!(
+            report["fragment_count"].as_u64().expect("a count") >= 2,
+            "the recording was written in several fragments"
+        );
+        // The fixture is 12 video frames 33 1/3 ms apart and 12 Opus packets
+        // of 960 samples, so each track's reported duration is its own count
+        // in its own timescale — the two spans differ, and that is the point:
+        // the inspector reports what each track holds, not a movie duration.
+        assert_eq!(report["tracks"][0]["timescale"], 1_000_000_000u64);
+        assert_eq!(report["tracks"][0]["samples"], 12);
+        assert_eq!(
+            report["tracks"][0]["duration_in_timescale"],
+            12 * 33_333_333u64
+        );
+
+        assert_eq!(report["tracks"][1]["timescale"], 48_000);
+        assert_eq!(report["tracks"][1]["samples"], 12);
+        assert_eq!(
+            report["tracks"][1]["duration_in_timescale"],
+            12 * 960u64,
+            "each Opus sample spans its own sample_count"
+        );
+        assert_eq!(report["tracks"][1]["duration_seconds"], 0.24);
+    }
+}

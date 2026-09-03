@@ -189,13 +189,42 @@ marker remains in this file.
   ffmpeg re-tag `/verify-video` shells to today (`.claude/skills/verify-video/SKILL.md:44-46`).
   Every remaining NAL is 4-byte length-prefixed, the walk reusing the engine's byte-stream
   parser (`vulkan/video/mod.rs:35`) rather than a fourth splitter; a sync-point bag is a sync
-  sample. A parameter set that changes mid-file, or a track whose `codec` changes, is
-  refused by name: the processor reaches `Error` and the file stays playable to its last
-  closed fragment.
+  sample. A parameter set that changes mid-file, a track whose `codec` changes, and an Opus
+  track whose `channels` changes are each refused by name, **per track and never per file**:
+  there is no second sample entry to switch to — one lives only in the one `moov`
+  (14496-12 §6.1.2) and `dOps` shall carry the identification header's count
+  (Opus-in-ISOBMFF §4.3.2) — so the sink says so once naming the link and that track's last
+  written stamp, stops writing it, reads and discards every later bag it carries, and every
+  other track keeps recording. A `moof` owes a `traf` to no track (§8.8.6), so a track that
+  stops appearing is a legal file, and one microphone's format change must not end two
+  cameras' recording. The refusal is the built-in's own latch, the shape both encoders
+  already use: a `reactive` processor has no `Error` state to reach — the runner logs an
+  `Err` from `process()` and carries on (`thread_runner.rs:302-305`), and the macro does not
+  forward `has_failed_unrecoverably` to the authoring trait, which the trait doc states as
+  the design (`generated_processor_impl.rs:129-133`).
 - **DECIDED** — An Opus track is the `Opus` sample entry with `dOps` (version 0, the bag's
-  `channels`, PreSkip = `pre_skip`, InputSampleRate 48 000, gain 0; mapping family 0 for one
-  or two channels, family 1 with the standard stream counts for three to eight), timescale
-  48 000, each sample's duration its `sample_count`.
+  `channels`, PreSkip = `pre_skip`, InputSampleRate 48 000, gain 0; mapping family 0),
+  timescale 48 000, each sample's duration its `sample_count`. **PreSkip is the encoder's
+  reported lookahead (312 at 48 kHz), deliberately below the 80 ms (3 840) floor
+  Opus-in-ISOBMFF §4.3.2 states.** That floor is RFC 7845 §4.2's recommendation for
+  *cropping an existing stream* rendered as a `shall`; the spec's own §4.7 example writes
+  312, and no shipping muxer writes anything else (FFmpeg `movenc.c` ← `libopusenc.c`
+  `OPUS_GET_LOOKAHEAD`, GStreamer `qtmux`, gst-plugins-rs `fmp4mux`, Xiph `libopusenc`).
+  The field is not informative in practice — FFmpeg, Chromium, ExoPlayer and Android all
+  discard exactly this many decoded samples — so 3 840 would destroy 73.5 ms of real audio
+  and lead the video by it. With no edit list (the epoch rule), a player that keeps media
+  time after the trim places the first real sample 6.5 ms late: the residual every
+  FFmpeg- and GStreamer-authored Opus MP4 carries, below any lip-sync threshold, and
+  present in every option.
+- **DECIDED** — **Three to eight channels record no Opus track yet.** `mp4-atom` 0.15 —
+  0.15.0 is the latest — writes `ChannelMappingFamily` 0 unconditionally and refuses any
+  other value on read, so mapping family 1 has no representation in the container writer.
+  A track above two channels is refused by name, naming the container rather than the
+  codec: `OpusEncoder` still mints such a stream (`opus_stream_layout.rs` places 1–8), and
+  only recording it does not follow. Owner ruling 2026-09-03, taken over hand-splicing the
+  `dOps` bytes (which is the hand-written box writer this change rejected) and over
+  carrying a second vendored fork. The gap is tracked as #2139; `camera-audio-recorder` is mono or
+  stereo, so the showcase is unaffected.
 - **DECIDED** — Time is the plan's subtraction written into the container (`:833-851`): the
   epoch is the earliest first stamp across tracks, each track's first `tfdt` is its own
   offset from it, no edit list, no drift correction. Video timescale is 1 000 000 000 — a

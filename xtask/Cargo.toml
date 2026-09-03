@@ -29,6 +29,10 @@ tempfile = "3.15"
 # Recursive file walk for the source-walking gates
 walkdir = "2.5"
 
+# Pure-Rust ISOBMFF box reader for `xtask mp4-inspect`. Same pin as the sink
+# that writes the files it reads, so the writer and the reader cannot drift.
+mp4-atom = "0.15"
+
 # PNG decode/encode for `xtask psnr` — the codec proof's image measurements.
 # Same pin as the engine's, which decodes the very same reference set.
 png = "0.17"
