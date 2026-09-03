@@ -40,6 +40,7 @@ pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 #[cfg(test)]
 mod msgpack_wire_test_support;
+pub mod opus_stream_layout;
 pub mod pooled_rgba_frame_staging;
 pub(crate) mod processor_thread_join;
 #[cfg(target_os = "linux")]

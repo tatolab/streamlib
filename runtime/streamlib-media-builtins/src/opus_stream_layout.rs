@@ -1,0 +1,266 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! How a source channel count resolves to an Opus stream layout, shared by
+//! the encoder and the decoder so both mint the same shape from the same
+//! count.
+//!
+//! One and two channels ride mapping family 0 — RFC 7845 §5.1.1.1, a single
+//! Opus stream, stereo if and only if the count is two, and the channel
+//! mapping table is omitted from the header. Three to eight ride family 1
+//! (§5.1.1.2), Vorbis channel order, which is the surround order both MP4's
+//! `dOps` and WebRTC accept. Family 255 — arbitrary layouts with no defined
+//! channel meaning — is deliberately not offered, so a count above eight is
+//! refused rather than muxed into something no player can place.
+//!
+//! The family-1 stream counts and mapping tables below are libopus's own
+//! `vorbis_mappings` (`src/opus_multistream_encoder.c`), because
+//! `opus::MSEncoder::new` takes them as constructor arguments — the crate
+//! wraps `opus_multistream_encoder_create`, not the `_surround_` variant
+//! that would derive them. Getting one wrong produces a stream that decodes
+//! to the right count with the speakers permuted, which no assertion on
+//! channel count would catch, so the table is locked by a test that builds
+//! a real encoder at every count.
+
+use streamlib::sdk::error::{Error, Result};
+
+/// The most channels Opus mapping family 1 places on named speakers.
+pub const HIGHEST_CHANNEL_COUNT_OPUS_PLACES: u32 = 8;
+
+/// One row of libopus's `vorbis_mappings`: the stream layout a family-1
+/// channel count is coded as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpusMappingFamilyOneStreamLayout {
+    /// Total Opus streams the encoder produces per frame.
+    pub streams: u8,
+    /// How many of those streams are coupled (stereo) pairs. The rest are
+    /// mono, so the decoded channel count is `streams + coupled_streams`.
+    pub coupled_streams: u8,
+    /// Vorbis-order channel mapping table: for each output channel, the
+    /// index of the decoded channel that feeds it.
+    pub vorbis_channel_order_mapping: &'static [u8],
+}
+
+/// The Opus stream layout a source channel count resolves to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpusStreamLayoutForSourceChannelCount {
+    /// Mapping family 0: one Opus stream, mono or stereo, no mapping table.
+    MappingFamilyZeroSingleStream { channels: opus::Channels },
+    /// Mapping family 1: several Opus streams in Vorbis channel order.
+    MappingFamilyOneMultistream(OpusMappingFamilyOneStreamLayout),
+}
+
+/// libopus's `vorbis_mappings`, indexed by channel count minus one.
+///
+/// Rows one and two are present for completeness and are never reached by
+/// [`OpusStreamLayoutForSourceChannelCount::resolve`], which sends those
+/// counts to family 0.
+const VORBIS_CHANNEL_ORDER_STREAM_LAYOUTS: [OpusMappingFamilyOneStreamLayout;
+    HIGHEST_CHANNEL_COUNT_OPUS_PLACES as usize] = [
+    // 1: mono
+    OpusMappingFamilyOneStreamLayout {
+        streams: 1,
+        coupled_streams: 0,
+        vorbis_channel_order_mapping: &[0],
+    },
+    // 2: stereo
+    OpusMappingFamilyOneStreamLayout {
+        streams: 1,
+        coupled_streams: 1,
+        vorbis_channel_order_mapping: &[0, 1],
+    },
+    // 3: linear surround
+    OpusMappingFamilyOneStreamLayout {
+        streams: 2,
+        coupled_streams: 1,
+        vorbis_channel_order_mapping: &[0, 2, 1],
+    },
+    // 4: quadraphonic
+    OpusMappingFamilyOneStreamLayout {
+        streams: 2,
+        coupled_streams: 2,
+        vorbis_channel_order_mapping: &[0, 1, 2, 3],
+    },
+    // 5: 5.0 surround
+    OpusMappingFamilyOneStreamLayout {
+        streams: 3,
+        coupled_streams: 2,
+        vorbis_channel_order_mapping: &[0, 4, 1, 2, 3],
+    },
+    // 6: 5.1 surround
+    OpusMappingFamilyOneStreamLayout {
+        streams: 4,
+        coupled_streams: 2,
+        vorbis_channel_order_mapping: &[0, 4, 1, 2, 3, 5],
+    },
+    // 7: 6.1 surround
+    OpusMappingFamilyOneStreamLayout {
+        streams: 4,
+        coupled_streams: 3,
+        vorbis_channel_order_mapping: &[0, 4, 1, 2, 3, 5, 6],
+    },
+    // 8: 7.1 surround
+    OpusMappingFamilyOneStreamLayout {
+        streams: 5,
+        coupled_streams: 3,
+        vorbis_channel_order_mapping: &[0, 6, 1, 2, 3, 4, 5, 7],
+    },
+];
+
+impl OpusStreamLayoutForSourceChannelCount {
+    /// Resolve a source channel count, refusing by name one Opus cannot
+    /// place on named speakers.
+    pub fn resolve(source_channels: u32, processor_name: &str) -> Result<Self> {
+        match source_channels {
+            1 => Ok(Self::MappingFamilyZeroSingleStream {
+                channels: opus::Channels::Mono,
+            }),
+            2 => Ok(Self::MappingFamilyZeroSingleStream {
+                channels: opus::Channels::Stereo,
+            }),
+            3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES => Ok(Self::MappingFamilyOneMultistream(
+                VORBIS_CHANNEL_ORDER_STREAM_LAYOUTS[source_channels as usize - 1],
+            )),
+            refused => Err(Error::Runtime(format!(
+                "{processor_name}: a source of {refused} channels cannot be encoded — Opus \
+                 places 1 to {HIGHEST_CHANNEL_COUNT_OPUS_PLACES} channels on named speakers \
+                 (mapping family 0 for 1 and 2, family 1 in Vorbis order for 3 to \
+                 {HIGHEST_CHANNEL_COUNT_OPUS_PLACES}), and the arbitrary-layout family is \
+                 deliberately not offered because nothing downstream could place its channels"
+            ))),
+        }
+    }
+
+    /// The channel mapping family a container writes beside the stream —
+    /// `dOps.ChannelMappingFamily`, `OpusHead`'s eighth byte.
+    pub fn channel_mapping_family(self) -> u8 {
+        match self {
+            Self::MappingFamilyZeroSingleStream { .. } => 0,
+            Self::MappingFamilyOneMultistream(_) => 1,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROCESSOR_NAME: &str = "OpusEncoder";
+
+    #[test]
+    fn one_and_two_channels_ride_mapping_family_zero() {
+        assert_eq!(
+            OpusStreamLayoutForSourceChannelCount::resolve(1, PROCESSOR_NAME).expect("resolves"),
+            OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream {
+                channels: opus::Channels::Mono
+            }
+        );
+        assert_eq!(
+            OpusStreamLayoutForSourceChannelCount::resolve(2, PROCESSOR_NAME).expect("resolves"),
+            OpusStreamLayoutForSourceChannelCount::MappingFamilyZeroSingleStream {
+                channels: opus::Channels::Stereo
+            }
+        );
+        for channels in [1, 2] {
+            assert_eq!(
+                OpusStreamLayoutForSourceChannelCount::resolve(channels, PROCESSOR_NAME)
+                    .expect("resolves")
+                    .channel_mapping_family(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn three_to_eight_channels_ride_mapping_family_one_in_vorbis_order() {
+        for channels in 3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
+            let layout = OpusStreamLayoutForSourceChannelCount::resolve(channels, PROCESSOR_NAME)
+                .expect("resolves");
+            assert_eq!(layout.channel_mapping_family(), 1);
+            let OpusStreamLayoutForSourceChannelCount::MappingFamilyOneMultistream(multistream) =
+                layout
+            else {
+                panic!("{channels} channels must resolve to family 1, got {layout:?}");
+            };
+            assert_eq!(
+                multistream.vorbis_channel_order_mapping.len(),
+                channels as usize,
+                "the mapping table has one entry per output channel"
+            );
+            assert_eq!(
+                u32::from(multistream.streams) + u32::from(multistream.coupled_streams),
+                channels,
+                "streams + coupled streams is the decoded channel count"
+            );
+            let decoded_channels =
+                u32::from(multistream.streams) + u32::from(multistream.coupled_streams);
+            assert!(
+                multistream
+                    .vorbis_channel_order_mapping
+                    .iter()
+                    .all(|decoded_index| u32::from(*decoded_index) < decoded_channels),
+                "every mapping entry indexes a decoded channel that exists"
+            );
+            let mut placed: Vec<u8> = multistream.vorbis_channel_order_mapping.to_vec();
+            placed.sort_unstable();
+            placed.dedup();
+            assert_eq!(
+                placed.len(),
+                channels as usize,
+                "no decoded channel feeds two outputs and none is dropped"
+            );
+        }
+    }
+
+    /// The table is libopus's own, and a transcription slip in it produces a
+    /// stream that decodes to the right channel count with the speakers
+    /// permuted. Building the real encoder is what catches that: libopus
+    /// validates the stream counts and the mapping against each other.
+    #[test]
+    fn every_family_one_layout_builds_a_real_multistream_encoder_and_decoder() {
+        for channels in 3..=HIGHEST_CHANNEL_COUNT_OPUS_PLACES {
+            let OpusStreamLayoutForSourceChannelCount::MappingFamilyOneMultistream(multistream) =
+                OpusStreamLayoutForSourceChannelCount::resolve(channels, PROCESSOR_NAME)
+                    .expect("resolves")
+            else {
+                panic!("{channels} channels must resolve to family 1");
+            };
+            opus::MSEncoder::new(
+                48_000,
+                multistream.streams,
+                multistream.coupled_streams,
+                multistream.vorbis_channel_order_mapping,
+                opus::Application::Audio,
+            )
+            .unwrap_or_else(|failure| {
+                panic!("libopus refused the family-1 layout for {channels} channels: {failure}")
+            });
+            opus::MSDecoder::new(
+                48_000,
+                multistream.streams,
+                multistream.coupled_streams,
+                multistream.vorbis_channel_order_mapping,
+            )
+            .unwrap_or_else(|failure| {
+                panic!("libopus refused the family-1 layout for {channels} channels: {failure}")
+            });
+        }
+    }
+
+    #[test]
+    fn a_channel_count_opus_cannot_place_is_refused_naming_the_count_and_the_range() {
+        for refused in [0, 9, 16] {
+            let refusal = OpusStreamLayoutForSourceChannelCount::resolve(refused, PROCESSOR_NAME)
+                .expect_err("refused")
+                .to_string();
+            assert!(
+                refusal.contains(&refused.to_string()),
+                "the refusal names the count it was handed: {refusal}"
+            );
+            assert!(
+                refusal.contains('8') && refusal.contains(PROCESSOR_NAME),
+                "the refusal names the range and the processor: {refusal}"
+            );
+        }
+    }
+}

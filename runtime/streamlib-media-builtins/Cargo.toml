@@ -20,6 +20,11 @@ serde = { workspace = true }
 serde_bytes = { workspace = true }
 rmp-serde = { workspace = true }
 tracing = { workspace = true }
+# libopus, statically linked through `opusic-sys`'s bundled copy (cmake, no
+# bindgen at build). Not target-gated: the Opus pair registers unconditionally
+# beside the audio built-ins, and nothing in it is platform-bound. The static
+# link is load-bearing — `test_wheel_portability.py` fails if `DT_NEEDED` grows.
+opus = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 v4l = "0.14"
