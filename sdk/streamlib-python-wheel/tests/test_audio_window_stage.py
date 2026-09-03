@@ -231,7 +231,7 @@ def wire_with_window(data_plane: ProcessorLinkDataAccess, audio_window) -> None:
 
 
 def test_a_child_refuses_a_window_contract_whose_field_it_cannot_read():
-    """The parent sends the five values; a key it got wrong is named here
+    """The parent sends the contract resolved; a key it got wrong is named here
     rather than surfacing as an anonymous decode failure."""
     data_plane = a_helper_process_data_plane()
 

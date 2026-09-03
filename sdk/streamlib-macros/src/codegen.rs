@@ -796,7 +796,7 @@ fn audio_window_contract_tokens(
         Some(AudioWindowContract::Device(_)) => quote! {
             compile_error!(
                 "`audio_window` resolved from a device is a rendering, not a declaration \
-                 — a port states its five values or `match_device`"
+                 — a port states its own values or `match_device`"
             )
         },
         Some(AudioWindowContract::MatchDevice {}) => quote! {
