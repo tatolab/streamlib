@@ -982,7 +982,7 @@ mod tests {
     use super::*;
     use crate::encoded_audio_packet::{EncodedAudioCodec, EncodedAudioPacket};
     use crate::encoded_video_frame::EncodedVideoFrame;
-    use mp4_atom::{Any, DecodeMaybe, Mdat};
+    use mp4_atom::{Any, DecodeMaybe};
 
     /// Re-parse a written file, which is what every assertion below reads.
     ///

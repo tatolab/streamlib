@@ -454,8 +454,8 @@ mod tests {
         assert!(
             matches!(
                 refusal,
-                Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint { ref codec, .. }
-                    if *codec == "h264"
+                Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint { codec, .. }
+                    if codec == "h264"
             ),
             "got {refusal:?}"
         );
@@ -530,7 +530,7 @@ mod tests {
         /// `rbsp_trailing_bits()` — a one, then zeros to the byte.
         fn finish_rbsp(&mut self) -> Vec<u8> {
             self.unsigned(1, 1);
-            while self.bits.len() % 8 != 0 {
+            while !self.bits.len().is_multiple_of(8) {
                 self.bits.push(false);
             }
             self.bits
@@ -662,8 +662,8 @@ mod tests {
             .expect_err("hvcC wants a VPS as well");
         assert!(matches!(
             refusal,
-            Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint { ref codec, .. }
-                if *codec == "h265"
+            Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint { codec, .. }
+                if codec == "h265"
         ));
     }
 
