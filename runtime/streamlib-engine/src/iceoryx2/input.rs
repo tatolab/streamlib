@@ -35,9 +35,9 @@ use super::audio_window::{
     DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
+use super::channel_name::InboundLinkName;
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
-use super::channel_name::InboundLinkName;
 use super::read_mode::ReadMode;
 use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
@@ -997,14 +997,30 @@ impl InputMailboxesInner {
     /// `Ok(Some((data, timestamp_ns)))` if data is available, `Ok(None)` if the
     /// mailbox is empty.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        Ok(self
+            .read_one_frame_unbounded(port)?
+            .map(|(data, timestamp_ns, _)| (data, timestamp_ns)))
+    }
+
+    /// The next frame for `port` with no buffer bound, and the link it arrived
+    /// on — the one read both public unbounded reads sit on.
+    ///
+    /// A `usize::MAX` cap always fits, so the grow-and-retry outcome cannot
+    /// arise here and is reported as the internal inconsistency it would be.
+    fn read_one_frame_unbounded(
+        &self,
+        port: &str,
+    ) -> Result<Option<(Vec<u8>, i64, Option<InboundLinkName>)>> {
         match self.read_raw_bounded(port, usize::MAX)? {
             BoundedReadOutcome::Empty => Ok(None),
             BoundedReadOutcome::Frame {
-                data, timestamp_ns, ..
-            } => Ok(Some((data, timestamp_ns))),
-            // Unreachable: usize::MAX cap always fits.
+                data,
+                timestamp_ns,
+                inbound_link_name,
+            } => Ok(Some((data, timestamp_ns, inbound_link_name))),
             BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => Err(Error::Link(format!(
-                "read_raw: frame of {required_bytes} bytes did not fit an unbounded buffer"
+                "read of input port '{port}': frame of {required_bytes} bytes did not fit an \
+                 unbounded buffer"
             ))),
         }
     }
@@ -1027,25 +1043,17 @@ impl InputMailboxesInner {
         &self,
         port: &str,
     ) -> Result<Option<(Vec<u8>, i64, InboundLinkName)>> {
-        match self.read_raw_bounded(port, usize::MAX)? {
-            BoundedReadOutcome::Empty => Ok(None),
-            BoundedReadOutcome::Frame {
-                data,
-                timestamp_ns,
-                inbound_link_name,
-            } => match inbound_link_name {
-                Some(inbound_link_name) => Ok(Some((data, timestamp_ns, inbound_link_name))),
-                None => Err(Error::Link(format!(
-                    "a bag on input port '{port}' was injected rather than delivered by a \
-                     link, so there is no inbound link to name. Read it with `read_raw`"
-                ))),
-            },
-            // Unreachable: usize::MAX cap always fits.
-            BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => Err(Error::Link(format!(
-                "read_raw_from_inbound_link: frame of {required_bytes} bytes did not fit an \
-                 unbounded buffer"
-            ))),
-        }
+        let Some((data, timestamp_ns, inbound_link_name)) = self.read_one_frame_unbounded(port)?
+        else {
+            return Ok(None);
+        };
+        let Some(inbound_link_name) = inbound_link_name else {
+            return Err(Error::Link(format!(
+                "a bag on input port '{port}' was injected rather than delivered by a link, \
+                 so there is no inbound link to name. Read it with `read_raw`"
+            )));
+        };
+        Ok(Some((data, timestamp_ns, inbound_link_name)))
     }
 
     /// The next frame for `port` deserialized into `T`, with the inbound link
@@ -2347,11 +2355,11 @@ mod tests {
             let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
             let (publisher, subscriber) = open_channel_for_one_link_loaning(&node, tag, 16, 16_384);
             mailboxes.add_channel_subscriber(
-            "in",
-            "L-only",
-            &InboundLinkName::from("ponly/out"),
-            subscriber,
-        );
+                "in",
+                "L-only",
+                &InboundLinkName::from("ponly/out"),
+                subscriber,
+            );
             for block in 0..4u64 {
                 publish_one_frame(
                     &publisher,
@@ -2714,11 +2722,11 @@ mod tests {
                 None => mailboxes.add_port("in", depth, ReadMode::ReadNextInOrder),
             }
             mailboxes.add_channel_subscriber(
-            "in",
-            "L-only",
-            &InboundLinkName::from("ponly/out"),
-            subscriber,
-        );
+                "in",
+                "L-only",
+                &InboundLinkName::from("ponly/out"),
+                subscriber,
+            );
 
             for block in 0..published_bags {
                 publish_one_frame(
@@ -2957,14 +2965,14 @@ mod tests {
             "in",
             "L-link-a",
             &InboundLinkName::from("plink-a/out"),
-            open_subscriber("reclaim/a",
-        ));
+            open_subscriber("reclaim/a"),
+        );
         inner.add_channel_subscriber(
             "in",
             "L-link-b",
             &InboundLinkName::from("plink-b/out"),
-            open_subscriber("reclaim/b",
-        ));
+            open_subscriber("reclaim/b"),
+        );
         inner.set_listener(listener);
         assert!(inner.has_port("in"));
         assert!(inner.has_listener());

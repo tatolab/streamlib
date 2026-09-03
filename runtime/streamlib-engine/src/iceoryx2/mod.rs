@@ -37,7 +37,9 @@ pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub use dropped_bag_counters::DroppedBagCountsByInboundLink;
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
-pub use mailbox::{PortMailbox, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure};
+pub use mailbox::{
+    PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
+};
 pub use node::{
     ChannelTapSubscribeError, Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService,
     Iceoryx2Service,

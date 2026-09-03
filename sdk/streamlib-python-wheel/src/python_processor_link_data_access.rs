@@ -134,10 +134,7 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// Every inbound link feeding `port_name`, in wiring order.
-    pub(crate) fn inbound_links_of_input_port(
-        &self,
-        port_name: &str,
-    ) -> PyResult<Vec<String>> {
+    pub(crate) fn inbound_links_of_input_port(&self, port_name: &str) -> PyResult<Vec<String>> {
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));
         };
