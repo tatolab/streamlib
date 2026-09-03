@@ -430,4 +430,183 @@ mod tests {
             assert!(said.contains("ambisonic/audio"), "and names the link");
         }
     }
+
+    /// Writes the bit-oriented syntax ITU-T H.265 §7.3 is spelled in, so the
+    /// SPS below can be read against the spec rather than trusted as a blob.
+    struct H265SyntaxBitWriter {
+        bits: Vec<bool>,
+    }
+
+    impl H265SyntaxBitWriter {
+        fn new() -> Self {
+            Self { bits: Vec::new() }
+        }
+
+        /// `u(n)` — `n` bits, most significant first.
+        fn unsigned(&mut self, value: u64, bit_count: u32) -> &mut Self {
+            for shift in (0..bit_count).rev() {
+                self.bits.push((value >> shift) & 1 == 1);
+            }
+            self
+        }
+
+        /// `ue(v)` — Exp-Golomb: `n` leading zeros, then `value + 1`.
+        fn exp_golomb(&mut self, value: u64) -> &mut Self {
+            let code = value + 1;
+            let significant_bits = 64 - code.leading_zeros();
+            self.unsigned(0, significant_bits - 1);
+            self.unsigned(code, significant_bits)
+        }
+
+        /// `rbsp_trailing_bits()` — a one, then zeros to the byte.
+        fn finish_rbsp(&mut self) -> Vec<u8> {
+            self.unsigned(1, 1);
+            while self.bits.len() % 8 != 0 {
+                self.bits.push(false);
+            }
+            self.bits
+                .chunks(8)
+                .map(|byte| {
+                    byte.iter()
+                        .fold(0u8, |packed, &bit| (packed << 1) | u8::from(bit))
+                })
+                .collect()
+        }
+    }
+
+    /// A 320x240 Main-profile level-3.1 SPS, built to ITU-T H.265 §7.3.2.2.1.
+    ///
+    /// Hand-authored because the tree carries no HEVC bitstream and the build
+    /// host has no HEVC encoder. It is not trusted blindly: the engine's own
+    /// parser has to accept it for the assertions below to run at all.
+    fn h265_sequence_parameter_set() -> Vec<u8> {
+        let mut writer = H265SyntaxBitWriter::new();
+        writer
+            .unsigned(0, 4) // sps_video_parameter_set_id
+            .unsigned(0, 3) // sps_max_sub_layers_minus1
+            .unsigned(1, 1) // sps_temporal_id_nesting_flag
+            // profile_tier_level(1, 0) — the 12 bytes hvcC reads back
+            .unsigned(0, 2) // general_profile_space
+            .unsigned(0, 1) // general_tier_flag
+            .unsigned(1, 5) // general_profile_idc — Main
+            .unsigned(0b0100_0000_0000_0000_0000_0000_0000_0000, 32) // compatibility, Main
+            .unsigned(1, 1) // general_progressive_source_flag
+            .unsigned(0, 1) // general_interlaced_source_flag
+            .unsigned(0, 1) // general_non_packed_constraint_flag
+            .unsigned(1, 1) // general_frame_only_constraint_flag
+            .unsigned(0, 43) // general_reserved_zero_43bits
+            .unsigned(0, 1) // general_inbld_flag
+            .unsigned(93, 8) // general_level_idc — level 3.1
+            .exp_golomb(0) // sps_seq_parameter_set_id
+            .exp_golomb(1) // chroma_format_idc — 4:2:0
+            .exp_golomb(320) // pic_width_in_luma_samples
+            .exp_golomb(240) // pic_height_in_luma_samples
+            .unsigned(0, 1) // conformance_window_flag
+            .exp_golomb(0) // bit_depth_luma_minus8
+            .exp_golomb(0) // bit_depth_chroma_minus8
+            .exp_golomb(4) // log2_max_pic_order_cnt_lsb_minus4
+            .unsigned(1, 1) // sps_sub_layer_ordering_info_present_flag
+            .exp_golomb(3) // sps_max_dec_pic_buffering_minus1[0]
+            .exp_golomb(0) // sps_max_num_reorder_pics[0]
+            .exp_golomb(0) // sps_max_latency_increase_plus1[0]
+            .exp_golomb(0) // log2_min_luma_coding_block_size_minus3
+            .exp_golomb(2) // log2_diff_max_min_luma_coding_block_size
+            .exp_golomb(0) // log2_min_luma_transform_block_size_minus2
+            .exp_golomb(3) // log2_diff_max_min_luma_transform_block_size
+            .exp_golomb(0) // max_transform_hierarchy_depth_inter
+            .exp_golomb(0) // max_transform_hierarchy_depth_intra
+            .unsigned(0, 1) // scaling_list_enabled_flag
+            .unsigned(0, 1) // amp_enabled_flag
+            .unsigned(0, 1) // sample_adaptive_offset_enabled_flag
+            .unsigned(0, 1) // pcm_enabled_flag
+            .exp_golomb(0) // num_short_term_ref_pic_sets
+            .unsigned(0, 1) // long_term_ref_pics_present_flag
+            .unsigned(0, 1) // sps_temporal_mvp_enabled_flag
+            .unsigned(0, 1) // strong_intra_smoothing_enabled_flag
+            .unsigned(0, 1) // vui_parameters_present_flag
+            .unsigned(0, 1); // sps_extension_present_flag
+
+        // NAL header: forbidden_zero, type 33 (SPS), layer 0, temporal id 1.
+        let mut nal_unit = vec![0x42, 0x01];
+        nal_unit.extend_from_slice(&writer.finish_rbsp());
+        nal_unit
+    }
+
+    fn h265_parameter_sets() -> ParameterSetsFromAnnexBAccessUnit {
+        ParameterSetsFromAnnexBAccessUnit {
+            video_parameter_set_nal_units: vec![vec![0x40, 0x01, 0x0C, 0x01, 0xFF, 0xFF]],
+            sequence_parameter_set_nal_units: vec![h265_sequence_parameter_set()],
+            picture_parameter_set_nal_units: vec![vec![0x44, 0x01, 0xC0, 0x73]],
+        }
+    }
+
+    #[test]
+    fn hvcc_takes_its_profile_tier_level_from_the_sps_at_the_position_the_spec_fixes() {
+        let entry = build_hvc1_sample_entry("camera/video", &h265_parameter_sets(), 320, 240)
+            .expect("the engine's own parser accepts this SPS");
+
+        assert_eq!(entry.hvcc.general_profile_space, 0);
+        assert!(!entry.hvcc.general_tier_flag, "main tier");
+        assert_eq!(entry.hvcc.general_profile_idc, 1, "Main profile");
+        assert_eq!(entry.hvcc.general_level_idc, 93, "level 3.1");
+        assert_eq!(
+            entry.hvcc.general_profile_compatibility_flags,
+            [0x40, 0x00, 0x00, 0x00],
+            "Main sets compatibility flag 1"
+        );
+        assert_eq!(entry.hvcc.configuration_version, 1);
+    }
+
+    #[test]
+    fn hvcc_takes_chroma_and_bit_depths_from_the_engines_own_parser() {
+        let entry = build_hvc1_sample_entry("camera/video", &h265_parameter_sets(), 320, 240)
+            .expect("parses");
+
+        assert_eq!(entry.hvcc.chroma_format_idc, 1, "4:2:0");
+        assert_eq!(entry.hvcc.bit_depth_luma_minus8, 0, "8-bit");
+        assert_eq!(entry.hvcc.bit_depth_chroma_minus8, 0, "8-bit");
+        assert_eq!(
+            entry.hvcc.length_size_minus_one,
+            NAL_UNIT_LENGTH_PREFIX_BYTES - 1,
+            "the declared prefix width and the one the walk writes agree"
+        );
+    }
+
+    #[test]
+    fn an_hvc1_entry_carries_all_three_parameter_set_arrays_marked_complete() {
+        let entry = build_hvc1_sample_entry("camera/video", &h265_parameter_sets(), 320, 240)
+            .expect("parses");
+
+        let kinds: Vec<u8> = entry.hvcc.arrays.iter().map(|a| a.nal_unit_type).collect();
+        assert_eq!(kinds, vec![32, 33, 34], "VPS, SPS then PPS");
+        assert!(
+            entry.hvcc.arrays.iter().all(|array| array.completeness),
+            "hvc1 forbids in-band sets, so the arrays are complete by construction"
+        );
+    }
+
+    #[test]
+    fn an_h265_sync_point_missing_its_vps_is_refused_by_name() {
+        let mut sets = h265_parameter_sets();
+        sets.video_parameter_set_nal_units.clear();
+        let refusal = build_hvc1_sample_entry("camera/video", &sets, 320, 240)
+            .expect_err("hvcC wants a VPS as well");
+        assert!(matches!(
+            refusal,
+            Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint { ref codec, .. }
+                if *codec == "h265"
+        ));
+    }
+
+    #[test]
+    fn an_h265_sps_too_short_for_its_profile_tier_level_is_refused_by_name() {
+        let mut sets = h265_parameter_sets();
+        sets.sequence_parameter_set_nal_units = vec![vec![0x42, 0x01, 0x01, 0x02]];
+        let refusal = build_hvc1_sample_entry("camera/video", &sets, 320, 240)
+            .expect_err("twelve profile-tier-level bytes are not there");
+        assert!(matches!(
+            refusal,
+            Mp4SampleEntryRefusal::SequenceParameterSetTooShort { .. }
+        ));
+    }
 }
