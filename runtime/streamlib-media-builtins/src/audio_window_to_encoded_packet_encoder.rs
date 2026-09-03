@@ -183,8 +183,18 @@ struct MintedOpusEncoder {
 pub struct AudioWindowToEncodedPacketEncoder {
     minted: Option<MintedOpusEncoder>,
     ordering_pair_counter: EncodedStreamOrderingPairCounter,
-    /// Latched once a mint has failed for a reason a later window cannot
-    /// change — a channel count Opus cannot place. Every later window is
+    /// The channel count whose layout Opus cannot place, once refused.
+    ///
+    /// Keyed on the count rather than latched run-wide, because this refusal
+    /// is a property of the window and not of the encoder: the window stage
+    /// flushes and re-anchors when a source changes its count, so a run that
+    /// briefly carried nine channels and returned to stereo must encode
+    /// again. Latching it would leave the processor permanently silent for
+    /// the rest of the run over a transient.
+    channel_count_already_refused: Option<u32>,
+    /// Latched once a mint has failed for a reason no later window can
+    /// change — a bitrate libopus rejects, or libopus declining to construct
+    /// an encoder it had already agreed the layout for. Every later window is
     /// discarded rather than re-attempted, so the refusal is said once
     /// instead of per dispatch.
     ///
@@ -203,7 +213,7 @@ impl AudioWindowToEncodedPacketEncoder {
         config: &OpusEncoderConfig,
         window: &AudioBlock,
     ) -> Result<Option<EncodedAudioPacket>> {
-        if self.mint_already_failed {
+        if self.mint_already_failed || self.channel_count_already_refused == Some(window.channels) {
             return Ok(None);
         }
         let interleaved_samples = read_window_as_interleaved_f32(window)?;
@@ -221,17 +231,37 @@ impl AudioWindowToEncodedPacketEncoder {
 
         let minted = match &mut self.minted {
             Some(minted) => minted,
-            empty_slot => match mint_encoder_for_window(config, window) {
-                Ok(minted) => empty_slot.insert(minted),
-                Err(mint_failure) => {
-                    self.mint_already_failed = true;
-                    tracing::error!(
-                        "{OPUS_ENCODER_PROCESSOR_NAME}: the encoder could not be minted; every later window \
-                         is discarded: {mint_failure}"
-                    );
-                    return Err(mint_failure);
+            empty_slot => {
+                // Resolved here rather than inside the mint so the two
+                // failures stay distinguishable: a count Opus cannot place is
+                // this window's problem, everything after it is the run's.
+                let layout = match OpusStreamLayoutForSourceChannelCount::resolve(window.channels) {
+                    Ok(layout) => layout,
+                    Err(refusal) => {
+                        self.channel_count_already_refused = Some(window.channels);
+                        tracing::error!(
+                            source_channels = window.channels,
+                            "{OPUS_ENCODER_PROCESSOR_NAME}: windows are discarded until the \
+                             source's channel count changes — {refusal}"
+                        );
+                        return Err(Error::Runtime(format!(
+                            "{OPUS_ENCODER_PROCESSOR_NAME}: this window cannot be encoded — \
+                             {refusal}"
+                        )));
+                    }
+                };
+                match mint_encoder_for_window(config, window, layout) {
+                    Ok(minted) => empty_slot.insert(minted),
+                    Err(mint_failure) => {
+                        self.mint_already_failed = true;
+                        tracing::error!(
+                            "{OPUS_ENCODER_PROCESSOR_NAME}: the encoder could not be minted; \
+                             every later window is discarded: {mint_failure}"
+                        );
+                        return Err(mint_failure);
+                    }
                 }
-            },
+            }
         };
 
         let opus_packet_bytes = minted
@@ -302,13 +332,8 @@ fn read_window_as_interleaved_f32(window: &AudioBlock) -> Result<Vec<f32>> {
 fn mint_encoder_for_window(
     config: &OpusEncoderConfig,
     window: &AudioBlock,
+    layout: OpusStreamLayoutForSourceChannelCount,
 ) -> Result<MintedOpusEncoder> {
-    let layout =
-        OpusStreamLayoutForSourceChannelCount::resolve(window.channels).map_err(|refusal| {
-            Error::Runtime(format!(
-                "{OPUS_ENCODER_PROCESSOR_NAME}: this window cannot be encoded — {refusal}"
-            ))
-        })?;
     let application = config
         .application
         .unwrap_or_default()
@@ -545,6 +570,52 @@ mod tests {
             0,
             "nothing was published, so nothing was counted"
         );
+    }
+
+    /// The window stage flushes and re-anchors when a source changes its
+    /// channel count, so a run that briefly carried a count Opus cannot place
+    /// and returned to a supported one must encode again. Latching the
+    /// refusal run-wide would leave the processor silent for the rest of the
+    /// run over a transient.
+    #[test]
+    fn a_count_opus_cannot_place_does_not_silence_the_encoder_once_the_source_returns() {
+        let mut encoder = AudioWindowToEncodedPacketEncoder::default();
+        let config = OpusEncoderConfig::default();
+
+        encoder
+            .encode_one_window(&config, &a_window_of(9, 0))
+            .expect_err("nine channels are refused");
+        assert_eq!(
+            encoder
+                .encode_one_window(&config, &a_window_of(9, WINDOW_SAMPLE_COUNT))
+                .expect("the same count is discarded rather than refused again"),
+            None
+        );
+
+        let packet = encoder
+            .encode_one_window(&config, &a_window_of(2, 2 * WINDOW_SAMPLE_COUNT))
+            .expect("a supported count mints")
+            .expect("and publishes");
+        assert_eq!(packet.channels, 2);
+        assert_eq!(
+            packet.sequence_index, 0,
+            "nothing was published before it, so it opens the sequence"
+        );
+
+        // And going back is still discarded, without disturbing the encoder
+        // that is now minted for stereo.
+        assert_eq!(
+            encoder
+                .encode_one_window(&config, &a_window_of(9, 3 * WINDOW_SAMPLE_COUNT))
+                .expect("still discarded"),
+            None
+        );
+        let after = encoder
+            .encode_one_window(&config, &a_window_of(2, 4 * WINDOW_SAMPLE_COUNT))
+            .expect("stereo still encodes")
+            .expect("and publishes");
+        assert_eq!(after.sequence_index, 1);
+        assert_eq!(encoder.packets_encoded(), 2);
     }
 
     #[test]
