@@ -17,9 +17,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 
 use mp4_atom::{
-    Any, Codec, DecodeMaybe, Dinf, Dref, Encode, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd, Minf, Moof,
-    Moov, Mvex, Mvhd, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url,
-    Vmhd,
+    Codec, Dinf, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdhd, Mdia, Mfhd, Minf, Moof, Moov, Mvex,
+    Mvhd, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url, Vmhd,
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
@@ -121,6 +120,8 @@ struct Mp4TrackFromInboundLink {
     sample_entry: Option<Codec>,
     committed_parameter_sets: Option<ParameterSetsFromAnnexBAccessUnit>,
     committed_channel_count: Option<u32>,
+    /// The coded extent `tkhd` states as the track's presentation size.
+    coded_extent: Option<(u32, u32)>,
     first_timestamp_ns: Option<i64>,
     last_accepted_timestamp_ns: Option<i64>,
     next_fragment_decode_time_in_track_timescale: u64,
@@ -140,6 +141,7 @@ impl Mp4TrackFromInboundLink {
             sample_entry: None,
             committed_parameter_sets: None,
             committed_channel_count: None,
+            coded_extent: None,
             first_timestamp_ns: None,
             last_accepted_timestamp_ns: None,
             next_fragment_decode_time_in_track_timescale: 0,
@@ -361,6 +363,8 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                             self.tracks[track_index].sample_entry = Some(entry);
                             self.tracks[track_index].committed_parameter_sets =
                                 Some(split.parameter_sets.clone());
+                            self.tracks[track_index].coded_extent =
+                                Some((frame.width, frame.height));
                         }
                         Err(refusal) => {
                             self.latch_track(track_index, refusal.to_string());
@@ -379,30 +383,44 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             return Ok(());
         }
 
-        // A fragment closes at the pacing video track's sync points, so the
-        // close happens before this sample joins the next one.
-        if frame.is_sync_point && self.is_pacing_video_track(track_index) {
-            self.close_open_fragment()?;
-        }
-
-        let previous =
-            self.tracks[track_index]
-                .held_back_video_sample
-                .replace(HeldBackVideoSample {
-                    sample_bytes: split.length_prefixed_sample_bytes,
-                    timestamp_ns,
-                    is_sync_point: frame.is_sync_point,
-                });
-        if let Some(previous) = previous {
+        // The held-back predecessor is resolved and pushed *before* any close,
+        // so it lands in the fragment it belongs to and the incoming sync frame
+        // becomes the next fragment's first sample. A fragment whose first
+        // sample were not a sync point would be no random-access point at all,
+        // which is the whole premise of the `cmfc` brand this file declares.
+        if let Some(previous) = self.tracks[track_index].held_back_video_sample.take() {
             let duration_ns = timestamp_ns.saturating_sub(previous.timestamp_ns).max(0);
+            let Ok(duration_in_track_timescale) = u32::try_from(duration_ns) else {
+                // The video timescale is 1 GHz, so a `trun` duration spans at
+                // most 4.29 s. Writing the wrapped value would misplace every
+                // later sample on the track rather than lose one.
+                let refusal = format!(
+                    "a frame on `{}` arrived {duration_ns} ns after its predecessor, past the \
+                     {} ns a 32-bit sample duration can name at the 1 GHz video timescale",
+                    self.tracks[track_index].inbound_link_name,
+                    u32::MAX
+                );
+                self.latch_track(track_index, refusal);
+                return Ok(());
+            };
             self.tracks[track_index]
                 .samples_awaiting_fragment
                 .push(Mp4SampleAwaitingFragment {
                     sample_bytes: previous.sample_bytes,
-                    duration_in_track_timescale: duration_ns as u32,
+                    duration_in_track_timescale,
                     is_sync_point: previous.is_sync_point,
                 });
         }
+
+        if frame.is_sync_point && self.is_pacing_video_track(track_index) {
+            self.close_open_fragment()?;
+        }
+
+        self.tracks[track_index].held_back_video_sample = Some(HeldBackVideoSample {
+            sample_bytes: split.length_prefixed_sample_bytes,
+            timestamp_ns,
+            is_sync_point: frame.is_sync_point,
+        });
         self.write_header_once_every_track_can_be_described()?;
         Ok(())
     }
@@ -524,11 +542,16 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         true
     }
 
+    /// Whether any video track is still recording and so still pacing closes.
+    ///
+    /// A latched track paces nothing: once the last healthy video track stops,
+    /// the once-a-second rule has to take over or no fragment ever closes again
+    /// and every other track's samples sit in memory until teardown — which
+    /// this module's whole layout exists because it cannot rely on.
     fn no_video_track_is_wired(&self) -> bool {
-        !self
-            .tracks
-            .iter()
-            .any(|track| matches!(track.media, Some(Mp4TrackMedia::Video(_))))
+        !self.tracks.iter().any(|track| {
+            matches!(track.media, Some(Mp4TrackMedia::Video(_))) && !track.is_latched()
+        })
     }
 
     /// The first video track still recording paces fragment closes; if it
@@ -598,6 +621,10 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
     fn build_moov(&self) -> Result<Moov> {
         let mut moov = Moov {
             mvhd: Mvhd {
+                // §8.2.2 fixes 1.0 as normal playback and full volume; the
+                // derived `Default` is 0 for both, which misdescribes the file.
+                rate: FixedPoint::new(1, 0),
+                volume: FixedPoint::new(1, 0),
                 timescale: VIDEO_TRACK_TIMESCALE_HZ,
                 // A fragmented file's duration is not known while it is being
                 // written, and `mehd` is optional precisely so it need not be.
@@ -616,12 +643,22 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             else {
                 continue;
             };
+            let (coded_width, coded_height) = track.coded_extent.unwrap_or((0, 0));
+            let track_volume = match media {
+                Mp4TrackMedia::Video(_) => 0,
+                Mp4TrackMedia::Audio => 1,
+            };
             moov.trak.push(Trak {
                 tkhd: Tkhd {
                     track_id: track.track_id,
                     enabled: true,
                     in_movie: true,
                     duration: 0,
+                    // §8.3.2.3: a visual track states its presentation size and
+                    // carries no volume; an audio track is the other way round.
+                    width: FixedPoint::new(coded_width as u16, 0),
+                    height: FixedPoint::new(coded_height as u16, 0),
+                    volume: FixedPoint::new(track_volume, 0),
                     ..Default::default()
                 },
                 mdia: Mdia {
@@ -747,13 +784,13 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         self.sink.flush()?;
 
         for &index in &contributing {
-            let written: u32 = self.tracks[index]
+            let written: u64 = self.tracks[index]
                 .samples_awaiting_fragment
                 .iter()
-                .map(|sample| sample.duration_in_track_timescale)
+                .map(|sample| u64::from(sample.duration_in_track_timescale))
                 .sum();
             self.tally.samples_written += self.tracks[index].samples_awaiting_fragment.len() as u64;
-            self.tracks[index].next_fragment_decode_time_in_track_timescale += written as u64;
+            self.tracks[index].next_fragment_decode_time_in_track_timescale += written;
             self.tracks[index].samples_awaiting_fragment.clear();
         }
         self.next_fragment_sequence_number += 1;
@@ -867,33 +904,33 @@ fn box_write_failure(failure: mp4_atom::Error) -> Error {
     Error::Runtime(format!("Mp4Sink: a box could not be written: {failure}"))
 }
 
-/// Re-parse a written file, for the container-bytes tests below.
-///
-/// `cargo xtask mp4-inspect` does not come through here — `xtask` does not
-/// depend on this crate and walks the boxes itself.
-#[cfg(test)]
-fn parse_written_atoms(file_bytes: &[u8]) -> Result<Vec<Any>> {
-    let mut cursor = std::io::Cursor::new(file_bytes);
-    let mut atoms = Vec::new();
-    loop {
-        match Any::decode_maybe(&mut cursor) {
-            Ok(Some(atom)) => atoms.push(atom),
-            Ok(None) => break,
-            Err(failure) => {
-                return Err(Error::Runtime(format!(
-                    "Mp4Sink: the written file did not re-parse: {failure}"
-                )));
-            }
-        }
-    }
-    Ok(atoms)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::encoded_audio_packet::{EncodedAudioCodec, EncodedAudioPacket};
     use crate::encoded_video_frame::EncodedVideoFrame;
+    use mp4_atom::{Any, DecodeMaybe, Mdat};
+
+    /// Re-parse a written file, which is what every assertion below reads.
+    ///
+    /// `cargo xtask mp4-inspect` does not come through here — `xtask` does not
+    /// depend on this crate and walks the boxes itself.
+    fn parse_written_atoms(file_bytes: &[u8]) -> Result<Vec<Any>> {
+        let mut cursor = std::io::Cursor::new(file_bytes);
+        let mut atoms = Vec::new();
+        loop {
+            match Any::decode_maybe(&mut cursor) {
+                Ok(Some(atom)) => atoms.push(atom),
+                Ok(None) => break,
+                Err(failure) => {
+                    return Err(Error::Runtime(format!(
+                        "Mp4Sink: the written file did not re-parse: {failure}"
+                    )));
+                }
+            }
+        }
+        Ok(atoms)
+    }
 
     /// A 320x240 baseline SPS, and the PPS that goes with it.
     const H264_SEQUENCE_PARAMETER_SET: &[u8] = &[
@@ -1591,5 +1628,223 @@ mod tests {
             "a link that never named a codec describes no track, and the camera still records"
         );
         assert_eq!(only_moov(&atoms).trak[0].mdia.hdlr.name, "camera/video");
+    }
+
+    /// Every top-level box start, which is what `data_offset` is measured from.
+    fn top_level_box_offsets(file: &[u8]) -> Vec<(usize, [u8; 4], usize)> {
+        let mut offsets = Vec::new();
+        let mut at = 0usize;
+        while at + 8 <= file.len() {
+            let size = u32::from_be_bytes(file[at..at + 4].try_into().unwrap()) as usize;
+            let kind: [u8; 4] = file[at + 4..at + 8].try_into().unwrap();
+            offsets.push((at, kind, size));
+            at += size;
+        }
+        offsets
+    }
+
+    #[test]
+    fn every_truns_data_offset_points_at_that_tracks_samples_in_order() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        for index in 0..12usize {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+
+        // This is the computation a player performs and the one nothing else
+        // here exercises: locate each track's samples at `moof_start +
+        // data_offset` and check the bytes are that track's, in order.
+        let boxes = top_level_box_offsets(&file);
+        let mut checked_truns = 0;
+        for (box_index, (box_offset, kind, _)) in boxes.iter().enumerate() {
+            if kind != b"moof" {
+                continue;
+            }
+            let (_, _, moof_size) = boxes[box_index];
+            let mut moof_cursor = std::io::Cursor::new(&file[*box_offset..*box_offset + moof_size]);
+            let Ok(Some(Any::Moof(moof))) = Any::decode_maybe(&mut moof_cursor) else {
+                panic!("a moof at {box_offset} must re-parse");
+            };
+            for traf in &moof.traf {
+                for trun in &traf.trun {
+                    let data_offset = trun.data_offset.expect("every trun names its offset");
+                    let mut at = *box_offset + data_offset as usize;
+                    for entry in &trun.entries {
+                        let size = entry.size.expect("every entry names its size") as usize;
+                        assert!(
+                            at + size <= file.len(),
+                            "trun for track {} points past the end of the file",
+                            traf.tfhd.track_id
+                        );
+                        let sample = &file[at..at + size];
+                        // A video sample opens with its own 4-byte NAL length;
+                        // an Opus packet opens with the bytes the bag carried.
+                        if traf.tfhd.track_id == 1 {
+                            let first_nal_length =
+                                u32::from_be_bytes(sample[0..4].try_into().unwrap()) as usize;
+                            assert_eq!(
+                                first_nal_length + 4,
+                                size,
+                                "a video sample is exactly its length-prefixed NALs"
+                            );
+                        } else {
+                            assert_eq!(sample[0], 0xFC, "an Opus packet starts with its own bytes");
+                        }
+                        at += size;
+                        checked_truns += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            checked_truns >= 12,
+            "the walk reached {checked_truns} samples, so it proved nothing"
+        );
+    }
+
+    #[test]
+    fn every_fragment_after_the_first_opens_on_a_sync_sample() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
+        for index in 0..18usize {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 6 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let fragments = every_moof(&atoms);
+        assert!(fragments.len() >= 3, "got {} fragments", fragments.len());
+        for (index, moof) in fragments.iter().enumerate() {
+            let first_entry = &moof.traf[0].trun[0].entries[0];
+            assert_eq!(
+                first_entry.flags,
+                Some(SAMPLE_FLAGS_SYNC),
+                "fragment {index} opens on a non-sync sample, so it is no random-access point \
+                 at all — which is the whole premise of the `cmfc` brand this file declares"
+            );
+        }
+    }
+
+    #[test]
+    fn fragments_keep_closing_after_the_only_video_track_latches() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
+            .expect("accepted");
+        writer
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .expect("accepted");
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(1, true, H264_SEQUENCE_PARAMETER_SET_AT_ANOTHER_LEVEL),
+                ONE_VIDEO_FRAME_NS,
+            )
+            .expect("the camera latches");
+
+        // Three seconds of audio after the pacer is gone. If a latched track
+        // still counted as "video wired", nothing would close and every one of
+        // these would sit in memory until teardown.
+        for index in 1..150u64 {
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+        }
+        let tally = writer.finish().expect("closes");
+
+        assert_eq!(tally.tracks_latched, 1);
+        assert!(
+            tally.fragments_written >= 3,
+            "the once-a-second rule has to take over when the last video track latches, \
+             got {} fragments",
+            tally.fragments_written
+        );
+    }
+
+    #[test]
+    fn the_movie_and_track_headers_carry_the_values_the_spec_fixes() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+            )
+            .expect("accepted");
+        writer
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .expect("accepted");
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
+                ONE_VIDEO_FRAME_NS,
+            )
+            .expect("accepted");
+        writer.finish().expect("closes");
+
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let moov = only_moov(&atoms);
+        // §8.2.2 — normal playback rate and full volume, not the zeroes a
+        // derived `Default` would leave.
+        assert_eq!(moov.mvhd.rate.integer(), 1, "mvhd.rate is 1.0");
+        assert_eq!(moov.mvhd.volume.integer(), 1, "mvhd.volume is 1.0");
+
+        // §8.3.2.3 — a visual track states its presentation size and no volume.
+        let video = &moov.trak[0];
+        assert_eq!(video.tkhd.width.integer(), 320);
+        assert_eq!(video.tkhd.height.integer(), 240);
+        assert_eq!(video.tkhd.volume.integer(), 0);
+
+        let audio = &moov.trak[1];
+        assert_eq!(
+            audio.tkhd.volume.integer(),
+            1,
+            "an audio track plays at 1.0"
+        );
+        assert_eq!(
+            audio.tkhd.width.integer(),
+            0,
+            "an audio track has no extent"
+        );
     }
 }
