@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.44](https://github.com/tatolab/streamlib/compare/v0.18.43...v0.18.44) (2026-09-03)
+
+
+### Features
+
+* **codec:** OpusEncoder and OpusDecoder, engine half — the EncodedAudioPacket bag, and libopus linked statically into the wheel ([#2135](https://github.com/tatolab/streamlib/issues/2135)) ([2c87880](https://github.com/tatolab/streamlib/commit/2c8788032e948736229ccab224130c43394472b5))
+
 ## [0.18.43](https://github.com/tatolab/streamlib/compare/v0.18.42...v0.18.43) (2026-09-03)
 
 
