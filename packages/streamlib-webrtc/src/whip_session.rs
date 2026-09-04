@@ -164,6 +164,15 @@ impl WhipPublishingSession {
         write_sample(track, opus_packet, duration).await
     }
 
+    /// What the peer connection reports about itself, for a test that has to
+    /// prove media crossed a real connection.
+    #[cfg(test)]
+    pub fn peer_connection_state(
+        &self,
+    ) -> webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState {
+        self.peer_connection.connection_state()
+    }
+
     /// Close the peer connection and DELETE the session, bounded as a whole so
     /// the helper's five-second teardown budget cannot be overrun.
     pub async fn close(&self) {

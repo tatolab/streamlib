@@ -300,97 +300,7 @@ mod tests {
 #[cfg(test)]
 mod signalling_round_trips {
     use super::*;
-    use std::sync::{Arc, Mutex};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    /// One canned HTTP response, and what the stub recorded of the request
-    /// that drew it.
-    struct RecordedRequest {
-        request_line: String,
-        headers: String,
-        body: String,
-    }
-
-    /// A one-connection-at-a-time HTTP responder, so a signalling round trip
-    /// can be checked with no network and no relay.
-    struct StubRelay {
-        origin: String,
-        requests: Arc<Mutex<Vec<RecordedRequest>>>,
-        listening: tokio::task::JoinHandle<()>,
-    }
-
-    impl StubRelay {
-        /// Serves `responses` in order; a connection past the end gets a 500.
-        async fn answering(responses: Vec<String>) -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let origin = format!("http://{}", listener.local_addr().unwrap());
-            let requests = Arc::new(Mutex::new(Vec::new()));
-            let recorded = Arc::clone(&requests);
-
-            let listening = tokio::spawn(async move {
-                let mut responses = responses.into_iter();
-                while let Ok((mut connection, _)) = listener.accept().await {
-                    let mut received = Vec::new();
-                    let mut buffer = [0u8; 4096];
-                    // Read until the headers are complete, then take exactly
-                    // the body the request declared.
-                    loop {
-                        let read = connection.read(&mut buffer).await.unwrap_or(0);
-                        if read == 0 {
-                            break;
-                        }
-                        received.extend_from_slice(&buffer[..read]);
-                        let text = String::from_utf8_lossy(&received).to_string();
-                        if let Some(headers_end) = text.find("\r\n\r\n") {
-                            let declared_body_length = text
-                                .lines()
-                                .find_map(|line| {
-                                    line.strip_prefix("content-length: ")
-                                        .or_else(|| line.strip_prefix("Content-Length: "))
-                                })
-                                .and_then(|value| value.trim().parse::<usize>().ok())
-                                .unwrap_or(0);
-                            if received.len() >= headers_end + 4 + declared_body_length {
-                                let (head, body) = text.split_at(headers_end + 4);
-                                let mut lines = head.lines();
-                                recorded.lock().unwrap().push(RecordedRequest {
-                                    request_line: lines.next().unwrap_or_default().to_owned(),
-                                    headers: lines.collect::<Vec<_>>().join("\n"),
-                                    body: body.to_owned(),
-                                });
-                                break;
-                            }
-                        }
-                    }
-
-                    let response = responses.next().unwrap_or_else(|| {
-                        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\
-                         Connection: close\r\n\r\n"
-                            .to_owned()
-                    });
-                    let _ = connection.write_all(response.as_bytes()).await;
-                    let _ = connection.flush().await;
-                }
-            });
-
-            Self {
-                origin,
-                requests,
-                listening,
-            }
-        }
-
-        fn recorded(&self) -> std::sync::MutexGuard<'_, Vec<RecordedRequest>> {
-            self.requests.lock().unwrap()
-        }
-    }
-
-    impl Drop for StubRelay {
-        fn drop(&mut self) {
-            self.listening.abort();
-        }
-    }
+    use crate::http_test_responder::HttpResponderUnderTest;
 
     const AN_ANSWER: &str = "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n";
 
@@ -418,7 +328,7 @@ mod signalling_round_trips {
 
     #[tokio::test]
     async fn an_offer_is_posted_as_sdp_with_the_bearer_token_and_the_answer_read_back() {
-        let relay = StubRelay::answering(vec![created_at("/sessions/7")]).await;
+        let relay = HttpResponderUnderTest::answering(vec![created_at("/sessions/7")]).await;
         let client = client_for(format!("{}/live", relay.origin), Some("a-token".to_owned()));
 
         let opened = client.post_offer("v=0\r\nthe-offer\r\n").await.unwrap();
@@ -428,36 +338,30 @@ mod signalling_round_trips {
 
         let recorded = relay.recorded();
         assert!(recorded[0].request_line.starts_with("POST /live "));
-        assert!(
-            recorded[0]
-                .headers
-                .contains("content-type: application/sdp")
-        );
-        assert!(
-            recorded[0]
-                .headers
-                .contains("authorization: Bearer a-token")
-        );
+        assert!(recorded[0].has_header("content-type: application/sdp"));
+        assert!(recorded[0].has_header("authorization: bearer a-token"));
         assert_eq!(recorded[0].body, "v=0\r\nthe-offer\r\n");
     }
 
     #[tokio::test]
     async fn no_token_configured_sends_no_authorization_header() {
-        let relay = StubRelay::answering(vec![created_at("/sessions/7")]).await;
+        let relay = HttpResponderUnderTest::answering(vec![created_at("/sessions/7")]).await;
         let client = client_for(format!("{}/live", relay.origin), None);
 
         client.post_offer("v=0\r\n").await.unwrap();
 
-        assert!(!relay.recorded()[0].headers.contains("authorization"));
+        assert!(!relay.recorded()[0].has_header("authorization"));
     }
 
     #[tokio::test]
     async fn a_redirect_is_followed_and_the_offer_posted_again() {
         // The Location is root-relative, which is the form that has to be
         // resolved against the origin before it can be requested at all.
-        let relay =
-            StubRelay::answering(vec![redirected_to("/elsewhere"), created_at("/sessions/9")])
-                .await;
+        let relay = HttpResponderUnderTest::answering(vec![
+            redirected_to("/elsewhere"),
+            created_at("/sessions/9"),
+        ])
+        .await;
         let client = client_for(format!("{}/live", relay.origin), None);
 
         let opened = client.post_offer("v=0\r\nthe-offer\r\n").await.unwrap();
@@ -474,7 +378,7 @@ mod signalling_round_trips {
         let always_redirecting: Vec<String> = (0..HIGHEST_REDIRECTS_FOLLOWED + 3)
             .map(|_| redirected_to("/again"))
             .collect();
-        let relay = StubRelay::answering(always_redirecting).await;
+        let relay = HttpResponderUnderTest::answering(always_redirecting).await;
         let client = client_for(format!("{}/live", relay.origin), None);
 
         let refusal = client.post_offer("v=0\r\n").await.unwrap_err();
@@ -484,7 +388,7 @@ mod signalling_round_trips {
 
     #[tokio::test]
     async fn a_created_without_a_location_is_refused_because_the_session_is_unreachable() {
-        let relay = StubRelay::answering(vec![
+        let relay = HttpResponderUnderTest::answering(vec![
             "HTTP/1.1 201 Created\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
         ])
         .await;
@@ -497,7 +401,7 @@ mod signalling_round_trips {
 
     #[tokio::test]
     async fn a_refusal_from_the_relay_names_its_status_and_carries_its_body() {
-        let relay = StubRelay::answering(vec![
+        let relay = HttpResponderUnderTest::answering(vec![
             "HTTP/1.1 401 Unauthorized\r\nContent-Length: 12\r\nConnection: close\r\n\r\n\
              bad-token   "
                 .to_owned(),
@@ -513,7 +417,7 @@ mod signalling_round_trips {
 
     #[tokio::test]
     async fn trickled_candidates_are_patched_to_the_session_url_as_an_sdp_fragment() {
-        let relay = StubRelay::answering(vec![
+        let relay = HttpResponderUnderTest::answering(vec![
             "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
         ])
         .await;
@@ -527,17 +431,13 @@ mod signalling_round_trips {
 
         let recorded = relay.recorded();
         assert!(recorded[0].request_line.starts_with("PATCH /sessions/7 "));
-        assert!(
-            recorded[0]
-                .headers
-                .contains("content-type: application/trickle-ice-sdpfrag")
-        );
+        assert!(recorded[0].has_header("content-type: application/trickle-ice-sdpfrag"));
         assert_eq!(recorded[0].body, "a=candidate:1 1 udp");
     }
 
     #[tokio::test]
     async fn deleting_a_session_a_relay_refuses_is_reported_rather_than_raised() {
-        let relay = StubRelay::answering(vec![
+        let relay = HttpResponderUnderTest::answering(vec![
             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
         ])
         .await;

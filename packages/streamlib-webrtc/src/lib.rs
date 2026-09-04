@@ -17,12 +17,14 @@ pub mod h264_rtp_depacketiser;
 pub mod h264_sequence_parameter_set;
 mod h264_test_bitstreams;
 pub mod http_signalling;
+mod http_test_responder;
 pub mod monotonic_clock;
 pub mod opus_packet;
 pub mod received_media_assembly;
 pub mod session_description;
 pub mod transport_stack;
 pub mod whep_session;
+mod whip_publish_loopback;
 pub mod whip_session;
 
 use crate::error::WebRtcExtensionError;
