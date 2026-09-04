@@ -16,8 +16,15 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 # The engine is a binary dependency, never a source one: this wheel links no
-# streamlib crate and speaks no engine internals. 0.18.48 is the release that
-# carries the capability-extension mechanism `extension.py:load` needs.
+# streamlib crate and speaks no engine internals.
+#
+# 0.18.48 is the release carrying the capability-extension mechanism
+# `extension.py:load` needs. `WhipPublisher` also needs
+# `read_from_inbound_link_with_timestamp`, which lands in the release after it —
+# so this floor is understated, deliberately: CI installs the wheel built from
+# this same checkout, and a floor above that version would fail to resolve
+# there. Nothing is published from here, so no installer can reach the gap; the
+# accurate floor is set with the release wiring.
 dependencies = ["streamlib>=0.18.48"]
 
 # What pip records at install and the engine reads back through
