@@ -1713,16 +1713,24 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
 - **DECIDED** — Networking is the next work and the first extension: WebRTC and MoQ ship
-  as extension wheels under §Packages & extension model, never as built-ins — not every
-  app needs them, and a capability with a consumer is what proves the extension model.
-  MoQ and WebRTC are edge source/sink processors ingesting and egressing external streams
-  at a runtime boundary; they are not the runtime-to-runtime fabric. The held consumers
-  `packages/{moq,webrtc}` and `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}`
-  resolve through the networking align per §Consumers. [extension-model]
+  as extension wheels under §Packages & extension model rather than as built-ins — not
+  every app needs them, and a capability with a consumer is what proves the extension
+  model. The scope is those two, and both are moves of code the tree already holds:
+  `runtime/streamlib-moq` (sessions and catalog on `moq-transport`) leaves the runtime
+  workspace into the MoQ extension wheel, and the held `packages/{moq,webrtc}` are mined
+  into the two wheels' Rust with their processors rewritten as ordinary processor
+  extensions. The one expected exception to "leaves the runtime" is a runtime capability
+  the moved code turns out to need, which is exposed as engine code — a split of concerns,
+  expected to be rare. Zenoh is new work rather than a move and is its own later change;
+  the cross-host fabric stays OPEN below. MoQ and WebRTC are edge source/sink processors
+  ingesting and egressing external streams at a runtime boundary; they are not the
+  runtime-to-runtime fabric. The held consumers `packages/{moq,webrtc}` and
+  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolve through the
+  networking align per §Consumers. [extension-model]
 - **OPEN** — Everything else: the block shapes, the capability-extension surface
-  networking needs (and the sandbox and entry line it is the first to exercise), mesh
-  discovery and the cross-host fabric. The networking align decides it, on the extension
-  model.
+  networking needs (and the sandbox and entry-point hook it is the first to exercise),
+  and — as later work, after the WebRTC/MoQ move — mesh discovery and the cross-host
+  fabric (Zenoh). The networking align decides the first two, on the extension model.
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->

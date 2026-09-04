@@ -131,5 +131,10 @@ is kept as a record.
   ruling to make, never a session's inference.
 - `packages/` gains its first live entry with networking; the publish path the plan deferred
   "until the first one wants a home" is now owed by that work.
+- `runtime/streamlib-moq` leaves the runtime workspace into the MoQ extension wheel (owner,
+  2026-09-04). The one expected exception is a runtime capability the moved code turns out to
+  need, which is exposed as engine code — a split of concerns, expected to be rare. WebRTC and
+  MoQ are moves of existing code and are the scope; Zenoh is new work and is sequenced
+  separately, after them.
 - The helper hop's per-frame cost has never been measured; the plan's "fits within the helper
   hop's budget" is an argument, not a number. The first extension should measure it.
