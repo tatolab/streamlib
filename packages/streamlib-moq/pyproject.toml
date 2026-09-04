@@ -18,12 +18,11 @@ classifiers = [
 # The engine is a binary dependency, never a source one: this wheel links no
 # streamlib crate and speaks no engine internals.
 #
-# 0.18.49 carries both halves this wheel needs — the capability-extension
-# mechanism `extension.py:load` is declared against, and
+# 0.18.48 is the earliest release carrying both halves this wheel needs — the
+# capability-extension mechanism `extension.py:load` is declared against, and
 # `read_from_inbound_link_with_timestamp`, which the publisher reads every bag
-# through. CI installs the wheel built from this same checkout, so the floor
-# must not name a version that checkout cannot produce.
-dependencies = ["streamlib>=0.18.49"]
+# through. Verified against an installed 0.18.48, not inferred from a changelog.
+dependencies = ["streamlib>=0.18.48"]
 
 # What pip records at install and the engine reads back through
 # `importlib.metadata` when a process takes an engine role.
