@@ -34,10 +34,14 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from . import log
+from ._capability_extensions import (
+    load_installed_capability_extensions_once_per_process,
+)
 from ._engine import (
     MonotonicTimer,
     ProcessorLinkDataAccess,
     RuntimeContextFullAccess,
+    capability_extension_host_for_the_helper_process,
 )
 from ._processor_hosting import apply_configuration, construct_processor_instance
 
@@ -770,6 +774,22 @@ def main() -> None:
 
     bridge.start_reading()
     log.install_helper_process_sink(ParentProcessLogSink(bridge, processor_id))
+
+    # Before the processor's own module is imported: its class may reach for a
+    # stack an extension in the same wheel brings up, and a hook that fails
+    # here is reportable on the channel the sink above just installed.
+    try:
+        load_installed_capability_extensions_once_per_process(
+            capability_extension_host_for_the_helper_process
+        )
+    except Exception as extension_failure:
+        log.error(
+            "the helper could not load a capability extension",
+            entrypoint=import_path,
+            error=str(extension_failure),
+            traceback=traceback.format_exc(),
+        )
+        sys.exit(1)
 
     try:
         processor_class = load_processor_class(import_path)

@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: streamlib-helper-raising-extension
+Version: 0.5.0
+Summary: A capability extension whose hook raises only in a helper process.

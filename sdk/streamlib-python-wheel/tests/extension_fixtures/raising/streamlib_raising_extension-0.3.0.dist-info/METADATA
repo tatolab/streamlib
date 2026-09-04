@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: streamlib-raising-extension
+Version: 0.3.0
+Summary: A capability extension whose hook raises.

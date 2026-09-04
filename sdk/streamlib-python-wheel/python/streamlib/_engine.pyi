@@ -47,6 +47,7 @@ __all__ = [
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
     "CameraSource",
+    "CapabilityExtensionHost",
     "DisplayWindow",
     "H264Decoder",
     "H264Encoder",
@@ -64,6 +65,8 @@ __all__ = [
     "TestBagCollector",
     "TestBagFeeder",
     "await_test_harness_bag",
+    "capability_extension_host_for_the_app_process",
+    "capability_extension_host_for_the_helper_process",
     "close_test_harness_channel",
     "decode_tapped_channel_bag_frame_to_python_object",
     "feed_test_harness_bag",
@@ -473,6 +476,37 @@ class Runtime:
         exception: BaseException | None = ...,
         traceback: TracebackType | None = ...,
     ) -> Literal[False]: ...
+
+@final
+class CapabilityExtensionHost:
+    """What a capability extension's `load(host)` hook is handed.
+
+    A wheel declares its hook as a `streamlib.extensions` entry point in its
+    `pyproject.toml`, and the engine calls it once in every process taking an
+    engine role — the app process as `Runtime()` is constructed, and each
+    helper process before the processor's own module is imported. App code
+    never constructs one.
+
+    A hook is expected to be cheap and to do no I/O: bring a runtime or a
+    device library up, register the capability's name, and return. It must not
+    connect, open a device, or block — the app is waiting on `Runtime()` and a
+    helper is inside its registration budget. Raising from a hook fails the
+    process it was loading into, by design: an extension that half loaded is
+    worse than one that refused.
+    """
+
+    @property
+    def role(self) -> Literal["app", "helper"]:
+        """Which role this process takes."""
+
+    def register_capability(self, name: str, version: str) -> None:
+        """Declare a capability this wheel brought up.
+
+        The name is unique across every installed distribution: a second
+        distribution registering one already taken is refused, naming both. In
+        the app process the registration renders under `extensions` in
+        `streamlib graph`; in a helper it is the process's own record.
+        """
 
 @final
 class AddedProcessor:
@@ -1501,6 +1535,16 @@ def decode_tapped_channel_bag_frame_to_python_object(
     shorter than its own declared length rather than returning the prefix that
     did arrive.
     """
+
+def capability_extension_host_for_the_app_process(
+    distribution: str,
+) -> CapabilityExtensionHost:
+    """Mint the host `distribution`'s hook is handed in the app process."""
+
+def capability_extension_host_for_the_helper_process(
+    distribution: str,
+) -> CapabilityExtensionHost:
+    """Mint the host `distribution`'s hook is handed in a helper process."""
 
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""

@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: streamlib-duplicate-extension
+Version: 2.0.0
+Summary: A capability extension registering a name another distribution took.

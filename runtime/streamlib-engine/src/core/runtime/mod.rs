@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+mod capability_extensions;
 mod graph_change_listener;
 mod local_processor_type_registration;
 mod operations;
@@ -13,6 +14,7 @@ mod status;
 mod surface_image_exchange;
 mod tap;
 
+pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;
 #[cfg(test)]

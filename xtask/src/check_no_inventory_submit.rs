@@ -5,21 +5,16 @@
 //! factories.
 //!
 //! The engine substrate is an empty registry; processors land in
-//! `PROCESSOR_REGISTRY` through one of two paths:
-//!
-//! 1. Cdylib packages loaded via `runtime.add_module(...)`, which trip
-//!    `STREAMLIB_PLUGIN` and call the host's `processor_register`
-//!    callback.
-//! 2. In-process Rust callers invoking
-//!    `PROCESSOR_REGISTRY.register::<P>()` directly.
+//! `PROCESSOR_REGISTRY` when a caller registers them, by invoking
+//! `PROCESSOR_REGISTRY.register::<P>()` in process — the wheel does it
+//! for a `@processor` class as `rt.add` classifies it.
 //!
 //! The link-time `inventory::submit!(FactoryRegistration { ... })`
 //! emission the `#[processor]` macro used to do is gone. Anyone
-//! reintroducing it would bypass the dynamic-load model — `Runner::new()`
-//! would silently grow non-empty in builds that link the offending crate,
-//! processors would register before any `add_module` call, and
-//! cross-rustc-version plugin builds would start to "work" via the
-//! force-link path that the milestone wants gone.
+//! reintroducing it would bypass the dynamic-registration model:
+//! `Runner::new()` would silently grow non-empty in builds that link the
+//! offending crate, and processors would register before any caller asked
+//! for them.
 //!
 //! This gate scans `.rs` files under `packages/`, `libs/`, and `examples/`
 //! and fails when any non-`#[cfg(test)]` item contains

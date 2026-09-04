@@ -11,6 +11,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::runtime::LoadedCapabilityExtension;
 
 /// The processor-identity wire type. Defined in the engine-free
 /// `streamlib-processor-schema` crate so the MoQ catalog and the authoring
@@ -31,6 +32,30 @@ pub struct GraphResponse {
     pub nodes: Vec<ProcessorNodeOutput>,
     /// All links (connections) between processors.
     pub links: Vec<LinkOutput>,
+    /// The capabilities the extension wheels installed beside this engine
+    /// registered at startup. Always present; empty when none loaded.
+    pub extensions: Vec<LoadedCapabilityExtensionOutput>,
+}
+
+/// A capability a loaded extension wheel registered.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct LoadedCapabilityExtensionOutput {
+    /// The capability's name, unique across every loaded distribution.
+    pub name: String,
+    /// The version the registering distribution declared for it.
+    pub version: String,
+    /// The distribution whose entry point registered it.
+    pub distribution: String,
+}
+
+impl From<LoadedCapabilityExtension> for LoadedCapabilityExtensionOutput {
+    fn from(registered: LoadedCapabilityExtension) -> Self {
+        Self {
+            name: registered.name,
+            version: registered.version,
+            distribution: registered.distribution,
+        }
+    }
 }
 
 /// A processor node in the graph.
@@ -761,5 +786,53 @@ mod port_rendering_tests {
             serde_json::json!({ "resolved_from": "match_device" })
         );
         assert_renders_exactly(&json, &PORT_DESCRIPTOR_WITH_A_CONTRACT_KEYS);
+    }
+}
+
+#[cfg(test)]
+mod capability_extension_rendering_tests {
+    //! `extensions` is a third top-level key beside `nodes` and `links`, and a
+    //! reader that finds it absent cannot tell "nothing loaded" from "this
+    //! engine predates extensions" — so it is always present.
+
+    use super::*;
+    use crate::core::graph::Graph;
+    use crate::core::runtime::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
+
+    #[test]
+    fn a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list() {
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(Vec::new())).unwrap();
+
+        let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["nodes", "links", "extensions"]);
+        assert_eq!(rendered["extensions"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_registered_extension_renders_its_name_version_and_distribution() {
+        let registry = LoadedCapabilityExtensionRegistry::default();
+        registry
+            .register(LoadedCapabilityExtension {
+                name: "webrtc".to_string(),
+                version: "0.2.0".to_string(),
+                distribution: "streamlib-webrtc".to_string(),
+            })
+            .expect("the capability registers");
+        let extensions: Vec<_> = registry
+            .registered()
+            .into_iter()
+            .map(LoadedCapabilityExtensionOutput::from)
+            .collect();
+
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(extensions)).unwrap();
+
+        assert_eq!(
+            rendered["extensions"],
+            serde_json::json!([{
+                "name": "webrtc",
+                "version": "0.2.0",
+                "distribution": "streamlib-webrtc",
+            }])
+        );
     }
 }

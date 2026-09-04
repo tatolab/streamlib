@@ -1,0 +1,2 @@
+[streamlib.extensions]
+duplicate_extension = streamlib_duplicate_extension:load

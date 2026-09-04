@@ -1,0 +1,2 @@
+[streamlib.extensions]
+raising_extension = streamlib_raising_extension:load

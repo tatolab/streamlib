@@ -1,0 +1,2 @@
+[streamlib.extensions]
+test_extension = streamlib_test_extension:load
