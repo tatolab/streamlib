@@ -14,16 +14,6 @@ use mp4_atom::{Atom, Decode, Encode, Header, Mdat, Mfhd, Moof, Tfdt, Tfhd, Traf,
 
 use crate::error::{MoqExtensionError, Result};
 
-/// The track id this wheel's publisher passes to [`build_cmaf_fragment`].
-///
-/// The init segment describes exactly one track, and the reference relay names
-/// a media track after its `tkhd.track_id` (`1.m4s`), so this number is part of
-/// the track name a subscriber asks for and not an internal choice. It is not a
-/// guarantee about the bytes on the wire: [`build_cmaf_fragment`] writes the
-/// track id it is handed, and [`read_cmaf_fragment`] lifts samples out of a
-/// fragment whatever track id it carries.
-pub(crate) const CMAF_FRAGMENT_TRACK_ID: u32 = 1;
-
 /// What a refusal on this path calls the container it was reading or writing.
 const CMAF_CONTAINER_NAME: &str = "cmaf";
 
@@ -377,6 +367,10 @@ fn refuse_as_malformed_cmaf_fragment(what: String) -> MoqExtensionError {
 
 #[cfg(test)]
 mod tests {
+    /// The `tkhd.track_id` these fixtures write. A real broadcast passes each
+    /// track's own id; one is simply what a single-track fixture uses.
+    const CMAF_FRAGMENT_TRACK_ID: u32 = 1;
+
     use super::*;
     use mp4_atom::Any;
 

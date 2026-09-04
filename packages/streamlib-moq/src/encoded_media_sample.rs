@@ -37,16 +37,6 @@ impl EncodedMediaSample {
         }
     }
 
-    /// The ordering pair the producer wrote. A group boundary is what opens a
-    /// MoQ subgroup, so the publisher reads this before it decides where the
-    /// object goes.
-    pub(crate) fn ordering_pair(&self) -> (u64, u64) {
-        match self {
-            EncodedMediaSample::VideoAccessUnit(unit) => (unit.group_index, unit.sequence_index),
-            EncodedMediaSample::AudioPacket(packet) => (packet.group_index, packet.sequence_index),
-        }
-    }
-
     /// `true` on a bag a decoder can enter the stream at.
     pub(crate) fn is_sync_point(&self) -> bool {
         match self {

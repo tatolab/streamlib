@@ -112,13 +112,6 @@ impl MoqCatalogTrackSelectionParameters {
             channel_count: Some(channel_count),
         }
     }
-
-    /// Declare the track's bitrate, which a player uses to choose between
-    /// renditions.
-    pub(crate) fn with_bitrate_bits_per_second(mut self, bitrate_bits_per_second: u32) -> Self {
-        self.bitrate_bits_per_second = Some(bitrate_bits_per_second);
-        self
-    }
 }
 
 /// One media track as the catalog describes it.
@@ -381,8 +374,14 @@ mod tests {
                 ),
                 MoqCatalogTrackDescription::of_cmaf_track_id(
                     2,
-                    MoqCatalogTrackSelectionParameters::of_audio_track("mp4a.40.2", 48_000, 2)
-                        .with_bitrate_bits_per_second(128_000),
+                    MoqCatalogTrackSelectionParameters {
+                        // The reference sets `bitrate` from an AAC `esds`.
+                        // This wheel's audio is Opus, which states none — the
+                        // key is here only so the fixture stays the reference's
+                        // own document.
+                        bitrate_bits_per_second: Some(128_000),
+                        ..MoqCatalogTrackSelectionParameters::of_audio_track("mp4a.40.2", 48_000, 2)
+                    },
                 ),
             ],
         )

@@ -317,11 +317,6 @@ impl MoqBroadcastPublishingSession {
             })
     }
 
-    /// Whether this track has ever had an object written to it.
-    pub(crate) fn has_an_open_group_on(&self, track_name: &str) -> bool {
-        self.open_subgroup_by_track.contains_key(track_name)
-    }
-
     /// Finish every subgroup and end the session's tasks.
     pub(crate) fn close(mut self) {
         self.open_subgroup_by_track.clear();

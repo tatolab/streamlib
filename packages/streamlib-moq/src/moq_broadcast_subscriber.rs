@@ -608,7 +608,10 @@ mod tests {
     use crate::annex_b_access_unit::{
         ANNEX_B_START_CODE, AnnexBNalHeaderGrammar, length_prefix_annex_b_access_unit,
     };
-    use crate::cmaf_fragment::{CMAF_FRAGMENT_TRACK_ID, build_cmaf_fragment};
+    use crate::cmaf_fragment::build_cmaf_fragment;
+
+    /// The `tkhd.track_id` these fixtures write into a fragment.
+    const CMAF_FRAGMENT_TRACK_ID: u32 = 1;
     use crate::cmaf_init_segment::{
         CmafTrackDescriptionForTheInitSegment, build_cmaf_init_segment,
     };

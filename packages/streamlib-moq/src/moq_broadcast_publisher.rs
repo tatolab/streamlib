@@ -34,9 +34,8 @@ use crate::cmaf_track_timeline::{
 use crate::encoded_media_sample::{EncodedMediaSample, TrackMedium};
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_broadcast_catalog::{
-    CATALOG_TRACK_NAME, CMAF_PACKAGING, INIT_TRACK_NAME, MoqBroadcastCatalog,
-    MoqCatalogTrackDescription, MoqCatalogTrackSelectionParameters, STREAMLIB_BAG_PACKAGING,
-    media_track_name,
+    CATALOG_TRACK_NAME, INIT_TRACK_NAME, MoqBroadcastCatalog, MoqCatalogTrackDescription,
+    MoqCatalogTrackSelectionParameters, STREAMLIB_BAG_PACKAGING, media_track_name,
 };
 use crate::moq_relay_config::MoqRelayConfig;
 use crate::moq_session::MoqBroadcastPublishingSession;
@@ -91,14 +90,6 @@ impl MoqContainerFormat {
                      `{CMAF_CONTAINER_WIRE_NAME}` and `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`"
                 ),
             }),
-        }
-    }
-
-    /// How the broadcast catalog spells this container.
-    pub(crate) fn catalog_packaging(self) -> &'static str {
-        match self {
-            MoqContainerFormat::Cmaf => CMAF_PACKAGING,
-            MoqContainerFormat::StreamlibBag => STREAMLIB_BAG_PACKAGING,
         }
     }
 }
@@ -995,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn each_container_the_wheel_publishes_is_named_the_same_way_by_the_catalog_and_the_caller() {
+    fn each_container_this_wheel_publishes_is_reachable_by_its_config_spelling() {
         assert_eq!(
             MoqContainerFormat::of_wire_name("cmaf").expect("cmaf is published"),
             MoqContainerFormat::Cmaf
@@ -1003,11 +994,6 @@ mod tests {
         assert_eq!(
             MoqContainerFormat::of_wire_name("streamlib_bag").expect("streamlib_bag is published"),
             MoqContainerFormat::StreamlibBag
-        );
-        assert_eq!(MoqContainerFormat::Cmaf.catalog_packaging(), CMAF_PACKAGING);
-        assert_eq!(
-            MoqContainerFormat::StreamlibBag.catalog_packaging(),
-            STREAMLIB_BAG_PACKAGING
         );
     }
 
