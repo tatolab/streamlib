@@ -21,7 +21,6 @@ from ._capability_extensions import (
 from ._engine import AddedProcessor as AddedProcessor
 from ._engine import CapabilityExtensionHost as CapabilityExtensionHost
 from ._engine import capability_extension_host_for_the_app_process
-from ._engine import hand_loaded_capability_extensions_to_the_runtime
 from ._engine import GpuContextFullAccess as GpuContextFullAccess
 from ._engine import GpuContextLimitedAccess as GpuContextLimitedAccess
 from ._engine import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
@@ -150,9 +149,6 @@ class Runtime(_NativeRuntime):
         load_installed_capability_extensions_once_per_process(
             capability_extension_host_for_the_app_process
         )
-        # After the loop, always: the hooks run once per process, so a second
-        # Runtime runs none of them and would otherwise report nothing loaded.
-        hand_loaded_capability_extensions_to_the_runtime(self)
 
 
 @atexit.register

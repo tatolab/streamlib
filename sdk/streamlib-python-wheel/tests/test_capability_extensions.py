@@ -88,10 +88,17 @@ def test_a_raising_hook_fails_the_runtime_naming_the_distribution(
 
 
 def test_a_hook_that_failed_once_fails_every_later_runtime(capability_extension_app):
-    """The cached failure, not a retry: the first `Runtime()` already half ran the loop."""
+    """The cached failure, not a retry: the first `Runtime()` already half ran the loop.
+
+    Both markers are load-bearing. `REFUSAL_COUNT` alone reads the same whether
+    the failure was cached or the hook was run again — the call count is what
+    tells them apart, and a hook that brings a stack up must not be re-entered
+    after it failed partway.
+    """
     app = capability_extension_app("a_raising_hook_keeps_failing_every_later_runtime")
     app.await_clean_exit()
     assert marker_value(app, "REFUSAL_COUNT=") == "2"
+    assert marker_value(app, "HOOK_CALL_COUNT=") == "1"
 
 
 def test_two_distributions_on_one_capability_name_refuse_naming_both(

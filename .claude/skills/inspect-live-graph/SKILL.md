@@ -18,7 +18,7 @@ streamlib graph --url <control_url>
 # or, when exactly one node is live:
 streamlib graph
 ```
-The result is the `graph` MCP tool's JSON (pretty-printed): processors, links, states, metrics.
+The result is the `graph` MCP tool's JSON (pretty-printed): processors, links, states, metrics, and the capability extensions loaded in the node's process.
 
 ### 2. Read what you need out of it
 - **Processor ids** — which instances the node actually stood up, and under which type.

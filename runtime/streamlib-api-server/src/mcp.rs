@@ -236,7 +236,7 @@ fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "graph",
-            "description": "Export the current runtime graph (processors, links, states, metrics) as JSON.",
+            "description": "Export the current runtime graph (processors, links, states, metrics) and the capability extensions loaded in this process, as JSON.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
         }),
         json!({

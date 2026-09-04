@@ -48,12 +48,12 @@ pub struct LoadedCapabilityExtensionOutput {
     pub distribution: String,
 }
 
-impl From<&LoadedCapabilityExtension> for LoadedCapabilityExtensionOutput {
-    fn from(registered: &LoadedCapabilityExtension) -> Self {
+impl From<LoadedCapabilityExtension> for LoadedCapabilityExtensionOutput {
+    fn from(registered: LoadedCapabilityExtension) -> Self {
         Self {
-            name: registered.name.clone(),
-            version: registered.version.clone(),
-            distribution: registered.distribution.clone(),
+            name: registered.name,
+            version: registered.version,
+            distribution: registered.distribution,
         }
     }
 }
@@ -820,7 +820,7 @@ mod capability_extension_rendering_tests {
             .expect("the capability registers");
         let extensions: Vec<_> = registry
             .registered()
-            .iter()
+            .into_iter()
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
 

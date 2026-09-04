@@ -7,8 +7,6 @@ use super::edges::Link;
 use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
 
-use serde::Serialize;
-
 use super::traversal::{TraversalSource, TraversalSourceMut};
 use crate::core::json_schema::{
     GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput, ProcessorNodeOutput,
@@ -132,8 +130,7 @@ impl Graph {
     /// `loaded_capability_extensions` alongside it.
     ///
     /// The extensions are a property of the process, not of the graph, so the
-    /// runtime that owns the registry passes them in; serializing a graph on
-    /// its own renders the key empty rather than omitting it.
+    /// runtime that reads the registry passes them in.
     pub(crate) fn to_graph_response(
         &self,
         loaded_capability_extensions: Vec<LoadedCapabilityExtensionOutput>,
@@ -151,14 +148,5 @@ impl Graph {
                 .collect(),
             extensions: loaded_capability_extensions,
         }
-    }
-}
-
-impl Serialize for Graph {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.to_graph_response(Vec::new()).serialize(serializer)
     }
 }

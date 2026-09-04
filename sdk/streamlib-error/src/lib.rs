@@ -134,6 +134,9 @@ pub enum Error {
         also_registered_by: String,
     },
 
+    #[error("the capability extension in `{distribution}` registered a capability with no name")]
+    CapabilityExtensionNameEmpty { distribution: String },
+
     #[error(
         "no tappable channel named '{0}' in the running graph — a channel's \
          iceoryx2 data service exists only once a connect() has wired its source \

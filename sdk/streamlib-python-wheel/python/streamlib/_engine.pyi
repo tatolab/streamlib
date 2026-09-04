@@ -71,7 +71,6 @@ __all__ = [
     "decode_tapped_channel_bag_frame_to_python_object",
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
-    "hand_loaded_capability_extensions_to_the_runtime",
     "log_event",
     "monotonic_now_ns",
     "open_test_harness_channel",
@@ -1546,9 +1545,6 @@ def capability_extension_host_for_the_helper_process(
     distribution: str,
 ) -> CapabilityExtensionHost:
     """Mint the host `distribution`'s hook is handed in a helper process."""
-
-def hand_loaded_capability_extensions_to_the_runtime(runtime: Runtime) -> None:
-    """Give `runtime` what this process's hooks registered, so `graph` shows it."""
 
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""

@@ -207,6 +207,10 @@ jobs:
           # real iceoryx2 services, which need /dev/shm and nothing else. The
           # end-to-end half through a helper-placed Python consumer is
           # rig-gated like every other graph test in the wheel.
+          # The capability-extension mechanism's engine half: the registry's
+          # duplicate refusal, and `graph`'s third top-level key. The Python
+          # discovery loop and the two call sites are proven in the wheel's
+          # pytest suite; these are the seam it registers through.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -256,16 +260,12 @@ jobs:
             iceoryx2::delivery_profile::tests::port_declaration_resolution::declared_profile_is_the_whole_answer \
             iceoryx2::delivery_profile::tests::port_declaration_resolution::missing_declaration_is_a_wiring_error_naming_the_port \
             iceoryx2::delivery_profile::tests::port_declaration_resolution::unknown_declared_value_is_rejected_with_the_legal_values \
-            # The capability-extension mechanism's engine half: the registry's
-            # duplicate refusal, and `graph`'s third top-level key. The Python
-            # discovery loop and the two call sites are proven in the wheel's
-            # pytest suite; these are the seam it registers through.
             core::runtime::capability_extensions::tests::one_distribution_registering_two_capabilities_keeps_both_in_order \
             core::runtime::capability_extensions::tests::two_distributions_registering_one_capability_name_are_refused_naming_both \
             core::runtime::capability_extensions::tests::a_capability_registered_with_an_empty_name_is_refused_naming_its_distribution \
-            core::runtime::capability_extensions::tests::a_runtime_adopts_every_capability_the_process_had_already_registered \
             core::json_schema::capability_extension_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
             core::json_schema::capability_extension_rendering_tests::a_registered_extension_renders_its_name_version_and_distribution \
+            core::runtime::runtime::tests::to_json_renders_every_capability_this_process_registered \
             core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys \
             core::json_schema::port_rendering_tests::port_info_output_carries_no_type_key_under_any_spelling \
             core::json_schema::port_rendering_tests::port_descriptor_output_carries_no_type_key \

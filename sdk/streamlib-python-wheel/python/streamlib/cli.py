@@ -688,8 +688,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "graph",
         help="Export a running node's live graph as JSON.",
         description=(
-            "Processors, ports, links, channel names, states and metrics, as the "
-            "node reports them right now."
+            "Processors, ports, links, channel names, states and metrics, plus the "
+            "capability extensions loaded in that node's process, as the node "
+            "reports them right now."
         ),
     )
     add_control_target_flags(graph_command)

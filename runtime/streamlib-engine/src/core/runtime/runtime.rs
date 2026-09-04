@@ -12,7 +12,6 @@ use serde::Serialize;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
-use super::capability_extensions::LoadedCapabilityExtensionRegistry;
 use super::graph_change_listener::GraphChangeListener;
 use crate::core::compiler::{Compiler, PendingOperation};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -28,6 +27,7 @@ use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
+use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -115,11 +115,6 @@ pub struct Runner {
     /// construction needs the live GpuContext but whose registration must
     /// precede the first `process()` call. Drained on each `start()`.
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
-    /// What the capability extensions installed beside the wheel registered
-    /// in this process. Held behind an `Arc` so the wheel's loader can hand a
-    /// clone to each extension's hook without holding the engine alive past
-    /// teardown.
-    loaded_capability_extensions: Arc<LoadedCapabilityExtensionRegistry>,
     /// Optional pipeline name carried across snapshot load → save.
     /// Set by [`Self::load_graph_snapshot`] and read by
     /// [`Self::save_graph_snapshot`] so a snapshot loaded from disk
@@ -249,7 +244,6 @@ impl Runner {
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
-            loaded_capability_extensions: Arc::new(LoadedCapabilityExtensionRegistry::default()),
             pipeline_name: Arc::new(Mutex::new(None)),
         }))
     }
@@ -1028,20 +1022,11 @@ impl Runner {
     // Introspection
     // =========================================================================
 
-    /// The registry a capability extension's `load(host)` hook registers into.
-    ///
-    /// The wheel's loader hands a clone to each hook. What lands here renders
-    /// under `extensions` in [`Self::to_json`].
-    pub fn loaded_capability_extensions(&self) -> Arc<LoadedCapabilityExtensionRegistry> {
-        Arc::clone(&self.loaded_capability_extensions)
-    }
-
     /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
-        let extensions: Vec<_> = self
-            .loaded_capability_extensions
+        let extensions: Vec<_> = LoadedCapabilityExtensionRegistry::of_this_process()
             .registered()
-            .iter()
+            .into_iter()
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
         self.compiler.scope(|graph, _tx| {
@@ -1404,6 +1389,40 @@ mod tests {
             after, before,
             "Runner::new() must not register any processors — the engine \
              substrate ships empty (issue #793). Delta: {before} → {after}."
+        );
+    }
+
+    /// `graph`'s third key answers about the process, not about which runtime
+    /// asked: the extension hooks run once per process, so a runtime built
+    /// after them reports what they registered just as the first one does.
+    ///
+    /// The registry is a process-global like `PROCESSOR_REGISTRY` above, so
+    /// this asserts membership rather than the whole list.
+    #[test]
+    #[serial]
+    fn to_json_renders_every_capability_this_process_registered() {
+        LoadedCapabilityExtensionRegistry::of_this_process()
+            .register(crate::core::runtime::LoadedCapabilityExtension {
+                name: "a-capability-only-this-test-registers".to_string(),
+                version: "3.1.4".to_string(),
+                distribution: "streamlib-test-only".to_string(),
+            })
+            .expect("the capability registers");
+
+        let runtime = Runner::new().expect("Runner::new");
+        let rendered = runtime.to_json().expect("the graph serializes");
+
+        assert!(
+            rendered["extensions"]
+                .as_array()
+                .expect("extensions is always an array")
+                .contains(&serde_json::json!({
+                    "name": "a-capability-only-this-test-registers",
+                    "version": "3.1.4",
+                    "distribution": "streamlib-test-only",
+                })),
+            "to_json must render what the process registered, got: {}",
+            rendered["extensions"]
         );
     }
 

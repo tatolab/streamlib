@@ -94,6 +94,7 @@ def scenario_a_raising_hook_keeps_failing_every_later_runtime() -> None:
         except Exception:
             refusals += 1
     marker(f"REFUSAL_COUNT={refusals}")
+    marker(f"HOOK_CALL_COUNT={sys.modules['streamlib_raising_extension'].hook_call_count}")
     marker("CLEAN_EXIT")
 
 

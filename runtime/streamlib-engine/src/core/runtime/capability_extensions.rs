@@ -3,13 +3,13 @@
 
 //! What the capability extensions installed beside the wheel registered.
 //!
-//! One registry per process taking an engine role: the app process reaches it
-//! through the [`Runner`](super::Runner) that owns it, a helper process through
-//! the wheel's own. The registration itself crosses no process boundary — a
-//! helper's registrations are its own, and the app process renders only what
-//! loaded in it.
+//! Process-wide, like `PROCESSOR_REGISTRY`: the hooks run once per process
+//! taking an engine role, and a capability they brought up stays up, so every
+//! runtime in that process reports the same set. The registration crosses no
+//! process boundary — a helper's registrations are its own, and the app
+//! process renders only what loaded in it.
 
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use crate::core::error::{Error, Result};
 
@@ -31,6 +31,13 @@ pub struct LoadedCapabilityExtensionRegistry {
 }
 
 impl LoadedCapabilityExtensionRegistry {
+    /// The one registry this process registers into and renders from.
+    pub fn of_this_process() -> &'static Self {
+        static REGISTRY: LazyLock<LoadedCapabilityExtensionRegistry> =
+            LazyLock::new(LoadedCapabilityExtensionRegistry::default);
+        &REGISTRY
+    }
+
     /// Record `capability`, refusing a name another distribution already took.
     ///
     /// Refusal rather than last-one-wins: two wheels claiming one capability
@@ -38,10 +45,9 @@ impl LoadedCapabilityExtensionRegistry {
     /// extension is worse than one that refused.
     pub fn register(&self, capability: LoadedCapabilityExtension) -> Result<()> {
         if capability.name.is_empty() {
-            return Err(Error::Runtime(format!(
-                "the capability extension in `{}` registered a capability with an empty name",
-                capability.distribution
-            )));
+            return Err(Error::CapabilityExtensionNameEmpty {
+                distribution: capability.distribution,
+            });
         }
         let mut registered = self
             .registered
@@ -59,16 +65,6 @@ impl LoadedCapabilityExtensionRegistry {
         }
         registered.push(capability);
         Ok(())
-    }
-
-    /// Take on everything `already_loaded` holds, under the same rule.
-    ///
-    /// How a runtime learns what loaded before it existed: the hooks run once
-    /// per process, and every runtime in that process reports the same set.
-    pub fn adopt(&self, already_loaded: Vec<LoadedCapabilityExtension>) -> Result<()> {
-        already_loaded
-            .into_iter()
-            .try_for_each(|capability| self.register(capability))
     }
 
     /// Every capability registered so far, in registration order.
@@ -132,24 +128,6 @@ mod tests {
             vec![capability("webrtc", "streamlib-webrtc")],
             "a refused registration leaves the registry as it was"
         );
-    }
-
-    #[test]
-    fn a_runtime_adopts_every_capability_the_process_had_already_registered() {
-        let process_wide = LoadedCapabilityExtensionRegistry::default();
-        process_wide
-            .register(capability("webrtc", "streamlib-webrtc"))
-            .expect("the capability registers");
-        process_wide
-            .register(capability("moq", "streamlib-moq"))
-            .expect("the second capability registers");
-
-        let a_later_runtime = LoadedCapabilityExtensionRegistry::default();
-        a_later_runtime
-            .adopt(process_wide.registered())
-            .expect("a fresh registry adopts the process's set");
-
-        assert_eq!(a_later_runtime.registered(), process_wide.registered());
     }
 
     #[test]
