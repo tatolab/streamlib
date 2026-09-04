@@ -74,6 +74,47 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   address-space-local pointer is not a handle.
   [importable-python-library — SHIPPED #1710, #1756, #1757]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py -->
+- **DECIDED** — First-party optional capabilities ship the same way third-party native
+  code does: as separate PyPI extension wheels — Rust inside for speed, a Python
+  processor as the binding — depending on the `streamlib` wheel as a binary and never
+  building it from source. Optional means an app can be complete without it. The engine
+  is not the home of every capability; it is the home of what belongs in core. Direction
+  declared by the owner 2026-09-04, superseding the general rule — carried since the
+  2026-08-02 pivot and applied nine times since — that a first-party native capability is
+  a built-in. [extension-model]
+- **DECIDED** — Two extension mechanisms and no third. A *processor extension* is a
+  Python processor class in a pip-installed package whose per-frame work runs in native
+  code the same wheel carries: `rt.add(TheClass)` is its whole registration, exactly as
+  for any Python processor, it runs in its own helper process under the one placement
+  rule, and it reaches engine primitives only through the wheel's public surface. A
+  *capability extension* extends what the engine can do rather than adding a node — a
+  transport, a sink kind, a discovery source — and is registered by one explicit line in
+  `app.py`, never discovered by scanning installed distributions; it is sandboxed so that
+  no two packages can unsafely alter engine features and no extension rewrites an engine
+  piece: extending capabilities only, the Vite-plugin shape. Both compile at publish time
+  with maturin, neither dlopens into the engine, and the CPython ABI stays the only
+  binary boundary. [extension-model]
+- **DECIDED** — The criterion for a built-in, stated so that the next one is
+  contestable: a first-party capability ships inside the wheel only if (a) its per-frame
+  path has a deadline the helper hop cannot meet — a vsync-paced present loop, a device
+  audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
+  not export, and in either case (c) a named consumer exists. Everything else is an
+  extension. What an extension needs and the engine does not yet expose is engine work,
+  done as engine code inside the extension's own change — never by the extension reaching
+  past the surface. Known gaps at the pivot: a Python compute dispatch cannot bind a
+  storage buffer, and codec sessions are not exported to Python. [extension-model]
+- **OPEN** — The capability-extension mechanism's architecture: what an extension may
+  register, the entry-line spelling in `app.py`, the sandbox boundary that keeps two
+  packages from colliding, how a registered capability renders in `graph`, and the shape
+  of a Rust-side extension SDK (typed wrappers over the engine's Python objects, depending
+  on `pyo3` and never on the engine). Direction only; the networking align decides it on
+  the first real extension. [extension-model]
+- **OPEN** — Whether an extension's native code may ever be called in the app process
+  rather than in its helper — a Rust-implemented class reached through the CPython API
+  with the GIL released on entry. The placement rule stands unchanged: every Python
+  processor, extension or not, runs in its own helper process. This is the owner's ruling
+  to make and never a session's inference; until it is made there is no carve-out.
+  [extension-model]
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export, the present target,
   texture rings, codec byte pumps, the audio clock, color resolution — surfaced to
@@ -217,17 +258,19 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   #2059; the never-a-contract-source clause with the example-coupled E2E deleted in
   #2052]
   <!-- verify: examples/*/pyproject.toml -->
-- **DECIDED** — `packages/` holds first-party *optional* Python packages — integrations
-  and optional capabilities that do not belong in the engine tree. What belongs in the
-  engine goes in the engine; each package is an ordinary pip-installable Python package
-  depending on the streamlib wheel through its public surface, never linking the engine.
+- **DECIDED** — `packages/` holds first-party extension wheels — the optional
+  capabilities §Packages & extension model decides ship outside the wheel, with its
+  built-in criterion deciding which side of the line a capability lands on. Each is an
+  ordinary pip-installable Python package depending on the streamlib wheel through its
+  public surface, never linking the engine.
   In-repo consumers (examples included) link a package locally as a Python path
   dependency — no publish loop stands between an example and the package it uses.
   Externally, packages publish through the same GitHub-hosted PEP 503 index the wheel
   uses (PyPI after the rename). `test-fixtures` remains as the tree's one
-  engine-adjacent Rust crate. [consumer-tree-disposition — SHIPPED #2052; no first-party
-  integration package is commissioned yet, so `packages/` is `test-fixtures` beside the
-  held consumers, and the publish path is owed no work until the first one wants a home]
+  engine-adjacent Rust crate. [consumer-tree-disposition — SHIPPED #2052;
+  extension-model — the first extension wheel is networking, which is what gives
+  `packages/` its first live entry and makes the deferred publish path owed; until then it
+  is `test-fixtures` beside the held consumers]
   <!-- verify: grep -n "packages/" Cargo.toml -->
 - **DECIDED** — Conversion is a from-scratch rewrite in the current idiom, never an
   in-place upgrade: start from the `streamlib new` scaffold, mine the old directory for
@@ -1189,8 +1232,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   primitive was built for codecs. [codec-blocks — SHIPPED #2083, #2084, #2086 for the
   four video blocks, engine half; python-codec-block-api — SHIPPED #2105 for their
   Python surface; opus-mp4-recording-rung — SHIPPED #2125, #2126 for the Opus pair and
-  #2127, #2128 for `Mp4Sink`, which is a sink rather than a codec and holds no session;
-  `JpegDecoder` is the one later rung left]
+  #2127, #2128 for `Mp4Sink`, which is a sink rather than a codec and holds no session.
+  extension-model — the "native built-ins" clause is the record of these seven and not the
+  rule for the next codec, which follows the built-in criterion in §Packages & extension
+  model; `JpegDecoder` is frozen — neither built nor retired — until its drone consumer
+  returns (owner, 2026-09-04)]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
@@ -1642,11 +1688,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, moq, webrtc
+## Networking — transport, moq, webrtc — OPEN
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
-- **OPEN** — Everything else (transport choice, moq, webrtc, mesh discovery).
+- **DECIDED** — Networking is the next work and the first extension: WebRTC and MoQ ship
+  as extension wheels under §Packages & extension model, never as built-ins — not every
+  app needs them, and a capability with a consumer is what proves the extension model.
+  MoQ and WebRTC are edge source/sink processors ingesting and egressing external streams
+  at a runtime boundary; they are not the runtime-to-runtime fabric. The held consumers
+  `packages/{moq,webrtc}` and `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}`
+  resolve through the networking align per §Consumers. [extension-model]
+- **OPEN** — Everything else: the block shapes, the capability-extension surface
+  networking needs (and the sandbox and entry line it is the first to exercise), mesh
+  discovery and the cross-host fabric. The networking align decides it, on the extension
+  model.
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->

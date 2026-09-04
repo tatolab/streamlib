@@ -16,18 +16,34 @@ expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
 **Built-in**: a first-party native processor shipped inside the wheel (camera, display,
-audio) — instantiated and configured from Python; its per-frame path never enters the
-interpreter.
+audio, the seven codec blocks) — instantiated and configured from Python; its per-frame
+path never enters the interpreter. Since the 2026-09-04 extension-model pivot, not the
+default home for a first-party capability: a new built-in must meet the criterion in
+§Packages & extension model — a deadline the helper hop cannot meet, or an engine-only
+primitive, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
+**extension wheel**).
 
-**Codec block**: a codec built-in — encoder, decoder, or muxer shipped inside the
-wheel (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its per-frame
-path never enters an interpreter. _Avoid_: "codec processor" (user-authored shape),
+**Extension wheel**: a separate PyPI package — Rust inside for speed, a Python processor as
+the binding — that depends on the `streamlib` wheel as a binary and never builds it from
+source. First-party optional capabilities and third-party native code both ship this way.
+_Avoid_: "plugin" (pre-pivot ABI), "integration package" (retired), "built-in" (inside the
+wheel).
+
+**Processor extension**: an extension wheel's Python processor class whose per-frame work
+runs in native code the same wheel carries; `rt.add(TheClass)` is its whole registration and
+it runs in its own helper like any Python processor.
+
+**Capability extension**: an extension wheel that extends what the engine can do — a
+transport, a sink kind, a discovery source — rather than adding a node; registered by one
+explicit line in `app.py`, never by scanning; sandboxed so two packages cannot unsafely
+alter engine features; extends only, never rewrites an engine piece. _Avoid_: "plugin"
+unqualified (say "the Vite-plugin shape" when the analogy helps).
+
+**Codec block**: one of the seven codec built-ins that shipped — encoder, decoder, or
+muxer inside the wheel (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its
+per-frame path never enters an interpreter. The next codec follows the built-in criterion
+and is not a codec block by default. _Avoid_: "codec processor" (user-authored shape),
 "codec plugin" (pre-pivot).
-
-**Integration package**: a first-party *optional* Python package under `packages/` —
-an integration or optional capability depending on the wheel's public surface, linked
-locally by in-repo consumers and published through the wheel's own index. _Avoid_:
-"plugin" (pre-pivot), "built-in" (those ship inside the wheel).
 
 **Conversion**: rewriting a pre-pivot consumer from scratch in the current idiom — the
 old directory mined for logic only and deleted in the same PR. _Avoid_: "upgrade",
@@ -174,3 +190,7 @@ Retired by the 2026-08-04 helper-placement pivot (see
 **Placement policy**, **Placement heuristic**, **Transparent move** — there is one
 placement, so these name nothing. For the surviving in-that-process Rust senses
 (engine, control plane, built-ins, interop adapters), say **app-process**.
+
+Retired by the 2026-09-04 extension-model pivot (see `docs/decisions/extension-model.md`):
+**Integration package** — say **extension wheel**; and "built-in" as the default home for
+a first-party capability — a built-in is now the exception the criterion admits.
