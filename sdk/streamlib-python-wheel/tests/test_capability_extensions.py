@@ -15,6 +15,7 @@ raising hook in the shared venv would fail every other suite's `Runtime()`.
 `extension_fixtures/README.md` says why that is still pip's registry.
 """
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -216,12 +217,47 @@ def test_a_helper_runs_every_hook_before_it_imports_the_processor(
 
 
 @pytest.mark.requires_gpu
+def test_graph_renders_every_capability_the_app_process_registered(
+    capability_extension_app,
+):
+    """The whole path, end to end: `register_capability` → the runtime → `graph`.
+
+    Needs a real node because the control plane is a processor in the graph, so
+    it only serves once the runtime is running.
+    """
+    app = capability_extension_app("graph_renders_the_registered_capability")
+    app.await_clean_exit()
+
+    extensions = json.loads(marker_value(app, "GRAPH_EXTENSIONS="))
+    assert extensions == [
+        {
+            "name": "test-capability",
+            "version": "1.4.2",
+            "distribution": "streamlib-test-extension",
+        }
+    ]
+
+
+@pytest.mark.requires_gpu
 def test_a_raising_hook_in_a_helper_refuses_that_processor_by_name(
     capability_extension_app,
 ):
-    """The helper exits before importing the processor; the parent says which one."""
+    """The helper exits before importing the processor; the parent says which one.
+
+    Both halves of the report matter and neither is enough alone: the child's
+    own log line is the only place the distribution and entry point are named,
+    and the parent's refusal is the only place the processor is.
+    """
     app = capability_extension_app("a_raising_hook_refuses_the_processor")
     app.await_clean_exit()
 
-    refusal = marker_value(app, "PROCESSOR_REFUSED=")
-    assert "ReportsTheExtensionItsHelperLoaded" in refusal, refusal
+    assert "the helper could not load a capability extension" in app.output
+    assert "streamlib-helper-raising-extension" in app.output
+    assert "helper_raising_extension" in app.output
+    assert (
+        "[ReportsTheExtensionItsHelperLoaded] its helper process died before it "
+        "finished setting up" in app.output
+    ), app.output
+
+    # The processor never reached Running, so the app's own wait refused it.
+    assert marker_value(app, "PROCESSOR_REFUSED=") != "it started anyway"

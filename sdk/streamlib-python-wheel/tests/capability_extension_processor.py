@@ -24,8 +24,9 @@ class ReportsTheExtensionItsHelperLoaded:
     def frames_to_downstream(self) -> None: ...
 
     def process(self, ctx) -> None:
+        # Reports and writes nothing: the port exists to make this a processor,
+        # and nothing downstream is wired, so a write would only raise.
         if not self.announced:
             loaded = "streamlib_test_extension" in sys.modules
             log.info(f"MARKER:HELPER_LOADED_THE_EXTENSION={loaded}")
             self.announced = True
-        ctx.outputs.write("frames_to_downstream", {"tick": True})

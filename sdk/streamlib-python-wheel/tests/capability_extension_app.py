@@ -14,6 +14,7 @@ fixture to that child.
 """
 
 import importlib
+import json
 import os
 import sys
 import threading
@@ -129,8 +130,13 @@ def scenario_a_helper_runs_the_hook_before_the_processor() -> None:
 
 
 def scenario_a_raising_hook_refuses_the_processor() -> None:
-    """A hook that fails in the child takes that processor's start with it."""
-    install_fixture_distributions("raising")
+    """A hook that fails in the child takes that processor's start with it.
+
+    The fixture raises only when `role` is `"helper"`: an extension that failed
+    in the app process too would refuse `Runtime()` first, and this would never
+    reach a helper at all.
+    """
+    install_fixture_distributions("helper_raising")
     import streamlib
     from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
 
@@ -151,6 +157,36 @@ def scenario_a_raising_hook_refuses_the_processor() -> None:
     marker("CLEAN_EXIT")
 
 
+def scenario_graph_renders_the_registered_capability() -> None:
+    """`streamlib graph` is where an operator sees what an install enabled.
+
+    Read through this run's own control plane, which is the exact payload
+    `GET /api/graph` and the MCP `graph` tool serve.
+    """
+    install_fixture_distributions("registering")
+    import streamlib
+    from capability_extension_processor import ReportsTheExtensionItsHelperLoaded
+    from streamlib._control_plane_client import call_tool
+    from streamlib._node_registry import live_nodes
+
+    runtime = streamlib.Runtime()
+    runtime.host_control_plane()
+    runtime.add(ReportsTheExtensionItsHelperLoaded)
+
+    def report_the_extensions_the_graph_carries() -> None:
+        runtime.wait_until_every_processor_is_running(timeout=60.0)
+        control_url = next(
+            node.control_url for node in live_nodes() if node.pid == os.getpid()
+        )
+        graph = json.loads(call_tool(control_url, "graph", {}))
+        marker(f"GRAPH_EXTENSIONS={json.dumps(graph['extensions'])}")
+        runtime.shutdown()
+
+    threading.Thread(target=report_the_extensions_the_graph_carries, daemon=True).start()
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
 SCENARIOS = {
     "a_hook_runs_and_registers": scenario_a_hook_runs_and_registers,
     "the_hook_runs_once_however_many_runtimes": (
@@ -167,6 +203,9 @@ SCENARIOS = {
         scenario_a_helper_runs_the_hook_before_the_processor
     ),
     "a_raising_hook_refuses_the_processor": scenario_a_raising_hook_refuses_the_processor,
+    "graph_renders_the_registered_capability": (
+        scenario_graph_renders_the_registered_capability
+    ),
 }
 
 
