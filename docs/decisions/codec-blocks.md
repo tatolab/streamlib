@@ -201,7 +201,8 @@ recorded as findings on the change; the stub docstrings state today's behavior.
 
 ## Why the recording rung is shaped this way
 
-Written with `opus-mp4-recording-rung` (proposed 2026-09-02), before its approval.
+Written with `opus-mp4-recording-rung` (proposed 2026-09-02); shipped 2026-09-03 and
+revised here with what the build settled.
 
 **The encoded-audio bag is the video convention applied, not a second one.** `EncodedAudioPacket`
 carries `codec`, `bitstream`, the ordering pair and the sync-point flag exactly as
@@ -257,6 +258,24 @@ parameter-set parser; a second parser for the same bytes would be the parallel-s
 data plane already shares land in the container exactly, with no 90 kHz rounding carry across a
 long recording. Audio stays at 48 000 with the packet's own sample count as its duration. A/V
 sync is then the plan's own subtraction: one epoch, two offsets, no edit list.
+
+**A refusal latches one track, never the file.** A parameter set that changes mid-file, a
+track whose codec changes, an Opus track whose channel count changes: each is unrepresentable
+because a track has exactly one sample entry and it lives in the one `moov`. The first draft
+would have ended the recording. But a `moof` owes a `traf` to no track, so a track that simply
+stops appearing is a legal file — and one microphone's format change ending two cameras'
+recording is the failure mode the track-per-link shape exists to avoid. So the sink says so
+once, naming the link and that track's last written stamp, stops writing it, discards its later
+bags, and every other track keeps recording.
+
+**Three to eight channels record no Opus track, and that is a container gap named as one.**
+`mp4-atom` 0.15 writes `ChannelMappingFamily` 0 unconditionally and refuses any other value on
+read, so mapping family 1 — which `OpusEncoder` happily mints — has no representation in the
+writer. The owner ruled on 2026-09-03 that the track is refused by name, naming the container
+rather than the codec, over the two alternatives: hand-splicing the `dOps` bytes is the
+hand-written box writer this rung rejected on purpose, and a second vendored fork is a
+maintenance cost for a case no consumer has. Tracked as #2139. The recording showcase is mono
+or stereo, so nothing shipped is blocked on it.
 
 **Static libopus through `opusic-sys`, `mp4-atom` for the boxes.** `opusic-sys` carries libopus
 1.6.1 and its BSD-3-Clause `COPYING` inside the crate and builds it with cmake, which the wheel

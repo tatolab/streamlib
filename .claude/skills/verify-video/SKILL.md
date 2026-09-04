@@ -4,58 +4,56 @@ description: Capture a verification video from the vivid virtual camera through 
 user_invocable: true
 arguments:
   - name: codec
-    description: "h264 or h265 (default: h265)"
-    required: false
-  - name: duration
-    description: "seconds to capture (default: 5)"
+    description: "h264 or h265 (default: h264)"
     required: false
 ---
 
-Capture a verification video using the streamlib processor pipeline (Camera → Encoder → MP4Writer) and send it to the user via Telegram. Use this when the user asks to verify the video pipeline, requests a test video, or wants confirmation that encoding works.
+Record an MP4 through the streamlib processor pipeline (vivid camera → encoder → `Mp4Sink`,
+beside the known audio signal → `OpusEncoder` → the same sink), prove the container with our own
+tooling, and send the file to the user via Telegram. Use this when the user asks to verify the
+video pipeline, requests a test video, or wants confirmation that recording works.
 
-> **Blocked on the muxer.** No `Mp4Sink` built-in exists yet — it lands with the recording
-> showcase. The codec rig below proves encode → decode end to end but writes no file, so steps
-> 3–5 have nothing to send. Until the muxer lands, verify with `/verify-live`, which reads the
-> decoded frames out of the running rig over the control plane.
+The recording gate does the recording, the inspection and the decode-back in one script; this
+skill runs it and sends what it wrote.
 
 ## Arguments
 
-- `codec`: First argument — `h264` or `h265`. Default: `h265`
-- `duration`: Second argument — seconds the `timeout` wrapper gives the rig. Default: `5`
+- `codec`: First argument — `h264` or `h265`. Default: `h264`
 
 ## Steps
 
-1. Delete any previous output:
+1. Run the recording gate (**debug build only** — release has a known race condition, see #273):
    ```bash
-   rm -f /tmp/streamlib_live_h264.mp4 /tmp/streamlib_live_h265.mp4 /tmp/streamlib_test_h265.mp4
+   runtime/streamlib-engine/tests/fixtures/e2e_fixture_recording.sh /tmp/streamlib-verify-video $codec
    ```
+   Three phases, each failing on its own terms: `recording_node.py` records until the file holds
+   enough video and then takes SIGTERM (a run needing SIGKILL is a hard fail — teardown is what
+   closes the last fragment); `cargo xtask mp4-inspect` reads the written file; and
+   `codec_roundtrip_rig --source mp4:<file>` replays the video track back through our decoder,
+   locked to the per-codec vivid baseline within ±0.05.
 
-2. Run the codec rig (**debug build only** — release has a known race condition, see #273):
+   Exit codes: `0` pass, `1` fail, `77` skip (no vivid, no GPU). A skip is not a pass — say so.
+
+2. Read the verdict and the written MP4 out of the output directory:
    ```bash
-   timeout $((duration + 15)) cargo run -p streamlib-engine --example codec_roundtrip_rig -- \
-     --codec $codec --source camera --camera /dev/video2
+   ls /tmp/streamlib-verify-video
+   cargo xtask mp4-inspect /tmp/streamlib-verify-video/recording.mp4
    ```
-   Output: none on disk — the rig hosts the control plane and stays up. Steps 3–5 resume when
-   the muxer lands.
+   `mp4-inspect` reports the tracks under their inbound link names, each one's sample entry
+   (`avc1`/`hvc1` for the video track, `Opus` for the audio one), the fragments and the per-track
+   durations — as JSON, so nothing here needs ffprobe.
 
-3. If codec is `h265`, re-mux with `hvc1` tag for Apple device playback:
-   ```bash
-   ffmpeg -y -i /tmp/streamlib_live_h265.mp4 -c:v copy -c:a copy -tag:v hvc1 -movflags +faststart /tmp/streamlib_test_h265.mp4
-   ```
-   Send path: `/tmp/streamlib_test_h265.mp4`
-
-   For `h264`, send path: `/tmp/streamlib_live_h264.mp4`
-
-4. Verify the output with ffprobe:
-   ```bash
-   ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,r_frame_rate,nb_read_frames -count_frames -of csv $send_path
-   ```
-
-5. Send the MP4 to the user via Telegram using the `reply` tool. Look up the chat_id from memory (reference_telegram_chat). Include: codec, frame count, duration, and that it was captured from vivid virtual camera via the streamlib processor pipeline.
+3. Send the MP4 to the user via Telegram using the `reply` tool. Look up the chat_id from memory
+   (reference_telegram_chat). Include: codec, the track list `mp4-inspect` reported, the
+   decode-back's channel-mean drift against the baseline, and that it was captured from the vivid
+   virtual camera through the streamlib processor pipeline.
 
 ## Important
 
 - **Always use debug build** (no `--release`) — release build has a threading race condition (#273)
 - The vivid virtual camera is at `/dev/video2` — outputs animated SMPTE color bars with frame counter
 - If vivid isn't available, check `v4l2-ctl --list-devices`
-- The rig takes no duration flag and does not auto-stop — it hosts the control plane and runs until killed, so the `timeout` wrapper is the only bound; its margin also covers compilation
+- No ffmpeg step: `Mp4Sink` strips parameter sets from samples and writes `avc1`/`hvc1`, which is
+  already what Apple hardware plays, so there is no re-tag to do
+- `INJECT_BUG=bt601-bt709 | swap-channels | swap-chroma` proves the decode-back's lock is
+  non-vacuous, if the user asks whether the gate can fail

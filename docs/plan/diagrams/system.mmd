@@ -45,6 +45,8 @@ every input port declares one read policy — newest or ordered — and no other
 both drop under pressure, and no link ever blocks a producer;
 a drop is counted at the port that lost it, but only an app-process destination's
 count reaches graph — a helper's counts stay in its own child process (OPEN);
+a read can name the inbound link a bag arrived on, and a port can list the links wired
+into it — which is how a many-track sink learns what it owes, counting unchanged;
 every stamp reads the one machine-monotonic clock"| helper
   helper -->|"kernels constructed in setup(), dispatched by name and
 synchronously — one submission per batch; an output is named by surface id,
