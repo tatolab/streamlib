@@ -8,10 +8,21 @@ extension model, so it is what these check — over a real `Runtime`, which need
 no device to build a graph.
 """
 
+import os
+from typing import Any
+
 import pytest
 
 import streamlib
-from streamlib import H264Decoder, H264Encoder, OpusDecoder, OpusEncoder, log
+from streamlib import (
+    H264Decoder,
+    H264Encoder,
+    OpusDecoder,
+    OpusEncoder,
+    RuntimeContextFullAccess,
+    log,
+)
+from streamlib._engine import ProcessorLinkDataAccess
 from streamlib_webrtc import WhepPlayer, WhipPublisher
 from streamlib_webrtc.processors import (
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
@@ -153,3 +164,59 @@ def test_multichannel_opus_is_refused_because_rtp_cannot_carry_it(channels):
 @pytest.mark.parametrize("channels", [1, 2])
 def test_the_channel_counts_rtp_carries_are_published(channels):
     refuse_audio_rtp_cannot_carry(channels, "encoder/encoded_audio")
+
+
+class _PublisherUnderTest:
+    """A `WhipPublisher` whose `setup()` can be driven without a graph.
+
+    A helper-process context opened directly on wired links is the same seam
+    `setup()` sees in a real child, and it needs no runtime and no device.
+    """
+
+    @staticmethod
+    def set_up_with(
+        request: pytest.FixtureRequest,
+        inbound_links: int,
+        config: "dict[str, Any]",
+    ) -> None:
+        unique = f"whipsetup{os.getpid()}_{request.node.name}"
+        link_data_access = ProcessorLinkDataAccess()
+        for index in range(inbound_links):
+            link_data_access.wire_input_link(
+                "tracks", f"{unique}/encoder{index}", f"{unique}_dest/notify",
+                "read_next_in_order", 8, 2, 4, f"L-{unique}-{index}",
+            )  # fmt: skip
+        context = RuntimeContextFullAccess.open_for_helper_process(
+            config, link_data_access, "runtime-under-test", "processor-under-test"
+        )
+        WhipPublisher().setup(context)
+
+
+AN_ENDPOINT = {"url": "https://example.invalid/whip"}
+
+
+@pytest.mark.parametrize("inbound_links", [1, 2])
+def test_a_publisher_sets_up_against_the_links_a_session_can_carry(
+    request, inbound_links
+):
+    _PublisherUnderTest.set_up_with(request, inbound_links, AN_ENDPOINT)
+
+
+def test_a_publisher_with_nothing_wired_refuses_rather_than_publishing_silence(
+    request,
+):
+    """A graph that forgot the connect would otherwise open a session and send
+    nothing, which looks from the relay's side like a working publisher."""
+    with pytest.raises(ValueError, match="nothing is connected"):
+        _PublisherUnderTest.set_up_with(request, 0, AN_ENDPOINT)
+
+
+def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(request):
+    with pytest.raises(ValueError, match="3 links feed"):
+        _PublisherUnderTest.set_up_with(request, 3, AN_ENDPOINT)
+
+
+@pytest.mark.parametrize("config", [{}, {"url": ""}, {"url": 7}])
+def test_a_publisher_without_an_endpoint_is_refused_by_name(request, config):
+    with pytest.raises(ValueError, match="`url` is required"):
+        _PublisherUnderTest.set_up_with(request, 1, config)
