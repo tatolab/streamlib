@@ -1,7 +1,7 @@
 # camera-audio-recorder
 
-Camera + microphone → one MP4, with a preview window on the way past. Two
-tracks, nothing configured between them.
+Camera + microphone → one MP4, with the recording decoded back into a preview
+window. Two tracks, nothing configured between them.
 
 ## The model this example teaches
 
@@ -16,13 +16,15 @@ def setup(rt: Runtime) -> None:
 
     rt.connect(camera.output("video"), video_encoder.input("video"))
     rt.connect(video_encoder.output("encoded_video"), recorder.input("tracks"))
-    rt.connect(camera.output("video"), window.input("video"))
+    rt.connect(video_encoder.output("encoded_video"),
+               preview_decoder.input("encoded_video"))
+    rt.connect(preview_decoder.output("video"), window.input("video"))
 
     rt.connect(microphone.output("audio"), audio_encoder.input("audio"))
     rt.connect(audio_encoder.output("encoded_audio"), recorder.input("tracks"))
 ```
 
-- All five are **native built-in processors**, statically linked into the
+- All six are **native built-in processors**, statically linked into the
   `streamlib` wheel. `rt.add` takes the class itself — it is a marker, never
   instantiated. No frame and no sample enters a Python interpreter, so a
   recording costs Python nothing per frame.
@@ -33,11 +35,14 @@ def setup(rt: Runtime) -> None:
   declares a window contract naming a rate, a dtype and a 20 ms window but no
   channel count, so the engine resamples and re-frames to Opus's own clock
   while the channel count follows whatever the device opened at.
-- **The camera output feeds two consumers.** One `rt.connect` to the encoder
-  and one to the window; the preview is a second reader of the same frames, not
-  a second capture. The two read on their own terms — the encoder's `video`
-  input is `ordered` and the window's is `newest` — so a window that falls
-  behind passes over frames to catch up and never paces the recording.
+- **The preview hangs off the encoder, not the camera.** A channel's one
+  publisher shares a single ring config with every subscriber, so a source port
+  cannot feed an `ordered` destination and a `newest` one at the same time —
+  and `H264Encoder`'s input is `ordered` while `DisplayWindow`'s is `newest`.
+  Wiring the camera to both is refused at startup, by name. Both destinations
+  of `encoded_video` *are* `ordered`, so that fan-out is legal, and the
+  constraint turns into the more honest picture: what reaches the glass is the
+  bitstream that reached the file, not the camera frame that preceded it.
 
 ## Run it
 
@@ -57,6 +62,15 @@ into this venv instead:
 uv pip install maturin
 maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 ```
+
+## What the hardware has to have
+
+A GPU with **Vulkan Video encode** queues for H.264 — without them the encoder
+logs `the encoder session could not be minted; every later frame is discarded`
+and the file gets no video track. The preview additionally needs a **decode**
+queue; lacking one, the decoder refuses in `setup()`, sits in state `Error` in
+`streamlib graph`, and the window stays black — the recording itself is
+unaffected, because the file is fed by the encoder, not by the preview.
 
 ## Stopping it
 
