@@ -21,10 +21,17 @@ crate-type = ["cdylib"]
 # CPython 3.10 and every later GIL-enabled release.
 pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
 
-webrtc = "0.20.5"
+# 0.17.2, not the 0.20 line: at 0.20 webrtc-rs was rewritten onto a sans-IO
+# core with a different API — a builder, an event-handler trait, and `rtc` as a
+# second direct dependency. 0.17.2 is the last release of the family the mined
+# WHIP/WHEP clients were written and proven against, and is itself three minor
+# versions past the 0.14 the held package froze on.
+webrtc = "0.17.2"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 bytes = "1.12.1"
 thiserror = "2.0.17"
+# The one clock the whole runtime agrees on, read the same way the wheel reads it.
+libc = "0.2"
 tracing = "0.1.44"
 
 # WHIP/WHEP signalling is plain HTTPS: POST the offer, PATCH trickle ICE,
