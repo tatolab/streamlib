@@ -303,7 +303,7 @@ fn an_opus_packet(stereo: bool) -> Vec<u8> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_published_opus_packet_arrives_described_by_its_own_toc() {
+async fn a_published_opus_packet_arrives_whole_and_described() {
     crate::transport_stack::bring_up().unwrap();
     let (relay, mut assembled) = a_relay_that_receives_what_is_published().await;
 
@@ -350,9 +350,11 @@ async fn a_published_opus_packet_arrives_described_by_its_own_toc() {
     );
     session.close().await;
 
-    // The payload crosses unchanged — an Opus payloader packetises one packet
-    // per RTP packet — and everything about it is read back off its own TOC
-    // byte rather than out of the session description.
+    // The payload crosses unchanged: an Opus payloader packetises one packet
+    // per RTP packet. The channel count here comes from the first packet's TOC
+    // rather than from an answer's `sprop-stereo`, because the relay in this
+    // test is the answerer and so reads no answer of its own — the
+    // answer-declared path is covered by the assembler's unit tests.
     assert_eq!(received.opus_packet, Bytes::from(opus_packet));
     assert_eq!(received.sample_count, 960);
     assert_eq!(received.sample_rate, 48_000);

@@ -133,7 +133,7 @@ class PlayedVideoAccessUnit:
 
 @final
 class PlayedOpusPacket:
-    """One Opus packet off a WHEP stream, described by its own TOC byte."""
+    """One Opus packet off a WHEP stream, described by the stream itself."""
 
     @property
     def bitstream(self) -> bytes: ...
@@ -145,8 +145,14 @@ class PlayedOpusPacket:
     def sample_rate(self) -> int: ...
     @property
     def channels(self) -> int:
-        """From the TOC's stereo bit, which is the only honest source: the
-        answer's rtpmap says 2 for every Opus stream ever negotiated."""
+        """The stream's declared output channel count, constant for its life.
+
+        From the answer's `sprop-stereo`, falling back to the first packet's
+        TOC when the answer states no Opus fmtp. Not the rtpmap, which RFC 7587
+        §7 fixes at 2 for every Opus stream ever negotiated; and not the TOC per
+        packet, which codes a frame rather than declaring a stream — it flips
+        when an encoder codes a mono frame inside a stereo stream.
+        """
 
     @property
     def sample_count(self) -> int: ...

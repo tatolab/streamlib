@@ -20,7 +20,7 @@ use crate::monotonic_clock::RtpClockAnchoredToMonotonic;
 use crate::opus_packet::{OPUS_WIRE_SAMPLE_RATE_HZ, describe_opus_packet};
 use bytes::Bytes;
 
-const H264_CLOCK_RATE_HZ: u32 = 90_000;
+use crate::webrtc_peer_connection::H264_CLOCK_RATE_HZ;
 /// RFC 6716 §4.2: an Opus stream's encoder lookahead is signalled in the
 /// container's header, and RTP has no container. A player states no skip
 /// rather than inventing one, so a decoder trims nothing.

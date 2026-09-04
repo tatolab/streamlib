@@ -29,7 +29,8 @@ use webrtc::rtp_transceiver::rtp_codec::{
 pub(crate) const H264_PAYLOAD_TYPE: u8 = 102;
 pub(crate) const OPUS_PAYLOAD_TYPE: u8 = 111;
 pub(crate) const H264_CLOCK_RATE_HZ: u32 = 90_000;
-pub(crate) const OPUS_CLOCK_RATE_HZ: u32 = 48_000;
+/// Opus's RTP clock is its wire sample rate; the two are one number.
+pub(crate) const OPUS_CLOCK_RATE_HZ: u32 = crate::opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ;
 
 /// Constrained-baseline 3.1, the profile every WHIP relay accepts, in the
 /// asymmetric form RFC 6184 §8.2.2 defines.

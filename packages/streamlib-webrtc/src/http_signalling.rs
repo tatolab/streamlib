@@ -48,16 +48,18 @@ pub(crate) struct WhipWhepSignallingClient {
 
 impl WhipWhepSignallingClient {
     /// `protocol` names this client in every refusal it raises.
-    ///
-    /// The transport stack must already be up: building the HTTPS connector
-    /// reads rustls's default crypto provider, which panics inside rustls if
-    /// nothing installed one. `extension.py:load` is what installs it, and it
-    /// runs before any processor module is imported.
     pub(crate) fn new(
         endpoint_url: String,
         bearer_token: Option<String>,
         protocol: &'static str,
     ) -> Result<Self> {
+        // Building the HTTPS connector reads rustls's default crypto provider
+        // and *panics* inside rustls if nothing installed one. `load(host)`
+        // installs it before any processor module is imported, so this is
+        // already done in every real process — but a panic crossing into
+        // Python is a worse failure than the idempotent call that prevents it.
+        crate::transport_stack::bring_up()?;
+
         let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .map_err(|failure| WebRtcExtensionError::Signalling {
@@ -320,9 +322,6 @@ mod signalling_round_trips {
     }
 
     fn client_for(endpoint_url: String, bearer_token: Option<String>) -> WhipWhepSignallingClient {
-        // What `extension.py:load` does in a real process, and what the HTTPS
-        // connector below reads.
-        crate::transport_stack::bring_up().unwrap();
         WhipWhepSignallingClient::new(endpoint_url, bearer_token, "WHIP").unwrap()
     }
 

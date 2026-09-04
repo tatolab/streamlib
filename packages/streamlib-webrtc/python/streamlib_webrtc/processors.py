@@ -47,6 +47,12 @@ PLAYER_POLL_TIMEOUT_MS = 200
 #: is bounded, so this only expires when it is still inside `connect()`.
 READER_THREAD_JOIN_TIMEOUT_SECONDS = 1.0
 
+#: How often a publisher and a player say they are still working. The engine's
+#: own built-ins report on the same cadence, and this wheel's Rust cannot: its
+#: `tracing` has no subscriber in a helper process, so anything a session wants
+#: understood has to be said from Python.
+BAGS_BETWEEN_PROGRESS_REPORTS = 300
+
 #: A helper-placed link's per-bag ceiling
 #: (`streamlib-ipc-types`' untrusted-session ceiling). A bag past it is dropped
 #: at `debug` by the engine rather than raised, which would look from here like
@@ -169,8 +175,7 @@ def refuse_audio_rtp_cannot_carry(channels: Any, inbound_link: str) -> None:
         )
 
 
-def _required_url(config: "dict[str, Any]", processor_name: str) -> str:
-    url = config.get("url")
+def _required_url(url: Any, processor_name: str) -> str:
     if not isinstance(url, str) or not url:
         raise ValueError(
             f"{processor_name}: `url` is required and must be the endpoint's "
@@ -179,8 +184,7 @@ def _required_url(config: "dict[str, Any]", processor_name: str) -> str:
     return url
 
 
-def _optional_bearer_token(config: "dict[str, Any]") -> "str | None":
-    bearer_token = config.get("bearer_token")
+def _optional_bearer_token(bearer_token: Any) -> "str | None":
     return bearer_token if isinstance(bearer_token, str) and bearer_token else None
 
 
@@ -194,8 +198,9 @@ class WhipPublisher:
     """Encoded bags in, one WHIP session out.
 
     The `Mp4Sink` shape: one fan-in input, and each inbound link is one track
-    whose medium the link's first bag settles by its `codec`. Config is `url`
-    and an optional `bearer_token`.
+    whose medium the link's first bag settles by its `codec`. Its settings are
+    ordinary constructor parameters — `url`, and an optional `bearer_token` —
+    which is what `rt.add(WhipPublisher, config={"url": ...})` passes.
 
     The session opens on the first bag rather than in `setup()`, because a
     relay round trip inside `setup()` spends the helper's start-up budget and a
@@ -210,18 +215,19 @@ class WhipPublisher:
     zero.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, url: str, bearer_token: "str | None" = None) -> None:
+        self._url = _required_url(url, "WhipPublisher")
+        self._bearer_token = _optional_bearer_token(bearer_token)
         self._session: "_native.WhipSession | None" = None
         self._inbound_links: "list[str]" = []
         self._kind_by_inbound_link: "dict[str, VideoOrAudio]" = {}
+        self._bags_published = 0
 
     @input(delivery_profile="ordered")
     def tracks(self) -> None:
         """Encoded video or audio bags; each inbound link becomes one track."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        url = _required_url(ctx.config, "WhipPublisher")
-
         # Links are wired before setup() runs, so the track count is knowable
         # here — before a bag has arrived, and before anything is offered.
         self._inbound_links = ctx.inputs.inbound_link_names(TRACKS_INPUT_PORT)
@@ -239,7 +245,7 @@ class WhipPublisher:
                 f"one publisher per session."
             )
 
-        self._session = _native.WhipSession(url, _optional_bearer_token(ctx.config))
+        self._session = _native.WhipSession(self._url, self._bearer_token)
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         read = ctx.inputs.read_from_inbound_link_with_timestamp(TRACKS_INPUT_PORT)
@@ -248,6 +254,11 @@ class WhipPublisher:
         bag, inbound_link, timestamp_ns = read
 
         kind = self._track_kind_of(bag, inbound_link)
+        if kind == "audio":
+            # Before the connect, not after: refusing a stream once a session
+            # is already open leaves exactly the phantom publisher — live at
+            # the relay, permanently silent — that refusing exists to prevent.
+            refuse_audio_rtp_cannot_carry(bag.get("channels"), inbound_link)
         self._connect_on_the_first_bag(kind, bag)
 
         session = self._connected_session()
@@ -258,14 +269,22 @@ class WhipPublisher:
             )
         else:
             packet = EncodedAudioPacket(**bag)
-            refuse_audio_rtp_cannot_carry(packet.channels, inbound_link)
             session.write_audio_packet(packet.opus_packet_bytes, packet.sample_count)
+        self._report_progress()
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
         if self._session is not None:
             self._session.close()
             self._session = None
+        log.info(f"WhipPublisher: teardown, bags_published={self._bags_published}")
+
+    def _report_progress(self) -> None:
+        self._bags_published += 1
+        if self._bags_published == 1:
+            log.info("WhipPublisher: first bag published to the session")
+        elif self._bags_published % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
+            log.info(f"WhipPublisher: bags_published={self._bags_published}")
 
     def _track_kind_of(
         self, bag: "dict[str, Any]", inbound_link: str
@@ -292,11 +311,18 @@ class WhipPublisher:
 
         carries_both = len(self._inbound_links) == HIGHEST_TRACKS_IN_ONE_SESSION
         audio_channels = bag.get("channels") if kind == "audio" else None
+        video = carries_both or kind == "video"
+        audio = carries_both or kind == "audio"
+        log.info(
+            f"WhipPublisher: opening a session on the first bag "
+            f"(video={video}, audio={audio}, links={len(self._inbound_links)})"
+        )
         session.connect(
-            video=carries_both or kind == "video",
-            audio=carries_both or kind == "audio",
+            video=video,
+            audio=audio,
             audio_channels=audio_channels if isinstance(audio_channels, int) else None,
         )
+        log.info("WhipPublisher: the relay accepted the session")
 
     def _connected_session(self) -> "_native.WhipSession":
         if self._session is None:
@@ -316,18 +342,24 @@ class WhepPlayer:
     Two output ports rather than one per track: ports are declared statically,
     and a decoder downstream wants a port it can name when the graph is wired.
 
-    Every key each bag carries comes from the stream itself — the extent and
-    colour from the SPS, the ordering pair from this player's own counters, the
-    sync point from the access unit, and the Opus sample and channel counts from
-    each packet's TOC byte. `pre_skip` is 0 because RTP carries no `OpusHead`
-    to state an encoder lookahead, so a decoder trims nothing.
+    Every key each bag carries comes from the stream itself — the coded extent
+    and the colour from the SPS, the ordering pair from this player's own
+    counters, the sync point from the access unit, the Opus sample count from
+    each packet's TOC byte, and the channel count from the answer's
+    `sprop-stereo` (falling back to the first packet's TOC when the answer
+    states no Opus fmtp), latched constant for the stream. `pre_skip` is 0
+    because RTP carries no `OpusHead` to state an encoder lookahead, so a
+    decoder trims nothing.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, url: str, bearer_token: "str | None" = None) -> None:
+        self._url = _required_url(url, "WhepPlayer")
+        self._bearer_token = _optional_bearer_token(bearer_token)
         self._session: "_native.WhepSession | None" = None
         self._stop = threading.Event()
         self._reader: "threading.Thread | None" = None
         self._reported_an_oversized_bag = False
+        self._bags_written: "dict[str, int]" = {}
 
     @output()
     def encoded_video(self) -> None:
@@ -338,10 +370,8 @@ class WhepPlayer:
         """Opus packets, as `EncodedAudioPacket` bags."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self._session = _native.WhepSession(
-            _required_url(ctx.config, "WhepPlayer"),
-            _optional_bearer_token(ctx.config),
-        )
+        del ctx
+        self._session = _native.WhepSession(self._url, self._bearer_token)
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Hand the outputs to a thread this processor owns.
@@ -361,7 +391,9 @@ class WhepPlayer:
             # contending with it.
             try:
                 try:
+                    log.info("WhepPlayer: opening the session")
                     session.connect()
+                    log.info("WhepPlayer: the relay accepted the session")
                 except Exception as connect_failure:
                     log.error(
                         f"WhepPlayer: the session did not open: {connect_failure}"
@@ -384,6 +416,15 @@ class WhepPlayer:
             port, bag = _bag_for(media)
             self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
             outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+            self._report_progress(port)
+
+    def _report_progress(self, port: str) -> None:
+        written = self._bags_written.get(port, 0) + 1
+        self._bags_written[port] = written
+        if written == 1:
+            log.info(f"WhepPlayer: first bag written on `{port}`")
+        elif written % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
+            log.info(f"WhepPlayer: `{port}` bags_written={written}")
 
     def _report_a_bag_the_link_will_drop(self, port: str, bitstream: bytes) -> None:
         if len(bitstream) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
