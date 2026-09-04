@@ -284,49 +284,67 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
                     ),
                 },
             )?;
-            if let Some(video_parameters) = description.video_parameters {
-                if self.video_track_reconstitution.is_some() {
-                    tracing::warn!(
-                        track_id = description.track_id,
-                        "the init segment describes a second video track; this subscriber has \
-                         one video port, so the later description is ignored"
-                    );
-                    continue;
+            match description.track_medium {
+                TrackMedium::Video => {
+                    let (Some(wire_codec), Some((coded_width, coded_height))) =
+                        (description.wire_codec.clone(), description.coded_extent)
+                    else {
+                        tracing::warn!(
+                            track_id = description.track_id,
+                            "the init segment's video track states no codec or no coded extent, \
+                             so no bag can be spelled from its fragments"
+                        );
+                        continue;
+                    };
+                    if self.video_track_reconstitution.is_some() {
+                        tracing::warn!(
+                            track_id = description.track_id,
+                            "the init segment describes a second video track; this subscriber has \
+                             one video port, so the later description is ignored"
+                        );
+                        continue;
+                    }
+                    self.video_track_reconstitution = Some(CmafVideoTrackReconstitution {
+                        codec: wire_codec,
+                        media_timescale_hz,
+                        parameter_set_nal_units: description.parameter_set_nal_units,
+                        coded_width,
+                        coded_height,
+                        ordering_pair_counter: SubscriberMintedOrderingPairCounter::default(),
+                        stamp_anchor: None,
+                    });
                 }
-                self.video_track_reconstitution = Some(CmafVideoTrackReconstitution {
-                    codec: description.codec,
-                    media_timescale_hz,
-                    parameter_set_nal_units: video_parameters.parameter_set_nal_units,
-                    coded_width: video_parameters.coded_width,
-                    coded_height: video_parameters.coded_height,
-                    ordering_pair_counter: SubscriberMintedOrderingPairCounter::default(),
-                    stamp_anchor: None,
-                });
-            } else if let Some(opus_parameters) = description.opus_parameters {
-                if self.audio_track_reconstitution.is_some() {
-                    tracing::warn!(
-                        track_id = description.track_id,
-                        "the init segment describes a second audio track; this subscriber has \
-                         one audio port, so the later description is ignored"
-                    );
-                    continue;
+                TrackMedium::Audio => {
+                    let (Some(channels), Some(sample_rate), Some(pre_skip)) = (
+                        description.channels,
+                        description.sample_rate,
+                        description.pre_skip,
+                    ) else {
+                        tracing::warn!(
+                            track_id = description.track_id,
+                            "the init segment's audio track states no channel count, rate or \
+                             pre-skip, so no bag can be spelled from its fragments"
+                        );
+                        continue;
+                    };
+                    if self.audio_track_reconstitution.is_some() {
+                        tracing::warn!(
+                            track_id = description.track_id,
+                            "the init segment describes a second audio track; this subscriber has \
+                             one audio port, so the later description is ignored"
+                        );
+                        continue;
+                    }
+                    self.audio_track_reconstitution = Some(CmafAudioTrackReconstitution {
+                        codec: description.wire_codec.unwrap_or_else(|| "opus".to_owned()),
+                        media_timescale_hz,
+                        channels,
+                        sample_rate,
+                        pre_skip,
+                        ordering_pair_counter: SubscriberMintedOrderingPairCounter::default(),
+                        stamp_anchor: None,
+                    });
                 }
-                self.audio_track_reconstitution = Some(CmafAudioTrackReconstitution {
-                    codec: description.codec,
-                    media_timescale_hz,
-                    channels: opus_parameters.channels,
-                    sample_rate: opus_parameters.sample_rate,
-                    pre_skip: opus_parameters.pre_skip,
-                    ordering_pair_counter: SubscriberMintedOrderingPairCounter::default(),
-                    stamp_anchor: None,
-                });
-            } else {
-                tracing::warn!(
-                    track_id = description.track_id,
-                    codec = %description.codec,
-                    "the init segment describes a track this subscriber cannot reconstitute a \
-                     bag from; its fragments will be refused if any arrive"
-                );
             }
         }
         self.the_init_segment_has_arrived = true;
