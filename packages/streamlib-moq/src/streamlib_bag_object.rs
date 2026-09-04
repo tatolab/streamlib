@@ -117,27 +117,27 @@ pub(crate) fn decode_object(
     payload: &[u8],
     expected_medium: TrackMedium,
 ) -> Result<EncodedMediaSample> {
-    let probe: MediumProbeOnTheWire = rmp_serde::from_slice(payload).map_err(|failure| {
-        MoqExtensionError::MalformedObject {
+    let probe: MediumProbeOnTheWire =
+        rmp_serde::from_slice(payload).map_err(|failure| MoqExtensionError::MalformedObject {
             container: STREAMLIB_BAG_PACKAGING,
             what: format!("the object is not a named map of bag keys: {failure}"),
-        }
-    })?;
-    let codec = probe.codec.ok_or_else(|| MoqExtensionError::MalformedObject {
-        container: STREAMLIB_BAG_PACKAGING,
-        what: "the object names no `codec`, so no decoder can be chosen for its bitstream"
-            .to_owned(),
-    })?;
+        })?;
+    let codec = probe
+        .codec
+        .ok_or_else(|| MoqExtensionError::MalformedObject {
+            container: STREAMLIB_BAG_PACKAGING,
+            what: "the object names no `codec`, so no decoder can be chosen for its bitstream"
+                .to_owned(),
+        })?;
 
-    let carried_medium = medium_of_codec(&codec).ok_or_else(|| {
-        MoqExtensionError::MalformedObject {
+    let carried_medium =
+        medium_of_codec(&codec).ok_or_else(|| MoqExtensionError::MalformedObject {
             container: STREAMLIB_BAG_PACKAGING,
             what: format!(
                 "the object names codec `{codec}`, which this subscriber does not carry — it \
                  reads {VIDEO_CODECS_ON_THE_WIRE:?} and {AUDIO_CODECS_ON_THE_WIRE:?}"
             ),
-        }
-    })?;
+        })?;
     if carried_medium != expected_medium {
         return Err(MoqExtensionError::MalformedObject {
             container: STREAMLIB_BAG_PACKAGING,
@@ -154,17 +154,19 @@ pub(crate) fn decode_object(
         TrackMedium::Video => {
             let on_the_wire: VideoObjectOnTheWire =
                 rmp_serde::from_slice(payload).map_err(malformed_for(TrackMedium::Video))?;
-            Ok(EncodedMediaSample::VideoAccessUnit(EncodedVideoAccessUnit {
-                codec: on_the_wire.codec,
-                annex_b_access_unit: bytes::Bytes::from(on_the_wire.annex_b_access_unit),
-                is_sync_point: on_the_wire.is_sync_point,
-                group_index: on_the_wire.group_index,
-                sequence_index: on_the_wire.sequence_index,
-                width: on_the_wire.width,
-                height: on_the_wire.height,
-                color: on_the_wire.color,
-                timestamp_ns: on_the_wire.timestamp_ns,
-            }))
+            Ok(EncodedMediaSample::VideoAccessUnit(
+                EncodedVideoAccessUnit {
+                    codec: on_the_wire.codec,
+                    annex_b_access_unit: bytes::Bytes::from(on_the_wire.annex_b_access_unit),
+                    is_sync_point: on_the_wire.is_sync_point,
+                    group_index: on_the_wire.group_index,
+                    sequence_index: on_the_wire.sequence_index,
+                    width: on_the_wire.width,
+                    height: on_the_wire.height,
+                    color: on_the_wire.color,
+                    timestamp_ns: on_the_wire.timestamp_ns,
+                },
+            ))
         }
         TrackMedium::Audio => {
             let on_the_wire: AudioObjectOnTheWire =

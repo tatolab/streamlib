@@ -72,7 +72,8 @@ impl CmafTrackTimeline {
         CmafSamplePlacement {
             decode_time: rescale_nanoseconds(since_epoch_ns, self.timescale_hz),
             duration: rescale_nanoseconds(
-                self.newest_gap_ns.unwrap_or(NOMINAL_FIRST_SAMPLE_DURATION_NS),
+                self.newest_gap_ns
+                    .unwrap_or(NOMINAL_FIRST_SAMPLE_DURATION_NS),
                 self.timescale_hz,
             )
             .max(1) as u32,
@@ -119,7 +120,10 @@ mod tests {
     fn opus_rescaling_lands_on_whole_samples() {
         // 20 ms at 48 kHz is exactly 960 samples, the Opus frame every
         // encoder in this tree mints.
-        assert_eq!(rescale_nanoseconds(20_000_000, OPUS_TRACK_TIMESCALE_HZ), 960);
+        assert_eq!(
+            rescale_nanoseconds(20_000_000, OPUS_TRACK_TIMESCALE_HZ),
+            960
+        );
     }
 
     #[test]

@@ -163,7 +163,12 @@ mod tests {
         let namespace = config("https://relay.example/t", "/streamlib/abc")
             .namespace()
             .expect("the leading slash is trimmed, not carried");
-        assert_eq!(namespace, config("https://r.example/t", "streamlib/abc").namespace().unwrap());
+        assert_eq!(
+            namespace,
+            config("https://r.example/t", "streamlib/abc")
+                .namespace()
+                .unwrap()
+        );
     }
 
     #[test]

@@ -78,7 +78,8 @@ impl AnnexBNalHeaderGrammar {
         match self {
             Self::H264 => matches!(
                 nal_unit_type,
-                H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET | H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET
+                H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET
+                    | H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET
             ),
             Self::H265 => matches!(
                 nal_unit_type,

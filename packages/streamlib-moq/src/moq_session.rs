@@ -62,9 +62,7 @@ const OBJECTS_WAITING_FOR_THE_PROCESSOR: usize = 256;
 /// as the WebTransport subprotocol. There is no certificate-verification
 /// bypass: the 0.14 path had one, and a dial that turns verification off is a
 /// dial.
-async fn connect_web_transport_session(
-    dial_url: url::Url,
-) -> Result<web_transport::Session> {
+async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transport::Session> {
     let provider = web_transport::quinn::crypto::default_provider();
 
     let mut roots = rustls::RootCertStore::empty();
@@ -93,11 +91,12 @@ async fn connect_web_transport_session(
         .with_no_client_auth();
     crypto.alpn_protocols = vec![web_transport::quinn::ALPN.as_bytes().to_vec()];
 
-    let quic_crypto = quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(
-        |failure| MoqExtensionError::Transport {
-            what: format!("the QUIC client config could not be built: {failure}"),
-        },
-    )?;
+    let quic_crypto =
+        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(|failure| {
+            MoqExtensionError::Transport {
+                what: format!("the QUIC client config could not be built: {failure}"),
+            }
+        })?;
     let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(Some(QUIC_KEEP_ALIVE_INTERVAL));
@@ -498,7 +497,7 @@ impl MoqBroadcastSubscribingSession {
 /// is the order that leaves here.
 async fn drain_one_track(
     track_name: String,
-    mut reader: moq_transport::serve::TrackReader,
+    reader: moq_transport::serve::TrackReader,
     sender: tokio::sync::mpsc::Sender<DrainedObject>,
 ) {
     let mut subgroups = match reader.mode().await {
@@ -552,7 +551,10 @@ async fn drain_one_track(
 
         match step {
             DrainStep::AnObjectArrived(payload) => {
-                if send_one_object(&track_name, &sender, payload).await.is_err() {
+                if send_one_object(&track_name, &sender, payload)
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -564,7 +566,10 @@ async fn drain_one_track(
                     while superseded.pos() < superseded.len() {
                         match superseded.read_next().await {
                             Ok(Some(payload)) => {
-                                if send_one_object(&track_name, &sender, payload).await.is_err() {
+                                if send_one_object(&track_name, &sender, payload)
+                                    .await
+                                    .is_err()
+                                {
                                     return;
                                 }
                             }
