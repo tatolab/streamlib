@@ -93,6 +93,28 @@ tests, rig proofs and a Python surface would cost a rewrite each to become exten
 user-visible gain. The rule changes going forward; the record of what shipped under the old rule
 is kept as a record.
 
+## Why the hook runs in both processes and fails hard
+
+The engine lives in the app process; the processor runs in its helper. A tokio runtime or a
+device library brought up in one is not up in the other, and "like loading a driver" means
+once per process that needs it. The helper already has the slot: the wheel is imported before
+the processor's module by CPython's own package semantics, and the helper host installs its
+log channel before that import precisely so anything the import raises is reportable — the
+hook sits in that gap. Failing hard follows the engine's own sealed init-hook shape, which
+fails runtime creation on any hook error and caches the failure: an extension that half
+loaded would surface later as a processor that mysteriously cannot do its job, which is the
+worse outcome.
+
+## Why the wheels are standalone rather than workspace members
+
+A first-party extension built as a member of the engine workspace would share the engine's
+lockfile, pins and release cadence — first-party being special again, which is the shape
+the pivot retires. Built standalone, `streamlib-webrtc` is built exactly as a third party
+would build one: its own workspace root, its own lockfile, a dependency on the published
+`streamlib` wheel by version. What that costs — the engine workspace's gates do not walk it,
+and it needs its own CI lane and its own stub gate — is the cost every third party already
+pays, and paying it first-party is how those lanes get built.
+
 ## Rejected alternatives
 
 - **Keep building capabilities into the engine** — every optional feature makes every user
@@ -110,6 +132,11 @@ is kept as a record.
   the distribution shape while building a decoder nobody would run.
 - **Move the twelve built-ins out to extensions as part of this pivot** — churn without gain;
   the criterion governs the next one, not the last twelve.
+- **Extension wheels as engine-workspace members** — gates would walk them for free, but they
+  would be built unlike any third party's wheel, and the mechanism would never be proven in the
+  shape it is meant for.
+- **Skip-and-log when a support hook fails** — leaves the engine running with a capability half
+  present; the engine's own init hooks already fail hard, and an extension gets no gentler rule.
 
 ## Consequences
 

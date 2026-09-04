@@ -33,6 +33,15 @@ wheel).
 runs in native code the same wheel carries and which it calls directly; `rt.add(TheClass)`
 is its registration and it runs in its own helper like any Python processor.
 
+**Support hook**: the one callable a capability extension exports (`load(host)`) that the
+engine runs once in every process taking an engine role. _Avoid_: "plugin init",
+"entry point" for the callable (that is how it is declared, not what it is).
+
+**Edge I/O processor**: a source or sink processor that ingests or egresses an
+external-world stream at a runtime boundary — WebRTC, MoQ, raw UDP. Not the
+runtime-to-runtime fabric. _Avoid_: "transport processor", "network transport" (that is
+the fabric's word).
+
 **Capability extension**: an extension wheel's support code — declared by a standard entry
 point in its `pyproject.toml` that pip records and the engine runs once at startup, like
 loading a driver — which may bring up a device or network stack, or introduce an

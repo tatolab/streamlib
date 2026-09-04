@@ -112,16 +112,41 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   done as engine code inside the extension's own change, rather than by the extension
   reaching past the surface. Known gaps at the pivot: a Python compute dispatch cannot
   bind a storage buffer, and codec sessions are not exported to Python. [extension-model]
-- **OPEN** — The capability-extension mechanism's architecture: the entry-point group
-  and the hook's signature, what the sandboxed object handed to the hook offers, what an
-  extension may register and how an engine-grade capability it introduces is reached, where
-  the hook runs (the app process at startup, each helper at spawn, or both — the driver
-  analogy suggests once per process that takes an engine role), the sandbox boundary that
-  keeps two packages from colliding, how a registered capability renders in `graph`, and
-  the shape of a Rust-side extension SDK (typed wrappers over the engine's Python objects,
-  depending on `pyo3` and never on the engine). Every spelling named in the entry above is
-  a best guess that this OPEN owns; the networking align decides it on the first real
-  extension, and implementation is expected to move it. [extension-model]
+- **DECIDED** — The capability-extension mechanism, decided on the first real extension
+  and expected to move where implementation teaches otherwise. The entry-point group is
+  `streamlib.extensions`; an entry names one callable the wheel exports, `load(host)`.
+  The engine runs every installed hook once per process that takes an engine role: in
+  the app process when `Runtime()` is constructed, and in each helper after the wheel is
+  imported and the log channel is up but before the processor's module is imported — so
+  a failing hook is reportable through the normal channel, and a stack the hook brings
+  up exists in the process where `process()` runs. `host` is a small bounded object: it
+  says which role the process has, and it takes `register_capability(name, version)` — a
+  registry the wheel owns, because native processor registration is reachable only from
+  Rust that links the engine, which an extension by construction does not. Doors on
+  `host` grow only when an extension needs one, as engine code inside that extension's
+  change. A hook that raises fails the runtime's construction in the app process and
+  fails that processor's start by name in a helper — the posture the engine's own init
+  hooks already take — rather than skipping and logging, since an extension that half
+  loaded is worse than one that refused. Two wheels registering one capability name
+  refuse by name at startup. `graph` carries what loaded, as a third top-level key beside
+  `nodes` and `links`: one entry per capability with its name, version and distribution.
+  There is no per-app opt-out yet; the first app that needs one gets it as a one-line
+  addition. [extension-model]
+- **DECIDED** — An extension wheel is built the way a third party would build one, which
+  is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
+  with its own workspace root and lockfile — not a member of the engine workspace —
+  depending on the published `streamlib` wheel by version and on `pyo3`, and on no engine
+  crate; independently versioned and released; published through the same simple index
+  the wheel uses, which becomes multi-project to carry it. Distribution names take the
+  `streamlib-<capability>` form and imports `streamlib_<capability>`. Its gates are its
+  own CI lane — stubtest over its own `.pyi`, pyright, the portability gate — since the
+  engine workspace's gates do not walk a non-member. A Rust-side extension SDK is not
+  owed by the first two extensions, whose Rust handles bytes and no engine object; it
+  lands with the first extension that needs one. [extension-model]
+- **OPEN** — How an engine-grade capability an extension introduces — a specialised
+  graphics pass, a device class — is reached by processors and by the engine. Undecided
+  until an extension brings one: the first two register a name and bring up a network
+  stack, which is all the mechanism has to carry so far. [extension-model]
 - **OPEN** — Whether an extension's native code may ever be called in the app process
   rather than in its helper — a Rust-implemented class reached through the CPython API
   with the GIL released on entry. The placement rule stands unchanged: every Python
@@ -340,9 +365,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   closed-source Rust processors for Rust apps are deliberately not a path — a
   closed-source vendor ships the Python package whose native internals expose handles.
   What the extension-model pivot adds is not distribution but *registration*: the
-  capability extension's one explicit line in `app.py`, which §Packages & extension
-  model owns and the networking align decides. [consumer-tree-disposition — SHIPPED;
-  extension-model — the registration door is the one addition, 2026-09-04]
+  capability extension's support hook, declared by a standard entry point pip records
+  and the engine runs once per process, which §Packages & extension model owns.
+  [consumer-tree-disposition — SHIPPED; extension-model — the registration door is the
+  one addition, 2026-09-04]
 - **DECIDED** — Lag-by-design ends for a converted consumer: when an engine change
   breaks one, the breakage is filed as tracked backlog at the consumer and never
   blocks the engine change.
@@ -1727,10 +1753,27 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   runtime-to-runtime fabric. The held consumers `packages/{moq,webrtc}` and
   `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolve through the
   networking align per §Consumers. [extension-model]
-- **OPEN** — Everything else: the block shapes, the capability-extension surface
-  networking needs (and the sandbox and entry-point hook it is the first to exercise),
-  and — as later work, after the WebRTC/MoQ move — mesh discovery and the cross-host
-  fabric (Zenoh). The networking align decides the first two, on the extension model.
+- **DECIDED** — Both wheels sit on the encoded side of the codec blocks and touch no
+  raw frame, surface or GPU: `WhipPublisher` and `MoqPublishTrack` consume
+  `EncodedVideoFrame` and `EncodedAudioPacket` bags downstream of `H264Encoder` and
+  `OpusEncoder`; `WhepPlayer` and `MoqSubscribeTrack` emit the same bags upstream of
+  `H264Decoder` and `OpusDecoder`. Audio is in scope for both from the first rung. The
+  four are ordinary processor extensions — `@processor` classes in the wheel calling the
+  wheel's own Rust — each in its own helper, on the tokio runtime the wheel's support
+  hook brought up. [extension-model]
+- **DECIDED** — MoQ carries the ordering pair the delivery-profile decision chose for
+  it: `group_index` names the MoQ group and `sequence_index` the object within it, a
+  sync point opening a group; the subscriber writes the pair back onto the bag unchanged
+  so a decoder's sync-point gate behaves as it does over a local link. [extension-model]
+- **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
+  inbound link, named by the link's channel, and derives its catalog or session media
+  description from them; a subscriber or player declares its tracks in config and
+  exposes one output port per track. Endpoint, credential and track configuration is
+  ticket-level, as for every built-in's config. [extension-model]
+- **OPEN** — The live proof's target (an external relay and WHIP endpoint, or a relay run
+  on the rig), and what the control plane keeps if it turns out to depend on
+  `runtime/streamlib-moq` — both waiting on facts in this align. Later work, after the
+  move: mesh discovery and the cross-host fabric (Zenoh).
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
