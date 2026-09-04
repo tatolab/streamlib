@@ -23,9 +23,11 @@ its own length and then stops, which is a legal recording — a `moof` owes a
 `traf` to no track — so the audio track is shorter than the video one by
 design.
 
-The sink is named `recorder` and the encoders `video_encoder` and
-`audio_encoder`, because the fixture script derives what it inspects from the
-live graph by display name.
+The display names are for reading a run: they are what this node's own log
+lines and `streamlib graph` show. Nothing downstream keys on them — a track is
+named by the channel its link subscribed to, which carries the engine-minted
+processor id, so `e2e_fixture_recording.sh` checks the recorded track names by
+their `/encoded_video` and `/encoded_audio` suffixes instead.
 """
 
 import argparse

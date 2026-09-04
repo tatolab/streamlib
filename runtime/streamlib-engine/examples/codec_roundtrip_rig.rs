@@ -75,7 +75,9 @@ mod linux_rig {
     use streamlib::sdk::media_clock::MediaClock;
     use streamlib::sdk::processors::ContinuousProcessor;
     use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
-    use streamlib_media_builtins::mp4_annex_b_access_unit::NAL_UNIT_LENGTH_PREFIX_BYTES;
+    use streamlib_media_builtins::mp4_annex_b_access_unit::{
+        NAL_UNIT_LENGTH_PREFIX_BYTES, annex_b_access_unit_from_length_prefixed_sample,
+    };
     use streamlib_media_builtins::video_frame::{
         ColorInfo, Primaries, Range, Transfer, VideoFrame,
     };
@@ -412,11 +414,6 @@ mod linux_rig {
     /// What `--source` prefixes a recording's path with.
     const RECORDED_MP4_SOURCE_PREFIX: &str = "mp4:";
 
-    /// The Annex-B start code every NAL unit is re-prefixed with on the way
-    /// out of a sample. Three and four bytes are both legal and a decoder
-    /// reads either (ITU-T H.264 Annex B), so the width here is free.
-    const ANNEX_B_START_CODE: [u8; 4] = [0, 0, 0, 1];
-
     /// `sample_is_non_sync_sample`, ISO/IEC 14496-12 §8.8.3.1. A sample whose
     /// flags leave it clear is a sync sample.
     const SAMPLE_FLAG_IS_NON_SYNC_SAMPLE: u32 = 0x0001_0000;
@@ -458,10 +455,11 @@ mod linux_rig {
     pub struct RecordedMp4TrackReplaySourceConfig {
         /// The recording to replay.
         recording_path: String,
-        /// The wire codec the rig's decoder was built for. The file names its
-        /// own, so a mismatch is refused at `setup()` naming both rather than
-        /// reaching a decoder that would refuse every bag.
-        expected_codec: String,
+        /// The codec the rig's decoder was built for. The file names its own,
+        /// so a mismatch is refused at `setup()` naming both rather than
+        /// reaching a decoder that would refuse every bag. `Option` only
+        /// because a processor config owes a `Default`.
+        expected_codec: Option<EncodedVideoCodec>,
     }
 
     /// Every top-level `moov` and `moof` in a recording, each fragment paired
@@ -527,6 +525,17 @@ mod linux_rig {
         Ok((moov, fragments))
     }
 
+    /// An `hvcC`'s parameter sets, VPS before SPS before PPS.
+    fn parameter_sets_ordered_by_nal_unit_type(arrays: &[mp4_atom::HvcCArray]) -> Vec<Vec<u8>> {
+        let mut by_type: Vec<&mp4_atom::HvcCArray> = arrays.iter().collect();
+        by_type.sort_by_key(|array| array.nal_unit_type);
+        by_type
+            .into_iter()
+            .flat_map(|array| array.nalus.iter())
+            .cloned()
+            .collect()
+    }
+
     /// Read the first video track's sample entry, or say why the recording
     /// holds nothing this rig can replay.
     fn read_video_sample_entry(
@@ -552,16 +561,13 @@ mod linux_rig {
                     codec: EncodedVideoCodec::H265,
                     coded_width: u32::from(hvc1.visual.width),
                     coded_height: u32::from(hvc1.visual.height),
-                    // The arrays are written VPS, SPS, PPS and read back in
-                    // that order, which is the order they go back in front of
-                    // a sync sample.
-                    parameter_set_nal_units: hvc1
-                        .hvcc
-                        .arrays
-                        .iter()
-                        .flat_map(|array| array.nalus.iter())
-                        .cloned()
-                        .collect(),
+                    // Ordered by `nal_unit_type` rather than by the order the
+                    // arrays appear: 14496-15 fixes neither, and ascending
+                    // type is exactly VPS 32, SPS 33, PPS 34 — what a decoder
+                    // wants in front of a sync sample.
+                    parameter_set_nal_units: parameter_sets_ordered_by_nal_unit_type(
+                        &hvc1.hvcc.arrays,
+                    ),
                     nal_unit_length_prefix_bytes: hvc1.hvcc.length_size_minus_one + 1,
                 },
                 _ => continue,
@@ -586,55 +592,6 @@ mod linux_rig {
             "RecordedMp4TrackReplaySource: {recording_path} holds no `avc1` or `hvc1` track, so \
              there is no video to replay"
         )))
-    }
-
-    /// One length-prefixed sample back into the Annex-B access unit the
-    /// encoder published.
-    ///
-    /// The parameter sets go back in front of every sync sample because
-    /// 14496-15 forbids them inside a sample under `avc1`/`hvc1` — the sink
-    /// stripped exactly these on the way in, and the encoder had prepended
-    /// them to every IDR.
-    fn annex_b_access_unit_from_sample(
-        sample_bytes: &[u8],
-        sample_entry: &RecordedVideoSampleEntry,
-        is_sync_point: bool,
-        recording_path: &str,
-    ) -> Result<Vec<u8>> {
-        let mut access_unit = Vec::with_capacity(sample_bytes.len());
-        if is_sync_point {
-            for parameter_set in &sample_entry.parameter_set_nal_units {
-                access_unit.extend_from_slice(&ANNEX_B_START_CODE);
-                access_unit.extend_from_slice(parameter_set);
-            }
-        }
-
-        let prefix_bytes = usize::from(sample_entry.nal_unit_length_prefix_bytes);
-        let mut at = 0;
-        while at < sample_bytes.len() {
-            let length_prefix = sample_bytes
-                .get(at..at + prefix_bytes)
-                .ok_or_else(|| truncated_sample(recording_path))?;
-            at += prefix_bytes;
-            let nal_unit_bytes = length_prefix
-                .iter()
-                .fold(0usize, |length, byte| (length << 8) | usize::from(*byte));
-            let nal_unit = sample_bytes
-                .get(at..at + nal_unit_bytes)
-                .ok_or_else(|| truncated_sample(recording_path))?;
-            at += nal_unit_bytes;
-            access_unit.extend_from_slice(&ANNEX_B_START_CODE);
-            access_unit.extend_from_slice(nal_unit);
-        }
-        Ok(access_unit)
-    }
-
-    fn truncated_sample(recording_path: &str) -> Error {
-        Error::Runtime(format!(
-            "RecordedMp4TrackReplaySource: a sample in {recording_path} declares a NAL unit \
-             longer than the sample itself, so the track is not the length-prefixed shape its \
-             sample entry claims"
-        ))
     }
 
     /// Read a recording's video track back into the access units that made it.
@@ -668,12 +625,29 @@ mod linux_rig {
                 .iter()
                 .filter(|traf| traf.tfhd.track_id == video_track_id)
             {
+                // What `trun.data_offset` is measured from — the `moof` under
+                // `default_base_is_moof`, an absolute position under
+                // `base_data_offset`. A fragment that states neither leaves the
+                // offset meaning nothing, and reading it as either would hand
+                // the decoder some other track's bytes and present as a decode
+                // failure. 14496-12 §8.8.7.
+                let sample_offset_base = match (
+                    track_fragment.tfhd.base_data_offset,
+                    track_fragment.tfhd.default_base_is_moof,
+                ) {
+                    (Some(base_data_offset), _) => base_data_offset as i64,
+                    (None, true) => *moof_start as i64,
+                    (None, false) => {
+                        return Err(Error::Runtime(format!(
+                            "RecordedMp4TrackReplaySource: a fragment in {recording_path} states \
+                             neither `base_data_offset` nor `default_base_is_moof`, so its \
+                             `trun.data_offset` is measured from nothing this reader can name"
+                        )));
+                    }
+                };
                 for run in &track_fragment.trun {
-                    let mut at = i64::try_from(*moof_start)
-                        .ok()
-                        .and_then(|start| {
-                            start.checked_add(i64::from(run.data_offset.unwrap_or(0)))
-                        })
+                    let mut next_sample_start_in_file = sample_offset_base
+                        .checked_add(i64::from(run.data_offset.unwrap_or(0)))
                         .and_then(|offset| usize::try_from(offset).ok())
                         .ok_or_else(|| {
                             Error::Runtime(format!(
@@ -694,7 +668,10 @@ mod linux_rig {
                                 ))
                             })? as usize;
                         let sample_bytes = file_bytes
-                            .get(at..at + sample_bytes_length)
+                            .get(
+                                next_sample_start_in_file
+                                    ..next_sample_start_in_file + sample_bytes_length,
+                            )
                             .ok_or_else(|| {
                                 Error::Runtime(format!(
                                     "RecordedMp4TrackReplaySource: a fragment in \
@@ -702,7 +679,7 @@ mod linux_rig {
                                      recording truncated mid-`mdat`"
                                 ))
                             })?;
-                        at += sample_bytes_length;
+                        next_sample_start_in_file += sample_bytes_length;
 
                         let sample_flags = entry
                             .flags
@@ -710,13 +687,26 @@ mod linux_rig {
                             .or(default_sample_flags_from_trex)
                             .unwrap_or(0);
                         let is_sync_point = sample_flags & SAMPLE_FLAG_IS_NON_SYNC_SAMPLE == 0;
+                        // A sync sample takes the sample entry's sets back in
+                        // front of it; a non-sync sample takes none, which is
+                        // what the encoder published.
+                        let parameter_sets_this_sample_needs: &[Vec<u8>] = if is_sync_point {
+                            &sample_entry.parameter_set_nal_units
+                        } else {
+                            &[]
+                        };
                         access_units.push(ReplayableAccessUnit {
-                            annex_b_access_unit_bytes: annex_b_access_unit_from_sample(
-                                sample_bytes,
-                                &sample_entry,
-                                is_sync_point,
-                                recording_path,
-                            )?,
+                            annex_b_access_unit_bytes:
+                                annex_b_access_unit_from_length_prefixed_sample(
+                                    sample_bytes,
+                                    parameter_sets_this_sample_needs,
+                                )
+                                .map_err(|refusal| {
+                                    Error::Runtime(format!(
+                                        "RecordedMp4TrackReplaySource: a sample in \
+                                         {recording_path}: {refusal}"
+                                    ))
+                                })?,
                             is_sync_point,
                         });
                     }
@@ -754,17 +744,22 @@ mod linux_rig {
     impl ContinuousProcessor for RecordedMp4TrackReplaySource::Processor {
         fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             let replay = demux_recorded_video_track(&self.config.recording_path)?;
-            let recorded_codec = replay.sample_entry.codec.as_wire_str();
-            if recorded_codec != self.config.expected_codec {
+            let recorded_codec = replay.sample_entry.codec;
+            if self.config.expected_codec != Some(recorded_codec) {
                 return Err(Error::Runtime(format!(
-                    "RecordedMp4TrackReplaySource: {} holds a `{recorded_codec}` track and this \
-                     run wired the `{}` decoder — run the arm with `--codec {recorded_codec}`",
-                    self.config.recording_path, self.config.expected_codec,
+                    "RecordedMp4TrackReplaySource: {} holds a `{}` track and this run wired the \
+                     `{}` decoder — run the arm with `--codec {}`",
+                    self.config.recording_path,
+                    recorded_codec.as_wire_str(),
+                    self.config
+                        .expected_codec
+                        .map_or("none", EncodedVideoCodec::as_wire_str),
+                    recorded_codec.as_wire_str(),
                 )));
             }
             tracing::info!(
                 recording = self.config.recording_path,
-                codec = recorded_codec,
+                codec = recorded_codec.as_wire_str(),
                 access_units = replay.access_units.len(),
                 sync_points = replay
                     .access_units
@@ -789,10 +784,11 @@ mod linux_rig {
         }
 
         fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-            let Some(replay) = self.replay.as_ref() else {
+            let published_so_far = self.access_units_published;
+            let Some(replay) = self.replay.as_mut() else {
                 return Ok(());
             };
-            let Some(access_unit) = replay.access_units.get(self.access_units_published) else {
+            let Some(access_unit) = replay.access_units.get_mut(published_so_far) else {
                 return Ok(());
             };
 
@@ -801,12 +797,17 @@ mod linux_rig {
             }
             let frame = EncodedVideoFrame {
                 codec: replay.sample_entry.codec,
-                annex_b_access_unit_bytes: access_unit.annex_b_access_unit_bytes.clone(),
+                // Taken rather than cloned: the recording is replayed once
+                // through, so nothing reads an access unit twice. A looping
+                // arm would have to copy again.
+                annex_b_access_unit_bytes: std::mem::take(
+                    &mut access_unit.annex_b_access_unit_bytes,
+                ),
                 is_sync_point: access_unit.is_sync_point,
                 // The first access unit is a sync point, so the first group is
                 // zero and the count is one ahead of the index.
                 group_index: self.sync_points_published.saturating_sub(1),
-                sequence_index: self.access_units_published as u64,
+                sequence_index: published_so_far as u64,
                 width: replay.sample_entry.coded_width,
                 height: replay.sample_entry.coded_height,
                 // The re-prepended SPS carries the VUI the encoder minted, and
@@ -882,22 +883,22 @@ mod linux_rig {
                     arguments.source_arm = match named_source.as_str() {
                         "fixture" => RoundTripSourceArm::PsnrReferenceFixtures,
                         "camera" => RoundTripSourceArm::Camera,
-                        recorded if recorded.starts_with(RECORDED_MP4_SOURCE_PREFIX) => {
-                            let recording_path =
-                                recorded[RECORDED_MP4_SOURCE_PREFIX.len()..].to_string();
-                            if recording_path.is_empty() {
+                        named => match named.strip_prefix(RECORDED_MP4_SOURCE_PREFIX) {
+                            Some("") => {
                                 return Err(Error::Runtime(
                                     "--source mp4: names no file; it takes `mp4:<path>`".into(),
                                 ));
                             }
-                            RoundTripSourceArm::RecordedMp4File { recording_path }
-                        }
-                        unknown => {
-                            return Err(Error::Runtime(format!(
-                                "--source {unknown} is none of `fixture`, `camera` or \
-                                 `mp4:<path>`"
-                            )));
-                        }
+                            Some(recording_path) => RoundTripSourceArm::RecordedMp4File {
+                                recording_path: recording_path.to_string(),
+                            },
+                            None => {
+                                return Err(Error::Runtime(format!(
+                                    "--source {named} is none of `fixture`, `camera` or \
+                                     `mp4:<path>`"
+                                )));
+                            }
+                        },
                     }
                 }
                 "--codec" => {
@@ -975,11 +976,7 @@ mod linux_rig {
                 app.add_local::<RecordedMp4TrackReplaySource::Processor>(
                     RecordedMp4TrackReplaySourceConfig {
                         recording_path: recording_path.clone(),
-                        expected_codec: arguments
-                            .codec_arm
-                            .encoded_video_codec()
-                            .as_wire_str()
-                            .to_string(),
+                        expected_codec: Some(arguments.codec_arm.encoded_video_codec()),
                     },
                     Some("mp4_replay"),
                 )?
@@ -993,13 +990,15 @@ mod linux_rig {
         // generation rather than the container.
         let encoder = match arguments.source_arm {
             RoundTripSourceArm::RecordedMp4File { .. } => None,
-            _ => Some(app.add(
-                encoder_class_import_path,
-                serde_json::json!({
-                    "keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS
-                }),
-                Some("encoder"),
-            )?),
+            RoundTripSourceArm::PsnrReferenceFixtures | RoundTripSourceArm::Camera => {
+                Some(app.add(
+                    encoder_class_import_path,
+                    serde_json::json!({
+                        "keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS
+                    }),
+                    Some("encoder"),
+                )?)
+            }
         };
         let decoder = app.add(
             decoder_class_import_path,

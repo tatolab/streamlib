@@ -2,13 +2,19 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Annex-B access units into the length-prefixed samples an `avc1`/`hvc1`
-//! track carries, and the parameter sets its sample entry is built from.
+//! track carries, and the parameter sets its sample entry is built from —
+//! and back again.
 //!
 //! ISO/IEC 14496-15 forbids in-band parameter sets under `avc1` and `hvc1`
 //! — they belong in the sample entry's `avcC`/`hvcC` and nowhere else — so
 //! the walk below sorts each access unit's NAL units into the two piles the
 //! container wants them in: parameter sets out to the configuration record,
 //! everything else 4-byte length-prefixed into the sample.
+//!
+//! [`annex_b_access_unit_from_length_prefixed_sample`] is that walk run
+//! backwards, for a reader taking a recording apart. The two live together so
+//! a round-trip test can hold them to each other; splitting the pair across
+//! crates is what would cost that test.
 //!
 //! The start-code scan is the engine's own
 //! [`StartCodeFinder`], not a fourth splitter.
@@ -39,6 +45,12 @@ const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
 /// what `avcC.length_size` / `hvcC.length_size_minus_one` below declare, and
 /// the two must agree or every sample mis-parses.
 pub const NAL_UNIT_LENGTH_PREFIX_BYTES: u8 = 4;
+
+/// The Annex-B start code each NAL unit carries outside a container. Three
+/// and four bytes are both legal and a decoder reads either (ITU-T H.264
+/// Annex B), so the width here is free; it is stated once so the split and
+/// the join below cannot disagree about it.
+pub const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
 impl AnnexBNalHeaderGrammar {
     /// How many bytes this grammar's NAL header occupies — one for H.264
@@ -224,6 +236,73 @@ pub fn length_prefix_annex_b_access_unit(
     }
 }
 
+/// Why a sample's bytes are not the length-prefixed NAL units its sample
+/// entry says they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleIsNotLengthPrefixedNalUnits {
+    /// Where the walk ran out of bytes.
+    pub stopped_at_byte: usize,
+    /// How many bytes the sample holds.
+    pub sample_bytes: usize,
+}
+
+impl std::error::Error for SampleIsNotLengthPrefixedNalUnits {}
+
+impl std::fmt::Display for SampleIsNotLengthPrefixedNalUnits {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the sample is {} bytes and does not partition into \
+             {NAL_UNIT_LENGTH_PREFIX_BYTES}-byte length-prefixed NAL units — the walk ran out \
+             at byte {}, so the track is not the shape its `avcC`/`hvcC` declares",
+            self.sample_bytes, self.stopped_at_byte,
+        )
+    }
+}
+
+/// Convert one length-prefixed sample back into the Annex-B access unit it
+/// was made from, with `parameter_set_nal_units` back in front of it.
+///
+/// The inverse of [`length_prefix_annex_b_access_unit`]. A sync sample on its
+/// own decodes nothing — 14496-15 kept its parameter sets out in the sample
+/// entry — so a reader passes the sets from `avcC`/`hvcC` here and a
+/// non-sync sample passes none, which is what the encoder emitted.
+pub fn annex_b_access_unit_from_length_prefixed_sample(
+    length_prefixed_sample_bytes: &[u8],
+    parameter_set_nal_units: &[Vec<u8>],
+) -> Result<Vec<u8>, SampleIsNotLengthPrefixedNalUnits> {
+    let mut annex_b_access_unit_bytes = Vec::with_capacity(length_prefixed_sample_bytes.len());
+    for parameter_set in parameter_set_nal_units {
+        annex_b_access_unit_bytes.extend_from_slice(&ANNEX_B_START_CODE);
+        annex_b_access_unit_bytes.extend_from_slice(parameter_set);
+    }
+
+    let prefix_bytes = usize::from(NAL_UNIT_LENGTH_PREFIX_BYTES);
+    let mut next_nal_unit_start_in_sample = 0usize;
+    while next_nal_unit_start_in_sample < length_prefixed_sample_bytes.len() {
+        let ran_out = || SampleIsNotLengthPrefixedNalUnits {
+            stopped_at_byte: next_nal_unit_start_in_sample,
+            sample_bytes: length_prefixed_sample_bytes.len(),
+        };
+        let length_prefix = length_prefixed_sample_bytes
+            .get(next_nal_unit_start_in_sample..next_nal_unit_start_in_sample + prefix_bytes)
+            .ok_or_else(ran_out)?;
+        let declared_nal_unit_bytes = length_prefix
+            .iter()
+            .fold(0usize, |length, byte| (length << 8) | usize::from(*byte));
+        let nal_unit = length_prefixed_sample_bytes
+            .get(
+                next_nal_unit_start_in_sample + prefix_bytes
+                    ..next_nal_unit_start_in_sample + prefix_bytes + declared_nal_unit_bytes,
+            )
+            .ok_or_else(ran_out)?;
+        annex_b_access_unit_bytes.extend_from_slice(&ANNEX_B_START_CODE);
+        annex_b_access_unit_bytes.extend_from_slice(nal_unit);
+        next_nal_unit_start_in_sample += prefix_bytes + declared_nal_unit_bytes;
+    }
+    Ok(annex_b_access_unit_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +443,120 @@ mod tests {
             300
         );
         assert_eq!(bytes.len(), 4 + 2 + 4 + 300);
+    }
+
+    /// The pair held to each other: split an access unit the way the sink
+    /// does, then join it the way a reader does, and land on the bytes the
+    /// encoder published. This is the only test that can catch the two
+    /// drifting apart, which is why they live in one module.
+    #[test]
+    fn a_sync_points_sample_and_its_parameter_sets_rejoin_into_the_access_unit_they_came_from() {
+        let sequence_parameter_set: &[u8] = &[0x67, 0x42, 0x00, 0x1F, 0xAA, 0xBB];
+        let picture_parameter_set: &[u8] = &[0x68, 0xCE, 0x3C, 0x80];
+        let idr_slice: &[u8] = &[0x65, 0x88, 0x84, 0x00, 0x11, 0x22];
+        let published = annex_b(&[sequence_parameter_set, picture_parameter_set, idr_slice]);
+
+        let split = length_prefix_annex_b_access_unit(&published, AnnexBNalHeaderGrammar::H264);
+        // The order a sample entry hands them back in: `avcC` states its
+        // sequence sets before its picture sets.
+        let parameter_sets: Vec<Vec<u8>> = split
+            .parameter_sets
+            .sequence_parameter_set_nal_units
+            .iter()
+            .chain(split.parameter_sets.picture_parameter_set_nal_units.iter())
+            .cloned()
+            .collect();
+
+        let rejoined = annex_b_access_unit_from_length_prefixed_sample(
+            &split.length_prefixed_sample_bytes,
+            &parameter_sets,
+        )
+        .expect("the sample the splitter just wrote is length-prefixed");
+        assert_eq!(
+            rejoined, published,
+            "a recorded sync point plus its sample entry has to be the access unit the \
+             encoder published, byte for byte — that is what makes a decode-back a proof \
+             about the container rather than about a second encode"
+        );
+    }
+
+    #[test]
+    fn an_h265_sample_rejoins_with_all_three_arrays_in_front_of_it() {
+        let video_parameter_set: &[u8] = &[0x40, 0x01, 0x0C, 0x01];
+        let sequence_parameter_set: &[u8] = &[0x42, 0x01, 0x01, 0x02];
+        let picture_parameter_set: &[u8] = &[0x44, 0x01, 0xC1];
+        let coded_slice: &[u8] = &[0x26, 0x01, 0xAF, 0x00];
+        let published = annex_b(&[
+            video_parameter_set,
+            sequence_parameter_set,
+            picture_parameter_set,
+            coded_slice,
+        ]);
+
+        let split = length_prefix_annex_b_access_unit(&published, AnnexBNalHeaderGrammar::H265);
+        // `hvcC` orders its arrays by `nal_unit_type`, which is VPS 32, SPS
+        // 33, PPS 34 — the order they were published in.
+        let parameter_sets: Vec<Vec<u8>> = split
+            .parameter_sets
+            .video_parameter_set_nal_units
+            .iter()
+            .chain(split.parameter_sets.sequence_parameter_set_nal_units.iter())
+            .chain(split.parameter_sets.picture_parameter_set_nal_units.iter())
+            .cloned()
+            .collect();
+
+        let rejoined = annex_b_access_unit_from_length_prefixed_sample(
+            &split.length_prefixed_sample_bytes,
+            &parameter_sets,
+        )
+        .expect("the sample the splitter just wrote is length-prefixed");
+        assert_eq!(rejoined, published);
+    }
+
+    #[test]
+    fn a_non_sync_sample_rejoins_with_nothing_in_front_of_it() {
+        let first_slice: &[u8] = &[0x41, 0x9A, 0x00];
+        let second_slice: &[u8] = &[0x41, 0x9B, 0x01, 0x02];
+        let published = annex_b(&[first_slice, second_slice]);
+
+        let split = length_prefix_annex_b_access_unit(&published, AnnexBNalHeaderGrammar::H264);
+        assert_eq!(
+            split.parameter_sets,
+            ParameterSetsFromAnnexBAccessUnit::default(),
+            "a non-sync access unit carries no sets to strip"
+        );
+
+        let rejoined = annex_b_access_unit_from_length_prefixed_sample(
+            &split.length_prefixed_sample_bytes,
+            &[],
+        )
+        .expect("the sample the splitter just wrote is length-prefixed");
+        assert_eq!(rejoined, published);
+    }
+
+    #[test]
+    fn a_length_prefix_that_outruns_the_sample_is_refused_rather_than_truncated() {
+        // Declares 0x1000 bytes and carries two: a reader that trusted it
+        // would hand the decoder a short NAL and read the failure as the
+        // codec's.
+        let malformed_sample = [0x00, 0x00, 0x10, 0x00, 0x65, 0x88];
+
+        let refusal = annex_b_access_unit_from_length_prefixed_sample(&malformed_sample, &[])
+            .expect_err("a prefix past the end of the sample describes no NAL unit");
+        assert_eq!(refusal.sample_bytes, malformed_sample.len());
+        assert_eq!(refusal.stopped_at_byte, 0);
+    }
+
+    #[test]
+    fn a_sample_ending_mid_length_prefix_is_refused_at_the_byte_it_ran_out_on() {
+        let one_nal_unit_then_a_stub = [
+            0x00, 0x00, 0x00, 0x02, 0x41, 0x9A, // one complete NAL unit
+            0x00, 0x00, // a prefix cut short
+        ];
+
+        let refusal =
+            annex_b_access_unit_from_length_prefixed_sample(&one_nal_unit_then_a_stub, &[])
+                .expect_err("a sample cannot end part way through a length prefix");
+        assert_eq!(refusal.stopped_at_byte, 6);
     }
 }
