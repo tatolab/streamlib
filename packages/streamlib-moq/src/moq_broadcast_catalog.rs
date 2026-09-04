@@ -218,8 +218,10 @@ impl MoqBroadcastCatalog {
         Ok(bytes::Bytes::from(document))
     }
 
-    /// `moq-sub` indexes `tracks[0]` and unwraps its `initTrack`, so both are
-    /// hard requirements of the CMAF packaging rather than optional fields.
+    /// `moq-sub` indexes `tracks[0]` and unwraps its `initTrack`. A catalog
+    /// with no tracks therefore breaks any subscriber whatever the packaging;
+    /// a missing `initTrack` breaks one only where a track has an init segment
+    /// to name, which is CMAF.
     fn refuse_a_catalog_a_subscriber_would_drop_the_broadcast_on(&self) -> Result<()> {
         if self.media_tracks.is_empty() {
             return Err(MoqExtensionError::Refused {
