@@ -6,9 +6,8 @@ trait. It was split out of `vulkan-jpeg` during the plugin-SDK
 extraction and parked here, **disabled** — there is no
 `mod _nvjpeg_impl_pending_;` anywhere in the engine, so nothing in this
 directory is in the module tree and none of it compiles. It is
-reference code only, mirroring the `_apple_impl_pending_/` convention
-used elsewhere in the codebase (e.g.
-`packages/mp4/processors/_apple_impl_pending_/`).
+reference code only, and its own `_<what>_impl_pending_/` directory name
+is what says so.
 
 ## Why it was split out (and not shipped in `sdk/vulkan-jpeg`)
 
