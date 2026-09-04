@@ -12,10 +12,16 @@ every lifecycle hook.
 
 import atexit
 import weakref
+from functools import partial
 
 from . import clock as clock
 from . import log as log
+from ._capability_extensions import (
+    load_installed_capability_extensions_once_per_process,
+)
 from ._engine import AddedProcessor as AddedProcessor
+from ._engine import CapabilityExtensionHost as CapabilityExtensionHost
+from ._engine import capability_extension_host_for_the_app_process
 from ._engine import GpuContextFullAccess as GpuContextFullAccess
 from ._engine import GpuContextLimitedAccess as GpuContextLimitedAccess
 from ._engine import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
@@ -77,6 +83,7 @@ __all__ = [
     "AudioBlock",
     "AudioWindowContract",
     "CameraSource",
+    "CapabilityExtensionHost",
     "ClaimedSurfacePixelAccess",
     "ColorInfo",
     "ContentLight",
@@ -136,7 +143,13 @@ class Runtime(_NativeRuntime):
 
     def __init__(self) -> None:
         super().__init__()
+        # Registered before the hooks run, not after: a hook that raises leaves
+        # a constructed engine behind whose threads still need joining, and the
+        # `atexit` teardown below only reaches a Runtime it knows about.
         _live_runtimes.add(self)
+        load_installed_capability_extensions_once_per_process(
+            partial(capability_extension_host_for_the_app_process, self)
+        )
 
 
 @atexit.register

@@ -155,6 +155,20 @@ impl PythonRuntimeHandle {
         }
     }
 
+    /// The registry a capability extension's `load(host)` hook registers into.
+    ///
+    /// Read while the graph is being built — the hooks run inside
+    /// `Runtime.__init__`, before anything else can reach this handle. Handing
+    /// back the registry rather than the engine is deliberate: an extension
+    /// that stashes its host must not hold the engine past teardown.
+    pub(crate) fn loaded_capability_extensions(
+        &self,
+    ) -> PyResult<Arc<streamlib::sdk::runtime::LoadedCapabilityExtensionRegistry>> {
+        Ok(self
+            .engine_being_built("load capability extensions")?
+            .loaded_capability_extensions())
+    }
+
     /// Take a reference to the engine to read the graph's readiness from.
     ///
     /// Answers in both live states, not just the running one. A processor
