@@ -44,9 +44,6 @@ rustls-native-certs = "0.8.4"
 # fragmented-MP4 writer is built on, so the box layer is shared even though no
 # code is: an extension links no engine crate.
 mp4-atom = "0.15"
-# draft-ietf-moq-catalogformat-01, the catalog moq-js and moq-sub read.
-moq-catalog = "0.2.3"
-
 # The `streamlib_bag` container path: the bag's own wire keys, msgpack, with
 # `bitstream` as `bin` rather than an array of numbers.
 rmp-serde = "1.3.1"
@@ -63,6 +60,13 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
+# The reference catalog types, as a test oracle only. They are not a dependency
+# of the wheel because `TrackPackaging` is a closed `cmaf`/`loc` enum, and this
+# publisher also declares a `streamlib-bag` packaging it cannot hold — so the
+# catalog is written from this crate's own types and then proved to parse back
+# as the reference's on the CMAF path.
+moq-catalog = "0.2.3"
+serde_json = "1.0"
 
 # Not a member of the engine workspace: an extension wheel is built exactly as a
 # third party would build one, with its own root, its own lockfile and its own
