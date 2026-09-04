@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.48](https://github.com/tatolab/streamlib/compare/v0.18.47...v0.18.48) (2026-09-04)
+
+
+### Features
+
+* **engine:** the capability-extension mechanism — streamlib.extensions entry point, load(host), CapabilityExtensionHost, hard-fail, and graph's extensions key ([#2154](https://github.com/tatolab/streamlib/issues/2154)) ([fdaa090](https://github.com/tatolab/streamlib/commit/fdaa090982aa99dd7b292fa7e547980f72da1e1c))
+
 ## [0.18.47](https://github.com/tatolab/streamlib/compare/v0.18.46...v0.18.47) (2026-09-04)
 
 
