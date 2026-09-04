@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.49](https://github.com/tatolab/streamlib/compare/v0.18.48...v0.18.49) (2026-09-04)
+
+
+### Features
+
+* **extension:** streamlib-webrtc — a standalone maturin wheel with WhipPublisher and WhepPlayer on the mined clients and h264_rtp.rs ([#2156](https://github.com/tatolab/streamlib/issues/2156)) ([80e652d](https://github.com/tatolab/streamlib/commit/80e652da9f1dc48fe50f79709740c7fe2a734340))
+
 ## [0.18.48](https://github.com/tatolab/streamlib/compare/v0.18.47...v0.18.48) (2026-09-04)
 
 
