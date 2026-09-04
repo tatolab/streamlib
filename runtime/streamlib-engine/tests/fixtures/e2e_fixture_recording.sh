@@ -192,10 +192,26 @@ if ! [[ "$ORIGINAL_PATTERN" =~ ^[0-9]+$ ]]; then
 fi
 
 RUNNING_PID=""
-NEEDED_SIGKILL=0
+# How the last phase's process ended. Three outcomes, because only one of them
+# is a clean stop and the other two are different failures:
+#   stopped-cleanly  it was running, took SIGTERM, and exited inside the budget
+#   needed-sigkill   it was running, ignored SIGTERM, and had to be killed
+#   already-gone     it was not running when we went to stop it
+# `already-gone` is a failure and not a shortcut: the process crashed, or its
+# own `timeout` wrapper fired and killed it. Either way the graph never took a
+# SIGTERM, so teardown — which is what closes the last fragment — never ran,
+# and the file on disk stops at whatever the writer had already flushed.
+STOP_OUTCOME=""
+STOP_EXIT_STATUS=""
 stop_running_process() {
-    NEEDED_SIGKILL=0
-    if [ -n "$RUNNING_PID" ] && kill -0 "$RUNNING_PID" 2>/dev/null; then
+    STOP_OUTCOME="never-started"
+    STOP_EXIT_STATUS=""
+    if [ -z "$RUNNING_PID" ]; then
+        return 0
+    fi
+    if ! kill -0 "$RUNNING_PID" 2>/dev/null; then
+        STOP_OUTCOME="already-gone"
+    else
         # SIGTERM so the graph tears down the way a real stop does. For the
         # record phase that is load-bearing rather than tidy: teardown is what
         # closes the open fragment.
@@ -205,12 +221,42 @@ stop_running_process() {
             sleep 0.2
         done
         if kill -0 "$RUNNING_PID" 2>/dev/null; then
-            NEEDED_SIGKILL=1
+            STOP_OUTCOME="needed-sigkill"
             kill -9 "$RUNNING_PID" 2>/dev/null || true
+        else
+            STOP_OUTCOME="stopped-cleanly"
         fi
-        wait "$RUNNING_PID" 2>/dev/null || true
     fi
+    STOP_EXIT_STATUS=0
+    wait "$RUNNING_PID" 2>/dev/null || STOP_EXIT_STATUS=$?
     RUNNING_PID=""
+}
+
+# Every phase ends here, and only `stopped-cleanly` continues.
+require_clean_stop() {
+    local phase="$1" log_file="$2"
+    case "$STOP_OUTCOME" in
+        stopped-cleanly)
+            return 0
+            ;;
+        needed-sigkill)
+            echo "[recording] FAIL: the $phase process did not exit on SIGTERM and needed" >&2
+            echo "[recording] SIGKILL. Teardown is what closes the last fragment, so a hung" >&2
+            echo "[recording] stop is a truncated recording as well as a shutdown defect." >&2
+            ;;
+        already-gone)
+            echo "[recording] FAIL: the $phase process was already gone before it was asked" >&2
+            echo "[recording] to stop (exit status $STOP_EXIT_STATUS). It crashed, or its budget" >&2
+            echo "[recording] ran out and \`timeout\` killed it — 124 is the wrapper firing, 137" >&2
+            echo "[recording] its SIGKILL escalation. The graph never took a SIGTERM either way," >&2
+            echo "[recording] so teardown never closed the last fragment." >&2
+            ;;
+        *)
+            echo "[recording] FAIL: the $phase process was never started" >&2
+            ;;
+    esac
+    tail -30 "$log_file" >&2
+    exit 1
 }
 restore_pattern_and_stop() {
     stop_running_process
@@ -304,13 +350,7 @@ done
 echo "[recording] Landed on disk:    $RECORDED_FRAMES video samples"
 
 stop_running_process
-if [ "$NEEDED_SIGKILL" -eq 1 ]; then
-    echo "[recording] FAIL: recording_node.py did not exit on SIGTERM and needed SIGKILL." >&2
-    echo "[recording] Teardown is what closes the last fragment, so a hung stop is a" >&2
-    echo "[recording] truncated recording as well as a shutdown defect." >&2
-    tail -30 "$RECORD_LOG" >&2
-    exit 1
-fi
+require_clean_stop "recording" "$RECORD_LOG"
 
 if [ ! -s "$RECORDING_PATH" ]; then
     echo "[recording] FAIL: $RECORDING_PATH is empty or missing" >&2
@@ -466,11 +506,7 @@ fi
 echo "[recording] Captured $sample_index frames"
 
 stop_running_process
-if [ "$NEEDED_SIGKILL" -eq 1 ]; then
-    echo "[recording] FAIL: the replay rig did not exit on SIGTERM and needed SIGKILL." >&2
-    tail -30 "$REPLAY_LOG" >&2
-    exit 1
-fi
+require_clean_stop "replay" "$REPLAY_LOG"
 
 # ── Measure ──────────────────────────────────────────────────────────
 MEASURE_ARGUMENTS=(
