@@ -15,25 +15,52 @@ raising hook in the shared venv would fail every other suite's `Runtime()`.
 `extension_fixtures/README.md` says why that is still pip's registry.
 """
 
+import importlib
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from streamlib import _capability_extensions
 from streamlib._capability_extensions import (
     CapabilityExtensionLoadError,
+    load_installed_capability_extensions_once_per_process,
     run_every_installed_capability_extension_hook,
 )
 
 CAPABILITY_EXTENSION_APP = Path(__file__).parent / "capability_extension_app.py"
 EXTENSION_FIXTURES = Path(__file__).parent / "extension_fixtures"
 
+#: Every distribution `extension_fixtures/` supplies. Assertions about which
+#: hooks ran are filtered to these: discovery reads the whole environment, and
+#: a venv that happens to carry a real extension wheel — a developer building
+#: `streamlib-webrtc` beside this one — is not this suite's failure.
+FIXTURE_DISTRIBUTIONS = frozenset(
+    {
+        "streamlib-test-extension",
+        "streamlib-raising-extension",
+        "streamlib-duplicate-extension",
+        "streamlib-helper-raising-extension",
+        "streamlib-blocking-extension",
+    }
+)
+
 
 @pytest.fixture
 def capability_extension_app(start_app_under_test):
     """Starts this suite's app; the shared fixture owns the cleanup."""
     return lambda scenario: start_app_under_test(CAPABILITY_EXTENSION_APP, scenario)
+
+
+def fixture_distributions_handed_a_host(hosts) -> "list[str]":
+    """Which of this suite's own fixtures the loop reached, in call order."""
+    return [
+        host.distribution
+        for host in hosts
+        if host.distribution in FIXTURE_DISTRIBUTIONS
+    ]
 
 
 def marker_value(app, prefix: str) -> str:
@@ -170,11 +197,12 @@ def test_the_loop_hands_each_hook_a_host_carrying_its_own_distribution(
 
     run_every_installed_capability_extension_hook(mint_a_fake_helper_host)
 
-    assert [host.distribution for host in hosts_handed_to_hooks] == [
+    assert fixture_distributions_handed_a_host(hosts_handed_to_hooks) == [
         "streamlib-test-extension"
     ]
-    assert hosts_handed_to_hooks[0].role == "helper"
-    assert hosts_handed_to_hooks[0].registered == [("test-capability", "1.4.2")]
+    handed = hosts_handed_to_hooks[-1]
+    assert handed.role == "helper"
+    assert handed.registered == [("test-capability", "1.4.2")]
 
 
 def test_the_loop_stops_at_the_first_hook_that_raises(
@@ -199,7 +227,64 @@ def test_no_installed_extensions_is_not_an_error(
     """The overwhelmingly common case: nothing installed, nothing run."""
     run_every_installed_capability_extension_hook(mint_a_fake_helper_host)
 
-    assert hosts_handed_to_hooks == []
+    assert fixture_distributions_handed_a_host(hosts_handed_to_hooks) == []
+
+
+def test_hooks_still_running_hold_off_a_second_thread_rather_than_re_running(
+    monkeypatch,
+    installed_fixture_distributions,
+    mint_a_fake_helper_host,
+    hosts_handed_to_hooks,
+):
+    """Two `Runtime()`s at once must not both run the hooks.
+
+    A hook that brings a real stack up takes time, and the check-then-run in
+    `load_installed_capability_extensions_once_per_process` spans it. Without
+    the lock both threads pass the checks and both run every hook — and since
+    the second registration of one capability name is a refusal, the latch
+    would cache that refusal and fail every later `Runtime()` in the process,
+    permanently.
+
+    Deterministic, not a lucky interleaving: the fixture's hook blocks inside
+    the first call until this test releases it, so the second thread is
+    guaranteed to arrive mid-flight.
+    """
+    installed_fixture_distributions("blocking")
+    # Imported dynamically because it only exists on `sys.path` once the line
+    # above puts it there — a static import would read as an ordinary
+    # dependency of this file, which it is not.
+    blocking_extension = importlib.import_module("streamlib_blocking_extension")
+
+    # The latch is module state; leave it as this test found it.
+    monkeypatch.setattr(_capability_extensions, "_HOOKS_HAVE_RUN", False)
+    monkeypatch.setattr(_capability_extensions, "_HOOK_FAILURE", None)
+
+    def load_the_extensions() -> None:
+        load_installed_capability_extensions_once_per_process(mint_a_fake_helper_host)
+
+    try:
+        first = threading.Thread(target=load_the_extensions, name="first-runtime")
+        first.start()
+        assert blocking_extension.hook_has_been_entered.wait(timeout=30.0), (
+            "the hook never started; the fixture is not on the path"
+        )
+
+        second = threading.Thread(target=load_the_extensions, name="second-runtime")
+        second.start()
+        # The second thread is either blocked on the lock (correct) or already
+        # inside the hook (the bug). Releasing lets both finish either way, so
+        # the call count is what tells them apart.
+        blocking_extension.hook_may_return.set()
+        first.join(timeout=30.0)
+        second.join(timeout=30.0)
+        assert not first.is_alive() and not second.is_alive()
+
+        assert blocking_extension.hook_call_count == 1
+        assert fixture_distributions_handed_a_host(hosts_handed_to_hooks) == [
+            "streamlib-blocking-extension"
+        ]
+    finally:
+        blocking_extension.hook_may_return.set()
 
 
 # =============================================================================

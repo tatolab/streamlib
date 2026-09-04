@@ -18,6 +18,7 @@ processors would then fail per frame, far from the cause.
 from __future__ import annotations
 
 import importlib.metadata
+import threading
 from typing import Protocol
 
 
@@ -36,6 +37,12 @@ _HOOKS_HAVE_RUN = False
 
 #: The failure the loop ended on, re-raised rather than re-attempted.
 _HOOK_FAILURE: CapabilityExtensionLoadError | None = None
+
+#: Held across the whole check-run-record sequence below. Two threads
+#: constructing a `Runtime()` at once would otherwise both pass the checks and
+#: both run every hook — and the second registration of one capability name is
+#: a refusal, which the latch would then cache and re-raise forever.
+_RUNNING_THE_HOOKS = threading.Lock()
 
 
 def run_every_installed_capability_extension_hook(
@@ -63,21 +70,24 @@ def load_installed_capability_extensions_once_per_process(
 ) -> None:
     """Run the loop the first time only, and re-raise its failure after that.
 
-    A second `Runtime()` in one process re-runs nothing: a hook brings a stack
-    up, and bringing it up twice is what the once-per-process contract exists
-    to prevent.
+    A second `Runtime()` in one process re-runs nothing, whether it is
+    constructed after the first or alongside it: a hook brings a stack up, and
+    bringing it up twice is what the once-per-process contract exists to
+    prevent. A thread arriving while the hooks are still running waits for them
+    and then sees the result, rather than running them again.
     """
     global _HOOKS_HAVE_RUN, _HOOK_FAILURE
-    if _HOOK_FAILURE is not None:
-        raise _HOOK_FAILURE
-    if _HOOKS_HAVE_RUN:
-        return
-    try:
-        run_every_installed_capability_extension_hook(mint_host_for_distribution)
-    except CapabilityExtensionLoadError as hook_failure:
-        _HOOK_FAILURE = hook_failure
-        raise
-    _HOOKS_HAVE_RUN = True
+    with _RUNNING_THE_HOOKS:
+        if _HOOK_FAILURE is not None:
+            raise _HOOK_FAILURE
+        if _HOOKS_HAVE_RUN:
+            return
+        try:
+            run_every_installed_capability_extension_hook(mint_host_for_distribution)
+        except CapabilityExtensionLoadError as hook_failure:
+            _HOOK_FAILURE = hook_failure
+            raise
+        _HOOKS_HAVE_RUN = True
 
 
 def _distribution_name_of(entry_point: importlib.metadata.EntryPoint) -> str:
