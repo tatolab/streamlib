@@ -13,8 +13,9 @@ one wheel, one venv, PyPI — is untouched.
 Read this before reintroducing any custom distribution mechanism (module folders, install
 verbs, runtime downloading), before proposing a new dlopen/ABI extension path, before putting
 Python in a per-frame media path, or when someone asks why streamlib is a wheel and not a
-framework. An extension wheel (`extension-model.md`, 2026-09-04) is neither dlopen nor ABI —
-it is a Python package loaded across the CPython ABI — so that refusal does not cover it.
+framework. An extension wheel (`extension-model.md`, 2026-09-04) uses neither StreamLib's
+dlopen path nor its plugin ABI — it is a Python package crossing the CPython ABI like any
+wheel — so that refusal does not cover it.
 
 ## The direction, verbatim (owner-confirmed)
 
@@ -107,7 +108,8 @@ favors shipping built-ins in the shape vendors are told to use — which the han
 contract satisfies without putting Python in deadline paths.
 > Sharpened 2026-09-04 by `extension-model.md`: first-party *optional* capabilities now ship
 > *as* the shape vendors are told to use — an extension wheel — rather than merely against
-> the same primitives; only the deadline-bound and primitive-owning cases stay built-ins.
+> the same primitives; only the deadline-bound and primitive-owning cases, each with a named
+> consumer, stay built-ins.
 
 ## Rejected alternatives
 

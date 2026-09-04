@@ -34,8 +34,9 @@ and the data-collection rigs that train them.
   configuration dial in between. Your model gets the frame where it already sits.
 - **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
   proprietary driver ships as an ordinary Python package. Optional capabilities — networking
-  first — ship the same way, as extension wheels with Rust inside that pip installs and the
-  engine picks up.
+  first — ship the same way, as extension wheels with Rust inside: pip installs the wheel, the
+  engine discovers its support code, and your app adds its processors with `rt.add` like any
+  other.
   No plugin ABI, no framework headers, no vendor allowlist deciding what you're allowed to
   plug in.
 - **The execution graph is code, not a config file.** You compose it in Python at startup, so it can
@@ -230,12 +231,14 @@ binary boundary. First-party optional capabilities take that same door — an ex
 an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary. Its processors
 are added with `rt.add` like any other and call the wheel's own Rust directly; its support code
 is declared by a standard entry point that pip records and the engine runs once at startup, the
-way a driver is loaded. There is no plugin ABI, no manifest, and no lockfile.
+way a driver is loaded. There is no plugin ABI, no StreamLib manifest and no StreamLib
+lockfile — an extension wheel is an ordinary Python project with an ordinary `pyproject.toml`.
 
-**It costs you** a small set of built-ins. Camera, display, microphone, speaker, the H.264 /
-H.265 / Opus codec pair and an MP4 sink ship inside the wheel because their per-frame paths
-have deadlines a helper process cannot meet or sit on engine-only primitives; everything else
-is an extension wheel or a stage you write.
+**It costs you** a small set of built-ins. Camera, display, test pattern, microphone, speaker,
+the H.264 / H.265 / Opus codec pairs and an MP4 sink ship inside the wheel because their
+per-frame paths have deadlines a helper process cannot meet or sit on engine-only primitives,
+and each had a consumer that asked for it; everything else is an extension wheel or a stage
+you write.
 
 </details>
 

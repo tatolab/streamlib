@@ -124,7 +124,8 @@ build.
 - **Backend outside the wheel** — contradicts the decided built-ins-in-the-wheel
   entry and reintroduces lag-by-design for audio alone. (After 2026-09-04 the rejection
   rests on the criterion in `extension-model.md` — a device audio callback is a deadline
-  the helper hop cannot meet — not on a built-ins-by-default rule.)
+  the helper hop cannot meet, and the audio built-ins had a named consumer — not on a
+  built-ins-by-default rule.)
 - **Engine-clock-paced devices** — fights every backend's design and re-creates the
   clock-vs-device drift the FIXME documents.
 - **GPU-resident audio / DLPack audio handoff** — no consumer wants it at audio's

@@ -20,8 +20,8 @@ mechanism's specifics are expected to move during the align and implementation, 
 below is worded to prevent that.
 
 1. Optional capabilities ship as separate PyPI extension wheels — Rust inside for speed, a Python
-   processor as the binding — that depend on the `streamlib` wheel as a binary and never build it
-   from source.
+   processor as the binding for any processor the wheel supplies — that depend on the `streamlib`
+   wheel as a binary and never build it from source.
 2. Two mechanisms: a processor extension (a Python processor calling native code in its own
    wheel directly — no engine round trip on the data path) and a capability extension — support
    code declared by a standard entry point that pip records and the engine runs once at startup,
@@ -83,7 +83,9 @@ live behind, applied to code the engine did not ship.
 **Networking first, because it has a consumer and needs no GPU door.** WebRTC and MoQ are CPU
 and network work over encoded bags the codec blocks already publish; they exercise every piece
 of the model — a wheel with Rust inside, the entry-point support hook, the per-frame path
-through the wheel's own Rust — without first closing any primitive gap on the Python surface. Proving the model on the
+through the wheel's own Rust — without first closing any primitive gap on the Python surface.
+Every piece but one: reach into an engine-grade capability an extension introduces stays OPEN
+until an extension brings one, and neither of these does. Proving the model on the
 capability the owner most wants next is the point. The risk is accepted knowingly: if the
 mechanism has a flaw, networking finds it, and that beats finding it on a capability nobody
 asked for.
@@ -165,9 +167,9 @@ extension needs it; the move deletes the coupling and owes no route.
   needing to.
 - Rust apps with no interpreter cannot load extension wheels; they compile extensions as source
   crates. Python is the binding for optional capabilities, by the owner's statement.
-- Where the support hook runs — the app process at startup, each helper at spawn, or both — is
-  the align's to settle; the driver analogy suggests once per process that takes an engine
-  role, idempotently.
+- The support hook runs once per process that takes an engine role — the app process when
+  `Runtime()` is constructed, and each helper after the wheel is imported and the log channel
+  is up but before the processor's module imports — idempotently, the driver-load shape.
 - The placement rule is unchanged: a processor extension's Python class runs in its own helper.
   Whether its native code may ever be called in the app process is OPEN and is the owner's
   ruling to make, never a session's inference.

@@ -78,8 +78,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py -->
 - **DECIDED** — First-party optional capabilities ship the same way third-party native
   code does: as separate PyPI extension wheels — Rust inside for speed, a Python
-  processor as the binding — depending on the `streamlib` wheel as a binary and never
-  building it from source. Optional means an app can be complete without it. The engine
+  processor as the binding for any processor the wheel supplies — depending on the
+  `streamlib` wheel as a binary and never building it from source. Optional means an app can be complete without it. The engine
   is not the home of every capability; it is the home of what belongs in core. Direction
   declared by the owner 2026-09-04, superseding the general rule — carried since the
   2026-08-02 pivot and applied nine times since — that a first-party native capability is
