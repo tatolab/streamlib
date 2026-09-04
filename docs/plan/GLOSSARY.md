@@ -30,14 +30,15 @@ _Avoid_: "plugin" (pre-pivot ABI), "integration package" (retired), "built-in" (
 wheel).
 
 **Processor extension**: an extension wheel's Python processor class whose per-frame work
-runs in native code the same wheel carries; `rt.add(TheClass)` is its whole registration and
-it runs in its own helper like any Python processor.
+runs in native code the same wheel carries and which it calls directly; `rt.add(TheClass)`
+is its registration and it runs in its own helper like any Python processor.
 
-**Capability extension**: an extension wheel that extends what the engine can do — a
-transport, a sink kind, a discovery source — rather than adding a node; registered by one
-explicit line in `app.py`, never by scanning; sandboxed so two packages cannot unsafely
-alter engine features; extends only, never rewrites an engine piece. _Avoid_: "plugin"
-unqualified (say "the Vite-plugin shape" when the analogy helps).
+**Capability extension**: an extension wheel's support code — declared by a standard entry
+point in its `pyproject.toml` that pip records and the engine runs once at startup, like
+loading a driver — which may bring up a device or network stack, or introduce an
+engine-grade capability the engine does not provide (graphics processing, a transport, a
+device class; the Unreal-module shape). Sandboxed so two packages cannot unsafely alter
+engine features; extends rather than rewrites. _Avoid_: "plugin" unqualified.
 
 **Codec block**: one of the seven codec built-ins that shipped — encoder, decoder, or
 muxer inside the wheel (`H264Encoder`, `Mp4Sink`, ...), configured like any built-in; its

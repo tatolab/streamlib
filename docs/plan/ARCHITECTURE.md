@@ -84,33 +84,44 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   declared by the owner 2026-09-04, superseding the general rule — carried since the
   2026-08-02 pivot and applied nine times since — that a first-party native capability is
   a built-in. [extension-model]
-- **DECIDED** — Two extension mechanisms and no third. A *processor extension* is a
-  Python processor class in a pip-installed package whose per-frame work runs in native
-  code the same wheel carries: `rt.add(TheClass)` is its whole registration, exactly as
-  for any Python processor, it runs in its own helper process under the one placement
-  rule, and it reaches engine primitives only through the wheel's public surface. A
-  *capability extension* extends what the engine can do rather than adding a node — a
-  transport, a sink kind, a discovery source — and is registered by one explicit line in
-  `app.py`, never discovered by scanning installed distributions; it is sandboxed so that
-  no two packages can unsafely alter engine features and no extension rewrites an engine
-  piece: extending capabilities only, the Vite-plugin shape. Both compile at publish time
-  with maturin, neither dlopens into the engine, and the CPython ABI stays the only
-  binary boundary. [extension-model]
+- **DECIDED** — Two extension mechanisms, recorded as the current best understanding of
+  the shape and expected to flex during the align and implementation. A *processor
+  extension* is a Python processor class in a pip-installed package whose per-frame work
+  runs in native code the same wheel carries: `rt.add(TheClass)` is its registration, as
+  for any Python processor; it runs in its own helper process under the one placement
+  rule; and it calls its own package's Rust directly — the engine does not call extension
+  code on the data path, and there is no processor-to-engine-to-wheel round trip. A
+  *capability extension* is support code: declared by a standard entry point in the
+  wheel's `pyproject.toml` that pip records at install and the engine reads through
+  `importlib.metadata` at startup — pip's registry, not a file scan — and run once, the
+  way a driver is loaded, so that the processors in the same wheel find what they need
+  already in place. It may bring up a device library or a network stack, and it may
+  introduce an engine-grade capability the engine does not itself provide — specialised
+  graphics processing, a transport, a device class — the Unreal-module shape. It registers
+  through a sandboxed door the engine offers, so two packages cannot unsafely alter engine
+  features, and it extends rather than rewrites engine pieces. Pure Python stays a
+  complete way to write a processor; this is an additional pathway. Both compile at
+  publish time with maturin, neither is dlopen'd by the engine, and the CPython ABI stays
+  the only binary boundary. [extension-model]
 - **DECIDED** — The criterion for a built-in, stated so that the next one is
   contestable: a first-party capability ships inside the wheel only if (a) its per-frame
   path has a deadline the helper hop cannot meet — a vsync-paced present loop, a device
   audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
   not export, and in either case (c) a named consumer exists. Everything else is an
   extension. What an extension needs and the engine does not yet expose is engine work,
-  done as engine code inside the extension's own change — never by the extension reaching
-  past the surface. Known gaps at the pivot: a Python compute dispatch cannot bind a
-  storage buffer, and codec sessions are not exported to Python. [extension-model]
-- **OPEN** — The capability-extension mechanism's architecture: what an extension may
-  register, the entry-line spelling in `app.py`, the sandbox boundary that keeps two
-  packages from colliding, how a registered capability renders in `graph`, and the shape
-  of a Rust-side extension SDK (typed wrappers over the engine's Python objects, depending
-  on `pyo3` and never on the engine). Direction only; the networking align decides it on
-  the first real extension. [extension-model]
+  done as engine code inside the extension's own change, rather than by the extension
+  reaching past the surface. Known gaps at the pivot: a Python compute dispatch cannot
+  bind a storage buffer, and codec sessions are not exported to Python. [extension-model]
+- **OPEN** — The capability-extension mechanism's architecture: the entry-point group
+  and the hook's signature, what the sandboxed object handed to the hook offers, what an
+  extension may register and how an engine-grade capability it introduces is reached, where
+  the hook runs (the app process at startup, each helper at spawn, or both — the driver
+  analogy suggests once per process that takes an engine role), the sandbox boundary that
+  keeps two packages from colliding, how a registered capability renders in `graph`, and
+  the shape of a Rust-side extension SDK (typed wrappers over the engine's Python objects,
+  depending on `pyo3` and never on the engine). Every spelling named in the entry above is
+  a best guess that this OPEN owns; the networking align decides it on the first real
+  extension, and implementation is expected to move it. [extension-model]
 - **OPEN** — Whether an extension's native code may ever be called in the app process
   rather than in its helper — a Rust-implemented class reached through the CPython API
   with the GIL released on entry. The placement rule stands unchanged: every Python

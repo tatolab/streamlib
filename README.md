@@ -34,7 +34,8 @@ and the data-collection rigs that train them.
   configuration dial in between. Your model gets the frame where it already sits.
 - **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
   proprietary driver ships as an ordinary Python package. Optional capabilities — networking
-  first — ship the same way, as extension wheels with Rust inside that you name in `app.py`.
+  first — ship the same way, as extension wheels with Rust inside that pip installs and the
+  engine picks up.
   No plugin ABI, no framework headers, no vendor allowlist deciding what you're allowed to
   plug in.
 - **The execution graph is code, not a config file.** You compose it in Python at startup, so it can
@@ -226,9 +227,10 @@ Native code comes in the same door. A third-party driver — closed-source inclu
 ordinary Python package that exposes handles (file descriptors, exportable allocations, buffers)
 and is wrapped by a stage you write. It never links the engine, and the CPython ABI is the only
 binary boundary. First-party optional capabilities take that same door — an extension wheel is
-an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary, registered by
-`rt.add` on its processor class or by one explicit line in `app.py` for a capability. There is no
-plugin ABI, no manifest, no lockfile, and no scanning of what happens to be installed.
+an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary. Its processors
+are added with `rt.add` like any other and call the wheel's own Rust directly; its support code
+is declared by a standard entry point that pip records and the engine runs once at startup, the
+way a driver is loaded. There is no plugin ABI, no manifest, and no lockfile.
 
 **It costs you** a small set of built-ins. Camera, display, microphone, speaker, the H.264 /
 H.265 / Opus codec pair and an MP4 sink ship inside the wheel because their per-frame paths

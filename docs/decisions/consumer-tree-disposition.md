@@ -79,8 +79,9 @@ conversions: there is no entry-point or `pyproject.toml` registration mechanism 
 processor classes anywhere in the wheel — plain importability is the whole contract
 (side-effect-safe module, import-path identity, `rt.add(Class)`).
 > Still true for processors after 2026-09-04 (`extension-model.md`): a processor extension
-> is `rt.add(Class)` and nothing more. A *capability* extension is the one thing registered —
-> by one explicit line in `app.py`, never by scanning — and its mechanism is the align's.
+> is `rt.add(Class)` and nothing more. A *capability* extension's support code declares itself
+> by a standard entry point pip records, which the engine reads at startup; the mechanism's
+> specifics are the align's.
 
 ## Why no further distribution mechanism
 

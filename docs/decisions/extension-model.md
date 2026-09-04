@@ -15,17 +15,23 @@ because it is easier than exposing the primitive it needs.
 
 ## The direction, verbatim (owner-stated 2026-09-04)
 
+This records the current best understanding of the shape. The direction is settled; the
+mechanism's specifics are expected to move during the align and implementation, and nothing
+below is worded to prevent that.
+
 1. Optional capabilities ship as separate PyPI extension wheels — Rust inside for speed, a Python
    processor as the binding — that depend on the `streamlib` wheel as a binary and never build it
    from source.
-2. Two mechanisms and no third: a processor extension (a Python processor talking to native code
-   in its own wheel) and a capability extension registered by one explicit line in `app.py`,
-   sandboxed so no two packages can unsafely alter engine features — extending capabilities
-   only, never rewriting engine pieces, the Vite-plugin shape.
-3. The engine keeps and exposes everything that truly belongs in core — primitives, plumbing, the
-   handle-shaped surface — as engine code, so an extension never rebuilds plumbing; what an
-   extension needs and the engine does not yet expose is engine work done inside the extension's
-   own change.
+2. Two mechanisms: a processor extension (a Python processor calling native code in its own
+   wheel directly — no engine round trip on the data path) and a capability extension — support
+   code declared by a standard entry point that pip records and the engine runs once at startup,
+   like loading a driver — sandboxed so no two packages can unsafely alter engine features,
+   extending rather than rewriting engine pieces.
+3. The engine keeps and exposes what belongs in core — primitives, plumbing, the handle-shaped
+   surface — as engine code, so an extension does not rebuild plumbing; and an extension may
+   introduce engine-grade capabilities the engine does not provide — graphics processing,
+   networking, a device class — the Unreal-module shape. What an extension needs and the engine
+   does not yet expose is engine work done inside the extension's own change.
 4. Networking — WebRTC and MoQ — is the next work and the first extension, because not every app
    needs it, and a capability with a consumer is what proves the model.
 5. The twelve shipped built-ins stay; `JpegDecoder` is frozen — neither built nor retired — until
@@ -54,15 +60,19 @@ thirteenth built-in has to pass them. The third clause — a named consumer — 
 proposal lacked: a decoder for a stream nothing in the tree produced, carried into the roster
 because its backend existed. Under the criterion it would not have been proposed.
 
-**Two mechanisms, because processors and capabilities are different things.** A processor is
-a graph node; the plan already lets a pip-installed package supply one, and `rt.add` on the
-class is its whole registration — nothing new is needed for the processor half except the
-primitives it reaches for. A capability is what the engine can *do* — carry a link over a
-network, discover peers, serve a control-plane surface — and a package that adds one is not
-adding a node; it is extending the engine. That needs its own door, and the door is explicit:
-one line in `app.py` naming the extension, the way a Vite config names its plugins. Discovery
-by scanning installed distributions was rejected because it makes the set of things extending
-the engine depend on what happens to be in the venv rather than on what the app said.
+**Two mechanisms, because processors and support are different things.** A processor is a
+graph node; the plan already lets a pip-installed package supply one, and `rt.add` on the class
+is its registration — nothing new is needed for the processor half except the primitives it
+reaches for, and it calls its own package's Rust directly rather than asking the engine to call
+back into the wheel. A capability extension is the support that has to exist before such a
+processor runs — a device library brought up, a network stack initialised, an engine-grade
+capability the engine does not itself carry (a specialised graphics pass, a transport, a device
+class) made available — the way a driver is loaded before the code that uses it. That needs its
+own door, and the door is the one the Python ecosystem already has: a standard entry point in
+the wheel's `pyproject.toml`, recorded by pip at install and read by the engine through
+`importlib.metadata` at startup. `pip install streamlib-webrtc` is then the whole of enabling
+it, the way a pytest plugin enables itself. This is not a file scan; it is pip's own registry.
+The analogy the owner named is Unreal Engine modules: specialised, engine-grade, optional.
 
 **Sandboxed, because two packages must not be able to fight.** An extension extends; it never
 rewrites. The engine mediates every capability an extension registers, so two packages that both
@@ -91,9 +101,11 @@ is kept as a record.
 - **A narrow native ABI for extensions** — the deleted plugin ABI again: a vtable surface to
   maintain, two engines in one process as a failure mode, build fingerprints. The CPython ABI
   already exists, is already shipped, and pip already handles it.
-- **Discovery by scanning dependencies' `pyproject.toml`** — magic: the engine's capabilities
-  become a function of the venv rather than the app. The entry-line form is one line more and
-  says exactly what extends the engine.
+- **Explicit activation in `app.py` as the only door (the Vite form)** — considered, and it
+  remains a reasonable per-app opt-out. The owner chose the entry-point registry pip already
+  maintains (the pytest form): the sandbox is what makes automatic activation safe, and an
+  opt-out for one app is cheaper than an opt-in for every app. Walking `pyproject.toml` files
+  at runtime was never on the table — the entry point is pip's registry, read once.
 - **Prove the extension model on JPEG first** — a capability with no consumer; it would prove
   the distribution shape while building a decoder nobody would run.
 - **Move the twelve built-ins out to extensions as part of this pivot** — churn without gain;
@@ -111,6 +123,9 @@ is kept as a record.
   hand-write PyO3 against the stub. Its shape is the networking align's to decide.
 - Rust apps with no interpreter cannot load extension wheels; they compile extensions as source
   crates. Python is the binding for optional capabilities, by the owner's statement.
+- Where the support hook runs — the app process at startup, each helper at spawn, or both — is
+  the align's to settle; the driver analogy suggests once per process that takes an engine
+  role, idempotently.
 - The placement rule is unchanged: a processor extension's Python class runs in its own helper.
   Whether its native code may ever be called in the app process is OPEN and is the owner's
   ruling to make, never a session's inference.
