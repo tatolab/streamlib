@@ -40,7 +40,7 @@ a windowed input port is resampled, channel-converted and framed at this read
 seam, and reports ready only when a full window can be emitted — a gap flushes
 the accumulator and the resampler's filter rather than interpolating across it;
 its channel count is the contract's one optional value: absent means the source's own
-count, carried on every emitted window, and only a declared count is converted to;
+count, carried on every emitted window, and a declared count is what the stage converts to;
 every input port declares one read policy — newest or ordered — and no other delivery setting:
 both drop under pressure, and no link ever blocks a producer;
 a drop is counted at the port that lost it, but only an app-process destination's
