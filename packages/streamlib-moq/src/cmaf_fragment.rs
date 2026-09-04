@@ -14,11 +14,14 @@ use mp4_atom::{Atom, Decode, Encode, Header, Mdat, Mfhd, Moof, Tfdt, Tfhd, Traf,
 
 use crate::error::{MoqExtensionError, Result};
 
-/// The track id every fragment this wheel writes carries.
+/// The track id this wheel's publisher passes to [`build_cmaf_fragment`].
 ///
 /// The init segment describes exactly one track, and the reference relay names
 /// a media track after its `tkhd.track_id` (`1.m4s`), so this number is part of
-/// the track name a subscriber asks for and not an internal choice.
+/// the track name a subscriber asks for and not an internal choice. It is not a
+/// guarantee about the bytes on the wire: [`build_cmaf_fragment`] writes the
+/// track id it is handed, and [`read_cmaf_fragment`] lifts samples out of a
+/// fragment whatever track id it carries.
 pub(crate) const CMAF_FRAGMENT_TRACK_ID: u32 = 1;
 
 /// What a refusal on this path calls the container it was reading or writing.
@@ -146,10 +149,16 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
             unread_object_bytes.len()
         )));
     }
-    let mut moof_body_bytes = &unread_object_bytes[..moof_body_byte_count];
-    let moof = Moof::decode_body(&mut moof_body_bytes).map_err(|failure| {
+    let mut unparsed_moof_body_bytes = &unread_object_bytes[..moof_body_byte_count];
+    let moof = Moof::decode_body(&mut unparsed_moof_body_bytes).map_err(|failure| {
         refuse_as_malformed_cmaf_fragment(format!("the moof atom does not parse: {failure}"))
     })?;
+    if !unparsed_moof_body_bytes.is_empty() {
+        return Err(refuse_as_malformed_cmaf_fragment(format!(
+            "the moof atom declares a {moof_body_byte_count} byte body but {} bytes of it parse as no atom",
+            unparsed_moof_body_bytes.len()
+        )));
+    }
     unread_object_bytes = &unread_object_bytes[moof_body_byte_count..];
 
     let mdat_header = Header::decode(&mut unread_object_bytes).map_err(|failure| {
@@ -172,6 +181,13 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
             unread_object_bytes.len()
         )));
     }
+    let object_byte_count_after_the_mdat_payload =
+        unread_object_bytes.len() - mdat_payload_byte_count;
+    if object_byte_count_after_the_mdat_payload != 0 {
+        return Err(refuse_as_malformed_cmaf_fragment(format!(
+            "the object carries {object_byte_count_after_the_mdat_payload} bytes after its mdat payload, but a CMAF chunk is one moof and one mdat and nothing else"
+        )));
+    }
     let mdat_payload_bytes = &unread_object_bytes[..mdat_payload_byte_count];
     let object_offset_of_mdat_payload = object_bytes.len() - unread_object_bytes.len();
 
@@ -185,12 +201,23 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
         }
     };
 
+    // With exactly one traf, an absent `base_data_offset` puts the offset base
+    // at the first byte of the enclosing moof whether or not
+    // `default_base_is_moof` is set (ISO/IEC 14496-12 §8.8.7.1), so that field
+    // is the only thing that can move the base off this object's first byte.
+    if let Some(base_data_offset) = traf.tfhd.base_data_offset {
+        return Err(refuse_as_malformed_cmaf_fragment(format!(
+            "the traf sets tfhd.base_data_offset to {base_data_offset}, but this reader resolves sample offsets from the first byte of the moof and supports no other base"
+        )));
+    }
+
     let mut samples: Vec<CmafFragmentSample> = Vec::new();
     let mut decode_time_of_next_sample = traf
         .tfdt
         .as_ref()
         .map_or(0, |tfdt| tfdt.base_media_decode_time);
     let mut mdat_payload_read_cursor: usize = 0;
+    let mut mdat_payload_byte_count_covered_by_samples: usize = 0;
 
     for trun in &traf.trun {
         if let Some(data_offset) = trun.data_offset {
@@ -232,7 +259,11 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
             let duration = trun_entry
                 .duration
                 .or(traf.tfhd.default_sample_duration)
-                .unwrap_or(0);
+                .ok_or_else(|| {
+                    refuse_as_malformed_cmaf_fragment(format!(
+                        "trun entry {entry_index} carries no sample duration and the tfhd declares no default"
+                    ))
+                })?;
             // `first_sample_flags` is folded into entry zero's own flags when a
             // trun is decoded, so the per-entry field already carries the
             // override the reference publisher writes for a keyframe.
@@ -253,12 +284,13 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
             decode_time_of_next_sample =
                 decode_time_of_next_sample.saturating_add(u64::from(duration));
             mdat_payload_read_cursor = sample_end_in_mdat_payload;
+            mdat_payload_byte_count_covered_by_samples += sample_byte_count;
         }
     }
 
-    if mdat_payload_read_cursor != mdat_payload_bytes.len() {
+    if mdat_payload_byte_count_covered_by_samples != mdat_payload_bytes.len() {
         return Err(refuse_as_malformed_cmaf_fragment(format!(
-            "the trun sample sizes account for {mdat_payload_read_cursor} bytes but the mdat payload is {} bytes",
+            "the trun sample sizes account for {mdat_payload_byte_count_covered_by_samples} bytes but the mdat payload is {} bytes",
             mdat_payload_bytes.len()
         )));
     }
@@ -340,6 +372,44 @@ mod tests {
     use mp4_atom::Any;
 
     const A_SAMPLE: [u8; 64] = [0x5A; 64];
+
+    /// The offset a hand-built moof carries through its sizing pass, before the
+    /// real one is measured from that encoding.
+    const PLACEHOLDER_DATA_OFFSET: i32 = 0;
+
+    /// Encode a hand-built moof, point its first trun at
+    /// `sample_start_in_mdat_payload` bytes into the mdat payload, and append
+    /// that payload as the mdat.
+    fn object_bytes_of_a_moof_and_an_mdat_payload(
+        mut moof_to_encode: Moof,
+        mdat_payload_bytes: &[u8],
+        sample_start_in_mdat_payload: i32,
+    ) -> Vec<u8> {
+        let mut moof_sizing_pass_bytes: Vec<u8> = Vec::new();
+        moof_to_encode
+            .encode(&mut moof_sizing_pass_bytes)
+            .expect("a moof encodes");
+
+        moof_to_encode.traf[0].trun[0].data_offset = Some(
+            i32::try_from(moof_sizing_pass_bytes.len()).expect("a moof written here is small")
+                + MDAT_BOX_HEADER_BYTES as i32
+                + sample_start_in_mdat_payload,
+        );
+
+        let mut object_bytes: Vec<u8> = Vec::new();
+        moof_to_encode
+            .encode(&mut object_bytes)
+            .expect("a moof encodes");
+        object_bytes.extend_from_slice(
+            &(MDAT_BOX_HEADER_BYTES
+                + u32::try_from(mdat_payload_bytes.len())
+                    .expect("a payload written here is small"))
+            .to_be_bytes(),
+        );
+        object_bytes.extend_from_slice(b"mdat");
+        object_bytes.extend_from_slice(mdat_payload_bytes);
+        object_bytes
+    }
 
     fn moof_byte_count_of(fragment_bytes: &[u8]) -> usize {
         let mut unread: &[u8] = fragment_bytes;
@@ -460,21 +530,264 @@ mod tests {
         let fragment_bytes =
             build_cmaf_fragment(CMAF_FRAGMENT_TRACK_ID, 1, 0, 3000, true, &A_SAMPLE)
                 .expect("a fragment builds");
+        let moof_byte_count = moof_byte_count_of(&fragment_bytes);
 
-        let refusal = read_cmaf_fragment(&fragment_bytes[..fragment_bytes.len() / 2])
-            .expect_err("half an object is not a CMAF chunk");
+        let refusal_of_a_cut_inside_the_moof_body =
+            read_cmaf_fragment(&fragment_bytes[..moof_byte_count - 4])
+                .expect_err("half a moof is not a CMAF chunk");
 
         assert!(
             matches!(
-                refusal,
+                refusal_of_a_cut_inside_the_moof_body,
                 MoqExtensionError::MalformedObject {
                     container: CMAF_CONTAINER_NAME,
                     ..
                 }
             ),
+            "got {refusal_of_a_cut_inside_the_moof_body}"
+        );
+        assert!(
+            refusal_of_a_cut_inside_the_moof_body
+                .to_string()
+                .contains("moof body"),
+            "got {refusal_of_a_cut_inside_the_moof_body}"
+        );
+
+        let refusal_of_a_cut_inside_the_mdat_payload =
+            read_cmaf_fragment(&fragment_bytes[..fragment_bytes.len() - 8])
+                .expect_err("a sample cut short is not a CMAF chunk");
+
+        assert!(
+            matches!(
+                refusal_of_a_cut_inside_the_mdat_payload,
+                MoqExtensionError::MalformedObject {
+                    container: CMAF_CONTAINER_NAME,
+                    ..
+                }
+            ),
+            "got {refusal_of_a_cut_inside_the_mdat_payload}"
+        );
+        assert!(
+            refusal_of_a_cut_inside_the_mdat_payload
+                .to_string()
+                .contains("mdat payload"),
+            "got {refusal_of_a_cut_inside_the_mdat_payload}"
+        );
+    }
+
+    #[test]
+    fn an_object_carrying_bytes_after_its_mdat_is_refused_by_name() {
+        let fragment_bytes =
+            build_cmaf_fragment(CMAF_FRAGMENT_TRACK_ID, 1, 0, 3000, true, &A_SAMPLE)
+                .expect("a fragment builds");
+
+        let mut fragment_with_trailing_bytes: Vec<u8> = fragment_bytes.to_vec();
+        fragment_with_trailing_bytes.extend_from_slice(&[0x11; 100]);
+
+        let refusal = read_cmaf_fragment(&fragment_with_trailing_bytes)
+            .expect_err("bytes the reader cannot describe are not silently dropped");
+
+        assert!(
+            refusal
+                .to_string()
+                .contains("carries 100 bytes after its mdat payload"),
             "got {refusal}"
         );
-        assert!(refusal.to_string().contains("moof"), "got {refusal}");
+    }
+
+    #[test]
+    fn two_chunks_concatenated_are_refused_rather_than_read_as_the_first_alone() {
+        let first_chunk_bytes =
+            build_cmaf_fragment(CMAF_FRAGMENT_TRACK_ID, 1, 0, 3000, true, &A_SAMPLE)
+                .expect("a fragment builds");
+        let second_chunk_bytes =
+            build_cmaf_fragment(CMAF_FRAGMENT_TRACK_ID, 2, 3000, 3000, false, &A_SAMPLE)
+                .expect("a fragment builds");
+
+        let mut both_chunks_bytes: Vec<u8> = first_chunk_bytes.to_vec();
+        both_chunks_bytes.extend_from_slice(&second_chunk_bytes);
+
+        let refusal = read_cmaf_fragment(&both_chunks_bytes)
+            .expect_err("a second chunk in the same object is not the first chunk's business");
+
+        assert!(
+            refusal.to_string().contains("after its mdat payload"),
+            "a subscriber handed two chunks must be told, not quietly given one: got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_trun_entry_with_no_duration_and_no_tfhd_default_is_refused_by_name() {
+        let mut moof_of_three_sized_but_undated_samples = cmaf_fragment_moof(
+            CMAF_FRAGMENT_TRACK_ID,
+            1,
+            1000,
+            3000,
+            true,
+            4,
+            PLACEHOLDER_DATA_OFFSET,
+        );
+        moof_of_three_sized_but_undated_samples.traf[0]
+            .tfhd
+            .default_sample_duration = None;
+        moof_of_three_sized_but_undated_samples.traf[0].trun[0].entries = vec![
+            TrunEntry {
+                duration: None,
+                size: Some(4),
+                flags: Some(SAMPLE_FLAGS_OF_A_SYNC_POINT),
+                cts: None,
+            };
+            3
+        ];
+
+        let object_bytes = object_bytes_of_a_moof_and_an_mdat_payload(
+            moof_of_three_sized_but_undated_samples,
+            &[0x5A; 12],
+            0,
+        );
+
+        let refusal = read_cmaf_fragment(&object_bytes).expect_err(
+            "a duration that would come from a trex the fragment does not carry is not zero",
+        );
+
+        assert!(
+            refusal.to_string().contains(
+                "trun entry 0 carries no sample duration and the tfhd declares no default"
+            ),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_data_offset_that_skips_leading_mdat_bytes_is_refused_by_name() {
+        let moof_of_one_sample_placed_past_the_payload_start = cmaf_fragment_moof(
+            CMAF_FRAGMENT_TRACK_ID,
+            1,
+            0,
+            3000,
+            true,
+            64,
+            PLACEHOLDER_DATA_OFFSET,
+        );
+
+        let object_bytes = object_bytes_of_a_moof_and_an_mdat_payload(
+            moof_of_one_sample_placed_past_the_payload_start,
+            &[0x5A; 128],
+            64,
+        );
+
+        let refusal = read_cmaf_fragment(&object_bytes)
+            .expect_err("media data no sample names is not a chunk this reader can describe");
+
+        assert!(
+            refusal
+                .to_string()
+                .contains("account for 64 bytes but the mdat payload is 128 bytes"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_traf_that_bases_its_offsets_outside_the_moof_is_refused_by_the_field_that_did_it() {
+        let mut moof_based_on_an_absolute_file_offset = cmaf_fragment_moof(
+            CMAF_FRAGMENT_TRACK_ID,
+            1,
+            0,
+            3000,
+            true,
+            64,
+            PLACEHOLDER_DATA_OFFSET,
+        );
+        moof_based_on_an_absolute_file_offset.traf[0]
+            .tfhd
+            .default_base_is_moof = false;
+        moof_based_on_an_absolute_file_offset.traf[0]
+            .tfhd
+            .base_data_offset = Some(4096);
+        moof_based_on_an_absolute_file_offset.traf[0].trun[0].data_offset = Some(0);
+
+        let mut object_bytes: Vec<u8> = Vec::new();
+        moof_based_on_an_absolute_file_offset
+            .encode(&mut object_bytes)
+            .expect("a moof encodes");
+        object_bytes.extend_from_slice(&(MDAT_BOX_HEADER_BYTES + 64).to_be_bytes());
+        object_bytes.extend_from_slice(b"mdat");
+        object_bytes.extend_from_slice(&A_SAMPLE);
+
+        let refusal = read_cmaf_fragment(&object_bytes)
+            .expect_err("an offset base this reader does not resolve is not guessed at");
+
+        assert!(
+            refusal.to_string().contains("tfhd.base_data_offset"),
+            "the unsupported field is what the far end has to change: got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_moof_body_carrying_bytes_that_parse_as_no_atom_is_refused_by_name() {
+        const JUNK_BYTE_COUNT: usize = 16;
+
+        let mut moof_sizing_pass_bytes: Vec<u8> = Vec::new();
+        cmaf_fragment_moof(
+            CMAF_FRAGMENT_TRACK_ID,
+            1,
+            0,
+            3000,
+            true,
+            64,
+            PLACEHOLDER_DATA_OFFSET,
+        )
+        .encode(&mut moof_sizing_pass_bytes)
+        .expect("a moof encodes");
+
+        // The junk sits inside the moof body and the sample still starts at the
+        // first byte of the mdat payload, so nothing but the leftover check can
+        // notice it.
+        let data_offset_past_the_junk =
+            i32::try_from(moof_sizing_pass_bytes.len() + JUNK_BYTE_COUNT)
+                .expect("a moof written here is small")
+                + MDAT_BOX_HEADER_BYTES as i32;
+        let mut object_bytes: Vec<u8> = Vec::new();
+        cmaf_fragment_moof(
+            CMAF_FRAGMENT_TRACK_ID,
+            1,
+            0,
+            3000,
+            true,
+            64,
+            data_offset_past_the_junk,
+        )
+        .encode(&mut object_bytes)
+        .expect("a moof encodes");
+        let moof_box_byte_count_including_the_junk =
+            u32::try_from(object_bytes.len() + JUNK_BYTE_COUNT)
+                .expect("a moof written here is small");
+        object_bytes[..4].copy_from_slice(&moof_box_byte_count_including_the_junk.to_be_bytes());
+        object_bytes.extend_from_slice(&[0xAA; JUNK_BYTE_COUNT]);
+        object_bytes.extend_from_slice(&(MDAT_BOX_HEADER_BYTES + 64).to_be_bytes());
+        object_bytes.extend_from_slice(b"mdat");
+        object_bytes.extend_from_slice(&A_SAMPLE);
+
+        let refusal = read_cmaf_fragment(&object_bytes)
+            .expect_err("a moof body the box layer cannot account for is not a chunk");
+
+        assert!(
+            refusal
+                .to_string()
+                .contains("16 bytes of it parse as no atom"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_fragment_written_with_another_track_id_still_reads_back() {
+        let fragment_bytes = build_cmaf_fragment(9, 1, 0, 3000, true, &A_SAMPLE)
+            .expect("a fragment on another track builds");
+
+        let samples = read_cmaf_fragment(&fragment_bytes)
+            .expect("the reader takes the track id the publisher numbered its track with");
+
+        assert_eq!(samples[0].sample_bytes, A_SAMPLE.to_vec());
     }
 
     #[test]
@@ -501,7 +814,6 @@ mod tests {
                 .expect("a fragment builds");
         let moof_byte_count = moof_byte_count_of(&fragment_bytes);
 
-        // The trun still claims 64 bytes; the mdat now carries eight.
         let mut fragment_with_a_starved_mdat: Vec<u8> = fragment_bytes[..moof_byte_count].to_vec();
         fragment_with_a_starved_mdat.extend_from_slice(&16u32.to_be_bytes());
         fragment_with_a_starved_mdat.extend_from_slice(b"mdat");
@@ -523,7 +835,6 @@ mod tests {
                 .expect("a fragment builds");
         let moof_byte_count = moof_byte_count_of(&fragment_bytes);
 
-        // The trun still claims 64 bytes; the mdat now carries 128.
         let mut fragment_with_an_overfed_mdat: Vec<u8> = fragment_bytes[..moof_byte_count].to_vec();
         fragment_with_an_overfed_mdat.extend_from_slice(&(8u32 + 128).to_be_bytes());
         fragment_with_an_overfed_mdat.extend_from_slice(b"mdat");

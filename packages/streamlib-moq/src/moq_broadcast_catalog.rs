@@ -63,11 +63,9 @@ const RENDER_GROUP_RENDERED_TOGETHER: u16 = 1;
 
 /// The parameters a player selects a track on.
 ///
-/// Field order here is the reference struct's declaration order, because that
-/// is the order the reference's JSON comes out in and a catalog that diffs
-/// clean against a known-good one is worth more than an alphabetised struct.
-/// `framerate` is absent on purpose: no shipped reference stream carries it,
-/// and a player that sees it is reading a field nothing has exercised.
+/// Field order here is the reference struct's declaration order, which is the
+/// order its JSON keys come out in. `framerate` is absent because no shipped
+/// reference stream carries it.
 #[derive(Debug, Clone)]
 pub(crate) struct MoqCatalogTrackSelectionParameters {
     /// The RFC 6381 codec string — `avc1.64001f`, `hvc1.1.6.L93.B0`, `opus`.
@@ -205,22 +203,54 @@ impl MoqBroadcastCatalog {
     }
 
     /// The catalog object's payload: pretty-printed JSON, two-space indent,
-    /// exactly as the reference publisher writes it.
+    /// exactly as the reference publisher writes it. Refuses a catalog no
+    /// subscriber could read — one that names no tracks, or a CMAF one whose
+    /// tracks do not all name an initialisation track.
     pub(crate) fn catalog_json_bytes(&self) -> Result<bytes::Bytes> {
-        let document = serde_json::to_string_pretty(&self.on_the_wire()).map_err(|failure| {
-            MoqExtensionError::MalformedObject {
-                container: "catalog",
-                what: format!("the broadcast catalog could not be written as JSON: {failure}"),
-            }
-        })?;
+        self.refuse_a_catalog_a_subscriber_would_drop_the_broadcast_on()?;
+
+        let document =
+            serde_json::to_string_pretty(&self.catalog_root_on_the_wire()).map_err(|failure| {
+                MoqExtensionError::Transport {
+                    what: format!("the broadcast catalog could not be written as JSON: {failure}"),
+                }
+            })?;
         Ok(bytes::Bytes::from(document))
+    }
+
+    /// `moq-sub` indexes `tracks[0]` and unwraps its `initTrack`, so both are
+    /// hard requirements of the CMAF packaging rather than optional fields.
+    fn refuse_a_catalog_a_subscriber_would_drop_the_broadcast_on(&self) -> Result<()> {
+        if self.media_tracks.is_empty() {
+            return Err(MoqExtensionError::Refused {
+                what: format!(
+                    "the catalog for broadcast `{}` names no tracks",
+                    self.broadcast_namespace
+                ),
+            });
+        }
+
+        if self.container_packaging == CMAF_PACKAGING {
+            for track in &self.media_tracks {
+                if track.initialisation_track_name.is_none() {
+                    return Err(MoqExtensionError::Refused {
+                        what: format!(
+                            "the {CMAF_PACKAGING} catalog for broadcast `{}` has a track `{}` that names no init track",
+                            self.broadcast_namespace, track.media_track_name
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// `namespace`, `packaging` and `renderGroup` are hoisted into
     /// `commonTrackFields` and omitted per track: every track of one broadcast
     /// agrees on all three by construction, and the reference hoists whatever
     /// every track agrees on.
-    fn on_the_wire(&self) -> BroadcastCatalogRootOnTheWire<'_> {
+    fn catalog_root_on_the_wire(&self) -> BroadcastCatalogRootOnTheWire<'_> {
         BroadcastCatalogRootOnTheWire {
             version: CATALOG_FORMAT_VERSION,
             streaming_format: MOQ_STREAMING_FORMAT,
@@ -359,7 +389,7 @@ mod tests {
     fn catalog_json_string(catalog: &MoqBroadcastCatalog) -> String {
         let payload = catalog
             .catalog_json_bytes()
-            .expect("a catalog of owned strings and integers always serialises");
+            .expect("this catalog names tracks the packaging accepts");
         String::from_utf8(payload.to_vec()).expect("serde_json writes UTF-8")
     }
 
@@ -442,19 +472,46 @@ mod tests {
         );
 
         let document = catalog_json_string(&catalog);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&document).expect("the catalog is JSON");
 
-        assert!(
-            document.contains(r#""packaging": "streamlib-bag""#),
-            "the catalog names its own container: {document}"
+        assert_eq!(
+            parsed["commonTrackFields"]["packaging"],
+            serde_json::json!(STREAMLIB_BAG_PACKAGING)
         );
+        assert_eq!(parsed["tracks"][0]["name"], serde_json::json!("1.bag"));
         assert!(
-            !document.contains("initTrack"),
+            parsed["tracks"][0].get("initTrack").is_none(),
             "a self-describing container publishes no init track to point at: {document}"
         );
         assert!(
             serde_json::from_str::<moq_catalog::Root>(&document).is_err(),
             "the reference packaging enum is closed, which is why this crate writes its own types"
         );
+    }
+
+    #[test]
+    fn a_namespace_or_track_name_that_spells_init_track_declares_no_init_track() {
+        let catalog = MoqBroadcastCatalog::of_streamlib_bag_tracks(
+            "initTrack",
+            vec![MoqCatalogTrackDescription::of_self_describing_track(
+                "initTrack.bag",
+                MoqCatalogTrackSelectionParameters::of_video_track("h264", 640, 480),
+            )],
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&catalog_json_string(&catalog)).expect("the catalog is JSON");
+
+        assert_eq!(
+            parsed["commonTrackFields"]["namespace"],
+            serde_json::json!("initTrack")
+        );
+        assert_eq!(
+            parsed["tracks"][0]["name"],
+            serde_json::json!("initTrack.bag")
+        );
+        assert!(parsed["tracks"][0].get("initTrack").is_none());
     }
 
     #[test]
@@ -466,11 +523,73 @@ mod tests {
     }
 
     #[test]
-    fn every_cmaf_track_names_the_one_init_track_because_a_subscriber_unwraps_it() {
-        let document = catalog_json_string(&reference_shaped_catalog());
+    fn a_cmaf_catalog_whose_track_names_no_init_track_is_refused_because_a_subscriber_unwraps_it() {
+        let catalog = MoqBroadcastCatalog::of_cmaf_tracks(
+            "streamlib",
+            vec![
+                MoqCatalogTrackDescription::of_cmaf_track_id(
+                    1,
+                    MoqCatalogTrackSelectionParameters::of_video_track("avc1.64001f", 1920, 1080),
+                ),
+                MoqCatalogTrackDescription::of_self_describing_track(
+                    "2.m4s",
+                    MoqCatalogTrackSelectionParameters::of_audio_track("opus", 48_000, 2),
+                ),
+            ],
+        );
 
+        let refusal = catalog
+            .catalog_json_bytes()
+            .expect_err("a cmaf track with no init track is refused");
+
+        assert!(
+            matches!(refusal, MoqExtensionError::Refused { .. }),
+            "a caller-built catalog is a caller mistake: {refusal:?}"
+        );
+        assert!(
+            refusal.to_string().contains("2.m4s"),
+            "the refusal names the offending track: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_catalog_naming_no_tracks_is_refused_because_a_subscriber_indexes_the_first_one() {
+        let catalog = MoqBroadcastCatalog::of_cmaf_tracks("streamlib", Vec::new());
+
+        let refusal = catalog
+            .catalog_json_bytes()
+            .expect_err("a catalog with no tracks is refused");
+
+        assert!(
+            matches!(refusal, MoqExtensionError::Refused { .. }),
+            "a caller-built catalog is a caller mistake: {refusal:?}"
+        );
+
+        let refusal = MoqBroadcastCatalog::of_streamlib_bag_tracks("streamlib", Vec::new())
+            .catalog_json_bytes()
+            .expect_err("the empty track list is refused whatever the packaging");
+
+        assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
+    }
+
+    #[test]
+    fn a_self_describing_track_is_only_refused_under_the_cmaf_packaging() {
+        let catalog = MoqBroadcastCatalog::of_streamlib_bag_tracks(
+            "streamlib",
+            vec![MoqCatalogTrackDescription::of_self_describing_track(
+                "1.bag",
+                MoqCatalogTrackSelectionParameters::of_video_track("h264", 1920, 1080),
+            )],
+        );
+
+        assert!(catalog.catalog_json_bytes().is_ok());
+    }
+
+    #[test]
+    fn every_cmaf_track_the_writer_emits_names_the_one_init_track_the_broadcast_publishes() {
         let parsed: moq_catalog::Root =
-            serde_json::from_str(&document).expect("the reference type reads this catalog");
+            serde_json::from_str(&catalog_json_string(&reference_shaped_catalog()))
+                .expect("the reference type reads this catalog");
 
         assert!(
             parsed
