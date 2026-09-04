@@ -12,7 +12,11 @@ use crate::error::{Result, WebRtcExtensionError};
 use std::sync::OnceLock;
 use tokio::runtime::Runtime;
 
-static TRANSPORT_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+/// The build's own result, not just the runtime: `get_or_init` runs its closure
+/// at most once and cannot fail, so the failure has to be what is stored. The
+/// alternative — build outside and store the winner — drops the loser's
+/// runtime, and dropping a tokio runtime from inside an async context panics.
+static TRANSPORT_RUNTIME: OnceLock<std::result::Result<Runtime, String>> = OnceLock::new();
 
 /// Two threads is what a session needs: one driving the peer connection's
 /// timers and sockets, one for the track read and write loops.
@@ -37,20 +41,17 @@ pub fn bring_up() -> Result<()> {
 
 /// The runtime every session in this process runs on.
 pub fn transport_runtime() -> Result<&'static Runtime> {
-    if let Some(runtime) = TRANSPORT_RUNTIME.get() {
-        return Ok(runtime);
-    }
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(TRANSPORT_RUNTIME_WORKER_THREADS)
-        .thread_name("streamlib-webrtc")
-        .enable_all()
-        .build()
+    TRANSPORT_RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(TRANSPORT_RUNTIME_WORKER_THREADS)
+                .thread_name("streamlib-webrtc")
+                .enable_all()
+                .build()
+                .map_err(|failure| failure.to_string())
+        })
+        .as_ref()
         .map_err(|failure| WebRtcExtensionError::Transport {
             what: format!("the WebRTC transport runtime could not be started: {failure}"),
-        })?;
-
-    // A second caller that lost the race gets the winner's runtime and drops
-    // its own, which is the point of building it outside the lock.
-    Ok(TRANSPORT_RUNTIME.get_or_init(|| runtime))
+        })
 }
