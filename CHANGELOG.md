@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.47](https://github.com/tatolab/streamlib/compare/v0.18.46...v0.18.47) (2026-09-04)
+
+
+### Features
+
+* **wheel:** Mp4Sink reaches Python — the marker, a two-track recording of the vivid camera and the known signal, and the decode-back arm that locks it to the vivid baseline ([#2143](https://github.com/tatolab/streamlib/issues/2143)) ([ff08d67](https://github.com/tatolab/streamlib/commit/ff08d676c4369175006b81f88fefd74ddfa98207))
+
 ## [0.18.46](https://github.com/tatolab/streamlib/compare/v0.18.45...v0.18.46) (2026-09-03)
 
 

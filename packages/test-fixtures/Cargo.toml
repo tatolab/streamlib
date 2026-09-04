@@ -18,11 +18,11 @@ crate-type = ["rlib"]
 
 [dependencies]
 # Engine substrate — runtime context and processor traits.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.46" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.47" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.46" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.47" }
 
 
 # Serialization (config dataclass ships as serde-derived).
