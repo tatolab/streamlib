@@ -109,8 +109,8 @@ class MoqBroadcastSubscribingSession:
         relay_url: str,
         broadcast: str,
         container_format: str,
-        video_track: "str | None",
-        audio_track: "str | None",
+        video_track: "str | None" = None,
+        audio_track: "str | None" = None,
     ) -> MoqBroadcastSubscribingSession: ...
     def connect(self) -> None:
         """Connect and begin draining. Called from the processor's own thread."""
