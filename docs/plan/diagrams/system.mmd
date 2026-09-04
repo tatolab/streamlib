@@ -2,7 +2,7 @@ flowchart LR
   subgraph env["One uv-managed venv — one Python, ordinary Python package deps only"]
     app["User Python app\n(app.py setup(rt) — normal codebase;\nhosts no processor)"]
     procs["User processor classes\n(importable modules — imported by the app\nto register, by helpers to run;\nnever hosted in the app;\nthe class's import path is its identity)"]
-    pkgs["Processor packages\n(ordinary PyPI packages; native internals\nexpose handles, never streamlib internals;\nfirst-party optional integrations live in packages/,\nlocal-linked in-repo, published via the wheel's index)"]
+    pkgs["Extension wheels\n(ordinary PyPI packages — Rust inside for speed, a Python processor\nas the binding; depend on the streamlib wheel as a binary, never link the engine;\nnative internals expose handles, never streamlib internals;\ntwo mechanisms — a processor extension registered by rt.add that calls its own\nRust directly, and a capability extension: support code declared by a pyproject\nentry point pip records, run once at startup like a driver, sandboxed, able to\nintroduce engine-grade capabilities the engine does not provide; first-party optional capabilities ship this way too,\nnetworking (WebRTC / MoQ) first; live in packages/, local-linked in-repo,\npublished via the wheel's index)"]
     wheel["streamlib wheel\n(Python API + CLI + engine, PyO3 —\nrepo releases now, PyPI after rename)"]
     helper["Helper processes — every Python processor\n(engine exec of sys.executable; own\ninterpreter, own GIL; imports the wheel;\nthe only placement)"]
   end
@@ -10,7 +10,7 @@ flowchart LR
   rustapp["Rust app\n(plain cargo project)"]
   crate["streamlib crate\n(embeddable Rust library)"]
   engine["Engine runtime\n(runtime/streamlib-engine)"]
-  media["Built-in media blocks\n(camera / display / MicrophoneSource / SpeakerSink — native,\nin the wheel, handle-shaped primitives;\naudio backend dlopen'd: PipeWire → ALSA → null,\nchosen by opening not by loading; vendored SPA headers\ncompile to a shim that calls only pointers, so no audio\nlibrary enters DT_NEEDED;\ndevice-paced, conditioning on the built-ins;\ncodec blocks: H264/H265 encode+decode shipped on Vulkan Video sessions,\none encode body and one decode body specialised by codec identity,\ncolour conversion on the engine's existing rgb_to_nv12 — no new RHI primitive;\nall four reach Python as marker classes like every other built-in, and the\nencoded frame has a Python cast (EncodedVideoFrame) holding no surface;\nOpus encode+decode shipped over statically linked libopus, and a pure-Rust\nfragmented Mp4Sink muxing both — one track per inbound link, named by its channel;\nJpegDecoder still to come — an encoded frame is an\nordinary bag, bitstream inline as bin beside the ordering pair and sync-point flag;\nan encoded audio packet is that convention applied to audio, cast by EncodedAudioPacket;\na decoder publishes the SPS display window, never the padded coded picture)"]
+  media["Built-in media blocks\n(camera / display / MicrophoneSource / SpeakerSink — native,\nin the wheel, handle-shaped primitives;\naudio backend dlopen'd: PipeWire → ALSA → null,\nchosen by opening not by loading; vendored SPA headers\ncompile to a shim that calls only pointers, so no audio\nlibrary enters DT_NEEDED;\ndevice-paced, conditioning on the built-ins;\ncodec blocks: H264/H265 encode+decode shipped on Vulkan Video sessions,\none encode body and one decode body specialised by codec identity,\ncolour conversion on the engine's existing rgb_to_nv12 — no new RHI primitive;\nall four reach Python as marker classes like every other built-in, and the\nencoded frame has a Python cast (EncodedVideoFrame) holding no surface;\nOpus encode+decode shipped over statically linked libopus, and a pure-Rust\nfragmented Mp4Sink muxing both — one track per inbound link, named by its channel;\nJpegDecoder frozen until its drone consumer returns, and the next codec\nfollows the built-in criterion rather than joining this node — an encoded frame is an\nordinary bag, bitstream inline as bin beside the ordering pair and sync-point flag;\nan encoded audio packet is that convention applied to audio, cast by EncodedAudioPacket;\na decoder publishes the SPS display window, never the padded coded picture)"]
   rhi["RHI\n(vulkan/rhi + streamlib-consumer-rhi)"]
   interop["Interop adapters\n(Vulkan↔CUDA, Vulkan↔GL — app-process Rust)"]
   ctl["Control plane\n(api-server: HTTP / WS / MCP — engine-side)"]
@@ -21,6 +21,7 @@ flowchart LR
 
   app -->|imports classes for rt.add| procs
   app -->|imports classes for rt.add| pkgs
+  wheel -->|"at startup the engine reads pip's entry-point registry and runs\neach capability extension's support hook once"| pkgs
   procs --> helper
   pkgs --> helper
   helper -->|"raw memory fd, Full-gated — names the allocation, never the

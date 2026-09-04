@@ -46,6 +46,12 @@ API shape is mined from the era that worked (lazy encoder mint from the first fr
 dimensions; decoder DPB auto-sized from SPS), not re-invented. Kernels-as-objects is
 for compute the user writes; a codec is not that.
 
+> The generalisation — a native per-frame path the user configures is a built-in — is
+> retired 2026-09-04 by `extension-model.md`. The seven codec blocks that shipped under it
+> stay; the next codec is a built-in only under the criterion there (a deadline the helper
+> hop cannot meet, or an engine-only primitive, and a named consumer) and is otherwise an
+> extension wheel. `JpegDecoder` is frozen — neither built nor retired.
+
 ## Why encoded frames ride inline in bags
 
 The historical blocker was the wire, in three eras: a fixed 64 KiB slot that silently
