@@ -221,20 +221,29 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
 
     for trun in &traf.trun {
         if let Some(data_offset) = trun.data_offset {
-            // `default_base_is_moof` bases the offset on the first byte of the
-            // moof, which is the first byte of the object.
             let offset_from_moof_start = usize::try_from(data_offset).map_err(|_| {
                 refuse_as_malformed_cmaf_fragment(format!(
                     "a trun places its samples {data_offset} bytes from the start of the moof, which is before the object begins"
                 ))
             })?;
-            mdat_payload_read_cursor = offset_from_moof_start
+            let resolved_start = offset_from_moof_start
                 .checked_sub(object_offset_of_mdat_payload)
                 .ok_or_else(|| {
                     refuse_as_malformed_cmaf_fragment(format!(
                         "a trun places its samples at object offset {offset_from_moof_start}, before the mdat payload that starts at {object_offset_of_mdat_payload}"
                     ))
                 })?;
+            // A later trun that does not resume exactly where the previous one
+            // ended either skips payload bytes or reads some of them twice.
+            // Summing the sample sizes cannot tell either case from a healthy
+            // fragment — two overlapping truns can cover the payload's byte
+            // count exactly — so the seam is checked here instead.
+            if !samples.is_empty() && resolved_start != mdat_payload_read_cursor {
+                return Err(refuse_as_malformed_cmaf_fragment(format!(
+                    "a trun resumes at mdat payload offset {resolved_start} where the previous one ended at {mdat_payload_read_cursor}, so the fragment's truns do not describe one run of samples"
+                )));
+            }
+            mdat_payload_read_cursor = resolved_start;
         }
 
         for (entry_index, trun_entry) in trun.entries.iter().enumerate() {

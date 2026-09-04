@@ -21,7 +21,9 @@
 use mp4_atom::{Audio, Avc1, Avcc, Codec, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual};
 
 use crate::annex_b_access_unit::{
-    AnnexBNalHeaderGrammar, NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
+    AnnexBNalHeaderGrammar, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET,
+    H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET, H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET,
+    NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
     remove_emulation_prevention_bytes,
 };
 use crate::cmaf_track_timeline::OPUS_TRACK_TIMESCALE_HZ;
@@ -46,10 +48,6 @@ pub(crate) const HIGHEST_OPUS_CHANNEL_COUNT_THIS_CONTAINER_PATH_PLACES: u32 = 2;
 /// `level_idc`.
 const H264_SHORTEST_SEQUENCE_PARAMETER_SET_STATING_PROFILE_AND_LEVEL: usize = 4;
 
-/// `forbidden_zero_bit`, `nal_unit_type`, `nuh_layer_id` and
-/// `nuh_temporal_id_plus1` — ITU-T H.265 §7.3.1.2.
-const H265_NAL_UNIT_HEADER_BYTES: usize = 2;
-
 /// H.265 profile-tier-level sits at a fixed position in the SPS RBSP:
 /// `sps_video_parameter_set_id` (4), `sps_max_sub_layers_minus1` (3) and
 /// `sps_temporal_id_nesting_flag` (1) fill the first byte exactly, so the PTL
@@ -61,12 +59,17 @@ const H265_PROFILE_TIER_LEVEL_OFFSET_IN_SEQUENCE_PARAMETER_SET_RBSP: usize = 1;
 /// `general_level_idc` (8).
 const H265_PROFILE_TIER_LEVEL_BYTES: usize = 12;
 
-/// H.265 `nal_unit_type` for a video parameter set — ITU-T H.265 §7.4.2.2.
-const H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET: u8 = 32;
-/// H.265 `nal_unit_type` for a sequence parameter set.
-const H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 33;
-/// H.265 `nal_unit_type` for a picture parameter set.
-const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
+/// The most sub-layers minus one an SPS may declare — ITU-T H.265 §7.4.3.2.1
+/// bounds `sps_max_sub_layers_minus1` at 6.
+const HIGHEST_H265_SPS_MAX_SUB_LAYERS_MINUS1: u32 = 6;
+
+/// The largest `chroma_format_idc` ITU-T H.265 §7.4.3.2.1 defines.
+const HIGHEST_H265_CHROMA_FORMAT_IDC_THE_STANDARD_DEFINES: u32 = 3;
+
+/// `hvcC` states each bit depth in a three-bit field — ISO/IEC 14496-15
+/// §8.3.3 writes `bit_depth_luma_minus8` and `bit_depth_chroma_minus8` behind
+/// five reserved one bits.
+const HIGHEST_BIT_DEPTH_MINUS8_AN_HEVC_CONFIGURATION_RECORD_STATES: u32 = 7;
 
 /// One track's `stsd` entry, tagged with the medium the track carries.
 ///
@@ -422,7 +425,7 @@ fn hevc_decoder_configuration_record(
         // header leaves a decoder with no second source for it.
         if let Some(carries_no_payload) = nal_units
             .iter()
-            .find(|nal_unit| nal_unit.len() <= H265_NAL_UNIT_HEADER_BYTES)
+            .find(|nal_unit| nal_unit.len() <= AnnexBNalHeaderGrammar::H265.nal_unit_header_bytes())
         {
             return Err(MoqExtensionError::MalformedBitstream {
                 what: format!(
@@ -452,6 +455,10 @@ fn hevc_decoder_configuration_record(
         sequence_parameter_set_fields.bit_depth_chroma_minus8;
     hevc_configuration.num_temporal_layers =
         sequence_parameter_set_fields.sps_max_sub_layers_minus1 + 1;
+    // ISO/IEC 14496-15 §8.3.3 defines `temporalIdNested` as the SPS's own
+    // `sps_temporal_id_nesting_flag`.
+    hevc_configuration.temporal_id_nested =
+        sequence_parameter_set_fields.sps_temporal_id_nesting_flag;
     hevc_configuration.length_size_minus_one = NAL_UNIT_LENGTH_PREFIX_BYTES - 1;
     hevc_configuration.arrays = parameter_set_arrays
         .into_iter()
@@ -470,7 +477,8 @@ fn hevc_decoder_configuration_record(
 /// emulation-prevention bytes removed, which is what both the fixed-offset
 /// read and the bit reader below work over.
 fn h265_sequence_parameter_set_rbsp(sequence_parameter_set: &[u8]) -> Result<Vec<u8>> {
-    if sequence_parameter_set.len() <= H265_NAL_UNIT_HEADER_BYTES {
+    let nal_unit_header_bytes = AnnexBNalHeaderGrammar::H265.nal_unit_header_bytes();
+    if sequence_parameter_set.len() <= nal_unit_header_bytes {
         return Err(MoqExtensionError::MalformedBitstream {
             what: format!(
                 "the h265 sequence parameter set is {} bytes, its NAL header and nothing else, so \
@@ -480,7 +488,7 @@ fn h265_sequence_parameter_set_rbsp(sequence_parameter_set: &[u8]) -> Result<Vec
         });
     }
     Ok(remove_emulation_prevention_bytes(
-        &sequence_parameter_set[H265_NAL_UNIT_HEADER_BYTES..],
+        &sequence_parameter_set[nal_unit_header_bytes..],
     ))
 }
 
@@ -557,6 +565,7 @@ fn rfc6381_codec_string_from_h265_profile_tier_level(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SequenceParameterSetFieldsTheHevcConfigurationStates {
     sps_max_sub_layers_minus1: u8,
+    sps_temporal_id_nesting_flag: bool,
     chroma_format_idc: u8,
     bit_depth_luma_minus8: u8,
     bit_depth_chroma_minus8: u8,
@@ -575,8 +584,18 @@ fn read_h265_sequence_parameter_set_fields(
     };
 
     reader.read_next_bits(4).ok_or_else(unreadable)?; // sps_video_parameter_set_id
-    let sps_max_sub_layers_minus1 = reader.read_next_bits(3).ok_or_else(unreadable)? as u8;
-    reader.read_next_bits(1).ok_or_else(unreadable)?; // sps_temporal_id_nesting_flag
+    let sps_max_sub_layers_minus1 = reader.read_next_bits(3).ok_or_else(unreadable)?;
+    if sps_max_sub_layers_minus1 > HIGHEST_H265_SPS_MAX_SUB_LAYERS_MINUS1 {
+        return Err(MoqExtensionError::MalformedBitstream {
+            what: format!(
+                "the h265 sequence parameter set states `sps_max_sub_layers_minus1` \
+                 {sps_max_sub_layers_minus1}, past the \
+                 {HIGHEST_H265_SPS_MAX_SUB_LAYERS_MINUS1} ITU-T H.265 §7.4.3.2.1 allows — the \
+                 temporal layer count `hvcC` states cannot be derived from it"
+            ),
+        });
+    }
+    let sps_temporal_id_nesting_flag = reader.read_next_bits(1).ok_or_else(unreadable)? == 1;
     skip_h265_profile_tier_level(&mut reader, sps_max_sub_layers_minus1).ok_or_else(unreadable)?;
 
     reader
@@ -584,8 +603,8 @@ fn read_h265_sequence_parameter_set_fields(
         .ok_or_else(unreadable)?; // sps_seq_parameter_set_id
     let chroma_format_idc = reader
         .read_next_unsigned_exponential_golomb()
-        .ok_or_else(unreadable)? as u8;
-    if chroma_format_idc > 3 {
+        .ok_or_else(unreadable)?;
+    if chroma_format_idc > HIGHEST_H265_CHROMA_FORMAT_IDC_THE_STANDARD_DEFINES {
         return Err(MoqExtensionError::MalformedBitstream {
             what: format!(
                 "the h265 sequence parameter set states `chroma_format_idc` {chroma_format_idc}, \
@@ -613,16 +632,33 @@ fn read_h265_sequence_parameter_set_fields(
     }
     let bit_depth_luma_minus8 = reader
         .read_next_unsigned_exponential_golomb()
-        .ok_or_else(unreadable)? as u8;
+        .ok_or_else(unreadable)?;
     let bit_depth_chroma_minus8 = reader
         .read_next_unsigned_exponential_golomb()
-        .ok_or_else(unreadable)? as u8;
+        .ok_or_else(unreadable)?;
+    for (syntax_element, bit_depth_minus8) in [
+        ("bit_depth_luma_minus8", bit_depth_luma_minus8),
+        ("bit_depth_chroma_minus8", bit_depth_chroma_minus8),
+    ] {
+        if bit_depth_minus8 > HIGHEST_BIT_DEPTH_MINUS8_AN_HEVC_CONFIGURATION_RECORD_STATES {
+            return Err(MoqExtensionError::MalformedBitstream {
+                what: format!(
+                    "the h265 sequence parameter set states `{syntax_element}` \
+                     {bit_depth_minus8}, and an `hvcC` states a bit depth in three bits, so only \
+                     0 to {HIGHEST_BIT_DEPTH_MINUS8_AN_HEVC_CONFIGURATION_RECORD_STATES} is \
+                     expressible — writing it would have a subscriber configure a decoder for a \
+                     bit depth the stream does not carry"
+                ),
+            });
+        }
+    }
 
     Ok(SequenceParameterSetFieldsTheHevcConfigurationStates {
-        sps_max_sub_layers_minus1,
-        chroma_format_idc,
-        bit_depth_luma_minus8,
-        bit_depth_chroma_minus8,
+        sps_max_sub_layers_minus1: sps_max_sub_layers_minus1 as u8,
+        sps_temporal_id_nesting_flag,
+        chroma_format_idc: chroma_format_idc as u8,
+        bit_depth_luma_minus8: bit_depth_luma_minus8 as u8,
+        bit_depth_chroma_minus8: bit_depth_chroma_minus8 as u8,
     })
 }
 
@@ -632,7 +668,7 @@ fn read_h265_sequence_parameter_set_fields(
 /// sub-layers, then 88 or 8 further bits per sub-layer that declared them.
 fn skip_h265_profile_tier_level(
     reader: &mut RbspBitReaderThatRefusesToReadPastTheEnd<'_>,
-    sps_max_sub_layers_minus1: u8,
+    sps_max_sub_layers_minus1: u32,
 ) -> Option<()> {
     reader.skip_next_bits(H265_PROFILE_TIER_LEVEL_BYTES as u32 * 8)?;
 
@@ -724,7 +760,7 @@ impl<'rbsp> RbspBitReaderThatRefusesToReadPastTheEnd<'rbsp> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mp4_atom::{Encode, Stsd};
+    use mp4_atom::{Decode, Encode, Stsd};
 
     /// Writes the syntax elements a parameter set is made of, so a fixture
     /// states a stream's shape rather than a hex blob nobody can check.
@@ -830,15 +866,39 @@ mod tests {
         }
     }
 
-    /// A Main-profile, main-tier, level 3.1 SPS for 320x180 4:2:0 8-bit — ITU-T
-    /// H.265 §7.3.2.2.1 down to the bit depths, which is as far as `hvcC` reads.
-    fn h265_main_profile_320x180_sequence_parameter_set() -> Vec<u8> {
+    /// The SPS syntax elements the H.265 fixtures vary. Everything else the
+    /// written set states is fixed: Main profile, main tier, level 3.1, 320x180.
+    struct H265SequenceParameterSetFixtureFields {
+        sps_max_sub_layers_minus1: u32,
+        sps_temporal_id_nesting_flag: u8,
+        chroma_format_idc: u32,
+        bit_depth_luma_minus8: u32,
+        bit_depth_chroma_minus8: u32,
+    }
+
+    impl Default for H265SequenceParameterSetFixtureFields {
+        fn default() -> Self {
+            Self {
+                sps_max_sub_layers_minus1: 0,
+                sps_temporal_id_nesting_flag: 1,
+                chroma_format_idc: 1,
+                bit_depth_luma_minus8: 0,
+                bit_depth_chroma_minus8: 0,
+            }
+        }
+    }
+
+    /// A Main-profile, main-tier, level 3.1 SPS for 320x180 — ITU-T H.265
+    /// §7.3.2.2.1 down to the bit depths, which is as far as `hvcC` reads.
+    fn h265_320x180_sequence_parameter_set(
+        fields: &H265SequenceParameterSetFixtureFields,
+    ) -> Vec<u8> {
         let mut writer = ParameterSetBitWriter::default();
         writer
             .bits(0, 4) // sps_video_parameter_set_id
-            .bits(0, 3) // sps_max_sub_layers_minus1
-            .bit(1) // sps_temporal_id_nesting_flag
-            // profile_tier_level(1, 0)
+            .bits(u64::from(fields.sps_max_sub_layers_minus1), 3)
+            .bit(fields.sps_temporal_id_nesting_flag)
+            // profile_tier_level(1, sps_max_sub_layers_minus1)
             .bits(0, 2) // general_profile_space
             .bit(0) // general_tier_flag — main tier
             .bits(1, 5) // general_profile_idc — Main
@@ -849,16 +909,70 @@ mod tests {
             .bit(1) // general_frame_only_constraint_flag
             .bits(0, 32) // general_reserved_zero_43bits, first half
             .bits(0, 12) // general_reserved_zero_43bits and general_inbld_flag
-            .bits(93, 8) // general_level_idc — 3.1
+            .bits(93, 8); // general_level_idc — 3.1
+        for _ in 0..fields.sps_max_sub_layers_minus1 {
+            writer
+                .bit(0) // sub_layer_profile_present_flag
+                .bit(0); // sub_layer_level_present_flag
+        }
+        if fields.sps_max_sub_layers_minus1 > 0 {
+            for _ in fields.sps_max_sub_layers_minus1..8 {
+                writer.bits(0, 2); // reserved_zero_2bits
+            }
+        }
+        writer
             .unsigned_exp_golomb(0) // sps_seq_parameter_set_id
-            .unsigned_exp_golomb(1) // chroma_format_idc — 4:2:0
+            .unsigned_exp_golomb(fields.chroma_format_idc);
+        if fields.chroma_format_idc == 3 {
+            writer.bit(0); // separate_colour_plane_flag
+        }
+        writer
             .unsigned_exp_golomb(320) // pic_width_in_luma_samples
             .unsigned_exp_golomb(180) // pic_height_in_luma_samples
             .bit(0) // conformance_window_flag
-            .unsigned_exp_golomb(0) // bit_depth_luma_minus8
-            .unsigned_exp_golomb(0) // bit_depth_chroma_minus8
+            .unsigned_exp_golomb(fields.bit_depth_luma_minus8)
+            .unsigned_exp_golomb(fields.bit_depth_chroma_minus8)
             .unsigned_exp_golomb(4); // log2_max_pic_order_cnt_lsb_minus4
         writer.finish(&[0x42, 0x01])
+    }
+
+    fn h265_main_profile_320x180_sequence_parameter_set() -> Vec<u8> {
+        h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields::default())
+    }
+
+    /// ITU-T H.265 §7.4.2: an encoder writes `00 00 03` wherever the payload
+    /// would otherwise carry two zero bytes ahead of a byte low enough to
+    /// complete a start code.
+    fn insert_emulation_prevention_bytes(nal_unit_payload: &[u8]) -> Vec<u8> {
+        let mut escaped = Vec::with_capacity(nal_unit_payload.len());
+        let mut zero_run = 0usize;
+        for &byte in nal_unit_payload {
+            if zero_run == 2 && byte <= 0x03 {
+                escaped.push(0x03);
+                zero_run = 0;
+            }
+            zero_run = if byte == 0x00 { zero_run + 1 } else { 0 };
+            escaped.push(byte);
+        }
+        escaped
+    }
+
+    fn h265_main_profile_320x180_sequence_parameter_set_as_an_encoder_escapes_it() -> Vec<u8> {
+        let unescaped = h265_main_profile_320x180_sequence_parameter_set();
+        let (nal_unit_header, payload) =
+            unescaped.split_at(AnnexBNalHeaderGrammar::H265.nal_unit_header_bytes());
+        let mut escaped = nal_unit_header.to_vec();
+        escaped.extend(insert_emulation_prevention_bytes(payload));
+        escaped
+    }
+
+    fn h265_parameter_sets_whose_sequence_parameter_set_is(
+        sequence_parameter_set: Vec<u8>,
+    ) -> ParameterSetsFromAnnexBAccessUnit {
+        ParameterSetsFromAnnexBAccessUnit {
+            sequence_parameter_set_nal_units: vec![sequence_parameter_set],
+            ..h265_parameter_sets()
+        }
     }
 
     fn h265_parameter_sets() -> ParameterSetsFromAnnexBAccessUnit {
@@ -931,16 +1045,15 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_entry_goes_into_an_stsd_as_it_stands() {
+    fn a_sample_entry_goes_into_an_stsd_and_reads_back_out_of_it_unchanged() {
         let video = build_video_sample_entry("h264", &h264_parameter_sets(), 320, 180)
             .expect("the parameter sets are complete");
         let audio = build_opus_sample_entry(2, 48_000, 312).expect("stereo opus is expressible");
+        let video_sample_entry = video.cmaf_track_sample_entry.into_stsd_sample_entry();
+        let audio_sample_entry = audio.cmaf_track_sample_entry.into_stsd_sample_entry();
 
         let sample_description = Stsd {
-            codecs: vec![
-                video.cmaf_track_sample_entry.into_stsd_sample_entry(),
-                audio.cmaf_track_sample_entry.into_stsd_sample_entry(),
-            ],
+            codecs: vec![video_sample_entry.clone(), audio_sample_entry.clone()],
         };
         let mut encoded = Vec::new();
         sample_description
@@ -948,13 +1061,17 @@ mod tests {
             .expect("both entries encode");
 
         assert_eq!(&encoded[4..8], b"stsd");
-        assert!(
-            encoded.windows(4).any(|kind| kind == b"avc1"),
-            "the video entry is in the sample description"
+        let mut unread_encoded_bytes: &[u8] = &encoded;
+        let decoded_sample_description = Stsd::decode(&mut unread_encoded_bytes)
+            .expect("what this path writes into an init segment is what a subscriber reads");
+        assert_eq!(
+            decoded_sample_description.codecs,
+            vec![video_sample_entry, audio_sample_entry],
+            "a subscriber reads back the entries the publisher described its tracks with"
         );
         assert!(
-            encoded.windows(4).any(|kind| kind == b"Opus"),
-            "the audio entry is in the sample description"
+            unread_encoded_bytes.is_empty(),
+            "the box length covers both entries and nothing beyond them"
         );
     }
 
@@ -1086,13 +1203,214 @@ mod tests {
     #[test]
     fn an_h265_sequence_parameter_set_cut_short_of_the_bit_depths_is_refused_rather_than_guessed() {
         let full = h265_main_profile_320x180_sequence_parameter_set();
-        let mut parameter_sets = h265_parameter_sets();
-        parameter_sets.sequence_parameter_set_nal_units = vec![full[..15].to_vec()];
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(full[..15].to_vec());
 
         let refusal = build_video_sample_entry("h265", &parameter_sets, 320, 180)
             .expect_err("a truncated SPS states no chroma format");
 
-        assert!(refusal.to_string().contains("h265"), "{refusal}");
+        assert!(
+            refusal
+                .to_string()
+                .contains("ends before the chroma format and bit depths"),
+            "the set reached the walk and ran out inside it: {refusal}"
+        );
+    }
+
+    #[test]
+    fn an_h265_sequence_parameter_set_cut_short_of_the_profile_tier_level_names_that_block() {
+        let full = h265_main_profile_320x180_sequence_parameter_set();
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(full[..14].to_vec());
+
+        let refusal = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect_err("a set this short cannot hold a profile-tier-level block");
+
+        assert!(
+            refusal.to_string().contains("profile-tier-level"),
+            "the shorter cut is refused for the block it lacks, not for the bit depths: {refusal}"
+        );
+    }
+
+    #[test]
+    fn an_h265_chroma_format_past_the_defined_range_is_refused_by_the_value_the_sps_stated() {
+        let sequence_parameter_set =
+            h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                chroma_format_idc: 259,
+                ..Default::default()
+            });
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+        let refusal = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect_err("259 is no chroma format ITU-T H.265 defines");
+
+        let message = refusal.to_string();
+        assert!(
+            message.contains("259"),
+            "the value the SPS stated is named, not one it wrapped to: {message}"
+        );
+        assert!(message.contains("chroma_format_idc"), "{message}");
+    }
+
+    #[test]
+    fn an_h265_luma_bit_depth_wider_than_an_hvcc_can_state_is_refused_by_name() {
+        let sequence_parameter_set =
+            h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                bit_depth_luma_minus8: 8,
+                ..Default::default()
+            });
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+        let refusal = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect_err("16-bit luma has no spelling in a three-bit field");
+
+        let message = refusal.to_string();
+        assert!(message.contains("bit_depth_luma_minus8"), "{message}");
+        assert!(
+            message.contains("three bits"),
+            "the refusal says what the record can state: {message}"
+        );
+    }
+
+    #[test]
+    fn an_h265_chroma_bit_depth_wider_than_an_hvcc_can_state_is_refused_by_name() {
+        let sequence_parameter_set =
+            h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                bit_depth_chroma_minus8: 8,
+                ..Default::default()
+            });
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+        let refusal = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect_err("16-bit chroma has no spelling in a three-bit field");
+
+        let message = refusal.to_string();
+        assert!(message.contains("bit_depth_chroma_minus8"), "{message}");
+        assert!(message.contains("three bits"), "{message}");
+    }
+
+    #[test]
+    fn the_widest_bit_depth_an_hvcc_can_state_reaches_it_unchanged() {
+        let sequence_parameter_set =
+            h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                bit_depth_luma_minus8: 7,
+                bit_depth_chroma_minus8: 7,
+                ..Default::default()
+            });
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+        let entry = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect("15-bit is the widest a three-bit field states, and it states it");
+
+        let Codec::Hvc1(hvc1) = entry.cmaf_track_sample_entry.into_stsd_sample_entry() else {
+            panic!("an h265 track is described by an `hvc1` entry");
+        };
+        assert_eq!(hvc1.hvcc.bit_depth_luma_minus8, 7);
+        assert_eq!(hvc1.hvcc.bit_depth_chroma_minus8, 7);
+    }
+
+    #[test]
+    fn an_h265_sequence_parameter_set_declaring_more_sub_layers_than_the_standard_allows_is_refused()
+     {
+        let sequence_parameter_set =
+            h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                sps_max_sub_layers_minus1: 7,
+                ..Default::default()
+            });
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+        let refusal = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect_err("ITU-T H.265 §7.4.3.2.1 bounds sps_max_sub_layers_minus1 at 6");
+
+        let message = refusal.to_string();
+        assert!(message.contains("sps_max_sub_layers_minus1"), "{message}");
+        assert!(message.contains("7.4.3.2.1"), "{message}");
+    }
+
+    #[test]
+    fn the_temporal_layer_count_counts_every_sub_layer_the_sps_declared() {
+        let sequence_parameter_set =
+            h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                sps_max_sub_layers_minus1: 6,
+                ..Default::default()
+            });
+        let parameter_sets =
+            h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+        let entry = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect("seven temporal layers is what the standard's widest SPS declares");
+
+        let Codec::Hvc1(hvc1) = entry.cmaf_track_sample_entry.into_stsd_sample_entry() else {
+            panic!("an h265 track is described by an `hvc1` entry");
+        };
+        assert_eq!(hvc1.hvcc.num_temporal_layers, 7);
+    }
+
+    #[test]
+    fn the_hevc_configuration_record_states_the_temporal_id_nesting_the_sps_declared() {
+        for (sps_temporal_id_nesting_flag, temporal_id_nested) in [(1u8, true), (0u8, false)] {
+            let sequence_parameter_set =
+                h265_320x180_sequence_parameter_set(&H265SequenceParameterSetFixtureFields {
+                    sps_temporal_id_nesting_flag,
+                    ..Default::default()
+                });
+            let parameter_sets =
+                h265_parameter_sets_whose_sequence_parameter_set_is(sequence_parameter_set);
+
+            let entry = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+                .expect("the parameter sets are complete");
+
+            let Codec::Hvc1(hvc1) = entry.cmaf_track_sample_entry.into_stsd_sample_entry() else {
+                panic!("an h265 track is described by an `hvc1` entry");
+            };
+            assert_eq!(
+                hvc1.hvcc.temporal_id_nested, temporal_id_nested,
+                "sps_temporal_id_nesting_flag {sps_temporal_id_nesting_flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_h265_sequence_parameter_set_an_encoder_escaped_is_read_past_its_escapes_and_stored_with_them()
+     {
+        let escaped = h265_main_profile_320x180_sequence_parameter_set_as_an_encoder_escapes_it();
+        assert!(
+            escaped.len() > h265_main_profile_320x180_sequence_parameter_set().len(),
+            "the fixture is one a real encoder would emit, escapes and all"
+        );
+        assert!(
+            escaped
+                .windows(3)
+                .any(|run| run == [0x00, 0x00, 0x03].as_slice()),
+            "the escaped set carries the `03` bytes that must survive into `hvcC`"
+        );
+        let parameter_sets = h265_parameter_sets_whose_sequence_parameter_set_is(escaped.clone());
+
+        let entry = build_video_sample_entry("h265", &parameter_sets, 320, 180)
+            .expect("the parameter sets are complete");
+
+        let Codec::Hvc1(hvc1) = entry.cmaf_track_sample_entry.into_stsd_sample_entry() else {
+            panic!("an h265 track is described by an `hvc1` entry");
+        };
+        assert_eq!(hvc1.hvcc.chroma_format_idc, 1, "4:2:0");
+        assert_eq!(hvc1.hvcc.bit_depth_luma_minus8, 0);
+        assert_eq!(hvc1.hvcc.bit_depth_chroma_minus8, 0);
+        assert_eq!(hvc1.hvcc.general_profile_idc, 1, "Main");
+        assert_eq!(hvc1.hvcc.general_level_idc, 93, "level 3.1");
+        assert_eq!(
+            hvc1.hvcc.arrays[1].nalus,
+            vec![escaped],
+            "the set is stored as it arrived — ISO/IEC 14496-15 §5.3.3.1 keeps the escapes in"
+        );
+        assert_eq!(
+            entry.rfc6381_codec_string, "hvc1.1.6.L93.B0",
+            "the catalog names the same profile, tier and level the escaped set states"
+        );
     }
 
     #[test]

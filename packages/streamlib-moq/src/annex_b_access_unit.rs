@@ -26,11 +26,11 @@ const H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 7;
 /// H.264 `nal_unit_type` for a picture parameter set.
 const H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 8;
 /// H.265 `nal_unit_type` for a video parameter set (ITU-T H.265 §7.4.2.2).
-const H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET: u8 = 32;
+pub(crate) const H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET: u8 = 32;
 /// H.265 `nal_unit_type` for a sequence parameter set.
-const H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 33;
+pub(crate) const H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 33;
 /// H.265 `nal_unit_type` for a picture parameter set.
-const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
+pub(crate) const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
 
 /// How `avc1` and `hvc1` prefix each NAL unit inside a sample. Four bytes is
 /// what `avcC.length_size` / `hvcC.length_size_minus_one` declare, and the two

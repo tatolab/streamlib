@@ -16,13 +16,388 @@ use std::time::Duration;
 pub mod annex_b_access_unit;
 pub mod cmaf_fragment;
 pub mod cmaf_init_segment;
+pub mod cmaf_init_segment_reader;
+pub mod cmaf_init_segment_reader;
 pub mod cmaf_sample_entry;
 pub mod cmaf_track_timeline;
 pub mod encoded_media_sample;
 pub mod error;
 pub mod monotonic_clock;
 pub mod moq_broadcast_catalog;
+pub mod moq_broadcast_publisher;
+pub mod moq_broadcast_publisher;
+pub mod moq_broadcast_subscriber;
+pub mod moq_broadcast_subscriber;
 pub mod moq_relay_config;
 pub mod moq_session;
 pub mod streamlib_bag_object;
 pub mod transport_stack;
+
+use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
+use crate::error::MoqExtensionError;
+use crate::moq_broadcast_publisher::{MoqBroadcastPublisher, MoqContainerFormat};
+use crate::moq_broadcast_subscriber::MoqBroadcastSubscriber;
+use crate::moq_relay_config::MoqRelayConfig;
+
+/// Bring up the tokio runtime and the TLS provider this wheel's sessions share.
+#[pyfunction]
+fn bring_up_the_transport_stack() -> PyResult<()> {
+    transport_stack::bring_up()?;
+    Ok(())
+}
+
+/// Publishes encoded media to a MoQ broadcast.
+///
+/// One thread owns a session for its whole life — the helper dispatches
+/// `process`, `stop` and `teardown` on one thread — and that, not the lock, is
+/// what makes the lifecycle safe. The lock is taken inside `detach` in every
+/// method regardless, because taking it with the GIL held while another thread
+/// holds it across a detached network call is a deadlock and not a wait: the
+/// detached thread cannot re-attach to release it.
+#[pyclass]
+struct MoqBroadcastPublishingSession {
+    publisher: Mutex<MoqBroadcastPublisher>,
+}
+
+#[pymethods]
+impl MoqBroadcastPublishingSession {
+    /// Constructs without connecting: opening the session is what the first
+    /// bag does, so a relay round trip never runs inside `setup()`.
+    #[new]
+    fn new(relay_url: String, broadcast: String, container_format: &str) -> PyResult<Self> {
+        let container_format = MoqContainerFormat::of_wire_name(container_format)?;
+        let config = MoqRelayConfig {
+            relay_endpoint_url: relay_url,
+            broadcast_path: broadcast,
+        };
+        Ok(Self {
+            publisher: Mutex::new(MoqBroadcastPublisher::new(config, container_format)),
+        })
+    }
+
+    /// Fix the broadcast's tracks, in the order their links were wired.
+    fn declare_tracks(&self, python: Python<'_>, inbound_link_names: Vec<String>) -> PyResult<()> {
+        python.detach(|| self.locked_publisher()?.declare_tracks(inbound_link_names))?;
+        Ok(())
+    }
+
+    /// Publish one access unit on the track that link owns.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        inbound_link_name, codec, annex_b_access_unit, is_sync_point, group_index,
+        sequence_index, width, height, color, timestamp_ns
+    ))]
+    fn publish_video_access_unit(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        codec: String,
+        annex_b_access_unit: &[u8],
+        is_sync_point: bool,
+        group_index: u64,
+        sequence_index: u64,
+        width: u32,
+        height: u32,
+        color: Option<BTreeMap<String, String>>,
+        timestamp_ns: i64,
+    ) -> PyResult<()> {
+        // Copied while the GIL is held: the slice borrows Python's buffer.
+        let sample = EncodedMediaSample::VideoAccessUnit(EncodedVideoAccessUnit {
+            codec,
+            annex_b_access_unit: bytes::Bytes::copy_from_slice(annex_b_access_unit),
+            is_sync_point,
+            group_index,
+            sequence_index,
+            width,
+            height,
+            color,
+            timestamp_ns,
+        });
+        self.publish(python, inbound_link_name, sample)
+    }
+
+    /// Publish one Opus packet on the track that link owns.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        inbound_link_name, opus_packet, is_sync_point, group_index, sequence_index,
+        sample_rate, channels, sample_count, pre_skip, timestamp_ns
+    ))]
+    fn publish_audio_packet(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        opus_packet: &[u8],
+        is_sync_point: bool,
+        group_index: u64,
+        sequence_index: u64,
+        sample_rate: u32,
+        channels: u32,
+        sample_count: u32,
+        pre_skip: u32,
+        timestamp_ns: i64,
+    ) -> PyResult<()> {
+        let sample = EncodedMediaSample::AudioPacket(EncodedAudioPacket {
+            codec: "opus".to_owned(),
+            opus_packet: bytes::Bytes::copy_from_slice(opus_packet),
+            is_sync_point,
+            group_index,
+            sequence_index,
+            sample_rate,
+            channels,
+            sample_count,
+            pre_skip,
+            timestamp_ns,
+        });
+        self.publish(python, inbound_link_name, sample)
+    }
+
+    /// Finish every open group and drop the connection.
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
+        python.detach(|| {
+            let mut publisher = self.locked_publisher()?;
+            if let Ok(runtime) = transport_stack::transport_runtime() {
+                runtime.block_on(publisher.close());
+            }
+            Ok::<(), MoqExtensionError>(())
+        })?;
+        Ok(())
+    }
+
+    #[getter]
+    fn is_connected(&self, python: Python<'_>) -> PyResult<bool> {
+        Ok(python.detach(|| self.locked_publisher().map(|open| open.is_connected()))?)
+    }
+}
+
+impl MoqBroadcastPublishingSession {
+    fn publish(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        sample: EncodedMediaSample,
+    ) -> PyResult<()> {
+        python.detach(|| {
+            let mut publisher = self.locked_publisher()?;
+            transport_stack::transport_runtime()?
+                .block_on(publisher.publish(inbound_link_name, sample))
+        })?;
+        Ok(())
+    }
+
+    fn locked_publisher(&self) -> Result<MutexGuard<'_, MoqBroadcastPublisher>, MoqExtensionError> {
+        self.publisher
+            .lock()
+            .map_err(|_| MoqExtensionError::Transport {
+                what: "the MoQ publishing session was left poisoned by an earlier panic".to_owned(),
+            })
+    }
+}
+
+/// Subscribes to a MoQ broadcast.
+///
+/// The subscriber's reading thread owns the session for its whole life — it
+/// connects, drains and closes it — so no two threads reach one session. The
+/// lock is taken inside `detach` in every method regardless, for the same
+/// deadlock reason the publisher's is.
+#[pyclass]
+struct MoqBroadcastSubscribingSession {
+    subscriber: Mutex<MoqBroadcastSubscriber>,
+}
+
+#[pymethods]
+impl MoqBroadcastSubscribingSession {
+    #[new]
+    #[pyo3(signature = (relay_url, broadcast, container_format, video_track=None, audio_track=None))]
+    fn new(
+        relay_url: String,
+        broadcast: String,
+        container_format: &str,
+        video_track: Option<String>,
+        audio_track: Option<String>,
+    ) -> PyResult<Self> {
+        let container_format = MoqContainerFormat::of_wire_name(container_format)?;
+        let config = MoqRelayConfig {
+            relay_endpoint_url: relay_url,
+            broadcast_path: broadcast,
+        };
+        Ok(Self {
+            subscriber: Mutex::new(MoqBroadcastSubscriber::new(
+                config,
+                container_format,
+                video_track,
+                audio_track,
+            )?),
+        })
+    }
+
+    /// Connect and begin draining. Called from the processor's own thread, not
+    /// from `setup()`, so a relay outage cannot spend the start-up budget.
+    fn connect(&self, python: Python<'_>) -> PyResult<()> {
+        python.detach(|| {
+            let mut subscriber = self.locked_subscriber()?;
+            transport_stack::transport_runtime()?.block_on(subscriber.connect())
+        })?;
+        Ok(())
+    }
+
+    /// The next sample, or `None` if none arrived within `timeout_ms`.
+    fn next_media(&self, python: Python<'_>, timeout_ms: u64) -> PyResult<Option<Py<PyAny>>> {
+        let received = python.detach(|| {
+            let mut subscriber = self.locked_subscriber()?;
+            transport_stack::transport_runtime()?
+                .block_on(subscriber.next_sample(Duration::from_millis(timeout_ms)))
+        })?;
+
+        Ok(match received {
+            Some(EncodedMediaSample::VideoAccessUnit(access_unit)) => {
+                Some(Py::new(python, ReceivedVideoAccessUnit::from(access_unit))?.into_any())
+            }
+            Some(EncodedMediaSample::AudioPacket(packet)) => {
+                Some(Py::new(python, ReceivedOpusPacket::from(packet))?.into_any())
+            }
+            None => None,
+        })
+    }
+
+    /// Stop draining and drop the connection.
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
+        python.detach(|| {
+            self.locked_subscriber()?.close();
+            Ok::<(), MoqExtensionError>(())
+        })?;
+        Ok(())
+    }
+
+    #[getter]
+    fn is_connected(&self, python: Python<'_>) -> PyResult<bool> {
+        Ok(python.detach(|| self.locked_subscriber().map(|open| open.is_connected()))?)
+    }
+}
+
+impl MoqBroadcastSubscribingSession {
+    fn locked_subscriber(
+        &self,
+    ) -> Result<MutexGuard<'_, MoqBroadcastSubscriber>, MoqExtensionError> {
+        self.subscriber
+            .lock()
+            .map_err(|_| MoqExtensionError::Transport {
+                what: "the MoQ subscribing session was left poisoned by an earlier panic"
+                    .to_owned(),
+            })
+    }
+}
+
+/// One access unit off a MoQ broadcast, with every key the video wire contract
+/// requires taken from the broadcast itself.
+#[pyclass]
+struct ReceivedVideoAccessUnit {
+    inner: EncodedVideoAccessUnit,
+}
+
+impl From<EncodedVideoAccessUnit> for ReceivedVideoAccessUnit {
+    fn from(inner: EncodedVideoAccessUnit) -> Self {
+        Self { inner }
+    }
+}
+
+#[pymethods]
+impl ReceivedVideoAccessUnit {
+    #[getter]
+    fn codec(&self) -> &str {
+        &self.inner.codec
+    }
+    #[getter]
+    fn bitstream<'python>(&self, python: Python<'python>) -> Bound<'python, PyBytes> {
+        PyBytes::new(python, &self.inner.annex_b_access_unit)
+    }
+    #[getter]
+    fn is_sync_point(&self) -> bool {
+        self.inner.is_sync_point
+    }
+    #[getter]
+    fn group_index(&self) -> u64 {
+        self.inner.group_index
+    }
+    #[getter]
+    fn sequence_index(&self) -> u64 {
+        self.inner.sequence_index
+    }
+    #[getter]
+    fn width(&self) -> u32 {
+        self.inner.width
+    }
+    #[getter]
+    fn height(&self) -> u32 {
+        self.inner.height
+    }
+    #[getter]
+    fn timestamp_ns(&self) -> i64 {
+        self.inner.timestamp_ns
+    }
+    #[getter]
+    fn color(&self) -> Option<BTreeMap<String, String>> {
+        self.inner.color.clone()
+    }
+}
+
+/// One Opus packet off a MoQ broadcast.
+#[pyclass]
+struct ReceivedOpusPacket {
+    inner: EncodedAudioPacket,
+}
+
+impl From<EncodedAudioPacket> for ReceivedOpusPacket {
+    fn from(inner: EncodedAudioPacket) -> Self {
+        Self { inner }
+    }
+}
+
+#[pymethods]
+impl ReceivedOpusPacket {
+    #[getter]
+    fn bitstream<'python>(&self, python: Python<'python>) -> Bound<'python, PyBytes> {
+        PyBytes::new(python, &self.inner.opus_packet)
+    }
+    #[getter]
+    fn is_sync_point(&self) -> bool {
+        self.inner.is_sync_point
+    }
+    #[getter]
+    fn group_index(&self) -> u64 {
+        self.inner.group_index
+    }
+    #[getter]
+    fn sequence_index(&self) -> u64 {
+        self.inner.sequence_index
+    }
+    #[getter]
+    fn sample_rate(&self) -> u32 {
+        self.inner.sample_rate
+    }
+    #[getter]
+    fn channels(&self) -> u32 {
+        self.inner.channels
+    }
+    #[getter]
+    fn sample_count(&self) -> u32 {
+        self.inner.sample_count
+    }
+    #[getter]
+    fn pre_skip(&self) -> u32 {
+        self.inner.pre_skip
+    }
+    #[getter]
+    fn timestamp_ns(&self) -> i64 {
+        self.inner.timestamp_ns
+    }
+}
+
+#[pymodule]
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(bring_up_the_transport_stack, module)?)?;
+    module.add_class::<MoqBroadcastPublishingSession>()?;
+    module.add_class::<MoqBroadcastSubscribingSession>()?;
+    module.add_class::<ReceivedVideoAccessUnit>()?;
+    module.add_class::<ReceivedOpusPacket>()?;
+    Ok(())
+}
