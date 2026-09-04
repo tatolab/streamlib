@@ -10,6 +10,9 @@ use petgraph::graph::DiGraph;
 use serde::Serialize;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
+use crate::core::json_schema::{
+    GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput, ProcessorNodeOutput,
+};
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,14 +127,18 @@ impl std::fmt::Display for Graph {
     }
 }
 
-impl Serialize for Graph {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use crate::core::json_schema::{GraphResponse, LinkOutput, ProcessorNodeOutput};
-
-        let response = GraphResponse {
+impl Graph {
+    /// Render this graph as the `/api/graph` payload, carrying
+    /// `loaded_capability_extensions` alongside it.
+    ///
+    /// The extensions are a property of the process, not of the graph, so the
+    /// runtime that owns the registry passes them in; serializing a graph on
+    /// its own renders the key empty rather than omitting it.
+    pub(crate) fn to_graph_response(
+        &self,
+        loaded_capability_extensions: Vec<LoadedCapabilityExtensionOutput>,
+    ) -> GraphResponse {
+        GraphResponse {
             nodes: self
                 .digraph
                 .node_indices()
@@ -142,8 +149,16 @@ impl Serialize for Graph {
                 .edge_indices()
                 .map(|idx| LinkOutput::from(&self.digraph[idx]))
                 .collect(),
-        };
+            extensions: loaded_capability_extensions,
+        }
+    }
+}
 
-        response.serialize(serializer)
+impl Serialize for Graph {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_graph_response(Vec::new()).serialize(serializer)
     }
 }

@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::RuntimeOperations;
+use super::capability_extensions::LoadedCapabilityExtensionRegistry;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
 use super::graph_change_listener::GraphChangeListener;
@@ -23,6 +24,7 @@ use crate::core::graph::{
     GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
     ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent,
 };
+use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
@@ -113,6 +115,11 @@ pub struct Runner {
     /// construction needs the live GpuContext but whose registration must
     /// precede the first `process()` call. Drained on each `start()`.
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
+    /// What the capability extensions installed beside the wheel registered
+    /// in this process. Held behind an `Arc` so the wheel's loader can hand a
+    /// clone to each extension's hook without holding the engine alive past
+    /// teardown.
+    loaded_capability_extensions: Arc<LoadedCapabilityExtensionRegistry>,
     /// Optional pipeline name carried across snapshot load → save.
     /// Set by [`Self::load_graph_snapshot`] and read by
     /// [`Self::save_graph_snapshot`] so a snapshot loaded from disk
@@ -183,11 +190,8 @@ impl Runner {
 
         // The engine substrate is empty by construction — there are no
         // compile-time-linked processors. Callers populate the
-        // `PROCESSOR_REGISTRY` after `Runner::new()` returns via
-        // `runtime.add_module(...)` / `runtime.add_module_with(...)`
-        // (which dlopen plugin cdylibs and register through the host's
-        // `processor_register` callback) or via direct
-        // `PROCESSOR_REGISTRY.register::<P>()` calls in-process.
+        // `PROCESSOR_REGISTRY` after `Runner::new()` returns, by calling
+        // `PROCESSOR_REGISTRY.register::<P>()` in process.
 
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
@@ -245,6 +249,7 @@ impl Runner {
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
+            loaded_capability_extensions: Arc::new(LoadedCapabilityExtensionRegistry::default()),
             pipeline_name: Arc::new(Mutex::new(None)),
         }))
     }
@@ -1023,10 +1028,24 @@ impl Runner {
     // Introspection
     // =========================================================================
 
+    /// The registry a capability extension's `load(host)` hook registers into.
+    ///
+    /// The wheel's loader hands a clone to each hook. What lands here renders
+    /// under `extensions` in [`Self::to_json`].
+    pub fn loaded_capability_extensions(&self) -> Arc<LoadedCapabilityExtensionRegistry> {
+        Arc::clone(&self.loaded_capability_extensions)
+    }
+
     /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
+        let extensions: Vec<_> = self
+            .loaded_capability_extensions
+            .registered()
+            .iter()
+            .map(LoadedCapabilityExtensionOutput::from)
+            .collect();
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(&*graph)
+            serde_json::to_value(graph.to_graph_response(extensions))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }
