@@ -59,7 +59,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The plugin ABI is deleted: no dlopen'd processor cdylibs, no `repr(C)`
   vtable surface, no load handshake, no build fingerprints. The extension paths are
-  Python packages and Rust source crates only.
+  Python packages and Rust source crates only — and an extension wheel is a Python
+  package: Rust inside, loaded across the CPython ABI, never dlopen'd by the engine
+  (extension-model, 2026-09-04).
   [importable-python-library; importable-python-library-ripout — SHIPPED #1715]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
@@ -322,12 +324,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED #2052; the sweep left
   every held consumer untouched]
   <!-- verify: git ls-files packages/clap packages/screen-capture examples/screen-recorder -->
-- **DECIDED** — No additional native-processor distribution mechanism is owed pre-1.0:
-  the extension paths in §Packages & extension model are the complete set, and
+- **DECIDED** — No additional native-processor *distribution* mechanism is owed
+  pre-1.0: an extension wheel is an ordinary Python package on the ordinary index, and
   closed-source Rust processors for Rust apps are deliberately not a path — a
   closed-source vendor ships the Python package whose native internals expose handles.
-  [consumer-tree-disposition — SHIPPED; the decision adds no mechanism, so no build is
-  owed]
+  What the extension-model pivot adds is not distribution but *registration*: the
+  capability extension's one explicit line in `app.py`, which §Packages & extension
+  model owns and the networking align decides. [consumer-tree-disposition — SHIPPED;
+  extension-model — the registration door is the one addition, 2026-09-04]
 - **DECIDED** — Lag-by-design ends for a converted consumer: when an engine change
   breaks one, the breakage is filed as tracked backlog at the consumer and never
   blocks the engine change.
@@ -711,7 +715,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   in the engine tree, statically linked into the wheel — pre-built named blocks
   instantiated and configured from Python (`rt.add(CameraSource)`), whose per-frame
   paths never enter the interpreter. Lag-by-design ends: built-ins ship inside the
-  wheel, current by construction. [importable-python-library — SHIPPED #1709]
+  wheel, current by construction. Since 2026-09-04 this names the shipped set, not a
+  rule: a further first-party capability is a built-in only under the criterion in
+  §Packages & extension model, and is otherwise an extension wheel.
+  [importable-python-library — SHIPPED #1709; extension-model for the scope clause]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_native_builtin_blocks.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
@@ -1359,7 +1366,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [codec-blocks — SHIPPED #2084 closing #1077, #2085 closing #756, #2086 closing #335]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
 - **DECIDED** — The four video blocks reach Python as marker classes beside
-  `CameraSource`, through the five touchpoints a native built-in owns and no sixth: a
+  `CameraSource`, through the five touchpoints a native built-in owns and no sixth — a
+  processor extension owns none of them, being an ordinary Python processor class the
+  wheel never has to know about (extension-model) — : a
   constructor-less `#[pyclass]` unit struct, an `is()` arm resolving the type to the
   processor's own minted import path, an `add_class` line, a re-export with its
   `__all__` entry, and a stub entry gated by stubtest with no allowlist. Configured the

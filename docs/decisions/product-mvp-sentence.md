@@ -98,6 +98,8 @@ Its load-bearing terms:
   modules; consumer examples continue to lag by design until then.~~ — Superseded
   2026-08-02 by `importable-python-library.md`: there is no plugin format to port to;
   first-party media becomes engine-tree built-ins, and other plugin functionality is
-  re-authored as Python packages or cargo crates per the pivot's change file.
+  re-authored as Python packages or cargo crates per the pivot's change file. (Narrowed
+  2026-09-04 by `extension-model.md`: the built-ins that shipped stay; a further
+  first-party capability ships as an extension wheel unless the criterion admits it.)
 - The MVP claim is narrow (one persona, one platform, one GPU vendor) and must be kept
   honest: widening any axis is a plan change, not a ticket.

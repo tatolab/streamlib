@@ -21,6 +21,9 @@ work.
 > discipline: built-ins are written against the same handle-shaped primitives
 > (DMA-BUF / OPAQUE_FD, present target, audio clock, color resolution, codec sessions)
 > third parties get — never against private engine guts.
+> — Narrowed again 2026-09-04 by `extension-model.md`: "first-party media is a built-in"
+> holds for the twelve that shipped and is no longer a rule; the layering half is now the
+> contract extension wheels build on too.
 
 > ~~First-party media packages lag by design while the engine moves, then upgrade to
 > the current engine exactly once, as the final MVP step.~~ — Superseded 2026-08-02 by

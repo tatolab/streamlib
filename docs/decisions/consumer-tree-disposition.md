@@ -34,7 +34,8 @@ package-linking path. The split remains open as a later move, deliberately undec
 The engine tree absorbs what is core (built-ins ship in the wheel); third-party
 extension is PyPI/cargo by the shipped extension model. What remained was a home for
 first-party *optional* integrations — wanted on PyPI eventually, not wanted in the
-wheel. Collocation solves the development loop: an in-repo consumer links the package
+wheel. (Superseded 2026-09-04 by `extension-model.md`, which names these *extension wheels*, gives "core" a criterion,
+and commissions the first one — networking.) Collocation solves the development loop: an in-repo consumer links the package
 as a local path dependency, so no publish cycle sits inside an edit loop; externally
 the wheel's own GitHub-hosted PEP 503 index serves them until the rename unlocks PyPI.
 Rejected: retiring the tree entirely (leaves optional integrations homeless or bloating
@@ -77,6 +78,9 @@ minimal example. A third "minimal" teaches nothing the other two do not. Note fo
 conversions: there is no entry-point or `pyproject.toml` registration mechanism for
 processor classes anywhere in the wheel — plain importability is the whole contract
 (side-effect-safe module, import-path identity, `rt.add(Class)`).
+> Still true for processors after 2026-09-04 (`extension-model.md`): a processor extension
+> is `rt.add(Class)` and nothing more. A *capability* extension is the one thing registered —
+> by one explicit line in `app.py`, never by scanning — and its mechanism is the align's.
 
 ## Why no further distribution mechanism
 
@@ -86,3 +90,6 @@ are source-compiled cargo dependencies. The perceived gap assumed a replacement 
 the deleted cdylib/slpkg path was still owed; it is not — closed-source Rust-for-Rust
 is deliberately not a path, because the Python-package route serves closed-source
 vendors and a second binary boundary would reopen everything the ABI deletion closed.
+> Stands for *distribution* after 2026-09-04. What `extension-model.md` adds is
+> *registration* of a capability extension, over the same CPython boundary — no second
+> binary boundary.

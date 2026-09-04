@@ -33,8 +33,10 @@ and the data-collection rigs that train them.
   zero-copy where the device exports it, transparently uploaded where it doesn't, with no
   configuration dial in between. Your model gets the frame where it already sits.
 - **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
-  proprietary driver ships as an ordinary Python package. No plugin ABI, no framework headers, no
-  manifest, no vendor allowlist deciding what you're allowed to plug in.
+  proprietary driver ships as an ordinary Python package. Optional capabilities — networking
+  first — ship the same way, as extension wheels with Rust inside that you name in `app.py`.
+  No plugin ABI, no framework headers, no vendor allowlist deciding what you're allowed to
+  plug in.
 - **The execution graph is code, not a config file.** You compose it in Python at startup, so it can
   branch on the sensors actually present, the mission profile, or the tier of hardware it booted on
   — the same source deployed across a heterogeneous fleet.
@@ -223,10 +225,15 @@ everything that ships.
 Native code comes in the same door. A third-party driver — closed-source included — ships as an
 ordinary Python package that exposes handles (file descriptors, exportable allocations, buffers)
 and is wrapped by a stage you write. It never links the engine, and the CPython ABI is the only
-binary boundary. There is no plugin system, no ABI, no manifest, and no lockfile.
+binary boundary. First-party optional capabilities take that same door — an extension wheel is
+an ordinary PyPI package with Rust inside, depending on `streamlib` as a binary, registered by
+`rt.add` on its processor class or by one explicit line in `app.py` for a capability. There is no
+plugin ABI, no manifest, no lockfile, and no scanning of what happens to be installed.
 
-**It costs you** the built-ins you don't get. V4L2 capture, a display window, and a test pattern
-are what ship native; every other sensor is yours to wrap.
+**It costs you** a small set of built-ins. Camera, display, microphone, speaker, the H.264 /
+H.265 / Opus codec pair and an MP4 sink ship inside the wheel because their per-frame paths
+have deadlines a helper process cannot meet or sit on engine-only primitives; everything else
+is an extension wheel or a stage you write.
 
 </details>
 
@@ -308,7 +315,8 @@ portability in practice: NVIDIA on Linux x86_64 is what CI tests. Other vendors 
 rather than validated.
 
 Rust authoring is first-class: a plain cargo project depending on the `streamlib` crate, released
-at the wheel's version. PyPI and cargo are the package systems.
+at the wheel's version. PyPI and cargo are the package systems — a Rust app compiles an extension
+from source, a Python app pip-installs its wheel.
 
 </details>
 

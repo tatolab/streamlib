@@ -13,7 +13,8 @@ one wheel, one venv, PyPI — is untouched.
 Read this before reintroducing any custom distribution mechanism (module folders, install
 verbs, runtime downloading), before proposing a new dlopen/ABI extension path, before putting
 Python in a per-frame media path, or when someone asks why streamlib is a wheel and not a
-framework.
+framework. An extension wheel (`extension-model.md`, 2026-09-04) is neither dlopen nor ABI —
+it is a Python package loaded across the CPython ABI — so that refusal does not cover it.
 
 ## The direction, verbatim (owner-confirmed)
 
@@ -104,6 +105,9 @@ Python processors (Holoscan's own `PyOperator::compute` acquires the GIL in one 
 interpreter — it is the performance bar, never a placement precedent). Dogfooding
 favors shipping built-ins in the shape vendors are told to use — which the handle-shaped
 contract satisfies without putting Python in deadline paths.
+> Sharpened 2026-09-04 by `extension-model.md`: first-party *optional* capabilities now ship
+> *as* the shape vendors are told to use — an extension wheel — rather than merely against
+> the same primitives; only the deadline-bound and primitive-owning cases stay built-ins.
 
 ## Rejected alternatives
 
@@ -127,7 +131,8 @@ contract satisfies without putting Python in deadline paths.
 - **Keep a narrow ABI for closed-source vendors** — resurrects the 22-vtable maintenance
   surface for a user that does not exist; two engines in one process (a vendor wheel linking
   its own streamlib) is silent breakage; the answer to engine-internal GPU access is a
-  conversation, not an ABI.
+  conversation, not an ABI. (Stands after 2026-09-04: an extension wheel depends on the
+  `streamlib` wheel as a binary and never links its own engine — the distinguishing clause.)
 - **Retire TypeScript permanently** — the hobbyist / video-creator audience keeps it alive as
   a future target; what dies is the subprocess-polyglot substrate, and a future TS SDK is
   importable-library-shaped. Paused, not rejected.
@@ -151,7 +156,10 @@ contract satisfies without putting Python in deadline paths.
 - Re-authoring the old packages and examples into the new shapes (built-ins absorption aside,
   which is rip-out work) is deferred to its own planning sessions and milestones after the
   wheel exists — dispositions are recorded in the pivot's change file, not ticketed now.
-- First-party media moves *into* the engine tree; lag-by-design ends for built-ins.
+- ~~First-party media moves *into* the engine tree; lag-by-design ends for built-ins.~~ —
+  Superseded 2026-09-04 by `extension-model.md`: the twelve built-ins that shipped stay in the engine tree; the rule that
+  first-party media *belongs* there is retired, and a further capability is a built-in only
+  under the criterion stated in the plan.
 - The Python SDK keeps a GIL-release contract, narrowed 2026-08-04: every blocking native
   binding releases the GIL so it never stalls its own interpreter's threads. It is not a
   co-tenancy remedy — helper-only placement means no two Python processors ever contend for
