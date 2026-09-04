@@ -17,10 +17,12 @@ use streamlib::sdk::runtime::{LoadedCapabilityExtension, LoadedCapabilityExtensi
 
 use crate::python_runtime_lifecycle::PythonRuntimeHandle;
 
-/// What a helper process registers into. A helper hosts no engine, so its
-/// registrations belong to the process rather than to a runtime, and never
-/// travel to the parent.
-fn helper_process_registry() -> &'static Arc<LoadedCapabilityExtensionRegistry> {
+/// What every hook in this process registers into.
+///
+/// Process-wide rather than per-runtime because the hooks run once per process
+/// and a capability they brought up stays up: a runtime constructed later has
+/// it too, and says so. A process takes one role, so this never mixes them.
+fn process_wide_registry() -> &'static Arc<LoadedCapabilityExtensionRegistry> {
     static REGISTRY: OnceLock<Arc<LoadedCapabilityExtensionRegistry>> = OnceLock::new();
     REGISTRY.get_or_init(|| Arc::new(LoadedCapabilityExtensionRegistry::default()))
 }
@@ -31,6 +33,16 @@ pub(crate) struct PythonCapabilityExtensionHost {
     role: &'static str,
     distribution: String,
     registry: Arc<LoadedCapabilityExtensionRegistry>,
+}
+
+impl PythonCapabilityExtensionHost {
+    fn for_this_process(role: &'static str, distribution: String) -> Self {
+        Self {
+            role,
+            distribution,
+            registry: Arc::clone(process_wide_registry()),
+        }
+    }
 }
 
 #[pymethods]
@@ -61,18 +73,12 @@ impl PythonCapabilityExtensionHost {
     }
 }
 
-/// Mint the host for `distribution`'s hook in the app process, registering
-/// into `runtime`'s registry.
+/// Mint the host for `distribution`'s hook in the app process.
 #[pyfunction]
 pub(crate) fn capability_extension_host_for_the_app_process(
-    runtime: &PythonRuntimeHandle,
     distribution: String,
-) -> PyResult<PythonCapabilityExtensionHost> {
-    Ok(PythonCapabilityExtensionHost {
-        role: "app",
-        distribution,
-        registry: runtime.loaded_capability_extensions()?,
-    })
+) -> PythonCapabilityExtensionHost {
+    PythonCapabilityExtensionHost::for_this_process("app", distribution)
 }
 
 /// Mint the host for `distribution`'s hook in a helper process.
@@ -80,9 +86,19 @@ pub(crate) fn capability_extension_host_for_the_app_process(
 pub(crate) fn capability_extension_host_for_the_helper_process(
     distribution: String,
 ) -> PythonCapabilityExtensionHost {
-    PythonCapabilityExtensionHost {
-        role: "helper",
-        distribution,
-        registry: Arc::clone(helper_process_registry()),
-    }
+    PythonCapabilityExtensionHost::for_this_process("helper", distribution)
+}
+
+/// Give `runtime` what this process's hooks registered, so `graph` renders it.
+///
+/// Called once per runtime, after the loop: the hooks run once per process,
+/// so a runtime constructed after them would otherwise report nothing loaded.
+#[pyfunction]
+pub(crate) fn hand_loaded_capability_extensions_to_the_runtime(
+    runtime: &PythonRuntimeHandle,
+) -> PyResult<()> {
+    runtime
+        .loaded_capability_extensions()?
+        .adopt(process_wide_registry().registered())
+        .map_err(|refusal| PyRuntimeError::new_err(refusal.to_string()))
 }

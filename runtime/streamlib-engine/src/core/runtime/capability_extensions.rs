@@ -37,16 +37,16 @@ impl LoadedCapabilityExtensionRegistry {
     /// name is an installation the operator has to resolve, and a half-loaded
     /// extension is worse than one that refused.
     pub fn register(&self, capability: LoadedCapabilityExtension) -> Result<()> {
-        let mut registered = self
-            .registered
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if capability.name.is_empty() {
             return Err(Error::Runtime(format!(
                 "the capability extension in `{}` registered a capability with an empty name",
                 capability.distribution
             )));
         }
+        let mut registered = self
+            .registered
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(already) = registered
             .iter()
             .find(|already| already.name == capability.name)
@@ -59,6 +59,16 @@ impl LoadedCapabilityExtensionRegistry {
         }
         registered.push(capability);
         Ok(())
+    }
+
+    /// Take on everything `already_loaded` holds, under the same rule.
+    ///
+    /// How a runtime learns what loaded before it existed: the hooks run once
+    /// per process, and every runtime in that process reports the same set.
+    pub fn adopt(&self, already_loaded: Vec<LoadedCapabilityExtension>) -> Result<()> {
+        already_loaded
+            .into_iter()
+            .try_for_each(|capability| self.register(capability))
     }
 
     /// Every capability registered so far, in registration order.
@@ -122,6 +132,24 @@ mod tests {
             vec![capability("webrtc", "streamlib-webrtc")],
             "a refused registration leaves the registry as it was"
         );
+    }
+
+    #[test]
+    fn a_runtime_adopts_every_capability_the_process_had_already_registered() {
+        let process_wide = LoadedCapabilityExtensionRegistry::default();
+        process_wide
+            .register(capability("webrtc", "streamlib-webrtc"))
+            .expect("the capability registers");
+        process_wide
+            .register(capability("moq", "streamlib-moq"))
+            .expect("the second capability registers");
+
+        let a_later_runtime = LoadedCapabilityExtensionRegistry::default();
+        a_later_runtime
+            .adopt(process_wide.registered())
+            .expect("a fresh registry adopts the process's set");
+
+        assert_eq!(a_later_runtime.registered(), process_wide.registered());
     }
 
     #[test]

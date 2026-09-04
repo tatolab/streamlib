@@ -91,6 +91,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_capability_extension_host::capability_extension_host_for_the_helper_process,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_capability_extension_host::hand_loaded_capability_extensions_to_the_runtime,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(

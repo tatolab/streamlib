@@ -10,9 +10,9 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::RuntimeOperations;
-use super::capability_extensions::LoadedCapabilityExtensionRegistry;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
+use super::capability_extensions::LoadedCapabilityExtensionRegistry;
 use super::graph_change_listener::GraphChangeListener;
 use crate::core::compiler::{Compiler, PendingOperation};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
