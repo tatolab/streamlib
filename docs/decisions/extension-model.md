@@ -185,3 +185,38 @@ extension needs it; the move deletes the coupling and owes no route.
 - The held networking code pins libraries that have moved — `webrtc`, `moq-transport`,
   `quinn`, `rustls` — and carried patches for TLS and newer MoQ draft versions that may now be
   upstream. The move checks current versions first rather than porting the pins.
+
+## Why the first rung is shaped this way
+
+**The mechanism ships with the wheels that need it, not ahead of them.** A capability-extension
+door built before any extension exists would be designed against an imagined consumer. WebRTC and
+MoQ each need exactly one thing from the hook — a tokio runtime and a TLS provider brought up once
+per process — and that is what the door carries; every other affordance waits for the extension
+that asks. The hook's own proof is a test-only distribution installed into the venv, which is the
+only honest way to test discovery through pip's registry.
+
+**Publishers take the `Mp4Sink` shape; players take two typed outputs.** One fan-in input with a
+track per inbound link is a seam the engine already has — a read that names its link, a port that
+lists its links — and it makes a WHIP session or a MoQ broadcast a matter of wiring rather than
+config. Players cannot mirror it: output ports are declared statically, and the decoder downstream
+wants a port it can name when the graph is wired. So a player exposes one output per media kind
+and takes its track names as config; the plan's "one output per track" was narrowed by that fact.
+
+**The MoQ names changed because the shape did.** `MoqPublishTrack` described the old processor,
+which published one track and needed one instance per media. A publisher of a whole broadcast is
+not that, and a name that says "track" would send a reader looking for a per-track instance.
+
+**The players fill in what the wire does not carry.** RTP has no group index, no extent, no
+pre-skip; the old players never had to supply them because their bag types were a different
+contract. Taking them from config was rejected: a player that needs the app to tell it the
+stream's extent is a player that gets it wrong the day the far end changes resolution. The SPS,
+the access unit and the SDP answer already say everything the bag needs.
+
+**The decode-back is the live proof, again.** A PSNR lock through the network is the same argument
+the recording rung made through the container: the codec rig already scored the path on both
+sides, so anything the wheel does to the bytes shows up as a delta against a baseline that exists.
+A liveness check ("frames arrived") would prove much less for the same rig time.
+
+**`runtime/streamlib-moq`'s registry does not move.** `sessions_for_runtime` existed so a dlopen'd
+package and the api-server could find one shared session by runtime id. With one processor per
+helper and no control-plane route, a session has exactly one owner and the registry has no reader.
