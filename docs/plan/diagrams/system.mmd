@@ -10,7 +10,7 @@ flowchart LR
   rustapp["Rust app\n(plain cargo project)"]
   crate["streamlib crate\n(embeddable Rust library)"]
   engine["Engine runtime\n(runtime/streamlib-engine)"]
-  media["Built-in media blocks\n(camera / display / MicrophoneSource / SpeakerSink — native,\nin the wheel, handle-shaped primitives;\naudio backend dlopen'd: PipeWire → ALSA → null,\nchosen by opening not by loading; vendored SPA headers\ncompile to a shim that calls only pointers, so no audio\nlibrary enters DT_NEEDED;\ndevice-paced, conditioning on the built-ins;\ncodec blocks: H264/H265 encode+decode shipped on Vulkan Video sessions,\none encode body and one decode body specialised by codec identity,\ncolour conversion on the engine's existing rgb_to_nv12 — no new RHI primitive;\nall four reach Python as marker classes like every other built-in, and the\nencoded frame has a Python cast (EncodedVideoFrame) holding no surface;\nJpegDecoder, Opus, pure-Rust Mp4Sink still to come — an encoded frame is an\nordinary bag, bitstream inline as bin beside the ordering pair and sync-point flag;\na decoder publishes the SPS display window, never the padded coded picture)"]
+  media["Built-in media blocks\n(camera / display / MicrophoneSource / SpeakerSink — native,\nin the wheel, handle-shaped primitives;\naudio backend dlopen'd: PipeWire → ALSA → null,\nchosen by opening not by loading; vendored SPA headers\ncompile to a shim that calls only pointers, so no audio\nlibrary enters DT_NEEDED;\ndevice-paced, conditioning on the built-ins;\ncodec blocks: H264/H265 encode+decode shipped on Vulkan Video sessions,\none encode body and one decode body specialised by codec identity,\ncolour conversion on the engine's existing rgb_to_nv12 — no new RHI primitive;\nall four reach Python as marker classes like every other built-in, and the\nencoded frame has a Python cast (EncodedVideoFrame) holding no surface;\nOpus encode+decode shipped over statically linked libopus, and a pure-Rust\nfragmented Mp4Sink muxing both — one track per inbound link, named by its channel;\nJpegDecoder still to come — an encoded frame is an\nordinary bag, bitstream inline as bin beside the ordering pair and sync-point flag;\nan encoded audio packet is that convention applied to audio, cast by EncodedAudioPacket;\na decoder publishes the SPS display window, never the padded coded picture)"]
   rhi["RHI\n(vulkan/rhi + streamlib-consumer-rhi)"]
   interop["Interop adapters\n(Vulkan↔CUDA, Vulkan↔GL — app-process Rust)"]
   ctl["Control plane\n(api-server: HTTP / WS / MCP — engine-side)"]
@@ -39,6 +39,8 @@ audio rides the bag itself — AudioBlock samples inline, no surface ids;
 a windowed input port is resampled, channel-converted and framed at this read
 seam, and reports ready only when a full window can be emitted — a gap flushes
 the accumulator and the resampler's filter rather than interpolating across it;
+its channel count is the contract's one optional value: absent means the source's own
+count, carried on every emitted window, and only a declared count is converted to;
 every input port declares one read policy — newest or ordered — and no other delivery setting:
 both drop under pressure, and no link ever blocks a producer;
 a drop is counted at the port that lost it, but only an app-process destination's
