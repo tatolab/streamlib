@@ -1770,10 +1770,40 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   description from them; a subscriber or player declares its tracks in config and
   exposes one output port per track. Endpoint, credential and track configuration is
   ticket-level, as for every built-in's config. [extension-model]
-- **OPEN** — The live proof's target (an external relay and WHIP endpoint, or a relay run
-  on the rig), and what the control plane keeps if it turns out to depend on
-  `runtime/streamlib-moq` — both waiting on facts in this align. Later work, after the
-  move: mesh discovery and the cross-host fabric (Zenoh).
+- **DECIDED** — The control plane keeps nothing from the move. Its one use of
+  `runtime/streamlib-moq` — a `/api/moq/catalog` route behind a `moq` feature no crate
+  enables — read a process-global session registry that, with the publisher in a helper,
+  the app process could never see; the route and the feature delete with the crate, and
+  a broadcast's catalog is the MoQ wheel's to serve. The "rare exception" did not fire:
+  the runtime needed nothing from the moved code that survives the move.
+  `runtime/streamlib-moq` leaves the workspace whole once its logic is in the wheel, its
+  `deny.toml` entry with it; whether the wheel's Rust is also published as a crate for a
+  Rust app waits for a Rust app that wants it. [extension-model]
+- **DECIDED** — The moved processors are typed, and the Python surface gains no raw byte
+  port for them: a publisher reads `EncodedVideoFrame` / `EncodedAudioPacket` and hands
+  the bitstream to the wheel's Rust; a player or subscriber writes the bag literal
+  against the wire contract, filling every required key from the stream itself — the
+  extent from the SPS, the ordering pair from its own counters (for MoQ, from the group
+  and object it arrived in), a sync point from the access unit, the audio parameters from
+  the session description — rather than from config. The old processors' opaque envelope
+  forwarding does not carry over: what crosses a network is a bitstream and the keys a
+  decoder needs, not a serialised link payload. [extension-model]
+- **DECIDED** — What the move carries and what it leaves: `runtime/streamlib-moq`'s
+  session and catalog logic moves largely intact; from `packages/webrtc` the RFC 6184
+  depacketiser and the WHIP/WHEP signalling logic are mined, and its dead second RTP path
+  (`streaming/session.rs`, constructed nowhere) is not; `packages/{moq,webrtc}` have not
+  built since the plugin SDK was deleted and their bag types share no key with today's
+  wire contract, so that half is a rewrite against mined logic — the conversion doctrine
+  as usual. A received stream reaches the bag through the proven manual-source shape: the
+  wheel's Rust receives on its own runtime and a processor-owned thread writes, so no
+  engine seam is added for it. Two budgets the wheels live inside, ticket-level but named
+  here: a helper's teardown reply and exit are bounded at five seconds each, so a WHIP
+  `DELETE` or a QUIC close must be bounded too; and connecting inside `setup()` spends
+  the sixty-second registration budget. [extension-model]
+- **OPEN** — The live proof's target: the public Cloudflare relay and Cloudflare Stream's
+  WHIP endpoint, rig-only with credentials outside the tree — what every past proof used,
+  no relay or loopback existing in the tree — or a relay run on the rig. The owner's
+  call. Later work, after the move: mesh discovery and the cross-host fabric (Zenoh).
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->

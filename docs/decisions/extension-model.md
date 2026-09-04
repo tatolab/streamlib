@@ -147,7 +147,10 @@ pays, and paying it first-party is how those lanes get built.
   that needs it.
 - A Rust-side extension SDK — typed wrappers over the engine's Python objects, depending on
   `pyo3` and not on the engine — is owed the first time an extension author would otherwise
-  hand-write PyO3 against the stub. Its shape is the networking align's to decide.
+  hand-write PyO3 against the stub. The first two extensions do not need it: a separately
+  compiled wheel cannot downcast the engine's writer object, and the proven manual-source
+  shape (Rust receives on its own runtime, a processor-owned thread writes the bag) avoids
+  needing to.
 - Rust apps with no interpreter cannot load extension wheels; they compile extensions as source
   crates. Python is the binding for optional capabilities, by the owner's statement.
 - Where the support hook runs — the app process at startup, each helper at spawn, or both — is
