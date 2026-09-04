@@ -82,8 +82,8 @@ live behind, applied to code the engine did not ship.
 
 **Networking first, because it has a consumer and needs no GPU door.** WebRTC and MoQ are CPU
 and network work over encoded bags the codec blocks already publish; they exercise every piece
-of the model — a wheel with Rust inside, explicit registration, the per-frame path through the
-binding — without first closing any primitive gap on the Python surface. Proving the model on the
+of the model — a wheel with Rust inside, the entry-point support hook, the per-frame path
+through the wheel's own Rust — without first closing any primitive gap on the Python surface. Proving the model on the
 capability the owner most wants next is the point. The risk is accepted knowingly: if the
 mechanism has a flaw, networking finds it, and that beats finding it on a capability nobody
 asked for.
