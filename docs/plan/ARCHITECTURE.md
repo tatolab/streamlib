@@ -415,16 +415,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   already queued each frame holding its link's identity for drop attribution; this
   exposes the identity the per-link counters are keyed by, so no frame carries anything
   it did not carry before and counting is unchanged. In Python `LinkInputDataReader`
-  gains the same read — `read_from_inbound_link(port, into=T)`, handing back the cast
-  and the link name — so a Python-authored many-input sink is possible rather than
-  deferred. A destination can also enumerate its inbound links at `setup()`
+  gains the same read, in two spellings — `read_from_inbound_link(port, into=T)`, handing
+  back the cast and the link name, and `read_from_inbound_link_with_timestamp(port,
+  into=T)`, handing back the producer's stamp beside them — so a Python-authored
+  many-input sink is possible rather than deferred, and one that restates a producer's
+  timing downstream has the stamp to restate. A destination can also enumerate its
+  inbound links at `setup()`
   (`inbound_link_names(port)`), which is how a sink learns how many tracks it owes. A bag
   the port never enumerated a link for is refused by name rather than borrowing one.
-  [opus-mp4-recording-rung — SHIPPED #2124]
+  [opus-mp4-recording-rung — SHIPPED #2124; the timestamped spelling with
+  networking-extension-wheels — #2150]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::an_injected_bag_with_no_inbound_link_is_refused_by_name_rather_than_borrowing_one -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_read_with_timestamp.py -->
 - **DECIDED** — The delivery profile is the whole of channel policy: one word, declared
   port-locally at the consuming input port. Every input port declares its delivery profile explicitly — there is no default
   and nothing left to infer one from, so an input port without one is a wiring error.

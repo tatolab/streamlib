@@ -2112,6 +2112,28 @@ impl PythonLinkInputDataReader {
             )
     }
 
+    /// The next bag on `port_name` with its link and its timestamp, or `None`.
+    ///
+    /// What a many-track sink needs to restate a producer's own timing: the
+    /// link names the producer and the stamp is the one that producer wrote,
+    /// which is the source frame's instant rather than the moment of the read.
+    #[pyo3(signature = (port_name, *, into = None))]
+    fn read_from_inbound_link_with_timestamp<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
+        self.link_data_access
+            .get()
+            .read_from_input_port_naming_its_inbound_link_and_timestamp(
+                python,
+                port_name,
+                into,
+                Some(self.gpu_limited_access_context.bind(python)),
+            )
+    }
+
     /// Every link feeding `port_name`, in wiring order.
     ///
     /// Readable in `setup()`, which is how a sink learns how many producers it

@@ -1,0 +1,51 @@
+[package]
+name = "streamlib-webrtc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "WHIP publish and WHEP play for StreamLib, as a capability extension wheel."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `streamlib_webrtc.processors` imports. cdylib only:
+# nothing links this crate as a Rust library, and the CPython ABI is the one
+# binary boundary an extension is allowed to cross.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
+# CPython 3.10 and every later GIL-enabled release.
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+
+# 0.17.2, not the 0.20 line: at 0.20 webrtc-rs was rewritten onto a sans-IO
+# core with a different API — a builder, an event-handler trait, and `rtc` as a
+# second direct dependency. 0.17.2 is the last release of the family the mined
+# WHIP/WHEP clients were written and proven against, and is itself three minor
+# versions past the 0.14 the held package froze on.
+webrtc = "0.17.2"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+bytes = "1.12.1"
+thiserror = "2.0.17"
+# The one clock the whole runtime agrees on, read the same way the wheel reads it.
+libc = "0.2"
+tracing = "0.1.44"
+
+# WHIP/WHEP signalling is plain HTTPS: POST the offer, PATCH trickle ICE,
+# DELETE the session.
+hyper = { version = "1.11.1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1.20", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+hyper-rustls = { version = "0.27.9", features = ["http1", "http2", "native-tokio", "ring"] }
+http-body-util = "0.1.5"
+rustls = { version = "0.23.43", features = ["ring"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]

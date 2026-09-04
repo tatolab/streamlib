@@ -695,6 +695,22 @@ class LinkInputDataReader:
         `into` is the same strictness dial `read` carries.
         """
 
+    @overload
+    def read_from_inbound_link_with_timestamp(
+        self, port_name: str, *, into: None = None
+    ) -> tuple[Any, str, int] | None: ...
+    @overload
+    def read_from_inbound_link_with_timestamp(
+        self, port_name: str, *, into: Callable[..., _BagReadTarget]
+    ) -> tuple[_BagReadTarget, str, int] | None:
+        """The next bag on `port_name` with its link and its timestamp.
+
+        The fan-in read and the timestamped read at once, which a many-track
+        sink needs together: the link names the producer, and the stamp is the
+        one that producer wrote — the source frame's instant, not the moment of
+        the read. Restating a producer's timing downstream needs both.
+        """
+
     def inbound_link_names(self, port_name: str) -> list[str]:
         """Every link feeding `port_name`, in wiring order.
 

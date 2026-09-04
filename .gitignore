@@ -50,9 +50,13 @@ docs/research/SESSION_RESTORE.md
 # Rust
 target/
 # Workspace lockfile is committed (reproducible dev/CI builds, per current
-# cargo guidance); nested package/example lockfiles stay untracked.
+# cargo guidance); nested package/example lockfiles stay untracked. An
+# extension wheel is the exception: it is a released artifact built from its
+# own workspace root, so its lockfile is committed for the same reason the
+# workspace's is.
 Cargo.lock
 !/Cargo.lock
+!/packages/streamlib-webrtc/Cargo.lock
 
 # Node/Nx
 node_modules/

@@ -114,13 +114,35 @@ impl PythonProcessorLinkDataAccess {
         into: Option<&Bound<'py, PyAny>>,
         offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
     ) -> PyResult<Option<(Bound<'py, PyAny>, String)>> {
+        Ok(self
+            .read_from_input_port_naming_its_inbound_link_and_timestamp(
+                python,
+                port_name,
+                into,
+                offered_gpu_limited_access,
+            )?
+            .map(|(bag, inbound_link_name, _timestamp_ns)| (bag, inbound_link_name)))
+    }
+
+    /// The same read, keeping the frame header's timestamp.
+    ///
+    /// A many-track sink needs both halves at once: the link says which
+    /// producer sent the bag, and the stamp is the producer's own — the source
+    /// frame's instant, not the moment the bag was read.
+    pub(crate) fn read_from_input_port_naming_its_inbound_link_and_timestamp<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
+        offered_gpu_limited_access: Option<&Bound<'py, PythonGpuContextLimitedAccess>>,
+    ) -> PyResult<Option<(Bound<'py, PyAny>, String, i64)>> {
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));
         };
         let read = python
             .detach(|| input_mailboxes.read_raw_from_inbound_link(port_name))
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
-        let Some((encoded, _timestamp_ns, inbound_link_name)) = read else {
+        let Some((encoded, timestamp_ns, inbound_link_name)) = read else {
             return Ok(None);
         };
         let bag = decode_one_bag_into(
@@ -130,7 +152,11 @@ impl PythonProcessorLinkDataAccess {
             into,
             offered_gpu_limited_access,
         )?;
-        Ok(Some((bag, inbound_link_name.as_str().to_string())))
+        Ok(Some((
+            bag,
+            inbound_link_name.as_str().to_string(),
+            timestamp_ns,
+        )))
     }
 
     /// Every inbound link feeding `port_name`, in wiring order.
