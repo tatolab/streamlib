@@ -190,6 +190,10 @@ jobs:
     name: Extension wheel (${{ matrix.extension }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Compiles and runs PR-authored code, so it gets the read it needs and
+    # nothing else rather than inheriting the workflow's defaults.
+    permissions:
+      contents: read
     # Installs the wheel that job built. An extension links no engine crate, so
     # nothing here needs Vulkan, glslc or the engine's build set.
     needs: wheel-interpreter-lifecycle

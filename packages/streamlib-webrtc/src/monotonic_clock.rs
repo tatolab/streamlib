@@ -67,7 +67,13 @@ impl RtpClockAnchoredToMonotonic {
             i64::from(rtp_timestamp.wrapping_sub(anchor.previous_rtp_timestamp) as i32);
         anchor.elapsed_ticks += ticks_since_last;
         anchor.previous_rtp_timestamp = rtp_timestamp;
-        anchor.monotonic_ns + anchor.elapsed_ticks * 1_000_000_000 / self.clock_rate_hz
+
+        // i128 for the intermediate: `elapsed_ticks * 1_000_000_000` overflows
+        // an i64 after about 28 hours at 90 kHz, and a publish that runs for a
+        // day is an ordinary thing to ask of a transport.
+        let elapsed_ns =
+            i128::from(anchor.elapsed_ticks) * 1_000_000_000 / i128::from(self.clock_rate_hz);
+        anchor.monotonic_ns.saturating_add(elapsed_ns as i64)
     }
 }
 

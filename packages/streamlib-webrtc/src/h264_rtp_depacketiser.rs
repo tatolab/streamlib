@@ -7,10 +7,16 @@ use crate::error::{Result, WebRtcExtensionError};
 use bytes::Bytes;
 use std::collections::HashMap;
 
-/// RFC 6184 §5.2 packetisation modes this reads. Everything outside this set
-/// is a single NAL unit, which needs no reassembly.
+/// RFC 6184 §5.2 packetisation modes this reads.
 const NAL_TYPE_STAP_A: u8 = 24;
 const NAL_TYPE_FU_A: u8 = 28;
+
+/// RFC 6184 §5.2's other aggregation and fragmentation types — STAP-B, MTAP16,
+/// MTAP24, FU-B — plus the values H.264 §7.4.1 leaves unspecified or reserved.
+/// None of them is a NAL unit: each carries its own header layout, so treating
+/// one as a single NAL would splice a decoder order number or a timestamp
+/// offset into the access unit as though it were coded data.
+const NAL_TYPES_THIS_DOES_NOT_READ: [u8; 7] = [0, 25, 26, 27, 29, 30, 31];
 
 /// RFC 6184 §1.3: an IDR picture's coded slice, the sync point a decoder may
 /// enter a stream at.
@@ -57,7 +63,17 @@ impl H264RtpDepacketiser {
             });
         };
 
-        match nal_unit_header & 0x1F {
+        let nal_unit_type = nal_unit_header & 0x1F;
+        if NAL_TYPES_THIS_DOES_NOT_READ.contains(&nal_unit_type) {
+            return Err(WebRtcExtensionError::MalformedRtpPayload {
+                what: format!(
+                    "RFC 6184 packetisation type {nal_unit_type} is not one this reads — \
+                     it offers single NAL units, STAP-A and FU-A"
+                ),
+            });
+        }
+
+        match nal_unit_type {
             NAL_TYPE_FU_A => {
                 self.reassemble_fragmentation_unit(payload, rtp_timestamp, rtp_sequence_number)
             }
@@ -409,6 +425,25 @@ mod tests {
             refusal,
             WebRtcExtensionError::MalformedRtpPayload { .. }
         ));
+    }
+
+    #[test]
+    fn a_packetisation_type_this_does_not_read_is_refused_rather_than_spliced_in() {
+        // STAP-B, MTAP16, MTAP24 and FU-B each carry a decoder order number or
+        // a timestamp offset after the header. Passed through as a NAL unit,
+        // those bytes would reach a decoder as though they were coded data.
+        let mut depacketiser = H264RtpDepacketiser::new();
+
+        for nal_unit_type in NAL_TYPES_THIS_DOES_NOT_READ {
+            let payload = Bytes::from(vec![0x60 | nal_unit_type, 0x00, 0x01, 0x02]);
+
+            let refusal = depacketiser.depacketise(payload, 1000, 1).unwrap_err();
+
+            assert!(
+                matches!(refusal, WebRtcExtensionError::MalformedRtpPayload { .. }),
+                "type {nal_unit_type} was not refused"
+            );
+        }
     }
 
     #[test]

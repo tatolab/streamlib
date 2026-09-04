@@ -59,6 +59,7 @@ impl WhipWhepSignallingClient {
         // already done in every real process — but a panic crossing into
         // Python is a worse failure than the idempotent call that prevents it.
         crate::transport_stack::bring_up()?;
+        refuse_a_bearer_token_over_plaintext(&endpoint_url, bearer_token.as_deref(), protocol)?;
 
         let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
@@ -101,9 +102,29 @@ impl WhipWhepSignallingClient {
 
             if status == StatusCode::TEMPORARY_REDIRECT || status == StatusCode::PERMANENT_REDIRECT
             {
-                endpoint_url = location_header(&headers, &endpoint_url).ok_or_else(|| {
+                let redirected_to = location_header(&headers, &endpoint_url).ok_or_else(|| {
                     self.refusal(format!("a {status} redirect carried no Location header"))
                 })?;
+                // A redirect this follows re-sends the Authorization header, so
+                // a relay that answers with someone else's origin would be
+                // handed the token. Refused rather than followed with the
+                // header stripped: an ingest that redirects off-origin is not
+                // a session this can open anyway.
+                if self.bearer_token.is_some()
+                    && origin_of(&redirected_to) != origin_of(&endpoint_url)
+                {
+                    return Err(self.refusal(format!(
+                        "the relay redirected to a different origin ({}), and this session \
+                         carries a bearer token that a redirect would disclose",
+                        origin_of(&redirected_to).unwrap_or_default()
+                    )));
+                }
+                refuse_a_bearer_token_over_plaintext(
+                    &redirected_to,
+                    self.bearer_token.as_deref(),
+                    self.protocol,
+                )?;
+                endpoint_url = redirected_to;
                 continue;
             }
 
@@ -227,19 +248,90 @@ impl WhipWhepSignallingClient {
     }
 }
 
-/// Resolve a `Location` against the URL it was returned from, since a relay may
-/// answer with an absolute URL or a site-root-relative path.
+/// Resolve a `Location` against the URL it was returned from.
+///
+/// RFC 9110 §10.2.2 allows any URI reference, and relays use most of them: an
+/// absolute URL, a scheme-relative `//host/path`, a root-relative `/path`, or a
+/// path-relative `sessions/7`. Reading a relative one as absolute would send
+/// the next request nowhere.
 fn location_header(headers: &hyper::HeaderMap, requested_url: &str) -> Option<String> {
-    let location = headers.get(header::LOCATION)?.to_str().ok()?;
-    if !location.starts_with('/') {
+    resolve_location(headers.get(header::LOCATION)?.to_str().ok()?, requested_url)
+}
+
+fn resolve_location(location: &str, requested_url: &str) -> Option<String> {
+    if let Some(scheme_relative) = location.strip_prefix("//") {
+        let scheme = requested_url.split_once("://")?.0;
+        return Some(format!("{scheme}://{scheme_relative}"));
+    }
+    if is_absolute_url(location) {
         return Some(location.to_owned());
     }
-    let origin: String = requested_url
-        .split('/')
-        .take(3)
-        .collect::<Vec<_>>()
-        .join("/");
-    Some(format!("{origin}{location}"))
+
+    let origin = origin_of(requested_url)?;
+    if let Some(root_relative) = location.strip_prefix('/') {
+        return Some(format!("{origin}/{root_relative}"));
+    }
+
+    // Path-relative: against the requested path's directory, per RFC 3986 §5.3.
+    let requested_path = requested_url.strip_prefix(&origin).unwrap_or("/");
+    let directory = match requested_path.rfind('/') {
+        Some(last_separator) => &requested_path[..=last_separator],
+        None => "/",
+    };
+    Some(format!("{origin}{directory}{location}"))
+}
+
+/// A scheme followed by `://`, with nothing path-like before it.
+fn is_absolute_url(url: &str) -> bool {
+    url.split_once("://")
+        .is_some_and(|(scheme, _)| !scheme.is_empty() && !scheme.contains(['/', '?', '#']))
+}
+
+/// Scheme and authority, which is what decides whether two URLs are one origin.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    Some(format!("{scheme}://{authority}"))
+}
+
+/// A bearer token belongs only on a channel that hides it.
+fn refuse_a_bearer_token_over_plaintext(
+    url: &str,
+    bearer_token: Option<&str>,
+    protocol: &'static str,
+) -> Result<()> {
+    if bearer_token.is_some() && !hides_a_credential(url) {
+        return Err(WebRtcExtensionError::Signalling {
+            protocol,
+            what: format!(
+                "this session carries a bearer token and `{url}` is neither https nor \
+                 loopback, so the token would cross the network in the clear"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// TLS, or a destination the bytes never leave the machine to reach — the same
+/// carve-out a browser makes in treating `http://localhost` as a secure
+/// context, and what lets a local relay be driven without a certificate.
+fn hides_a_credential(url: &str) -> bool {
+    if url.starts_with("https://") {
+        return true;
+    }
+    let Some(authority) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let host = authority
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit_once(':')
+        .map_or(
+            authority.split(['/', '?', '#']).next().unwrap_or_default(),
+            |(host, _port)| host,
+        );
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]") || host.starts_with("127.")
 }
 
 fn full_body(body: String) -> SignallingRequestBody {
@@ -287,6 +379,54 @@ mod tests {
         assert_eq!(
             resolved.as_deref(),
             Some("https://ingest.example/sessions/7")
+        );
+    }
+
+    #[test]
+    fn a_scheme_relative_location_keeps_the_requests_own_scheme() {
+        assert_eq!(
+            resolve_location(
+                "//relay.example/sessions/7",
+                "https://ingest.example/live/abc"
+            )
+            .as_deref(),
+            Some("https://relay.example/sessions/7")
+        );
+    }
+
+    #[test]
+    fn a_path_relative_location_resolves_against_the_requests_directory() {
+        assert_eq!(
+            resolve_location("sessions/7", "https://ingest.example/live/abc").as_deref(),
+            Some("https://ingest.example/live/sessions/7")
+        );
+    }
+
+    #[test]
+    fn a_bearer_token_is_refused_over_plaintext_but_allowed_to_loopback() {
+        // Loopback never leaves the machine, which is the same carve-out a
+        // browser makes for `http://localhost`.
+        assert!(
+            refuse_a_bearer_token_over_plaintext(
+                "http://relay.example/live",
+                Some("a-token"),
+                "WHIP"
+            )
+            .is_err()
+        );
+        for loopback in [
+            "http://127.0.0.1:8080/live",
+            "http://localhost/live",
+            "http://[::1]:9000/live",
+        ] {
+            assert!(
+                refuse_a_bearer_token_over_plaintext(loopback, Some("a-token"), "WHIP").is_ok(),
+                "{loopback} was refused"
+            );
+        }
+        // No token, nothing to disclose.
+        assert!(
+            refuse_a_bearer_token_over_plaintext("http://relay.example/live", None, "WHIP").is_ok()
         );
     }
 
@@ -370,6 +510,40 @@ mod signalling_round_trips {
         assert!(recorded[0].request_line.starts_with("POST /live "));
         assert!(recorded[1].request_line.starts_with("POST /elsewhere "));
         assert_eq!(recorded[1].body, "v=0\r\nthe-offer\r\n");
+    }
+
+    #[tokio::test]
+    async fn a_cross_origin_redirect_is_refused_rather_than_handed_the_token() {
+        // Following it would re-send the Authorization header to whoever the
+        // relay named. The offer is not worth disclosing the token for.
+        let relay = HttpResponderUnderTest::answering(vec![redirected_to(
+            "https://somewhere-else.example/sessions/9",
+        )])
+        .await;
+        let client = client_for(format!("{}/live", relay.origin), Some("a-token".to_owned()));
+
+        let refusal = client.post_offer("v=0\r\n").await.unwrap_err().to_string();
+
+        assert!(refusal.contains("different origin"), "{refusal}");
+        assert!(refusal.contains("bearer token"), "{refusal}");
+    }
+
+    #[tokio::test]
+    async fn a_cross_origin_redirect_is_followed_when_there_is_no_token_to_disclose() {
+        let elsewhere = HttpResponderUnderTest::answering(vec![created_at("/sessions/9")]).await;
+        let relay = HttpResponderUnderTest::answering(vec![redirected_to(&format!(
+            "{}/elsewhere",
+            elsewhere.origin
+        ))])
+        .await;
+        let client = client_for(format!("{}/live", relay.origin), None);
+
+        let opened = client.post_offer("v=0\r\n").await.unwrap();
+
+        assert_eq!(
+            opened.session_url,
+            format!("{}/sessions/9", elsewhere.origin)
+        );
     }
 
     #[tokio::test]

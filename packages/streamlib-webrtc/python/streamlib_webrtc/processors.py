@@ -414,8 +414,18 @@ class WhepPlayer:
             if media is None:
                 continue
             port, bag = _bag_for(media)
-            self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
-            outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+            try:
+                self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
+                outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+            except Exception as write_failure:
+                # This thread's death is otherwise silent from outside — the
+                # session closes and the ports go quiet with nothing saying
+                # which one failed or why.
+                log.error(
+                    f"WhepPlayer: writing a bag on `{port}` failed, and the "
+                    f"reading thread is ending: {write_failure}"
+                )
+                raise
             self._report_progress(port)
 
     def _report_progress(self, port: str) -> None:
