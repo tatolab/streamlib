@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "streamlib-webrtc"
+version = "0.1.0"
+description = "WHIP publish and WHEP play for StreamLib."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Video",
+]
+# The engine is a binary dependency, never a source one: this wheel links no
+# streamlib crate and speaks no engine internals. 0.18.48 is the release that
+# carries the capability-extension mechanism `extension.py:load` needs.
+dependencies = ["streamlib>=0.18.48"]
+
+# What pip records at install and the engine reads back through
+# `importlib.metadata` when a process takes an engine role.
+[project.entry-points."streamlib.extensions"]
+webrtc = "streamlib_webrtc.extension:load"
+
+[tool.maturin]
+python-source = "python"
+module-name = "streamlib_webrtc._native"
+features = ["pyo3/extension-module"]
+
+[tool.pyright]
+include = ["python", "tests"]
+typeCheckingMode = "standard"
+pythonVersion = "3.10"
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_gpu: needs a real GPU; deselected in CI with -m 'not requires_gpu'",
+]
