@@ -105,6 +105,22 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
+      # An extension wheel depends on `streamlib` as a binary, so its lane
+      # installs this artifact rather than building the engine a second time —
+      # which is the slowest job in the repo and would be duplicated per
+      # extension. Incremental over the develop build above, so it costs
+      # seconds rather than minutes.
+      - name: Package the wheel for the extension lane
+        working-directory: sdk/streamlib-python-wheel
+        run: VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 build --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: streamlib-wheel
+          path: sdk/streamlib-python-wheel/dist/*.whl
+          retention-days: 1
+          if-no-files-found: error
+
       # The crate's own unit tests link libpython rather than building as an
       # extension module (the `extension-module` feature is off by default for
       # exactly this), which is why `python3-dev` is in the apt list above.
@@ -169,6 +185,97 @@ jobs:
         run: |
           cargo test --locked -p streamlib-engine --lib -- \
             core::signals core::runtime::runtime::tests::stopping
+
+  extension-wheels:
+    name: Extension wheel (${{ matrix.extension }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Installs the wheel that job built. An extension links no engine crate, so
+    # nothing here needs Vulkan, glslc or the engine's build set.
+    needs: wheel-interpreter-lifecycle
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - extension: streamlib-webrtc
+            native_module: streamlib_webrtc._native
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Compiles and runs PR-authored code; a persisted checkout token
+          # would be readable by it.
+          persist-credentials: false
+
+      # `cargo test` builds the crate with pyo3's `extension-module` off — the
+      # default, so the crate's own unit tests can link libpython and run at
+      # all — which is what this is for.
+      - name: Install system dependencies
+        timeout-minutes: 6
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          packages: python3-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: extension-${{ matrix.extension }}
+          workspaces: packages/${{ matrix.extension }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: streamlib-wheel
+          path: streamlib-wheel
+
+      # The engine as a binary dependency, exactly as a third party installs
+      # it: from a built wheel, never from this checkout's source.
+      - name: Install the engine wheel and build the extension into it
+        working-directory: packages/${{ matrix.extension }}
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      # Run before the venv is on PATH so pyo3 resolves the system interpreter,
+      # whose dev headers the apt step above installed.
+      - name: Extension crate tests
+        working-directory: packages/${{ matrix.extension }}
+        run: cargo test --locked --lib
+
+      - name: Clippy
+        working-directory: packages/${{ matrix.extension }}
+        run: cargo clippy --locked --lib --all-targets -- -D warnings
+
+      # The only check that compares the extension's hand-written `_native.pyi`
+      # to what it actually built. The engine workspace's gates do not walk a
+      # non-member, which is why an extension carries its own.
+      - name: Type stubs match the compiled module
+        working-directory: packages/${{ matrix.extension }}
+        run: .venv/bin/python -m mypy.stubtest ${{ matrix.native_module }}
+
+      - name: Type-check the extension's Python surface
+        working-directory: packages/${{ matrix.extension }}
+        run: uvx pyright@1.1.411
+
+      # Carries the portability gate over the built `.so`: an extension wheel
+      # installs beside the engine wheel on machines this project never sees,
+      # so it owes the same manylinux promise.
+      - name: Extension tests, GPU-free
+        working-directory: packages/${{ matrix.extension }}
+        env:
+          XDG_RUNTIME_DIR: /tmp/streamlib-runtime-dir
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR"
+          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
   python-types:
     name: Pyright (no build)
