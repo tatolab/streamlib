@@ -1734,7 +1734,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, moq, webrtc — OPEN
+## Networking — transport, moq, webrtc — DECIDED
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -1778,7 +1778,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the runtime needed nothing from the moved code that survives the move.
   `runtime/streamlib-moq` leaves the workspace whole once its logic is in the wheel, its
   `deny.toml` entry with it; whether the wheel's Rust is also published as a crate for a
-  Rust app waits for a Rust app that wants it. [extension-model]
+  Rust app waits for a Rust app that wants it. More generally, the coupling was the
+  mistake and not the route: the control plane carries no optional capability's routes
+  natively, and an extension that needs an endpoint contributes it through `host`, served
+  by the one control plane in the app process and seeing only what the app process sees
+  (§Control plane & observability). The move owes no catalog route; the first consumer
+  that wants one adds it through that door. [extension-model]
 - **DECIDED** — The moved processors are typed, and the Python surface gains no raw byte
   port for them: a publisher reads `EncodedVideoFrame` / `EncodedAudioPacket` and hands
   the bitstream to the wheel's Rust; a player or subscriber writes the bag literal
@@ -1800,10 +1805,19 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   here: a helper's teardown reply and exit are bounded at five seconds each, so a WHIP
   `DELETE` or a QUIC close must be bounded too; and connecting inside `setup()` spends
   the sixty-second registration budget. [extension-model]
-- **OPEN** — The live proof's target: the public Cloudflare relay and Cloudflare Stream's
-  WHIP endpoint, rig-only with credentials outside the tree — what every past proof used,
-  no relay or loopback existing in the tree — or a relay run on the rig. The owner's
-  call. Later work, after the move: mesh discovery and the cross-host fabric (Zenoh).
+- **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
+  endpoint-free: RTP packetising and depacketising round trips, SDP construction and
+  parsing, MoQ catalog and object bytes, and the bag literal a player writes checked
+  against the wire contract. Live, rig-only: WHIP publish to Cloudflare Stream and WHEP
+  play back from it, and MoQ publish and subscribe through Cloudflare's public relay —
+  the endpoints every past proof used — with credentials outside the tree, in the
+  fixture-script shape the codec rig set (owner, 2026-09-04). The move re-verifies
+  against current library versions rather than the pins the held code carried: `webrtc`,
+  `moq-transport`, `quinn` and `rustls` have moved since the freeze, and the patches the
+  old MoQ path carried for TLS and for newer draft versions may now be upstream — whoever
+  moves it checks first. [extension-model]
+- **OPEN** — Later work, after the move: mesh discovery and the cross-host fabric
+  (Zenoh).
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
@@ -1865,6 +1879,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
 ## Control plane & observability — IN-FLIGHT
+
+- **DECIDED** — The control plane carries no optional capability's routes natively. A
+  capability extension that needs an endpoint contributes it through the `host` door
+  (§Packages & extension model), served by the one control plane in the app process
+  under the same `RuntimeOperations`-shaped discipline — a handler sees what the app
+  process sees, the graph and what the extension registered, and no helper's private
+  state. The `moq` feature and its catalog route, the one coupling of this kind, delete
+  with the networking move. The door's spelling is the first extension's to bring when
+  it needs one. [extension-model]
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical

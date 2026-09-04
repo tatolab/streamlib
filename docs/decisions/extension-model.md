@@ -115,6 +115,18 @@ would build one: its own workspace root, its own lockfile, a dependency on the p
 and it needs its own CI lane and its own stub gate — is the cost every third party already
 pays, and paying it first-party is how those lanes get built.
 
+## Why the control plane carries nothing optional
+
+The api-server grew a `moq` feature and a catalog route because the old MoQ package needed
+somewhere observable to publish its state, and the control plane was the nearest surface.
+Nothing ever enabled the feature, and under helper placement its handler cannot see the
+sessions it reads. The mistake was the coupling — an optional capability wired into a core
+surface by feature flag — not the route. The owner named the shape wanted instead: the way a
+plugin-friendly API layer lets a plugin contribute endpoints (Better Auth's `better-call`
+was the reference), so a capability can offer a route without the engine knowing the
+capability exists. That is a door on `host`, and like every door it is built when an
+extension needs it; the move deletes the coupling and owes no route.
+
 ## Rejected alternatives
 
 - **Keep building capabilities into the engine** — every optional feature makes every user
@@ -168,3 +180,6 @@ pays, and paying it first-party is how those lanes get built.
   separately, after them.
 - The helper hop's per-frame cost has never been measured; the plan's "fits within the helper
   hop's budget" is an argument, not a number. The first extension should measure it.
+- The held networking code pins libraries that have moved — `webrtc`, `moq-transport`,
+  `quinn`, `rustls` — and carried patches for TLS and newer MoQ draft versions that may now be
+  upstream. The move checks current versions first rather than porting the pins.
