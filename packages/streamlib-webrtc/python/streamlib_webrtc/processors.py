@@ -330,9 +330,10 @@ class WhepPlayer:
         del ctx
         self._stop.set()
         if self._reader is not None:
-            # Bounded well inside the helper's five-second teardown budget: the
-            # thread's own wait for media is bounded too.
-            self._reader.join(timeout=2.0)
+            # The join and the session close below share the helper's
+            # five-second teardown budget, and the thread's own wait for media
+            # is bounded at PLAYER_POLL_TIMEOUT_MS, so this returns promptly.
+            self._reader.join(timeout=1.0)
             self._reader = None
         if self._session is not None:
             self._session.close()

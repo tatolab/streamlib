@@ -41,6 +41,11 @@ const H264_FORMAT_PARAMETERS: &str =
 /// `sprop-stereo` and never here.
 const OPUS_RTPMAP_CHANNELS: u16 = 2;
 
+/// The helper's teardown reply is bounded at five seconds before the parent
+/// stops waiting, and the peer connection's own close has no bound of its own.
+/// This leaves room for the join that precedes it.
+const CLOSE_BUDGET: Duration = Duration::from_secs(3);
+
 /// What the session will carry, settled from the publisher's inbound links
 /// before the offer is built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,9 +168,21 @@ impl WhipPublishingSession {
         write_sample(track, opus_packet, duration).await
     }
 
-    /// Close the peer connection and DELETE the session, both bounded so the
-    /// helper's five-second teardown budget cannot be overrun.
+    /// Close the peer connection and DELETE the session, bounded as a whole so
+    /// the helper's five-second teardown budget cannot be overrun.
     pub async fn close(&self) {
+        if tokio::time::timeout(CLOSE_BUDGET, self.close_the_session())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "the WHIP session did not close inside {CLOSE_BUDGET:?}; \
+                 the relay may hold it until it times out"
+            );
+        }
+    }
+
+    async fn close_the_session(&self) {
         if let Err(failure) = self.peer_connection.close().await {
             tracing::warn!(%failure, "closing the WHIP peer connection failed");
         }
