@@ -83,6 +83,12 @@ pub(crate) struct PythonOpusEncoderBlock;
 #[pyclass(name = "OpusDecoder", module = "streamlib", frozen)]
 pub(crate) struct PythonOpusDecoderBlock;
 
+/// `streamlib.Mp4Sink` — encoded video and audio bags recorded to one
+/// fragmented MP4 file, one track per inbound link, on every platform the
+/// wheel builds for.
+#[pyclass(name = "Mp4Sink", module = "streamlib", frozen)]
+pub(crate) struct PythonMp4SinkBlock;
+
 /// Resolve a Python object to a native built-in's class import path, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins
@@ -182,6 +188,11 @@ pub(crate) fn native_builtin_class_import_path(
     if processor_class.is(python.get_type::<PythonOpusDecoderBlock>()) {
         return Ok(Some(
             streamlib_media_builtins::OpusDecoder::Processor::processor_class_import_path(),
+        ));
+    }
+    if processor_class.is(python.get_type::<PythonMp4SinkBlock>()) {
+        return Ok(Some(
+            streamlib_media_builtins::Mp4Sink::Processor::processor_class_import_path(),
         ));
     }
     Ok(None)

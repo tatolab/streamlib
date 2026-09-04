@@ -4,12 +4,16 @@
 //! The engine-owned codec round-trip rig: a source → encoder → decoder →
 //! `DisplayWindow` graph, run against real hardware.
 //!
-//! Two source arms. `--source fixture` replays the checked-in PSNR
+//! Three source arms. `--source fixture` replays the checked-in PSNR
 //! reference PNGs, each held for a run of frames long enough to cross a GOP
 //! boundary, so a scorer can pair a decoded frame with the reference that
 //! produced it. `--source camera` runs `CameraSource` unchanged, which is
 //! the arm the real-hardware races are reproduced on — vivid hides that
-//! class.
+//! class. `--source mp4:<path>` demuxes an `Mp4Sink` recording's video track
+//! back into access units and publishes them into the decoder directly, with
+//! no encoder in the graph: the decode-back that proves the container carried
+//! the encoder's bytes untouched, scored against the same baseline the live
+//! camera path locks to with one file in between.
 //!
 //! Two codec arms. `--codec h264` and `--codec h265` swap the encoder and
 //! decoder pair and change nothing else — the two built-in pairs share
@@ -43,6 +47,7 @@
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1
 //! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source camera --camera /dev/video1 --camera-max-width 3840 --camera-max-height 2160
+//! cargo run -p streamlib-engine --example codec_roundtrip_rig -- --source mp4:/tmp/recording.mp4 --codec h264
 //! streamlib exchange --channel <decoder_id>/video --out /tmp/decoded --count 4
 //! ```
 
@@ -61,6 +66,7 @@ fn main() -> streamlib::sdk::error::Result<()> {
 
 #[cfg(target_os = "linux")]
 mod linux_rig {
+    use mp4_atom::{Atom, Codec, Header, Moof, Moov, ReadAtom, ReadFrom};
     use serde::{Deserialize, Serialize};
     use streamlib::sdk::App;
     use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -69,12 +75,16 @@ mod linux_rig {
     use streamlib::sdk::media_clock::MediaClock;
     use streamlib::sdk::processors::ContinuousProcessor;
     use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
+    use streamlib_media_builtins::mp4_annex_b_access_unit::{
+        NAL_UNIT_LENGTH_PREFIX_BYTES, annex_b_access_unit_from_length_prefixed_sample,
+    };
     use streamlib_media_builtins::video_frame::{
         ColorInfo, Primaries, Range, Transfer, VideoFrame,
     };
     use streamlib_media_builtins::{
-        CameraSource, DisplayWindow, H264Decoder, H264Encoder, H265Decoder, H265Encoder,
-        register_media_builtin_processor_types, stage_tightly_packed_rgba_into_pooled_pixel_buffer,
+        CameraSource, DisplayWindow, EncodedVideoCodec, EncodedVideoFrame, H264Decoder,
+        H264Encoder, H265Decoder, H265Encoder, register_media_builtin_processor_types,
+        stage_tightly_packed_rgba_into_pooled_pixel_buffer,
     };
 
     /// The fixture source's publish rate, and the twin of the
@@ -110,6 +120,15 @@ mod linux_rig {
     }
 
     impl RoundTripCodecArm {
+        /// The elementary stream this arm's pair codes, which is also what a
+        /// recording names its own track by.
+        fn encoded_video_codec(self) -> EncodedVideoCodec {
+            match self {
+                RoundTripCodecArm::H264 => EncodedVideoCodec::H264,
+                RoundTripCodecArm::H265 => EncodedVideoCodec::H265,
+            }
+        }
+
         /// The registered class paths of this arm's encoder and decoder.
         fn encoder_and_decoder_class_import_paths(
             self,
@@ -127,8 +146,8 @@ mod linux_rig {
         }
     }
 
-    /// Which source arm feeds the encoder.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    /// Which source arm feeds the graph.
+    #[derive(Debug, Clone, PartialEq, Eq)]
     enum RoundTripSourceArm {
         /// Replay the checked-in reference PNGs — deterministic, and the
         /// only arm a PSNR score can be computed against.
@@ -136,6 +155,10 @@ mod linux_rig {
         /// Real capture hardware, which is where the `DEVICE_LOST` and
         /// shutdown races live.
         Camera,
+        /// Replay an `Mp4Sink` recording's video track. The only arm that
+        /// publishes the encoded domain itself, so the only one with no
+        /// encoder in the graph.
+        RecordedMp4File { recording_path: String },
     }
 
     /// Configuration for [`PsnrReferenceFixtureSource`].
@@ -388,6 +411,426 @@ mod linux_rig {
             .collect()
     }
 
+    /// What `--source` prefixes a recording's path with.
+    const RECORDED_MP4_SOURCE_PREFIX: &str = "mp4:";
+
+    /// `sample_is_non_sync_sample`, ISO/IEC 14496-12 §8.8.3.1. A sample whose
+    /// flags leave it clear is a sync sample.
+    const SAMPLE_FLAG_IS_NON_SYNC_SAMPLE: u32 = 0x0001_0000;
+
+    /// One access unit read back out of a recording, already in the Annex-B
+    /// shape an encoded-video link carries.
+    struct ReplayableAccessUnit {
+        annex_b_access_unit_bytes: Vec<u8>,
+        is_sync_point: bool,
+    }
+
+    /// A recording's video track: what its sample entry describes, and the
+    /// access units that were stored under it.
+    struct RecordedVideoTrackReplay {
+        sample_entry: RecordedVideoSampleEntry,
+        access_units: Vec<ReplayableAccessUnit>,
+    }
+
+    /// What a track's sample entry says about the elementary stream inside it.
+    struct RecordedVideoSampleEntry {
+        codec: EncodedVideoCodec,
+        /// The coded extent — before the conformance crop, as an encoded
+        /// frame's own `width`/`height` are.
+        coded_width: u32,
+        coded_height: u32,
+        /// The parameter sets `avcC`/`hvcC` carries, in the order a decoder
+        /// wants them re-prepended in — 14496-15 keeps them out of the samples,
+        /// so a sync sample is only decodable with these back in front of it.
+        parameter_set_nal_units: Vec<Vec<u8>>,
+        /// How many bytes prefix each NAL unit inside a sample.
+        nal_unit_length_prefix_bytes: u8,
+    }
+
+    /// Configuration for [`RecordedMp4TrackReplaySource`].
+    ///
+    /// `Default` is the empty pair every processor config owes; the rig always
+    /// states both, and an unset path is refused by name at `setup()`.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+    pub struct RecordedMp4TrackReplaySourceConfig {
+        /// The recording to replay.
+        recording_path: String,
+        /// The codec the rig's decoder was built for. The file names its own,
+        /// so a mismatch is refused at `setup()` naming both rather than
+        /// reaching a decoder that would refuse every bag. `Option` only
+        /// because a processor config owes a `Default`.
+        expected_codec: Option<EncodedVideoCodec>,
+    }
+
+    /// Every top-level `moov` and `moof` in a recording, each fragment paired
+    /// with where its box starts.
+    ///
+    /// The offset is what makes the samples findable: `trun.data_offset` is
+    /// relative to the `moof` it rides in (`tfhd.default_base_is_moof`), so a
+    /// fragment read out of its position in the file locates nothing.
+    fn read_moov_and_fragments(
+        file_bytes: &[u8],
+        recording_path: &str,
+    ) -> Result<(Moov, Vec<(usize, Moof)>)> {
+        let mut reader = std::io::Cursor::new(file_bytes);
+        let mut moov: Option<Moov> = None;
+        let mut fragments: Vec<(usize, Moof)> = Vec::new();
+
+        loop {
+            let box_start = reader.position() as usize;
+            // A header that cannot be read is the end of the file, or a
+            // trailing box a killed run never finished. Both stop the walk
+            // rather than fail it — that is what the fragmented layout is for.
+            let Ok(header) = Header::read_from(&mut reader) else {
+                break;
+            };
+            let body_start = reader.position();
+            match header.kind {
+                kind if kind == Moov::KIND => {
+                    moov = Some(Moov::read_atom(&header, &mut reader).map_err(|failure| {
+                        Error::Runtime(format!(
+                            "RecordedMp4TrackReplaySource: {recording_path}'s `moov` did not \
+                             parse: {failure}"
+                        ))
+                    })?);
+                }
+                kind if kind == Moof::KIND => {
+                    let fragment = Moof::read_atom(&header, &mut reader).map_err(|failure| {
+                        Error::Runtime(format!(
+                            "RecordedMp4TrackReplaySource: {recording_path} carries a `moof` \
+                             that did not parse: {failure}"
+                        ))
+                    })?;
+                    fragments.push((box_start, fragment));
+                }
+                _ => {}
+            }
+            // A box with no declared size runs to the end of the file.
+            let Some(body_bytes) = header.size else {
+                break;
+            };
+            let next_box_start = body_start + body_bytes as u64;
+            if next_box_start > file_bytes.len() as u64 {
+                break;
+            }
+            reader.set_position(next_box_start);
+        }
+
+        let moov = moov.ok_or_else(|| {
+            Error::Runtime(format!(
+                "RecordedMp4TrackReplaySource: {recording_path} carries no `moov`, so it \
+                 describes no track — a recording whose header never landed"
+            ))
+        })?;
+        Ok((moov, fragments))
+    }
+
+    /// An `hvcC`'s parameter sets, VPS before SPS before PPS.
+    fn parameter_sets_ordered_by_nal_unit_type(arrays: &[mp4_atom::HvcCArray]) -> Vec<Vec<u8>> {
+        let mut by_type: Vec<&mp4_atom::HvcCArray> = arrays.iter().collect();
+        by_type.sort_by_key(|array| array.nal_unit_type);
+        by_type
+            .into_iter()
+            .flat_map(|array| array.nalus.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Read the first video track's sample entry, or say why the recording
+    /// holds nothing this rig can replay.
+    fn read_video_sample_entry(
+        moov: &Moov,
+        recording_path: &str,
+    ) -> Result<(u32, RecordedVideoSampleEntry)> {
+        for trak in &moov.trak {
+            let sample_entry = match trak.mdia.minf.stbl.stsd.codecs.first() {
+                Some(Codec::Avc1(avc1)) => RecordedVideoSampleEntry {
+                    codec: EncodedVideoCodec::H264,
+                    coded_width: u32::from(avc1.visual.width),
+                    coded_height: u32::from(avc1.visual.height),
+                    parameter_set_nal_units: avc1
+                        .avcc
+                        .sequence_parameter_sets
+                        .iter()
+                        .chain(avc1.avcc.picture_parameter_sets.iter())
+                        .cloned()
+                        .collect(),
+                    nal_unit_length_prefix_bytes: avc1.avcc.length_size,
+                },
+                Some(Codec::Hvc1(hvc1)) => RecordedVideoSampleEntry {
+                    codec: EncodedVideoCodec::H265,
+                    coded_width: u32::from(hvc1.visual.width),
+                    coded_height: u32::from(hvc1.visual.height),
+                    // Ordered by `nal_unit_type` rather than by the order the
+                    // arrays appear: 14496-15 fixes neither, and ascending
+                    // type is exactly VPS 32, SPS 33, PPS 34 — what a decoder
+                    // wants in front of a sync sample.
+                    parameter_set_nal_units: parameter_sets_ordered_by_nal_unit_type(
+                        &hvc1.hvcc.arrays,
+                    ),
+                    nal_unit_length_prefix_bytes: hvc1.hvcc.length_size_minus_one + 1,
+                },
+                _ => continue,
+            };
+            if sample_entry.parameter_set_nal_units.is_empty() {
+                return Err(Error::Runtime(format!(
+                    "RecordedMp4TrackReplaySource: {recording_path}'s video track carries no \
+                     parameter sets in its sample entry, so no sync sample in it is decodable"
+                )));
+            }
+            if sample_entry.nal_unit_length_prefix_bytes != NAL_UNIT_LENGTH_PREFIX_BYTES {
+                return Err(Error::Runtime(format!(
+                    "RecordedMp4TrackReplaySource: {recording_path}'s video track prefixes each \
+                     NAL unit with {} bytes; this replay reads the {NAL_UNIT_LENGTH_PREFIX_BYTES} \
+                     the sink writes",
+                    sample_entry.nal_unit_length_prefix_bytes
+                )));
+            }
+            return Ok((trak.tkhd.track_id, sample_entry));
+        }
+        Err(Error::Runtime(format!(
+            "RecordedMp4TrackReplaySource: {recording_path} holds no `avc1` or `hvc1` track, so \
+             there is no video to replay"
+        )))
+    }
+
+    /// Read a recording's video track back into the access units that made it.
+    ///
+    /// The file is read whole rather than streamed: a sample is located from
+    /// its fragment's own offset in the file, and a rig recording is bounded
+    /// by the run that wrote it.
+    fn demux_recorded_video_track(recording_path: &str) -> Result<RecordedVideoTrackReplay> {
+        let file_bytes = std::fs::read(recording_path).map_err(|read_failure| {
+            Error::Runtime(format!(
+                "RecordedMp4TrackReplaySource: {recording_path} could not be read: {read_failure}"
+            ))
+        })?;
+        let (moov, fragments) = read_moov_and_fragments(&file_bytes, recording_path)?;
+        let (video_track_id, sample_entry) = read_video_sample_entry(&moov, recording_path)?;
+
+        // A `trun` entry may omit its size or its flags and inherit them:
+        // 14496-12 §8.8.7.1 lets `tfhd` override §8.8.3.2's `trex`.
+        let track_defaults = moov.mvex.as_ref().and_then(|mvex| {
+            mvex.trex
+                .iter()
+                .find(|trex| trex.track_id == video_track_id)
+        });
+        let default_sample_size_from_trex = track_defaults.map(|trex| trex.default_sample_size);
+        let default_sample_flags_from_trex = track_defaults.map(|trex| trex.default_sample_flags);
+
+        let mut access_units = Vec::new();
+        for (moof_start, fragment) in &fragments {
+            for track_fragment in fragment
+                .traf
+                .iter()
+                .filter(|traf| traf.tfhd.track_id == video_track_id)
+            {
+                // What `trun.data_offset` is measured from — the `moof` under
+                // `default_base_is_moof`, an absolute position under
+                // `base_data_offset`. A fragment that states neither leaves the
+                // offset meaning nothing, and reading it as either would hand
+                // the decoder some other track's bytes and present as a decode
+                // failure. 14496-12 §8.8.7.
+                let sample_offset_base = match (
+                    track_fragment.tfhd.base_data_offset,
+                    track_fragment.tfhd.default_base_is_moof,
+                ) {
+                    (Some(base_data_offset), _) => base_data_offset as i64,
+                    (None, true) => *moof_start as i64,
+                    (None, false) => {
+                        return Err(Error::Runtime(format!(
+                            "RecordedMp4TrackReplaySource: a fragment in {recording_path} states \
+                             neither `base_data_offset` nor `default_base_is_moof`, so its \
+                             `trun.data_offset` is measured from nothing this reader can name"
+                        )));
+                    }
+                };
+                for run in &track_fragment.trun {
+                    let mut next_sample_start_in_file = sample_offset_base
+                        .checked_add(i64::from(run.data_offset.unwrap_or(0)))
+                        .and_then(|offset| usize::try_from(offset).ok())
+                        .ok_or_else(|| {
+                            Error::Runtime(format!(
+                                "RecordedMp4TrackReplaySource: a fragment in {recording_path} \
+                                 points its samples outside the file"
+                            ))
+                        })?;
+                    for entry in &run.entries {
+                        let sample_bytes_length = entry
+                            .size
+                            .or(track_fragment.tfhd.default_sample_size)
+                            .or(default_sample_size_from_trex)
+                            .ok_or_else(|| {
+                                Error::Runtime(format!(
+                                    "RecordedMp4TrackReplaySource: a sample in {recording_path} \
+                                     states no size and inherits none, so its bytes cannot be \
+                                     found"
+                                ))
+                            })? as usize;
+                        let sample_bytes = file_bytes
+                            .get(
+                                next_sample_start_in_file
+                                    ..next_sample_start_in_file + sample_bytes_length,
+                            )
+                            .ok_or_else(|| {
+                                Error::Runtime(format!(
+                                    "RecordedMp4TrackReplaySource: a fragment in \
+                                     {recording_path} points past the end of the file — a \
+                                     recording truncated mid-`mdat`"
+                                ))
+                            })?;
+                        next_sample_start_in_file += sample_bytes_length;
+
+                        let sample_flags = entry
+                            .flags
+                            .or(track_fragment.tfhd.default_sample_flags)
+                            .or(default_sample_flags_from_trex)
+                            .unwrap_or(0);
+                        let is_sync_point = sample_flags & SAMPLE_FLAG_IS_NON_SYNC_SAMPLE == 0;
+                        // A sync sample takes the sample entry's sets back in
+                        // front of it; a non-sync sample takes none, which is
+                        // what the encoder published.
+                        let parameter_sets_this_sample_needs: &[Vec<u8>] = if is_sync_point {
+                            &sample_entry.parameter_set_nal_units
+                        } else {
+                            &[]
+                        };
+                        access_units.push(ReplayableAccessUnit {
+                            annex_b_access_unit_bytes:
+                                annex_b_access_unit_from_length_prefixed_sample(
+                                    sample_bytes,
+                                    parameter_sets_this_sample_needs,
+                                )
+                                .map_err(|refusal| {
+                                    Error::Runtime(format!(
+                                        "RecordedMp4TrackReplaySource: a sample in \
+                                         {recording_path}: {refusal}"
+                                    ))
+                                })?,
+                            is_sync_point,
+                        });
+                    }
+                }
+            }
+        }
+
+        if access_units.is_empty() {
+            return Err(Error::Runtime(format!(
+                "RecordedMp4TrackReplaySource: {recording_path}'s video track carries no \
+                 samples — a recording whose `moov` landed and whose fragments did not"
+            )));
+        }
+        Ok(RecordedVideoTrackReplay {
+            sample_entry,
+            access_units,
+        })
+    }
+
+    #[streamlib::sdk::processor(
+        description = "Replays a recording's video track as encoded-frame bags, for the decode-back arm",
+        execution = continuous(interval_ms = 100),
+        config = crate::linux_rig::RecordedMp4TrackReplaySourceConfig,
+        output(
+            "encoded_video",
+            description = "Access units read back out of the recording"
+        ),
+    )]
+    pub struct RecordedMp4TrackReplaySource {
+        replay: Option<RecordedVideoTrackReplay>,
+        access_units_published: usize,
+        sync_points_published: u64,
+    }
+
+    impl ContinuousProcessor for RecordedMp4TrackReplaySource::Processor {
+        fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            let replay = demux_recorded_video_track(&self.config.recording_path)?;
+            let recorded_codec = replay.sample_entry.codec;
+            if self.config.expected_codec != Some(recorded_codec) {
+                return Err(Error::Runtime(format!(
+                    "RecordedMp4TrackReplaySource: {} holds a `{}` track and this run wired the \
+                     `{}` decoder — run the arm with `--codec {}`",
+                    self.config.recording_path,
+                    recorded_codec.as_wire_str(),
+                    self.config
+                        .expected_codec
+                        .map_or("none", EncodedVideoCodec::as_wire_str),
+                    recorded_codec.as_wire_str(),
+                )));
+            }
+            tracing::info!(
+                recording = self.config.recording_path,
+                codec = recorded_codec.as_wire_str(),
+                access_units = replay.access_units.len(),
+                sync_points = replay
+                    .access_units
+                    .iter()
+                    .filter(|access_unit| access_unit.is_sync_point)
+                    .count(),
+                width = replay.sample_entry.coded_width,
+                height = replay.sample_entry.coded_height,
+                "RecordedMp4TrackReplaySource: recording demuxed"
+            );
+            self.replay = Some(replay);
+            Ok(())
+        }
+
+        fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            tracing::info!(
+                access_units_published = self.access_units_published,
+                "RecordedMp4TrackReplaySource: teardown"
+            );
+            self.replay = None;
+            Ok(())
+        }
+
+        fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            let published_so_far = self.access_units_published;
+            let Some(replay) = self.replay.as_mut() else {
+                return Ok(());
+            };
+            let Some(access_unit) = replay.access_units.get_mut(published_so_far) else {
+                return Ok(());
+            };
+
+            if access_unit.is_sync_point {
+                self.sync_points_published += 1;
+            }
+            let frame = EncodedVideoFrame {
+                codec: replay.sample_entry.codec,
+                // Taken rather than cloned: the recording is replayed once
+                // through, so nothing reads an access unit twice. A looping
+                // arm would have to copy again.
+                annex_b_access_unit_bytes: std::mem::take(
+                    &mut access_unit.annex_b_access_unit_bytes,
+                ),
+                is_sync_point: access_unit.is_sync_point,
+                // The first access unit is a sync point, so the first group is
+                // zero and the count is one ahead of the index.
+                group_index: self.sync_points_published.saturating_sub(1),
+                sequence_index: published_so_far as u64,
+                width: replay.sample_entry.coded_width,
+                height: replay.sample_entry.coded_height,
+                // The re-prepended SPS carries the VUI the encoder minted, and
+                // a parsed VUI outranks a producer's attestation — so stating
+                // one here could only disagree with the bitstream.
+                color: None,
+            };
+            // Stamped at publication rather than at the recorded decode time:
+            // a `tfdt` is an offset from the recording's own epoch, not an
+            // instant on this run's monotonic clock.
+            self.outputs.write("encoded_video", &frame)?;
+
+            self.access_units_published += 1;
+            if self.access_units_published == replay.access_units.len() {
+                tracing::info!(
+                    access_units_published = self.access_units_published,
+                    "RecordedMp4TrackReplaySource: the recording is fully replayed"
+                );
+            }
+            Ok(())
+        }
+    }
+
     /// The port the hosted control plane binds, so `streamlib nodes` finds
     /// the run. The wheel's own default; the api-server increments on
     /// collision.
@@ -436,14 +879,26 @@ mod linux_rig {
             };
             match flag.as_str() {
                 "--source" => {
-                    arguments.source_arm = match next_value_for_this_flag()?.as_str() {
+                    let named_source = next_value_for_this_flag()?;
+                    arguments.source_arm = match named_source.as_str() {
                         "fixture" => RoundTripSourceArm::PsnrReferenceFixtures,
                         "camera" => RoundTripSourceArm::Camera,
-                        unknown => {
-                            return Err(Error::Runtime(format!(
-                                "--source {unknown} is neither `fixture` nor `camera`"
-                            )));
-                        }
+                        named => match named.strip_prefix(RECORDED_MP4_SOURCE_PREFIX) {
+                            Some("") => {
+                                return Err(Error::Runtime(
+                                    "--source mp4: names no file; it takes `mp4:<path>`".into(),
+                                ));
+                            }
+                            Some(recording_path) => RoundTripSourceArm::RecordedMp4File {
+                                recording_path: recording_path.to_string(),
+                            },
+                            None => {
+                                return Err(Error::Runtime(format!(
+                                    "--source {named} is none of `fixture`, `camera` or \
+                                     `mp4:<path>`"
+                                )));
+                            }
+                        },
                     }
                 }
                 "--codec" => {
@@ -499,7 +954,7 @@ mod linux_rig {
         register_media_builtin_processor_types();
 
         let app = App::new()?;
-        let source = match arguments.source_arm {
+        let source = match &arguments.source_arm {
             RoundTripSourceArm::PsnrReferenceFixtures => app
                 .add_local::<PsnrReferenceFixtureSource::Processor>(
                 PsnrReferenceFixtureSourceConfig {
@@ -517,14 +972,34 @@ mod linux_rig {
                 }),
                 Some("camera"),
             )?,
+            RoundTripSourceArm::RecordedMp4File { recording_path } => {
+                app.add_local::<RecordedMp4TrackReplaySource::Processor>(
+                    RecordedMp4TrackReplaySourceConfig {
+                        recording_path: recording_path.clone(),
+                        expected_codec: Some(arguments.codec_arm.encoded_video_codec()),
+                    },
+                    Some("mp4_replay"),
+                )?
+            }
         };
         let (encoder_class_import_path, decoder_class_import_path) =
             arguments.codec_arm.encoder_and_decoder_class_import_paths();
-        let encoder = app.add(
-            encoder_class_import_path,
-            serde_json::json!({ "keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS }),
-            Some("encoder"),
-        )?;
+        // The replay arm publishes the encoded domain itself, so there is
+        // nothing left for an encoder to do: what it would produce is what the
+        // recording already holds, and re-encoding it would score a second
+        // generation rather than the container.
+        let encoder = match arguments.source_arm {
+            RoundTripSourceArm::RecordedMp4File { .. } => None,
+            RoundTripSourceArm::PsnrReferenceFixtures | RoundTripSourceArm::Camera => {
+                Some(app.add(
+                    encoder_class_import_path,
+                    serde_json::json!({
+                        "keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS
+                    }),
+                    Some("encoder"),
+                )?)
+            }
+        };
         let decoder = app.add(
             decoder_class_import_path,
             serde_json::json!({}),
@@ -548,15 +1023,23 @@ mod linux_rig {
             },
         )?;
 
-        app.connect((&source, "video"), (&encoder, "video"))?;
-        app.connect((&encoder, "encoded_video"), (&decoder, "encoded_video"))?;
+        match &encoder {
+            Some(encoder) => {
+                app.connect((&source, "video"), (encoder, "video"))?;
+                app.connect((encoder, "encoded_video"), (&decoder, "encoded_video"))?;
+            }
+            None => {
+                app.connect((&source, "encoded_video"), (&decoder, "encoded_video"))?;
+            }
+        }
         app.connect((&decoder, "video"), (&display, "video"))?;
 
         tracing::info!(
             source_arm = ?arguments.source_arm,
             codec_arm = ?arguments.codec_arm,
-            "codec_roundtrip_rig: {} -> encoder -> decoder -> display",
-            source.display_name()
+            "codec_roundtrip_rig: {} -> {}decoder -> display",
+            source.display_name(),
+            if encoder.is_some() { "encoder -> " } else { "" },
         );
         app.run()
     }

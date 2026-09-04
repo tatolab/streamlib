@@ -190,6 +190,10 @@ streamlib-media-builtins = { path = "../streamlib-media-builtins" }
 streamlib-api-server = { path = "../streamlib-api-server" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
+# The `codec_roundtrip_rig` example demuxes an `Mp4Sink` recording back into
+# access units for its decode-back arm. Same pin the sink and `mp4-inspect`
+# hold, so the arm reads what the writer wrote.
+mp4-atom = "0.15"
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for logging and runtime tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
