@@ -113,13 +113,14 @@ impl WhipWhepSignallingClient {
             }
 
             let session_url = location_header(&headers, &endpoint_url).ok_or_else(|| {
-                self.refusal("a 201 Created carried no Location header, so the session \
+                self.refusal(
+                    "a 201 Created carried no Location header, so the session \
                               cannot be trickled to or deleted"
-                    .to_owned())
+                        .to_owned(),
+                )
             })?;
-            let sdp_answer = String::from_utf8(body.to_vec()).map_err(|failure| {
-                self.refusal(format!("the answer is not UTF-8: {failure}"))
-            })?;
+            let sdp_answer = String::from_utf8(body.to_vec())
+                .map_err(|failure| self.refusal(format!("the answer is not UTF-8: {failure}")))?;
             return Ok(OpenedSession {
                 sdp_answer,
                 session_url,
@@ -206,7 +207,10 @@ impl WhipWhepSignallingClient {
             .map_err(|failure| self.refusal(format!("the request did not complete: {failure}")))
     }
 
-    async fn collect_body(&self, response: hyper::Response<hyper::body::Incoming>) -> Result<Bytes> {
+    async fn collect_body(
+        &self,
+        response: hyper::Response<hyper::body::Incoming>,
+    ) -> Result<Bytes> {
         Ok(BodyExt::collect(response.into_body())
             .await
             .map_err(|failure| self.refusal(format!("could not read the response: {failure}")))?
@@ -228,7 +232,11 @@ fn location_header(headers: &hyper::HeaderMap, requested_url: &str) -> Option<St
     if !location.starts_with('/') {
         return Some(location.to_owned());
     }
-    let origin: String = requested_url.split('/').take(3).collect::<Vec<_>>().join("/");
+    let origin: String = requested_url
+        .split('/')
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("/");
     Some(format!("{origin}{location}"))
 }
 
@@ -239,7 +247,9 @@ fn full_body(body: String) -> SignallingRequestBody {
 }
 
 fn empty_body() -> SignallingRequestBody {
-    Empty::<Bytes>::new().map_err(|never| match never {}).boxed()
+    Empty::<Bytes>::new()
+        .map_err(|never| match never {})
+        .boxed()
 }
 
 #[cfg(test)]
@@ -418,8 +428,16 @@ mod signalling_round_trips {
 
         let recorded = relay.recorded();
         assert!(recorded[0].request_line.starts_with("POST /live "));
-        assert!(recorded[0].headers.contains("content-type: application/sdp"));
-        assert!(recorded[0].headers.contains("authorization: Bearer a-token"));
+        assert!(
+            recorded[0]
+                .headers
+                .contains("content-type: application/sdp")
+        );
+        assert!(
+            recorded[0]
+                .headers
+                .contains("authorization: Bearer a-token")
+        );
         assert_eq!(recorded[0].body, "v=0\r\nthe-offer\r\n");
     }
 
@@ -437,11 +455,9 @@ mod signalling_round_trips {
     async fn a_redirect_is_followed_and_the_offer_posted_again() {
         // The Location is root-relative, which is the form that has to be
         // resolved against the origin before it can be requested at all.
-        let relay = StubRelay::answering(vec![
-            redirected_to("/elsewhere"),
-            created_at("/sessions/9"),
-        ])
-        .await;
+        let relay =
+            StubRelay::answering(vec![redirected_to("/elsewhere"), created_at("/sessions/9")])
+                .await;
         let client = client_for(format!("{}/live", relay.origin), None);
 
         let opened = client.post_offer("v=0\r\nthe-offer\r\n").await.unwrap();
@@ -498,8 +514,7 @@ mod signalling_round_trips {
     #[tokio::test]
     async fn trickled_candidates_are_patched_to_the_session_url_as_an_sdp_fragment() {
         let relay = StubRelay::answering(vec![
-            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                .to_owned(),
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned(),
         ])
         .await;
         let client = client_for(format!("{}/live", relay.origin), None);
@@ -534,6 +549,10 @@ mod signalling_round_trips {
             .delete_session(&format!("{}/sessions/7", relay.origin))
             .await;
 
-        assert!(relay.recorded()[0].request_line.starts_with("DELETE /sessions/7 "));
+        assert!(
+            relay.recorded()[0]
+                .request_line
+                .starts_with("DELETE /sessions/7 ")
+        );
     }
 }

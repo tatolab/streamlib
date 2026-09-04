@@ -39,9 +39,8 @@ impl ColorDescription {
 
 /// Profiles whose SPS carries the chroma format and scaling lists that the
 /// baseline profiles omit — H.264 §7.3.2.1.1.
-const PROFILES_CARRYING_CHROMA_FORMAT: [u8; 13] = [
-    100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135,
-];
+const PROFILES_CARRYING_CHROMA_FORMAT: [u8; 13] =
+    [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135];
 
 /// Parse one SPS NAL unit, header byte included.
 pub fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameterSet> {

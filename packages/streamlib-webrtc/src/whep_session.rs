@@ -174,11 +174,12 @@ async fn build_peer_connection() -> Result<RTCPeerConnection> {
             })?;
     }
 
-    let registry = register_default_interceptors(Registry::new(), &mut media_engine).map_err(
-        |failure| WebRtcExtensionError::Transport {
-            what: format!("the RTCP interceptors could not be registered: {failure}"),
-        },
-    )?;
+    let registry =
+        register_default_interceptors(Registry::new(), &mut media_engine).map_err(|failure| {
+            WebRtcExtensionError::Transport {
+                what: format!("the RTCP interceptors could not be registered: {failure}"),
+            }
+        })?;
 
     APIBuilder::new()
         .with_media_engine(media_engine)
@@ -305,21 +306,22 @@ fn forward(received_media: &mpsc::Sender<ReceivedMedia>, media: ReceivedMedia) -
             tracing::debug!("the received-media queue is full; a bag was dropped");
             Ok(())
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => Err(WebRtcExtensionError::NotConnected {
-            protocol: PROTOCOL,
-        }),
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(WebRtcExtensionError::NotConnected { protocol: PROTOCOL })
+        }
     }
 }
 
 async fn create_offer_once_ice_has_gathered(
     peer_connection: &Arc<RTCPeerConnection>,
 ) -> Result<String> {
-    let offer = peer_connection.create_offer(None).await.map_err(|failure| {
-        WebRtcExtensionError::Signalling {
+    let offer = peer_connection
+        .create_offer(None)
+        .await
+        .map_err(|failure| WebRtcExtensionError::Signalling {
             protocol: PROTOCOL,
             what: format!("the offer could not be created: {failure}"),
-        }
-    })?;
+        })?;
     peer_connection
         .set_local_description(offer)
         .await

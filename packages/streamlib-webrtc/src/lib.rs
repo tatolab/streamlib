@@ -113,7 +113,9 @@ impl WhipSession {
         timestamp_ns: i64,
     ) -> PyResult<()> {
         let duration = match self.previous_video_stamp_ns.replace(timestamp_ns) {
-            Some(previous) => Duration::from_nanos(timestamp_ns.saturating_sub(previous).max(0) as u64),
+            Some(previous) => {
+                Duration::from_nanos(timestamp_ns.saturating_sub(previous).max(0) as u64)
+            }
             None => FIRST_FRAME_NOMINAL_DURATION,
         };
         let session = self.connected_session()?;
@@ -135,7 +137,8 @@ impl WhipSession {
         sample_count: u32,
     ) -> PyResult<()> {
         let duration = Duration::from_nanos(
-            u64::from(sample_count) * 1_000_000_000 / u64::from(opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ),
+            u64::from(sample_count) * 1_000_000_000
+                / u64::from(opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ),
         );
         let session = self.connected_session()?;
         let packet = bytes::Bytes::copy_from_slice(opus_packet);
@@ -217,24 +220,21 @@ impl WhepSession {
     /// The next assembled access unit or Opus packet, or `None` if none arrived
     /// within `timeout_ms` — which is how the reading thread stays responsive
     /// to a stop it has been asked for.
-    fn next_media(
-        &mut self,
-        python: Python<'_>,
-        timeout_ms: u64,
-    ) -> PyResult<Option<Py<PyAny>>> {
+    fn next_media(&mut self, python: Python<'_>, timeout_ms: u64) -> PyResult<Option<Py<PyAny>>> {
         let Some(session) = self.session.as_mut() else {
             return Err(WebRtcExtensionError::NotConnected { protocol: "WHEP" }.into());
         };
 
         let received = python.detach(|| {
-            transport_stack::transport_runtime()
-                .map(|runtime| runtime.block_on(session.next_media(Duration::from_millis(timeout_ms))))
+            transport_stack::transport_runtime().map(|runtime| {
+                runtime.block_on(session.next_media(Duration::from_millis(timeout_ms)))
+            })
         })?;
 
         Ok(match received {
-            Some(ReceivedMedia::Video(access_unit)) => Some(
-                Py::new(python, PlayedVideoAccessUnit::from(access_unit))?.into_any(),
-            ),
+            Some(ReceivedMedia::Video(access_unit)) => {
+                Some(Py::new(python, PlayedVideoAccessUnit::from(access_unit))?.into_any())
+            }
             Some(ReceivedMedia::Audio(packet)) => {
                 Some(Py::new(python, PlayedOpusPacket::from(packet))?.into_any())
             }

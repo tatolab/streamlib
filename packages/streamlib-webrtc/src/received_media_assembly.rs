@@ -129,9 +129,10 @@ impl VideoAccessUnitAssembler {
         }
 
         for nal_unit in &nal_units {
-            if nal_unit.first().is_some_and(|header| {
-                header & 0x1F == NAL_TYPE_SEQUENCE_PARAMETER_SET
-            }) {
+            if nal_unit
+                .first()
+                .is_some_and(|header| header & 0x1F == NAL_TYPE_SEQUENCE_PARAMETER_SET)
+            {
                 match parse_sequence_parameter_set(nal_unit) {
                     Ok(parsed) => self.latched_sequence_parameter_set = Some(parsed),
                     Err(refusal) => {
@@ -154,9 +155,11 @@ impl VideoAccessUnitAssembler {
             return None;
         };
 
-        let is_sync_point = nal_units
-            .iter()
-            .any(|nal_unit| nal_unit.first().is_some_and(|header| header & 0x1F == NAL_TYPE_IDR_SLICE));
+        let is_sync_point = nal_units.iter().any(|nal_unit| {
+            nal_unit
+                .first()
+                .is_some_and(|header| header & 0x1F == NAL_TYPE_IDR_SLICE)
+        });
 
         let mut annex_b_access_unit =
             Vec::with_capacity(nal_units.iter().map(|unit| unit.len() + 4).sum());
@@ -375,7 +378,11 @@ mod tests {
         let third = feed_a_keyframe(&mut assembler, &sps, 9000, 5).unwrap();
 
         assert_eq!(
-            [first.sequence_index, second.sequence_index, third.sequence_index],
+            [
+                first.sequence_index,
+                second.sequence_index,
+                third.sequence_index
+            ],
             [0, 1, 2]
         );
         assert_eq!(
@@ -477,7 +484,9 @@ mod tests {
     #[test]
     fn opus_stamps_advance_over_the_forty_eight_kilohertz_clock() {
         let mut assembler = OpusPacketAssembler::new(None);
-        let first = assembler.accept_rtp_packet(opus_packet(1, true), 0).unwrap();
+        let first = assembler
+            .accept_rtp_packet(opus_packet(1, true), 0)
+            .unwrap();
 
         let second = assembler
             .accept_rtp_packet(opus_packet(1, true), 960)

@@ -161,8 +161,7 @@ fn split_single_time_aggregation_packet(payload: &Bytes) -> Result<Vec<Bytes>> {
     let mut offset = 1;
 
     while offset + 2 <= payload.len() {
-        let nal_unit_length =
-            u16::from_be_bytes([payload[offset], payload[offset + 1]]) as usize;
+        let nal_unit_length = u16::from_be_bytes([payload[offset], payload[offset + 1]]) as usize;
         offset += 2;
 
         if nal_unit_length == 0 {
@@ -390,9 +389,7 @@ mod tests {
     fn an_empty_payload_is_refused_rather_than_read_past() {
         let mut depacketiser = H264RtpDepacketiser::new();
 
-        let refusal = depacketiser
-            .depacketise(Bytes::new(), 9000, 1)
-            .unwrap_err();
+        let refusal = depacketiser.depacketise(Bytes::new(), 9000, 1).unwrap_err();
 
         assert!(matches!(
             refusal,

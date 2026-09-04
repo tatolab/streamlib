@@ -39,8 +39,21 @@ features = ["pyo3/extension-module"]
 
 [tool.pyright]
 include = ["python", "tests"]
-typeCheckingMode = "standard"
+# The package is checked from source, not from an install, so `tests/` needs the
+# package root on the search path.
+extraPaths = ["python"]
+# Checked at the version floor rather than whatever interpreter the venv happens
+# to be — `requires-python` is the promise.
 pythonVersion = "3.10"
+# Standard rather than strict, matching the engine wheel: strict turns on
+# `reportPrivateUsage`, which fights the `_native` shape this package is built
+# on, and demands annotations on every pytest fixture parameter.
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# `_native` is a compiled artifact, so a checkout has the stub and not the `.so`
+# it describes. `mypy.stubtest` is what checks the stub against the real binary.
+reportMissingModuleSource = "none"
 
 [tool.pytest.ini_options]
 markers = [

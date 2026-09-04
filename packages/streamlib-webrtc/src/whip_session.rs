@@ -156,11 +156,7 @@ impl WhipPublishingSession {
 
     /// Hand one Opus packet to the audio track, its duration taken from the
     /// bag's own sample count rather than assumed to be one 20 ms frame.
-    pub async fn write_audio_packet(
-        &self,
-        opus_packet: Bytes,
-        duration: Duration,
-    ) -> Result<()> {
+    pub async fn write_audio_packet(&self, opus_packet: Bytes, duration: Duration) -> Result<()> {
         let track = self
             .audio_track
             .as_ref()
@@ -266,11 +262,12 @@ async fn build_peer_connection(
         )?;
     }
 
-    let registry = register_default_interceptors(Registry::new(), &mut media_engine).map_err(
-        |failure| WebRtcExtensionError::Transport {
-            what: format!("the RTCP interceptors could not be registered: {failure}"),
-        },
-    )?;
+    let registry =
+        register_default_interceptors(Registry::new(), &mut media_engine).map_err(|failure| {
+            WebRtcExtensionError::Transport {
+                what: format!("the RTCP interceptors could not be registered: {failure}"),
+            }
+        })?;
 
     APIBuilder::new()
         .with_media_engine(media_engine)
@@ -356,12 +353,13 @@ async fn set_every_track_send_only(peer_connection: &Arc<RTCPeerConnection>) {
 async fn create_offer_once_ice_has_gathered(
     peer_connection: &Arc<RTCPeerConnection>,
 ) -> Result<String> {
-    let offer = peer_connection.create_offer(None).await.map_err(|failure| {
-        WebRtcExtensionError::Signalling {
+    let offer = peer_connection
+        .create_offer(None)
+        .await
+        .map_err(|failure| WebRtcExtensionError::Signalling {
             protocol: PROTOCOL,
             what: format!("the offer could not be created: {failure}"),
-        }
-    })?;
+        })?;
     peer_connection
         .set_local_description(offer)
         .await

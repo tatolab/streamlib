@@ -61,11 +61,17 @@ mod tests {
             .collect();
 
         assert_eq!(
-            pairs.iter().map(|pair| pair.sequence_index).collect::<Vec<_>>(),
+            pairs
+                .iter()
+                .map(|pair| pair.sequence_index)
+                .collect::<Vec<_>>(),
             vec![0, 1, 2, 3, 4]
         );
         assert_eq!(
-            pairs.iter().map(|pair| pair.group_index).collect::<Vec<_>>(),
+            pairs
+                .iter()
+                .map(|pair| pair.group_index)
+                .collect::<Vec<_>>(),
             vec![0, 0, 0, 1, 1]
         );
     }

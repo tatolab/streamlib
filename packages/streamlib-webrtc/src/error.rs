@@ -3,8 +3,8 @@
 
 //! What this wheel's Rust refuses with, and how a refusal reaches Python.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::PyErr;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 
 /// Every way the WHIP and WHEP paths refuse.
 #[derive(Debug, thiserror::Error)]
@@ -23,7 +23,10 @@ pub enum WebRtcExtensionError {
 
     /// WHIP or WHEP signalling that did not complete.
     #[error("{protocol} signalling failed: {what}")]
-    Signalling { protocol: &'static str, what: String },
+    Signalling {
+        protocol: &'static str,
+        what: String,
+    },
 
     /// A media operation on a session that has not connected.
     #[error("the {protocol} session is not connected")]

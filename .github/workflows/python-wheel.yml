@@ -245,6 +245,12 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-wheel/*.whl
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
+      # The repo-root `cargo fmt --all` does not reach a non-member, so an
+      # extension checks its own.
+      - name: Formatting
+        working-directory: packages/${{ matrix.extension }}
+        run: cargo fmt --all --check
+
       # Run before the venv is on PATH so pyo3 resolves the system interpreter,
       # whose dev headers the apt step above installed.
       - name: Extension crate tests
