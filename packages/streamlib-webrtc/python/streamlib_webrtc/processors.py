@@ -42,6 +42,14 @@ HIGHEST_TRACKS_IN_ONE_SESSION = 2
 #: helper's five-second teardown budget.
 PLAYER_POLL_TIMEOUT_MS = 200
 
+#: A helper-placed link's per-bag ceiling
+#: (`streamlib-ipc-types`' untrusted-session ceiling). A bag past it is dropped
+#: at `debug` by the engine rather than raised, which would look from here like
+#: a stream that simply stopped — so the player says so itself, once. Three
+#: orders of magnitude above an H.264 access unit at any sane bitrate, so this
+#: firing at all means something upstream is wrong.
+HELPER_LINK_PAYLOAD_CEILING_BYTES = 16 * 1024 * 1024
+
 VideoOrAudio = Literal["video", "audio"]
 
 
@@ -81,6 +89,7 @@ class ReceivedPacket(Protocol):
     def sample_count(self) -> int: ...
     @property
     def pre_skip(self) -> int: ...
+
 
 #: What each bag's `codec` maps to. A codec absent from here is refused by name
 #: rather than guessed at — this session offers H.264 and Opus and nothing else.
@@ -284,6 +293,7 @@ class WhepPlayer:
         self._session: "_native.WhepSession | None" = None
         self._stop = threading.Event()
         self._reader: "threading.Thread | None" = None
+        self._reported_an_oversized_bag = False
 
     @output()
     def encoded_video(self) -> None:
@@ -321,10 +331,23 @@ class WhepPlayer:
                 if media is None:
                     continue
                 port, bag = _bag_for(media)
+                self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
                 outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
 
         self._reader = threading.Thread(target=play_until_stopped, daemon=True)
         self._reader.start()
+
+    def _report_a_bag_the_link_will_drop(self, port: str, bitstream: bytes) -> None:
+        if len(bitstream) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
+            return
+        if self._reported_an_oversized_bag:
+            return
+        self._reported_an_oversized_bag = True
+        log.error(
+            f"WhepPlayer: a {len(bitstream)}-byte bag on `{port}` is past the "
+            f"{HELPER_LINK_PAYLOAD_CEILING_BYTES}-byte link ceiling and will be "
+            f"dropped without reaching the decoder. Reported once."
+        )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx

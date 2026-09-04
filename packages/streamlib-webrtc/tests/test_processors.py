@@ -11,9 +11,13 @@ no device to build a graph.
 import pytest
 
 import streamlib
-from streamlib import H264Decoder, H264Encoder, OpusDecoder, OpusEncoder
+from streamlib import H264Decoder, H264Encoder, OpusDecoder, OpusEncoder, log
 from streamlib_webrtc import WhepPlayer, WhipPublisher
-from streamlib_webrtc.processors import VideoOrAudio, resolve_track_kind
+from streamlib_webrtc.processors import (
+    HELPER_LINK_PAYLOAD_CEILING_BYTES,
+    VideoOrAudio,
+    resolve_track_kind,
+)
 
 
 @pytest.fixture
@@ -104,3 +108,32 @@ def test_a_link_publishing_the_medium_it_already_claimed_is_unchanged():
     already: "dict[str, VideoOrAudio]" = {"encoder/encoded_video": "video"}
 
     assert resolve_track_kind("h264", "encoder/encoded_video", already) == "video"
+
+
+def test_an_oversized_bag_is_reported_once_rather_than_silently_dropped(
+    monkeypatch,
+):
+    """The engine drops a bag past the link ceiling at `debug` rather than
+    raising, which downstream looks like a stream that simply stopped. The
+    player is the only place that can say what actually happened — and a
+    per-frame condition reported per frame is noise, so it says it once."""
+    reported: "list[str]" = []
+    monkeypatch.setattr(log, "error", reported.append)
+    player = WhepPlayer()
+    over_the_ceiling = b"\x00" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)
+
+    player._report_a_bag_the_link_will_drop("encoded_video", over_the_ceiling)
+    player._report_a_bag_the_link_will_drop("encoded_video", over_the_ceiling)
+
+    assert len(reported) == 1
+    assert "encoded_video" in reported[0]
+    assert str(len(over_the_ceiling)) in reported[0]
+
+
+def test_a_bag_inside_the_ceiling_is_not_reported(monkeypatch):
+    reported: "list[str]" = []
+    monkeypatch.setattr(log, "error", reported.append)
+
+    WhepPlayer()._report_a_bag_the_link_will_drop("encoded_video", b"\x00" * 4096)
+
+    assert reported == []
