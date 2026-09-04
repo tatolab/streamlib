@@ -9,26 +9,23 @@ use crate::received_media_assembly::{
     OpusPacketAssembler, ReceivedOpusPacket, ReceivedVideoAccessUnit, VideoAccessUnitAssembler,
 };
 use crate::session_description::opus_sender_stereo_hint_in_answer;
+use crate::webrtc_peer_connection::{
+    H264_PAYLOAD_TYPE, NegotiatedCodec, OPUS_PAYLOAD_TYPE, OPUS_RECEIVE_FORMAT_PARAMETERS,
+    TrackMedium, apply_the_relays_answer, build_peer_connection, close_the_session,
+    create_offer_once_ice_has_gathered, opus_codec_capability, report_state_changes,
+    video_codec_capability, video_rtcp_feedback,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use webrtc::api::APIBuilder;
-use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MIME_TYPE_H264, MIME_TYPE_OPUS, MediaEngine};
-use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::rtp_transceiver::RTCRtpTransceiverInit;
-use webrtc::rtp_transceiver::rtp_codec::{
-    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
-};
+use webrtc::rtp_transceiver::rtp_codec::RTPCodecType;
 use webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection;
+use webrtc::track::track_remote::TrackRemote;
 
 const PROTOCOL: &str = "WHEP";
-const H264_PAYLOAD_TYPE: u8 = 102;
-const OPUS_PAYLOAD_TYPE: u8 = 111;
 
 /// How many assembled bags may wait for the processor thread to collect them.
 /// Bounded and dropped rather than blocked: a stalled reader must not stall the
@@ -36,20 +33,34 @@ const OPUS_PAYLOAD_TYPE: u8 = 111;
 /// something — which is exactly what happened.
 const RECEIVED_MEDIA_QUEUE_DEPTH: usize = 256;
 
-/// The helper's teardown reply is bounded at five seconds before the parent
-/// stops waiting, and the peer connection's own close has no bound of its own.
-/// This leaves room for the join that precedes it.
-const CLOSE_BUDGET: Duration = Duration::from_secs(3);
-
 /// One bag's worth of media, assembled and ready to be spelled.
 #[derive(Debug, Clone)]
-pub enum ReceivedMedia {
+pub(crate) enum ReceivedMedia {
     Video(ReceivedVideoAccessUnit),
     Audio(ReceivedOpusPacket),
 }
 
+/// Which mediums already have a reader, so a second track of one kind is
+/// refused rather than interleaved into the first one's ordering.
+#[derive(Default)]
+struct TrackMediumsAlreadyTaken {
+    video: AtomicBool,
+    audio: AtomicBool,
+}
+
+impl TrackMediumsAlreadyTaken {
+    /// `true` if this medium was already claimed by an earlier track.
+    fn claim(&self, medium: TrackMedium) -> bool {
+        match medium {
+            TrackMedium::Video => &self.video,
+            TrackMedium::Audio => &self.audio,
+        }
+        .swap(true, Ordering::SeqCst)
+    }
+}
+
 /// One connected WHEP session, draining into an assembled-media queue.
-pub struct WhepPlayingSession {
+pub(crate) struct WhepPlayingSession {
     signalling: WhipWhepSignallingClient,
     peer_connection: Arc<RTCPeerConnection>,
     session_url: String,
@@ -58,13 +69,16 @@ pub struct WhepPlayingSession {
 
 impl WhepPlayingSession {
     /// Offer two receive-only transceivers and start draining what arrives.
-    pub async fn connect(endpoint_url: String, bearer_token: Option<String>) -> Result<Self> {
+    pub(crate) async fn connect(
+        endpoint_url: String,
+        bearer_token: Option<String>,
+    ) -> Result<Self> {
         let signalling = WhipWhepSignallingClient::new(endpoint_url, bearer_token, PROTOCOL)?;
-        let peer_connection = Arc::new(build_peer_connection().await?);
+        let peer_connection = Arc::new(build_peer_connection(played_codecs()).await?);
 
         let (received_media_sender, received_media) = mpsc::channel(RECEIVED_MEDIA_QUEUE_DEPTH);
         let sender_declared_stereo = Arc::new(OnceLock::new());
-        report_state_changes(&peer_connection);
+        report_state_changes(&peer_connection, PROTOCOL);
         drain_every_arriving_track(
             &peer_connection,
             received_media_sender,
@@ -72,26 +86,13 @@ impl WhepPlayingSession {
         );
         add_receive_only_transceivers(&peer_connection).await?;
 
-        let sdp_offer = create_offer_once_ice_has_gathered(&peer_connection).await?;
+        let sdp_offer = create_offer_once_ice_has_gathered(&peer_connection, PROTOCOL).await?;
         let opened = signalling.post_offer(&sdp_offer).await?;
 
         // Before the answer is applied, because applying it is what fires the
         // track handlers that read this.
         let _ = sender_declared_stereo.set(opus_sender_stereo_hint_in_answer(&opened.sdp_answer));
-
-        let answer = RTCSessionDescription::answer(opened.sdp_answer).map_err(|failure| {
-            WebRtcExtensionError::Signalling {
-                protocol: PROTOCOL,
-                what: format!("the relay's answer is not valid SDP: {failure}"),
-            }
-        })?;
-        peer_connection
-            .set_remote_description(answer)
-            .await
-            .map_err(|failure| WebRtcExtensionError::Signalling {
-                protocol: PROTOCOL,
-                what: format!("the relay's answer was not accepted: {failure}"),
-            })?;
+        apply_the_relays_answer(&peer_connection, opened.sdp_answer, PROTOCOL).await?;
 
         tracing::info!(session_url = opened.session_url, "WHEP session connected");
         Ok(Self {
@@ -103,7 +104,7 @@ impl WhepPlayingSession {
     }
 
     /// The next assembled bag, or `None` if none arrived within `timeout`.
-    pub async fn next_media(&mut self, timeout: Duration) -> Option<ReceivedMedia> {
+    pub(crate) async fn next_media(&mut self, timeout: Duration) -> Option<ReceivedMedia> {
         tokio::time::timeout(timeout, self.received_media.recv())
             .await
             .ok()
@@ -112,84 +113,32 @@ impl WhepPlayingSession {
 
     /// Close the peer connection and DELETE the session, bounded as a whole so
     /// the helper's five-second teardown budget cannot be overrun.
-    pub async fn close(&self) {
-        if tokio::time::timeout(CLOSE_BUDGET, self.close_the_session())
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                "the WHEP session did not close inside {CLOSE_BUDGET:?}; \
-                 the relay may hold it until it times out"
-            );
-        }
-    }
-
-    async fn close_the_session(&self) {
-        if let Err(failure) = self.peer_connection.close().await {
-            tracing::warn!(%failure, "closing the WHEP peer connection failed");
-        }
-        self.signalling.delete_session(&self.session_url).await;
+    pub(crate) async fn close(&self) {
+        close_the_session(
+            &self.peer_connection,
+            &self.signalling,
+            &self.session_url,
+            PROTOCOL,
+        )
+        .await;
     }
 }
 
-async fn build_peer_connection() -> Result<RTCPeerConnection> {
-    let mut media_engine = MediaEngine::default();
-    for (capability, payload_type, codec_type) in [
-        (
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                clock_rate: 90_000,
-                channels: 0,
-                sdp_fmtp_line:
-                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-                        .to_owned(),
-                rtcp_feedback: vec![],
-            },
-            H264_PAYLOAD_TYPE,
-            RTPCodecType::Video,
-        ),
-        (
-            RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_OPUS.to_owned(),
-                clock_rate: 48_000,
-                channels: 2,
-                sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
-                rtcp_feedback: vec![],
-            },
-            OPUS_PAYLOAD_TYPE,
-            RTPCodecType::Audio,
-        ),
-    ] {
-        media_engine
-            .register_codec(
-                RTCRtpCodecParameters {
-                    capability,
-                    payload_type,
-                    ..Default::default()
-                },
-                codec_type,
-            )
-            .map_err(|failure| WebRtcExtensionError::Transport {
-                what: format!("the {codec_type} codec could not be registered: {failure}"),
-            })?;
-    }
-
-    let registry =
-        register_default_interceptors(Registry::new(), &mut media_engine).map_err(|failure| {
-            WebRtcExtensionError::Transport {
-                what: format!("the RTCP interceptors could not be registered: {failure}"),
-            }
-        })?;
-
-    APIBuilder::new()
-        .with_media_engine(media_engine)
-        .with_interceptor_registry(registry)
-        .build()
-        .new_peer_connection(RTCConfiguration::default())
-        .await
-        .map_err(|failure| WebRtcExtensionError::Transport {
-            what: format!("the peer connection could not be created: {failure}"),
-        })
+fn played_codecs() -> Vec<NegotiatedCodec> {
+    vec![
+        NegotiatedCodec {
+            capability: video_codec_capability(),
+            payload_type: H264_PAYLOAD_TYPE,
+            medium: TrackMedium::Video,
+            rtcp_feedback: video_rtcp_feedback(),
+        },
+        NegotiatedCodec {
+            capability: opus_codec_capability(OPUS_RECEIVE_FORMAT_PARAMETERS.to_owned()),
+            payload_type: OPUS_PAYLOAD_TYPE,
+            medium: TrackMedium::Audio,
+            rtcp_feedback: vec![],
+        },
+    ]
 }
 
 async fn add_receive_only_transceivers(peer_connection: &Arc<RTCPeerConnection>) -> Result<()> {
@@ -217,69 +166,71 @@ fn drain_every_arriving_track(
     received_media: mpsc::Sender<ReceivedMedia>,
     sender_declared_stereo: Arc<OnceLock<Option<bool>>>,
 ) {
-    let video_track_taken = Arc::new(AtomicBool::new(false));
-    let audio_track_taken = Arc::new(AtomicBool::new(false));
+    let already_taken = Arc::new(TrackMediumsAlreadyTaken::default());
 
     peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
+        let mime_type = track.codec().capability.mime_type;
+        let medium = TrackMedium::from_mime_type(&mime_type);
         let received_media = received_media.clone();
         let sender_declared_stereo = Arc::clone(&sender_declared_stereo);
-        let video_track_taken = Arc::clone(&video_track_taken);
-        let audio_track_taken = Arc::clone(&audio_track_taken);
+        let already_taken = Arc::clone(&already_taken);
 
         Box::pin(async move {
-            let mime_type = track.codec().capability.mime_type;
-            let is_video = mime_type.eq_ignore_ascii_case(MIME_TYPE_H264);
-            let already_taken = if is_video {
-                &video_track_taken
-            } else {
-                &audio_track_taken
-            };
-
-            // Two tracks of one kind would interleave into one output port
-            // with two independent ordering counters, which reads downstream
-            // as loss rather than as a second stream.
-            if already_taken.swap(true, Ordering::SeqCst) {
+            let Some(medium) = medium else {
                 tracing::warn!(
                     mime_type,
-                    "a second track of this kind arrived and is not being read"
+                    "a track arrived carrying a codec this session never negotiated; \
+                     it is not being read"
+                );
+                return;
+            };
+            // Two tracks of one medium would interleave into one output port
+            // with two independent ordering counters, which reads downstream
+            // as loss rather than as a second stream.
+            if already_taken.claim(medium) {
+                tracing::warn!(
+                    mime_type,
+                    "a second {} track arrived and is not being read",
+                    medium.as_str()
                 );
                 return;
             }
             tracing::info!(mime_type, "reading a WHEP track");
 
             tokio::spawn(async move {
-                if is_video {
-                    read_video_track(track, received_media).await;
-                } else {
-                    let declared = sender_declared_stereo.get().copied().flatten();
-                    read_audio_track(track, received_media, declared).await;
+                match medium {
+                    TrackMedium::Video => read_video_track(track, received_media).await,
+                    TrackMedium::Audio => {
+                        let declared = sender_declared_stereo.get().copied().flatten();
+                        read_audio_track(track, received_media, declared).await
+                    }
                 }
             });
         })
     }));
 }
 
-async fn read_video_track(
-    track: Arc<webrtc::track::track_remote::TrackRemote>,
-    received_media: mpsc::Sender<ReceivedMedia>,
-) {
+async fn read_video_track(track: Arc<TrackRemote>, received_media: mpsc::Sender<ReceivedMedia>) {
     let mut assembler = VideoAccessUnitAssembler::new();
-    while let Ok((packet, _attributes)) = track.read_rtp().await {
-        if let Some(access_unit) = assembler.accept_rtp_packet(
+    'reading: while let Ok((packet, _attributes)) = track.read_rtp().await {
+        for access_unit in assembler.accept_rtp_packet(
             packet.payload,
             packet.header.timestamp,
             packet.header.sequence_number,
             packet.header.marker,
-        ) && forward(&received_media, ReceivedMedia::Video(access_unit)).is_err()
-        {
-            break;
+        ) {
+            if try_forward_to_the_reading_thread(&received_media, ReceivedMedia::Video(access_unit))
+                .is_err()
+            {
+                break 'reading;
+            }
         }
     }
     tracing::debug!("the WHEP video track ended");
 }
 
 async fn read_audio_track(
-    track: Arc<webrtc::track::track_remote::TrackRemote>,
+    track: Arc<TrackRemote>,
     received_media: mpsc::Sender<ReceivedMedia>,
     sender_declared_stereo: Option<bool>,
 ) {
@@ -287,7 +238,12 @@ async fn read_audio_track(
     while let Ok((packet, _attributes)) = track.read_rtp().await {
         match assembler.accept_rtp_packet(packet.payload, packet.header.timestamp) {
             Ok(opus_packet) => {
-                if forward(&received_media, ReceivedMedia::Audio(opus_packet)).is_err() {
+                if try_forward_to_the_reading_thread(
+                    &received_media,
+                    ReceivedMedia::Audio(opus_packet),
+                )
+                .is_err()
+                {
                     break;
                 }
             }
@@ -299,7 +255,10 @@ async fn read_audio_track(
 
 /// A full queue drops rather than blocks. `Err` means the reader is gone, which
 /// is the only condition that ends a track's task.
-fn forward(received_media: &mpsc::Sender<ReceivedMedia>, media: ReceivedMedia) -> Result<()> {
+fn try_forward_to_the_reading_thread(
+    received_media: &mpsc::Sender<ReceivedMedia>,
+    media: ReceivedMedia,
+) -> Result<()> {
     match received_media.try_send(media) {
         Ok(()) => Ok(()),
         Err(mpsc::error::TrySendError::Full(_)) => {
@@ -310,48 +269,4 @@ fn forward(received_media: &mpsc::Sender<ReceivedMedia>, media: ReceivedMedia) -
             Err(WebRtcExtensionError::NotConnected { protocol: PROTOCOL })
         }
     }
-}
-
-async fn create_offer_once_ice_has_gathered(
-    peer_connection: &Arc<RTCPeerConnection>,
-) -> Result<String> {
-    let offer = peer_connection
-        .create_offer(None)
-        .await
-        .map_err(|failure| WebRtcExtensionError::Signalling {
-            protocol: PROTOCOL,
-            what: format!("the offer could not be created: {failure}"),
-        })?;
-    peer_connection
-        .set_local_description(offer)
-        .await
-        .map_err(|failure| WebRtcExtensionError::Signalling {
-            protocol: PROTOCOL,
-            what: format!("the offer could not be set as the local description: {failure}"),
-        })?;
-
-    let mut gathering_complete = peer_connection.gathering_complete_promise().await;
-    let _ = gathering_complete.recv().await;
-
-    peer_connection
-        .local_description()
-        .await
-        .map(|description| description.sdp)
-        .ok_or(WebRtcExtensionError::Signalling {
-            protocol: PROTOCOL,
-            what: "ICE gathering finished with no local description".to_owned(),
-        })
-}
-
-fn report_state_changes(peer_connection: &Arc<RTCPeerConnection>) {
-    peer_connection.on_peer_connection_state_change(Box::new(|state| {
-        Box::pin(async move {
-            tracing::info!(?state, "WHEP peer connection state");
-        })
-    }));
-    peer_connection.on_ice_connection_state_change(Box::new(|state| {
-        Box::pin(async move {
-            tracing::debug!(?state, "WHEP ICE connection state");
-        })
-    }));
 }

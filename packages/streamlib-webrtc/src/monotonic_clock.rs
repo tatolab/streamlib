@@ -7,7 +7,7 @@
 //! wheel writes onto a bag is compared against stamps the engine wrote.
 
 /// Nanoseconds on `CLOCK_MONOTONIC`.
-pub fn monotonic_now_ns() -> i64 {
+pub(crate) fn monotonic_now_ns() -> i64 {
     let mut timespec = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,
@@ -29,7 +29,7 @@ pub fn monotonic_now_ns() -> i64 {
 /// The first packet's arrival anchors the stream; every later stamp is the RTP
 /// delta since that anchor, so jitter on the wire does not become jitter in the
 /// stamps a decoder downstream reads.
-pub struct RtpClockAnchoredToMonotonic {
+pub(crate) struct RtpClockAnchoredToMonotonic {
     clock_rate_hz: i64,
     anchor: Option<RtpClockAnchor>,
 }
@@ -44,7 +44,7 @@ struct RtpClockAnchor {
 }
 
 impl RtpClockAnchoredToMonotonic {
-    pub fn new(clock_rate_hz: u32) -> Self {
+    pub(crate) fn new(clock_rate_hz: u32) -> Self {
         Self {
             clock_rate_hz: i64::from(clock_rate_hz),
             anchor: None,
@@ -52,7 +52,7 @@ impl RtpClockAnchoredToMonotonic {
     }
 
     /// The monotonic stamp for a packet carrying `rtp_timestamp`.
-    pub fn stamp_for(&mut self, rtp_timestamp: u32) -> i64 {
+    pub(crate) fn stamp_for(&mut self, rtp_timestamp: u32) -> i64 {
         let Some(anchor) = self.anchor.as_mut() else {
             let monotonic_ns = monotonic_now_ns();
             self.anchor = Some(RtpClockAnchor {

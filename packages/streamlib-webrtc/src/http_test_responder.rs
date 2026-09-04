@@ -12,20 +12,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 /// What the responder recorded of one request it answered.
-pub struct HttpRequestUnderTest {
+pub(crate) struct HttpRequestUnderTest {
     pub request_line: String,
     pub headers: String,
     pub body: String,
 }
 
 impl HttpRequestUnderTest {
-    pub fn has_header(&self, lowercased: &str) -> bool {
+    pub(crate) fn has_header(&self, lowercased: &str) -> bool {
         self.headers.to_ascii_lowercase().contains(lowercased)
     }
 }
 
 /// Serves answers a handler computes, and records what drew each one.
-pub struct HttpResponderUnderTest {
+pub(crate) struct HttpResponderUnderTest {
     pub origin: String,
     requests: Arc<Mutex<Vec<HttpRequestUnderTest>>>,
     listening: tokio::task::JoinHandle<()>,
@@ -34,7 +34,7 @@ pub struct HttpResponderUnderTest {
 impl HttpResponderUnderTest {
     /// The handler is called once per request and returns the whole raw
     /// response, so a test can answer with anything a relay could.
-    pub async fn answering_with<Handler, Answer>(handler: Handler) -> Self
+    pub(crate) async fn answering_with<Handler, Answer>(handler: Handler) -> Self
     where
         Handler: Fn(&HttpRequestUnderTest) -> Answer + Send + Sync + 'static,
         Answer: Future<Output = String> + Send,
@@ -64,7 +64,7 @@ impl HttpResponderUnderTest {
     }
 
     /// Serves `responses` in order; a request past the end gets a 500.
-    pub async fn answering(responses: Vec<String>) -> Self {
+    pub(crate) async fn answering(responses: Vec<String>) -> Self {
         let remaining = Arc::new(Mutex::new(responses.into_iter()));
         Self::answering_with(move |_request| {
             let next = remaining.lock().unwrap().next();
@@ -79,7 +79,7 @@ impl HttpResponderUnderTest {
         .await
     }
 
-    pub fn recorded(&self) -> MutexGuard<'_, Vec<HttpRequestUnderTest>> {
+    pub(crate) fn recorded(&self) -> MutexGuard<'_, Vec<HttpRequestUnderTest>> {
         self.requests.lock().unwrap()
     }
 }

@@ -163,15 +163,16 @@ fn reassemble_every_arriving_track(
         Box::pin(async move {
             tokio::spawn(async move {
                 let mut assembler = VideoAccessUnitAssembler::new();
-                while let Ok((packet, _attributes)) = track.read_rtp().await {
-                    if let Some(access_unit) = assembler.accept_rtp_packet(
+                'reading: while let Ok((packet, _attributes)) = track.read_rtp().await {
+                    for access_unit in assembler.accept_rtp_packet(
                         packet.payload,
                         packet.header.timestamp,
                         packet.header.sequence_number,
                         packet.header.marker,
-                    ) && assembled.send(access_unit).await.is_err()
-                    {
-                        break;
+                    ) {
+                        if assembled.send(access_unit).await.is_err() {
+                            break 'reading;
+                        }
                     }
                 }
             });
@@ -245,6 +246,7 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
         "the reassembled access unit is not the one that was published"
     );
     assert!(received.is_sync_point, "an IDR access unit is a sync point");
-    // Parsed out of the SPS that survived the round trip, not from config.
-    assert_eq!((received.width, received.height), (320, 180));
+    // The coded extent, parsed out of the SPS that survived the round trip
+    // rather than taken from config: 320x180 displayed is 320x192 coded.
+    assert_eq!((received.width, received.height), (320, 192));
 }

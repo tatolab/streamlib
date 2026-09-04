@@ -8,7 +8,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 
 /// Every way the WHIP and WHEP paths refuse.
 #[derive(Debug, thiserror::Error)]
-pub enum WebRtcExtensionError {
+pub(crate) enum WebRtcExtensionError {
     /// An RTP payload this depacketiser cannot read as H.264.
     #[error("malformed RTP payload: {what}")]
     MalformedRtpPayload { what: String },
@@ -41,7 +41,7 @@ pub enum WebRtcExtensionError {
     Refused { what: String },
 }
 
-pub type Result<T> = std::result::Result<T, WebRtcExtensionError>;
+pub(crate) type Result<T> = std::result::Result<T, WebRtcExtensionError>;
 
 impl From<WebRtcExtensionError> for PyErr {
     fn from(refusal: WebRtcExtensionError) -> Self {

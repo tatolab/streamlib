@@ -8,13 +8,13 @@
 
 /// Writes the syntax elements a parameter set is made of.
 #[derive(Default)]
-pub struct RawBitstreamWriter {
+pub(crate) struct RawBitstreamWriter {
     bytes: Vec<u8>,
     bits_in_last_byte: u32,
 }
 
 impl RawBitstreamWriter {
-    pub fn bit(&mut self, value: u8) -> &mut Self {
+    pub(crate) fn bit(&mut self, value: u8) -> &mut Self {
         if self.bits_in_last_byte == 0 {
             self.bytes.push(0);
             self.bits_in_last_byte = 8;
@@ -25,7 +25,7 @@ impl RawBitstreamWriter {
         self
     }
 
-    pub fn bits(&mut self, value: u32, count: u32) -> &mut Self {
+    pub(crate) fn bits(&mut self, value: u32, count: u32) -> &mut Self {
         for index in (0..count).rev() {
             self.bit(((value >> index) & 1) as u8);
         }
@@ -33,7 +33,7 @@ impl RawBitstreamWriter {
     }
 
     /// `ue(v)` — H.264 §9.1.
-    pub fn unsigned_exp_golomb(&mut self, value: u32) -> &mut Self {
+    pub(crate) fn unsigned_exp_golomb(&mut self, value: u32) -> &mut Self {
         let code_number = value + 1;
         let significant_bits = 32 - code_number.leading_zeros();
         self.bits(0, significant_bits - 1);
@@ -41,7 +41,7 @@ impl RawBitstreamWriter {
     }
 
     /// The `rbsp_trailing_bits()` every NAL unit ends on.
-    pub fn finish(&mut self, nal_unit_header: u8) -> Vec<u8> {
+    pub(crate) fn finish(&mut self, nal_unit_header: u8) -> Vec<u8> {
         self.bit(1);
         while self.bits_in_last_byte != 0 {
             self.bit(0);
@@ -54,7 +54,7 @@ impl RawBitstreamWriter {
 
 /// A constrained-baseline SPS for 320x180 4:2:0 progressive: 20 macroblocks
 /// across, 12 map units down (192 coded), the bottom 12 rows cropped away.
-pub fn baseline_320x180(vui: impl FnOnce(&mut RawBitstreamWriter)) -> Vec<u8> {
+pub(crate) fn baseline_320x180(vui: impl FnOnce(&mut RawBitstreamWriter)) -> Vec<u8> {
     let mut writer = RawBitstreamWriter::default();
     writer
         .bits(66, 8) // profile_idc — constrained baseline
@@ -80,12 +80,12 @@ pub fn baseline_320x180(vui: impl FnOnce(&mut RawBitstreamWriter)) -> Vec<u8> {
 }
 
 /// No `vui_parameters()` block at all.
-pub fn no_vui(writer: &mut RawBitstreamWriter) {
+pub(crate) fn no_vui(writer: &mut RawBitstreamWriter) {
     writer.bit(0);
 }
 
 /// A `vui_parameters()` carrying a full colour description.
-pub fn vui_with_colour(
+pub(crate) fn vui_with_colour(
     primaries: u32,
     transfer: u32,
     matrix: u32,

@@ -29,7 +29,7 @@ const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
 /// One whole access unit, with everything the video wire contract requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceivedVideoAccessUnit {
+pub(crate) struct ReceivedVideoAccessUnit {
     pub annex_b_access_unit: Vec<u8>,
     pub is_sync_point: bool,
     pub group_index: u64,
@@ -42,8 +42,8 @@ pub struct ReceivedVideoAccessUnit {
 
 /// One Opus packet, with everything the audio wire contract requires.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReceivedOpusPacket {
-    pub opus_packet: Vec<u8>,
+pub(crate) struct ReceivedOpusPacket {
+    pub opus_packet: Bytes,
     pub group_index: u64,
     pub sequence_index: u64,
     pub sample_rate: u32,
@@ -54,7 +54,7 @@ pub struct ReceivedOpusPacket {
 }
 
 /// Collects RTP payloads into whole access units.
-pub struct VideoAccessUnitAssembler {
+pub(crate) struct VideoAccessUnitAssembler {
     depacketiser: H264RtpDepacketiser,
     nal_units_in_progress: Vec<Bytes>,
     rtp_timestamp_in_progress: Option<u32>,
@@ -71,7 +71,7 @@ impl Default for VideoAccessUnitAssembler {
 }
 
 impl VideoAccessUnitAssembler {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             depacketiser: H264RtpDepacketiser::new(),
             nal_units_in_progress: Vec::new(),
@@ -83,23 +83,33 @@ impl VideoAccessUnitAssembler {
         }
     }
 
-    /// Feed one RTP packet; hands back an access unit as each one completes.
+    /// Feed one RTP packet; hands back every access unit it completed.
     ///
     /// RFC 6184 §5.1 sets the marker bit on an access unit's last packet. A
     /// timestamp change closes one too, so a sender that omits the marker does
     /// not merge every picture into one growing unit.
-    pub fn accept_rtp_packet(
+    ///
+    /// Both can fire on one packet — a new timestamp closes the unit before it
+    /// while the packet's own marker closes a single-packet unit of its own —
+    /// which is reachable whenever the previous unit's marker packet was lost.
+    /// Returning only one of the two would spend an ordering pair on a unit
+    /// nobody receives, and the gap reads downstream as loss of the whole group
+    /// rather than of the one packet that actually went missing.
+    pub(crate) fn accept_rtp_packet(
         &mut self,
         payload: Bytes,
         rtp_timestamp: u32,
         rtp_sequence_number: u16,
         marks_the_end_of_an_access_unit: bool,
-    ) -> Option<ReceivedVideoAccessUnit> {
-        let completed_by_a_timestamp_change = self
+    ) -> Vec<ReceivedVideoAccessUnit> {
+        let mut completed = Vec::new();
+
+        if self
             .rtp_timestamp_in_progress
             .is_some_and(|in_progress| in_progress != rtp_timestamp)
-            .then(|| self.complete_access_unit())
-            .flatten();
+        {
+            completed.extend(self.complete_access_unit());
+        }
 
         match self
             .depacketiser
@@ -111,14 +121,10 @@ impl VideoAccessUnitAssembler {
         self.rtp_timestamp_in_progress = Some(rtp_timestamp);
         self.depacketiser.discard_stale_fragments(rtp_timestamp);
 
-        let completed_by_the_marker = marks_the_end_of_an_access_unit
-            .then(|| self.complete_access_unit())
-            .flatten();
-
-        // At most one of the two can be Some: a marker completes what this
-        // packet just started, and a timestamp change completes what came
-        // before it.
-        completed_by_a_timestamp_change.or(completed_by_the_marker)
+        if marks_the_end_of_an_access_unit {
+            completed.extend(self.complete_access_unit());
+        }
+        completed
     }
 
     fn complete_access_unit(&mut self) -> Option<ReceivedVideoAccessUnit> {
@@ -183,49 +189,63 @@ impl VideoAccessUnitAssembler {
 }
 
 /// Describes each arriving Opus packet from the packet itself.
-pub struct OpusPacketAssembler {
+pub(crate) struct OpusPacketAssembler {
     ordering: EncodedStreamOrderingPairCounter,
     clock: RtpClockAnchoredToMonotonic,
+    /// The stream's declared output channel count, settled once and then
+    /// constant. The wire contract's `channels` is "the declared output count,
+    /// not the mono/stereo the TOC byte codes each frame at" — libopus in
+    /// two-channel mode codes mono frames on quiet or mono-ish content, so a
+    /// per-packet TOC reading would flip mid-stream and re-mint the decoder
+    /// downstream on every flip.
+    declared_channels: Option<u32>,
     sender_declared_stereo: Option<bool>,
     reported_a_disagreement_with_the_answer: bool,
 }
 
 impl OpusPacketAssembler {
-    /// `sender_declared_stereo` is the answer's `sprop-stereo`, kept only to be
-    /// checked against what the packets actually carry.
-    pub fn new(sender_declared_stereo: Option<bool>) -> Self {
+    /// `sender_declared_stereo` is the answer's `sprop-stereo` — the session
+    /// description's own statement of what the sender will send, and the
+    /// contract's preferred source for `channels`.
+    pub(crate) fn new(sender_declared_stereo: Option<bool>) -> Self {
         Self {
             ordering: EncodedStreamOrderingPairCounter::default(),
             clock: RtpClockAnchoredToMonotonic::new(OPUS_WIRE_SAMPLE_RATE_HZ),
+            declared_channels: sender_declared_stereo.map(|stereo| if stereo { 2 } else { 1 }),
             sender_declared_stereo,
             reported_a_disagreement_with_the_answer: false,
         }
     }
 
-    pub fn accept_rtp_packet(
+    pub(crate) fn accept_rtp_packet(
         &mut self,
         payload: Bytes,
         rtp_timestamp: u32,
     ) -> Result<ReceivedOpusPacket> {
         let described = describe_opus_packet(&payload)?;
+        // An answer that stated no Opus fmtp leaves the first packet's own TOC
+        // as the only statement available — latched here, so the stream's
+        // declared count is settled once either way.
+        let channels = *self.declared_channels.get_or_insert(described.channels);
         self.report_any_disagreement_with_the_answer(described.channels);
 
         // Every Opus packet is a sync point, so each is its own group.
         let pair = self.ordering.account_published_bag(true);
         Ok(ReceivedOpusPacket {
-            opus_packet: payload.to_vec(),
+            opus_packet: payload,
             group_index: pair.group_index,
             sequence_index: pair.sequence_index,
             sample_rate: OPUS_WIRE_SAMPLE_RATE_HZ,
-            channels: described.channels,
+            channels,
             sample_count: described.sample_count,
             pre_skip: PRE_SKIP_RTP_CARRIES_NONE,
             timestamp_ns: self.clock.stamp_for(rtp_timestamp),
         })
     }
 
-    /// The packets win — the TOC byte is what a decoder reads. This exists so
-    /// that a relay whose SDP disagrees leaves evidence rather than a silent
+    /// Reported once, because a sender that codes a mono frame inside a stereo
+    /// stream is doing something ordinary and the bags do not follow it — but a
+    /// relay whose fmtp is simply wrong should leave evidence rather than a
     /// mismatch nobody can trace later.
     fn report_any_disagreement_with_the_answer(&mut self, channels_in_the_packet: u32) {
         let Some(declared_stereo) = self.sender_declared_stereo else {
@@ -237,8 +257,8 @@ impl OpusPacketAssembler {
             tracing::warn!(
                 declared_stereo,
                 channels_in_the_packet,
-                "the answer's sprop-stereo disagrees with the packets; \
-                 the bags carry what the packets say"
+                "a packet's TOC codes a different channel count than the answer's \
+                 sprop-stereo declared; the bags carry the declared count"
             );
         }
     }
@@ -289,12 +309,24 @@ mod tests {
             first_sequence_number + 1,
             false,
         );
-        assembler.accept_rtp_packet(
-            single_nal_packet(IDR_SLICE),
-            rtp_timestamp,
-            first_sequence_number + 2,
-            true,
-        )
+        assembler
+            .accept_rtp_packet(
+                single_nal_packet(IDR_SLICE),
+                rtp_timestamp,
+                first_sequence_number + 2,
+                true,
+            )
+            .into_iter()
+            .next()
+    }
+
+    /// The one unit this packet completed, refusing a test that expected one
+    /// and got two.
+    fn only_completed_unit(
+        completed: Vec<ReceivedVideoAccessUnit>,
+    ) -> Option<ReceivedVideoAccessUnit> {
+        assert!(completed.len() <= 1, "expected at most one completed unit");
+        completed.into_iter().next()
     }
 
     #[test]
@@ -304,8 +336,7 @@ mod tests {
 
         let unit = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
 
-        // One bag, not three: a decoder is handed an access unit, and the old
-        // player published a bag per RTP packet's worth of NAL units.
+        // One bag, not three: what a decoder is handed is an access unit.
         assert_eq!(
             unit.annex_b_access_unit,
             annex_b_of(&[&sps, PICTURE_PARAMETER_SET, IDR_SLICE])
@@ -314,12 +345,12 @@ mod tests {
     }
 
     #[test]
-    fn the_extent_comes_from_the_sps_the_stream_carried() {
+    fn the_coded_extent_comes_from_the_sps_the_stream_carried() {
         let mut assembler = VideoAccessUnitAssembler::new();
 
         let unit = feed_a_keyframe(&mut assembler, &baseline_320x180(no_vui), 3000, 1).unwrap();
 
-        assert_eq!((unit.width, unit.height), (320, 180));
+        assert_eq!((unit.width, unit.height), (320, 192));
         assert_eq!(unit.color, None);
     }
 
@@ -346,11 +377,15 @@ mod tests {
         let mut assembler = VideoAccessUnitAssembler::new();
         feed_a_keyframe(&mut assembler, &baseline_320x180(no_vui), 3000, 1);
 
-        let unit = assembler
-            .accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 6000, 4, true)
-            .unwrap();
+        let unit = only_completed_unit(assembler.accept_rtp_packet(
+            single_nal_packet(NON_IDR_SLICE),
+            6000,
+            4,
+            true,
+        ))
+        .unwrap();
 
-        assert_eq!((unit.width, unit.height), (320, 180));
+        assert_eq!((unit.width, unit.height), (320, 192));
         assert!(!unit.is_sync_point);
     }
 
@@ -363,7 +398,7 @@ mod tests {
         let published =
             assembler.accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 3000, 1, true);
 
-        assert_eq!(published, None);
+        assert_eq!(published, vec![]);
     }
 
     #[test]
@@ -372,9 +407,13 @@ mod tests {
         let sps = baseline_320x180(no_vui);
 
         let first = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
-        let second = assembler
-            .accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 6000, 4, true)
-            .unwrap();
+        let second = only_completed_unit(assembler.accept_rtp_packet(
+            single_nal_packet(NON_IDR_SLICE),
+            6000,
+            4,
+            true,
+        ))
+        .unwrap();
         let third = feed_a_keyframe(&mut assembler, &sps, 9000, 5).unwrap();
 
         assert_eq!(
@@ -400,9 +439,13 @@ mod tests {
 
         // No marker ever arrives; the next picture's timestamp is what closes
         // the one before it.
-        let closed = assembler
-            .accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 6000, 3, false)
-            .unwrap();
+        let closed = only_completed_unit(assembler.accept_rtp_packet(
+            single_nal_packet(NON_IDR_SLICE),
+            6000,
+            3,
+            false,
+        ))
+        .unwrap();
 
         assert_eq!(closed.annex_b_access_unit, annex_b_of(&[&sps, IDR_SLICE]));
         assert!(closed.is_sync_point);
@@ -414,11 +457,46 @@ mod tests {
         let sps = baseline_320x180(no_vui);
         let first = feed_a_keyframe(&mut assembler, &sps, 3000, 1).unwrap();
 
-        let second = assembler
-            .accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 6000, 4, true)
-            .unwrap();
+        let second = only_completed_unit(assembler.accept_rtp_packet(
+            single_nal_packet(NON_IDR_SLICE),
+            6000,
+            4,
+            true,
+        ))
+        .unwrap();
 
         assert_eq!(second.timestamp_ns - first.timestamp_ns, 33_333_333);
+    }
+
+    #[test]
+    fn one_packet_can_close_two_access_units_and_neither_is_dropped() {
+        // Reachable whenever the previous unit's marker packet was lost: the
+        // new timestamp closes what came before while this packet's own marker
+        // closes a single-packet unit of its own. Returning one of the two
+        // would spend an ordering pair on a unit nobody receives, and the gap
+        // reads downstream as loss of a whole group.
+        let mut assembler = VideoAccessUnitAssembler::new();
+        let sps = baseline_320x180(no_vui);
+        assembler.accept_rtp_packet(single_nal_packet(&sps), 3000, 1, false);
+        assembler.accept_rtp_packet(single_nal_packet(IDR_SLICE), 3000, 2, false);
+
+        let completed =
+            assembler.accept_rtp_packet(single_nal_packet(NON_IDR_SLICE), 6000, 3, true);
+
+        assert_eq!(completed.len(), 2, "one unit was dropped");
+        assert_eq!(
+            completed[0].annex_b_access_unit,
+            annex_b_of(&[&sps, IDR_SLICE])
+        );
+        assert_eq!(
+            completed[1].annex_b_access_unit,
+            annex_b_of(&[NON_IDR_SLICE])
+        );
+        // The pair is continuous across both, so a consumer sees no loss.
+        assert_eq!(
+            (completed[0].sequence_index, completed[1].sequence_index),
+            (0, 1)
+        );
     }
 
     #[test]
@@ -428,9 +506,13 @@ mod tests {
         assembler.accept_rtp_packet(single_nal_packet(&sps), 3000, 1, false);
         assembler.accept_rtp_packet(Bytes::new(), 3000, 2, false);
 
-        let unit = assembler
-            .accept_rtp_packet(single_nal_packet(IDR_SLICE), 3000, 3, true)
-            .unwrap();
+        let unit = only_completed_unit(assembler.accept_rtp_packet(
+            single_nal_packet(IDR_SLICE),
+            3000,
+            3,
+            true,
+        ))
+        .unwrap();
 
         assert_eq!(unit.annex_b_access_unit, annex_b_of(&[&sps, IDR_SLICE]));
     }
@@ -440,10 +522,11 @@ mod tests {
     }
 
     #[test]
-    fn an_opus_bag_is_described_by_the_packet_and_not_by_the_answer() {
-        // The answer claims stereo; the packets are mono. RFC 7587 makes the
-        // fmtp a hint, and the TOC byte is what a decoder reads.
-        let mut assembler = OpusPacketAssembler::new(Some(true));
+    fn the_channel_count_comes_from_the_answers_declaration() {
+        // Not from the rtpmap, which RFC 7587 §7 fixes at 2 for every Opus
+        // stream ever negotiated, and not from the TOC, which codes a frame
+        // rather than declaring a stream.
+        let mut assembler = OpusPacketAssembler::new(Some(false));
 
         let packet = assembler
             .accept_rtp_packet(opus_packet(1, false), 0)
@@ -452,6 +535,46 @@ mod tests {
         assert_eq!(packet.channels, 1);
         assert_eq!(packet.sample_count, 960);
         assert_eq!(packet.sample_rate, 48_000);
+    }
+
+    #[test]
+    fn the_channel_count_does_not_flip_when_a_frames_toc_does() {
+        // libopus in two-channel mode codes a mono frame on quiet or mono-ish
+        // content. The wire contract's `channels` is the stream's declared
+        // output count, and a decoder re-mints and resets state on every change
+        // of it — so following the TOC per packet would restart the decoder
+        // mid-stream on ordinary content.
+        let mut assembler = OpusPacketAssembler::new(Some(true));
+
+        let channels: Vec<u32> = [true, false, false, true]
+            .into_iter()
+            .enumerate()
+            .map(|(index, stereo_frame)| {
+                assembler
+                    .accept_rtp_packet(opus_packet(1, stereo_frame), index as u32 * 960)
+                    .unwrap()
+                    .channels
+            })
+            .collect();
+
+        assert_eq!(channels, vec![2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn an_answer_that_declared_nothing_latches_the_first_packets_own_count() {
+        // A relay whose answer carries no Opus fmtp leaves the first packet as
+        // the only statement available — and it is still latched, so the
+        // stream's count is settled once either way.
+        let mut assembler = OpusPacketAssembler::new(None);
+
+        let first = assembler
+            .accept_rtp_packet(opus_packet(1, false), 0)
+            .unwrap();
+        let second = assembler
+            .accept_rtp_packet(opus_packet(1, true), 960)
+            .unwrap();
+
+        assert_eq!((first.channels, second.channels), (1, 1));
     }
 
     #[test]

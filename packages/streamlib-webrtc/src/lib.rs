@@ -9,6 +9,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 pub mod encoded_stream_ordering;
@@ -23,6 +24,7 @@ pub mod opus_packet;
 pub mod received_media_assembly;
 pub mod session_description;
 pub mod transport_stack;
+pub mod webrtc_peer_connection;
 pub mod whep_session;
 mod whip_publish_loopback;
 pub mod whip_session;
@@ -44,10 +46,19 @@ fn bring_up_the_transport_stack() -> PyResult<()> {
 }
 
 /// Publishes encoded media to a WHIP endpoint.
+///
+/// Every method takes `&self` and locks: `close()` runs on the helper's
+/// teardown while a write may still be in flight, and a `&mut self` receiver
+/// would make that a borrow error rather than a wait.
 #[pyclass]
 struct WhipSession {
     endpoint_url: String,
     bearer_token: Option<String>,
+    publishing: Mutex<PublishingState>,
+}
+
+#[derive(Default)]
+struct PublishingState {
     session: Option<WhipPublishingSession>,
     previous_video_stamp_ns: Option<i64>,
 }
@@ -62,21 +73,21 @@ impl WhipSession {
         Self {
             endpoint_url,
             bearer_token,
-            session: None,
-            previous_video_stamp_ns: None,
+            publishing: Mutex::new(PublishingState::default()),
         }
     }
 
-    /// Offer the media set the publisher's links settled on, and set the answer.
+    /// Offer the media set the publisher's links settled, and set the answer.
     #[pyo3(signature = (*, video, audio, audio_channels=None))]
     fn connect(
-        &mut self,
+        &self,
         python: Python<'_>,
         video: bool,
         audio: bool,
         audio_channels: Option<u32>,
     ) -> PyResult<()> {
-        if self.session.is_some() {
+        let mut publishing = self.locked_state()?;
+        if publishing.session.is_some() {
             return Err(WebRtcExtensionError::Refused {
                 what: "this WHIP session is already connected".to_owned(),
             }
@@ -90,14 +101,13 @@ impl WhipSession {
             audio_channels,
         };
 
-        let connected = python.detach(|| {
+        publishing.session = Some(python.detach(|| {
             transport_stack::transport_runtime()?.block_on(WhipPublishingSession::connect(
                 endpoint_url,
                 bearer_token,
                 media,
             ))
-        })?;
-        self.session = Some(connected);
+        })?);
         Ok(())
     }
 
@@ -106,34 +116,40 @@ impl WhipSession {
     /// The RTP clock advances by the gap to the *previous* frame, because the
     /// payloader applies a sample's duration to the frame after it and a
     /// publisher cannot see the next frame without delaying this one. The
-    /// stream's rate is therefore exact and its RTP numbering trails real time
-    /// by one frame — which the receiver's Sender Reports carry consistently.
+    /// stream's rate is exact and its RTP numbering trails real time by one
+    /// frame, so video presents roughly one frame interval later than audio,
+    /// whose duration comes from each packet's own sample count and is exact.
     fn write_video_access_unit(
-        &mut self,
+        &self,
         python: Python<'_>,
         annex_b_access_unit: &[u8],
         timestamp_ns: i64,
     ) -> PyResult<()> {
-        let duration = match self.previous_video_stamp_ns.replace(timestamp_ns) {
+        let mut publishing = self.locked_state()?;
+        let duration = match publishing.previous_video_stamp_ns {
             Some(previous) => {
                 Duration::from_nanos(timestamp_ns.saturating_sub(previous).max(0) as u64)
             }
             None => FIRST_FRAME_NOMINAL_DURATION,
         };
-        let session = self.connected_session()?;
+        let session = connected(publishing.session.as_ref())?;
         let access_unit = bytes::Bytes::copy_from_slice(annex_b_access_unit);
 
         python.detach(|| {
             transport_stack::transport_runtime()?
                 .block_on(session.write_video_access_unit(access_unit, duration))
         })?;
+        // Only after the write landed: a frame the track never saw must not
+        // move the anchor, or the clock stays short by that frame's gap for
+        // the rest of the stream.
+        publishing.previous_video_stamp_ns = Some(timestamp_ns);
         Ok(())
     }
 
     /// Send one Opus packet, its RTP advance taken from the packet's own sample
     /// count rather than from an assumed 20 ms frame.
     fn write_audio_packet(
-        &mut self,
+        &self,
         python: Python<'_>,
         opus_packet: &[u8],
         sample_count: u32,
@@ -142,7 +158,8 @@ impl WhipSession {
             u64::from(sample_count) * 1_000_000_000
                 / u64::from(opus_packet::OPUS_WIRE_SAMPLE_RATE_HZ),
         );
-        let session = self.connected_session()?;
+        let publishing = self.locked_state()?;
+        let session = connected(publishing.session.as_ref())?;
         let packet = bytes::Bytes::copy_from_slice(opus_packet);
 
         python.detach(|| {
@@ -153,8 +170,8 @@ impl WhipSession {
     }
 
     /// Close the peer connection and DELETE the session.
-    fn close(&mut self, python: Python<'_>) -> PyResult<()> {
-        let Some(session) = self.session.take() else {
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
+        let Some(session) = self.locked_state()?.session.take() else {
             return Ok(());
         };
         python.detach(|| {
@@ -166,25 +183,37 @@ impl WhipSession {
     }
 
     #[getter]
-    fn is_connected(&self) -> bool {
-        self.session.is_some()
+    fn is_connected(&self) -> PyResult<bool> {
+        Ok(self.locked_state()?.session.is_some())
     }
 }
 
 impl WhipSession {
-    fn connected_session(&self) -> PyResult<&WhipPublishingSession> {
-        self.session
-            .as_ref()
-            .ok_or_else(|| WebRtcExtensionError::NotConnected { protocol: "WHIP" }.into())
+    fn locked_state(&self) -> PyResult<MutexGuard<'_, PublishingState>> {
+        self.publishing.lock().map_err(|_| {
+            WebRtcExtensionError::Transport {
+                what: "the WHIP session's state was left poisoned by an earlier panic".to_owned(),
+            }
+            .into()
+        })
     }
 }
 
+fn connected(session: Option<&WhipPublishingSession>) -> PyResult<&WhipPublishingSession> {
+    session.ok_or_else(|| WebRtcExtensionError::NotConnected { protocol: "WHIP" }.into())
+}
+
 /// Plays encoded media back from a WHEP endpoint.
+///
+/// Every method takes `&self` and locks. The processor's reading thread is
+/// inside `next_media` or `connect` while the helper's teardown may be calling
+/// `close`, and a `&mut self` receiver would turn that into a borrow error —
+/// so a teardown racing a slow relay would raise instead of closing.
 #[pyclass]
 struct WhepSession {
     endpoint_url: String,
     bearer_token: Option<String>,
-    session: Option<WhepPlayingSession>,
+    session: Mutex<Option<WhepPlayingSession>>,
 }
 
 #[pymethods]
@@ -195,14 +224,15 @@ impl WhepSession {
         Self {
             endpoint_url,
             bearer_token,
-            session: None,
+            session: Mutex::new(None),
         }
     }
 
     /// Connect and begin draining. Called from the processor's own thread, not
     /// from `setup()`, so a relay outage cannot spend the start-up budget.
-    fn connect(&mut self, python: Python<'_>) -> PyResult<()> {
-        if self.session.is_some() {
+    fn connect(&self, python: Python<'_>) -> PyResult<()> {
+        let mut session = self.locked_session()?;
+        if session.is_some() {
             return Err(WebRtcExtensionError::Refused {
                 what: "this WHEP session is already connected".to_owned(),
             }
@@ -211,21 +241,21 @@ impl WhepSession {
         let endpoint_url = self.endpoint_url.clone();
         let bearer_token = self.bearer_token.clone();
 
-        let connected = python.detach(|| {
+        *session = Some(python.detach(|| {
             transport_stack::transport_runtime()?
                 .block_on(WhepPlayingSession::connect(endpoint_url, bearer_token))
-        })?;
-        self.session = Some(connected);
+        })?);
         Ok(())
     }
 
     /// The next assembled access unit or Opus packet, or `None` if none arrived
     /// within `timeout_ms` — which is how the reading thread stays responsive
     /// to a stop it has been asked for.
-    fn next_media(&mut self, python: Python<'_>, timeout_ms: u64) -> PyResult<Option<Py<PyAny>>> {
-        let Some(session) = self.session.as_mut() else {
-            return Err(WebRtcExtensionError::NotConnected { protocol: "WHEP" }.into());
-        };
+    fn next_media(&self, python: Python<'_>, timeout_ms: u64) -> PyResult<Option<Py<PyAny>>> {
+        let mut locked = self.locked_session()?;
+        let session = locked
+            .as_mut()
+            .ok_or(WebRtcExtensionError::NotConnected { protocol: "WHEP" })?;
 
         let received = python.detach(|| {
             transport_stack::transport_runtime().map(|runtime| {
@@ -245,8 +275,8 @@ impl WhepSession {
     }
 
     /// Close the peer connection and DELETE the session.
-    fn close(&mut self, python: Python<'_>) -> PyResult<()> {
-        let Some(session) = self.session.take() else {
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
+        let Some(session) = self.locked_session()?.take() else {
             return Ok(());
         };
         python.detach(|| {
@@ -258,8 +288,19 @@ impl WhepSession {
     }
 
     #[getter]
-    fn is_connected(&self) -> bool {
-        self.session.is_some()
+    fn is_connected(&self) -> PyResult<bool> {
+        Ok(self.locked_session()?.is_some())
+    }
+}
+
+impl WhepSession {
+    fn locked_session(&self) -> PyResult<MutexGuard<'_, Option<WhepPlayingSession>>> {
+        self.session.lock().map_err(|_| {
+            WebRtcExtensionError::Transport {
+                what: "the WHEP session's state was left poisoned by an earlier panic".to_owned(),
+            }
+            .into()
+        })
     }
 }
 

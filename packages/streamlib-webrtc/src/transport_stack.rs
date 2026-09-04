@@ -25,7 +25,7 @@ const TRANSPORT_RUNTIME_WORKER_THREADS: usize = 2;
 /// Install the TLS provider and start the runtime. Cheap, and does no I/O:
 /// `Runtime()` is waiting on this in the app process, and a helper is inside
 /// its registration budget.
-pub fn bring_up() -> Result<()> {
+pub(crate) fn bring_up() -> Result<()> {
     // Already installed is the ordinary case — another extension in this
     // process may have got there first, and the provider is shared.
     if rustls::crypto::CryptoProvider::get_default().is_none()
@@ -40,7 +40,7 @@ pub fn bring_up() -> Result<()> {
 }
 
 /// The runtime every session in this process runs on.
-pub fn transport_runtime() -> Result<&'static Runtime> {
+pub(crate) fn transport_runtime() -> Result<&'static Runtime> {
     TRANSPORT_RUNTIME
         .get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()

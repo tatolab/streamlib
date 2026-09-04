@@ -54,6 +54,12 @@ class WhipSession:
         Whole, not per NAL unit: the H.264 payloader does its own STAP-A
         aggregation and FU-A fragmentation, and one Sample per NAL would
         advance the RTP clock once per NAL rather than once per picture.
+
+        The RTP clock advances by the gap to the *previous* frame, because the
+        payloader applies a sample's duration to the frame after it. The
+        stream's rate is exact and its numbering trails real time by one frame,
+        so video presents roughly one frame interval later than audio — about
+        33 ms at 30 fps.
         """
 
     def write_audio_packet(self, opus_packet: bytes, sample_count: int) -> None:
@@ -106,7 +112,9 @@ class PlayedVideoAccessUnit:
     def sequence_index(self) -> int: ...
     @property
     def width(self) -> int:
-        """From the SPS the stream carried, cropped as the SPS directs."""
+        """Coded width from the SPS the stream carried — the codec-aligned
+        extent before the conformance crop, which is what the encoded-video
+        wire contract means by `width` and what `H264Encoder` writes."""
 
     @property
     def height(self) -> int: ...

@@ -10,7 +10,7 @@
 use crate::error::{Result, WebRtcExtensionError};
 
 /// Opus always codes at 48 kHz on the wire, whatever the source rate was.
-pub const OPUS_WIRE_SAMPLE_RATE_HZ: u32 = 48_000;
+pub(crate) const OPUS_WIRE_SAMPLE_RATE_HZ: u32 = 48_000;
 
 /// RFC 6716 §3.1 caps one packet at 120 ms, which is 5 760 samples per channel
 /// at the wire rate.
@@ -18,7 +18,7 @@ const HIGHEST_PER_CHANNEL_SAMPLES_IN_ONE_PACKET: u32 = 5_760;
 
 /// What one Opus packet declares about itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OpusPacketDescription {
+pub(crate) struct OpusPacketDescription {
     /// Per-channel samples at 48 kHz across every frame the packet carries.
     pub sample_count: u32,
     /// 1 or 2, from the TOC's stereo bit.
@@ -26,7 +26,7 @@ pub struct OpusPacketDescription {
 }
 
 /// Read the TOC byte, and the frame-count byte when there is one.
-pub fn describe_opus_packet(packet: &[u8]) -> Result<OpusPacketDescription> {
+pub(crate) fn describe_opus_packet(packet: &[u8]) -> Result<OpusPacketDescription> {
     let Some(&table_of_contents) = packet.first() else {
         return Err(WebRtcExtensionError::MalformedOpusPacket {
             what: "an empty packet carries no TOC byte".to_owned(),

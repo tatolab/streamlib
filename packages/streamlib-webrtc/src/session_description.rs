@@ -3,10 +3,9 @@
 
 //! Reading the Opus media parameters out of an SDP answer.
 //!
-//! The rtpmap is no use for this. RFC 7587 §7 fixes Opus's encoding parameter
-//! at 2 in every `a=rtpmap` ever negotiated, mono streams included, so the
-//! mined client's `opus/48000/2` scrape reported stereo for every stream it
-//! ever played. What the sender actually declares rides the fmtp instead.
+//! The rtpmap is no use for this: RFC 7587 §7 fixes Opus's encoding parameter
+//! at 2 in every `a=rtpmap` ever negotiated, mono streams included. What the
+//! sender actually declares rides the fmtp instead.
 
 /// The Opus fmtp's `sprop-stereo`, the sender's own hint about what it will
 /// send. `None` when the answer describes no Opus fmtp at all; RFC 7587 §3.1.1
@@ -14,7 +13,7 @@
 ///
 /// A hint, not the authority: the per-packet TOC byte is what a decoder reads,
 /// and this exists to be checked against it.
-pub fn opus_sender_stereo_hint_in_answer(session_description: &str) -> Option<bool> {
+pub(crate) fn opus_sender_stereo_hint_in_answer(session_description: &str) -> Option<bool> {
     let fmtp = opus_format_parameters_in_answer(session_description)?;
     Some(
         fmtp.split(';')
@@ -45,7 +44,7 @@ fn opus_format_parameters_in_answer(session_description: &str) -> Option<&str> {
 
 /// The Opus fmtp a publisher offers. `sprop-stereo` states what this sender
 /// will send; `minptime` and `useinbandfec` are what every WHIP relay expects.
-pub fn opus_format_parameters_for_offer(channels: u32) -> String {
+pub(crate) fn opus_format_parameters_for_offer(channels: u32) -> String {
     format!(
         "minptime=10;useinbandfec=1;sprop-stereo={}",
         u8::from(channels > 1)
@@ -78,8 +77,6 @@ mod tests {
 
     #[test]
     fn the_rtpmaps_channel_field_is_two_even_for_the_mono_answer() {
-        // The whole reason this module exists: reading `parts[2]` here would
-        // report stereo for a stream that just declared itself mono.
         assert!(MONO_ANSWER.contains("opus/48000/2"));
         assert_eq!(opus_sender_stereo_hint_in_answer(MONO_ANSWER), Some(false));
     }

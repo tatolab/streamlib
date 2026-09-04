@@ -11,8 +11,14 @@ use crate::error::{Result, WebRtcExtensionError};
 
 /// The extent and colour one SPS declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SequenceParameterSet {
+pub(crate) struct SequenceParameterSet {
+    /// Coded width before the conformance crop — the codec-aligned extent,
+    /// which is what the encoded-video wire contract's `width` means and what
+    /// the engine's own encoder writes. A player that published the cropped
+    /// display extent would disagree with `H264Encoder` about the same stream,
+    /// and `Mp4Sink` copies these straight into `tkhd`.
     pub width: u32,
+    /// Coded height before the conformance crop.
     pub height: u32,
     /// Absent when the VUI described no colour axis at all, which is distinct
     /// from a VUI that described one and left the rest unspecified.
@@ -21,7 +27,7 @@ pub struct SequenceParameterSet {
 
 /// The bag's `color` sub-map, in the wire's own string spelling.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ColorDescription {
+pub(crate) struct ColorDescription {
     pub primaries: Option<&'static str>,
     pub transfer: Option<&'static str>,
     pub matrix: Option<&'static str>,
@@ -43,7 +49,7 @@ const PROFILES_CARRYING_CHROMA_FORMAT: [u8; 13] =
     [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135];
 
 /// Parse one SPS NAL unit, header byte included.
-pub fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameterSet> {
+pub(crate) fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameterSet> {
     let Some((&header, payload)) = nal_unit.split_first() else {
         return Err(WebRtcExtensionError::MalformedBitstream {
             what: "an empty NAL unit is not a sequence parameter set".to_owned(),
@@ -108,8 +114,8 @@ pub fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameter
     bits.read_unsigned_exp_golomb()?; // max_num_ref_frames
     bits.skip_bits(1)?; // gaps_in_frame_num_value_allowed_flag
 
-    let width_in_macroblocks = bits.read_unsigned_exp_golomb()? + 1;
-    let height_in_map_units = bits.read_unsigned_exp_golomb()? + 1;
+    let width_in_macroblocks = one_more_than(bits.read_unsigned_exp_golomb()?)?;
+    let height_in_map_units = one_more_than(bits.read_unsigned_exp_golomb()?)?;
     let frame_macroblocks_only = bits.read_flag()?;
     if !frame_macroblocks_only {
         bits.skip_bits(1)?; // mb_adaptive_frame_field_flag
@@ -136,8 +142,12 @@ pub fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameter
     // H.264 §7.4.2.1.1: a field-coded stream stores half a frame per map unit,
     // so the map units count twice.
     let field_multiplier = if frame_macroblocks_only { 1 } else { 2 };
-    let coded_width = width_in_macroblocks * 16;
-    let coded_height = height_in_map_units * 16 * field_multiplier;
+    // Every one of these is an Exp-Golomb value off the wire, so a crafted SPS
+    // reaches them with anything up to `u32::MAX`. Overflow checks are on in
+    // the profile this wheel is built with, so unchecked arithmetic here is a
+    // panic in library code reading network input.
+    let coded_width = macroblocks_to_luma_samples(width_in_macroblocks, 1)?;
+    let coded_height = macroblocks_to_luma_samples(height_in_map_units, field_multiplier)?;
 
     let chroma_array_type = if separate_colour_plane {
         0
@@ -146,15 +156,18 @@ pub fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameter
     };
     // §7.4.2.1.1 again: the crop offsets count in chroma samples, so a 4:2:0
     // stream's offsets are halved relative to luma in both axes.
-    let (crop_unit_width, crop_unit_height) = match chroma_array_type {
+    let (crop_unit_width, crop_unit_height): (u32, u32) = match chroma_array_type {
         0 => (1, field_multiplier),
         1 => (2, 2 * field_multiplier),
         2 => (2, field_multiplier),
         _ => (1, field_multiplier),
     };
 
-    let cropped_width = crop_unit_width * (crop_left + crop_right);
-    let cropped_height = crop_unit_height * (crop_top + crop_bottom);
+    // The crop is parsed but not applied: the bag carries the coded extent. It
+    // is still read, because a crop that removes the whole picture is a
+    // bitstream to refuse rather than one to publish an extent for.
+    let cropped_width = crop_unit_width.saturating_mul(crop_left.saturating_add(crop_right));
+    let cropped_height = crop_unit_height.saturating_mul(crop_top.saturating_add(crop_bottom));
     if cropped_width >= coded_width || cropped_height >= coded_height {
         return Err(WebRtcExtensionError::MalformedBitstream {
             what: format!(
@@ -165,10 +178,27 @@ pub fn parse_sequence_parameter_set(nal_unit: &[u8]) -> Result<SequenceParameter
     }
 
     Ok(SequenceParameterSet {
-        width: coded_width - cropped_width,
-        height: coded_height - cropped_height,
+        width: coded_width,
+        height: coded_height,
         color,
     })
+}
+
+fn one_more_than(value: u32) -> Result<u32> {
+    value
+        .checked_add(1)
+        .ok_or_else(|| WebRtcExtensionError::MalformedBitstream {
+            what: format!("a macroblock count of {value} overflows its own increment"),
+        })
+}
+
+fn macroblocks_to_luma_samples(macroblocks: u32, field_multiplier: u32) -> Result<u32> {
+    macroblocks
+        .checked_mul(16)
+        .and_then(|samples| samples.checked_mul(field_multiplier))
+        .ok_or_else(|| WebRtcExtensionError::MalformedBitstream {
+            what: format!("{macroblocks} macroblocks is not a picture extent this can express"),
+        })
 }
 
 /// H.264 §E.1.1. Read only as far as the colour description — everything after
@@ -224,7 +254,7 @@ fn skip_scaling_list(bits: &mut RawBitstreamReader<'_>, coefficient_count: usize
 /// H.264 §7.4.1.1: a `0x03` inserted after two zero bytes keeps a payload from
 /// forming a start code, and is not part of the syntax the bit reader sees.
 fn strip_emulation_prevention_bytes(payload: &[u8]) -> Vec<u8> {
-    let mut raw = Vec::with_capacity(payload.len());
+    let mut raw_byte_sequence = Vec::with_capacity(payload.len());
     let mut zero_run = 0;
     for &byte in payload {
         if zero_run == 2 && byte == 0x03 {
@@ -232,9 +262,9 @@ fn strip_emulation_prevention_bytes(payload: &[u8]) -> Vec<u8> {
             continue;
         }
         zero_run = if byte == 0 { zero_run + 1 } else { 0 };
-        raw.push(byte);
+        raw_byte_sequence.push(byte);
     }
-    raw
+    raw_byte_sequence
 }
 
 /// A big-endian bit reader over an RBSP, refusing a read past the end rather
@@ -388,10 +418,13 @@ mod tests {
     };
 
     #[test]
-    fn the_extent_comes_out_cropped_not_coded() {
+    fn the_extent_is_the_coded_one_the_wire_contract_asks_for() {
+        // 320x180 displayed, coded at 320x192 with the bottom 12 rows cropped.
+        // The bag carries the coded extent, which is what `H264Encoder` writes
+        // for the same stream and what `Mp4Sink` copies into `tkhd`.
         let parsed = parse_sequence_parameter_set(&baseline_320x180(no_vui)).unwrap();
 
-        assert_eq!((parsed.width, parsed.height), (320, 180));
+        assert_eq!((parsed.width, parsed.height), (320, 192));
         assert_eq!(parsed.color, None);
     }
 
@@ -479,7 +512,8 @@ mod tests {
 
         let parsed = parse_sequence_parameter_set(&sps).unwrap();
 
-        assert_eq!((parsed.width, parsed.height), (1920, 1080));
+        // Coded at 1088 with 8 rows cropped for display; the bag says 1088.
+        assert_eq!((parsed.width, parsed.height), (1920, 1088));
     }
 
     #[test]
@@ -523,6 +557,34 @@ mod tests {
         let truncated = &baseline_320x180(no_vui)[..4];
 
         let refusal = parse_sequence_parameter_set(truncated).unwrap_err();
+
+        assert!(matches!(
+            refusal,
+            WebRtcExtensionError::MalformedBitstream { .. }
+        ));
+    }
+
+    #[test]
+    fn a_crafted_macroblock_count_is_refused_rather_than_overflowing() {
+        let mut writer = RawBitstreamWriter::default();
+        writer
+            .bits(66, 8)
+            .bits(0, 8)
+            .bits(30, 8)
+            .unsigned_exp_golomb(0)
+            .unsigned_exp_golomb(0)
+            .unsigned_exp_golomb(2)
+            .unsigned_exp_golomb(1)
+            .bit(0)
+            .unsigned_exp_golomb(u32::MAX - 1) // pic_width_in_mbs_minus1
+            .unsigned_exp_golomb(0)
+            .bit(1)
+            .bit(1)
+            .bit(0)
+            .bit(0);
+        let sps = writer.finish(0x67);
+
+        let refusal = parse_sequence_parameter_set(&sps).unwrap_err();
 
         assert!(matches!(
             refusal,

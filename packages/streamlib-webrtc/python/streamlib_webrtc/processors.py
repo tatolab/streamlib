@@ -19,6 +19,7 @@ from typing import Any, Literal, Protocol
 from streamlib import (
     EncodedAudioPacket,
     EncodedVideoFrame,
+    LinkOutputDataWriter,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     input,
@@ -41,6 +42,10 @@ HIGHEST_TRACKS_IN_ONE_SESSION = 2
 #: been asked to stop. Short enough that `stop()` returns well inside the
 #: helper's five-second teardown budget.
 PLAYER_POLL_TIMEOUT_MS = 200
+
+#: How long `stop()` waits for the reading thread. The thread's own media wait
+#: is bounded, so this only expires when it is still inside `connect()`.
+READER_THREAD_JOIN_TIMEOUT_SECONDS = 1.0
 
 #: A helper-placed link's per-bag ceiling
 #: (`streamlib-ipc-types`' untrusted-session ceiling). A bag past it is dropped
@@ -142,6 +147,28 @@ def resolve_track_kind(
     return kind
 
 
+#: RFC 7587 defines an RTP payload format for mono and stereo Opus only. The
+#: engine's `OpusEncoder` legally produces mapping-family-1 multistream packets
+#: for 3–8 channels, which no WHIP relay can carry.
+HIGHEST_CHANNELS_RTP_CARRIES = 2
+
+
+def refuse_audio_rtp_cannot_carry(channels: Any, inbound_link: str) -> None:
+    """Refuse a multichannel Opus packet by name rather than send it anyway.
+
+    `Mp4Sink` set the precedent: a track it cannot write honestly is refused,
+    not written broken. Forwarded here, the far end would decode garbage and
+    nothing upstream would say why.
+    """
+    if isinstance(channels, int) and channels > HIGHEST_CHANNELS_RTP_CARRIES:
+        raise ValueError(
+            f"WhipPublisher: a bag on `{inbound_link}` carries {channels}-channel "
+            f"Opus, and RFC 7587 defines an RTP payload format for mono and "
+            f"stereo only. Encode at {HIGHEST_CHANNELS_RTP_CARRIES} channels or "
+            f"fewer to publish this stream."
+        )
+
+
 def _required_url(config: "dict[str, Any]", processor_name: str) -> str:
     url = config.get("url")
     if not isinstance(url, str) or not url:
@@ -173,6 +200,14 @@ class WhipPublisher:
     The session opens on the first bag rather than in `setup()`, because a
     relay round trip inside `setup()` spends the helper's start-up budget and a
     relay outage there takes the whole graph down with it.
+
+    One known offset: video reaches the far end presenting roughly one frame
+    interval later than audio. The RTP payloader applies a sample's duration to
+    the frame *after* it, so a publisher that cannot see the next frame without
+    delaying this one numbers video one frame behind real time; audio takes its
+    duration from each packet's own sample count and is exact. At 30 fps that
+    is about 33 ms of video lag, inside the ITU-R BT.1359 comfort bound but not
+    zero.
     """
 
     def __init__(self) -> None:
@@ -223,9 +258,8 @@ class WhipPublisher:
             )
         else:
             packet = EncodedAudioPacket(**bag)
-            session.write_audio_packet(
-                packet.opus_packet_bytes, packet.sample_count
-            )
+            refuse_audio_rtp_cannot_carry(packet.channels, inbound_link)
+            session.write_audio_packet(packet.opus_packet_bytes, packet.sample_count)
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
@@ -321,21 +355,35 @@ class WhepPlayer:
         outputs = ctx.outputs
 
         def play_until_stopped() -> None:
+            # This thread owns the session's whole life, close included. Only
+            # one thread ever touches it, so a teardown arriving while the
+            # connect is still outstanding waits for the thread rather than
+            # contending with it.
             try:
-                session.connect()
-            except Exception as connect_failure:
-                log.error(f"WhepPlayer: the session did not open: {connect_failure}")
-                return
-            while not self._stop.is_set():
-                media = session.next_media(PLAYER_POLL_TIMEOUT_MS)
-                if media is None:
-                    continue
-                port, bag = _bag_for(media)
-                self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
-                outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+                try:
+                    session.connect()
+                except Exception as connect_failure:
+                    log.error(
+                        f"WhepPlayer: the session did not open: {connect_failure}"
+                    )
+                    return
+                self._drain_until_stopped(session, outputs)
+            finally:
+                session.close()
 
         self._reader = threading.Thread(target=play_until_stopped, daemon=True)
         self._reader.start()
+
+    def _drain_until_stopped(
+        self, session: "_native.WhepSession", outputs: LinkOutputDataWriter
+    ) -> None:
+        while not self._stop.is_set():
+            media = session.next_media(PLAYER_POLL_TIMEOUT_MS)
+            if media is None:
+                continue
+            port, bag = _bag_for(media)
+            self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
+            outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
 
     def _report_a_bag_the_link_will_drop(self, port: str, bitstream: bytes) -> None:
         if len(bitstream) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
@@ -352,14 +400,20 @@ class WhepPlayer:
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
         self._stop.set()
-        if self._reader is not None:
-            # The join and the session close below share the helper's
-            # five-second teardown budget, and the thread's own wait for media
-            # is bounded at PLAYER_POLL_TIMEOUT_MS, so this returns promptly.
-            self._reader.join(timeout=1.0)
-            self._reader = None
-        if self._session is not None:
-            self._session.close()
+        if self._reader is None:
+            return
+        # Bounded well inside the helper's five-second teardown budget: the
+        # thread's own wait for media is bounded at PLAYER_POLL_TIMEOUT_MS.
+        # A thread still inside `connect()` against an unresponsive relay
+        # outlives this, and closes the session itself when the connect
+        # returns — which is the most a stop can honestly promise.
+        self._reader.join(timeout=READER_THREAD_JOIN_TIMEOUT_SECONDS)
+        if self._reader.is_alive():
+            log.warn(
+                "WhepPlayer: the reading thread is still connecting; the session "
+                "will close when that connect returns"
+            )
+        self._reader = None
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx

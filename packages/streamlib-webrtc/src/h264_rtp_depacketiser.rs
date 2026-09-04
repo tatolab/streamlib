@@ -14,10 +14,10 @@ const NAL_TYPE_FU_A: u8 = 28;
 
 /// RFC 6184 §1.3: an IDR picture's coded slice, the sync point a decoder may
 /// enter a stream at.
-pub const NAL_TYPE_IDR_SLICE: u8 = 5;
+pub(crate) const NAL_TYPE_IDR_SLICE: u8 = 5;
 /// The sequence parameter set, which is the only place a stream states its
 /// extent and its colour.
-pub const NAL_TYPE_SEQUENCE_PARAMETER_SET: u8 = 7;
+pub(crate) const NAL_TYPE_SEQUENCE_PARAMETER_SET: u8 = 7;
 
 /// How far apart two RTP timestamps must be before a half-reassembled FU-A is
 /// abandoned. 90 kHz × 2 s — long enough that no plausible jitter drops a
@@ -27,7 +27,7 @@ const STALE_FRAGMENT_THRESHOLD_TICKS: u32 = 180_000;
 
 /// Reassembles the NAL units an H.264 RTP stream arrives in.
 #[derive(Default)]
-pub struct H264RtpDepacketiser {
+pub(crate) struct H264RtpDepacketiser {
     fragments_by_rtp_timestamp: HashMap<u32, FragmentedNalUnitUnderReassembly>,
 }
 
@@ -39,13 +39,13 @@ struct FragmentedNalUnitUnderReassembly {
 }
 
 impl H264RtpDepacketiser {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Every NAL unit this payload completes — none while a FU-A is still
     /// arriving, one for a single NAL or a completed FU-A, many for a STAP-A.
-    pub fn depacketise(
+    pub(crate) fn depacketise(
         &mut self,
         payload: Bytes,
         rtp_timestamp: u32,
@@ -68,9 +68,15 @@ impl H264RtpDepacketiser {
 
     /// Drop half-reassembled units older than the threshold, so a sender that
     /// stops mid-fragment cannot leak one entry per abandoned unit.
-    pub fn discard_stale_fragments(&mut self, current_rtp_timestamp: u32) {
+    ///
+    /// Age is a *signed* difference: a reordered packet carrying an older
+    /// timestamp than one already in the map would otherwise compute a huge
+    /// unsigned age for the newer entry and evict the unit still being
+    /// reassembled.
+    pub(crate) fn discard_stale_fragments(&mut self, current_rtp_timestamp: u32) {
         self.fragments_by_rtp_timestamp.retain(|&timestamp, _| {
-            current_rtp_timestamp.wrapping_sub(timestamp) < STALE_FRAGMENT_THRESHOLD_TICKS
+            let age_in_ticks = current_rtp_timestamp.wrapping_sub(timestamp) as i32;
+            age_in_ticks < STALE_FRAGMENT_THRESHOLD_TICKS as i32
         });
     }
 
@@ -319,6 +325,26 @@ mod tests {
             vec![Bytes::from(vec![IDR_NAL_UNIT_HEADER, 0xB1, 0xB2])]
         );
         assert_eq!(from_the_first, vec![Bytes::from(vec![0x61, 0xA1, 0xA2])]);
+    }
+
+    #[test]
+    fn a_unit_newer_than_the_packet_being_read_is_not_evicted_as_stale() {
+        // A reordered packet carrying an older timestamp must not look, to an
+        // unsigned age, like proof that everything else has gone stale.
+        let mut depacketiser = H264RtpDepacketiser::new();
+        depacketiser
+            .depacketise(fragmentation_unit(true, false, 5, &[0x01]), 90_000, 10)
+            .unwrap();
+
+        depacketiser.discard_stale_fragments(45_000);
+
+        let completed = depacketiser
+            .depacketise(fragmentation_unit(false, true, 5, &[0x02]), 90_000, 11)
+            .unwrap();
+        assert_eq!(
+            completed,
+            vec![Bytes::from(vec![IDR_NAL_UNIT_HEADER, 0x01, 0x02])]
+        );
     }
 
     #[test]

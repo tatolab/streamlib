@@ -32,14 +32,14 @@ const HIGHEST_REDIRECTS_FOLLOWED: u8 = 5;
 
 /// The session a successful offer opened.
 #[derive(Debug)]
-pub struct OpenedSession {
+pub(crate) struct OpenedSession {
     pub sdp_answer: String,
     /// Absolute, resolved from the `Location` header the relay returned.
     pub session_url: String,
 }
 
 /// Speaks WHIP or WHEP signalling to one endpoint.
-pub struct WhipWhepSignallingClient {
+pub(crate) struct WhipWhepSignallingClient {
     http_client: SignallingHttpClient,
     endpoint_url: String,
     bearer_token: Option<String>,
@@ -53,7 +53,7 @@ impl WhipWhepSignallingClient {
     /// reads rustls's default crypto provider, which panics inside rustls if
     /// nothing installed one. `extension.py:load` is what installs it, and it
     /// runs before any processor module is imported.
-    pub fn new(
+    pub(crate) fn new(
         endpoint_url: String,
         bearer_token: Option<String>,
         protocol: &'static str,
@@ -82,7 +82,7 @@ impl WhipWhepSignallingClient {
     }
 
     /// POST the offer and read back the answer and the session's own URL.
-    pub async fn post_offer(&self, sdp_offer: &str) -> Result<OpenedSession> {
+    pub(crate) async fn post_offer(&self, sdp_offer: &str) -> Result<OpenedSession> {
         let mut endpoint_url = self.endpoint_url.clone();
 
         for _ in 0..=HIGHEST_REDIRECTS_FOLLOWED {
@@ -133,7 +133,7 @@ impl WhipWhepSignallingClient {
     }
 
     /// Trickle gathered candidates onto an open session.
-    pub async fn patch_ice_candidates(
+    pub(crate) async fn patch_ice_candidates(
         &self,
         session_url: &str,
         sdp_fragment: String,
@@ -146,7 +146,7 @@ impl WhipWhepSignallingClient {
 
         let response = self.send(request, REQUEST_TIMEOUT).await?;
         let status = response.status();
-        if status == StatusCode::NO_CONTENT || status.is_success() {
+        if status.is_success() {
             return Ok(());
         }
         let body = self.collect_body(response).await?;
@@ -159,7 +159,7 @@ impl WhipWhepSignallingClient {
     /// End the session. A relay that refuses is logged rather than raised:
     /// this runs during teardown, where the local side is going away either
     /// way and a raise would only replace one report with a worse one.
-    pub async fn delete_session(&self, session_url: &str) {
+    pub(crate) async fn delete_session(&self, session_url: &str) {
         let request = match self
             .request_builder("DELETE", session_url)
             .body(empty_body())

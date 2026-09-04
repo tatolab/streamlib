@@ -16,6 +16,7 @@ from streamlib_webrtc import WhepPlayer, WhipPublisher
 from streamlib_webrtc.processors import (
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     VideoOrAudio,
+    refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
 
@@ -137,3 +138,18 @@ def test_a_bag_inside_the_ceiling_is_not_reported(monkeypatch):
     WhepPlayer()._report_a_bag_the_link_will_drop("encoded_video", b"\x00" * 4096)
 
     assert reported == []
+
+
+@pytest.mark.parametrize("channels", [3, 6, 8])
+def test_multichannel_opus_is_refused_because_rtp_cannot_carry_it(channels):
+    """`OpusEncoder` legally produces mapping-family-1 multistream packets for
+    3-8 channels, and RFC 7587 defines an RTP payload format for mono and
+    stereo only. Forwarded anyway, the far end decodes garbage and nothing
+    upstream says why."""
+    with pytest.raises(ValueError, match="mono and stereo only"):
+        refuse_audio_rtp_cannot_carry(channels, "encoder/encoded_audio")
+
+
+@pytest.mark.parametrize("channels", [1, 2])
+def test_the_channel_counts_rtp_carries_are_published(channels):
+    refuse_audio_rtp_cannot_carry(channels, "encoder/encoded_audio")

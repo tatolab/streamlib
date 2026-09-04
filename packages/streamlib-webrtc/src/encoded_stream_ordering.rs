@@ -10,21 +10,24 @@
 
 /// `(group_index, sequence_index)` for one published bag.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EncodedStreamOrderingPair {
+pub(crate) struct EncodedStreamOrderingPair {
     pub group_index: u64,
     pub sequence_index: u64,
 }
 
 /// Per-producer counter for the pair.
 #[derive(Debug, Default)]
-pub struct EncodedStreamOrderingPairCounter {
+pub(crate) struct EncodedStreamOrderingPairCounter {
     bags_accounted: u64,
     current_group_index: u64,
 }
 
 impl EncodedStreamOrderingPairCounter {
     /// Account one published bag, handing back the pair it carries.
-    pub fn account_published_bag(&mut self, is_sync_point: bool) -> EncodedStreamOrderingPair {
+    pub(crate) fn account_published_bag(
+        &mut self,
+        is_sync_point: bool,
+    ) -> EncodedStreamOrderingPair {
         if is_sync_point && self.bags_accounted > 0 {
             self.current_group_index += 1;
         }
