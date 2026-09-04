@@ -3,9 +3,9 @@
 """A StreamLib app: camera + microphone → one MP4, two tracks, with a preview.
 
 `streamlib run` finds `setup(rt)` below by convention — there is no manifest and
-no `main()`. All six processors are native built-ins that ship inside the wheel,
-so this app declares no processor of its own, and neither a frame nor a sample
-ever enters a Python interpreter.
+no `main()`. Every processor here is a native built-in that ships inside the
+wheel, so this app declares no processor of its own, and neither a frame nor a
+sample ever enters a Python interpreter.
 
 Nothing here configures the recording's track layout: both encoders are wired
 into the sink's one `tracks` input, and `Mp4Sink` makes one track per inbound

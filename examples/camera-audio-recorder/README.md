@@ -24,7 +24,7 @@ def setup(rt: Runtime) -> None:
     rt.connect(audio_encoder.output("encoded_audio"), recorder.input("tracks"))
 ```
 
-- All six are **native built-in processors**, statically linked into the
+- Every processor here is a **native built-in**, statically linked into the
   `streamlib` wheel. `rt.add` takes the class itself — it is a marker, never
   instantiated. No frame and no sample enters a Python interpreter, so a
   recording costs Python nothing per frame.
@@ -65,12 +65,17 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 
 ## What the hardware has to have
 
-A GPU with **Vulkan Video encode** queues for H.264 — without them the encoder
+A GPU with **Vulkan Video encode** queues for H.264. Without them the encoder
 logs `the encoder session could not be minted; every later frame is discarded`
-and the file gets no video track. The preview additionally needs a **decode**
-queue; lacking one, the decoder refuses in `setup()`, sits in state `Error` in
-`streamlib graph`, and the window stays black — the recording itself is
-unaffected, because the file is fed by the encoder, not by the preview.
+and never delivers a sync point, so the sink's header keeps waiting on that
+track and the file stays `ftyp`-only — see the header rule under *Observing it*
+for how that eventually resolves, and note that on an audio-only hold it
+resolves slowly.
+
+The preview additionally needs a **decode** queue; lacking one, the decoder
+refuses in `setup()`, sits in state `Error` in `streamlib graph`, and the window
+stays black. The recording itself is unaffected — the file is fed by the
+encoder, not by the preview.
 
 ## Stopping it
 
@@ -115,10 +120,18 @@ streamlib graph           # this node's processors, ports and links, as JSON
 streamlib logs --follow   # the node's JSONL log
 ```
 
-The sink writes its `moov` only once **every** track has delivered a first
-sync-point bag, because a sample entry needs the video parameter sets and the
-Opus header. A link that has produced nothing yet is named in the log once a
-second — which is where a silent microphone shows up.
+The sink writes its `moov` only once every track can be described, because a
+sample entry needs the video parameter sets or the Opus header. Until then it
+holds every delivered sample, and a link that has produced nothing yet is named
+in the log once a second — which is where a silent microphone shows up.
+
+That wait is bounded, but by held bytes rather than by time: when the samples
+held for the header pass the writer's 64 MiB budget, the links still silent are
+latched by name so the tracks that *did* deliver stop waiting on one that never
+will. The budget is sized for several seconds of 1080p, so a stalled video track
+resolves quickly — but a hold carrying only Opus fills 64 MiB in hours, so a run
+whose video never starts will sit on an `ftyp`-only file for a long time. A
+recording that trips the budget has a broken producer, not a busy one.
 
 ## Runtime knobs
 
