@@ -18,7 +18,7 @@ processors would then fail per frame, far from the cause.
 from __future__ import annotations
 
 import importlib.metadata
-from typing import Callable, Protocol
+from typing import Protocol
 
 
 class CapabilityExtensionHostFactory(Protocol):
@@ -35,7 +35,7 @@ class CapabilityExtensionLoadError(RuntimeError):
 _HOOKS_HAVE_RUN = False
 
 #: The failure the loop ended on, re-raised rather than re-attempted.
-_HOOK_FAILURE: "CapabilityExtensionLoadError | None" = None
+_HOOK_FAILURE: CapabilityExtensionLoadError | None = None
 
 
 def run_every_installed_capability_extension_hook(
@@ -49,7 +49,7 @@ def run_every_installed_capability_extension_hook(
     for entry_point in importlib.metadata.entry_points(group="streamlib.extensions"):
         distribution = _distribution_name_of(entry_point)
         try:
-            load: Callable[[object], None] = entry_point.load()
+            load = entry_point.load()
             load(mint_host_for_distribution(distribution))
         except Exception as hook_failure:
             raise CapabilityExtensionLoadError(
