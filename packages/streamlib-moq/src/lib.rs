@@ -5,6 +5,7 @@
 
 pub mod annex_b_access_unit;
 pub mod cmaf_fragment;
+pub mod cmaf_init_segment;
 pub mod cmaf_sample_entry;
 pub mod cmaf_track_timeline;
 pub mod encoded_media_sample;
