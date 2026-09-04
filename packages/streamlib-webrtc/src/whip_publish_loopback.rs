@@ -16,23 +16,21 @@
 
 use crate::h264_test_bitstreams::{baseline_320x180, no_vui};
 use crate::http_test_responder::HttpResponderUnderTest;
-use crate::received_media_assembly::{ReceivedVideoAccessUnit, VideoAccessUnitAssembler};
+use crate::received_media_assembly::{OpusPacketAssembler, VideoAccessUnitAssembler};
+use crate::webrtc_peer_connection::{
+    H264_PAYLOAD_TYPE, NegotiatedCodec, OPUS_PAYLOAD_TYPE, OPUS_RECEIVE_FORMAT_PARAMETERS,
+    TrackMedium, build_peer_connection, opus_codec_capability, video_codec_capability,
+    video_rtcp_feedback,
+};
+use crate::whep_session::ReceivedMedia;
 use crate::whip_session::{PublishedMediaSet, WhipPublishingSession};
 use bytes::Bytes;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use webrtc::api::APIBuilder;
-use webrtc::api::interceptor_registry::register_default_interceptors;
-use webrtc::api::media_engine::{MIME_TYPE_H264, MediaEngine};
-use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::RTCPeerConnection;
-use webrtc::peer_connection::configuration::RTCConfiguration;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
-use webrtc::rtp_transceiver::rtp_codec::{
-    RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType,
-};
 
 /// ICE plus a DTLS handshake on loopback is milliseconds in the ordinary case;
 /// this is the bound past which the test has failed rather than been slow.
@@ -63,12 +61,17 @@ fn annex_b(nal_units: &[&[u8]]) -> Vec<u8> {
     stream
 }
 
+fn only_video(media: ReceivedMedia) -> crate::received_media_assembly::ReceivedVideoAccessUnit {
+    match media {
+        ReceivedMedia::Video(access_unit) => access_unit,
+        ReceivedMedia::Audio(_) => panic!("an audio packet arrived on a video-only session"),
+    }
+}
+
 /// A WHIP endpoint that answers with a real receiving peer connection, and
-/// hands every access unit it reassembles back to the test.
-async fn a_relay_that_receives_what_is_published() -> (
-    HttpResponderUnderTest,
-    mpsc::Receiver<ReceivedVideoAccessUnit>,
-) {
+/// hands back everything it reassembles from what arrives.
+async fn a_relay_that_receives_what_is_published()
+-> (HttpResponderUnderTest, mpsc::Receiver<ReceivedMedia>) {
     let (assembled, assembled_receiver) = mpsc::channel(64);
 
     let responder = HttpResponderUnderTest::answering_with(move |request| {
@@ -104,49 +107,54 @@ async fn a_relay_that_receives_what_is_published() -> (
 /// outlive this function, which returns as soon as the answer is written.
 async fn answer_the_offer(
     offer: String,
-    assembled: mpsc::Sender<ReceivedVideoAccessUnit>,
-) -> Result<String, webrtc::Error> {
-    let mut media_engine = MediaEngine::default();
-    media_engine.register_codec(
-        RTCRtpCodecParameters {
-            capability: RTCRtpCodecCapability {
-                mime_type: MIME_TYPE_H264.to_owned(),
-                clock_rate: 90_000,
-                channels: 0,
-                sdp_fmtp_line:
-                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-                        .to_owned(),
+    assembled: mpsc::Sender<ReceivedMedia>,
+) -> crate::error::Result<String> {
+    let receiving_peer = Arc::new(
+        build_peer_connection(vec![
+            NegotiatedCodec {
+                capability: video_codec_capability(),
+                payload_type: H264_PAYLOAD_TYPE,
+                medium: TrackMedium::Video,
+                rtcp_feedback: video_rtcp_feedback(),
+            },
+            NegotiatedCodec {
+                capability: opus_codec_capability(OPUS_RECEIVE_FORMAT_PARAMETERS.to_owned()),
+                payload_type: OPUS_PAYLOAD_TYPE,
+                medium: TrackMedium::Audio,
                 rtcp_feedback: vec![],
             },
-            payload_type: 102,
-            ..Default::default()
-        },
-        RTPCodecType::Video,
-    )?;
-    let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
-    let receiving_peer = Arc::new(
-        APIBuilder::new()
-            .with_media_engine(media_engine)
-            .with_interceptor_registry(registry)
-            .build()
-            .new_peer_connection(RTCConfiguration::default())
-            .await?,
+        ])
+        .await?,
     );
 
     reassemble_every_arriving_track(&receiving_peer, assembled);
 
+    let refusal = |what: String| crate::error::WebRtcExtensionError::Signalling {
+        protocol: "the loopback relay",
+        what,
+    };
     receiving_peer
-        .set_remote_description(RTCSessionDescription::offer(offer)?)
-        .await?;
-    let answer = receiving_peer.create_answer(None).await?;
-    receiving_peer.set_local_description(answer).await?;
+        .set_remote_description(
+            RTCSessionDescription::offer(offer)
+                .map_err(|failure| refusal(format!("the offer is not valid SDP: {failure}")))?,
+        )
+        .await
+        .map_err(|failure| refusal(format!("the offer was not accepted: {failure}")))?;
+    let answer = receiving_peer
+        .create_answer(None)
+        .await
+        .map_err(|failure| refusal(format!("no answer could be created: {failure}")))?;
+    receiving_peer
+        .set_local_description(answer)
+        .await
+        .map_err(|failure| refusal(format!("the answer could not be set: {failure}")))?;
     let mut gathering_complete = receiving_peer.gathering_complete_promise().await;
     let _ = gathering_complete.recv().await;
 
     let local = receiving_peer
         .local_description()
         .await
-        .expect("gathering finished with no local description");
+        .ok_or_else(|| refusal("gathering finished with no local description".to_owned()))?;
 
     // Held for the life of the process the test runs in: dropping it here would
     // close the connection before a single packet arrived.
@@ -156,22 +164,51 @@ async fn answer_the_offer(
 
 fn reassemble_every_arriving_track(
     receiving_peer: &Arc<RTCPeerConnection>,
-    assembled: mpsc::Sender<ReceivedVideoAccessUnit>,
+    assembled: mpsc::Sender<ReceivedMedia>,
 ) {
     receiving_peer.on_track(Box::new(move |track, _receiver, _transceiver| {
+        let medium = TrackMedium::from_mime_type(&track.codec().capability.mime_type);
         let assembled = assembled.clone();
         Box::pin(async move {
+            let Some(medium) = medium else { return };
             tokio::spawn(async move {
-                let mut assembler = VideoAccessUnitAssembler::new();
-                'reading: while let Ok((packet, _attributes)) = track.read_rtp().await {
-                    for access_unit in assembler.accept_rtp_packet(
-                        packet.payload,
-                        packet.header.timestamp,
-                        packet.header.sequence_number,
-                        packet.header.marker,
-                    ) {
-                        if assembled.send(access_unit).await.is_err() {
-                            break 'reading;
+                match medium {
+                    TrackMedium::Video => {
+                        let mut assembler = VideoAccessUnitAssembler::new();
+                        'reading: while let Ok((packet, _)) = track.read_rtp().await {
+                            for access_unit in assembler.accept_rtp_packet(
+                                packet.payload,
+                                packet.header.timestamp,
+                                packet.header.sequence_number,
+                                packet.header.marker,
+                            ) {
+                                if assembled
+                                    .send(ReceivedMedia::Video(access_unit))
+                                    .await
+                                    .is_err()
+                                {
+                                    break 'reading;
+                                }
+                            }
+                        }
+                    }
+                    TrackMedium::Audio => {
+                        // `None`: the relay is the answerer, so there is no
+                        // answer for it to have read a `sprop-stereo` out of.
+                        let mut assembler = OpusPacketAssembler::new(None);
+                        while let Ok((packet, _)) = track.read_rtp().await {
+                            let Ok(opus_packet) = assembler
+                                .accept_rtp_packet(packet.payload, packet.header.timestamp)
+                            else {
+                                continue;
+                            };
+                            if assembled
+                                .send(ReceivedMedia::Audio(opus_packet))
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
                         }
                     }
                 }
@@ -208,24 +245,26 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
     // The first frames are written before the DTLS handshake has necessarily
     // completed, and a track drops what it cannot yet send — so this publishes
     // until one arrives rather than asserting on a single write.
-    let received = tokio::time::timeout(MEDIA_DEADLINE, async {
-        loop {
-            session
-                .write_video_access_unit(
-                    Bytes::from(access_unit.clone()),
-                    Duration::from_millis(33),
-                )
-                .await
-                .expect("writing the access unit failed");
-            match tokio::time::timeout(Duration::from_millis(100), assembled.recv()).await {
-                Ok(Some(access_unit)) => return access_unit,
-                Ok(None) => panic!("the receiving side closed"),
-                Err(_) => continue,
+    let received = only_video(
+        tokio::time::timeout(MEDIA_DEADLINE, async {
+            loop {
+                session
+                    .write_video_access_unit(
+                        Bytes::from(access_unit.clone()),
+                        Duration::from_millis(33),
+                    )
+                    .await
+                    .expect("writing the access unit failed");
+                match tokio::time::timeout(Duration::from_millis(100), assembled.recv()).await {
+                    Ok(Some(access_unit)) => return access_unit,
+                    Ok(None) => panic!("the receiving side closed"),
+                    Err(_) => continue,
+                }
             }
-        }
-    })
-    .await
-    .expect("no access unit arrived inside the deadline");
+        })
+        .await
+        .expect("no access unit arrived inside the deadline"),
+    );
 
     // Asserted rather than assumed: everything below would also hold if the
     // bytes had somehow reached the assembler without crossing a connection.
@@ -249,4 +288,74 @@ async fn a_published_keyframe_arrives_as_the_same_access_unit_it_was_handed() {
     // The coded extent, parsed out of the SPS that survived the round trip
     // rather than taken from config: 320x180 displayed is 320x192 coded.
     assert_eq!((received.width, received.height), (320, 192));
+}
+
+/// 960 samples at Opus's 48 kHz clock, which is what the publisher derives a
+/// packet's RTP advance from.
+const TWENTY_MILLISECONDS: Duration = Duration::from_millis(20);
+
+/// A 20 ms SILK frame, the framing every WebRTC Opus sender uses.
+fn an_opus_packet(stereo: bool) -> Vec<u8> {
+    let table_of_contents = (1u8 << 3) | (u8::from(stereo) << 2);
+    let mut packet = vec![table_of_contents];
+    packet.extend((0..60u32).map(|index| (index % 251 + 1) as u8));
+    packet
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_published_opus_packet_arrives_described_by_its_own_toc() {
+    crate::transport_stack::bring_up().unwrap();
+    let (relay, mut assembled) = a_relay_that_receives_what_is_published().await;
+
+    let session = tokio::time::timeout(
+        CONNECT_DEADLINE,
+        WhipPublishingSession::connect(
+            format!("{}/live", relay.origin),
+            None,
+            PublishedMediaSet {
+                video: false,
+                audio: true,
+                audio_channels: Some(1),
+            },
+        ),
+    )
+    .await
+    .expect("the WHIP connect did not finish inside its deadline")
+    .expect("the WHIP connect failed");
+
+    let opus_packet = an_opus_packet(false);
+    let received = tokio::time::timeout(MEDIA_DEADLINE, async {
+        loop {
+            session
+                .write_audio_packet(Bytes::from(opus_packet.clone()), TWENTY_MILLISECONDS)
+                .await
+                .expect("writing the Opus packet failed");
+            match tokio::time::timeout(Duration::from_millis(100), assembled.recv()).await {
+                Ok(Some(ReceivedMedia::Audio(packet))) => return packet,
+                Ok(Some(ReceivedMedia::Video(_))) => {
+                    panic!("a video access unit arrived on an audio-only session")
+                }
+                Ok(None) => panic!("the receiving side closed"),
+                Err(_) => continue,
+            }
+        }
+    })
+    .await
+    .expect("no Opus packet arrived inside the deadline");
+
+    assert_eq!(
+        session.peer_connection_state(),
+        RTCPeerConnectionState::Connected,
+        "the packet arrived without the peer connection being connected"
+    );
+    session.close().await;
+
+    // The payload crosses unchanged — an Opus payloader packetises one packet
+    // per RTP packet — and everything about it is read back off its own TOC
+    // byte rather than out of the session description.
+    assert_eq!(received.opus_packet, Bytes::from(opus_packet));
+    assert_eq!(received.sample_count, 960);
+    assert_eq!(received.sample_rate, 48_000);
+    assert_eq!(received.channels, 1);
+    assert!(received.pre_skip == 0, "RTP carries no OpusHead to skip by");
 }
