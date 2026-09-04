@@ -30,6 +30,13 @@ moq-transport = "0.16.2"
 web-transport = "0.10.9"
 quinn = "0.11.11"
 url = "2.5.8"
+# `ring` is what this wheel installs as the process default provider, but
+# `aws-lc-rs` is compiled in regardless: `web-transport-quinn`'s default feature
+# set turns on `quinn/rustls-aws-lc-rs`, and cargo feature unification is
+# additive, so no `default-features = false` here can switch it off. The cost is
+# a `cmake` and C-compiler build requirement for `aws-lc-sys`, which is why the
+# CI lane installs cmake. The explicit provider passed to the client config is
+# still the one this wheel chose.
 rustls = { version = "0.23.43", features = ["ring"] }
 rustls-native-certs = "0.8.4"
 

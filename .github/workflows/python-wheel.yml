@@ -204,6 +204,15 @@ jobs:
         include:
           - extension: streamlib-webrtc
             native_module: streamlib_webrtc._native
+            system_packages: python3-dev
+          - extension: streamlib-moq
+            native_module: streamlib_moq._native
+            # cmake for `aws-lc-sys`: web-transport-quinn's default feature set
+            # pulls `aws-lc-rs` in whatever this crate asks rustls for, and
+            # cargo feature unification cannot switch another crate's default
+            # off. ubuntu-latest happens to ship cmake; naming it here is what
+            # keeps that from being luck.
+            system_packages: python3-dev cmake
 
     steps:
       - uses: actions/checkout@v4
@@ -219,7 +228,7 @@ jobs:
         timeout-minutes: 6
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
-          packages: python3-dev
+          packages: ${{ matrix.system_packages }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
