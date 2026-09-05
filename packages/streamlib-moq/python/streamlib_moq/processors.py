@@ -315,7 +315,10 @@ class MoqBroadcastPublisher:
     def _report_progress(self) -> None:
         self._bags_published += 1
         if self._bags_published == 1:
-            log.info("MoqBroadcastPublisher: first bag published to the broadcast")
+            # "Accepted", not "published": on `cmaf` the first bags are held
+            # for the init segment and reach the transport with the flush, and
+            # the running log must not claim a write the hold has not made.
+            log.info("MoqBroadcastPublisher: first bag accepted by the broadcast")
         elif self._bags_published % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(
                 f"MoqBroadcastPublisher: bags_published={self._bags_published}, "

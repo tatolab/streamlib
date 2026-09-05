@@ -232,3 +232,78 @@ def test_the_deadline_a_publisher_runs_under_is_said_where_it_is_configured(
     """A run's log has to state which arm it is, or a measured before/after
     cannot be told apart after the fact."""
     assert describe_the_delivery_deadline(delivery_deadline_ms) == said
+
+
+class _SessionThatAnswers:
+    """A publishing session whose every publish call gives one fixed answer."""
+
+    def __init__(self, reaches_the_transport: bool) -> None:
+        self._answer = reaches_the_transport
+        self.calls = 0
+
+    def publish_video_access_unit(self, *args, **kwargs) -> bool:
+        del args, kwargs
+        self.calls += 1
+        return self._answer
+
+    def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
+        return [] if self._answer else [("camera", self.calls, 900 * self.calls)]
+
+    def close(self) -> "str | None":
+        return None
+
+
+class _InputsReadingOneVideoBag:
+    def read_from_inbound_link_with_timestamp(self, port: str):
+        assert port == "tracks"
+        return (
+            {
+                "codec": "h264",
+                "bitstream": b"\x00\x00\x00\x01\x65",
+                "is_sync_point": True,
+                "group_index": 0,
+                "sequence_index": 0,
+                "width": 320,
+                "height": 180,
+            },
+            "camera",
+            5_000_000_000,
+        )
+
+
+class _ContextReadingOneVideoBag:
+    inputs = _InputsReadingOneVideoBag()
+
+
+def _drive_one_bag_through(reaches_the_transport: bool) -> "tuple[list[str], int]":
+    publisher = MoqBroadcastPublisher(relay_url=A_RELAY)
+    session = _SessionThatAnswers(reaches_the_transport)
+    publisher._session = session  # type: ignore[assignment]
+    said: "list[str]" = []
+    with mock.patch.object(log, "info", said.append):
+        publisher.process(_ContextReadingOneVideoBag())  # type: ignore[arg-type]
+        publisher.teardown(None)  # type: ignore[arg-type]
+    return said, session.calls
+
+
+def test_a_bag_the_deadline_shed_is_neither_counted_as_published_nor_announced_as_the_first():
+    """The drop must be counted and said — and the numbers beside it must not
+    lie: a shed bag reached nothing, so it is not a publish."""
+    said, calls = _drive_one_bag_through(reaches_the_transport=False)
+
+    assert calls == 1
+    assert not any("first bag accepted" in line for line in said)
+    assert any(
+        "bags_published=0" in line and "shed camera=1 objects/900 bytes" in line
+        for line in said
+    ), said
+
+
+def test_a_bag_that_reached_the_transport_is_counted_and_announced_as_the_first():
+    said, calls = _drive_one_bag_through(reaches_the_transport=True)
+
+    assert calls == 1
+    assert any("first bag accepted by the broadcast" in line for line in said)
+    assert any(
+        "bags_published=1" in line and "shed nothing" in line for line in said
+    ), said

@@ -161,8 +161,9 @@ def main() -> None:
         display_name="video_encoder",
     )
     video_decoder = runtime.add(streamlib.H264Decoder, display_name="video_decoder")
-    # Both sinks are here so each decoder has a subscriber for the whole run,
-    # which is the shape the showcase ships and the shape the codec rig scored.
+    # A sink per decoder, so each has a subscriber for the whole run — the
+    # shape the showcase ships and the shape the codec rig scored. The window
+    # is here; the speaker sits with the audio path below.
     window = runtime.add(
         streamlib.DisplayWindow,
         config={"title": "streamlib moq broadcast round-trip"},
