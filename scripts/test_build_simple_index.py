@@ -3,15 +3,19 @@
 
 """The simple index is what `pip install streamlib --index-url …` resolves.
 
-Stdlib `unittest` on purpose: this runs in the release workflow before anything
-is published, on a runner with no test dependencies installed.
+Stdlib on purpose: this runs in the release workflow before anything is
+published, on a runner with no test dependencies installed. `tomllib` is the one
+import beyond `unittest`, and it is stdlib from 3.11 — both workflows that run
+this file are on `ubuntu-latest`, whose `python3` is well past that.
 """
 
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
 from build_simple_index import (
+    EXTENSION_ENTRY_POINT_GROUP,
     PUBLISHED_PROJECT_NAMES,
     WheelAsset,
     collect_wheel_assets,
@@ -237,6 +241,40 @@ class RenderingTheIndex(unittest.TestCase):
                 EXTENSION_WHEEL_FILE_NAME,
                 (simple_root / "streamlib" / "index.html").read_text(),
             )
+
+
+class PublishingEveryProjectThisRepoReleases(unittest.TestCase):
+    """`PUBLISHED_PROJECT_NAMES` is the whole index, so it is the whole answer to
+    "can pip resolve this?" — a released distribution missing from it is built,
+    attached to its release, and unreachable."""
+
+    def released_distribution_names(self):
+        """The engine wheel, plus every extension wheel under `packages/`.
+
+        An extension is one whose `pyproject.toml` declares the entry-point
+        group pip records at install — discovered rather than listed, so a third
+        extension is covered the day its `pyproject.toml` lands.
+        """
+        repository_root = Path(__file__).resolve().parent.parent
+        released = {"streamlib"}
+        for pyproject_path in sorted(
+            (repository_root / "packages").glob("*/pyproject.toml")
+        ):
+            project = tomllib.loads(pyproject_path.read_text(encoding="utf-8")).get(
+                "project", {}
+            )
+            if EXTENSION_ENTRY_POINT_GROUP in project.get("entry-points", {}):
+                released.add(normalize_project_name(project["name"]))
+        return released
+
+    def test_the_discovery_rule_still_finds_the_extension_wheels(self):
+        """A rule that matches nothing would make the check below vacuous."""
+        self.assertGreater(len(self.released_distribution_names()), 1)
+
+    def test_the_index_serves_exactly_what_this_repo_releases(self):
+        self.assertEqual(
+            set(PUBLISHED_PROJECT_NAMES), self.released_distribution_names()
+        )
 
 
 if __name__ == "__main__":

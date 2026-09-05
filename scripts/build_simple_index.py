@@ -32,6 +32,12 @@ PUBLISHED_PROJECT_NAMES = ("streamlib", "streamlib-moq", "streamlib-webrtc")
 
 WHEEL_FILE_SUFFIX = ".whl"
 
+# What makes a `packages/` directory an extension wheel: pip records this group
+# at install, and the engine reads it back when a process takes an engine role.
+# Here so the tests can check `PUBLISHED_PROJECT_NAMES` against what this repo
+# actually releases, rather than against a second list.
+EXTENSION_ENTRY_POINT_GROUP = "streamlib.extensions"
+
 
 class WheelAsset:
     """One published wheel: the file name pip matches, and where to fetch it."""

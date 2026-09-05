@@ -822,9 +822,8 @@ fn main() -> Result<()> {
             extension_package_directory,
         } => generate_third_party_notices::run(
             &workspace_root()?,
-            &generate_third_party_notices::NoticesGenerationTarget::for_extension_package_directory(
-                extension_package_directory.as_deref(),
-            ),
+            &generate_third_party_notices::NoticesGenerationTarget::
+                from_optional_extension_package_directory(extension_package_directory),
         )?,
     }
 
