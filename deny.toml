@@ -14,7 +14,7 @@
 # yet; regenerate on a dependency bump until it does.
 #
 # So the allowlist is deliberately exhaustive rather than categorical: there is
-# no "permissive licences are fine" rule here, only sixteen named identifiers.
+# no "permissive licences are fine" rule here, only fifteen named identifiers.
 # A new licence in the graph reds the gate and forces a decision, which is the
 # whole mechanism. Widening the list is that decision, made in a PR.
 #
@@ -87,9 +87,9 @@ license-files = []
 # `license-file` is not the fix: cargo then warns `only one of 'license' or
 # 'license-file' is necessary` on every build, and dropping `license-file`
 # would stop cargo copying the parameterized text into each published `.crate`.
-# `licenses.private.ignore` is no shortcut either: of the nineteen it reaches
+# `licenses.private.ignore` is no shortcut either: of the eighteen it reaches
 # only `xtask` and `streamlib-test-fixtures`, the two that set
-# `publish = false`, and the other seventeen still need an entry apiece.
+# `publish = false`, and the other sixteen still need an entry apiece.
 #
 # A new workspace crate reds this gate until it is listed. That is the intended
 # cost: the list is also the roster of what ships under our own terms.
