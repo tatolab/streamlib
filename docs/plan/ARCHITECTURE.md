@@ -1823,11 +1823,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   container names the tracks: under `cmaf` they are `.catalog`, an init track `0.mp4`
   carrying `ftyp` and `moov`, and `{track_id}.m4s` media tracks, because a subscriber not
   asked to fetch a catalog hardcodes exactly those; under `streamlib_bag` each is its
-  link's channel name. A subscriber or player declares its tracks in config and exposes
-  one output per media kind — `encoded_video`, `encoded_audio` — never one port per track:
-  ports are declared statically by decorator, and a decoder downstream wants a port it can
-  name at wiring time. Endpoint, credential and track configuration is ticket-level, as for
-  every built-in's config. [extension-model; port shape narrowed at
+  link's channel name. Both subscribers expose one output per media kind —
+  `encoded_video`, `encoded_audio` — never one port per track: ports are declared statically
+  by decorator, and a decoder downstream wants a port it can name at wiring time. Which
+  track feeds which port is config only where the transport cannot say: `MoqBroadcastSubscriber`
+  takes `video_track` and `audio_track`, because a MoQ broadcast may carry any number of
+  tracks and a subscriber picks; `WhepPlayer` takes neither, because a WHEP answer names
+  the session's media and there is nothing left to choose. Endpoint and credential
+  configuration is ticket-level, as for every built-in's config.
+  [extension-model; port shape narrowed and the player's track config corrected at
   networking-extension-wheels — SHIPPED #2150, #2151]
 - **DECIDED** — The control plane keeps nothing from the move. Its one use of
   `runtime/streamlib-moq` — a `/api/moq/catalog` route behind a `moq` feature no crate
