@@ -338,7 +338,7 @@ fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
         return sequence_to_msgpack_array(sequence.iter());
     }
     Err(PyTypeError::new_err(format!(
-        "cannot put a {} on a link: a bag is built from dict, list, tuple, str, bytes, int, \
+        "cannot put a {} in a bag: a bag is built from dict, list, tuple, str, bytes, int, \
          float, bool and None. A GPU frame is not copied into Python — it travels as a handle.",
         value.get_type().name()?
     )))
