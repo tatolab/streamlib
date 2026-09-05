@@ -133,10 +133,13 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
 
 - **DECIDED** — `packages/streamlib-moq/`: the same standalone shape on `moq-transport`,
   `quinn`, `rustls` and `rustls-native-certs`, with `src/moq_session.rs` and
-  `src/moq_catalog.rs` moved from `runtime/streamlib-moq` — the process-global
-  `RUNTIME_SESSIONS` registry and `sessions_for_runtime` do not move, since one processor
-  owns one session — and the relay URL becomes config, carrying the relay's auth token in
-  its path, with Cloudflare's draft-16 relay as its default. `extension.py:load` brings up
+  its catalog mined from `runtime/streamlib-moq` rather than moved — the old document
+  attributed tracks to processor import paths and has no relation to the
+  draft-ietf-moq-catalogformat-01 JSON a player reads, and the process-global
+  `RUNTIME_SESSIONS` registry and `sessions_for_runtime` do not come either, since one
+  processor owns one session — and the relay URL becomes config, carrying the relay's auth token in
+  its path and therefore having no default: a draft-16 relay is provisioned per account,
+  so no address this wheel could ship would reach one. `extension.py:load` brings up
   the runtime and registers `moq`. The version check this clause asked for was made
   (2026-09-04): `moq-transport` 0.16.2, the draft-16 revision, because Cloudflare deploys
   draft-16 and it carries the acknowledgement and namespace machinery draft-14 lacks —
