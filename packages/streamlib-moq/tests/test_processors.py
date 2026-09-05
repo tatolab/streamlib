@@ -21,6 +21,7 @@ from streamlib_moq.processors import (
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     READER_THREAD_JOIN_TIMEOUT_SECONDS,
     SUBSCRIBER_POLL_TIMEOUT_MS,
+    describe_what_the_delivery_deadline_shed,
     track_medium_of_codec,
 )
 
@@ -175,3 +176,42 @@ def test_a_bag_past_the_link_ceiling_is_reported_once_and_not_every_frame():
 
     assert len(said) == 1
     assert "Reported once" in said[0]
+
+
+def test_a_publisher_carrying_a_delivery_deadline_is_added_like_any_other(runtime):
+    added = runtime.add(
+        MoqBroadcastPublisher,
+        config={**PUBLISHER_CONFIG, "delivery_deadline_ms": 250},
+    )
+
+    assert added.display_name == "MoqBroadcastPublisher"
+
+
+@pytest.mark.parametrize("not_a_deadline", ["250", 2.5, True, -1])
+def test_a_delivery_deadline_that_is_not_a_count_of_milliseconds_is_refused_by_name(
+    not_a_deadline,
+):
+    """`bool` is an `int` in Python, so `True` would otherwise read as a
+    one-millisecond deadline that sheds every frame but the sync points."""
+    with pytest.raises(ValueError, match="delivery_deadline_ms"):
+        MoqBroadcastPublisher(relay_url=A_RELAY, delivery_deadline_ms=not_a_deadline)
+
+
+def test_a_run_that_shed_nothing_says_so_rather_than_saying_nothing():
+    """A silently shed frame is the failure mode this wheel is careful about,
+    so the absence of drops is reported as loudly as their presence."""
+    assert (
+        describe_what_the_delivery_deadline_shed([])
+        == "the delivery deadline shed nothing"
+    )
+
+
+def test_the_shed_report_names_each_link_with_its_objects_and_its_bytes():
+    said = describe_what_the_delivery_deadline_shed(
+        [("camera", 12, 48213), ("second_camera", 1, 900)]
+    )
+
+    assert said == (
+        "the delivery deadline shed camera=12 objects/48213 bytes, "
+        "second_camera=1 objects/900 bytes"
+    )

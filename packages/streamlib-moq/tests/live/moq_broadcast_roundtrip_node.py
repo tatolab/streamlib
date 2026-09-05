@@ -90,6 +90,18 @@ def main() -> None:
         ),
     )
     parser.add_argument("--control-plane-port", type=int, default=9000)
+    # The drop policy's two arms are one run each with this set and unset: the
+    # baseline is as much of the deliverable as the improvement is, so the
+    # fixture takes the deadline rather than hard-coding either arm.
+    parser.add_argument(
+        "--delivery-deadline-ms",
+        type=int,
+        default=None,
+        help=(
+            "how old a bag may be, by its own monotonic stamp, and still be "
+            "published (default: no deadline, which publishes every bag)"
+        ),
+    )
     arguments = parser.parse_args()
 
     relay_url = _relay_url_from_the_environment()
@@ -102,6 +114,7 @@ def main() -> None:
             "relay_url": relay_url,
             "broadcast": arguments.broadcast,
             "container_format": CONTAINER_FORMAT,
+            "delivery_deadline_ms": arguments.delivery_deadline_ms,
         },
         display_name="publisher",
     )

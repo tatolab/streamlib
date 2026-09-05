@@ -47,6 +47,13 @@ pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
 pub(crate) const AUDIO_MEDIA_TRACK_PRIORITY: u8 = 126;
 pub(crate) const VIDEO_MEDIA_TRACK_PRIORITY: u8 = 127;
 
+/// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner, so the
+/// ladder is only a ladder while it descends.
+const _: () = assert!(
+    DESCRIPTIVE_TRACK_PRIORITY < AUDIO_MEDIA_TRACK_PRIORITY
+        && AUDIO_MEDIA_TRACK_PRIORITY < VIDEO_MEDIA_TRACK_PRIORITY
+);
+
 /// The rung a medium's groups are opened at.
 pub(crate) fn media_track_priority_of(medium: TrackMedium) -> u8 {
     match medium {

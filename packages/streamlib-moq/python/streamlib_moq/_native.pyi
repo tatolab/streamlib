@@ -37,12 +37,20 @@ class MoqBroadcastPublishingSession:
     """One broadcast: one QUIC connection, one namespace, one track per link."""
 
     def __new__(
-        cls, relay_url: str, broadcast: str, container_format: str
+        cls,
+        relay_url: str,
+        broadcast: str,
+        container_format: str,
+        delivery_deadline_ms: "int | None" = None,
     ) -> MoqBroadcastPublishingSession:
         """Construct without connecting — the first bag is what connects.
 
         `relay_url` carries the relay's auth token as its path: draft-16
         provisions relays per account and there is nowhere else to put it.
+
+        `delivery_deadline_ms` is how old a bag may be, by its own monotonic
+        stamp, and still be published. Absent is the shipped behaviour: every
+        bag is written however late it is.
         """
 
     def declare_tracks(self, inbound_link_names: Sequence[str]) -> None:
@@ -104,6 +112,18 @@ class MoqBroadcastPublishingSession:
 
     @property
     def is_connected(self) -> bool: ...
+    def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
+        """What the deadline has shed so far: `(inbound_link_name, objects, bytes)`.
+
+        A link that shed nothing is left out, so an empty list is a broadcast
+        that dropped nothing. Read back rather than logged below the boundary:
+        this wheel's Rust reaches no `tracing` dispatcher inside a helper
+        process.
+        """
+
+    @property
+    def delivery_deadline(self) -> str:
+        """The deadline this publisher runs under, in words an operator reads."""
 
 @final
 class MoqBroadcastSubscribingSession:

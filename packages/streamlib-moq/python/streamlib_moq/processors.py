@@ -13,6 +13,7 @@ this wheel's own Rust directly — the engine is never on the data path.
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from typing import Any, Literal, Protocol
 
 from streamlib import (
@@ -91,6 +92,47 @@ def _required_container_format(container_format: Any, processor_name: str) -> st
     return container_format
 
 
+def _optional_delivery_deadline_ms(delivery_deadline_ms: Any) -> "int | None":
+    """The deadline a caller configured, refusing anything that is not one.
+
+    `bool` is an `int` in Python, so it is refused by name rather than read as
+    a zero- or one-millisecond deadline.
+    """
+    if delivery_deadline_ms is None:
+        return None
+    if isinstance(delivery_deadline_ms, bool) or not isinstance(
+        delivery_deadline_ms, int
+    ):
+        raise ValueError(
+            f"MoqBroadcastPublisher: `delivery_deadline_ms` is how many "
+            f"milliseconds old a bag may be and still be published, or None to "
+            f"publish every bag however late it is; got {delivery_deadline_ms!r}"
+        )
+    if delivery_deadline_ms < 0:
+        raise ValueError(
+            f"MoqBroadcastPublisher: `delivery_deadline_ms` cannot be negative; "
+            f"got {delivery_deadline_ms!r}"
+        )
+    return delivery_deadline_ms
+
+
+def describe_what_the_delivery_deadline_shed(
+    shed_by_inbound_link: "Sequence[tuple[str, int, int]]",
+) -> str:
+    """What a publisher says about its drops, including that it made none.
+
+    A silently shed frame is the failure mode this wheel is careful about, so a
+    run that dropped nothing says so rather than saying nothing.
+    """
+    if not shed_by_inbound_link:
+        return "the delivery deadline shed nothing"
+    per_link = ", ".join(
+        f"{inbound_link}={objects} objects/{byte_count} bytes"
+        for inbound_link, objects, byte_count in shed_by_inbound_link
+    )
+    return f"the delivery deadline shed {per_link}"
+
+
 def _required_relay_url(relay_url: Any, processor_name: str) -> str:
     if not isinstance(relay_url, str) or not relay_url:
         raise ValueError(
@@ -142,6 +184,14 @@ class MoqBroadcastPublisher:
     the init segment carries one `moov` describing all of them and is published
     once. Bags arriving before the last track has spoken are held, under a byte
     budget the session refuses past rather than growing without bound.
+
+    `delivery_deadline_ms` is how old a bag may be, by its own monotonic stamp,
+    and still be published. A bag past it is never written and the rest of its
+    group goes with it, because a decoder cannot use a frame whose reference
+    was shed; the shed ends at the next sync point. A sync point is published
+    however late it is, which is what keeps audio out of the policy's reach —
+    every Opus packet is one. Absent is the shipped behaviour and the baseline
+    a measurement is read against: every bag is written however late it is.
     """
 
     def __init__(
@@ -149,12 +199,14 @@ class MoqBroadcastPublisher:
         relay_url: str,
         broadcast: "str | None" = None,
         container_format: ContainerFormat = "cmaf",
+        delivery_deadline_ms: "int | None" = None,
     ) -> None:
         self._relay_url = _required_relay_url(relay_url, "MoqBroadcastPublisher")
         self._broadcast = broadcast
         self._container_format = _required_container_format(
             container_format, "MoqBroadcastPublisher"
         )
+        self._delivery_deadline_ms = _optional_delivery_deadline_ms(delivery_deadline_ms)
         self._session: "_native.MoqBroadcastPublishingSession | None" = None
         self._medium_by_inbound_link: "dict[str, str]" = {}
         self._bags_published = 0
@@ -177,12 +229,16 @@ class MoqBroadcastPublisher:
             )
         broadcast = self._broadcast or f"streamlib/{ctx.runtime_id}"
         self._session = _native.MoqBroadcastPublishingSession(
-            self._relay_url, broadcast, self._container_format
+            self._relay_url,
+            broadcast,
+            self._container_format,
+            self._delivery_deadline_ms,
         )
         self._session.declare_tracks(inbound_links)
         log.info(
             f"MoqBroadcastPublisher: broadcast={broadcast} "
-            f"container_format={self._container_format} tracks={len(inbound_links)}"
+            f"container_format={self._container_format} tracks={len(inbound_links)} "
+            f"{self._session.delivery_deadline}"
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -225,7 +281,9 @@ class MoqBroadcastPublisher:
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
+        shed = "the delivery deadline shed nothing"
         if self._session is not None:
+            shed = self._what_the_delivery_deadline_shed()
             # The wheel's Rust reaches no `tracing` dispatcher in a helper, so
             # media it discarded is only on the record if it is said here.
             discarded = self._session.close()
@@ -233,7 +291,8 @@ class MoqBroadcastPublisher:
                 log.warn(f"MoqBroadcastPublisher: {discarded}")
             self._session = None
         log.info(
-            f"MoqBroadcastPublisher: teardown, bags_published={self._bags_published}"
+            f"MoqBroadcastPublisher: teardown, bags_published={self._bags_published}, "
+            f"{shed}"
         )
 
     def _report_progress(self) -> None:
@@ -242,8 +301,14 @@ class MoqBroadcastPublisher:
             log.info("MoqBroadcastPublisher: first bag published to the broadcast")
         elif self._bags_published % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(
-                f"MoqBroadcastPublisher: bags_published={self._bags_published}"
+                f"MoqBroadcastPublisher: bags_published={self._bags_published}, "
+                f"{self._what_the_delivery_deadline_shed()}"
             )
+
+    def _what_the_delivery_deadline_shed(self) -> str:
+        return describe_what_the_delivery_deadline_shed(
+            self._declared_session().objects_the_delivery_deadline_shed()
+        )
 
     def _track_medium_of(self, bag: "dict[str, Any]", inbound_link: str) -> str:
         medium = track_medium_of_codec(bag.get("codec"), inbound_link)

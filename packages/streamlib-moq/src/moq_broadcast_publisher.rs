@@ -1154,9 +1154,7 @@ mod tests {
     use crate::annex_b_access_unit::ANNEX_B_START_CODE;
     use crate::cmaf_fragment::read_cmaf_fragment;
     use crate::encoded_media_sample::{EncodedAudioPacket, EncodedVideoAccessUnit};
-    use crate::moq_session::{
-        AUDIO_MEDIA_TRACK_PRIORITY, DESCRIPTIVE_TRACK_PRIORITY, VIDEO_MEDIA_TRACK_PRIORITY,
-    };
+    use crate::moq_session::{AUDIO_MEDIA_TRACK_PRIORITY, VIDEO_MEDIA_TRACK_PRIORITY};
 
     const BROADCAST_NAMESPACE: &str = "streamlib/a-broadcast";
 
@@ -2476,13 +2474,7 @@ mod tests {
     }
 
     #[test]
-    fn audio_outranks_video_and_both_sit_below_the_broadcasts_descriptive_tracks() {
-        assert!(
-            DESCRIPTIVE_TRACK_PRIORITY < AUDIO_MEDIA_TRACK_PRIORITY
-                && AUDIO_MEDIA_TRACK_PRIORITY < VIDEO_MEDIA_TRACK_PRIORITY,
-            "draft-16 §10.4.2 reads a smaller publisher_priority as sooner"
-        );
-
+    fn each_medium_opens_its_groups_at_its_own_rung_with_audio_ahead_of_video() {
         let mut planner =
             a_planner_over(MoqContainerFormat::StreamlibBag, &["camera", "microphone"]);
         let video = plan_the_writes_and_report_them_all_written(
