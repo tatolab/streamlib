@@ -45,15 +45,15 @@ clear_bitstream_buffers_on_create = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.18.52", features = ["utoipa"] }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.18.53", features = ["utoipa"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
 # re-exports them at `core::error`.
-streamlib-error = { path = "../../sdk/streamlib-error", version = "0.18.52" }
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.18.53" }
 
 # Procedural macros
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.52" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.53" }
 
 # Plugin ABI wire-protocol header. Dep direction reversed in #877:
 # streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
@@ -62,7 +62,7 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.52" }
 # `STREAMLIB_ABI_VERSION` from this crate directly.
 
 # Shared iceoryx2 payload types (for cross-process IPC)
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.18.52" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.18.53" }
 
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
@@ -70,7 +70,7 @@ streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.18.52" }
 # Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
 # re-exports the primitives so existing in-tree call sites (e.g.
 # `crate::core::rhi::TextureFormat`) keep working unchanged.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.18.52" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.18.53" }
 
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -159,7 +159,7 @@ raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # privileged syscall on the requesting thread's behalf.
 zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.18.52" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.18.53" }
 # The extern "C" panic net (run_host_extern_c) every host_services callback
 # routes through.
 # Consumer-side carve-out — defines the trait machinery
@@ -168,7 +168,7 @@ streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.
 # host side. streamlib re-exports for in-tree consumers; subprocess
 # cdylibs depend on it directly so the FullAccess capability boundary
 # is enforced by the type system.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.18.52" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.18.53" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -202,7 +202,7 @@ criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logg
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against
 # the surface-share service. Tests only: the engine's library code carries no
 # surface-adapter types.
-streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.18.52" }
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.18.53" }
 
 [[bench]]
 name = "logging"
