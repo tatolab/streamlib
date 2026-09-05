@@ -84,9 +84,7 @@ class CollectingWheelAssets(unittest.TestCase):
             [release(assets=[asset("numpy-2.1.0-cp312-cp312-linux_x86_64.whl")])]
         )
 
-        self.assertEqual(
-            {name: found for name, found in collected.items() if found}, {}
-        )
+        self.assertEqual(collected, {name: [] for name in PUBLISHED_PROJECT_NAMES})
 
     def test_an_asset_without_a_download_url_is_skipped(self):
         collected = collect_wheel_assets([release(assets=[{"name": WHEEL_FILE_NAME}])])

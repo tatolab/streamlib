@@ -4,8 +4,12 @@ Media over QUIC publish and subscribe for [StreamLib](https://github.com/tato123
 capability extension wheel: Rust inside, two ordinary `@processor` classes as the binding.
 
 ```bash
-pip install streamlib-moq
+pip install streamlib-moq --index-url https://tatolab.github.io/streamlib/simple/
 ```
+
+The same index serves the `streamlib` wheel this depends on, so one `--index-url`
+installs both. PyPI publication waits for the project rename; the artifact is
+identical either way.
 
 ```python
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber

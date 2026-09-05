@@ -4,8 +4,12 @@ WHIP publish and WHEP play for [StreamLib](https://github.com/tato123/streamlib)
 capability extension wheel: Rust inside, two ordinary `@processor` classes as the binding.
 
 ```bash
-pip install streamlib-webrtc
+pip install streamlib-webrtc --index-url https://tatolab.github.io/streamlib/simple/
 ```
+
+The same index serves the `streamlib` wheel this depends on, so one `--index-url`
+installs both. PyPI publication waits for the project rename; the artifact is
+identical either way.
 
 ```python
 from streamlib_webrtc import WhepPlayer, WhipPublisher

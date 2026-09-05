@@ -29,14 +29,18 @@ classifiers = [
 # The engine is a binary dependency, never a source one: this wheel links no
 # streamlib crate and speaks no engine internals.
 #
-# 0.18.48 is the release carrying the capability-extension mechanism
-# `extension.py:load` needs. `WhipPublisher` also needs
-# `read_from_inbound_link_with_timestamp`, which lands in the release after it —
-# so this floor is understated, deliberately: CI installs the wheel built from
-# this same checkout, and a floor above that version would fail to resolve
-# there. Nothing is published from here, so no installer can reach the gap; the
-# accurate floor is set with the release wiring.
-dependencies = ["streamlib>=0.18.48"]
+# 0.18.49 is the earliest release carrying both halves this wheel needs. The
+# capability-extension mechanism `extension.py:load` is declared against arrived
+# in 0.18.48; `read_from_inbound_link_with_timestamp`, which every bag is read
+# through, arrived in 0.18.49 — in the same commit as this wheel, which is why
+# the floor could only be stated once the release wiring existed. Both resolved
+# by `git describe --contains` on the commit that introduced each into
+# `_engine.pyi`, not from a changelog.
+#
+# The ceiling this floor must stay under is the version in the tree: the CI lane
+# installs the engine wheel built from this same checkout, so a floor above it
+# would send pip to PyPI for a `streamlib` that is not there.
+dependencies = ["streamlib>=0.18.49"]
 
 # What pip records at install and the engine reads back through
 # `importlib.metadata` when a process takes an engine role.
