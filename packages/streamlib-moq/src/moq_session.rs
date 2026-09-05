@@ -703,3 +703,86 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
         other => format!("`{track_name}` stopped: {other}"),
     }
 }
+
+/// What the transport does with an object the publisher has already written.
+///
+/// The drop policy rests on these two facts, and neither is documented — a
+/// `moq-transport` bump that changed either would move the only moment a
+/// publisher can shed work, so they are pinned here rather than re-derived.
+#[cfg(test)]
+mod tests {
+    use super::VIDEO_MEDIA_TRACK_PRIORITY;
+    use moq_transport::serve::{ServeError, Track, TrackReaderMode};
+
+    const A_NAMESPACE: &str = "streamlib/a-broadcast";
+    const A_TRACK: &str = "1.m4s";
+
+    /// The writer, and the reader positioned on the group it opened.
+    async fn one_open_group() -> (
+        moq_transport::serve::SubgroupsWriter,
+        moq_transport::serve::SubgroupWriter,
+        moq_transport::serve::SubgroupReader,
+    ) {
+        let namespace = moq_transport::coding::TrackNamespace::try_from(A_NAMESPACE)
+            .expect("the namespace parses");
+        let (track_writer, track_reader) = Track::new(namespace, A_TRACK).produce();
+        let mut subgroups_writer = track_writer
+            .subgroups()
+            .expect("a fresh track enters subgroups mode");
+        let open = subgroups_writer
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        let TrackReaderMode::Subgroups(mut subgroups_reader) =
+            track_reader.mode().await.expect("the track reads back")
+        else {
+            panic!("a track published as subgroups reads back as subgroups");
+        };
+        let open_reader = subgroups_reader
+            .next()
+            .await
+            .expect("the opened group reaches the reader")
+            .expect("there is an opened group");
+        (subgroups_writer, open, open_reader)
+    }
+
+    #[tokio::test]
+    async fn closing_a_group_delivers_every_object_already_written_to_it_before_the_close() {
+        let (_subgroups, mut open, mut reader) = one_open_group().await;
+        open.write(bytes::Bytes::from_static(b"first"))
+            .expect("the first object is written");
+        open.write(bytes::Bytes::from_static(b"second"))
+            .expect("the second object is written");
+
+        open.close(ServeError::Cancel)
+            .expect("a group closes with an error");
+
+        // This is why the drop policy decides before the write: `close` cannot
+        // pre-empt a backlog, so the forwarder puts every stale object on the
+        // wire and only then resets the stream.
+        assert_eq!(
+            reader.read_next().await.expect("the first object reads"),
+            Some(bytes::Bytes::from_static(b"first"))
+        );
+        assert_eq!(
+            reader.read_next().await.expect("the second object reads"),
+            Some(bytes::Bytes::from_static(b"second"))
+        );
+        assert_eq!(reader.read_next().await, Err(ServeError::Cancel));
+    }
+
+    #[tokio::test]
+    async fn a_group_whose_writer_is_dropped_ends_cleanly_once_its_objects_are_read() {
+        let (_subgroups, mut open, mut reader) = one_open_group().await;
+        open.write(bytes::Bytes::from_static(b"only"))
+            .expect("the object is written");
+
+        drop(open);
+
+        assert_eq!(
+            reader.read_next().await.expect("the object reads"),
+            Some(bytes::Bytes::from_static(b"only"))
+        );
+        // No error: the subgroup finished, which is what FINs its QUIC stream.
+        assert_eq!(reader.read_next().await.expect("the group ends"), None);
+    }
+}
