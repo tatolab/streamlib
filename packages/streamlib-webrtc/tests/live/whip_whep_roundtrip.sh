@@ -386,10 +386,16 @@ if "$REPO_ROOT/target/release/xtask" psnr channel-means \
     say "Output dir:        $OUTPUT_DIR"
     say "Per-sample stats:  $OUTPUT_DIR/channel_means.tsv"
     say "RESULT: video PASS · audio $AUDIO_VERDICT"
-    # A `cannot run` audio verdict is a silent rig and stays a report; a `fail`
-    # one is audio this wheel was handed and did not deliver back.
+    # A `fail` is audio this wheel was handed and did not deliver back; a
+    # `cannot run` is a silent rig. Neither may exit 0, because 0 is read as
+    # "everything this run claims to prove was proved" — and an arm that did not
+    # run proved nothing. 77 keeps the distinction: a cannot-run is never a pass.
     case "$AUDIO_VERDICT" in
         fail*) exit 1 ;;
+        "cannot run"*)
+            say "RESULT: cannot run — the audio arm never ran, so this run verified less than it reports"
+            exit 77
+            ;;
     esac
     exit 0
 fi

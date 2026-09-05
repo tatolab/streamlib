@@ -14,6 +14,7 @@ explicit = true
 [tool.uv.sources]
 streamlib = { index = "streamlib" }
 # In-repo, so this example exercises the wheel in the checkout rather than the
-# last release. Outside a checkout the line goes and the extension resolves from
-# the same index as the engine — it is an ordinary Python package either way.
+# last release. Outside a checkout the path becomes `{ index = "streamlib" }`
+# rather than going away: the index above is `explicit`, so it serves only what
+# is mapped to it, and an unmapped dependency is looked for on PyPI instead.
 streamlib-webrtc = { path = "../../packages/streamlib-webrtc" }

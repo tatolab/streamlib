@@ -66,7 +66,12 @@ def _required_relay_url() -> str:
 
 def setup(rt: Runtime) -> None:
     relay_url = _required_relay_url()
-    broadcast = os.environ.get("STREAMLIB_MOQ_BROADCAST", DEFAULT_BROADCAST_NAME)
+    # `or`, not a default argument: the variable set to the empty string is the
+    # shape that splits the two halves. The publisher reads it as unset and
+    # falls back to its own `streamlib/<runtime_id>`, while the subscriber
+    # refuses it — so the graph would fail at setup rather than use the name
+    # below.
+    broadcast = os.environ.get("STREAMLIB_MOQ_BROADCAST") or DEFAULT_BROADCAST_NAME
 
     publisher = rt.add(
         MoqBroadcastPublisher,

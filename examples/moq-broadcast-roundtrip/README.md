@@ -60,8 +60,11 @@ streamlib run
 `uv sync` installs `streamlib` from the simple index pinned in
 `pyproject.toml`, and builds `streamlib-moq` from this checkout — that is a
 maturin project, so it needs a Rust toolchain and `cmake` (its QUIC stack builds
-`aws-lc-sys`). Outside a checkout, drop the `tool.uv.sources` path entry and
-both wheels resolve from the index.
+`aws-lc-sys`). Outside a checkout, point that same `tool.uv.sources`
+entry at the index instead of the path — `streamlib-moq = { index = "streamlib" }` —
+because the index is declared `explicit`, so it serves only what is mapped to it
+and a bare dependency would be looked for on PyPI, where this wheel is not
+published yet.
 
 To work against a checkout of the engine as well, install that checkout's wheel
 into this venv:

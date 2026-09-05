@@ -24,11 +24,14 @@ from streamlib import (
 )
 from streamlib._engine import ProcessorLinkDataAccess
 from streamlib._processor_hosting import construct_processor_instance
-import streamlib_webrtc.processors
 from streamlib_webrtc import WhepPlayer, WhipPublisher
 from streamlib_webrtc.processors import (
+    FIRST_RECONNECT_DELAY_SECONDS,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
+    LONGEST_RECONNECT_DELAY_SECONDS,
+    LinkOutputWriteFailure,
     VideoOrAudio,
+    _native,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
@@ -362,9 +365,7 @@ def scripted_whep_session(monkeypatch):
     """Point `WhepPlayer` at the fake, and reset its class-level script."""
     RecordingWhepSession.constructed = []
     RecordingWhepSession.connect_outcomes = []
-    monkeypatch.setattr(
-        streamlib_webrtc.processors._native, "WhepSession", RecordingWhepSession
-    )
+    monkeypatch.setattr(_native, "WhepSession", RecordingWhepSession)
     return RecordingWhepSession
 
 
@@ -412,8 +413,8 @@ def test_a_refused_connect_is_retried_rather_than_ending_the_stream(
     )
     assert all(session.closed for session in scripted_whep_session.constructed)
     assert waited == [
-        streamlib_webrtc.processors.FIRST_RECONNECT_DELAY_SECONDS,
-        streamlib_webrtc.processors.FIRST_RECONNECT_DELAY_SECONDS * 2,
+        FIRST_RECONNECT_DELAY_SECONDS,
+        FIRST_RECONNECT_DELAY_SECONDS * 2,
     ], "the backoff doubles between attempts"
 
 
@@ -433,7 +434,7 @@ def test_the_backoff_stops_doubling_at_its_ceiling(scripted_whep_session, monkey
 
     player._play_until_stopped(outputs=None)
 
-    ceiling = streamlib_webrtc.processors.LONGEST_RECONNECT_DELAY_SECONDS
+    ceiling = LONGEST_RECONNECT_DELAY_SECONDS
     assert max(waited) == ceiling
     assert waited[-1] == ceiling
 
@@ -471,12 +472,12 @@ def test_a_refused_bag_names_its_port_and_stops_rather_than_reconnecting(
 
     def refuse_the_write(session, outputs):
         del session, outputs
-        raise streamlib_webrtc.processors.LinkOutputWriteFailure("encoded_video")
+        raise LinkOutputWriteFailure("encoded_video")
 
     monkeypatch.setattr(player, "_drain_until_stopped", refuse_the_write)
 
     errors: "list[str]" = []
-    monkeypatch.setattr(streamlib_webrtc.processors.log, "error", errors.append)
+    monkeypatch.setattr(log, "error", errors.append)
     monkeypatch.setattr(
         player._stop, "wait", lambda _: pytest.fail("a refused bag must not be retried")
     )

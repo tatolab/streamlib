@@ -416,8 +416,19 @@ if [ "$SKIP_INTEROP" != "1" ]; then
             > "$OUTPUT_DIR/moq_sub_output.mp4" 2> "$OUTPUT_DIR/moq_sub_raw.log" || true
         # The URL is a credential and this is a third-party binary's stderr, so
         # it is scrubbed before the log is kept rather than trusted not to echo.
-        sed "s|$STREAMLIB_MOQ_SUB_URL|<redacted subscribe url>|g" \
-            "$OUTPUT_DIR/moq_sub_raw.log" > "$OUTPUT_DIR/moq_sub.log" 2>/dev/null || true
+        # A literal replacement, not `sed`: a URL is not a regular expression,
+        # and one with an IPv6 literal host (`https://[::1]/<token>`) reads as a
+        # bracket expression that matches something else entirely — leaving the
+        # token in the log while the scrub reports success.
+        REDACT_SUBSCRIBE_URL="$STREAMLIB_MOQ_SUB_URL" python3 -c '
+import os, sys
+
+secret = os.environ["REDACT_SUBSCRIBE_URL"]
+with open(sys.argv[1], "rb") as raw:
+    body = raw.read()
+with open(sys.argv[2], "wb") as scrubbed:
+    scrubbed.write(body.replace(secret.encode(), b"<redacted subscribe url>"))
+' "$OUTPUT_DIR/moq_sub_raw.log" "$OUTPUT_DIR/moq_sub.log" 2>/dev/null || true
         rm -f "$OUTPUT_DIR/moq_sub_raw.log"
         interop_bytes="$(stat -c %s "$OUTPUT_DIR/moq_sub_output.mp4" 2>/dev/null || echo 0)"
         if [ "$interop_bytes" -gt 0 ] \
@@ -465,11 +476,19 @@ if "$REPO_ROOT/target/release/xtask" psnr channel-means \
     say "Output dir:        $OUTPUT_DIR"
     say "Per-sample stats:  $OUTPUT_DIR/channel_means.tsv"
     say "RESULT: video PASS · audio $AUDIO_VERDICT · interop $INTEROP_VERDICT"
-    # A `cannot run` interop verdict is an absent third-party tool and stays a
-    # report; a `fail` one is `moq-sub` refusing a broadcast this wheel wrote,
-    # which is the interop claim itself failing.
+    # A `fail` is a wheel that did not deliver; a `cannot run` is an arm that
+    # never ran. Neither may exit 0, because 0 is read as "everything this run
+    # claims to prove was proved" — and an arm that did not run proved nothing.
+    # 77 keeps the distinction: a cannot-run is never a pass. `SKIP_INTEROP=1`
+    # is the way to ask for the other two arms on purpose, and is not this.
     case "$AUDIO_VERDICT$INTEROP_VERDICT" in
         *fail*) exit 1 ;;
+    esac
+    case "$AUDIO_VERDICT$INTEROP_VERDICT" in
+        *"cannot run"*)
+            say "RESULT: cannot run — an arm above never ran, so this run verified less than it reports"
+            exit 77
+            ;;
     esac
     exit 0
 fi

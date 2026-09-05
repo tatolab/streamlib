@@ -46,8 +46,11 @@ streamlib run
 
 `uv sync` installs `streamlib` from the simple index pinned in
 `pyproject.toml`, and builds `streamlib-webrtc` from this checkout — that is a
-maturin project, so it needs a Rust toolchain. Outside a checkout, drop the
-`tool.uv.sources` path entry and both wheels resolve from the index.
+maturin project, so it needs a Rust toolchain. Outside a checkout, point that same `tool.uv.sources`
+entry at the index instead of the path — `streamlib-webrtc = { index = "streamlib" }` —
+because the index is declared `explicit`, so it serves only what is mapped to it
+and a bare dependency would be looked for on PyPI, where this wheel is not
+published yet.
 
 To work against a checkout of the engine as well, install that checkout's wheel
 into this venv:
