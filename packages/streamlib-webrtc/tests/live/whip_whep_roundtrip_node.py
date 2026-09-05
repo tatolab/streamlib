@@ -70,6 +70,15 @@ def main() -> None:
         default=None,
         help="V4L2 node to capture from (default: the first the engine finds)",
     )
+    parser.add_argument(
+        "--audio-capture-device",
+        default=None,
+        help=(
+            "audio device to capture from; the driver passes the fixture sink's "
+            "monitor, so the known signal played into that sink is what crosses "
+            "the network (default: the backend's own default device)"
+        ),
+    )
     parser.add_argument("--control-plane-port", type=int, default=9000)
     arguments = parser.parse_args()
 
@@ -100,7 +109,15 @@ def main() -> None:
         config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
         display_name="video_encoder",
     )
-    microphone = runtime.add(streamlib.MicrophoneSource, display_name="microphone")
+    microphone = runtime.add(
+        streamlib.MicrophoneSource,
+        config=(
+            {"device_id": arguments.audio_capture_device}
+            if arguments.audio_capture_device
+            else {}
+        ),
+        display_name="microphone",
+    )
     audio_encoder = runtime.add(streamlib.OpusEncoder, display_name="audio_encoder")
 
     video_decoder = runtime.add(streamlib.H264Decoder, display_name="video_decoder")

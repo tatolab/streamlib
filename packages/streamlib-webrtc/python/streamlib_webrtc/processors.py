@@ -47,6 +47,16 @@ PLAYER_POLL_TIMEOUT_MS = 200
 #: is bounded, so this only expires when it is still inside `connect()`.
 READER_THREAD_JOIN_TIMEOUT_SECONDS = 1.0
 
+#: The reconnect backoff. A WHEP endpoint answers `409 Conflict` while the live
+#: input it fronts has not started publishing yet, which is the ordinary state
+#: of a player brought up beside its publisher rather than after it — so a
+#: single failed connect cannot be the end of the stream. It lives here rather
+#: than in the session's Rust because a helper process has no `tracing`
+#: subscriber: a retry loop below the boundary would fail invisibly, and the
+#: operator would see a player that simply never produced.
+FIRST_RECONNECT_DELAY_SECONDS = 0.5
+LONGEST_RECONNECT_DELAY_SECONDS = 10.0
+
 #: How often a publisher and a player say they are still working. The engine's
 #: own built-ins report on the same cadence, and this wheel's Rust cannot: its
 #: `tracing` has no subscriber in a helper process, so anything a session wants
@@ -355,7 +365,6 @@ class WhepPlayer:
     def __init__(self, url: str, bearer_token: "str | None" = None) -> None:
         self._url = _required_url(url, "WhepPlayer")
         self._bearer_token = _optional_bearer_token(bearer_token)
-        self._session: "_native.WhepSession | None" = None
         self._stop = threading.Event()
         self._reader: "threading.Thread | None" = None
         self._reported_an_oversized_bag = False
@@ -369,42 +378,51 @@ class WhepPlayer:
     def encoded_audio(self) -> None:
         """Opus packets, as `EncodedAudioPacket` bags."""
 
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        del ctx
-        self._session = _native.WhepSession(self._url, self._bearer_token)
-
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Hand the outputs to a thread this processor owns.
 
-        Connecting happens on that thread and not here, so a relay that is slow
-        or down cannot spend the helper's start-up budget.
+        Connecting happens on that thread and not in `setup()`, so an endpoint
+        that is slow or down cannot spend the helper's start-up budget.
         """
-        if self._session is None:
-            raise RuntimeError("WhepPlayer: start() ran before setup()")
-        session = self._session
         outputs = ctx.outputs
-
-        def play_until_stopped() -> None:
-            # This thread owns the session's whole life, close included. Only
-            # one thread ever touches it, so a teardown arriving while the
-            # connect is still outstanding waits for the thread rather than
-            # contending with it.
-            try:
-                try:
-                    log.info("WhepPlayer: opening the session")
-                    session.connect()
-                    log.info("WhepPlayer: the relay accepted the session")
-                except Exception as connect_failure:
-                    log.error(
-                        f"WhepPlayer: the session did not open: {connect_failure}"
-                    )
-                    return
-                self._drain_until_stopped(session, outputs)
-            finally:
-                session.close()
-
-        self._reader = threading.Thread(target=play_until_stopped, daemon=True)
+        self._reader = threading.Thread(
+            target=lambda: self._play_until_stopped(outputs), daemon=True
+        )
         self._reader.start()
+
+    def _play_until_stopped(self, outputs: LinkOutputDataWriter) -> None:
+        """Connect, drain, and reconnect for as long as this processor runs.
+
+        A session per attempt, never one reused: a WHEP session is a peer
+        connection, and a closed one cannot be dialled again. This thread owns
+        each session's whole life, close included, so a teardown arriving while
+        a connect is outstanding waits for the thread rather than contending
+        with it.
+        """
+        delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
+        while not self._stop.is_set():
+            session = None
+            try:
+                log.info("WhepPlayer: opening the session")
+                session = _native.WhepSession(self._url, self._bearer_token)
+                session.connect()
+                log.info("WhepPlayer: the relay accepted the session")
+                delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
+                self._drain_until_stopped(session, outputs)
+            except Exception as failure:
+                log.warn(
+                    f"WhepPlayer: the session ended ({failure}); retrying in "
+                    f"{delay_seconds:.1f}s"
+                )
+            finally:
+                if session is not None:
+                    session.close()
+            if self._stop.is_set():
+                return
+            # `wait` rather than `sleep`: a stop arriving mid-backoff should end
+            # the thread now, not after the longest delay.
+            self._stop.wait(delay_seconds)
+            delay_seconds = min(delay_seconds * 2, LONGEST_RECONNECT_DELAY_SECONDS)
 
     def _drain_until_stopped(
         self, session: "_native.WhepSession", outputs: LinkOutputDataWriter
@@ -414,18 +432,8 @@ class WhepPlayer:
             if media is None:
                 continue
             port, bag = _bag_for(media)
-            try:
-                self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
-                outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
-            except Exception as write_failure:
-                # This thread's death is otherwise silent from outside — the
-                # session closes and the ports go quiet with nothing saying
-                # which one failed or why.
-                log.error(
-                    f"WhepPlayer: writing a bag on `{port}` failed, and the "
-                    f"reading thread is ending: {write_failure}"
-                )
-                raise
+            self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
+            outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
             self._report_progress(port)
 
     def _report_progress(self, port: str) -> None:
@@ -468,7 +476,7 @@ class WhepPlayer:
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
-        self._session = None
+        self._stop.set()
 
 
 def _bag_for(

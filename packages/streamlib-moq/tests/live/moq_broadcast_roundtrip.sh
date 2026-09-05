@@ -169,6 +169,9 @@ ORIGINAL_PATTERN="$(v4l2-ctl -d "$VIVID_DEVICE" -C test_pattern 2>/dev/null | aw
 
 NODE_PID=""
 NODE_NEEDED_SIGKILL=0
+# Redefined once the fixture sink is up; declared here so the EXIT trap,
+# which is installed before that, can always call it.
+stop_the_signal() { :; }
 stop_node() {
     NODE_NEEDED_SIGKILL=0
     if [ -n "$NODE_PID" ] && kill -0 "$NODE_PID" 2>/dev/null; then
@@ -189,6 +192,7 @@ stop_node() {
 }
 restore_and_stop() {
     stop_node
+    stop_the_signal
     v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$ORIGINAL_PATTERN" >/dev/null 2>&1 || true
 }
 trap restore_and_stop EXIT
@@ -210,6 +214,48 @@ say "Building xtask (release)..."
 cargo build --release --locked -p xtask > "$OUTPUT_DIR/build.log" 2>&1 \
     || { tail -40 "$OUTPUT_DIR/build.log" >&2; fail "xtask build failed"; }
 
+# ── The audio the run measures ───────────────────────────────────────
+# The known signal, looped into the fixture's own null sink, with that sink's
+# monitor handed to the capture block. Without it the arm measures whatever the
+# machine's default input happens to be — on a rig with no live source that is
+# nothing, and an empty decoder then reads as this wheel losing audio it was
+# never handed. The signal is 3.78 s and plays once, which is shorter than a
+# connect, so it is replayed for as long as the node runs.
+AUDIO_CAPTURE_DEVICE=""
+SIGNAL_PLAYER_PID=""
+FIXTURE_SINK=""
+stop_the_signal() {
+    if [ -n "$SIGNAL_PLAYER_PID" ]; then
+        pkill -P "$SIGNAL_PLAYER_PID" 2>/dev/null || true
+        kill "$SIGNAL_PLAYER_PID" 2>/dev/null || true
+        SIGNAL_PLAYER_PID=""
+    fi
+    if [ -n "$FIXTURE_SINK" ]; then
+        "$ENGINE_FIXTURES/virtual_audio_device.sh" stop >/dev/null 2>&1 || true
+        FIXTURE_SINK=""
+    fi
+}
+if "$ENGINE_FIXTURES/virtual_audio_device.sh" check >/dev/null 2>&1 \
+    && FIXTURE_SINK="$("$ENGINE_FIXTURES/virtual_audio_device.sh" start 2>/dev/null)" \
+    && [ -n "$FIXTURE_SINK" ]; then
+    if python3 "$ENGINE_FIXTURES/known_audio_signal.py" generate \
+            "$OUTPUT_DIR/known_signal.wav" >/dev/null 2>&1; then
+        AUDIO_CAPTURE_DEVICE="$FIXTURE_SINK.monitor"
+        ( while true; do
+              pw-play --target="$FIXTURE_SINK" "$OUTPUT_DIR/known_signal.wav" \
+                  >/dev/null 2>&1 || break
+          done ) &
+        SIGNAL_PLAYER_PID=$!
+        say "Audio source:      the known signal, looped into $FIXTURE_SINK"
+    else
+        stop_the_signal
+        say "Audio source:      the backend default (the known signal would not generate)"
+    fi
+else
+    FIXTURE_SINK=""
+    say "Audio source:      the backend default (no PipeWire session for the fixture sink)"
+fi
+
 # ── Run ──────────────────────────────────────────────────────────────
 say "Publishing and subscribing through the relay..."
 DISPLAY="${DISPLAY:-:0}" \
@@ -217,6 +263,7 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
     timeout --kill-after=5 "$RUN_SECONDS" \
         "$VENV_PYTHON" "$SCRIPT_DIR/moq_broadcast_roundtrip_node.py" \
             --camera "$VIVID_DEVICE" \
+            ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
             --broadcast "$BROADCAST" \
             --container-format "$CONTAINER_FORMAT" \
             --control-plane-port "$CONTROL_PLANE_PORT" \
@@ -259,10 +306,22 @@ say "Decoded audio:     $DECODED_AUDIO_CHANNEL"
 # spending the exchange budget is what keeps a slow connect from reading as an
 # empty channel — `exchange` gives up after 8 tap rounds.
 say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..."
+# `tap` never fails on a quiet channel — it returns a partial sample and exits 0
+# — so the bag count is the only readiness signal. Reading its exit code instead
+# reports a channel that has produced nothing as ready, and the run then spends
+# the exchange budget before the far side has connected.
+tapped_bag_count() {
+    "$STREAMLIB_CLI" tap "$1" --count 1 --url "$CONTROL_PLANE_URL" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("received", 0))
+except Exception:
+    print(0)
+'
+}
 FIRST_FRAME_SEEN=0
 for _ in $(seq 1 "$MEDIA_DEADLINE_SECONDS"); do
-    if "$STREAMLIB_CLI" tap "$DECODED_VIDEO_CHANNEL" --count 1 --url "$CONTROL_PLANE_URL" \
-            >/dev/null 2>&1; then
+    if [ "$(tapped_bag_count "$DECODED_VIDEO_CHANNEL")" -gt 0 ] 2>/dev/null; then
         FIRST_FRAME_SEEN=1
         break
     fi
@@ -302,8 +361,20 @@ done < "$OUTPUT_DIR/exchanged_paths.txt"
 say "Captured $sample_index frames"
 
 # ── The audio arm: the block contract on what came back ──────────────
-AUDIO_VERDICT="not run"
-if PYTHON="$VENV_PYTHON" "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
+# Judged against what was *sent*, not in isolation. A rig whose default capture
+# device publishes nothing — no live input, muted, no source — would otherwise
+# read as this wheel losing the audio it was handed, which is the one confusion
+# an audio arm exists to prevent. So the encoder's own output is tapped first:
+# silent there means the arm cannot run, and only a decoder that stayed empty
+# while the encoder spoke is a failure.
+ENCODED_AUDIO_CHANNEL="$(channel_of audio_encoder encoded_audio)" || ENCODED_AUDIO_CHANNEL=""
+PUBLISHED_AUDIO_BAGS=0
+if [ -n "$ENCODED_AUDIO_CHANNEL" ]; then
+    PUBLISHED_AUDIO_BAGS="$(tapped_bag_count "$ENCODED_AUDIO_CHANNEL")"
+fi
+if [ "${PUBLISHED_AUDIO_BAGS:-0}" -eq 0 ] 2>/dev/null; then
+    AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
+elif PYTHON="$VENV_PYTHON" "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
         --url "$CONTROL_PLANE_URL" --port audio --count 8 \
         > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
     AUDIO_VERDICT="pass"
@@ -342,7 +413,7 @@ stop_node
 echo ""
 say "Log gates:"
 for pattern in OUT_OF_DEVICE_MEMORY DEVICE_LOST "process() failed" "Validation Error"; do
-    printf '  %-24s %s\n' "$pattern" "$(grep -cF "$pattern" "$LOG_FILE" 2>/dev/null || echo 0)"
+    printf '  %-24s %s\n' "$pattern" "$(grep -cF "$pattern" "$LOG_FILE" 2>/dev/null; true)"
 done
 echo ""
 
