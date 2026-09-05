@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.50](https://github.com/tatolab/streamlib/compare/v0.18.49...v0.18.50) (2026-09-05)
+
+
+### Features
+
+* **extension:** streamlib-moq — a standalone maturin wheel publishing and subscribing MoQ over draft-16, in CMAF and the bag envelope ([#2158](https://github.com/tatolab/streamlib/issues/2158)) ([00a5e9e](https://github.com/tatolab/streamlib/commit/00a5e9e158b4b2ae343bb4384ef3f8583e206f0a))
+
 ## [0.18.49](https://github.com/tatolab/streamlib/compare/v0.18.48...v0.18.49) (2026-09-04)
 
 
