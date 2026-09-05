@@ -9,12 +9,11 @@
 //! The shape is draft-ietf-moq-catalogformat-01, matched field for field
 //! against what `moq-pub` emits.
 //!
-//! The types are written here rather than taken from the `moq-catalog` crate
-//! because that crate's `TrackPackaging` is a closed `cmaf` / `loc` enum with
-//! no room for a third value, and this publisher also declares the
-//! `streamlib-bag` packaging for its other container. `moq-catalog` stays a
-//! dev-dependency, where a test proves a CMAF catalog written from these types
-//! parses back as the reference's.
+//! `packaging` is a `String` here: the reference crate's `TrackPackaging` is a
+//! closed `cmaf` / `loc` enum, and this publisher also declares
+//! `streamlib-bag` for its other container. That crate is a dev-dependency, so
+//! a test can still prove a CMAF catalog written from these types parses back
+//! as the reference's.
 
 use serde::Serialize;
 

@@ -8,15 +8,18 @@ extension model, so it is what these check — over a real `Runtime`, which need
 no device to build a graph. Nothing here reaches a relay.
 """
 
+from unittest import mock
+
 import pytest
 
 import streamlib
+from streamlib import log
 from streamlib import H264Decoder, H264Encoder, OpusDecoder, OpusEncoder
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 from streamlib_moq.processors import (
     CONTAINER_FORMATS,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
-    LONGEST_RECONNECT_DELAY_SECONDS,
+    READER_THREAD_JOIN_TIMEOUT_SECONDS,
     SUBSCRIBER_POLL_TIMEOUT_MS,
     track_medium_of_codec,
 )
@@ -139,16 +142,36 @@ def test_a_missing_codec_is_refused_rather_than_guessed_at():
         track_medium_of_codec(None, "encoder/out")
 
 
-def test_the_subscribers_poll_bounds_a_stop_inside_the_teardown_budget():
-    """A helper's teardown reply and exit are bounded at five seconds each, so
-    a thread whose wait for an object is unbounded would be killed rather than
-    stopped."""
-    assert SUBSCRIBER_POLL_TIMEOUT_MS / 1000 < 5.0
-    assert LONGEST_RECONNECT_DELAY_SECONDS > SUBSCRIBER_POLL_TIMEOUT_MS / 1000
+#: A helper's teardown reply and its exit are each bounded at five seconds by
+#: the engine, and `stop()` runs inside the first of those.
+HELPER_TEARDOWN_BUDGET_SECONDS = 5.0
 
 
-def test_the_link_ceiling_this_wheel_reports_against_is_the_engines_own():
-    """16 MiB is `streamlib-ipc-types`' untrusted-session ceiling. A bag past
-    it is dropped at `debug` by the engine rather than raised, so a subscriber
-    that did not say so itself would look like a stream that just stopped."""
-    assert HELPER_LINK_PAYLOAD_CEILING_BYTES == 16 * 1024 * 1024
+def test_a_stop_completes_inside_the_helpers_teardown_budget():
+    """The two waits a `stop()` can sit through are the reading thread's own
+    poll and the join that follows it; together they must leave the budget
+    room, or the helper is killed rather than stopped."""
+    longest_stop_seconds = (
+        SUBSCRIBER_POLL_TIMEOUT_MS / 1000 + READER_THREAD_JOIN_TIMEOUT_SECONDS
+    )
+
+    assert longest_stop_seconds < HELPER_TEARDOWN_BUDGET_SECONDS
+
+
+def test_a_bag_past_the_link_ceiling_is_reported_once_and_not_every_frame():
+    """The engine drops an oversized bag at `debug` rather than raising, so a
+    subscriber that said nothing would look like a stream that just stopped —
+    but saying it per frame would bury the log of a stream that never
+    recovers."""
+    subscriber = MoqBroadcastSubscriber(
+        relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="1.m4s"
+    )
+    said: "list[str]" = []
+    with mock.patch.object(log, "error", said.append):
+        for _ in range(3):
+            subscriber._report_a_bag_the_link_will_drop(
+                "encoded_video", b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)
+            )
+
+    assert len(said) == 1
+    assert "Reported once" in said[0]

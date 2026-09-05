@@ -9,7 +9,7 @@
 
 /// Nanoseconds, so a monotonic-nanosecond stamp lands in `tfdt` with no
 /// rescale at all. A legal `u32`, which is what lets the subtraction stay
-/// integral — the engine's own writer made the same call for the same reason.
+/// integral.
 pub(crate) const VIDEO_TRACK_TIMESCALE_HZ: u32 = 1_000_000_000;
 
 /// Opus's own clock, and the only rate an `OpusEncoder` bag carries. Writing

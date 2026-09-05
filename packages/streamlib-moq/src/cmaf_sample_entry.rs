@@ -14,9 +14,9 @@
 //! carries one. Everything a decoder needs is therefore read out of the first
 //! sync point or refused there.
 //!
-//! Spelled in this wheel rather than imported: an extension links no engine
-//! crate. The H.265 constants and the fixed-offset technique are the engine's,
-//! at `runtime/streamlib-media-builtins/src/mp4_track_sample_entry.rs`.
+//! H.265's profile-tier-level sits at a fixed offset in the SPS RBSP, so the
+//! bytes are read there rather than re-derived — but only after the
+//! emulation-prevention bytes come out, or the offset lands mid-field.
 
 use mp4_atom::{Audio, Avc1, Avcc, Codec, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual};
 

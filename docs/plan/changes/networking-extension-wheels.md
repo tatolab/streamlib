@@ -144,16 +144,30 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
   authentication, so no credential-free public relay remains.
   [networking-extension-wheels]
 - **DECIDED** — `MoqBroadcastPublisher`: `@processor`, one fan-in input `tracks`, one MoQ
-  track per inbound link named by its channel, the catalog derived from them; config
-  `relay_url` and `broadcast` (default `streamlib/<runtime_id>`). A bag's `is_sync_point`
-  opens a subgroup whose MoQ group id is the bag's `group_index`; the object id is
-  `moq-transport`'s to assign and cannot name `sequence_index`, which for audio — every
-  packet a sync point, so every group one object with id 0 — would pin the index at zero
-  and make loss undetectable. `MoqBroadcastSubscriber`: `@processor(execution = "manual")`,
+  track per inbound link, the catalog derived from them; config `relay_url` (required — a
+  draft-16 relay is provisioned per account and carries its token in the path, so there is
+  no default that would work), `broadcast` (default `streamlib/<runtime_id>`) and
+  `container_format`. **The container names the tracks**: on `"cmaf"` they are `.catalog`,
+  `0.mp4` and `{track_id}.m4s`, because a subscriber not asked to fetch a catalog hardcodes
+  exactly those; on `"streamlib_bag"` each is its link's channel name.
+  **The MoQ group id is `moq-transport`'s own monotonic counter, and a group is cut by a
+  video sync point cutting every track at once** — the reference publisher's rule, and what
+  makes a group a GOP across audio and video. Naming the group from the bag's `group_index`
+  was this change's original design and does not survive contact: `SubgroupsWriter::create`
+  hands back a live writer for a group id at or below the latest and then drops every
+  object written to it with no error on either side, and a subgroup is retained only while
+  it is the newest — so audio, whose every packet is a sync point, would open one group per
+  packet and lose almost all of them. The producer's ordering pair rides the object instead;
+  it could not ride the transport in any case, because `SubgroupObjectReader::object_id` is
+  a per-subgroup local counter and the session discards the wire object id before an
+  application can read it. `MoqBroadcastSubscriber`: `@processor(execution = "manual")`,
   outputs `encoded_video` and `encoded_audio`, config `relay_url`, `broadcast`,
-  `video_track`, `audio_track`; the processor-owned thread writes each received object as a
-  bag literal, the producer's ordering pair and stamp preserved from the object rather than
-  re-minted or restamped. [networking-extension-wheels]
+  `video_track`, `audio_track`, `container_format`; the processor-owned thread writes each
+  received object as a bag literal. **On `"streamlib_bag"` the producer's ordering pair and
+  stamp are preserved from the object, never re-minted or restamped; on `"cmaf"` the
+  container carries neither, so the subscriber mints the pair by the engine's own
+  producer-side rule and takes the stamp from the fragment's decode time.**
+  [networking-extension-wheels]
 - **DECIDED** — Two container formats, selected by `container_format` on each processor and
   declared per track in the catalog's own `packaging` field. `"cmaf"` is the default,
   because interop is the point: the broadcast is laid out as `moq-pub` lays one out — a

@@ -195,11 +195,17 @@ impl MoqBroadcastPublisher {
     }
 
     /// Finish every open group and end the session.
-    pub(crate) async fn close(&mut self) {
-        if let Some(discarded) = self
+    /// Close the broadcast, handing back the encoded media the hold discards.
+    ///
+    /// Returned rather than only logged: this crate's `tracing` events reach no
+    /// dispatcher inside a helper process, so a loss reported only that way is
+    /// reported to nobody. The caller says it through the log channel the
+    /// helper does install.
+    pub(crate) async fn close(&mut self) -> Option<EncodedMediaTheHoldDiscardsAtClose> {
+        let discarded = self
             .object_write_planner
-            .the_encoded_media_the_hold_discards_at_close()
-        {
+            .the_encoded_media_the_hold_discards_at_close();
+        if let Some(discarded) = discarded.as_ref() {
             tracing::warn!(
                 broadcast = %self.relay_config.broadcast_path,
                 discarded_samples = discarded.held_sample_count,
@@ -212,6 +218,7 @@ impl MoqBroadcastPublisher {
         if let Some(session) = self.publishing_session.take() {
             session.close();
         }
+        discarded
     }
 }
 
@@ -256,10 +263,10 @@ impl PlannedMoqObjectWrites {
 
 /// The encoded media a broadcast that never became playable throws away.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct EncodedMediaTheHoldDiscardsAtClose {
-    held_sample_count: usize,
-    held_byte_count: usize,
-    tracks_that_were_never_describable: String,
+pub(crate) struct EncodedMediaTheHoldDiscardsAtClose {
+    pub(crate) held_sample_count: usize,
+    pub(crate) held_byte_count: usize,
+    pub(crate) tracks_that_were_never_describable: String,
 }
 
 /// Everything about a broadcast that needs no connection: its tracks, their

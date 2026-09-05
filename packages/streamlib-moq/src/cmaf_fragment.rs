@@ -295,12 +295,20 @@ pub(crate) fn read_cmaf_fragment(object_bytes: &[u8]) -> Result<Vec<CmafFragment
     Ok(samples)
 }
 
-/// Whether ISOBMFF sample flags name a random access point — `sample_depends_on
-/// == 2` and `sample_is_non_sync_sample == 0` (ISO/IEC 14496-12 §8.8.3.1). Both
-/// halves are read because a muxer that sets only one of them is common enough
-/// that the reference publisher tests the pair too.
+/// Whether ISOBMFF sample flags name a random access point.
+///
+/// ISO/IEC 14496-12 §8.8.3.1 makes `sample_is_non_sync_sample == 0` the
+/// statement; `sample_depends_on` is corroboration, and its value 0 means
+/// "unknown", which is a legal and common encoding of a keyframe. Requiring
+/// `sample_depends_on == 2` as well would read a third-party publisher's
+/// keyframes as delta frames, and a decoder's sync-point gate downstream would
+/// then never open on a broadcast this wheel did not write.
 fn sample_flags_mark_a_sync_point(sample_flags: u32) -> bool {
-    (sample_flags >> 24) & 0x3 == 0x2 && (sample_flags >> 16) & 0x1 == 0
+    let sample_is_non_sync_sample = (sample_flags >> 16) & 0x1;
+    let sample_depends_on = (sample_flags >> 24) & 0x3;
+    // 1 is "depends on others", which contradicts a sync point whatever the
+    // non-sync bit says.
+    sample_is_non_sync_sample == 0 && sample_depends_on != 1
 }
 
 fn cmaf_fragment_moof(
@@ -900,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_point_flags_are_read_by_both_halves_of_the_pair() {
+    fn a_sync_point_is_read_from_the_bit_the_standard_makes_the_statement() {
         assert!(sample_flags_mark_a_sync_point(SAMPLE_FLAGS_OF_A_SYNC_POINT));
         assert!(!sample_flags_mark_a_sync_point(
             SAMPLE_FLAGS_OF_A_NON_SYNC_POINT
@@ -909,6 +917,22 @@ mod tests {
             !sample_flags_mark_a_sync_point(SAMPLE_FLAGS_OF_A_SYNC_POINT | 0x0001_0000),
             "sample_is_non_sync_sample set alongside sample_depends_on == 2 is a contradiction, and the conservative reading is not a sync point"
         );
+    }
+
+    #[test]
+    fn a_keyframe_whose_dependency_is_merely_unknown_is_still_a_sync_point() {
+        // `sample_depends_on == 0` is "unknown" (ISO/IEC 14496-12 §8.8.3.1) and
+        // is a legal, common encoding of a keyframe. Demanding 2 as well reads
+        // a third-party publisher's every keyframe as a delta frame, and a
+        // decoder's sync-point gate downstream then never opens.
+        assert!(sample_flags_mark_a_sync_point(0x0000_0000));
+    }
+
+    #[test]
+    fn a_sample_that_says_it_depends_on_others_is_not_a_sync_point() {
+        // `sample_depends_on == 1` contradicts a sync point whatever the
+        // non-sync bit says.
+        assert!(!sample_flags_mark_a_sync_point(0x0100_0000));
     }
 
     #[test]

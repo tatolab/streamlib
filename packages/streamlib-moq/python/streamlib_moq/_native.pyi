@@ -93,8 +93,14 @@ class MoqBroadcastPublishingSession:
         representation there. `streamlib_bag` carries it.
         """
 
-    def close(self) -> None:
-        """Finish every open group and drop the connection, bounded."""
+    def close(self) -> "str | None":
+        """Finish every open group and drop the connection, bounded.
+
+        Hands back what a broadcast that never became playable threw away, or
+        `None` when nothing was held. The caller logs it: this wheel's Rust
+        reaches no `tracing` dispatcher inside a helper process, so a loss
+        reported only there is reported to nobody.
+        """
 
     @property
     def is_connected(self) -> bool: ...

@@ -13,7 +13,7 @@ this wheel's own Rust directly — the engine is never on the data path.
 from __future__ import annotations
 
 import threading
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from streamlib import (
     EncodedAudioPacket,
@@ -67,6 +67,10 @@ BAGS_BETWEEN_PROGRESS_REPORTS = 300
 #: session ceiling). A bag past it is dropped at `debug` by the engine rather
 #: than raised, which would look from here like a stream that simply stopped —
 #: so the subscriber says so itself, once.
+#:
+#: The engine exports no constant for this, so nothing can check the two agree;
+#: a change on the engine's side reaches this wheel as a warning at the wrong
+#: size rather than as a failing test.
 HELPER_LINK_PAYLOAD_CEILING_BYTES = 16 * 1024 * 1024
 
 #: What each bag's `codec` maps to. A codec absent from here is refused by name
@@ -222,7 +226,11 @@ class MoqBroadcastPublisher:
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
         if self._session is not None:
-            self._session.close()
+            # The wheel's Rust reaches no `tracing` dispatcher in a helper, so
+            # media it discarded is only on the record if it is said here.
+            discarded = self._session.close()
+            if discarded is not None:
+                log.warn(f"MoqBroadcastPublisher: {discarded}")
             self._session = None
         log.info(
             f"MoqBroadcastPublisher: teardown, bags_published={self._bags_published}"
@@ -440,6 +448,55 @@ class MoqBroadcastSubscriber:
         self._stop.set()
 
 
+class ReceivedAccessUnit(Protocol):
+    """What spelling a video bag reads off one received access unit.
+
+    Named as a protocol rather than the concrete `_native` class so the check
+    survives: `ReceivedVideoAccessUnit` carries no Python constructor, so a
+    test cannot build one, and typing the parameter `Any` to admit a stand-in
+    would stop pyright checking the reads at the one call site that passes the
+    real object.
+    """
+
+    @property
+    def codec(self) -> str: ...
+    @property
+    def bitstream(self) -> bytes: ...
+    @property
+    def is_sync_point(self) -> bool: ...
+    @property
+    def group_index(self) -> int: ...
+    @property
+    def sequence_index(self) -> int: ...
+    @property
+    def width(self) -> int: ...
+    @property
+    def height(self) -> int: ...
+    @property
+    def color(self) -> "dict[str, str] | None": ...
+
+
+class ReceivedPacket(Protocol):
+    """What spelling an audio bag reads off one received Opus packet."""
+
+    @property
+    def bitstream(self) -> bytes: ...
+    @property
+    def is_sync_point(self) -> bool: ...
+    @property
+    def group_index(self) -> int: ...
+    @property
+    def sequence_index(self) -> int: ...
+    @property
+    def sample_rate(self) -> int: ...
+    @property
+    def channels(self) -> int: ...
+    @property
+    def sample_count(self) -> int: ...
+    @property
+    def pre_skip(self) -> int: ...
+
+
 def _bag_for(
     media: "_native.ReceivedVideoAccessUnit | _native.ReceivedOpusPacket",
 ) -> "tuple[str, dict[str, Any]]":
@@ -449,7 +506,7 @@ def _bag_for(
     return ENCODED_VIDEO_OUTPUT_PORT, encoded_video_frame_bag(media)
 
 
-def encoded_video_frame_bag(access_unit: Any) -> "dict[str, Any]":
+def encoded_video_frame_bag(access_unit: ReceivedAccessUnit) -> "dict[str, Any]":
     """One access unit, spelled against the encoded-video wire contract.
 
     Spelled here rather than in Rust so the keys sit beside the cast that reads
@@ -471,7 +528,7 @@ def encoded_video_frame_bag(access_unit: Any) -> "dict[str, Any]":
     return bag
 
 
-def encoded_audio_packet_bag(packet: Any) -> "dict[str, Any]":
+def encoded_audio_packet_bag(packet: ReceivedPacket) -> "dict[str, Any]":
     """One Opus packet, spelled against the encoded-audio wire contract."""
     return {
         "codec": "opus",

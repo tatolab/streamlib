@@ -42,11 +42,14 @@ impl MoqRelayConfig {
     /// The path is where the relay's auth token lives, so the namespace cannot
     /// share it — it travels in `PUBLISH_NAMESPACE` / `SUBSCRIBE` instead.
     pub(crate) fn dial_url(&self) -> Result<url::Url> {
+        // The value is never echoed: `relay_url` carries the relay's auth
+        // token as its path, and a refusal reaches the parent's log through
+        // the helper's log sink. `failure` already names what is malformed.
         let parsed = url::Url::parse(&self.relay_endpoint_url).map_err(|failure| {
             MoqExtensionError::Refused {
                 what: format!(
-                    "`relay_url` is not a URL: {} ({failure})",
-                    self.relay_endpoint_url
+                    "`relay_url` is not a URL ({failure}); it reads \
+                     `https://<relay host>/<token>`"
                 ),
             }
         })?;
@@ -125,6 +128,31 @@ mod tests {
             .dial_url()
             .unwrap();
         assert!(!url.path().contains("streamlib"));
+    }
+
+    #[test]
+    fn no_refusal_from_the_dial_url_ever_echoes_the_relay_token() {
+        // `relay_url` carries the credential, and every refusal here reaches
+        // the parent process's log.
+        const TOKEN: &str = "eyJhbGciOiJIUzI1NiJ9.a-live-looking-token.sig";
+        for relay in [
+            // no scheme at all — the ordinary first-run typo
+            format!("draft-16.example/{TOKEN}"),
+            format!("moqt://relay.example/{TOKEN}"),
+            format!("https://relay.example/{}", "a".repeat(2000)),
+            format!("https://relay.example/to%2F{TOKEN}"),
+        ] {
+            let refusal = MoqRelayConfig {
+                relay_endpoint_url: relay.clone(),
+                broadcast_path: "streamlib/a".to_owned(),
+            }
+            .dial_url()
+            .expect_err("each of these is refused");
+            assert!(
+                !refusal.to_string().contains(TOKEN),
+                "a refusal put the relay token in the log: {refusal}"
+            );
+        }
     }
 
     #[test]

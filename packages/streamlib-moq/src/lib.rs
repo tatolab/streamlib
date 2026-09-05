@@ -149,15 +149,30 @@ impl MoqBroadcastPublishingSession {
     }
 
     /// Finish every open group and drop the connection.
-    fn close(&self, python: Python<'_>) -> PyResult<()> {
-        python.detach(|| {
+    ///
+    /// Returns what a broadcast that never became playable threw away, or
+    /// `None` when nothing was held. This crate's `tracing` events reach no
+    /// dispatcher inside a helper process, so a loss reported only that way
+    /// would be reported to nobody; the caller says it through the log channel
+    /// the helper does install.
+    fn close(&self, python: Python<'_>) -> PyResult<Option<String>> {
+        let discarded = python.detach(|| {
             let mut publisher = self.locked_publisher()?;
-            if let Ok(runtime) = transport_stack::transport_runtime() {
-                runtime.block_on(publisher.close());
-            }
-            Ok::<(), MoqExtensionError>(())
+            let discarded = match transport_stack::transport_runtime() {
+                Ok(runtime) => runtime.block_on(publisher.close()),
+                Err(_) => None,
+            };
+            Ok::<_, MoqExtensionError>(discarded)
         })?;
-        Ok(())
+        Ok(discarded.map(|discarded| {
+            format!(
+                "{} held samples ({} bytes) were discarded unwritten: the broadcast never \
+                 became playable because {} never became describable",
+                discarded.held_sample_count,
+                discarded.held_byte_count,
+                discarded.tracks_that_were_never_describable
+            )
+        }))
     }
 
     #[getter]

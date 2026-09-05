@@ -8,9 +8,9 @@
 //! out into the sample entry. Both directions live here so the round trip is
 //! one test rather than two halves that can drift.
 //!
-//! Spelled in this wheel rather than imported: an extension links no engine
-//! crate, and the engine's own copy reaches into its H.264 parser for the
-//! start-code walk. The walk here is the same grammar with a local scanner.
+//! Three- and four-byte start codes are both legal and an encoder emits both
+//! in one access unit, so the split has to tell a NAL's trailing zero from the
+//! leading zero of the next prefix.
 
 /// Which elementary stream an access unit's NAL headers are read by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -12,8 +12,9 @@ from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 ```
 
 `MoqBroadcastPublisher` takes one fan-in input, `tracks` — each inbound link becomes one MoQ
-track named by its channel. `MoqBroadcastSubscriber` emits `encoded_video` and `encoded_audio`,
-filling every key of the wire contract from the stream itself.
+track, named by the container: `{track_id}.m4s` on `cmaf`, the link's own channel name on
+`streamlib_bag`. `MoqBroadcastSubscriber` emits `encoded_video` and `encoded_audio`, filling
+every key of the wire contract from the stream itself.
 
 Both speak two container formats, chosen with `container_format`:
 
@@ -26,5 +27,6 @@ Both speak two container formats, chosen with `container_format`:
 Both sit on the encoded side of the codec blocks: `H264Encoder` / `OpusEncoder` upstream of the
 publisher, `H264Decoder` / `OpusDecoder` downstream of the subscriber.
 
-Cloudflare's draft-16 relays are provisioned per account and carry their token in the URL path,
-so `relay_url` is `https://draft-16.cloudflare.mediaoverquic.com/<token>`.
+`relay_url` is required and has no default: Cloudflare's draft-16 relays are provisioned per
+account and carry their token in the URL path, so it reads
+`https://draft-16.cloudflare.mediaoverquic.com/<token>`.
