@@ -631,10 +631,9 @@ const OPUS_CODE_THREE_FRAME_COUNT_MASK: u8 = 0b0011_1111;
 
 /// The samples one Opus packet decodes to, read from the packet itself.
 ///
-/// The only authority a subscriber has: a CMAF fragment's `duration` is
-/// whatever the publisher wrote beside the sample, and this wheel's own
-/// publisher writes the gap to the previous bag's stamp there — a nominal
-/// thirtieth of a second on a track's first fragment.
+/// RFC 6716 §3.1 puts a packet's frame duration and frame count in its own TOC
+/// byte, so a subscriber never has to trust a far end's arithmetic for a field
+/// the bitstream already states.
 fn opus_sample_count_of_the_packets_table_of_contents(opus_packet: &[u8]) -> Result<u32> {
     let Some(&table_of_contents_byte) = opus_packet.first() else {
         return Err(MoqExtensionError::MalformedObject {
@@ -862,15 +861,16 @@ mod tests {
     }
 
     /// An audio fragment whose decode time and duration are the ones this
-    /// wheel's own publisher would write for a bag stamped `stamp_ns` — which
-    /// is where the fragment's duration stops being the packet's sample count.
+    /// wheel's own publisher would write for a bag stamped `stamp_ns`.
     fn an_audio_fragment_placed_as_the_publisher_places_one(
         sequence_number: u32,
         audio_track_timeline: &mut CmafTrackTimeline,
         stamp_ns: i64,
         opus_packet: &[u8],
+        sample_count_the_packet_decodes_to: u32,
     ) -> bytes::Bytes {
-        let placement = audio_track_timeline.place(stamp_ns);
+        let placement = audio_track_timeline
+            .place_sample_of_stated_duration(stamp_ns, sample_count_the_packet_decodes_to);
         build_cmaf_fragment(
             AUDIO_TRACK_ID,
             sequence_number,
@@ -913,6 +913,10 @@ mod tests {
     fn a_twenty_millisecond_stereo_opus_packet() -> Vec<u8> {
         vec![0xFC, 0x01, 0x02, 0x03, 0x04]
     }
+
+    /// What the packet above decodes to, and so the duration the publisher
+    /// writes beside it: 20 ms of Opus's own 48 kHz clock.
+    const SAMPLES_A_TWENTY_MILLISECOND_OPUS_PACKET_DECODES_TO: u32 = 960;
 
     fn the_only_video_access_unit(bags: Vec<EncodedMediaSample>) -> EncodedVideoAccessUnit {
         match bags.as_slice() {
@@ -1273,6 +1277,7 @@ mod tests {
                         &mut audio_track_timeline,
                         9_000_000_000,
                         &opus_packet_bytes,
+                        SAMPLES_A_TWENTY_MILLISECOND_OPUS_PACKET_DECODES_TO,
                     ),
                 )
                 .expect("a fragment after the init segment reconstitutes"),
@@ -1290,70 +1295,6 @@ mod tests {
             "every Opus packet is a decode entry point"
         );
         assert_eq!(packet.opus_packet, bytes::Bytes::from(opus_packet_bytes));
-    }
-
-    #[test]
-    fn an_opus_bag_counts_the_samples_its_own_packet_carries_rather_than_the_fragments_duration() {
-        let mut subscriber = a_subscriber_of(
-            MoqContainerFormat::Cmaf,
-            None,
-            Some(media_track_name(AUDIO_TRACK_ID)),
-        );
-        let object_router = &mut subscriber.received_object_router;
-        object_router
-            .route_received_object(
-                INIT_TRACK_NAME,
-                &an_init_object(&[an_audio_init_segment_description()]),
-            )
-            .expect("the init object is the one this module's writer wrote");
-
-        let opus_packet_bytes = a_twenty_millisecond_stereo_opus_packet();
-        let mut audio_track_timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
-        let mut reconstituted_sample_counts = Vec::new();
-        let mut fragment_durations_the_publisher_wrote = Vec::new();
-        // Stamps a live capture would carry: 20 ms apart in intent, never in
-        // fact, so no gap between two of them is the packets' own 960 samples.
-        for (sequence_number, stamp_ns) in [9_000_000_000i64, 9_020_500_000, 9_039_500_000]
-            .into_iter()
-            .enumerate()
-        {
-            let fragment = an_audio_fragment_placed_as_the_publisher_places_one(
-                sequence_number as u32 + 1,
-                &mut audio_track_timeline,
-                stamp_ns,
-                &opus_packet_bytes,
-            );
-            fragment_durations_the_publisher_wrote.extend(
-                read_cmaf_fragment(&fragment)
-                    .expect("the fixture fragment is the one this module's writer wrote")
-                    .into_iter()
-                    .map(|fragment_sample| fragment_sample.duration),
-            );
-            reconstituted_sample_counts.push(
-                the_only_audio_packet(
-                    object_router
-                        .route_received_object(&media_track_name(AUDIO_TRACK_ID), &fragment)
-                        .expect("a fragment after the init segment reconstitutes"),
-                )
-                .sample_count,
-            );
-        }
-
-        assert_eq!(
-            reconstituted_sample_counts,
-            vec![960, 960, 960],
-            "three ordinary 20 ms packets carry 960 samples each, whatever the publisher wrote \
-             beside them"
-        );
-        assert!(
-            fragment_durations_the_publisher_wrote
-                .iter()
-                .all(|duration| *duration != 960),
-            "this publisher writes the gap to the previous bag's stamp as a fragment's duration, \
-             and a nominal thirtieth of a second on the first, so a duration-derived count reads \
-             the publisher's pacing rather than the packet; it wrote \
-             {fragment_durations_the_publisher_wrote:?}"
-        );
     }
 
     #[test]
@@ -1573,6 +1514,7 @@ mod tests {
                     &mut audio_track_timeline,
                     9_000_000_000,
                     &a_twenty_millisecond_stereo_opus_packet(),
+                    SAMPLES_A_TWENTY_MILLISECOND_OPUS_PACKET_DECODES_TO,
                 ),
             )
             .expect_err("the moov describes no audio track, so nothing states its `pre_skip`");

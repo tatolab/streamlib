@@ -50,27 +50,45 @@ impl CmafTrackTimeline {
         self.timescale_hz
     }
 
-    /// Account one sample, handing back its decode time and the duration to
-    /// write beside it.
+    /// Account one sample whose media states its own duration.
     ///
-    /// The duration is the gap to the *previous* sample, not the next: a
-    /// publisher that waited for the next sample to measure the current one's
-    /// duration would add a frame of latency to a live stream. The decode time
-    /// is exact regardless, so a player that reads `tfdt` — which is what a
-    /// one-sample-per-fragment CMAF chunk is for — is never off.
-    pub(crate) fn place(&mut self, stamp_ns: i64) -> CmafSamplePlacement {
-        let epoch_ns = *self.epoch_ns.get_or_insert(stamp_ns);
-        if let Some(newest) = self.newest_stamp_ns {
-            let gap = stamp_ns.saturating_sub(newest);
-            if gap > 0 {
-                self.newest_gap_ns = Some(gap);
-            }
-        }
-        self.newest_stamp_ns = Some(stamp_ns);
-
-        let since_epoch_ns = stamp_ns.saturating_sub(epoch_ns).max(0);
+    /// RFC 8486 §4.1 makes an Opus sample's duration its decoded sample count,
+    /// which the packet carries and the bag repeats — so nothing about when the
+    /// bag arrived reaches the `trun`, and capture jitter is not written into
+    /// the container as timing.
+    pub(crate) fn place_sample_of_stated_duration(
+        &mut self,
+        stamp_ns: i64,
+        duration_in_track_timescale: u32,
+    ) -> CmafSamplePlacement {
         CmafSamplePlacement {
-            decode_time: rescale_nanoseconds(since_epoch_ns, self.timescale_hz),
+            decode_time: self.account_one_samples_stamp(stamp_ns),
+            duration: duration_in_track_timescale,
+        }
+    }
+
+    /// Account one sample whose duration only its successor could state.
+    ///
+    /// **Wire contract.** The duration written beside such a sample is the gap
+    /// to its *predecessor*, so it is one sample late. ISO/IEC 14496-12
+    /// §8.8.8.2 makes `sample_duration` the duration of *that* sample; a
+    /// publisher that waited for the successor to measure it would add a whole
+    /// frame of latency to every frame of a live broadcast, so the field is
+    /// deliberately one sample late rather than on time and late by a frame.
+    ///
+    /// `tfdt` is the truth: every fragment carries its own, placed exactly from
+    /// the sample's stamp, so a reader that decodes from `tfdt` — which is what
+    /// a one-sample-per-fragment CMAF chunk is for — is never off. A reader
+    /// that instead accumulates durations sees a hole after every cadence
+    /// slowdown and an equal overlap after it, so a track placed this way is
+    /// decode-time contiguous only while the cadence holds steady.
+    pub(crate) fn place_sample_of_duration_measured_to_its_predecessor(
+        &mut self,
+        stamp_ns: i64,
+    ) -> CmafSamplePlacement {
+        let decode_time = self.account_one_samples_stamp(stamp_ns);
+        CmafSamplePlacement {
+            decode_time,
             // Clamped, not truncated: on the nanosecond video timescale a
             // `u32` runs out at 4.295 s, so an upstream stall longer than that
             // would wrap a five-second gap into a seven-hundred-millisecond
@@ -87,11 +105,28 @@ impl CmafTrackTimeline {
             .unwrap_or(u32::MAX),
         }
     }
+
+    /// Fold one sample's stamp into the track's epoch and predecessor gap,
+    /// handing back the decode time it lands on.
+    fn account_one_samples_stamp(&mut self, stamp_ns: i64) -> u64 {
+        let epoch_ns = *self.epoch_ns.get_or_insert(stamp_ns);
+        if let Some(newest) = self.newest_stamp_ns {
+            let gap = stamp_ns.saturating_sub(newest);
+            if gap > 0 {
+                self.newest_gap_ns = Some(gap);
+            }
+        }
+        self.newest_stamp_ns = Some(stamp_ns);
+
+        let since_epoch_ns = stamp_ns.saturating_sub(epoch_ns).max(0);
+        rescale_nanoseconds(since_epoch_ns, self.timescale_hz)
+    }
 }
 
-/// What the first sample of a track claims, having no predecessor to measure
-/// against. A thirtieth of a second: wrong only for that one sample, and only
-/// in a field `tfdt` overrides for every fragment after it.
+/// What a predecessor-measured track's first sample claims, having no
+/// predecessor to measure against. A thirtieth of a second, and a guess: this
+/// wheel is never told the frame rate. Wrong for that one sample only, in a
+/// field `tfdt` overrides for every fragment after it.
 const NOMINAL_FIRST_SAMPLE_DURATION_NS: i64 = 1_000_000_000 / 30;
 
 /// Where one sample sits and how long it claims to last.
@@ -137,15 +172,22 @@ mod tests {
     #[test]
     fn the_first_sample_of_a_track_sits_at_zero() {
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
-        assert_eq!(timeline.place(9_000_000_000).decode_time, 0);
+        assert_eq!(
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(9_000_000_000)
+                .decode_time,
+            0
+        );
     }
 
     #[test]
     fn later_samples_are_placed_by_their_distance_from_the_first() {
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
-        timeline.place(9_000_000_000);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(9_000_000_000);
         assert_eq!(
-            timeline.place(9_033_000_000).decode_time,
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(9_033_000_000)
+                .decode_time,
             33_000_000,
             "the epoch is the track's own first stamp, so this is the gap"
         );
@@ -154,10 +196,12 @@ mod tests {
     #[test]
     fn a_samples_duration_is_the_gap_to_the_one_before_it() {
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
-        timeline.place(0);
-        timeline.place(33_000_000);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(0);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(33_000_000);
         assert_eq!(
-            timeline.place(66_000_000).duration,
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(66_000_000)
+                .duration,
             33_000_000,
             "measuring against the next sample would cost a frame of latency"
         );
@@ -167,7 +211,9 @@ mod tests {
     fn the_first_sample_claims_a_nominal_duration_rather_than_zero() {
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
         assert_eq!(
-            timeline.place(0).duration,
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(0)
+                .duration,
             (NOMINAL_FIRST_SAMPLE_DURATION_NS) as u32,
             "a zero-duration first sample makes a player show nothing at all"
         );
@@ -176,8 +222,13 @@ mod tests {
     #[test]
     fn a_stamp_that_goes_backwards_does_not_place_a_sample_before_the_epoch() {
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
-        timeline.place(1_000_000_000);
-        assert_eq!(timeline.place(500_000_000).decode_time, 0);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(1_000_000_000);
+        assert_eq!(
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(500_000_000)
+                .decode_time,
+            0
+        );
     }
 
     #[test]
@@ -185,17 +236,106 @@ mod tests {
         // The video timescale is nanoseconds, so a `u32` duration runs out at
         // 4.295 s. A cast would turn a ten-second stall into 1.4 s.
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
-        timeline.place(0);
-        timeline.place(10_000_000_000);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(0);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(10_000_000_000);
 
-        assert_eq!(timeline.place(20_000_000_000).duration, u32::MAX);
+        assert_eq!(
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(20_000_000_000)
+                .duration,
+            u32::MAX
+        );
     }
 
     #[test]
     fn a_duration_never_rounds_down_to_zero() {
         let mut timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
-        timeline.place(0);
+        timeline.place_sample_of_duration_measured_to_its_predecessor(0);
         // A gap far below one tick of the track's own clock.
-        assert_eq!(timeline.place(1).duration, 1);
+        assert_eq!(
+            timeline
+                .place_sample_of_duration_measured_to_its_predecessor(1)
+                .duration,
+            1
+        );
+    }
+
+    /// The wart the predecessor-gap rule leaves, asserted rather than
+    /// discovered: a cadence change writes a hole and then an equal overlap.
+    /// Changing this test means changing the wire contract, which is an owner
+    /// decision and not an implementation detail.
+    #[test]
+    fn a_cadence_change_leaves_a_hole_and_then_an_equal_overlap() {
+        let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
+        let placements: Vec<CmafSamplePlacement> = [0, 33_000_000, 66_000_000, 166_000_000]
+            .into_iter()
+            .map(|stamp_ns| timeline.place_sample_of_duration_measured_to_its_predecessor(stamp_ns))
+            .collect();
+
+        assert_eq!(
+            placements
+                .iter()
+                .map(|placement| placement.decode_time)
+                .collect::<Vec<_>>(),
+            vec![0, 33_000_000, 66_000_000, 166_000_000],
+            "`tfdt` is exact for every sample, which is what a reader decodes from"
+        );
+        assert_eq!(
+            placements
+                .iter()
+                .map(|placement| placement.duration)
+                .collect::<Vec<_>>(),
+            vec![
+                NOMINAL_FIRST_SAMPLE_DURATION_NS as u32,
+                33_000_000,
+                33_000_000,
+                100_000_000
+            ],
+            "each duration is the gap to the predecessor, so the 100 ms stall is charged to the \
+             sample after it"
+        );
+        // The third sample claims [66 ms, 99 ms) and the fourth starts at
+        // 166 ms — 67 ms of hole. The fourth then claims 100 ms, running to
+        // 266 ms, over a successor a resumed 33 ms cadence would put at
+        // 199 ms.
+        assert_eq!(
+            placements[3].decode_time - (placements[2].decode_time + placements[2].duration as u64),
+            67_000_000,
+            "an accumulating reader sees a hole here; a `tfdt`-placing one sees none"
+        );
+    }
+
+    #[test]
+    fn a_stated_duration_is_written_verbatim_however_the_bags_arrived() {
+        let mut timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
+        // Stamps a live capture carries: 20 ms apart in intent, never in fact.
+        let durations: Vec<u32> = [9_000_000_000i64, 9_020_500_000, 9_039_500_000]
+            .into_iter()
+            .map(|stamp_ns| {
+                timeline
+                    .place_sample_of_stated_duration(stamp_ns, 960)
+                    .duration
+            })
+            .collect();
+
+        assert_eq!(
+            durations,
+            vec![960, 960, 960],
+            "the packet's own sample count, not the jitter between two arrivals"
+        );
+    }
+
+    #[test]
+    fn a_stated_duration_still_places_its_sample_by_its_stamp() {
+        let mut timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
+        timeline.place_sample_of_stated_duration(9_000_000_000, 960);
+        assert_eq!(
+            timeline
+                .place_sample_of_stated_duration(9_020_500_000, 960)
+                .decode_time,
+            984,
+            "`tfdt` follows the stamp even where the duration does not, so a capture gap \
+             stays visible in the decode times"
+        );
     }
 }
