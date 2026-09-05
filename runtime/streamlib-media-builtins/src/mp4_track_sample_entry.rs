@@ -10,10 +10,14 @@
 //! known before the first fragment closes, which is why the writer holds bags
 //! until every track has delivered a sync point.
 
-use mp4_atom::{Audio, Avc1, Avcc, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual};
+use mp4_atom::{Audio, Avc1, Avcc, AvccExt, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual};
 use streamlib::sdk::engine::video::nv_video_parser::byte_stream_parser::remove_emulation_prevention_bytes;
+// One RBSP bit reader, aliased per grammar at the call site: H.264 §9.1 and
+// H.265 §9.2 spell `u(n)` and `ue(v)` the same way, so the walk differs only in
+// which syntax elements it names.
 use streamlib::sdk::engine::video::nv_video_parser::vulkan_h265_decoder::{
-    BitstreamReader as H265BitstreamReader, VulkanH265Decoder,
+    BitstreamReader as H264BitstreamReader, BitstreamReader as H265BitstreamReader,
+    VulkanH265Decoder,
 };
 
 use crate::mp4_annex_b_access_unit::{
@@ -37,6 +41,24 @@ pub const HIGHEST_CHANNEL_COUNT_THIS_CONTAINER_WRITER_PLACES: u32 = 2;
 /// `forbidden_zero_bit`, `nal_unit_type`, `nuh_layer_id` and
 /// `nuh_temporal_id_plus1` — ITU-T H.265 §7.3.1.2.
 const H265_NAL_UNIT_HEADER_BYTES: usize = 2;
+
+/// `forbidden_zero_bit`, `nal_ref_idc` and `nal_unit_type` — ITU-T H.264
+/// §7.3.1.
+const H264_NAL_UNIT_HEADER_BYTES: usize = 1;
+
+/// The profiles ISO/IEC 14496-15 §5.3.3.1 makes the `avcC` chroma-and-depth
+/// trailer mandatory for. It is also exactly the set whose SPS carries those
+/// elements under the grammar that defined them (ITU-T H.264 §7.3.2.1), so a
+/// stream naming one of these always states what the record has to write.
+const H264_PROFILES_WHOSE_CONFIGURATION_RECORD_CARRIES_A_CHROMA_TRAILER: [u8; 4] =
+    [100, 110, 122, 144];
+
+/// `avcC` states the chroma format in two bits — ISO/IEC 14496-15 §5.3.3.1
+/// writes it behind six reserved one bits.
+const HIGHEST_CHROMA_FORMAT_IDC_AN_AVC_CONFIGURATION_RECORD_STATES: u32 = 3;
+
+/// `avcC` states each bit depth in three bits, behind five reserved one bits.
+const HIGHEST_BIT_DEPTH_MINUS8_AN_AVC_CONFIGURATION_RECORD_STATES: u32 = 7;
 
 /// H.265 profile-tier-level is 12 bytes at a fixed position in the SPS RBSP:
 /// `sps_video_parameter_set_id` (4), `sps_max_sub_layers_minus1` (3) and
@@ -81,6 +103,19 @@ pub enum Mp4SampleEntryRefusal {
     PreSkipThisContainerCannotState {
         inbound_link_name: String,
         pre_skip: u32,
+    },
+    /// A coded extent past what a visual sample entry's sixteen-bit fields
+    /// can name.
+    CodedExtentThisContainerCannotState {
+        inbound_link_name: String,
+        coded_width: u32,
+        coded_height: u32,
+    },
+    /// A High-profile SPS that ends before, or misstates, the chroma format
+    /// and bit depths `avcC` has to carry beside it.
+    ChromaTrailerUnreadableFromTheSequenceParameterSet {
+        inbound_link_name: String,
+        what: String,
     },
 }
 
@@ -145,6 +180,26 @@ impl std::fmt::Display for Mp4SampleEntryRefusal {
                  mapping family 1, and `mp4-atom` writes family 0 only. The encoder mints such a \
                  stream; recording it does not yet follow"
             ),
+            Self::CodedExtentThisContainerCannotState {
+                inbound_link_name,
+                coded_width,
+                coded_height,
+            } => write!(
+                formatter,
+                "the track on `{inbound_link_name}` is coded at {coded_width}x{coded_height}, and \
+                 ISO/IEC 14496-12 §12.1.3 states each dimension of a visual sample entry in \
+                 sixteen bits — so only 1 to {} is expressible and anything else would state a \
+                 plausible wrong size",
+                u16::MAX
+            ),
+            Self::ChromaTrailerUnreadableFromTheSequenceParameterSet {
+                inbound_link_name,
+                what,
+            } => write!(
+                formatter,
+                "the h264 track on `{inbound_link_name}` names a High profile, so ISO/IEC \
+                 14496-15 §5.3.3.1 makes `avcC` state a chroma format and two bit depths — {what}"
+            ),
         }
     }
 }
@@ -176,17 +231,37 @@ pub fn build_avc1_sample_entry(
         });
     }
 
+    let profile_idc = sequence_parameter_set[1];
+    let chroma_trailer = H264_PROFILES_WHOSE_CONFIGURATION_RECORD_CARRIES_A_CHROMA_TRAILER
+        .contains(&profile_idc)
+        .then(|| read_h264_chroma_trailer_fields(inbound_link_name, sequence_parameter_set))
+        .transpose()?;
+
     Ok(Avc1 {
-        visual: visual_sample_entry(coded_width, coded_height, "StreamLib H.264"),
+        visual: visual_sample_entry(
+            inbound_link_name,
+            coded_width,
+            coded_height,
+            "StreamLib H.264",
+        )?,
         avcc: Avcc {
             configuration_version: 1,
-            avc_profile_indication: sequence_parameter_set[1],
+            avc_profile_indication: profile_idc,
             profile_compatibility: sequence_parameter_set[2],
             avc_level_indication: sequence_parameter_set[3],
             length_size: NAL_UNIT_LENGTH_PREFIX_BYTES,
             sequence_parameter_sets: parameter_sets.sequence_parameter_set_nal_units.clone(),
             picture_parameter_sets: parameter_sets.picture_parameter_set_nal_units.clone(),
-            ext: None,
+            ext: chroma_trailer.map(|fields| AvccExt {
+                chroma_format: fields.chroma_format_idc,
+                // `mp4-atom` states the depth itself and writes the
+                // minus-eight form §5.3.3.1 puts in the three-bit field.
+                bit_depth_luma: fields.bit_depth_luma_minus8 + 8,
+                bit_depth_chroma: fields.bit_depth_chroma_minus8 + 8,
+                // §7.3.2.1.3's SPS extension carries auxiliary-picture coding
+                // only, and no encoder in this tree mints one.
+                sequence_parameter_sets_ext: Vec::new(),
+            }),
         },
         btrt: None,
         colr: None,
@@ -283,6 +358,12 @@ pub fn build_hvc1_sample_entry(
     hvcc.bit_depth_luma_minus8 = parsed_sequence_parameter_set.bit_depth_luma_minus8;
     hvcc.bit_depth_chroma_minus8 = parsed_sequence_parameter_set.bit_depth_chroma_minus8;
     hvcc.num_temporal_layers = parsed_sequence_parameter_set.sps_max_sub_layers_minus1 + 1;
+    // ISO/IEC 14496-15 §8.3.3.1.2 defines `temporalIdNested` as the SPS's own
+    // `sps_temporal_id_nesting_flag`, which this tree's H.265 encoder sets on
+    // every stream it writes.
+    hvcc.temporal_id_nested = parsed_sequence_parameter_set
+        .flags
+        .sps_temporal_id_nesting_flag;
     hvcc.length_size_minus_one = NAL_UNIT_LENGTH_PREFIX_BYTES - 1;
     hvcc.arrays = vec![
         hvcc_array(32, &parameter_sets.video_parameter_set_nal_units),
@@ -291,7 +372,12 @@ pub fn build_hvc1_sample_entry(
     ];
 
     Ok(Hvc1 {
-        visual: visual_sample_entry(coded_width, coded_height, "StreamLib H.265"),
+        visual: visual_sample_entry(
+            inbound_link_name,
+            coded_width,
+            coded_height,
+            "StreamLib H.265",
+        )?,
         hvcc,
         lhvc: None,
         btrt: None,
@@ -367,6 +453,85 @@ pub fn build_opus_sample_entry(
     })
 }
 
+/// The SPS fields the `avcC` High-profile trailer states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SequenceParameterSetFieldsTheAvcChromaTrailerStates {
+    chroma_format_idc: u8,
+    bit_depth_luma_minus8: u8,
+    bit_depth_chroma_minus8: u8,
+}
+
+/// Walk the SPS RBSP as far as the bit depths — ITU-T H.264 §7.3.2.1, in the
+/// element order the standard fixes.
+///
+/// Only ever called for a profile in
+/// [`H264_PROFILES_WHOSE_CONFIGURATION_RECORD_CARRIES_A_CHROMA_TRAILER`], which
+/// is the same set whose SPS carries these elements at all — for any other
+/// profile the walk would read whatever follows `seq_parameter_set_id` as a
+/// chroma format.
+fn read_h264_chroma_trailer_fields(
+    inbound_link_name: &str,
+    sequence_parameter_set: &[u8],
+) -> Result<SequenceParameterSetFieldsTheAvcChromaTrailerStates, Mp4SampleEntryRefusal> {
+    let sequence_parameter_set_rbsp =
+        remove_emulation_prevention_bytes(&sequence_parameter_set[H264_NAL_UNIT_HEADER_BYTES..]);
+    let mut reader = H264BitstreamReader::new(&sequence_parameter_set_rbsp);
+    let ended_early =
+        || Mp4SampleEntryRefusal::ChromaTrailerUnreadableFromTheSequenceParameterSet {
+            inbound_link_name: inbound_link_name.to_string(),
+            what: "the set ends before them, so the track cannot be described".to_string(),
+        };
+
+    // profile_idc, the constraint-flag byte and level_idc, already read at
+    // their fixed offsets by the caller.
+    reader.u(24).ok_or_else(ended_early)?;
+    reader.ue().ok_or_else(ended_early)?; // seq_parameter_set_id
+    let chroma_format_idc = reader.ue().ok_or_else(ended_early)?;
+    if chroma_format_idc > HIGHEST_CHROMA_FORMAT_IDC_AN_AVC_CONFIGURATION_RECORD_STATES {
+        return Err(
+            Mp4SampleEntryRefusal::ChromaTrailerUnreadableFromTheSequenceParameterSet {
+                inbound_link_name: inbound_link_name.to_string(),
+                what: format!(
+                    "it states `chroma_format_idc` {chroma_format_idc} and the record holds two \
+                     bits, so only 0 to \
+                     {HIGHEST_CHROMA_FORMAT_IDC_AN_AVC_CONFIGURATION_RECORD_STATES} is \
+                     expressible"
+                ),
+            },
+        );
+    }
+    if chroma_format_idc == 3 {
+        reader.u(1).ok_or_else(ended_early)?; // separate_colour_plane_flag
+    }
+    let bit_depth_luma_minus8 = reader.ue().ok_or_else(ended_early)?;
+    let bit_depth_chroma_minus8 = reader.ue().ok_or_else(ended_early)?;
+    for (syntax_element, bit_depth_minus8) in [
+        ("bit_depth_luma_minus8", bit_depth_luma_minus8),
+        ("bit_depth_chroma_minus8", bit_depth_chroma_minus8),
+    ] {
+        if bit_depth_minus8 > HIGHEST_BIT_DEPTH_MINUS8_AN_AVC_CONFIGURATION_RECORD_STATES {
+            return Err(
+                Mp4SampleEntryRefusal::ChromaTrailerUnreadableFromTheSequenceParameterSet {
+                    inbound_link_name: inbound_link_name.to_string(),
+                    what: format!(
+                        "it states `{syntax_element}` {bit_depth_minus8} and the record holds \
+                         three bits, so only 0 to \
+                         {HIGHEST_BIT_DEPTH_MINUS8_AN_AVC_CONFIGURATION_RECORD_STATES} is \
+                         expressible — writing it would configure a decoder for a bit depth the \
+                         stream does not carry"
+                    ),
+                },
+            );
+        }
+    }
+
+    Ok(SequenceParameterSetFieldsTheAvcChromaTrailerStates {
+        chroma_format_idc: chroma_format_idc as u8,
+        bit_depth_luma_minus8: bit_depth_luma_minus8 as u8,
+        bit_depth_chroma_minus8: bit_depth_chroma_minus8 as u8,
+    })
+}
+
 fn hvcc_array(nal_unit_type: u8, nal_units: &[Vec<u8>]) -> HvcCArray {
     HvcCArray {
         // Every set the track will ever use is here: `hvc1` forbids in-band
@@ -377,8 +542,30 @@ fn hvcc_array(nal_unit_type: u8, nal_units: &[Vec<u8>]) -> HvcCArray {
     }
 }
 
-fn visual_sample_entry(coded_width: u32, coded_height: u32, compressor: &str) -> Visual {
-    Visual {
+/// The `VisualSampleEntry` fields both video codecs share.
+///
+/// The extent is refused rather than cast: ISO/IEC 14496-12 §12.1.3 makes each
+/// dimension an `unsigned int(16)`, so a wider one wraps into a plausible wrong
+/// size that nothing downstream can tell from a real one. `tkhd` takes its
+/// extent from the same committed value, so refusing here is what keeps the
+/// movie header honest too.
+fn visual_sample_entry(
+    inbound_link_name: &str,
+    coded_width: u32,
+    coded_height: u32,
+    compressor: &str,
+) -> Result<Visual, Mp4SampleEntryRefusal> {
+    let dimensions_a_visual_entry_can_state = 1..=u32::from(u16::MAX);
+    if !dimensions_a_visual_entry_can_state.contains(&coded_width)
+        || !dimensions_a_visual_entry_can_state.contains(&coded_height)
+    {
+        return Err(Mp4SampleEntryRefusal::CodedExtentThisContainerCannotState {
+            inbound_link_name: inbound_link_name.to_string(),
+            coded_width,
+            coded_height,
+        });
+    }
+    Ok(Visual {
         data_reference_index: 1,
         width: coded_width as u16,
         height: coded_height as u16,
@@ -388,7 +575,7 @@ fn visual_sample_entry(coded_width: u32, coded_height: u32, compressor: &str) ->
         frame_count: 1,
         compressor: compressor.into(),
         depth: 24,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -500,13 +687,15 @@ mod tests {
         }
     }
 
-    /// Writes the bit-oriented syntax ITU-T H.265 §7.3 is spelled in, so the
-    /// SPS below can be read against the spec rather than trusted as a blob.
-    struct H265SyntaxBitWriter {
+    /// Writes the bit-oriented syntax a parameter set is spelled in, so the
+    /// sets below can be read against the spec rather than trusted as a blob.
+    /// `u(n)` and `ue(v)` are the same codewords in ITU-T H.264 §9.1 and H.265
+    /// §9.2, so one writer serves both.
+    struct ParameterSetSyntaxBitWriter {
         bits: Vec<bool>,
     }
 
-    impl H265SyntaxBitWriter {
+    impl ParameterSetSyntaxBitWriter {
         fn new() -> Self {
             Self { bits: Vec::new() }
         }
@@ -549,11 +738,17 @@ mod tests {
     /// host has no HEVC encoder. It is not trusted blindly: the engine's own
     /// parser has to accept it for the assertions below to run at all.
     fn h265_sequence_parameter_set() -> Vec<u8> {
-        let mut writer = H265SyntaxBitWriter::new();
+        h265_sequence_parameter_set_nesting_temporal_ids(1)
+    }
+
+    fn h265_sequence_parameter_set_nesting_temporal_ids(
+        sps_temporal_id_nesting_flag: u64,
+    ) -> Vec<u8> {
+        let mut writer = ParameterSetSyntaxBitWriter::new();
         writer
             .unsigned(0, 4) // sps_video_parameter_set_id
             .unsigned(0, 3) // sps_max_sub_layers_minus1
-            .unsigned(1, 1) // sps_temporal_id_nesting_flag
+            .unsigned(sps_temporal_id_nesting_flag, 1) // sps_temporal_id_nesting_flag
             // profile_tier_level(1, 0) — the 12 bytes hvcC reads back
             .unsigned(0, 2) // general_profile_space
             .unsigned(0, 1) // general_tier_flag
@@ -602,11 +797,241 @@ mod tests {
     }
 
     fn h265_parameter_sets() -> ParameterSetsFromAnnexBAccessUnit {
+        h265_parameter_sets_of(h265_sequence_parameter_set())
+    }
+
+    fn h265_parameter_sets_of(
+        sequence_parameter_set: Vec<u8>,
+    ) -> ParameterSetsFromAnnexBAccessUnit {
         ParameterSetsFromAnnexBAccessUnit {
             video_parameter_set_nal_units: vec![vec![0x40, 0x01, 0x0C, 0x01, 0xFF, 0xFF]],
-            sequence_parameter_set_nal_units: vec![h265_sequence_parameter_set()],
+            sequence_parameter_set_nal_units: vec![sequence_parameter_set],
             picture_parameter_set_nal_units: vec![vec![0x44, 0x01, 0xC0, 0x73]],
         }
+    }
+
+    /// A High-profile SPS for 320x240 at level 4.0 — `avc1.640028`, which is
+    /// what this tree's camera path encodes. `profile_idc` 100 is what makes
+    /// ISO/IEC 14496-15 §5.3.3.1 require the `avcC` chroma trailer, and what
+    /// makes ITU-T H.264 §7.3.2.1 put these three elements in the SPS.
+    fn h264_high_profile_sequence_parameter_set(
+        chroma_format_idc: u64,
+        bit_depth_luma_minus8: u64,
+        bit_depth_chroma_minus8: u64,
+    ) -> Vec<u8> {
+        let mut writer = ParameterSetSyntaxBitWriter::new();
+        writer
+            .unsigned(100, 8) // profile_idc — High
+            .unsigned(0x00, 8) // constraint flags
+            .unsigned(40, 8) // level_idc — 4.0
+            .exp_golomb(0) // seq_parameter_set_id
+            .exp_golomb(chroma_format_idc);
+        if chroma_format_idc == 3 {
+            writer.unsigned(0, 1); // separate_colour_plane_flag
+        }
+        writer
+            .exp_golomb(bit_depth_luma_minus8)
+            .exp_golomb(bit_depth_chroma_minus8)
+            .unsigned(0, 1) // qpprime_y_zero_transform_bypass_flag
+            .unsigned(0, 1) // seq_scaling_matrix_present_flag
+            .exp_golomb(0) // log2_max_frame_num_minus4
+            .exp_golomb(2) // pic_order_cnt_type
+            .exp_golomb(1) // max_num_ref_frames
+            .unsigned(0, 1) // gaps_in_frame_num_value_allowed_flag
+            .exp_golomb(19) // pic_width_in_mbs_minus1
+            .exp_golomb(14) // pic_height_in_map_units_minus1
+            .unsigned(1, 1) // frame_mbs_only_flag
+            .unsigned(1, 1) // direct_8x8_inference_flag
+            .unsigned(0, 1) // frame_cropping_flag
+            .unsigned(0, 1); // vui_parameters_present_flag
+
+        // NAL header: forbidden_zero, nal_ref_idc 3, type 7 (SPS).
+        let mut nal_unit = vec![0x67];
+        nal_unit.extend_from_slice(&writer.finish_rbsp());
+        nal_unit
+    }
+
+    fn h264_high_profile_parameter_sets(
+        chroma_format_idc: u64,
+        bit_depth_luma_minus8: u64,
+        bit_depth_chroma_minus8: u64,
+    ) -> ParameterSetsFromAnnexBAccessUnit {
+        ParameterSetsFromAnnexBAccessUnit {
+            video_parameter_set_nal_units: vec![],
+            sequence_parameter_set_nal_units: vec![h264_high_profile_sequence_parameter_set(
+                chroma_format_idc,
+                bit_depth_luma_minus8,
+                bit_depth_chroma_minus8,
+            )],
+            picture_parameter_set_nal_units: vec![H264_PICTURE_PARAMETER_SET.to_vec()],
+        }
+    }
+
+    /// The four trailer bytes ISO/IEC 14496-15 §5.3.3.1 puts after `avcC`'s
+    /// picture-parameter-set array, found by walking the encoded box by hand.
+    ///
+    /// Deliberately not `mp4_atom::Avcc::decode`: a writer and a reader from
+    /// one crate agreeing with each other is not evidence about a third party,
+    /// which is the lesson the missing `stco` taught. The `mp4` oracle is no
+    /// help here either — it skips to the end of the box and never exposes
+    /// these bytes at all.
+    fn avcc_chroma_trailer_bytes_read_by_a_hand_walk(encoded_sample_entry: &[u8]) -> Vec<u8> {
+        let box_type_offset = encoded_sample_entry
+            .windows(4)
+            .position(|four| four == b"avcC")
+            .expect("the entry carries an avcC");
+        let box_bytes = u32::from_be_bytes(
+            encoded_sample_entry[box_type_offset - 4..box_type_offset]
+                .try_into()
+                .expect("four size bytes"),
+        ) as usize;
+        let body = &encoded_sample_entry[box_type_offset + 4..];
+
+        let sequence_parameter_set_count = usize::from(body[5] & 0x1F);
+        let mut offset = 6;
+        for _ in 0..sequence_parameter_set_count {
+            offset += 2 + usize::from(u16::from_be_bytes([body[offset], body[offset + 1]]));
+        }
+        let picture_parameter_set_count = usize::from(body[offset]);
+        offset += 1;
+        for _ in 0..picture_parameter_set_count {
+            offset += 2 + usize::from(u16::from_be_bytes([body[offset], body[offset + 1]]));
+        }
+        body[offset..box_bytes - 8].to_vec()
+    }
+
+    fn encoded_avc1_sample_entry(parameter_sets: &ParameterSetsFromAnnexBAccessUnit) -> Vec<u8> {
+        let entry = build_avc1_sample_entry("camera/video", parameter_sets, 320, 240)
+            .expect("the sets are complete");
+        let mut encoded = Vec::new();
+        mp4_atom::Encode::encode(&entry, &mut encoded).expect("the entry encodes");
+        encoded
+    }
+
+    #[test]
+    fn a_high_profile_avcc_carries_the_chroma_and_bit_depth_trailer_the_standard_requires() {
+        let trailer = avcc_chroma_trailer_bytes_read_by_a_hand_walk(&encoded_avc1_sample_entry(
+            &h264_high_profile_parameter_sets(1, 0, 0),
+        ));
+
+        assert_eq!(
+            trailer,
+            // §5.3.3.1: six reserved one bits then `chroma_format` 1 (4:2:0),
+            // five then `bit_depth_luma_minus8` 0, five then
+            // `bit_depth_chroma_minus8` 0, then no SPS extensions.
+            vec![0b1111_1101, 0b1111_1000, 0b1111_1000, 0x00],
+            "the camera path encodes avc1.640028, so a reader that consults these bytes gets \
+             them for every recording this writer makes"
+        );
+    }
+
+    #[test]
+    fn the_avcc_trailer_states_the_chroma_format_and_depths_the_sps_carries() {
+        let trailer = avcc_chroma_trailer_bytes_read_by_a_hand_walk(&encoded_avc1_sample_entry(
+            &h264_high_profile_parameter_sets(2, 2, 2),
+        ));
+
+        assert_eq!(
+            (trailer[0] & 0b11, trailer[1] & 0b111, trailer[2] & 0b111),
+            (2, 2, 2),
+            "4:2:2 at ten bits, read off the SPS rather than defaulted to 4:2:0 at eight"
+        );
+    }
+
+    #[test]
+    fn a_baseline_avcc_carries_no_trailer_because_the_standard_states_none_for_it() {
+        let encoded = encoded_avc1_sample_entry(&h264_parameter_sets());
+        let box_type_offset = encoded
+            .windows(4)
+            .position(|four| four == b"avcC")
+            .expect("the entry carries an avcC");
+        let box_bytes = u32::from_be_bytes(
+            encoded[box_type_offset - 4..box_type_offset]
+                .try_into()
+                .expect("four size bytes"),
+        ) as usize;
+
+        assert_eq!(
+            box_bytes - 8,
+            6 + 2 + H264_SEQUENCE_PARAMETER_SET.len() + 1 + 2 + H264_PICTURE_PARAMETER_SET.len(),
+            "profile_idc 66 is not in §5.3.3.1's list, so the box ends at the PPS array — \
+             writing four more bytes there would state a chroma format the standard does not \
+             put in this record"
+        );
+    }
+
+    #[test]
+    fn a_high_profile_sequence_parameter_set_cut_short_of_its_chroma_fields_is_refused_by_name() {
+        let mut parameter_sets = h264_high_profile_parameter_sets(1, 0, 0);
+        parameter_sets.sequence_parameter_set_nal_units[0].truncate(4);
+
+        let refusal = build_avc1_sample_entry("camera/video", &parameter_sets, 320, 240)
+            .expect_err("a High-profile record cannot be written without them");
+        assert!(
+            matches!(
+                refusal,
+                Mp4SampleEntryRefusal::ChromaTrailerUnreadableFromTheSequenceParameterSet { .. }
+            ),
+            "got {refusal:?}"
+        );
+        assert!(refusal.to_string().contains("camera/video"));
+    }
+
+    #[test]
+    fn hvcc_states_the_temporal_id_nesting_the_sequence_parameter_set_declared() {
+        for sps_temporal_id_nesting_flag in [0, 1] {
+            let entry = build_hvc1_sample_entry(
+                "camera/video",
+                &h265_parameter_sets_of(h265_sequence_parameter_set_nesting_temporal_ids(
+                    sps_temporal_id_nesting_flag,
+                )),
+                320,
+                240,
+            )
+            .expect("the sets are complete");
+
+            assert_eq!(
+                entry.hvcc.temporal_id_nested,
+                sps_temporal_id_nesting_flag == 1,
+                "ISO/IEC 14496-15 §8.3.3.1.2 defines the field as exactly that flag, and this \
+                 tree's own H.265 encoder sets it on every stream"
+            );
+        }
+    }
+
+    #[test]
+    fn a_coded_extent_wider_than_a_visual_entry_can_state_is_refused_rather_than_wrapped() {
+        for (coded_width, coded_height) in [(70_000, 240), (320, 70_000), (0, 240)] {
+            let refusal = build_avc1_sample_entry(
+                "camera/video",
+                &h264_parameter_sets(),
+                coded_width,
+                coded_height,
+            )
+            .expect_err("a dimension a sixteen-bit field cannot name is not cast into one");
+            assert!(
+                matches!(
+                    refusal,
+                    Mp4SampleEntryRefusal::CodedExtentThisContainerCannotState { .. }
+                ),
+                "got {refusal:?}"
+            );
+            let said = refusal.to_string();
+            assert!(
+                said.contains("camera/video") && said.contains("§12.1.3"),
+                "the refusal names the link and the clause: {said}"
+            );
+        }
+
+        let refusal = build_hvc1_sample_entry("camera/video", &h265_parameter_sets(), 70_000, 240)
+            .expect_err("the h265 entry states its extent in the same sixteen bits");
+        assert!(
+            matches!(
+                refusal,
+                Mp4SampleEntryRefusal::CodedExtentThisContainerCannotState { .. }
+            ),
+            "got {refusal:?}"
+        );
     }
 
     #[test]

@@ -694,7 +694,6 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 // A fragmented file's duration is not known while it is being
                 // written, and `mehd` is optional precisely so it need not be.
                 duration: 0,
-                next_track_id: self.tracks.len() as u32 + 1,
                 ..Default::default()
             },
             mvex: Some(Mvex {
@@ -721,6 +720,10 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                     duration: 0,
                     // §8.3.2.3: a visual track states its presentation size and
                     // carries no volume; an audio track is the other way round.
+                    // The extent is a `u16` here as it is in the sample entry,
+                    // and one that would not fit was refused when the entry was
+                    // built — a track only reaches this point with an extent
+                    // both boxes can name.
                     width: FixedPoint::new(coded_width as u16, 0),
                     height: FixedPoint::new(coded_height as u16, 0),
                     volume: FixedPoint::new(track_volume, 0),
@@ -781,6 +784,15 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 });
             }
         }
+        // §8.2.2.3 wants a value larger than every track id in use, which is
+        // the largest id plus one and not the number of links: a link latched
+        // before it named a codec gets no `trak`, and ids need not run 1..n.
+        moov.mvhd.next_track_id = moov
+            .trak
+            .iter()
+            .map(|trak| trak.tkhd.track_id.saturating_add(1))
+            .max()
+            .unwrap_or(1);
         Ok(moov)
     }
 
@@ -1835,6 +1847,31 @@ mod tests {
             "a link that never named a codec describes no track, and the camera still records"
         );
         assert_eq!(only_moov(&atoms).trak[0].mdia.hdlr.name, "camera/video");
+        assert_eq!(
+            only_moov(&atoms).mvhd.next_track_id,
+            2,
+            "§8.2.2.3 wants a value larger than every track id in use, and only track 1 is in \
+             use — the link count would name 3 and describe an id nothing carries"
+        );
+    }
+
+    #[test]
+    fn the_movie_header_names_a_track_id_larger_than_every_one_the_movie_carries() {
+        let file = write_video_and_audio_tracks(4);
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let moov = only_moov(&atoms);
+
+        let largest_track_id_in_use = moov
+            .trak
+            .iter()
+            .map(|trak| trak.tkhd.track_id)
+            .max()
+            .expect("the movie carries tracks");
+        assert!(
+            moov.mvhd.next_track_id > largest_track_id_in_use,
+            "§8.2.2.3: next_track_id {} must exceed the largest id in use {largest_track_id_in_use}",
+            moov.mvhd.next_track_id
+        );
     }
 
     /// Every top-level box start, which is what `data_offset` is measured from.
