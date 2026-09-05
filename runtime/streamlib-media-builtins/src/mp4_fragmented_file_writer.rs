@@ -757,10 +757,10 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                                 codecs: vec![sample_entry],
                             },
                             // A fragmented movie has no chunks in its `moov`, so
-                            // this table is empty — but §8.5.1 makes a chunk
-                            // offset box mandatory in every `stbl` regardless,
-                            // and a reader that enforces it refuses the whole
-                            // file without one.
+                            // this table is empty — but ISO/IEC 14496-12 §8.7.5
+                            // states the box as mandatory with no exception for
+                            // an empty one, and a reader that enforces it
+                            // refuses the whole file without it.
                             stco: Some(Stco {
                                 entries: Vec::new(),
                             }),
@@ -1101,6 +1101,32 @@ mod tests {
     /// 20 ms, the span one Opus packet covers.
     const ONE_OPUS_PACKET_NS: i64 = 20_000_000;
 
+    fn write_video_and_audio_tracks(frames: usize) -> Vec<u8> {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        for index in 0..frames {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+        file
+    }
+
     fn write_one_video_track(frames: usize) -> (Vec<u8>, Mp4SinkRunTally) {
         let mut file = Vec::new();
         let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
@@ -1371,6 +1397,26 @@ mod tests {
             1,
             "the independent parser finds the track the writer described"
         );
+
+        let two_track_file = write_video_and_audio_tracks(12);
+        let size = two_track_file.len() as u64;
+        let reader = mp4::Mp4Reader::read_header(std::io::Cursor::new(two_track_file), size)
+            .expect("an independent parser reads a file with both track kinds");
+        assert_eq!(reader.tracks().len(), 2);
+        for track in reader.tracks().values() {
+            assert_eq!(
+                track
+                    .trak
+                    .mdia
+                    .minf
+                    .stbl
+                    .stco
+                    .as_ref()
+                    .map(|stco| stco.entries.len()),
+                Some(0),
+                "the box is present and its table is empty, as a fragmented movie's is"
+            );
+        }
     }
 
     #[test]
@@ -1970,28 +2016,7 @@ mod tests {
     /// streamlib-media-builtins --lib the_checked_in_inspector_fixture`.
     #[test]
     fn the_checked_in_inspector_fixture_is_what_this_writer_produces() {
-        let mut file = Vec::new();
-        let mut writer = Mp4FragmentedFileWriter::new(
-            &mut file,
-            &["camera/video".to_string(), "microphone/audio".to_string()],
-        );
-        for index in 0..12usize {
-            writer
-                .accept_bag(
-                    "camera/video",
-                    &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
-                    index as i64 * ONE_VIDEO_FRAME_NS,
-                )
-                .expect("accepted");
-            writer
-                .accept_bag(
-                    "microphone/audio",
-                    &opus_bag(index as u64, 2),
-                    index as i64 * ONE_OPUS_PACKET_NS,
-                )
-                .expect("accepted");
-        }
-        writer.finish().expect("closes");
+        let file = write_video_and_audio_tracks(12);
 
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../xtask/tests/fixtures/two_track_recording.mp4");

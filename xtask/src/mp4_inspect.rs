@@ -266,8 +266,8 @@ mod tests {
     fn one_opus_track_file() -> Vec<u8> {
         use mp4_atom::{
             Audio, Dinf, Dops, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdat, Mdhd, Mdia, Mfhd, Minf,
-            Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex,
-            Trun, TrunEntry, Url,
+            Moof, Moov, Mvex, Mvhd, Opus, Smhd, Stbl, Stco, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak,
+            Trex, Trun, TrunEntry, Url,
         };
 
         let mut bytes = Vec::new();
@@ -339,6 +339,12 @@ mod tests {
                                     btrt: None,
                                 })],
                             },
+                            // §8.7.5: the box the writer emits, so this
+                            // hand-built fixture keeps representing what
+                            // `Mp4Sink` actually produces.
+                            stco: Some(Stco {
+                                entries: Vec::new(),
+                            }),
                             ..Default::default()
                         },
                         ..Default::default()

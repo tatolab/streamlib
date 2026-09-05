@@ -1779,15 +1779,6 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   own, so downstream of a CMAF hop a gapless `sequence_index` is not evidence of a
   lossless stream and cross-track alignment is not recoverable from it. The pair and the
   stamp are producer-scoped, not end-to-end. [extension-model]
-- **DECIDED** — A publisher carries both containers, chosen by a `container_format`
-  config key: `cmaf` (the default — CMAF fragments every MoQ player already reads) and
-  `streamlib_bag` (msgpack, the bag's own keys byte-exact). CMAF is the interop format
-  and is lossy against the bag contract; the bag envelope is what a StreamLib subscriber
-  uses when it must hand a decoder back exactly what the producer wrote. [extension-model]
-- **DECIDED** — The draft is declared as the WebTransport subprotocol `moqt-16` on the
-  extended CONNECT, QUIC ALPN staying `h3`; draft-16 removed version negotiation from
-  `CLIENT_SETUP`. `moq-transport` does not dial — it takes an established
-  `web_transport::Session` — so establishing it is the wheel's job. [extension-model]
 - **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
   inbound link and derives its catalog or session media description from them. The
   link's channel names the track in the catalog, not on the wire: a CMAF broadcast's
