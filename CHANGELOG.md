@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.52](https://github.com/tatolab/streamlib/compare/v0.18.51...v0.18.52) (2026-09-05)
+
+
+### Features
+
+* **engine:** export the bag codec as encode_bag_to_msgpack_bytes and decode_msgpack_bytes_to_python_object ([#2175](https://github.com/tatolab/streamlib/issues/2175)) ([81f0b49](https://github.com/tatolab/streamlib/commit/81f0b491a117264f192e8b56190ccae730aa4f6c))
+
 ## [0.18.51](https://github.com/tatolab/streamlib/compare/v0.18.50...v0.18.51) (2026-09-05)
 
 
