@@ -21,8 +21,9 @@ Nothing in this file asks for it.
 `tracks` input, and each link becomes one RTP track whose medium its first bag
 settles by its `codec`. It is `Mp4Sink`'s shape, reused — with one endpoint
 constraint the file writer does not have: a WHIP session carries at most one
-video and one audio track, so a second link of either medium is refused by name
-at `setup()`.
+video and one audio track. `setup()` refuses more than two links, before
+anything is offered; a second link of the same *medium* is not knowable until
+its first bag says so by its `codec`, and is refused by name there.
 
 **The session opens on the first bag, not in `setup()`.** A relay round trip
 inside `setup()` would spend the helper's sixty-second registration budget, and

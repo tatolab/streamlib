@@ -107,8 +107,11 @@ _ = (streamlib.H264Decoder, WhepPlayer, WhipPublisher)
 fi
 
 # ── The credentials, from the environment and never from the tree ────
-# `.env` is gitignored and is where the rig keeps them; an already-exported
-# value wins, so CI or a shell that set one is never overridden.
+# `.env` is gitignored and is where the rig keeps them. Sourced only when a
+# `STREAMLIB_` name is missing, and `set -a` then exports everything it holds —
+# so a `CLOUDFLARE_` value it carries can replace one already in the
+# environment. Export the `STREAMLIB_` names to pin a run to exactly what you
+# meant; those are read first and are never re-derived.
 if { [ -z "${STREAMLIB_WHIP_URL:-}" ] || [ -z "${STREAMLIB_WHEP_URL:-}" ]; } \
     && [ -f "$REPO_ROOT/.env" ]; then
     set -a

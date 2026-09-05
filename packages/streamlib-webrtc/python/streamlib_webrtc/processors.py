@@ -74,6 +74,19 @@ HELPER_LINK_PAYLOAD_CEILING_BYTES = 16 * 1024 * 1024
 VideoOrAudio = Literal["video", "audio"]
 
 
+class LinkOutputWriteFailure(Exception):
+    """A bag this player wrote was refused, carrying the port that refused it.
+
+    Distinguishes the one failure a reconnect cannot fix from every failure it
+    can: the endpoint is reachable and the bag is wrong, so the port has to
+    reach the log and the retry loop has to stop.
+    """
+
+    def __init__(self, port: str) -> None:
+        super().__init__(f"writing a bag on `{port}` failed")
+        self.port = port
+
+
 class ReceivedAccessUnit(Protocol):
     """What spelling a video bag reads off one received access unit."""
 
@@ -398,6 +411,15 @@ class WhepPlayer:
         each session's whole life, close included, so a teardown arriving while
         a connect is outstanding waits for the thread rather than contending
         with it.
+
+        A fresh session also means a fresh ordering counter, so `group_index`
+        and `sequence_index` restart at zero after a reconnect. That is a
+        backwards step rather than the gap the encoded-stream contract otherwise
+        promises, and it is deliberate: the pair is producer-scoped, this player
+        is the producer, and each session is a new stream from its point of
+        view. A decoder downstream reads the backwards step as broken continuity
+        and re-enters at the next sync point, which is what it would do for the
+        loss the reconnect actually represents.
         """
         delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
         while not self._stop.is_set():
@@ -409,6 +431,17 @@ class WhepPlayer:
                 log.info("WhepPlayer: the relay accepted the session")
                 delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
                 self._drain_until_stopped(session, outputs)
+            except LinkOutputWriteFailure as write_failure:
+                # Not the endpoint's fault and not retryable: the bag this
+                # player wrote is one the engine refused, so reconnecting would
+                # spend an endpoint's session forever on a bag that will be
+                # refused again. Named, with its port, and the thread ends.
+                log.error(
+                    f"WhepPlayer: writing a bag on `{write_failure.port}` "
+                    f"failed, and the reading thread is ending: "
+                    f"{write_failure.__cause__}"
+                )
+                return
             except Exception as failure:
                 log.warn(
                     f"WhepPlayer: the session ended ({failure}); retrying in "
@@ -433,7 +466,10 @@ class WhepPlayer:
                 continue
             port, bag = _bag_for(media)
             self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
-            outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+            try:
+                outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+            except Exception as write_failure:
+                raise LinkOutputWriteFailure(port) from write_failure
             self._report_progress(port)
 
     def _report_progress(self, port: str) -> None:

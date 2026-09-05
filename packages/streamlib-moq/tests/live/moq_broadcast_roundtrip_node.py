@@ -30,6 +30,13 @@ import os
 import streamlib
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 
+#: CMAF and not `streamlib_bag`, and one node is the reason. That container
+#: names each track after its link's own channel — a cuid2 minted at `add` time
+#: — so a subscriber in the same graph would need names that do not exist until
+#: after it has been constructed. Proving it takes two nodes, the second reading
+#: the first's names off `graph`; there is no such fixture yet.
+CONTAINER_FORMAT = "cmaf"
+
 #: What the subscriber asks for. Under CMAF the container names media tracks
 #: `{track_id}.m4s`, numbered from one in declaration order — which is
 #: `runtime.connect` order, so wiring video into `tracks` first is what makes
@@ -74,11 +81,6 @@ def main() -> None:
         help="the broadcast name both halves agree on",
     )
     parser.add_argument(
-        "--container-format",
-        choices=("cmaf", "streamlib_bag"),
-        default="cmaf",
-    )
-    parser.add_argument(
         "--audio-capture-device",
         default=None,
         help=(
@@ -99,32 +101,19 @@ def main() -> None:
         config={
             "relay_url": relay_url,
             "broadcast": arguments.broadcast,
-            "container_format": arguments.container_format,
+            "container_format": CONTAINER_FORMAT,
         },
         display_name="publisher",
     )
-    # Under `streamlib_bag` a track is named after its link's own channel — a
-    # cuid2 minted at add time, which nothing can be told in advance. The arm
-    # that exercises that container names its tracks from the live graph
-    # instead; here the CMAF fallback contract makes them knowable.
-    subscriber_configuration: dict[str, object] = {
-        "relay_url": relay_url,
-        "broadcast": arguments.broadcast,
-        "container_format": arguments.container_format,
-    }
-    if arguments.container_format == "cmaf":
-        subscriber_configuration["video_track"] = VIDEO_TRACK_NAME
-        subscriber_configuration["audio_track"] = AUDIO_TRACK_NAME
-    else:
-        subscriber_configuration["video_track"] = os.environ[
-            "STREAMLIB_MOQ_VIDEO_TRACK"
-        ]
-        subscriber_configuration["audio_track"] = os.environ[
-            "STREAMLIB_MOQ_AUDIO_TRACK"
-        ]
     subscriber = runtime.add(
         MoqBroadcastSubscriber,
-        config=subscriber_configuration,
+        config={
+            "relay_url": relay_url,
+            "broadcast": arguments.broadcast,
+            "container_format": CONTAINER_FORMAT,
+            "video_track": VIDEO_TRACK_NAME,
+            "audio_track": AUDIO_TRACK_NAME,
+        },
         display_name="subscriber",
     )
 

@@ -26,7 +26,12 @@
 #   interop the CMAF proof (owner, 2026-09-05): `moq-sub`, built from
 #           `cloudflare/moq-rs`, reads the same broadcast. A third-party client
 #           parsing the catalog, accepting the init segment and decoding the
-#           media is stronger than matching a captured reference in-repo.
+#           media is stronger than matching a captured reference in-repo — so
+#           the arm asks for all three. `--catalog` is passed, or moq-sub never
+#           fetches `.catalog` at all and falls back to the hardcoded track
+#           names; and the verdict reads the fragment count out of the
+#           inspector, because a capture carrying only `ftyp` + `moov` parses
+#           perfectly and proves no media moved.
 #
 # CREDENTIALS. The relay URL is itself a credential — a draft-16 relay is
 # provisioned per account and carries its token in the URL path — so it is read
@@ -35,7 +40,15 @@
 # output directory. `streamlib graph` renders every processor's config, so this
 # script reads the graph in a pipe and never persists it.
 #
-# Absent credentials are a cannot-run (exit 77) and never a pass.
+# One exception, stated because it cannot be avoided: `moq-sub` takes its URL as
+# a positional argument and reads no environment variable, so the *subscribe*
+# token is in that process's `/proc/<pid>/cmdline` for the arm's 25 seconds. It
+# is the subscribe-only token, not the publish one, and its stderr is scrubbed
+# of the URL before the log is kept.
+#
+# Absent credentials are a cannot-run (exit 77) and never a pass — the interop
+# arm's included. Only `SKIP_INTEROP=1` or a genuinely missing `moq-sub` binary
+# downgrades that arm to a report.
 #
 # Usage:
 #   packages/streamlib-moq/tests/live/moq_broadcast_roundtrip.sh [output_dir]
@@ -47,7 +60,6 @@
 #   STREAMLIB_MOQ_SUB_URL     what `moq-sub` dials for the interop arm. Falls
 #                             back to the relay host + CLOUDFLARE_MOQ_SUB_TOKEN.
 #   STREAMLIB_MOQ_BROADCAST   the broadcast both halves name (default below)
-#   CONTAINER_FORMAT          cmaf (default) or streamlib_bag
 #   SAMPLE_COUNT/SAMPLE_EVERY the exchange budget (defaults 6 / 2)
 #   CONTROL_PLANE_PORT        default 9412
 #   RUN_SECONDS               node budget (default 120)
@@ -69,7 +81,6 @@ ENGINE_FIXTURES="$REPO_ROOT/runtime/streamlib-engine/tests/fixtures"
 BASELINE_TSV="$ENGINE_FIXTURES/psnr_vivid_baseline.tsv"
 
 OUTPUT_DIR="${1:-/tmp/streamlib-moq-live-$(date +%s)}"
-CONTAINER_FORMAT="${CONTAINER_FORMAT:-cmaf}"
 SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
 CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9412}"
@@ -83,11 +94,6 @@ SKIP_INTEROP="${SKIP_INTEROP:-}"
 say() { echo "[moq-live] $*"; }
 cannot_run() { echo "[moq-live] SKIP: $*" >&2; exit 77; }
 fail() { echo "[moq-live] FAIL: $*" >&2; exit 1; }
-
-case "$CONTAINER_FORMAT" in
-    cmaf|streamlib_bag) ;;
-    *) fail "CONTAINER_FORMAT '$CONTAINER_FORMAT' is neither cmaf nor streamlib_bag" ;;
-esac
 
 # ── What has to be here ──────────────────────────────────────────────
 for tool in cargo python3 v4l2-ctl; do
@@ -116,9 +122,13 @@ _ = (streamlib.H264Decoder, MoqBroadcastPublisher, MoqBroadcastSubscriber)
 fi
 
 # ── The credentials, from the environment and never from the tree ────
-# `.env` is gitignored and is where the rig keeps them; an already-exported
-# value wins, so CI or a shell that set one is never overridden.
-if [ -z "${STREAMLIB_MOQ_RELAY_URL:-}" ] && [ -f "$REPO_ROOT/.env" ]; then
+# `.env` is gitignored and is where the rig keeps them. Sourced only when a
+# `STREAMLIB_` name is missing, and `set -a` then exports everything it holds —
+# so a `CLOUDFLARE_` value it carries can replace one already in the
+# environment. Export the `STREAMLIB_` names to pin a run to exactly what you
+# meant; those are read first and are never re-derived.
+if { [ -z "${STREAMLIB_MOQ_RELAY_URL:-}" ] || [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; } \
+    && [ -f "$REPO_ROOT/.env" ]; then
     set -a
     # shellcheck disable=SC1091
     . "$REPO_ROOT/.env" >/dev/null 2>&1 || true
@@ -137,6 +147,13 @@ if [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ] \
     && [ -n "${CLOUDFLARE_MOQ_DRAFT_16_URL:-}" ] \
     && [ -n "${CLOUDFLARE_MOQ_SUB_TOKEN:-}" ]; then
     STREAMLIB_MOQ_SUB_URL="https://${CLOUDFLARE_MOQ_DRAFT_16_URL#https://}/${CLOUDFLARE_MOQ_SUB_TOKEN}"
+fi
+# The interop arm is the owner's CMAF proof, not a bonus: a run that cannot
+# reach it has not verified what it reports, so an absent subscribe credential
+# is a cannot-run like any other. `SKIP_INTEROP=1` is the way to ask for the
+# video and audio arms alone.
+if [ "$SKIP_INTEROP" != "1" ] && [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
+    cannot_run "no subscribe credential for the CMAF interop arm. Export STREAMLIB_MOQ_SUB_URL, or put CLOUDFLARE_MOQ_SUB_TOKEN in the repo-root .env. Pass SKIP_INTEROP=1 to run the video and audio arms without it."
 fi
 
 # ── The camera ───────────────────────────────────────────────────────
@@ -203,7 +220,7 @@ v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$VIVID_TEST_PATTERN" 2>"$OUTPUT_DIR
 say "Output dir:        $OUTPUT_DIR"
 say "Vivid device:      $VIVID_DEVICE"
 say "Test pattern:      $VIVID_TEST_PATTERN (was $ORIGINAL_PATTERN, restored on exit)"
-say "Container:         $CONTAINER_FORMAT"
+say "Container:         cmaf"
 say "Broadcast:         $BROADCAST"
 say "Control plane:     $CONTROL_PLANE_URL"
 say "Relay:             <redacted — the URL carries the account's token>"
@@ -265,7 +282,6 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
             --camera "$VIVID_DEVICE" \
             ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
             --broadcast "$BROADCAST" \
-            --container-format "$CONTAINER_FORMAT" \
             --control-plane-port "$CONTROL_PLANE_PORT" \
         > "$LOG_FILE" 2>&1 &
 NODE_PID=$!
@@ -391,19 +407,39 @@ if [ "$SKIP_INTEROP" != "1" ]; then
     elif [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
         INTEROP_VERDICT="cannot run — no subscribe credential (STREAMLIB_MOQ_SUB_URL or CLOUDFLARE_MOQ_SUB_TOKEN)"
     else
-        # `--name` is required and is the broadcast, not a track: moq-sub
-        # subscribes to the namespace and then fetches `.catalog`, `0.mp4` and
-        # the `{track_id}.m4s` tracks by the fallback contract. It writes one
-        # fMP4 stream to stdout.
-        timeout 25 moq-sub --name "$BROADCAST" "$STREAMLIB_MOQ_SUB_URL" \
-            > "$OUTPUT_DIR/moq_sub_output.mp4" 2> "$OUTPUT_DIR/moq_sub.log" || true
+        # `--name` is the broadcast, not a track. `--catalog` is what makes this
+        # the catalog proof: without it moq-sub never asks for `.catalog` and
+        # falls straight to its hardcoded `0.mp4` / `{track_id}.m4s` names, so
+        # the whole catalog writer could be reverted and the arm would still be
+        # green. It writes one fMP4 stream to stdout.
+        timeout 25 moq-sub --catalog --name "$BROADCAST" "$STREAMLIB_MOQ_SUB_URL" \
+            > "$OUTPUT_DIR/moq_sub_output.mp4" 2> "$OUTPUT_DIR/moq_sub_raw.log" || true
+        # The URL is a credential and this is a third-party binary's stderr, so
+        # it is scrubbed before the log is kept rather than trusted not to echo.
+        sed "s|$STREAMLIB_MOQ_SUB_URL|<redacted subscribe url>|g" \
+            "$OUTPUT_DIR/moq_sub_raw.log" > "$OUTPUT_DIR/moq_sub.log" 2>/dev/null || true
+        rm -f "$OUTPUT_DIR/moq_sub_raw.log"
         interop_bytes="$(stat -c %s "$OUTPUT_DIR/moq_sub_output.mp4" 2>/dev/null || echo 0)"
         if [ "$interop_bytes" -gt 0 ] \
             && "$REPO_ROOT/target/release/xtask" mp4-inspect "$OUTPUT_DIR/moq_sub_output.mp4" \
-                > "$OUTPUT_DIR/moq_sub_inspect.json" 2>&1; then
-            INTEROP_VERDICT="pass — moq-sub read $interop_bytes bytes and an independent parser read the container"
+                > "$OUTPUT_DIR/moq_sub_inspect.json" 2>/dev/null; then
+            # `mp4-inspect` bails only on a missing `moov`, so a capture holding
+            # the init segment and nothing else parses cleanly. The fragment
+            # count is what says media actually arrived and decoded.
+            INTEROP_FRAGMENTS="$(python3 -c '
+import json, sys
+try:
+    print(len(json.load(open(sys.argv[1])).get("fragments", [])))
+except Exception:
+    print(0)
+' "$OUTPUT_DIR/moq_sub_inspect.json")"
+            if [ "${INTEROP_FRAGMENTS:-0}" -gt 0 ] 2>/dev/null; then
+                INTEROP_VERDICT="pass — moq-sub fetched the catalog, accepted the init segment and decoded $INTEROP_FRAGMENTS fragments ($interop_bytes bytes)"
+            else
+                INTEROP_VERDICT="fail — moq-sub read $interop_bytes bytes but the capture carries no media fragment, so only the init segment arrived"
+            fi
         else
-            INTEROP_VERDICT="fail — moq-sub produced $interop_bytes bytes; see moq_sub.log"
+            INTEROP_VERDICT="fail — moq-sub produced $interop_bytes bytes that no parser could read; see moq_sub.log"
         fi
     fi
 fi

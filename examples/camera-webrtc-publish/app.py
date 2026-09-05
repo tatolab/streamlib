@@ -10,8 +10,9 @@ session's whole life is that wheel's Rust.
 
 The publisher is `Mp4Sink`'s shape reused: one fan-in input, and each inbound
 link becomes one track whose medium the link's first bag settles by its `codec`.
-One WHIP session carries at most one video and one audio track, so a second link
-of either medium is refused by name at `setup()` rather than silently dropped.
+One WHIP session carries at most one video and one audio track: `setup()`
+refuses a third link outright, and a second link of the same medium is refused
+by name on its first bag, since nothing before it says which medium it carries.
 """
 
 import os
