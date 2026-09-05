@@ -55,7 +55,7 @@ pub const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 impl AnnexBNalHeaderGrammar {
     /// How many bytes this grammar's NAL header occupies — one for H.264
     /// (ITU-T H.264 §7.3.1), two for H.265 (§7.3.1.2).
-    fn nal_unit_header_bytes(self) -> usize {
+    pub(crate) fn nal_unit_header_bytes(self) -> usize {
         match self {
             Self::H264 => 1,
             Self::H265 => 2,

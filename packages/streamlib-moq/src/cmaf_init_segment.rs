@@ -25,11 +25,17 @@ use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_broadcast_catalog::CMAF_PACKAGING;
 
-/// The brands a CMAF init segment declares. `cmfc` is the CMAF media-profile
-/// brand and `iso6` the base ISOBMFF version fragmented boxes need; `mp42`
-/// rides along because some players gate on it before looking further.
-const MAJOR_BRAND: &[u8; 4] = b"cmfc";
-const COMPATIBLE_BRANDS: [&[u8; 4]; 3] = [b"cmfc", b"iso6", b"mp42"];
+/// The brands a CMAF init segment declares — the same set, in the same order,
+/// as the engine's own recorder.
+///
+/// `iso6` is the base ISOBMFF version fragmented boxes need, and it is the
+/// major brand every MoQ-ecosystem player has actually been exercised against
+/// on a muxed `moov`: ffmpeg's CMAF muxer writes `iso6` major with `cmfc`
+/// compatible whatever the track count, and `moq-pub` forwards ffmpeg's init
+/// verbatim. `cmfc` stays in the compatible list, where it is the media-profile
+/// assertion this file makes.
+const MAJOR_BRAND: &[u8; 4] = b"iso6";
+const COMPATIBLE_BRANDS: [&[u8; 4]; 3] = [b"iso6", b"mp41", b"cmfc"];
 
 /// One track, as the init segment describes it.
 pub(crate) struct CmafTrackDescriptionForTheInitSegment {
@@ -69,7 +75,14 @@ pub(crate) fn build_cmaf_init_segment(
             // A live broadcast has no duration, and `mehd` is optional
             // precisely so one need not be stated.
             duration: 0,
-            next_track_id: tracks.len() as u32 + 1,
+            // §8.2.2.3 wants a value larger than every track id in use, which
+            // is the largest id plus one and not the track count — a caller
+            // names its tracks and need not name them `1..n`.
+            next_track_id: tracks
+                .iter()
+                .map(|track| track.track_id.saturating_add(1))
+                .max()
+                .unwrap_or(1),
             ..Default::default()
         },
         mvex: Some(Mvex {
@@ -258,6 +271,30 @@ mod tests {
         assert!(matches!(atoms[1], Any::Moov(_)));
     }
 
+    /// The brands are what a third-party reader gates on before it looks at a
+    /// single box, so they are pinned as bytes rather than as a membership
+    /// check — the same shape the engine recorder's `ftyp` test has.
+    #[test]
+    fn the_init_segment_declares_the_brands_a_multi_track_cmaf_movie_is_read_by() {
+        let bytes =
+            build_cmaf_init_segment(&[a_video_track(1), an_audio_track(2)]).expect("two tracks");
+
+        // Read off the wire rather than through `mp4-atom`: the major brand is
+        // the one field a third-party player gates on before it decodes a
+        // single box, so the assertion should not go through a decoder either.
+        assert_eq!(&bytes[4..8], b"ftyp");
+        assert_eq!(&bytes[8..12], b"iso6", "the major brand");
+
+        let Any::Ftyp(ftyp) = &decoded_atoms(&bytes)[0] else {
+            panic!("the init segment opens with ftyp");
+        };
+        assert_eq!(
+            ftyp.compatible_brands,
+            vec![b"iso6".into(), b"mp41".into(), b"cmfc".into()],
+            "the engine recorder's list, byte for byte, so one bitstream is described one way"
+        );
+    }
+
     #[test]
     fn the_movie_header_states_normal_rate_and_full_volume() {
         // mp4-atom's derived Default is 0 for both, which makes some players
@@ -368,7 +405,11 @@ mod tests {
         };
         assert_eq!(moov.trak[0].tkhd.track_id, 7);
         assert_eq!(moov.trak[1].tkhd.track_id, 9);
-        assert_eq!(moov.mvhd.next_track_id, 3);
+        assert_eq!(
+            moov.mvhd.next_track_id, 10,
+            "§8.2.2.3 wants a value larger than every id in use; the track count would name 3, \
+             which is an id this movie already carries"
+        );
     }
 
     #[test]

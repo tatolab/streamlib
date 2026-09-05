@@ -136,6 +136,11 @@ struct Mp4TrackFromInboundLink {
     coded_extent: Option<(u32, u32)>,
     first_timestamp_ns: Option<i64>,
     last_accepted_timestamp_ns: Option<i64>,
+    /// Where the next Opus packet lands if no capture gap intervened: the sum
+    /// of every sample duration this track has accounted, measured from its
+    /// own first accepted stamp. Compared against the incoming bag's stamp,
+    /// this is what makes a microphone dropout visible.
+    opus_ticks_accounted_since_the_tracks_first_stamp: u64,
     next_fragment_decode_time_in_track_timescale: u64,
     samples_awaiting_fragment: Vec<Mp4SampleAwaitingFragment>,
     held_back_video_sample: Option<HeldBackVideoSample>,
@@ -159,6 +164,7 @@ impl Mp4TrackFromInboundLink {
             coded_extent: None,
             first_timestamp_ns: None,
             last_accepted_timestamp_ns: None,
+            opus_ticks_accounted_since_the_tracks_first_stamp: 0,
             next_fragment_decode_time_in_track_timescale: 0,
             samples_awaiting_fragment: Vec::new(),
             held_back_video_sample: None,
@@ -489,6 +495,13 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         if !self.accept_timestamp(track_index, timestamp_ns) {
             return Ok(());
         }
+        if !self.represent_any_capture_gap_before_this_packet(
+            track_index,
+            timestamp_ns,
+            packet.sample_count,
+        ) {
+            return Ok(());
+        }
 
         self.tracks[track_index]
             .samples_awaiting_fragment
@@ -499,6 +512,8 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 duration_in_track_timescale: packet.sample_count,
                 is_sync_point: true,
             });
+        self.tracks[track_index].opus_ticks_accounted_since_the_tracks_first_stamp +=
+            u64::from(packet.sample_count);
         self.write_header_once_every_track_can_be_described()?;
 
         if self.no_video_track_is_wired()
@@ -555,6 +570,77 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         if self.open_fragment_started_at_ns.is_none() {
             self.open_fragment_started_at_ns = Some(timestamp_ns);
         }
+        true
+    }
+
+    /// Put a microphone dropout into the container instead of eliding it.
+    ///
+    /// An Opus track advances by the sum of its packets' sample counts, so a
+    /// capture gap would otherwise vanish and every later sample would sit
+    /// earlier than it belongs — permanently, and increasingly. ISO/IEC
+    /// 14496-12 §8.8.12.2 makes `base_media_decode_time` the absolute decode
+    /// time of the fragment's first sample, so the gap has to be represented
+    /// somewhere: in the preceding sample's duration while that sample is still
+    /// pending, and in this fragment's `tfdt` once it has been written out.
+    ///
+    /// The threshold is one whole packet. Below that the difference is arrival
+    /// jitter, and chasing it would write the capture's noise into the
+    /// container as timing — the very thing an Opus duration states its own
+    /// sample count to avoid.
+    ///
+    /// Returns whether the track is still recording.
+    fn represent_any_capture_gap_before_this_packet(
+        &mut self,
+        track_index: usize,
+        timestamp_ns: i64,
+        sample_count: u32,
+    ) -> bool {
+        let track = &mut self.tracks[track_index];
+        // `accept_timestamp` set this on the way in, so the total form here is
+        // for the type and not for a case: the first packet of a track is
+        // handled below, by its gap being zero.
+        let Some(first_timestamp_ns) = track.first_timestamp_ns else {
+            return true;
+        };
+        let elapsed_ticks = rescale_nanoseconds(
+            timestamp_ns.saturating_sub(first_timestamp_ns),
+            OPUS_TRACK_TIMESCALE_HZ,
+        );
+        let accounted_ticks = track.opus_ticks_accounted_since_the_tracks_first_stamp;
+        let Some(gap_ticks) = elapsed_ticks
+            .checked_sub(accounted_ticks)
+            .filter(|gap| *gap >= u64::from(sample_count))
+        else {
+            return true;
+        };
+
+        if let Some(preceding) = track.samples_awaiting_fragment.last_mut() {
+            let Ok(covering_the_gap) = u32::try_from(
+                u64::from(preceding.duration_in_track_timescale).saturating_add(gap_ticks),
+            ) else {
+                let refusal = format!(
+                    "capture on `{}` stopped for {gap_ticks} samples, and covering it would need \
+                     a sample duration past the {} a 32-bit field can name",
+                    track.inbound_link_name,
+                    u32::MAX
+                );
+                self.latch_track(track_index, refusal);
+                return false;
+            };
+            preceding.duration_in_track_timescale = covering_the_gap;
+        } else {
+            // The preceding sample is already on disk, so this fragment's own
+            // `tfdt` is where the gap is stated.
+            track.next_fragment_decode_time_in_track_timescale += gap_ticks;
+        }
+        track.opus_ticks_accounted_since_the_tracks_first_stamp += gap_ticks;
+        tracing::warn!(
+            inbound_link_name = %track.inbound_link_name,
+            gap_in_samples = gap_ticks,
+            timestamp_ns,
+            "Mp4Sink: audio capture stopped and resumed — the gap is written into the file \
+             rather than elided, so what follows keeps its lip sync"
+        );
         true
     }
 
@@ -694,7 +780,6 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 // A fragmented file's duration is not known while it is being
                 // written, and `mehd` is optional precisely so it need not be.
                 duration: 0,
-                next_track_id: self.tracks.len() as u32 + 1,
                 ..Default::default()
             },
             mvex: Some(Mvex {
@@ -721,6 +806,10 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                     duration: 0,
                     // §8.3.2.3: a visual track states its presentation size and
                     // carries no volume; an audio track is the other way round.
+                    // The extent is a `u16` here as it is in the sample entry,
+                    // and one that would not fit was refused when the entry was
+                    // built — a track only reaches this point with an extent
+                    // both boxes can name.
                     width: FixedPoint::new(coded_width as u16, 0),
                     height: FixedPoint::new(coded_height as u16, 0),
                     volume: FixedPoint::new(track_volume, 0),
@@ -781,6 +870,15 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 });
             }
         }
+        // §8.2.2.3 wants a value larger than every track id in use, which is
+        // the largest id plus one and not the number of links: a link latched
+        // before it named a codec gets no `trak`, and ids need not run 1..n.
+        moov.mvhd.next_track_id = moov
+            .trak
+            .iter()
+            .map(|trak| trak.tkhd.track_id.saturating_add(1))
+            .max()
+            .unwrap_or(1);
         Ok(moov)
     }
 
@@ -1835,6 +1933,148 @@ mod tests {
             "a link that never named a codec describes no track, and the camera still records"
         );
         assert_eq!(only_moov(&atoms).trak[0].mdia.hdlr.name, "camera/video");
+        assert_eq!(
+            only_moov(&atoms).mvhd.next_track_id,
+            2,
+            "§8.2.2.3 wants a value larger than every track id in use, and only track 1 is in \
+             use — the link count would name 3 and describe an id nothing carries"
+        );
+    }
+
+    /// What one fixture Opus packet decodes to: 20 ms of Opus's own 48 kHz
+    /// clock, which is the unit the assertions below are written in.
+    const ONE_OPUS_PACKET_IN_SAMPLES: u32 = 960;
+
+    fn an_audio_only_recording_of(stamps_ns: &[i64]) -> Vec<u8> {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
+        for (index, &timestamp_ns) in stamps_ns.iter().enumerate() {
+            writer
+                .accept_bag("microphone/audio", &opus_bag(index as u64, 2), timestamp_ns)
+                .expect("the bag is accepted");
+        }
+        writer.finish().expect("the file closes");
+        file
+    }
+
+    /// A steady stream cannot tell the correct code from the incorrect one —
+    /// both write 960 beside every packet — so the gap is the whole test.
+    #[test]
+    fn a_capture_gap_lands_in_the_preceding_samples_duration_while_that_sample_is_still_pending() {
+        let eighty_millisecond_dropout = ONE_OPUS_PACKET_NS * 4;
+        let file = an_audio_only_recording_of(&[
+            0,
+            ONE_OPUS_PACKET_NS,
+            ONE_OPUS_PACKET_NS * 2,
+            ONE_OPUS_PACKET_NS * 3 + eighty_millisecond_dropout,
+        ]);
+
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let durations: Vec<u32> = every_moof(&atoms)
+            .iter()
+            .flat_map(|moof| &moof.traf)
+            .flat_map(|traf| &traf.trun)
+            .flat_map(|trun| &trun.entries)
+            .map(|entry| entry.duration.expect("every sample states its duration"))
+            .collect();
+
+        assert_eq!(
+            durations,
+            vec![
+                ONE_OPUS_PACKET_IN_SAMPLES,
+                ONE_OPUS_PACKET_IN_SAMPLES,
+                ONE_OPUS_PACKET_IN_SAMPLES * 5,
+                ONE_OPUS_PACKET_IN_SAMPLES,
+            ],
+            "the third packet's duration covers the four packets that never arrived, so the \
+             fourth sits where its own stamp puts it rather than 80 ms early"
+        );
+        assert_eq!(
+            durations[..3].iter().map(|d| u64::from(*d)).sum::<u64>(),
+            rescale_nanoseconds(
+                ONE_OPUS_PACKET_NS * 3 + eighty_millisecond_dropout,
+                OPUS_TRACK_TIMESCALE_HZ
+            ),
+            "and the samples before it account for exactly the elapsed capture time"
+        );
+    }
+
+    #[test]
+    fn a_capture_gap_after_a_fragment_closed_lands_in_the_next_fragments_decode_time() {
+        // The audio-only rule closes a fragment once a second of stamps has
+        // gone by, so the packet before the dropout is already on disk and
+        // there is no pending sample left to lengthen.
+        let packets_before_the_close = (AUDIO_ONLY_FRAGMENT_SPAN_NS / ONE_OPUS_PACKET_NS) + 1;
+        let mut stamps_ns: Vec<i64> = (0..packets_before_the_close)
+            .map(|index| index * ONE_OPUS_PACKET_NS)
+            .collect();
+        let hundred_millisecond_dropout = ONE_OPUS_PACKET_NS * 5;
+        let after_the_dropout =
+            stamps_ns.last().expect("stamps") + ONE_OPUS_PACKET_NS + hundred_millisecond_dropout;
+        stamps_ns.push(after_the_dropout);
+
+        let atoms =
+            parse_written_atoms(&an_audio_only_recording_of(&stamps_ns)).expect("re-parses");
+        let decode_times: Vec<u64> = every_moof(&atoms)
+            .iter()
+            .flat_map(|moof| &moof.traf)
+            .map(|traf| {
+                traf.tfdt
+                    .as_ref()
+                    .expect("every fragment states its decode time")
+                    .base_media_decode_time
+            })
+            .collect();
+
+        assert_eq!(decode_times.len(), 2, "the span rule closed one fragment");
+        assert_eq!(
+            decode_times[1],
+            rescale_nanoseconds(after_the_dropout, OPUS_TRACK_TIMESCALE_HZ),
+            "§8.8.12.2 makes `tfdt` the absolute decode time of the fragment's first sample, so \
+             the dropout is stated here rather than elided — advancing by the written sample \
+             counts alone would put this fragment 100 ms early and keep it there"
+        );
+    }
+
+    #[test]
+    fn arrival_jitter_below_one_packet_is_not_written_into_the_container_as_timing() {
+        // Stamps a live capture carries: 20 ms apart in intent, never in fact.
+        let file = an_audio_only_recording_of(&[0, 20_500_000, 39_500_000, 61_000_000]);
+
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let durations: Vec<u32> = every_moof(&atoms)
+            .iter()
+            .flat_map(|moof| &moof.traf)
+            .flat_map(|traf| &traf.trun)
+            .flat_map(|trun| &trun.entries)
+            .map(|entry| entry.duration.expect("every sample states its duration"))
+            .collect();
+
+        assert_eq!(
+            durations,
+            vec![ONE_OPUS_PACKET_IN_SAMPLES; 4],
+            "no packet is missing here, so each one lasts the samples it decodes to and the \
+             capture's noise stays out of the container"
+        );
+    }
+
+    #[test]
+    fn the_movie_header_names_a_track_id_larger_than_every_one_the_movie_carries() {
+        let file = write_video_and_audio_tracks(4);
+        let atoms = parse_written_atoms(&file).expect("re-parses");
+        let moov = only_moov(&atoms);
+
+        let largest_track_id_in_use = moov
+            .trak
+            .iter()
+            .map(|trak| trak.tkhd.track_id)
+            .max()
+            .expect("the movie carries tracks");
+        assert!(
+            moov.mvhd.next_track_id > largest_track_id_in_use,
+            "§8.2.2.3: next_track_id {} must exceed the largest id in use {largest_track_id_in_use}",
+            moov.mvhd.next_track_id
+        );
     }
 
     /// Every top-level box start, which is what `data_offset` is measured from.

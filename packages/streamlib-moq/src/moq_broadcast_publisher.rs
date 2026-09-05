@@ -949,7 +949,16 @@ impl DeclaredMoqTrackPublicationState {
             });
         };
 
-        let placement = description.cmaf_track_timeline.place(sample.timestamp_ns());
+        // An Opus packet states its own duration and a coded picture does not,
+        // so only the video track's `trun` is measured from arrival stamps.
+        let placement = match sample {
+            EncodedMediaSample::AudioPacket(packet) => description
+                .cmaf_track_timeline
+                .place_sample_of_stated_duration(sample.timestamp_ns(), packet.sample_count),
+            EncodedMediaSample::VideoAccessUnit(_) => description
+                .cmaf_track_timeline
+                .place_sample_of_duration_measured_to_its_predecessor(sample.timestamp_ns()),
+        };
         let sequence_number = self.next_cmaf_fragment_sequence_number;
         self.next_cmaf_fragment_sequence_number =
             self.next_cmaf_fragment_sequence_number.saturating_add(1);
@@ -1593,6 +1602,47 @@ mod tests {
             decode_times,
             vec![0, 33_000_000, 66_000_000],
             "the held bags were placed on the track's timeline in arrival order"
+        );
+    }
+
+    #[test]
+    fn an_opus_fragment_states_the_packets_sample_count_rather_than_the_gap_between_arrivals() {
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "microphone"]);
+        plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(9_000_000_000),
+        )
+        .expect("the video track is described");
+
+        // Stamps a live capture carries: 20 ms apart in intent, never in fact,
+        // so no gap between two of them is the packets' own 960 samples.
+        let mut durations = Vec::new();
+        let mut decode_times = Vec::new();
+        for stamp_ns in [9_000_000_000i64, 9_020_500_000, 9_039_500_000] {
+            let planned = plan_the_writes_and_report_them_all_written(
+                &mut planner,
+                "microphone",
+                an_opus_packet(stamp_ns),
+            )
+            .expect("audio publishes");
+            for fragment in object_payloads_written_to(&planned, "2.m4s") {
+                let samples = read_cmaf_fragment(&fragment).expect("the fragment reads back");
+                durations.push(samples[0].duration);
+                decode_times.push(samples[0].decode_time);
+            }
+        }
+
+        assert_eq!(
+            durations,
+            vec![960, 960, 960],
+            "RFC 8486 §4.1 makes an Opus sample's duration its decoded sample count, which the \
+             bag states; the arrival gaps here are 20.5 ms and 19 ms"
+        );
+        assert_eq!(
+            decode_times,
+            vec![0, 984, 1896],
+            "`tfdt` still follows the stamps, so a capture gap stays visible in the decode times"
         );
     }
 
