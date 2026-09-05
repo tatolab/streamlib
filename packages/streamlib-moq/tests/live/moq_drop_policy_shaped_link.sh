@@ -8,11 +8,17 @@
 # and one with it on. The baseline is as much of the deliverable as the
 # improvement is, so both numbers are printed even when they are the same.
 #
-# THE SOURCE HAS TO CARRY BITS. vivid's default pattern is a flat colour and
-# encodes to roughly 365 bytes per delta frame — about 15 kbit/s, which no
-# ceiling this script could set would ever congest. Pattern 21 is Noise, which
-# is intra-coded at close to the encoder's ceiling, and that is what makes a
-# rate limit bite. Measured on the rig, 2026-09-05.
+# THE SOURCE HAS TO CARRY BITS, AND NOT TOO MANY. vivid's default pattern is a
+# flat colour and encodes to roughly 365 bytes per delta frame — about
+# 15 kbit/s, which no ceiling this script could set would ever congest. Pattern
+# 21 is Noise, which at constant QP is 2.3 MB a frame — 93 Mbit/s, a wall
+# rather than congestion: the baseline decoded nothing at all. So the encoder
+# is given a target bitrate, and the shape sits a few times under it. Both
+# measured on the rig, 2026-09-05.
+#
+# VIDEO ONLY. The CMAF init segment waits on every declared track, and a
+# microphone with nothing to say holds the broadcast until the hold's byte
+# bound stops it — which is a measurement of the hold, not of the policy.
 #
 # WHAT THIS MEASURES, and what it does not. It reports what the publisher shed
 # and what reached the decoder. Read the policy arm knowing what the deadline
@@ -40,6 +46,7 @@
 #                             from the repo-root `.env`, as the round-trip
 #                             fixture does.
 #   DELIVERY_DEADLINE_MS      the policy arm's deadline (default 200)
+#   VIDEO_BITRATE_BPS         the encoder's target (default 2000000)
 #   SHAPED_RATE               the uplink ceiling (default 400kbit)
 #   SHAPED_DELAY              one-way delay netem adds (default 80ms)
 #   SHAPED_LOSS               loss netem adds (default 1%)
@@ -57,6 +64,7 @@ REPO_ROOT="$(cd "$PACKAGE_DIR/../.." && pwd)"
 
 OUTPUT_DIR="${1:-/tmp/streamlib-moq-shaped-link-$(date +%s)}"
 DELIVERY_DEADLINE_MS="${DELIVERY_DEADLINE_MS:-200}"
+VIDEO_BITRATE_BPS="${VIDEO_BITRATE_BPS:-2000000}"
 SHAPED_RATE="${SHAPED_RATE:-400kbit}"
 SHAPED_DELAY="${SHAPED_DELAY:-80ms}"
 SHAPED_LOSS="${SHAPED_LOSS:-1%}"
@@ -135,7 +143,7 @@ trap unshape EXIT INT TERM
 
 say "Interface:   $SHAPED_INTERFACE"
 say "Shape:       rate $SHAPED_RATE, delay $SHAPED_DELAY, loss $SHAPED_LOSS"
-say "Source:      $VIVID_DEVICE pattern $VIVID_TEST_PATTERN"
+say "Source:      $VIVID_DEVICE pattern $VIVID_TEST_PATTERN, video only, ${VIDEO_BITRATE_BPS} bit/s"
 say "Arms:        baseline (no deadline) and policy (${DELIVERY_DEADLINE_MS} ms), ${ARM_SECONDS}s each"
 say "Output:      $OUTPUT_DIR"
 
@@ -158,6 +166,8 @@ run_one_arm() {
                 --camera "$VIVID_DEVICE" \
                 --broadcast "streamlib/moq-drop-policy-$arm_name" \
                 --control-plane-port "$CONTROL_PLANE_PORT" \
+                --video-only \
+                --video-bitrate-bps "$VIDEO_BITRATE_BPS" \
                 "$@" \
             > "$log_file" 2>&1
     unshape

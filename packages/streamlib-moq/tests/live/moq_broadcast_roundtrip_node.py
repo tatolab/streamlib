@@ -102,6 +102,23 @@ def main() -> None:
             "published (default: no deadline, which publishes every bag)"
         ),
     )
+    # The shaped-link arm's two knobs. Video-only because the CMAF init
+    # segment waits on every declared track, and a silent microphone holds the
+    # whole broadcast until the hold's byte bound stops it — a measurement of
+    # the hold, not of the policy. A stated bitrate because constant-QP noise
+    # is 2.3 MB a frame, which is a wall rather than congestion for any
+    # ceiling a shaped link can set.
+    parser.add_argument(
+        "--video-only",
+        action="store_true",
+        help="publish the camera alone: no microphone, no audio track",
+    )
+    parser.add_argument(
+        "--video-bitrate-bps",
+        type=int,
+        default=None,
+        help="the H.264 encoder's target bitrate (default: constant QP)",
+    )
     arguments = parser.parse_args()
 
     relay_url = _relay_url_from_the_environment()
@@ -125,7 +142,7 @@ def main() -> None:
             "broadcast": arguments.broadcast,
             "container_format": CONTAINER_FORMAT,
             "video_track": VIDEO_TRACK_NAME,
-            "audio_track": AUDIO_TRACK_NAME,
+            "audio_track": None if arguments.video_only else AUDIO_TRACK_NAME,
         },
         display_name="subscriber",
     )
@@ -135,24 +152,15 @@ def main() -> None:
         config={"device_id": arguments.camera} if arguments.camera else {},
         display_name="camera",
     )
+    video_encoder_config = {"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS}
+    if arguments.video_bitrate_bps is not None:
+        video_encoder_config["bitrate_bps"] = arguments.video_bitrate_bps
     video_encoder = runtime.add(
         streamlib.H264Encoder,
-        config={"keyframe_interval_seconds": ENCODER_KEYFRAME_INTERVAL_SECONDS},
+        config=video_encoder_config,
         display_name="video_encoder",
     )
-    microphone = runtime.add(
-        streamlib.MicrophoneSource,
-        config=(
-            {"device_id": arguments.audio_capture_device}
-            if arguments.audio_capture_device
-            else {}
-        ),
-        display_name="microphone",
-    )
-    audio_encoder = runtime.add(streamlib.OpusEncoder, display_name="audio_encoder")
-
     video_decoder = runtime.add(streamlib.H264Decoder, display_name="video_decoder")
-    audio_decoder = runtime.add(streamlib.OpusDecoder, display_name="audio_decoder")
     # Both sinks are here so each decoder has a subscriber for the whole run,
     # which is the shape the showcase ships and the shape the codec rig scored.
     window = runtime.add(
@@ -160,22 +168,40 @@ def main() -> None:
         config={"title": "streamlib moq broadcast round-trip"},
         display_name="window",
     )
-    speaker = runtime.add(streamlib.SpeakerSink, display_name="speaker")
 
     # Video into `tracks` first: declaration order is track-id order under CMAF.
     runtime.connect(camera.output("video"), video_encoder.input("video"))
     runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
-    runtime.connect(microphone.output("audio"), audio_encoder.input("audio"))
-    runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
-
     runtime.connect(
         subscriber.output("encoded_video"), video_decoder.input("encoded_video")
     )
     runtime.connect(video_decoder.output("video"), window.input("video"))
-    runtime.connect(
-        subscriber.output("encoded_audio"), audio_decoder.input("encoded_audio")
-    )
-    runtime.connect(audio_decoder.output("audio"), speaker.input("audio"))
+
+    if not arguments.video_only:
+        microphone = runtime.add(
+            streamlib.MicrophoneSource,
+            config=(
+                {"device_id": arguments.audio_capture_device}
+                if arguments.audio_capture_device
+                else {}
+            ),
+            display_name="microphone",
+        )
+        audio_encoder = runtime.add(
+            streamlib.OpusEncoder, display_name="audio_encoder"
+        )
+        audio_decoder = runtime.add(
+            streamlib.OpusDecoder, display_name="audio_decoder"
+        )
+        speaker = runtime.add(streamlib.SpeakerSink, display_name="speaker")
+        runtime.connect(microphone.output("audio"), audio_encoder.input("audio"))
+        runtime.connect(
+            audio_encoder.output("encoded_audio"), publisher.input("tracks")
+        )
+        runtime.connect(
+            subscriber.output("encoded_audio"), audio_decoder.input("encoded_audio")
+        )
+        runtime.connect(audio_decoder.output("audio"), speaker.input("audio"))
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication —
