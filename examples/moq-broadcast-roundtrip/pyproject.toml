@@ -1,0 +1,19 @@
+[project]
+name = "moq-broadcast-roundtrip"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["streamlib", "streamlib-moq"]
+
+# streamlib is served from its own simple index until the PyPI publication that
+# follows the project rename; everything else resolves from PyPI as usual.
+[[tool.uv.index]]
+name = "streamlib"
+url = "https://tatolab.github.io/streamlib/simple/"
+explicit = true
+
+[tool.uv.sources]
+streamlib = { index = "streamlib" }
+# In-repo, so this example exercises the wheel in the checkout rather than the
+# last release. Outside a checkout the line goes and the extension resolves from
+# the same index as the engine — it is an ordinary Python package either way.
+streamlib-moq = { path = "../../packages/streamlib-moq" }
