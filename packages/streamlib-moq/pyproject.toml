@@ -29,13 +29,13 @@ classifiers = [
 # The engine is a binary dependency, never a source one: this wheel links no
 # streamlib crate and speaks no engine internals.
 #
-# 0.18.49 is the earliest release carrying both halves this wheel needs. The
+# 0.18.52 is the earliest release carrying every half this wheel needs. The
 # capability-extension mechanism `extension.py:load` is declared against arrived
 # in 0.18.48; `read_from_inbound_link_with_timestamp`, which every bag is read
-# through, arrived in 0.18.49 — in the same commit as this wheel, which is why
-# the floor could only be stated once the release wiring existed. Both resolved
-# by `git describe --contains` on the commit that introduced each into
-# `_engine.pyi`, not from a changelog.
+# through, arrived in 0.18.49; and `encode_bag_to_msgpack_bytes`, which every
+# data track object is built with, arrived in 0.18.52. Each resolved by `git
+# describe --contains` on the commit that introduced it into `_engine.pyi`, not
+# from a changelog.
 #
 # The ceiling is the last *published* engine version, not the one in the tree.
 # Two lanes install this wheel and they resolve differently: the PR lane
@@ -43,7 +43,7 @@ classifiers = [
 # lane installs from the published index, which is rebuilt only after the
 # extension wheels are built. So a floor naming the engine version released in
 # the same run would fail the release smoke test.
-dependencies = ["streamlib>=0.18.49"]
+dependencies = ["streamlib>=0.18.52"]
 
 # What pip records at install and the engine reads back through
 # `importlib.metadata` when a process takes an engine role.

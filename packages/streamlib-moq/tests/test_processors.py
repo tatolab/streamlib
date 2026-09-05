@@ -14,15 +14,33 @@ import pytest
 
 import streamlib
 from streamlib import log
-from streamlib import H264Decoder, H264Encoder, OpusDecoder, OpusEncoder
+from streamlib import (
+    H264Decoder,
+    H264Encoder,
+    OpusDecoder,
+    OpusEncoder,
+    RuntimeContextLimitedAccess,
+    decode_msgpack_bytes_to_python_object,
+    output,
+    processor,
+)
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
+from streamlib_moq import processors as processors_module
 from streamlib_moq.processors import (
+    BAGS_BETWEEN_PROGRESS_REPORTS,
     CONTAINER_FORMATS,
+    DATA_OBJECT_BAG_KEY,
+    DATA_OBJECT_SEQUENCE_INDEX_KEY,
+    DATA_OBJECT_TIMESTAMP_NS_KEY,
+    DATA_TRACK_KIND,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     READER_THREAD_JOIN_TIMEOUT_SECONDS,
     SUBSCRIBER_POLL_TIMEOUT_MS,
+    data_track_object_bytes,
     describe_the_delivery_deadline,
     describe_what_the_delivery_deadline_shed,
+    framed_bag_byte_count,
+    track_kind_of_bag,
     track_medium_of_codec,
 )
 
@@ -30,6 +48,29 @@ A_RELAY = "https://relay.invalid/a-token"
 A_BROADCAST = "streamlib/a-broadcast"
 
 PUBLISHER_CONFIG = {"relay_url": A_RELAY}
+A_VIDEO_BAG = {
+    "codec": "h264",
+    "bitstream": b"\x00\x00\x00\x01\x65",
+    "is_sync_point": True,
+    "group_index": 0,
+    "sequence_index": 0,
+    "width": 320,
+    "height": 180,
+}
+A_DATA_BAG = {"frame": 3, "note": "hi", "blob": b"\x00\x01", "nested": {"a": [1, 2.5, None]}}
+
+
+@processor(
+    execution="continuous",
+    interval_ms=100,
+    description="Writes one telemetry bag per tick, as a graph's own data source",
+)
+class TelemetryProbe:
+    @output()
+    def telemetry(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.outputs.write("telemetry", {"frame": 1, "note": "hi", "blob": b"\x00"})
 SUBSCRIBER_CONFIG = {
     "relay_url": A_RELAY,
     "broadcast": A_BROADCAST,
@@ -68,6 +109,26 @@ def test_the_publisher_wires_to_both_encoders_without_an_adapter(runtime):
 
     runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
     runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+
+
+def test_a_data_producing_processor_wires_into_the_publisher_beside_both_encoders(runtime):
+    """A data track is a matter of wiring: any processor's output into the
+    same fan-in port the encoders feed, with the tracks named in that order."""
+    video_encoder = runtime.add(H264Encoder)
+    audio_encoder = runtime.add(OpusEncoder)
+    probe = runtime.add(TelemetryProbe)
+    publisher = runtime.add(
+        MoqBroadcastPublisher,
+        config={
+            **PUBLISHER_CONFIG,
+            "container_format": "streamlib_bag",
+            "track_names": ["video", "audio", "telemetry"],
+        },
+    )
+
+    runtime.connect(video_encoder.output("encoded_video"), publisher.input("tracks"))
+    runtime.connect(audio_encoder.output("encoded_audio"), publisher.input("tracks"))
+    runtime.connect(probe.output("telemetry"), publisher.input("tracks"))
 
 
 def test_the_subscriber_wires_to_both_decoders_without_an_adapter(runtime):
@@ -172,7 +233,8 @@ def test_a_bag_past_the_link_ceiling_is_reported_once_and_not_every_frame():
     with mock.patch.object(log, "error", said.append):
         for _ in range(3):
             subscriber._report_a_bag_the_link_will_drop(
-                "encoded_video", b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)
+                "encoded_video",
+                {**A_VIDEO_BAG, "bitstream": b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)},
             )
 
     assert len(said) == 1
@@ -256,23 +318,78 @@ class _SessionThatAnswers:
 class _InputsReadingOneVideoBag:
     def read_from_inbound_link_with_timestamp(self, port: str):
         assert port == "tracks"
-        return (
-            {
-                "codec": "h264",
-                "bitstream": b"\x00\x00\x00\x01\x65",
-                "is_sync_point": True,
-                "group_index": 0,
-                "sequence_index": 0,
-                "width": 320,
-                "height": 180,
-            },
-            "camera",
-            5_000_000_000,
-        )
+        return (dict(A_VIDEO_BAG), "camera", 5_000_000_000)
 
 
 class _ContextReadingOneVideoBag:
     inputs = _InputsReadingOneVideoBag()
+
+
+class _InputsReadingBagsInTurn:
+    """Each read hands over the next `(bag, inbound_link, timestamp_ns)`."""
+
+    def __init__(self, reads: "list[tuple[dict, str, int]]") -> None:
+        self._reads = iter(reads)
+
+    def read_from_inbound_link_with_timestamp(self, port: str):
+        assert port == "tracks"
+        return next(self._reads, None)
+
+
+class _ContextReadingBagsInTurn:
+    def __init__(self, reads: "list[tuple[dict, str, int]]") -> None:
+        self.inputs = _InputsReadingBagsInTurn(reads)
+
+
+class _SessionRecordingWhatWasPublished:
+    """A publishing session that keeps every data object it was handed."""
+
+    def __init__(self) -> None:
+        self.data_objects: "list[tuple[str, bytes]]" = []
+        self.media_calls = 0
+
+    def publish_data_object(self, inbound_link_name: str, object_bytes: bytes) -> None:
+        self.data_objects.append((inbound_link_name, object_bytes))
+
+    def publish_video_access_unit(self, *args, **kwargs) -> bool:
+        del args, kwargs
+        self.media_calls += 1
+        return True
+
+    def publish_audio_packet(self, *args, **kwargs) -> bool:
+        del args, kwargs
+        self.media_calls += 1
+        return True
+
+    def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
+        return []
+
+    def close(self) -> "str | None":
+        return None
+
+
+def _a_streamlib_bag_publisher_over(
+    session: _SessionRecordingWhatWasPublished,
+) -> MoqBroadcastPublisher:
+    publisher = MoqBroadcastPublisher(relay_url=A_RELAY, container_format="streamlib_bag")
+    publisher._session = session  # type: ignore[assignment]
+    return publisher
+
+
+class _InputsWiredTo:
+    def __init__(self, inbound_links: "list[str]") -> None:
+        self._inbound_links = inbound_links
+
+    def inbound_link_names(self, port: str) -> "list[str]":
+        assert port == "tracks"
+        return list(self._inbound_links)
+
+
+class _SetupContextWiredTo:
+    runtime_id = "a-runtime"
+
+    def __init__(self, inbound_links: "list[str]") -> None:
+        self.inputs = _InputsWiredTo(inbound_links)
 
 
 def _drive_bags_through(
@@ -329,3 +446,162 @@ def test_a_run_shedding_every_bag_still_reports_at_the_progress_cadence():
     progress_lines = [line for line in said if "bags_published=0" in line]
     assert len(progress_lines) == 2, said  # one at the cadence, one at teardown
     assert f"shed camera={BAGS_BETWEEN_PROGRESS_REPORTS} objects" in progress_lines[0]
+
+
+def test_a_bag_without_a_bitstream_key_is_a_data_track():
+    assert track_kind_of_bag(A_DATA_BAG, "probe/telemetry") == DATA_TRACK_KIND
+
+
+@pytest.mark.parametrize(
+    ("codec", "kind"), [("h264", "video"), ("h265", "video"), ("opus", "audio")]
+)
+def test_a_bag_with_a_bitstream_key_is_media_by_its_codec(codec, kind):
+    assert track_kind_of_bag({"codec": codec, "bitstream": b"\x00"}, "encoder/out") == kind
+
+
+def test_a_data_bag_that_spells_a_bitstream_key_is_refused_as_media_naming_the_key():
+    """`bitstream` is the wire contract's defining key for encoded media, so a
+    data bag that happens to use it is refused as media — and the message has
+    to say which key to rename, or the author cannot know what went wrong."""
+    with pytest.raises(ValueError, match="bitstream"):
+        track_kind_of_bag({"bitstream": b"raw", "frame": 1}, "probe/telemetry")
+
+
+def test_the_data_object_decodes_to_exactly_three_keys_with_the_bag_nested_whole():
+    decoded = decode_msgpack_bytes_to_python_object(
+        data_track_object_bytes(A_DATA_BAG, 7, 5_000_000_000)
+    )
+
+    assert set(decoded) == {
+        DATA_OBJECT_SEQUENCE_INDEX_KEY,
+        DATA_OBJECT_TIMESTAMP_NS_KEY,
+        DATA_OBJECT_BAG_KEY,
+    }
+    assert decoded[DATA_OBJECT_SEQUENCE_INDEX_KEY] == 7
+    assert decoded[DATA_OBJECT_TIMESTAMP_NS_KEY] == 5_000_000_000
+    assert decoded[DATA_OBJECT_BAG_KEY] == A_DATA_BAG
+    assert type(decoded[DATA_OBJECT_BAG_KEY]["blob"]) is bytes
+
+
+def test_a_data_track_mints_its_sequence_index_per_link_and_stamps_the_bags_own_stamp():
+    session = _SessionRecordingWhatWasPublished()
+    publisher = _a_streamlib_bag_publisher_over(session)
+    ctx = _ContextReadingBagsInTurn(
+        [({"n": 1}, "probe/a", 10), ({"n": 2}, "probe/b", 20), ({"n": 3}, "probe/a", 30)]
+    )
+
+    for _ in range(3):
+        publisher.process(ctx)  # type: ignore[arg-type]
+
+    published = [
+        (link, decode_msgpack_bytes_to_python_object(object_bytes))
+        for link, object_bytes in session.data_objects
+    ]
+    assert [
+        (
+            link,
+            envelope[DATA_OBJECT_SEQUENCE_INDEX_KEY],
+            envelope[DATA_OBJECT_TIMESTAMP_NS_KEY],
+            envelope[DATA_OBJECT_BAG_KEY],
+        )
+        for link, envelope in published
+    ] == [
+        ("probe/a", 0, 10, {"n": 1}),
+        ("probe/b", 0, 20, {"n": 2}),
+        ("probe/a", 1, 30, {"n": 3}),
+    ]
+    assert session.media_calls == 0
+
+
+def test_a_media_bag_on_a_link_that_first_published_data_is_refused_by_name():
+    publisher = _a_streamlib_bag_publisher_over(_SessionRecordingWhatWasPublished())
+    ctx = _ContextReadingBagsInTurn([({"n": 1}, "probe/a", 10), (dict(A_VIDEO_BAG), "probe/a", 20)])
+    publisher.process(ctx)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="probe/a"):
+        publisher.process(ctx)  # type: ignore[arg-type]
+
+
+def test_a_data_bag_on_a_link_that_first_published_media_is_refused_by_name():
+    publisher = _a_streamlib_bag_publisher_over(_SessionRecordingWhatWasPublished())
+    ctx = _ContextReadingBagsInTurn([(dict(A_VIDEO_BAG), "camera", 10), ({"n": 1}, "camera", 20)])
+    publisher.process(ctx)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="camera"):
+        publisher.process(ctx)  # type: ignore[arg-type]
+
+
+def test_data_objects_are_reported_at_the_progress_cadence():
+    publisher = _a_streamlib_bag_publisher_over(_SessionRecordingWhatWasPublished())
+    ctx = _ContextReadingBagsInTurn(
+        [({"n": n}, "probe/a", n) for n in range(BAGS_BETWEEN_PROGRESS_REPORTS)]
+    )
+    said: "list[str]" = []
+    with mock.patch.object(log, "info", said.append):
+        for _ in range(BAGS_BETWEEN_PROGRESS_REPORTS):
+            publisher.process(ctx)  # type: ignore[arg-type]
+
+    assert any(
+        f"data_objects_published={BAGS_BETWEEN_PROGRESS_REPORTS}" in line for line in said
+    ), said
+
+
+@pytest.mark.parametrize("not_names", ["video", b"video", [1, 2], [None]])
+def test_track_names_that_are_not_a_sequence_of_names_are_refused_by_name(not_names):
+    """A bare string is a `Sequence[str]` to Python, so it is refused by name
+    rather than read as one track per character."""
+    with pytest.raises(ValueError, match="track_names"):
+        MoqBroadcastPublisher(
+            relay_url=A_RELAY, container_format="streamlib_bag", track_names=not_names
+        )
+
+
+def test_track_names_unequal_in_count_to_the_inbound_links_are_refused_by_name_at_setup():
+    """Links are known at `setup()` and not before, so the count is checked
+    there — by the wheel's Rust, which is the one place the names are
+    declared."""
+    publisher = MoqBroadcastPublisher(
+        relay_url=A_RELAY, container_format="streamlib_bag", track_names=["video"]
+    )
+
+    with pytest.raises(ValueError, match="track_names"):
+        publisher.setup(_SetupContextWiredTo(["encoder/video", "probe/telemetry"]))  # type: ignore[arg-type]
+
+
+def test_track_names_under_cmaf_are_refused_by_name_at_setup():
+    publisher = MoqBroadcastPublisher(relay_url=A_RELAY, track_names=["video"])
+
+    with pytest.raises(ValueError, match="cmaf"):
+        publisher.setup(_SetupContextWiredTo(["encoder/video"]))  # type: ignore[arg-type]
+
+
+def test_track_names_matching_the_links_are_declared_and_said_at_setup():
+    publisher = MoqBroadcastPublisher(
+        relay_url=A_RELAY,
+        container_format="streamlib_bag",
+        track_names=["video", "telemetry"],
+    )
+    said: "list[str]" = []
+    with mock.patch.object(log, "info", said.append):
+        publisher.setup(_SetupContextWiredTo(["encoder/video", "probe/telemetry"]))  # type: ignore[arg-type]
+
+    assert any("track_names=['video', 'telemetry']" in line for line in said), said
+
+
+def test_the_oversize_guard_charges_the_framed_encoded_bag_not_the_bitstream_alone():
+    """The engine charges the frame header plus the whole encoded bag against
+    the ceiling, so a bitstream just under it is still dropped — and a guard
+    reading `len(bitstream)` would have stayed silent about it."""
+    bag = {**A_VIDEO_BAG, "bitstream": b"\x00" * 100}
+    subscriber = MoqBroadcastSubscriber(
+        relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="video"
+    )
+    said: "list[str]" = []
+    with (
+        mock.patch.object(processors_module, "HELPER_LINK_PAYLOAD_CEILING_BYTES", 150),
+        mock.patch.object(log, "error", said.append),
+    ):
+        subscriber._report_a_bag_the_link_will_drop("encoded_video", bag)
+
+    assert len(bag["bitstream"]) <= 150 < framed_bag_byte_count(bag)
+    assert said and "encoded_video" in said[0] and "framed" in said[0], said

@@ -5,15 +5,16 @@
 
 Both sit on the encoded side of the codec blocks and touch no raw frame, no
 surface and no GPU: `MoqBroadcastPublisher` consumes what `H264Encoder` and
-`OpusEncoder` publish, and `MoqBroadcastSubscriber` emits what `H264Decoder`
-and `OpusDecoder` consume. Each runs in its own helper process, and each calls
-this wheel's own Rust directly — the engine is never on the data path.
+`OpusEncoder` publish — and any other bag at all, as a data track beside them —
+and `MoqBroadcastSubscriber` emits what `H264Decoder` and `OpusDecoder`
+consume. Each runs in its own helper process, and each calls this wheel's own
+Rust directly — the engine is never on the data path.
 """
 
 from __future__ import annotations
 
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, Protocol
 
 from streamlib import (
@@ -22,6 +23,7 @@ from streamlib import (
     LinkOutputDataWriter,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    encode_bag_to_msgpack_bytes,
     input,
     log,
     output,
@@ -73,6 +75,23 @@ BAGS_BETWEEN_PROGRESS_REPORTS = 300
 #: a change on the engine's side reaches this wheel as a warning at the wrong
 #: size rather than as a failing test.
 HELPER_LINK_PAYLOAD_CEILING_BYTES = 16 * 1024 * 1024
+
+#: What the engine writes in front of every bag on a link — the port key, the
+#: stamp and the payload length — and charges against the ceiling with it.
+#: `streamlib-ipc-types`' `FRAME_HEADER_SIZE`, unexported for the same reason.
+HELPER_LINK_FRAME_HEADER_BYTES = 76
+
+#: The three keys of a data track's object. The user's bag rides whole under
+#: `bag`, so no name inside it is reserved; the other two are the publisher's —
+#: a per-track count and the bag's own link stamp — for the subscriber to count
+#: gaps by and to stamp its write with.
+DATA_OBJECT_SEQUENCE_INDEX_KEY = "sequence_index"
+DATA_OBJECT_TIMESTAMP_NS_KEY = "timestamp_ns"
+DATA_OBJECT_BAG_KEY = "bag"
+
+#: The kind of track a bag with no `bitstream` key lands on. The media kinds
+#: are the two media names, settled by the bag's `codec`.
+DATA_TRACK_KIND = "data"
 
 #: What each bag's `codec` maps to. A codec absent from here is refused by name
 #: rather than guessed at.
@@ -152,36 +171,111 @@ def _required_relay_url(relay_url: Any, processor_name: str) -> str:
 
 
 def track_medium_of_codec(codec: Any, inbound_link: str) -> str:
-    """Which medium a bag belongs to, refusing a codec this wheel does not carry.
+    """Which medium an encoded bag belongs to, refusing a codec this wheel does
+    not carry.
 
     Named rather than guessed: a graph that wired something other than an
     encoder into a publisher is a wiring mistake, and the message is the only
-    place it can be caught.
+    place it can be caught. A bag reaches here by carrying a `bitstream` key,
+    so the refusal also says what that key means — a data bag that happened to
+    spell one is refused as media, and its author renames the key.
     """
     medium = _TRACK_MEDIUM_BY_CODEC.get(codec) if isinstance(codec, str) else None
     if medium is None:
         raise ValueError(
-            f"MoqBroadcastPublisher: a bag on `{inbound_link}` names codec "
+            f"MoqBroadcastPublisher: a bag on `{inbound_link}` carries a "
+            f"`bitstream` key, which marks encoded media, and names codec "
             f"{codec!r}, which this broadcast does not carry — it carries "
-            f"{', '.join(sorted(_TRACK_MEDIUM_BY_CODEC))}."
+            f"{', '.join(sorted(_TRACK_MEDIUM_BY_CODEC))}. A data bag must not "
+            f"spell a key `bitstream`."
         )
     return medium
 
 
+def track_kind_of_bag(bag: Mapping[str, Any], inbound_link: str) -> str:
+    """Which kind of track a bag belongs on: a medium by its `codec`, or data.
+
+    `bitstream` is the encoded wire contract's defining key — both media bags
+    require it — so a bag carrying one is media and takes the typed path with
+    its refusals, and a bag without one is data, whatever else it carries.
+    """
+    if "bitstream" not in bag:
+        return DATA_TRACK_KIND
+    return track_medium_of_codec(bag.get("codec"), inbound_link)
+
+
+def data_track_object_bytes(
+    bag: Mapping[str, Any], sequence_index: int, timestamp_ns: int
+) -> bytes:
+    """One data track object, encoded with the engine's own bag codec.
+
+    The user's bag is nested whole under `bag`, never flattened, so no name in
+    it is reserved. The codec cannot refuse a bag that arrived over a link —
+    the same codec encoded it on the way in — so nothing here is caught.
+    """
+    return encode_bag_to_msgpack_bytes(
+        {
+            DATA_OBJECT_SEQUENCE_INDEX_KEY: sequence_index,
+            DATA_OBJECT_TIMESTAMP_NS_KEY: timestamp_ns,
+            DATA_OBJECT_BAG_KEY: bag,
+        }
+    )
+
+
+def framed_bag_byte_count(bag: Mapping[str, Any]) -> int:
+    """What a helper link charges for one bag against its ceiling: the frame
+    header plus the encoded bag — never the bitstream's length alone, which
+    under-reports by the header and every other key."""
+    return HELPER_LINK_FRAME_HEADER_BYTES + len(encode_bag_to_msgpack_bytes(bag))
+
+
+def _optional_track_names(track_names: Any) -> "list[str] | None":
+    """The names an app chose for its tracks, or None for the links' own.
+
+    Only the shape is settled here. Whether the count matches the links, and
+    whether the container admits names at all, is refused by name at `setup()`,
+    where the links are known.
+    """
+    if track_names is None:
+        return None
+    if isinstance(track_names, (str, bytes)) or not isinstance(track_names, Sequence):
+        raise ValueError(
+            f"MoqBroadcastPublisher: `track_names` is a sequence of one name per "
+            f"inbound link, in wiring order — not a single name; got {track_names!r}"
+        )
+    names = list(track_names)
+    for name in names:
+        if not isinstance(name, str):
+            raise ValueError(
+                f"MoqBroadcastPublisher: `track_names` names each track with a "
+                f"str; got {name!r}"
+            )
+    return names
+
+
 @processor(
     description=(
-        "Publishes encoded video and audio to a MoQ broadcast, "
-        "one track per inbound link"
+        "Publishes encoded video, encoded audio and data bags to a MoQ "
+        "broadcast, one track per inbound link"
     ),
 )
 class MoqBroadcastPublisher:
-    """Encoded bags in, one MoQ broadcast out.
+    """Bags in, one MoQ broadcast out.
 
     The `Mp4Sink` shape: one fan-in input, and each inbound link is one track
-    whose medium the link's first bag settles by its `codec`. Its settings are
-    ordinary constructor parameters — `relay_url`, `broadcast` and
-    `container_format` — which is what
+    whose kind the link's first bag settles — encoded media by its `codec`, or,
+    for a bag with no `bitstream` key, data. A data track carries any bag at
+    all, nested whole inside an object beside the publisher's own
+    `sequence_index` and the bag's stamp, under `streamlib_bag` only. Its
+    settings are ordinary constructor parameters — `relay_url`, `broadcast`,
+    `container_format` and `track_names` — which is what
     `rt.add(MoqBroadcastPublisher, config={"relay_url": ...})` passes.
+
+    `track_names`, under `streamlib_bag`, names the tracks positionally in
+    wiring order — the order `runtime.connect` ran — so a subscriber in
+    another node can name what it wants; absent, each track is its link's own
+    channel name. Under `cmaf` the names are the interop contract and cannot
+    be chosen.
 
     The session opens on the first bag rather than in `setup()`, because a
     relay round trip inside `setup()` spends the helper's start-up budget and a
@@ -216,6 +310,7 @@ class MoqBroadcastPublisher:
         broadcast: "str | None" = None,
         container_format: ContainerFormat = "cmaf",
         delivery_deadline_ms: "int | None" = None,
+        track_names: "Sequence[str] | None" = None,
     ) -> None:
         self._relay_url = _required_relay_url(relay_url, "MoqBroadcastPublisher")
         self._broadcast = broadcast
@@ -223,14 +318,18 @@ class MoqBroadcastPublisher:
             container_format, "MoqBroadcastPublisher"
         )
         self._delivery_deadline_ms = _optional_delivery_deadline_ms(delivery_deadline_ms)
+        self._track_names = _optional_track_names(track_names)
         self._session: "_native.MoqBroadcastPublishingSession | None" = None
-        self._medium_by_inbound_link: "dict[str, str]" = {}
+        self._kind_by_inbound_link: "dict[str, str]" = {}
+        self._next_data_sequence_index_by_inbound_link: "dict[str, int]" = {}
         self._bags_handed_over = 0
         self._bags_published = 0
+        self._data_objects_published = 0
 
     @input(delivery_profile="ordered")
     def tracks(self) -> None:
-        """Encoded video or audio bags; each inbound link becomes one MoQ track."""
+        """Encoded video or audio bags, or any bag as data; each inbound link
+        becomes one MoQ track."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         # Links are wired before setup() runs, so the track count and their
@@ -251,11 +350,16 @@ class MoqBroadcastPublisher:
             self._container_format,
             self._delivery_deadline_ms,
         )
-        self._session.declare_tracks(inbound_links)
+        self._session.declare_tracks(inbound_links, self._track_names)
+        named = (
+            f"track_names={self._track_names} "
+            if self._track_names is not None
+            else ""
+        )
         log.info(
             f"MoqBroadcastPublisher: broadcast={broadcast} "
             f"container_format={self._container_format} tracks={len(inbound_links)} "
-            f"{describe_the_delivery_deadline(self._delivery_deadline_ms)}"
+            f"{named}{describe_the_delivery_deadline(self._delivery_deadline_ms)}"
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -264,9 +368,15 @@ class MoqBroadcastPublisher:
             return
         bag, inbound_link, timestamp_ns = read
 
-        medium = self._track_medium_of(bag, inbound_link)
+        kind = self._track_kind_of(bag, inbound_link)
         session = self._declared_session()
-        if medium == "video":
+        if kind == DATA_TRACK_KIND:
+            session.publish_data_object(
+                inbound_link, self._next_data_object_bytes(inbound_link, bag, timestamp_ns)
+            )
+            self._record_one_bag(reaches_the_transport=True, is_a_data_object=True)
+            return
+        if kind == "video":
             frame = EncodedVideoFrame(**bag)
             reaches_the_transport = session.publish_video_access_unit(
                 inbound_link,
@@ -294,7 +404,7 @@ class MoqBroadcastPublisher:
                 packet.pre_skip,
                 timestamp_ns,
             )
-        self._record_one_bag(reaches_the_transport)
+        self._record_one_bag(reaches_the_transport, is_a_data_object=False)
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
@@ -307,17 +417,16 @@ class MoqBroadcastPublisher:
             if discarded is not None:
                 log.warn(f"MoqBroadcastPublisher: {discarded}")
             self._session = None
-        log.info(
-            f"MoqBroadcastPublisher: teardown, bags_published={self._bags_published}, "
-            f"{shed}"
-        )
+        log.info(f"MoqBroadcastPublisher: teardown, {self._describe_what_was_published()}, {shed}")
 
-    def _record_one_bag(self, reaches_the_transport: bool) -> None:
+    def _record_one_bag(self, reaches_the_transport: bool, is_a_data_object: bool) -> None:
         # The cadence counts every bag handed over, or a run shedding
         # everything after its sync points would say nothing until teardown.
         self._bags_handed_over += 1
         if reaches_the_transport:
             self._bags_published += 1
+            if is_a_data_object:
+                self._data_objects_published += 1
             if self._bags_published == 1:
                 # "Accepted", not "published": on `cmaf` the first bags are
                 # held for the init segment and reach the transport with the
@@ -326,26 +435,42 @@ class MoqBroadcastPublisher:
                 log.info("MoqBroadcastPublisher: first bag accepted by the broadcast")
         if self._bags_handed_over % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(
-                f"MoqBroadcastPublisher: bags_published={self._bags_published}, "
+                f"MoqBroadcastPublisher: {self._describe_what_was_published()}, "
                 f"{self._what_the_delivery_deadline_shed()}"
             )
+
+    def _describe_what_was_published(self) -> str:
+        return (
+            f"bags_published={self._bags_published}, "
+            f"data_objects_published={self._data_objects_published}"
+        )
+
+    def _next_data_object_bytes(
+        self, inbound_link: str, bag: "Mapping[str, Any]", timestamp_ns: int
+    ) -> bytes:
+        # Spent before the publish rather than after: an object the transport
+        # refused never reached the wire, and the subscriber's gap count is
+        # the honest record of that.
+        sequence_index = self._next_data_sequence_index_by_inbound_link.get(inbound_link, 0)
+        self._next_data_sequence_index_by_inbound_link[inbound_link] = sequence_index + 1
+        return data_track_object_bytes(bag, sequence_index, timestamp_ns)
 
     def _what_the_delivery_deadline_shed(self) -> str:
         return describe_what_the_delivery_deadline_shed(
             self._declared_session().objects_the_delivery_deadline_shed()
         )
 
-    def _track_medium_of(self, bag: "dict[str, Any]", inbound_link: str) -> str:
-        medium = track_medium_of_codec(bag.get("codec"), inbound_link)
-        already = self._medium_by_inbound_link.get(inbound_link)
-        if already is not None and already != medium:
+    def _track_kind_of(self, bag: "Mapping[str, Any]", inbound_link: str) -> str:
+        kind = track_kind_of_bag(bag, inbound_link)
+        already = self._kind_by_inbound_link.get(inbound_link)
+        if already is not None and already != kind:
             raise ValueError(
                 f"MoqBroadcastPublisher: `{inbound_link}` published {already} "
-                f"and is now publishing {medium}; one link is one track, and a "
-                f"track does not change medium."
+                f"and is now publishing {kind}; one link is one track, and a "
+                f"track does not change kind."
             )
-        self._medium_by_inbound_link[inbound_link] = medium
-        return medium
+        self._kind_by_inbound_link[inbound_link] = kind
+        return kind
 
     def _declared_session(self) -> "_native.MoqBroadcastPublishingSession":
         if self._session is None:
@@ -493,7 +618,7 @@ class MoqBroadcastSubscriber:
             if media is None:
                 continue
             port, bag = _bag_for(media)
-            self._report_a_bag_the_link_will_drop(port, bag["bitstream"])
+            self._report_a_bag_the_link_will_drop(port, bag)
             outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
             self._report_progress(port)
 
@@ -505,16 +630,18 @@ class MoqBroadcastSubscriber:
         elif written % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(f"MoqBroadcastSubscriber: `{port}` bags_written={written}")
 
-    def _report_a_bag_the_link_will_drop(self, port: str, bitstream: bytes) -> None:
-        if len(bitstream) <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
+    def _report_a_bag_the_link_will_drop(self, port: str, bag: "Mapping[str, Any]") -> None:
+        framed_byte_count = framed_bag_byte_count(bag)
+        if framed_byte_count <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
             return
         if self._reported_an_oversized_bag:
             return
         self._reported_an_oversized_bag = True
         log.error(
-            f"MoqBroadcastSubscriber: a {len(bitstream)}-byte bag on `{port}` is "
-            f"past the {HELPER_LINK_PAYLOAD_CEILING_BYTES}-byte link ceiling and "
-            f"will be dropped without reaching the decoder. Reported once."
+            f"MoqBroadcastSubscriber: a bag on `{port}` is {framed_byte_count} "
+            f"bytes framed — the link's header and the encoded bag — which is "
+            f"past the {HELPER_LINK_PAYLOAD_CEILING_BYTES}-byte link ceiling, so "
+            f"the link will drop it without reaching the decoder. Reported once."
         )
 
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
