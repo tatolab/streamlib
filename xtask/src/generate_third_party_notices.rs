@@ -88,14 +88,6 @@ const CARGO_ABOUT_TEMPLATE_FILE_NAME: &str = "about.hbs";
 /// The accepted-licence policy every project in this repo is generated against.
 const CARGO_ABOUT_CONFIG_FILE_NAME: &str = "about.toml";
 
-/// What makes a `packages/` directory an extension wheel: pip records this group
-/// at install, and the engine reads it back when a process takes an engine role.
-const EXTENSION_ENTRY_POINT_GROUP: &str = "streamlib.extensions";
-
-/// The generator whose published-project list decides what the simple index
-/// serves — a wheel it does not name is one pip cannot resolve.
-const SIMPLE_INDEX_GENERATOR_RELATIVE_PATH: &str = "scripts/build_simple_index.py";
-
 /// The crate whose build directory holds the extracted vendored C++ trees.
 const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
 
@@ -718,6 +710,16 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// What makes a `packages/` directory an extension wheel: pip records this
+    /// group at install, and the engine reads it back when a process takes an
+    /// engine role. Only the tests below read it — the generator is pointed at
+    /// one package at a time, and discovery is what a sweep needs.
+    const EXTENSION_ENTRY_POINT_GROUP: &str = "streamlib.extensions";
+
+    /// The generator whose published-project list decides what the simple index
+    /// serves — a wheel it does not name is one pip cannot resolve.
+    const SIMPLE_INDEX_GENERATOR_RELATIVE_PATH: &str = "scripts/build_simple_index.py";
+
     /// The family idiom for the workspace root in a gate's tests: free, and it
     /// needs neither cargo on PATH nor the package lock.
     fn workspace_root() -> PathBuf {
@@ -1076,9 +1078,7 @@ mod tests {
         }
         .preamble();
 
-        assert!(preamble.contains(
-            "--extension-package-directory packages/streamlib-webrtc"
-        ));
+        assert!(preamble.contains("--extension-package-directory packages/streamlib-webrtc"));
         assert!(!preamble.contains("deny.toml"));
         assert!(!preamble.contains("the whole workspace's dependency closure"));
     }
@@ -1115,7 +1115,10 @@ mod tests {
             let declared = pyproject["project"]["license-files"]
                 .as_array()
                 .unwrap_or_else(|| {
-                    panic!("{} declares no PEP 639 license-files", pyproject_path.display())
+                    panic!(
+                        "{} declares no PEP 639 license-files",
+                        pyproject_path.display()
+                    )
                 });
             assert!(
                 declared
