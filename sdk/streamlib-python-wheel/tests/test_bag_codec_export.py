@@ -47,6 +47,28 @@ def test_binary_rides_as_msgpack_bin_at_one_times_its_length() -> None:
     assert payload in encoded
 
 
+def test_a_payload_nested_past_the_decoder_bound_is_refused() -> None:
+    # One-element arrays all the way down, the shape a hostile peer sends to
+    # recurse the decoder off its stack. The decoder bounds nesting at 1024;
+    # what this locks is that it bounds it at all, because the subscriber that
+    # decodes relay-delivered bytes has nothing else standing between it and
+    # whatever the far end sent.
+    nested_far_past_the_bound = b"\x91" * 5000 + b"\xc0"
+
+    with pytest.raises(ValueError, match="depth limit exceeded"):
+        streamlib.decode_msgpack_bytes_to_python_object(nested_far_past_the_bound)
+
+
+def test_bytes_that_do_not_hold_a_whole_msgpack_value_are_refused() -> None:
+    with pytest.raises(ValueError, match="marker byte"):
+        streamlib.decode_msgpack_bytes_to_python_object(b"")
+
+    # An array header promising one element, with nothing behind it — refused
+    # rather than handed back as the empty list that did arrive.
+    with pytest.raises(ValueError, match="marker byte"):
+        streamlib.decode_msgpack_bytes_to_python_object(b"\x91")
+
+
 def test_a_top_level_that_is_not_a_named_map_is_refused() -> None:
     with pytest.raises(TypeError, match="a bag is a dict with string keys"):
         streamlib.encode_bag_to_msgpack_bytes([1, 2, 3])  # type: ignore[arg-type]

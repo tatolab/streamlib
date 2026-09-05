@@ -57,10 +57,8 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
 /// Encode a bag to the msgpack bytes the wire carries, for a caller carrying
 /// them itself.
 ///
-/// An extension wheel putting a bag on its own transport needs the engine's one
-/// codec — a second one in the extension would answer a different question about
-/// what a bag is. Nothing is added here: the same named-map rule, the same
-/// refusals, and no link is read or written.
+/// Nothing is added over [`encode_bag_to_msgpack`]: the same named-map rule,
+/// the same refusals, and no link is read or written.
 #[pyfunction]
 pub(crate) fn encode_bag_to_msgpack_bytes<'py>(
     bag: &Bound<'py, PyAny>,
@@ -70,8 +68,9 @@ pub(crate) fn encode_bag_to_msgpack_bytes<'py>(
 
 /// Decode msgpack bytes into ordinary Python data.
 ///
-/// Unlike the tapped-frame decoder these are payload bytes with no
-/// [`FrameHeader`] in front of them — what an extension's transport delivered.
+/// Unlike [`decode_tapped_channel_bag_frame_to_python_object`] these are payload
+/// bytes with no [`FrameHeader`] in front of them — what an extension's
+/// transport delivered.
 #[pyfunction]
 pub(crate) fn decode_msgpack_bytes_to_python_object<'py>(
     python: Python<'py>,
@@ -779,7 +778,7 @@ mod tests {
     /// The export forwards the codec's refusals rather than softening them —
     /// an extension author learns the same rule at the same boundary.
     #[test]
-    fn the_exported_encode_refuses_a_top_level_that_is_not_a_named_map() {
+    fn the_exported_encode_forwards_the_named_map_refusals() {
         Python::initialize();
         Python::attach(|python| {
             let list_bag = PyList::new(python, [1i64, 2, 3]).unwrap();
@@ -790,13 +789,7 @@ mod tests {
                     .contains("a bag is a dict with string keys"),
                 "got: {failure}"
             );
-        });
-    }
 
-    #[test]
-    fn the_exported_encode_refuses_a_non_string_key() {
-        Python::initialize();
-        Python::attach(|python| {
             let int_keyed = PyDict::new(python);
             int_keyed.set_item(1i64, "value").unwrap();
             let failure = encode_bag_to_msgpack_bytes(int_keyed.as_any()).unwrap_err();
