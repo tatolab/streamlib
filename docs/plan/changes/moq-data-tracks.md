@@ -77,14 +77,14 @@ DECIDED and applied.
 
 ---
 
-## [NEEDS DECISION] — what a late joiner sees
+## DECIDED (owner, 2026-09-05) — what a late joiner sees: A + C
 
 A MoQ subscriber that joins mid-group receives that group from its first object. For
 video that is a GOP and correct. For a data track it means a new subscriber receives up to
 the whole open group of messages before the live edge — up to 128 on a broadcast with no
 video, or everything since the last video sync point on one with. A websocket delivers
-nothing from before the connect; MoQ delivers the group. Product behavior the plan does
-not state.
+nothing from before the connect; MoQ delivers the group. Product behavior the plan did
+not state; the owner chose **A + C** from these, on the recommendation below.
 
 - **A. Accept the replay.** Zero work; matches media; a late joiner gets state catch-up
   for free. On a sparse data-only track (one message a second) the open group can be
@@ -98,10 +98,10 @@ not state.
   cut first. Bounds A's replay and B's wait alike. Adds a second backstop beside the
   128-object one; the video-cut rule is untouched.
 
-**Recommendation: A + C.** Replay is MoQ's behavior and media's, and C bounds it to about
-a second where video would not; a downstream that wants the live edge filters on the
-stamp it already receives. B is a subscriber flag a later rung can add without touching
-the wire.
+**Chosen: A + C.** Replay is MoQ's behavior and media's, and C bounds it to about a
+second where video would not; a downstream that wants the live edge filters on the stamp
+it already receives. B is a subscriber flag a later rung can add without touching the
+wire. No `[NEEDS DECISION]` remains.
 
 ## Assumptions stated, not asked
 
@@ -160,7 +160,11 @@ the wire.
   never enters the written bag; a jump in it is counted and reported through the Python
   log at the progress cadence. A subscriber naming none of its three tracks is refused, as
   one naming neither media track is today. The catalog is unchanged: a data track's entry
-  is the entry every `streamlib_bag` track already gets. [moq-data-tracks]
+  is the entry every `streamlib_bag` track already gets. A subscriber that joins
+  mid-group receives the open group from its first object — MoQ's behavior, accepted
+  rather than masked (owner, 2026-09-05) — and on a video-free broadcast that group is
+  bounded to about a second by the publisher's time backstop, so what a late joiner
+  replays is a second of history, never minutes. [moq-data-tracks]
 - **DECIDED** — Track names under `streamlib_bag` are the app's to choose.
   `MoqBroadcastPublisher` takes `track_names: Sequence[str] | None`, positional in wiring
   order — the order `runtime.connect` ran, which is the order `cmaf` already numbers
@@ -185,7 +189,9 @@ the wire.
   `bytes` still `bytes`; a `cmaf` broadcast refusing a data bag by name at its first bag
   with no hold entered; `track_names` count mismatch and `cmaf` refusals by name; a
   publisher classifying a bitstream-less bag as data and a later media bag on that link as
-  a refusal; and, in the engine wheel, `encode_bag_to_msgpack_bytes` /
+  a refusal; a video-free publisher fed two data bags stamped more than the bound apart
+  cutting a group between them, and one fed bags inside the bound not cutting; and, in
+  the engine wheel, `encode_bag_to_msgpack_bytes` /
   `decode_msgpack_bytes_to_python_object` proven against the existing codec tests' cases
   (named map, `bin`, refusal of a non-dict and of a non-string key) with stubtest and
   pyright over their entries. Live, rig-only, under `/verify-live`'s networking arm: the
@@ -224,8 +230,12 @@ the wire.
   `sequence_index` per data track, monotonic for its life, carried in the envelope and never
   written into the bag. Records the existing `HIGHEST_OBJECTS_IN_ONE_GROUP = 128` backstop
   for a broadcast with no video, which the entry does not yet name, and that a data bag
-  never cuts a group — the audio rule, for the audio reason. The time bound is the
-  `[NEEDS DECISION]` above and joins this entry only if chosen. [moq-data-tracks]
+  never cuts a group — the audio rule, for the audio reason. Adds a second backstop
+  beside it, for the same video-free broadcast: on the next bag, if the open group is
+  older than about a second on the publisher's own monotonic clock, the publisher cuts
+  first — no timer, a stamp comparison at the write. The video-cut rule is untouched, and
+  a broadcast with video never reaches either backstop. Owner ruling 2026-09-05: a late
+  joiner receives the open group, and this is what bounds it. [moq-data-tracks]
 - **MODIFIED** — `:1821-1835`, many tracks. "Both subscribers expose one output per media
   kind" becomes one output per *track kind*: `MoqBroadcastSubscriber` exposes
   `encoded_video`, `encoded_audio` and `data_bags`, and takes `video_track`, `audio_track`
