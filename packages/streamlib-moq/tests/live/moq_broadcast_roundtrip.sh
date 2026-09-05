@@ -68,6 +68,12 @@
 #                             connect and a CMAF init handshake sit inside it
 #   TOLERANCE                 abs channel-mean drift bound (default 0.05)
 #   VIVID_TEST_PATTERN        vivid pattern index (default 7 = "100% Red")
+#   DELIVERY_DEADLINE_MS      the publisher's delivery deadline in ms. Unset is
+#                             the baseline arm — every bag is published however
+#                             late it is. Set it for the policy-on arm; the
+#                             publisher's own count of what it shed is in the
+#                             log, per inbound link, and a run that shed
+#                             nothing says so
 #   SKIP_INTEROP              set to 1 to leave the moq-sub arm out
 #
 # Exit codes: 0 = pass, 1 = fail, 77 = cannot run.
@@ -89,6 +95,7 @@ MEDIA_DEADLINE_SECONDS="${MEDIA_DEADLINE_SECONDS:-45}"
 TOLERANCE="${TOLERANCE:-0.05}"
 VIVID_TEST_PATTERN="${VIVID_TEST_PATTERN:-7}"
 BROADCAST="${STREAMLIB_MOQ_BROADCAST:-streamlib/moq-live-proof}"
+DELIVERY_DEADLINE_MS="${DELIVERY_DEADLINE_MS:-}"
 SKIP_INTEROP="${SKIP_INTEROP:-}"
 
 say() { echo "[moq-live] $*"; }
@@ -157,7 +164,10 @@ if [ "$SKIP_INTEROP" != "1" ] && [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
 fi
 
 # ── The camera ───────────────────────────────────────────────────────
-lsmod | grep -q vivid || sudo modprobe vivid 2>/dev/null \
+# `/proc/modules` rather than `lsmod | grep -q`: under `pipefail`, `grep -q`
+# closing the pipe on its first match kills `lsmod` with SIGPIPE and the
+# pipeline reads as failed — a race that reports a loaded module as absent.
+grep -q '^vivid ' /proc/modules || sudo modprobe vivid 2>/dev/null \
     || cannot_run "vivid module not available (check kernel config)"
 VIVID_DEVICE=""
 while read -r dev; do
@@ -283,6 +293,7 @@ RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
             ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
             --broadcast "$BROADCAST" \
             --control-plane-port "$CONTROL_PLANE_PORT" \
+            ${DELIVERY_DEADLINE_MS:+--delivery-deadline-ms "$DELIVERY_DEADLINE_MS"} \
         > "$LOG_FILE" 2>&1 &
 NODE_PID=$!
 

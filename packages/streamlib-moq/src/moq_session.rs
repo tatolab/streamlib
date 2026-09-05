@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
 
@@ -25,15 +26,37 @@ use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
 /// the transport config, which is why the endpoint is assembled by hand.
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(4);
 
-/// What the catalog and init tracks are published at, and what media is
-/// published at — the reference publisher's literals.
-///
-/// They read backwards, and are: `SubgroupHeader.publisher_priority` documents
-/// smaller as sooner, while the same number reaches quinn's `set_priority`
-/// where larger is sooner. Matching the reference is what makes a broadcast
-/// interoperable; reasoning about it as a coherent scheme is not possible.
+// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner. Video keeps
+// `moq-pub`'s media literal of 127 and audio sits one rung ahead of it, so the
+// broadcast stays interoperable while still saying which medium to prefer. The
+// direction is read from the draft and has not been checked against a relay;
+// a shaped-link run that finds the relay reading it the other way flips the
+// two. The number reverses meaning once it leaves the header: `moq-transport`
+// hands the same `u8` to quinn's `set_priority`, where larger is sooner, so no
+// one value can rank audio first at both ends. This one is the statement to
+// the relay.
+
+/// The rung the catalog and init tracks are published at.
 pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
-pub(crate) const MEDIA_TRACK_PRIORITY: u8 = 127;
+/// The rung an audio track's groups are opened at.
+pub(crate) const AUDIO_MEDIA_TRACK_PRIORITY: u8 = 126;
+/// The rung a video track's groups are opened at.
+pub(crate) const VIDEO_MEDIA_TRACK_PRIORITY: u8 = 127;
+
+/// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner, so the
+/// ladder is only a ladder while it descends.
+const _: () = assert!(
+    DESCRIPTIVE_TRACK_PRIORITY < AUDIO_MEDIA_TRACK_PRIORITY
+        && AUDIO_MEDIA_TRACK_PRIORITY < VIDEO_MEDIA_TRACK_PRIORITY
+);
+
+/// The rung a medium's groups are opened at.
+pub(crate) fn media_track_priority_of(medium: TrackMedium) -> u8 {
+    match medium {
+        TrackMedium::Audio => AUDIO_MEDIA_TRACK_PRIORITY,
+        TrackMedium::Video => VIDEO_MEDIA_TRACK_PRIORITY,
+    }
+}
 
 /// How long a closing session may spend letting already-written objects reach
 /// the wire before its control loop is aborted.
@@ -271,7 +294,16 @@ impl MoqBroadcastPublishingSession {
 
     /// Write one object, opening a group first if none is open or the open one
     /// has reached the backstop.
-    pub(crate) fn write_object(&mut self, track_name: &str, payload: bytes::Bytes) -> Result<()> {
+    ///
+    /// The priority is the track's own rung and is spent only when a group is
+    /// opened: draft-16 carries `publisher_priority` in the subgroup header,
+    /// so it is a property of the group and not of the object.
+    pub(crate) fn write_object(
+        &mut self,
+        track_name: &str,
+        payload: bytes::Bytes,
+        publisher_priority: u8,
+    ) -> Result<()> {
         let full_enough = self
             .open_subgroup_by_track
             .get(track_name)
@@ -292,7 +324,7 @@ impl MoqBroadcastPublishingSession {
             // the wire, and an audio stream, whose every packet is a sync
             // point, would open one group per packet where only the newest
             // survives. The producer's ordering pair rides the object instead.
-            let opened = subgroups.append(MEDIA_TRACK_PRIORITY).map_err(|failure| {
+            let opened = subgroups.append(publisher_priority).map_err(|failure| {
                 MoqExtensionError::Transport {
                     what: format!("a MoQ group could not be opened on `{track_name}`: {failure}"),
                 }
@@ -665,5 +697,86 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
     match failure {
         moq_transport::serve::ServeError::Done => format!("`{track_name}` ended"),
         other => format!("`{track_name}` stopped: {other}"),
+    }
+}
+
+/// What the transport does with an object the publisher has already written —
+/// undocumented in `moq-transport`, and what [`crate::delivery_deadline`] rests
+/// on, so pinned here rather than re-derived.
+#[cfg(test)]
+mod tests {
+    use super::VIDEO_MEDIA_TRACK_PRIORITY;
+    use moq_transport::serve::{ServeError, Track, TrackReaderMode};
+
+    const A_NAMESPACE: &str = "streamlib/a-broadcast";
+    const A_TRACK: &str = "1.m4s";
+
+    /// The writer, and the reader positioned on the group it opened.
+    async fn one_open_group() -> (
+        moq_transport::serve::SubgroupsWriter,
+        moq_transport::serve::SubgroupWriter,
+        moq_transport::serve::SubgroupReader,
+    ) {
+        let namespace = moq_transport::coding::TrackNamespace::try_from(A_NAMESPACE)
+            .expect("the namespace parses");
+        let (track_writer, track_reader) = Track::new(namespace, A_TRACK).produce();
+        let mut subgroups_writer = track_writer
+            .subgroups()
+            .expect("a fresh track enters subgroups mode");
+        let open = subgroups_writer
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        let TrackReaderMode::Subgroups(mut subgroups_reader) =
+            track_reader.mode().await.expect("the track reads back")
+        else {
+            panic!("a track published as subgroups reads back as subgroups");
+        };
+        let open_reader = subgroups_reader
+            .next()
+            .await
+            .expect("the opened group reaches the reader")
+            .expect("there is an opened group");
+        (subgroups_writer, open, open_reader)
+    }
+
+    #[tokio::test]
+    async fn closing_a_group_delivers_every_object_already_written_to_it_before_the_close() {
+        let (_subgroups, mut open, mut reader) = one_open_group().await;
+        open.write(bytes::Bytes::from_static(b"first"))
+            .expect("the first object is written");
+        open.write(bytes::Bytes::from_static(b"second"))
+            .expect("the second object is written");
+
+        open.close(ServeError::Cancel)
+            .expect("a group closes with an error");
+
+        // This is why the drop policy decides before the write: `close` cannot
+        // pre-empt a backlog, so the forwarder puts every stale object on the
+        // wire and only then resets the stream.
+        assert_eq!(
+            reader.read_next().await.expect("the first object reads"),
+            Some(bytes::Bytes::from_static(b"first"))
+        );
+        assert_eq!(
+            reader.read_next().await.expect("the second object reads"),
+            Some(bytes::Bytes::from_static(b"second"))
+        );
+        assert_eq!(reader.read_next().await, Err(ServeError::Cancel));
+    }
+
+    #[tokio::test]
+    async fn a_group_whose_writer_is_dropped_ends_cleanly_once_its_objects_are_read() {
+        let (_subgroups, mut open, mut reader) = one_open_group().await;
+        open.write(bytes::Bytes::from_static(b"only"))
+            .expect("the object is written");
+
+        drop(open);
+
+        assert_eq!(
+            reader.read_next().await.expect("the object reads"),
+            Some(bytes::Bytes::from_static(b"only"))
+        );
+        // No error: the subgroup finished, which is what FINs its QUIC stream.
+        assert_eq!(reader.read_next().await.expect("the group ends"), None);
     }
 }

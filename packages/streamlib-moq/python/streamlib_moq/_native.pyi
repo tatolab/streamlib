@@ -37,12 +37,20 @@ class MoqBroadcastPublishingSession:
     """One broadcast: one QUIC connection, one namespace, one track per link."""
 
     def __new__(
-        cls, relay_url: str, broadcast: str, container_format: str
+        cls,
+        relay_url: str,
+        broadcast: str,
+        container_format: str,
+        delivery_deadline_ms: "int | None" = None,
     ) -> MoqBroadcastPublishingSession:
         """Construct without connecting — the first bag is what connects.
 
         `relay_url` carries the relay's auth token as its path: draft-16
         provisions relays per account and there is nowhere else to put it.
+
+        `delivery_deadline_ms` is how old a bag may be, by its own monotonic
+        stamp, and still be published. Absent is the shipped behaviour: every
+        bag is written however late it is.
         """
 
     def declare_tracks(self, inbound_link_names: Sequence[str]) -> None:
@@ -65,12 +73,14 @@ class MoqBroadcastPublishingSession:
         height: int,
         color: "dict[str, str] | None",
         timestamp_ns: int,
-    ) -> None:
+    ) -> bool:
         """Publish one access unit on the track that link owns.
 
-        On `cmaf` a sync point is what cuts a new MoQ group, and it cuts one on
-        every track at once — the reference publisher's rule, and what makes a
-        group a GOP across audio and video alike.
+        `True` when the bag reaches the transport — written now, or held for
+        the CMAF init segment and written with it; `False` when the delivery
+        deadline shed it. On `cmaf` a sync point is what cuts a new MoQ group,
+        and it cuts one on every track at once — the reference publisher's
+        rule, and what makes a group a GOP across audio and video alike.
         """
 
     def publish_audio_packet(
@@ -85,8 +95,9 @@ class MoqBroadcastPublishingSession:
         sample_count: int,
         pre_skip: int,
         timestamp_ns: int,
-    ) -> None:
-        """Publish one Opus packet on the track that link owns.
+    ) -> bool:
+        """Publish one Opus packet on the track that link owns. `True` when
+        it reaches the transport; `False` when the delivery deadline shed it.
 
         On `cmaf`, 3–8 channels are refused by name: the `dOps` box encodes
         ChannelMappingFamily 0 only, so a multichannel stream has no honest
@@ -104,6 +115,16 @@ class MoqBroadcastPublishingSession:
 
     @property
     def is_connected(self) -> bool: ...
+    def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
+        """What the deadline has shed so far: `(inbound_link_name, objects, bytes)`.
+
+        `bytes` is the encoded media payload — the Annex-B access unit or the
+        Opus packet — not the container or wire bytes the uplink would have
+        carried. A link that shed nothing is left out, so an empty list is a
+        broadcast that dropped nothing. Read back rather than logged below the
+        boundary: this wheel's Rust reaches no `tracing` dispatcher inside a
+        helper process.
+        """
 
 @final
 class MoqBroadcastSubscribingSession:

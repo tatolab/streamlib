@@ -12,6 +12,10 @@
 //! retains only a track's latest subgroup, so all but the newest packet would
 //! become unreachable the moment the next one arrived.
 //!
+//! Whether a bag is published at all is decided here too, before any of it
+//! reaches the transport — see [`crate::delivery_deadline`] for why that is the
+//! only moment there is.
+//!
 //! The transport is reached only through the instruction list this module
 //! plans, so everything up to the byte handed to a QUIC stream is decided
 //! without a relay. Planning states what would be written; nothing about the
@@ -34,6 +38,9 @@ use crate::cmaf_sample_entry::{
 use crate::cmaf_track_timeline::{
     CmafTrackTimeline, OPUS_TRACK_TIMESCALE_HZ, VIDEO_TRACK_TIMESCALE_HZ,
 };
+use crate::delivery_deadline::{
+    DeliveryDeadlineVerdict, MoqPublisherDeliveryDeadline, ObjectsTheDeliveryDeadlineShedOnOneTrack,
+};
 use crate::encoded_media_sample::{EncodedMediaSample, TrackMedium};
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_broadcast_catalog::{
@@ -41,7 +48,7 @@ use crate::moq_broadcast_catalog::{
     MoqCatalogTrackSelectionParameters, STREAMLIB_BAG_PACKAGING, media_track_name,
 };
 use crate::moq_relay_config::MoqRelayConfig;
-use crate::moq_session::MoqBroadcastPublishingSession;
+use crate::moq_session::{MoqBroadcastPublishingSession, media_track_priority_of};
 use crate::streamlib_bag_object::encode_object;
 
 /// The container name a caller passes for fragmented MP4.
@@ -106,13 +113,18 @@ pub(crate) struct MoqBroadcastPublisher {
 
 impl MoqBroadcastPublisher {
     /// A publisher that has declared no tracks and holds no connection.
-    pub(crate) fn new(relay_config: MoqRelayConfig, container_format: MoqContainerFormat) -> Self {
+    pub(crate) fn new(
+        relay_config: MoqRelayConfig,
+        container_format: MoqContainerFormat,
+        delivery_deadline: MoqPublisherDeliveryDeadline,
+    ) -> Self {
         let broadcast_namespace = relay_config.broadcast_path.clone();
         Self {
             relay_config,
             object_write_planner: MoqBroadcastObjectWritePlanner::of(
                 container_format,
                 broadcast_namespace,
+                delivery_deadline,
             ),
             publishing_session: None,
         }
@@ -130,7 +142,8 @@ impl MoqBroadcastPublisher {
         &mut self,
         inbound_link_name: &str,
         sample: EncodedMediaSample,
-    ) -> Result<()> {
+        now_ns: i64,
+    ) -> Result<WhatBecameOfOnePublishedBag> {
         // Connected here rather than in `declare_tracks`: a relay round trip
         // inside `setup()` spends the helper's start-up budget before the graph
         // is running. Before the plan rather than after it: a plan is the only
@@ -142,12 +155,13 @@ impl MoqBroadcastPublisher {
         // Everything the plan is about to spend, so a plan that does not reach
         // the relay whole can give it back.
         let placement_before_planning = self.object_write_planner.placement_of_every_track();
-        let planned = self
-            .object_write_planner
-            .plan_the_writes_for(inbound_link_name, sample);
+        let planned =
+            self.object_write_planner
+                .plan_the_writes_for(inbound_link_name, sample, now_ns);
         let PlannedMoqObjectWrites {
             instructions,
             writing_them_all_opens_the_broadcast,
+            the_delivery_deadline_shed_it,
         } = match planned {
             Ok(planned) => planned,
             Err(refusal) => {
@@ -156,8 +170,11 @@ impl MoqBroadcastPublisher {
                 return Err(refusal);
             }
         };
+        if the_delivery_deadline_shed_it {
+            return Ok(WhatBecameOfOnePublishedBag::ShedByTheDeliveryDeadline);
+        }
         if instructions.is_empty() {
-            return Ok(());
+            return Ok(WhatBecameOfOnePublishedBag::ReachesTheTransport);
         }
 
         let Some(session) = self.publishing_session.as_mut() else {
@@ -179,7 +196,8 @@ impl MoqBroadcastPublisher {
                 MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                     moq_track_name,
                     object_payload,
-                } => session.write_object(&moq_track_name, object_payload),
+                    publisher_priority,
+                } => session.write_object(&moq_track_name, object_payload, publisher_priority),
             };
             if wrote_them_all.is_err() {
                 break;
@@ -195,7 +213,7 @@ impl MoqBroadcastPublisher {
             self.object_write_planner
                 .record_that_every_descriptive_object_and_held_sample_was_written();
         }
-        Ok(())
+        Ok(WhatBecameOfOnePublishedBag::ReachesTheTransport)
     }
 
     async fn connect_the_publishing_session_unless_it_is_already_up(&mut self) -> Result<()> {
@@ -214,6 +232,18 @@ impl MoqBroadcastPublisher {
     /// Whether the relay session is up.
     pub(crate) fn is_connected(&self) -> bool {
         self.publishing_session.is_some()
+    }
+
+    /// What the delivery deadline has shed so far, per inbound link.
+    ///
+    /// Read back across the CPython boundary rather than only logged: this
+    /// crate's `tracing` events reach no dispatcher inside a helper process,
+    /// so a drop reported only that way is reported to nobody.
+    pub(crate) fn objects_the_delivery_deadline_shed(
+        &self,
+    ) -> Vec<ObjectsTheDeliveryDeadlineShedOnOneTrack> {
+        self.object_write_planner
+            .objects_the_delivery_deadline_shed()
     }
 
     /// Finish every open group and end the session.
@@ -259,13 +289,28 @@ enum MoqObjectWriteInstruction {
     AppendOneObjectToATracksOpenGroup {
         moq_track_name: String,
         object_payload: Bytes,
+        /// The rung the track's group is opened at — audio outranks video, and
+        /// both sit below the descriptive tracks.
+        publisher_priority: u8,
     },
+}
+
+/// What became of one bag `publish` was handed, for the caller that counts and
+/// says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WhatBecameOfOnePublishedBag {
+    /// Its object reached the transport — or the CMAF hold keeps it and it
+    /// reaches the transport with the flush.
+    ReachesTheTransport,
+    /// The delivery deadline shed it; nothing of it reaches the transport.
+    ShedByTheDeliveryDeadline,
 }
 
 /// What one bag became, ready for a transport that has not been reached yet.
 #[derive(Debug, Clone, PartialEq)]
 struct PlannedMoqObjectWrites {
     instructions: Vec<MoqObjectWriteInstruction>,
+    the_delivery_deadline_shed_it: bool,
     /// Whether these instructions carry the broadcast's descriptive objects and
     /// every sample the hold was keeping for them. The planner records that
     /// only once the caller reports all of them written, so a refusal or a dead
@@ -274,10 +319,20 @@ struct PlannedMoqObjectWrites {
 }
 
 impl PlannedMoqObjectWrites {
-    /// A bag the hold keeps asks the transport for nothing at all.
+    /// A bag the CMAF hold keeps until every track is describable.
     fn of_a_bag_the_hold_keeps() -> Self {
         Self {
             instructions: Vec::new(),
+            the_delivery_deadline_shed_it: false,
+            writing_them_all_opens_the_broadcast: false,
+        }
+    }
+
+    /// A bag the delivery deadline shed; the transport is asked for nothing.
+    fn of_a_bag_the_delivery_deadline_shed() -> Self {
+        Self {
+            instructions: Vec::new(),
+            the_delivery_deadline_shed_it: true,
             writing_them_all_opens_the_broadcast: false,
         }
     }
@@ -296,6 +351,7 @@ pub(crate) struct EncodedMediaTheHoldDiscardsAtClose {
 struct MoqBroadcastObjectWritePlanner {
     container_format: MoqContainerFormat,
     broadcast_namespace: String,
+    delivery_deadline: MoqPublisherDeliveryDeadline,
     /// Declaration order, which is also track-id order and catalog order.
     declared_tracks: Vec<DeclaredMoqTrackPublicationState>,
     declared_track_index_by_inbound_link_name: HashMap<String, usize>,
@@ -312,10 +368,15 @@ struct MoqBroadcastObjectWritePlanner {
 }
 
 impl MoqBroadcastObjectWritePlanner {
-    fn of(container_format: MoqContainerFormat, broadcast_namespace: String) -> Self {
+    fn of(
+        container_format: MoqContainerFormat,
+        broadcast_namespace: String,
+        delivery_deadline: MoqPublisherDeliveryDeadline,
+    ) -> Self {
         Self {
             container_format,
             broadcast_namespace,
+            delivery_deadline,
             declared_tracks: Vec::new(),
             declared_track_index_by_inbound_link_name: HashMap::new(),
             the_descriptive_objects_have_been_written: false,
@@ -406,11 +467,29 @@ impl MoqBroadcastObjectWritePlanner {
         &mut self,
         inbound_link_name: &str,
         sample: EncodedMediaSample,
+        now_ns: i64,
     ) -> Result<PlannedMoqObjectWrites> {
         let declared_track_index = self.declared_track_index_of(inbound_link_name)?;
+        let delivery_deadline = self.delivery_deadline;
         let track = &mut self.declared_tracks[declared_track_index];
         track.refuse_a_sample_unlike_the_one_this_track_was_first_published_from(&sample)?;
+        // Counted before the deadline reads it, because this counts what the
+        // link handed over and not what reached the wire — a track shedding
+        // every frame is still speaking, and the hold's account of a silent
+        // track must not call it silent.
         track.count_one_more_delivered_bag();
+
+        match delivery_deadline.verdict_for_one_sample(
+            &sample,
+            now_ns,
+            track.the_open_group_is_being_shed,
+        ) {
+            DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup => {
+                track.record_one_object_the_delivery_deadline_shed(encoded_byte_count_of(&sample));
+                return Ok(PlannedMoqObjectWrites::of_a_bag_the_delivery_deadline_shed());
+            }
+            DeliveryDeadlineVerdict::PublishIt => track.the_open_group_is_being_shed = false,
+        }
 
         match self.container_format {
             MoqContainerFormat::StreamlibBag => {
@@ -445,10 +524,12 @@ impl MoqBroadcastObjectWritePlanner {
                     .moq_media_track_name
                     .clone(),
                 object_payload,
+                publisher_priority: media_track_priority_of(sample.medium()),
             },
         );
         Ok(PlannedMoqObjectWrites {
             instructions,
+            the_delivery_deadline_shed_it: false,
             writing_them_all_opens_the_broadcast,
         })
     }
@@ -470,6 +551,7 @@ impl MoqBroadcastObjectWritePlanner {
             return Ok(PlannedMoqObjectWrites {
                 instructions: self.declared_tracks[declared_track_index]
                     .plan_the_cmaf_fragment_of(&sample)?,
+                the_delivery_deadline_shed_it: false,
                 writing_them_all_opens_the_broadcast: false,
             });
         }
@@ -500,6 +582,7 @@ impl MoqBroadcastObjectWritePlanner {
             .extend(self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?);
         Ok(PlannedMoqObjectWrites {
             instructions,
+            the_delivery_deadline_shed_it: false,
             writing_them_all_opens_the_broadcast: true,
         })
     }
@@ -596,6 +679,21 @@ impl MoqBroadcastObjectWritePlanner {
                 self.describe_the_tracks_the_init_segment_is_waiting_on()
             ),
         }
+    }
+
+    /// What the deadline has shed, by the link an operator wired. A track that
+    /// shed nothing is left out, so an empty list is a run that dropped
+    /// nothing.
+    fn objects_the_delivery_deadline_shed(&self) -> Vec<ObjectsTheDeliveryDeadlineShedOnOneTrack> {
+        self.declared_tracks
+            .iter()
+            .filter(|track| track.objects_the_delivery_deadline_shed > 0)
+            .map(|track| ObjectsTheDeliveryDeadlineShedOnOneTrack {
+                inbound_link_name: track.inbound_link_name.clone(),
+                objects_shed: track.objects_the_delivery_deadline_shed,
+                bytes_shed: track.bytes_the_delivery_deadline_shed,
+            })
+            .collect()
     }
 
     fn every_declared_track_is_described(&self) -> bool {
@@ -762,6 +860,11 @@ struct DeclaredMoqTrackPublicationState {
     cmaf_description: Option<CmafTrackDescriptionLearnedFromItsFirstUsableSample>,
     parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit,
     next_cmaf_fragment_sequence_number: u32,
+    /// Whether the delivery deadline is shedding this track's open group. It
+    /// ends at the next sync point, which is also what opens the next group.
+    the_open_group_is_being_shed: bool,
+    objects_the_delivery_deadline_shed: u64,
+    bytes_the_delivery_deadline_shed: u64,
 }
 
 impl DeclaredMoqTrackPublicationState {
@@ -778,11 +881,23 @@ impl DeclaredMoqTrackPublicationState {
             // ISO/IEC 14496-12 §8.8.5: `mfhd.sequence_number` counts one
             // track's fragments from one.
             next_cmaf_fragment_sequence_number: 1,
+            the_open_group_is_being_shed: false,
+            objects_the_delivery_deadline_shed: 0,
+            bytes_the_delivery_deadline_shed: 0,
         }
     }
 
     fn count_one_more_delivered_bag(&mut self) {
         self.bags_this_track_has_delivered = self.bags_this_track_has_delivered.saturating_add(1);
+    }
+
+    fn record_one_object_the_delivery_deadline_shed(&mut self, encoded_byte_count: usize) {
+        self.the_open_group_is_being_shed = true;
+        self.objects_the_delivery_deadline_shed =
+            self.objects_the_delivery_deadline_shed.saturating_add(1);
+        self.bytes_the_delivery_deadline_shed = self
+            .bytes_the_delivery_deadline_shed
+            .saturating_add(encoded_byte_count as u64);
     }
 
     fn refuse_a_sample_unlike_the_one_this_track_was_first_published_from(
@@ -983,6 +1098,7 @@ impl DeclaredMoqTrackPublicationState {
             MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                 moq_track_name: self.moq_media_track_name.clone(),
                 object_payload,
+                publisher_priority: media_track_priority_of(sample.medium()),
             },
         );
         Ok(instructions)
@@ -1055,6 +1171,7 @@ mod tests {
     use crate::annex_b_access_unit::ANNEX_B_START_CODE;
     use crate::cmaf_fragment::read_cmaf_fragment;
     use crate::encoded_media_sample::{EncodedAudioPacket, EncodedVideoAccessUnit};
+    use crate::moq_session::{AUDIO_MEDIA_TRACK_PRIORITY, VIDEO_MEDIA_TRACK_PRIORITY};
 
     const BROADCAST_NAMESPACE: &str = "streamlib/a-broadcast";
 
@@ -1137,8 +1254,19 @@ mod tests {
         container_format: MoqContainerFormat,
         inbound_link_names: &[&str],
     ) -> MoqBroadcastObjectWritePlanner {
-        let mut planner =
-            MoqBroadcastObjectWritePlanner::of(container_format, BROADCAST_NAMESPACE.to_owned());
+        a_planner_over_with_a_delivery_deadline_of(container_format, inbound_link_names, None)
+    }
+
+    fn a_planner_over_with_a_delivery_deadline_of(
+        container_format: MoqContainerFormat,
+        inbound_link_names: &[&str],
+        delivery_deadline_ms: Option<u64>,
+    ) -> MoqBroadcastObjectWritePlanner {
+        let mut planner = MoqBroadcastObjectWritePlanner::of(
+            container_format,
+            BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
+        );
         planner
             .declare_tracks(
                 inbound_link_names
@@ -1152,12 +1280,30 @@ mod tests {
 
     /// Plan one bag's writes and report every one of them written, which is
     /// what the publisher does when the transport accepted the whole plan.
+    ///
+    /// Planned at the instant it was stamped, so nothing is ever late: a test
+    /// that means to exercise the delivery deadline states its own instant.
     fn plan_the_writes_and_report_them_all_written(
         planner: &mut MoqBroadcastObjectWritePlanner,
         inbound_link_name: &str,
         sample: EncodedMediaSample,
     ) -> Result<Vec<MoqObjectWriteInstruction>> {
-        let planned = planner.plan_the_writes_for(inbound_link_name, sample)?;
+        let stamped_at_ns = sample.timestamp_ns();
+        plan_the_writes_at_and_report_them_all_written(
+            planner,
+            inbound_link_name,
+            sample,
+            stamped_at_ns,
+        )
+    }
+
+    fn plan_the_writes_at_and_report_them_all_written(
+        planner: &mut MoqBroadcastObjectWritePlanner,
+        inbound_link_name: &str,
+        sample: EncodedMediaSample,
+        now_ns: i64,
+    ) -> Result<Vec<MoqObjectWriteInstruction>> {
+        let planned = planner.plan_the_writes_for(inbound_link_name, sample, now_ns)?;
         if planned.writing_them_all_opens_the_broadcast {
             planner.record_that_every_descriptive_object_and_held_sample_was_written();
         }
@@ -1199,7 +1345,26 @@ mod tests {
                 MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                     moq_track_name,
                     object_payload,
+                    ..
                 } if moq_track_name == wanted_track_name => Some(object_payload.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The `publisher_priority` every group opened on a track is opened at.
+    fn publisher_priorities_of_objects_written_to(
+        instructions: &[MoqObjectWriteInstruction],
+        wanted_track_name: &str,
+    ) -> Vec<u8> {
+        instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
+                    moq_track_name,
+                    publisher_priority,
+                    ..
+                } if moq_track_name == wanted_track_name => Some(*publisher_priority),
                 _ => None,
             })
             .collect()
@@ -1335,13 +1500,14 @@ mod tests {
         // ever saw.
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera"]);
         planner
-            .plan_the_writes_for("camera", a_video_sync_point(0))
+            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
             .expect("the first sync point describes the track");
         let placement_before = planner.placement_of_every_track();
 
         let refused = planner.plan_the_writes_for(
             "camera",
             a_video_sync_point_carrying(&A_SECOND_H264_SEQUENCE_PARAMETER_SET, 33_000_000),
+            33_000_000,
         );
         assert!(refused.is_err(), "drifted parameter sets are refused");
         planner.restore_placement_of_every_track(placement_before.clone());
@@ -1368,6 +1534,7 @@ mod tests {
         let mut planner = MoqBroadcastObjectWritePlanner::of(
             MoqContainerFormat::Cmaf,
             BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(None),
         );
 
         let refusal = refusal_of(
@@ -1384,6 +1551,7 @@ mod tests {
         let mut planner = MoqBroadcastObjectWritePlanner::of(
             MoqContainerFormat::Cmaf,
             BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(None),
         );
 
         let refusal = refusal_of(
@@ -1404,6 +1572,7 @@ mod tests {
         let mut planner = MoqBroadcastObjectWritePlanner::of(
             MoqContainerFormat::StreamlibBag,
             BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(None),
         );
 
         let refusal = refusal_of(
@@ -1650,16 +1819,16 @@ mod tests {
     fn a_cmaf_plan_the_transport_never_wrote_still_owes_the_init_object_the_catalog_and_the_hold() {
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "microphone"]);
         planner
-            .plan_the_writes_for("camera", a_video_sync_point(0))
+            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
             .expect("the video track is held until the audio track speaks");
 
         let never_reached_the_transport = planner
-            .plan_the_writes_for("microphone", an_opus_packet(0))
+            .plan_the_writes_for("microphone", an_opus_packet(0), 0)
             .expect("the audio track describes itself and the broadcast can open");
         assert!(never_reached_the_transport.writing_them_all_opens_the_broadcast);
 
         let planned_again = planner
-            .plan_the_writes_for("microphone", an_opus_packet(20_000_000))
+            .plan_the_writes_for("microphone", an_opus_packet(20_000_000), 20_000_000)
             .expect("the next bag plans");
 
         assert_eq!(
@@ -1680,7 +1849,7 @@ mod tests {
     fn a_streamlib_bag_plan_the_transport_never_wrote_still_owes_the_catalog() {
         let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["camera"]);
         let never_reached_the_transport = planner
-            .plan_the_writes_for("camera", a_video_sync_point(0))
+            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
             .expect("a sync point plans");
         assert_eq!(
             describe_each_write_instruction_as_a_transport_verb(
@@ -1690,7 +1859,7 @@ mod tests {
         );
 
         let planned_again = planner
-            .plan_the_writes_for("camera", a_video_sync_point(33_000_000))
+            .plan_the_writes_for("camera", a_video_sync_point(33_000_000), 33_000_000)
             .expect("the next sync point plans");
 
         assert_eq!(
@@ -2006,6 +2175,7 @@ mod tests {
                 broadcast_path: BROADCAST_NAMESPACE.to_owned(),
             },
             MoqContainerFormat::Cmaf,
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(None),
         );
 
         publisher
@@ -2015,6 +2185,393 @@ mod tests {
         assert!(
             !publisher.is_connected(),
             "declaring tracks must not spend a relay round trip inside `setup()`"
+        );
+    }
+
+    #[test]
+    fn a_delivery_deadline_that_has_not_passed_sheds_nothing() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+
+        let opened = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        let inside_the_deadline = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 99_000_000,
+        )
+        .expect("a frame inside the deadline plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&opened),
+            vec!["only:.catalog", "cut", "object:camera"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&inside_the_deadline),
+            vec!["object:camera"]
+        );
+        assert_eq!(planner.objects_the_delivery_deadline_shed(), vec![]);
+    }
+
+    #[test]
+    fn a_shed_bag_and_a_held_bag_both_write_nothing_but_only_one_of_them_says_it_was_shed() {
+        let mut held = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::Cmaf,
+            &["camera", "microphone"],
+            Some(100),
+        );
+        let the_hold_keeps_it = held
+            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .expect("the video track is held until the audio track speaks");
+
+        let mut shed = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        shed.plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .expect("the first sync point plans");
+        let the_deadline_sheds_it = shed
+            .plan_the_writes_for(
+                "camera",
+                a_video_delta_frame(33_000_000),
+                33_000_000 + 100_000_001,
+            )
+            .expect("a shed frame is not a refusal");
+
+        assert!(the_hold_keeps_it.instructions.is_empty());
+        assert!(!the_hold_keeps_it.the_delivery_deadline_shed_it);
+        assert!(the_deadline_sheds_it.instructions.is_empty());
+        assert!(
+            the_deadline_sheds_it.the_delivery_deadline_shed_it,
+            "the caller counts a held bag as published and a shed bag as not, so the plan has \
+             to tell them apart"
+        );
+    }
+
+    #[test]
+    fn a_frame_past_the_delivery_deadline_asks_the_transport_for_nothing_at_all() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+
+        let shed = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("a shed frame is not a refusal");
+
+        // An empty instruction list is what "never mid-object" means here: the
+        // object is not created, so no header promising a payload length ever
+        // reaches a QUIC stream.
+        assert_eq!(shed, vec![]);
+    }
+
+    #[test]
+    fn the_rest_of_a_group_goes_with_the_frame_the_deadline_shed() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("the late frame is shed");
+
+        // On time by its own stamp, and still shed: a decoder cannot use a
+        // frame whose reference was shed, so its bytes would buy nothing.
+        let after_the_shed = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(66_000_000),
+            66_000_000,
+        )
+        .expect("a frame in a shed group is not a refusal");
+
+        assert_eq!(after_the_shed, vec![]);
+    }
+
+    #[test]
+    fn a_sync_point_is_published_however_late_it_is_and_ends_the_shed() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("the late frame is shed");
+
+        let a_very_late_sync_point = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(66_000_000),
+            66_000_000 + 60_000_000_000,
+        )
+        .expect("a sync point plans however late it is");
+        let after_the_sync_point = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(99_000_000),
+            99_000_000,
+        )
+        .expect("the frame after a sync point plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&a_very_late_sync_point),
+            vec!["cut", "object:camera"],
+            "abandoning the group a decoder re-enters at turns one late frame into a stall"
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&after_the_sync_point),
+            vec!["object:camera"],
+            "the shed ends at the sync point, which is also what opened the new group"
+        );
+    }
+
+    #[test]
+    fn an_opus_packet_is_never_shed_however_late_it_is_and_a_video_shed_beside_it_is_unaffected() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "microphone"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("the late frame is shed");
+
+        let a_very_late_packet = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(20_000_000),
+            20_000_000 + 60_000_000_000,
+        )
+        .expect("an Opus packet plans however late it is");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&a_very_late_packet),
+            vec!["object:microphone"],
+            "every Opus packet is a sync point, which is what makes audio outrank video here"
+        );
+        assert_eq!(
+            planner
+                .objects_the_delivery_deadline_shed()
+                .into_iter()
+                .map(|track| track.inbound_link_name)
+                .collect::<Vec<_>>(),
+            vec!["camera"],
+            "shedding is per track, and the audio track shed nothing"
+        );
+    }
+
+    #[test]
+    fn the_shed_counts_name_the_inbound_link_and_match_the_bytes_that_were_never_written() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        let a_shed_frame = a_video_delta_frame(33_000_000);
+        let one_frames_bytes = annex_b_byte_count_of(&a_shed_frame) as u64;
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_shed_frame,
+            33_000_000 + 100_000_001,
+        )
+        .expect("the late frame is shed");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(66_000_000),
+            66_000_000,
+        )
+        .expect("the rest of the group goes with it");
+
+        assert_eq!(
+            planner.objects_the_delivery_deadline_shed(),
+            vec![ObjectsTheDeliveryDeadlineShedOnOneTrack {
+                inbound_link_name: "camera".to_owned(),
+                objects_shed: 2,
+                bytes_shed: one_frames_bytes * 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_publisher_with_no_delivery_deadline_writes_every_bag_however_late() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["camera"]);
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+
+        let a_minute_late = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 60_000_000_000,
+        )
+        .expect("an unconfigured deadline refuses nothing");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&a_minute_late),
+            vec!["object:camera"]
+        );
+        assert_eq!(planner.objects_the_delivery_deadline_shed(), vec![]);
+    }
+
+    #[test]
+    fn a_bag_the_deadline_shed_spends_no_cmaf_fragment_sequence_number() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::Cmaf,
+            &["camera"],
+            Some(100),
+        );
+        let opened = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point opens the broadcast");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("the late frame is shed");
+        let after_the_shed = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(66_000_000),
+            66_000_000,
+        )
+        .expect("the next sync point plans");
+
+        let sequence_numbers: Vec<u32> = [&opened, &after_the_shed]
+            .into_iter()
+            .flat_map(|instructions| object_payloads_written_to(instructions, "1.m4s"))
+            .map(|fragment| cmaf_fragment_sequence_number(&fragment))
+            .collect();
+
+        assert_eq!(
+            sequence_numbers,
+            vec![1, 2],
+            "ISO/IEC 14496-12 §8.8.5 numbers a track's fragments consecutively, so a bag that              was never written must not spend one"
+        );
+    }
+
+    #[test]
+    fn each_medium_opens_its_groups_at_its_own_rung_with_audio_ahead_of_video() {
+        let mut planner =
+            a_planner_over(MoqContainerFormat::StreamlibBag, &["camera", "microphone"]);
+        let video = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+        )
+        .expect("the video sync point plans");
+        let audio = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(20_000_000),
+        )
+        .expect("the Opus packet plans");
+
+        assert_eq!(
+            publisher_priorities_of_objects_written_to(&video, "camera"),
+            vec![VIDEO_MEDIA_TRACK_PRIORITY]
+        );
+        assert_eq!(
+            publisher_priorities_of_objects_written_to(&audio, "microphone"),
+            vec![AUDIO_MEDIA_TRACK_PRIORITY]
+        );
+    }
+
+    #[test]
+    fn a_cmaf_broadcasts_two_media_tracks_open_their_groups_at_their_own_mediums_rung() {
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "microphone"]);
+        plan_the_writes_and_report_them_all_written(&mut planner, "camera", a_video_sync_point(0))
+            .expect("the video track is held until the audio track speaks");
+        let opened = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(0),
+        )
+        .expect("the audio track describes itself and the broadcast opens");
+
+        assert_eq!(
+            publisher_priorities_of_objects_written_to(&opened, "1.m4s"),
+            vec![VIDEO_MEDIA_TRACK_PRIORITY]
+        );
+        assert_eq!(
+            publisher_priorities_of_objects_written_to(&opened, "2.m4s"),
+            vec![AUDIO_MEDIA_TRACK_PRIORITY]
         );
     }
 }
