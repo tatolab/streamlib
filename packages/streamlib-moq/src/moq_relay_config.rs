@@ -6,18 +6,15 @@
 
 use crate::error::{MoqExtensionError, Result};
 
-/// Cloudflare's draft-16 relay. Draft-16 relays are provisioned per account and
-/// authenticate, so a usable URL carries a token as its path — this bare host is
-/// the shape, not a working endpoint.
-pub const DEFAULT_MOQ_RELAY_URL: &str = "https://draft-16.cloudflare.mediaoverquic.com";
-
 /// The MoQ Transport draft this wheel speaks, offered as the WebTransport
 /// subprotocol on the extended CONNECT. Draft-16 moved version negotiation out
 /// of the SETUP message, so this string is the whole of it: a relay that does
 /// not accept it refuses the connection rather than mis-negotiating.
 pub(crate) fn moq_transport_subprotocol() -> Result<&'static str> {
-    std::str::from_utf8(moq_transport::setup::ALPN).map_err(|_| MoqExtensionError::Transport {
-        what: "moq-transport's subprotocol name is not UTF-8".to_owned(),
+    std::str::from_utf8(moq_transport::setup::ALPN).map_err(|_| MoqExtensionError::Refused {
+        what: "moq-transport's subprotocol name is not UTF-8, so no draft can be offered on the \
+               extended CONNECT"
+            .to_owned(),
     })
 }
 
@@ -42,9 +39,8 @@ pub(crate) struct MoqRelayConfig {
 impl MoqRelayConfig {
     /// The URL to dial, with the broadcast namespace deliberately *not* in it.
     ///
-    /// The 0.14 path appended the broadcast to the endpoint. Draft-16 cannot:
-    /// the path is where the relay's auth token lives, and the namespace
-    /// travels in `PUBLISH_NAMESPACE` / `SUBSCRIBE` instead.
+    /// The path is where the relay's auth token lives, so the namespace cannot
+    /// share it — it travels in `PUBLISH_NAMESPACE` / `SUBSCRIBE` instead.
     pub(crate) fn dial_url(&self) -> Result<url::Url> {
         let parsed = url::Url::parse(&self.relay_endpoint_url).map_err(|failure| {
             MoqExtensionError::Refused {

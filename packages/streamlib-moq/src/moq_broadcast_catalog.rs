@@ -204,7 +204,8 @@ impl MoqBroadcastCatalog {
 
         let document =
             serde_json::to_string_pretty(&self.catalog_root_on_the_wire()).map_err(|failure| {
-                MoqExtensionError::Transport {
+                MoqExtensionError::MalformedObject {
+                    container: CMAF_PACKAGING,
                     what: format!("the broadcast catalog could not be written as JSON: {failure}"),
                 }
             })?;
@@ -513,14 +514,6 @@ mod tests {
             serde_json::json!("initTrack.bag")
         );
         assert!(parsed["tracks"][0].get("initTrack").is_none());
-    }
-
-    #[test]
-    fn the_catalog_names_the_same_container_the_object_writer_encodes() {
-        assert_eq!(
-            STREAMLIB_BAG_PACKAGING,
-            crate::streamlib_bag_object::STREAMLIB_BAG_PACKAGING
-        );
     }
 
     #[test]

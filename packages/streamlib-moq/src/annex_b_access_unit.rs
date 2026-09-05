@@ -104,6 +104,24 @@ pub(crate) struct ParameterSetsFromAnnexBAccessUnit {
 }
 
 impl ParameterSetsFromAnnexBAccessUnit {
+    /// Which kinds [`Self::is_complete_for`] found missing, for a refusal to
+    /// name. Beside the predicate rather than beside either caller, so a
+    /// changed rule cannot leave one caller's message describing the old one.
+    pub(crate) fn kinds_missing_for(&self, grammar: AnnexBNalHeaderGrammar) -> String {
+        let mut missing_kinds: Vec<&str> = Vec::new();
+        if grammar == AnnexBNalHeaderGrammar::H265 && self.video_parameter_set_nal_units.is_empty()
+        {
+            missing_kinds.push("video parameter set");
+        }
+        if self.sequence_parameter_set_nal_units.is_empty() {
+            missing_kinds.push("sequence parameter set");
+        }
+        if self.picture_parameter_set_nal_units.is_empty() {
+            missing_kinds.push("picture parameter set");
+        }
+        missing_kinds.join(" and no ")
+    }
+
     /// Whether these describe a whole track. H.264 needs an SPS and a PPS;
     /// H.265 needs a VPS beside them. This is the gate deciding when the init
     /// segment can first be minted.
@@ -222,6 +240,44 @@ pub(crate) fn length_prefix_annex_b_access_unit(
     }
 }
 
+/// The parameter sets an access unit carries, without building the sample.
+///
+/// [`length_prefix_annex_b_access_unit`] copies the whole access unit to make
+/// the `mdat`'s bytes. A caller that only wants to know whether a sync point
+/// re-describes the track wants none of that copy — and on a live publish path
+/// that is one full frame's worth of allocation per bag.
+pub(crate) fn parameter_sets_of_annex_b_access_unit(
+    annex_b_access_unit_bytes: &[u8],
+    grammar: AnnexBNalHeaderGrammar,
+) -> ParameterSetsFromAnnexBAccessUnit {
+    let mut parameter_sets = ParameterSetsFromAnnexBAccessUnit::default();
+    for nal_unit in split_annex_b_access_unit_into_nal_units(annex_b_access_unit_bytes) {
+        let Some(nal_unit_type) = grammar.nal_unit_type(nal_unit) else {
+            continue;
+        };
+        if !grammar.is_parameter_set(nal_unit_type)
+            || nal_unit.len() <= grammar.nal_unit_header_bytes()
+        {
+            continue;
+        }
+        let pile = match (grammar, nal_unit_type) {
+            (AnnexBNalHeaderGrammar::H264, H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET)
+            | (AnnexBNalHeaderGrammar::H265, H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET) => {
+                &mut parameter_sets.sequence_parameter_set_nal_units
+            }
+            (AnnexBNalHeaderGrammar::H264, H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET)
+            | (AnnexBNalHeaderGrammar::H265, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET) => {
+                &mut parameter_sets.picture_parameter_set_nal_units
+            }
+            _ => &mut parameter_sets.video_parameter_set_nal_units,
+        };
+        if !pile.iter().any(|already| already == nal_unit) {
+            pile.push(nal_unit.to_vec());
+        }
+    }
+    parameter_sets
+}
+
 /// Why a sample's bytes are not the length-prefixed NAL units its sample entry
 /// says they are.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,4 +363,160 @@ pub(crate) fn remove_emulation_prevention_bytes(nal_unit_payload: &[u8]) -> Vec<
         rbsp.push(byte);
     }
     rbsp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEQUENCE_PARAMETER_SET: [u8; 8] = [0x67, 0x42, 0xC0, 0x1F, 0xDA, 0x02, 0xD0, 0x49];
+    const PICTURE_PARAMETER_SET: [u8; 4] = [0x68, 0xCE, 0x3C, 0x80];
+    const SLICE: [u8; 6] = [0x65, 0x88, 0x84, 0x01, 0x02, 0x03];
+
+    /// The three-byte start code is as legal as the four-byte one, and an
+    /// encoder emits both in one access unit. Every other fixture in this
+    /// crate builds access units from the four-byte form only.
+    const THREE_BYTE_START_CODE: [u8; 3] = [0x00, 0x00, 0x01];
+
+    fn access_unit_with_mixed_start_codes() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ANNEX_B_START_CODE);
+        bytes.extend_from_slice(&SEQUENCE_PARAMETER_SET);
+        bytes.extend_from_slice(&THREE_BYTE_START_CODE);
+        bytes.extend_from_slice(&PICTURE_PARAMETER_SET);
+        bytes.extend_from_slice(&ANNEX_B_START_CODE);
+        bytes.extend_from_slice(&SLICE);
+        bytes
+    }
+
+    #[test]
+    fn an_access_unit_mixing_three_and_four_byte_start_codes_splits_the_same_way() {
+        // The byte before a four-byte start code is a zero that belongs to that
+        // prefix, not a trailing byte of the NAL before it.
+        let length_prefixed = length_prefix_annex_b_access_unit(
+            &access_unit_with_mixed_start_codes(),
+            AnnexBNalHeaderGrammar::H264,
+        );
+
+        assert_eq!(
+            length_prefixed
+                .parameter_sets
+                .sequence_parameter_set_nal_units,
+            vec![SEQUENCE_PARAMETER_SET.to_vec()]
+        );
+        assert_eq!(
+            length_prefixed
+                .parameter_sets
+                .picture_parameter_set_nal_units,
+            vec![PICTURE_PARAMETER_SET.to_vec()]
+        );
+        let mut expected_sample = (SLICE.len() as u32).to_be_bytes().to_vec();
+        expected_sample.extend_from_slice(&SLICE);
+        assert_eq!(
+            length_prefixed.length_prefixed_sample_bytes,
+            expected_sample
+        );
+    }
+
+    #[test]
+    fn a_nal_unit_ending_in_a_zero_keeps_that_zero() {
+        // `.. 00 | 00 00 00 01` and `.. | 00 00 00 01` differ by one byte that
+        // is the NAL's, and cutting it would corrupt every such sample.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&ANNEX_B_START_CODE);
+        bytes.extend_from_slice(&[0x65, 0x11, 0x22, 0x00]);
+        bytes.extend_from_slice(&ANNEX_B_START_CODE);
+        bytes.extend_from_slice(&[0x41, 0x33]);
+
+        let length_prefixed =
+            length_prefix_annex_b_access_unit(&bytes, AnnexBNalHeaderGrammar::H264);
+
+        assert_eq!(
+            length_prefixed.length_prefixed_sample_bytes,
+            vec![0, 0, 0, 4, 0x65, 0x11, 0x22, 0x00, 0, 0, 0, 2, 0x41, 0x33]
+        );
+    }
+
+    #[test]
+    fn a_sample_rejoins_the_access_unit_it_came_from() {
+        let grammar = AnnexBNalHeaderGrammar::H264;
+        let length_prefixed =
+            length_prefix_annex_b_access_unit(&access_unit_with_mixed_start_codes(), grammar);
+        let mut parameter_sets = length_prefixed
+            .parameter_sets
+            .sequence_parameter_set_nal_units
+            .clone();
+        parameter_sets.extend(
+            length_prefixed
+                .parameter_sets
+                .picture_parameter_set_nal_units
+                .iter()
+                .cloned(),
+        );
+
+        let rejoined = annex_b_access_unit_from_length_prefixed_sample(
+            &length_prefixed.length_prefixed_sample_bytes,
+            &parameter_sets,
+        )
+        .expect("the sample is length-prefixed NAL units");
+
+        let mut expected = Vec::new();
+        for nal_unit in [
+            SEQUENCE_PARAMETER_SET.as_slice(),
+            PICTURE_PARAMETER_SET.as_slice(),
+            SLICE.as_slice(),
+        ] {
+            expected.extend_from_slice(&ANNEX_B_START_CODE);
+            expected.extend_from_slice(nal_unit);
+        }
+        assert_eq!(rejoined, expected);
+    }
+
+    #[test]
+    fn a_sample_that_stops_mid_nal_is_refused_rather_than_read_short() {
+        let refusal =
+            annex_b_access_unit_from_length_prefixed_sample(&[0, 0, 0, 9, 0x65, 0x11], &[])
+                .expect_err("a nine-byte NAL cannot fit in two bytes");
+
+        assert_eq!(refusal.stopped_at_byte, 0);
+        assert_eq!(refusal.sample_bytes, 6);
+    }
+
+    #[test]
+    fn the_copy_free_read_finds_the_same_parameter_sets_as_the_full_one() {
+        let bytes = access_unit_with_mixed_start_codes();
+        let grammar = AnnexBNalHeaderGrammar::H264;
+
+        assert_eq!(
+            parameter_sets_of_annex_b_access_unit(&bytes, grammar),
+            length_prefix_annex_b_access_unit(&bytes, grammar).parameter_sets
+        );
+    }
+
+    #[test]
+    fn emulation_prevention_bytes_come_out_and_a_literal_three_stays() {
+        assert_eq!(
+            remove_emulation_prevention_bytes(&[0x00, 0x00, 0x03, 0x01, 0x03, 0x00, 0x00, 0x03]),
+            vec![0x00, 0x00, 0x01, 0x03, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn a_parameter_set_pile_is_incomplete_until_its_grammar_has_every_kind() {
+        let mut parameter_sets = ParameterSetsFromAnnexBAccessUnit {
+            sequence_parameter_set_nal_units: vec![SEQUENCE_PARAMETER_SET.to_vec()],
+            picture_parameter_set_nal_units: vec![PICTURE_PARAMETER_SET.to_vec()],
+            video_parameter_set_nal_units: Vec::new(),
+        };
+
+        assert!(parameter_sets.is_complete_for(AnnexBNalHeaderGrammar::H264));
+        assert!(!parameter_sets.is_complete_for(AnnexBNalHeaderGrammar::H265));
+        assert_eq!(
+            parameter_sets.kinds_missing_for(AnnexBNalHeaderGrammar::H265),
+            "video parameter set"
+        );
+
+        parameter_sets.video_parameter_set_nal_units = vec![vec![0x40, 0x01, 0x0C]];
+        assert!(parameter_sets.is_complete_for(AnnexBNalHeaderGrammar::H265));
+    }
 }

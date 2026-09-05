@@ -20,9 +20,7 @@ use crate::annex_b_access_unit::{
 };
 use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
-
-/// What a refusal on this path calls the container it was reading.
-const CMAF_CONTAINER_NAME: &str = "cmaf";
+use crate::moq_broadcast_catalog::CMAF_PACKAGING;
 
 /// The bag's `codec` spelling for a track an `avc1` sample entry describes.
 const H264_WIRE_CODEC: &str = "h264";
@@ -265,7 +263,7 @@ fn describe_a_video_track(
             "track {track_id} is a {wire_codec} track whose sample entry carries no {}, and \
              `avc1`/`hvc1` forbid in-band parameter sets — so nothing on this track can ever be \
              decoded",
-            missing_parameter_set_kinds_of(&parameter_sets, nal_header_grammar)
+            parameter_sets.kinds_missing_for(nal_header_grammar)
         )));
     }
     let mut parameter_set_nal_units = parameter_sets.video_parameter_set_nal_units;
@@ -293,26 +291,6 @@ fn wire_codec_spelling_of_nal_header_grammar(
         AnnexBNalHeaderGrammar::H264 => H264_WIRE_CODEC,
         AnnexBNalHeaderGrammar::H265 => H265_WIRE_CODEC,
     }
-}
-
-/// Which of the sets a decoder needs are absent, spelled for a refusal.
-fn missing_parameter_set_kinds_of(
-    parameter_sets: &ParameterSetsFromAnnexBAccessUnit,
-    nal_header_grammar: AnnexBNalHeaderGrammar,
-) -> String {
-    let mut missing_parameter_set_kinds: Vec<&str> = Vec::new();
-    if nal_header_grammar == AnnexBNalHeaderGrammar::H265
-        && parameter_sets.video_parameter_set_nal_units.is_empty()
-    {
-        missing_parameter_set_kinds.push("video parameter set");
-    }
-    if parameter_sets.sequence_parameter_set_nal_units.is_empty() {
-        missing_parameter_set_kinds.push("sequence parameter set");
-    }
-    if parameter_sets.picture_parameter_set_nal_units.is_empty() {
-        missing_parameter_set_kinds.push("picture parameter set");
-    }
-    missing_parameter_set_kinds.join(" and no ")
 }
 
 fn parameter_sets_of_an_avc_configuration_record(avcc: &Avcc) -> ParameterSetsFromAnnexBAccessUnit {
@@ -382,7 +360,7 @@ fn four_character_code_of_sample_entry(sample_entry: &Codec) -> Result<String> {
 
 fn refuse_as_malformed_cmaf_init_segment(what: String) -> MoqExtensionError {
     MoqExtensionError::MalformedObject {
-        container: CMAF_CONTAINER_NAME,
+        container: CMAF_PACKAGING,
         what,
     }
 }

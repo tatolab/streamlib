@@ -24,6 +24,7 @@ use bytes::Bytes;
 
 use crate::annex_b_access_unit::{
     AnnexBNalHeaderGrammar, ParameterSetsFromAnnexBAccessUnit, length_prefix_annex_b_access_unit,
+    parameter_sets_of_annex_b_access_unit,
 };
 use crate::cmaf_fragment::build_cmaf_fragment;
 use crate::cmaf_init_segment::{CmafTrackDescriptionForTheInitSegment, build_cmaf_init_segment};
@@ -821,9 +822,8 @@ impl DeclaredMoqTrackPublicationState {
         // later — with the init segment already built from the sets it drifted
         // from, and no way to plan the hold that now contains it.
         let grammar = nal_header_grammar_of(&unit.codec, &self.inbound_link_name)?;
-        let length_prefixed = length_prefix_annex_b_access_unit(&unit.annex_b_access_unit, grammar);
         self.refuse_parameter_sets_this_tracks_sample_entry_cannot_state(
-            &length_prefixed.parameter_sets,
+            &parameter_sets_of_annex_b_access_unit(&unit.annex_b_access_unit, grammar),
         )
     }
 

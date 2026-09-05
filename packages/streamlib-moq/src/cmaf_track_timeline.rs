@@ -71,12 +71,20 @@ impl CmafTrackTimeline {
         let since_epoch_ns = stamp_ns.saturating_sub(epoch_ns).max(0);
         CmafSamplePlacement {
             decode_time: rescale_nanoseconds(since_epoch_ns, self.timescale_hz),
-            duration: rescale_nanoseconds(
-                self.newest_gap_ns
-                    .unwrap_or(NOMINAL_FIRST_SAMPLE_DURATION_NS),
-                self.timescale_hz,
+            // Clamped, not truncated: on the nanosecond video timescale a
+            // `u32` runs out at 4.295 s, so an upstream stall longer than that
+            // would wrap a five-second gap into a seven-hundred-millisecond
+            // one. `tfdt` carries the exact decode time regardless, so
+            // stopping at the field's ceiling is the honest failure.
+            duration: u32::try_from(
+                rescale_nanoseconds(
+                    self.newest_gap_ns
+                        .unwrap_or(NOMINAL_FIRST_SAMPLE_DURATION_NS),
+                    self.timescale_hz,
+                )
+                .max(1),
             )
-            .max(1) as u32,
+            .unwrap_or(u32::MAX),
         }
     }
 }
@@ -170,6 +178,17 @@ mod tests {
         let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
         timeline.place(1_000_000_000);
         assert_eq!(timeline.place(500_000_000).decode_time, 0);
+    }
+
+    #[test]
+    fn a_gap_past_what_the_container_field_can_state_clamps_rather_than_wrapping() {
+        // The video timescale is nanoseconds, so a `u32` duration runs out at
+        // 4.295 s. A cast would turn a ten-second stall into 1.4 s.
+        let mut timeline = CmafTrackTimeline::on(VIDEO_TRACK_TIMESCALE_HZ);
+        timeline.place(0);
+        timeline.place(10_000_000_000);
+
+        assert_eq!(timeline.place(20_000_000_000).duration, u32::MAX);
     }
 
     #[test]

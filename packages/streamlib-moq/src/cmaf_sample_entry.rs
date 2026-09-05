@@ -320,7 +320,7 @@ fn first_complete_sequence_parameter_set(
                  sets live only in the sample entry — so this track can never be described to a \
                  decoder",
                 wire_codec_of_nal_header_grammar(grammar),
-                name_the_parameter_sets_that_are_missing(parameter_sets, grammar),
+                parameter_sets.kinds_missing_for(grammar),
             ),
         });
     }
@@ -332,25 +332,6 @@ fn wire_codec_of_nal_header_grammar(grammar: AnnexBNalHeaderGrammar) -> &'static
         AnnexBNalHeaderGrammar::H264 => "h264",
         AnnexBNalHeaderGrammar::H265 => "h265",
     }
-}
-
-fn name_the_parameter_sets_that_are_missing(
-    parameter_sets: &ParameterSetsFromAnnexBAccessUnit,
-    grammar: AnnexBNalHeaderGrammar,
-) -> String {
-    let mut missing = Vec::new();
-    if grammar == AnnexBNalHeaderGrammar::H265
-        && parameter_sets.video_parameter_set_nal_units.is_empty()
-    {
-        missing.push("video parameter set");
-    }
-    if parameter_sets.sequence_parameter_set_nal_units.is_empty() {
-        missing.push("sequence parameter set");
-    }
-    if parameter_sets.picture_parameter_set_nal_units.is_empty() {
-        missing.push("picture parameter set");
-    }
-    missing.join(" and no ")
 }
 
 /// `profile_idc`, the constraint-flag byte and `level_idc`, which ITU-T H.264

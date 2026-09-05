@@ -18,16 +18,12 @@ use mp4_atom::{
     Stco, Stsd, Tkhd, Trak, Trex, Url, Vmhd,
 };
 
+use crate::cmaf_fragment::SAMPLE_FLAGS_OF_A_NON_SYNC_POINT;
 use crate::cmaf_sample_entry::CmafTrackSampleEntry;
 use crate::cmaf_track_timeline::VIDEO_TRACK_TIMESCALE_HZ;
 use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
-
-/// What `trex` declares a sample to be when a `trun` does not say. The
-/// non-sync pattern, so that a fragment which omits the flag describes a
-/// delta frame rather than accidentally claiming every sample is a decode
-/// entry point.
-const SAMPLE_FLAGS_NON_SYNC: u32 = 0x0101_0000;
+use crate::moq_broadcast_catalog::CMAF_PACKAGING;
 
 /// The brands a CMAF init segment declares. `cmfc` is the CMAF media-profile
 /// brand and `iso6` the base ISOBMFF version fragmented boxes need; `mp42`
@@ -161,7 +157,7 @@ pub(crate) fn build_cmaf_init_segment(
                 default_sample_description_index: 1,
                 default_sample_duration: 0,
                 default_sample_size: 0,
-                default_sample_flags: SAMPLE_FLAGS_NON_SYNC,
+                default_sample_flags: SAMPLE_FLAGS_OF_A_NON_SYNC_POINT,
             });
         }
     }
@@ -176,11 +172,13 @@ pub(crate) fn build_cmaf_init_segment(
             .collect(),
     }
     .encode(&mut init_segment_bytes)
-    .map_err(|failure| MoqExtensionError::Transport {
+    .map_err(|failure| MoqExtensionError::MalformedObject {
+        container: CMAF_PACKAGING,
         what: format!("the init segment's ftyp could not be written: {failure}"),
     })?;
     moov.encode(&mut init_segment_bytes)
-        .map_err(|failure| MoqExtensionError::Transport {
+        .map_err(|failure| MoqExtensionError::MalformedObject {
+            container: CMAF_PACKAGING,
             what: format!("the init segment's moov could not be written: {failure}"),
         })?;
 
@@ -354,7 +352,7 @@ mod tests {
             .expect("a fragmented movie declares mvex");
         assert_eq!(mvex.trex.len(), 2);
         for trex in &mvex.trex {
-            assert_eq!(trex.default_sample_flags, SAMPLE_FLAGS_NON_SYNC);
+            assert_eq!(trex.default_sample_flags, SAMPLE_FLAGS_OF_A_NON_SYNC_POINT);
             assert_eq!(trex.default_sample_description_index, 1);
         }
     }

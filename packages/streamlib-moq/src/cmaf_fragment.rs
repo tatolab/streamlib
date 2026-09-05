@@ -13,9 +13,7 @@ use bytes::Bytes;
 use mp4_atom::{Atom, Decode, Encode, Header, Mdat, Mfhd, Moof, Tfdt, Tfhd, Traf, Trun, TrunEntry};
 
 use crate::error::{MoqExtensionError, Result};
-
-/// What a refusal on this path calls the container it was reading or writing.
-const CMAF_CONTAINER_NAME: &str = "cmaf";
+use crate::moq_broadcast_catalog::CMAF_PACKAGING;
 
 /// An ISOBMFF box header: a 32-bit big-endian size followed by a four-character
 /// code (ISO/IEC 14496-12 §4.2). The `mdat` header is written by hand rather
@@ -28,7 +26,7 @@ const SAMPLE_FLAGS_OF_A_SYNC_POINT: u32 = 0x0200_0000;
 
 /// `sample_depends_on = 1` with `sample_is_non_sync_sample = 1` — the sample
 /// depends on others and is not a random access point.
-const SAMPLE_FLAGS_OF_A_NON_SYNC_POINT: u32 = 0x0101_0000;
+pub(crate) const SAMPLE_FLAGS_OF_A_NON_SYNC_POINT: u32 = 0x0101_0000;
 
 /// Build one CMAF chunk carrying one sample, ready to send as a single MoQ
 /// object.
@@ -353,14 +351,14 @@ fn cmaf_fragment_moof(
 
 fn refuse_cmaf_fragment_that_would_not_encode(failure: mp4_atom::Error) -> MoqExtensionError {
     MoqExtensionError::MalformedObject {
-        container: CMAF_CONTAINER_NAME,
+        container: CMAF_PACKAGING,
         what: format!("the fragment's moof could not be encoded: {failure}"),
     }
 }
 
 fn refuse_as_malformed_cmaf_fragment(what: String) -> MoqExtensionError {
     MoqExtensionError::MalformedObject {
-        container: CMAF_CONTAINER_NAME,
+        container: CMAF_PACKAGING,
         what,
     }
 }
@@ -543,7 +541,7 @@ mod tests {
             matches!(
                 refusal_of_a_cut_inside_the_moof_body,
                 MoqExtensionError::MalformedObject {
-                    container: CMAF_CONTAINER_NAME,
+                    container: CMAF_PACKAGING,
                     ..
                 }
             ),
@@ -564,7 +562,7 @@ mod tests {
             matches!(
                 refusal_of_a_cut_inside_the_mdat_payload,
                 MoqExtensionError::MalformedObject {
-                    container: CMAF_CONTAINER_NAME,
+                    container: CMAF_PACKAGING,
                     ..
                 }
             ),
@@ -883,7 +881,7 @@ mod tests {
             matches!(
                 refusal,
                 MoqExtensionError::MalformedObject {
-                    container: CMAF_CONTAINER_NAME,
+                    container: CMAF_PACKAGING,
                     ..
                 }
             ),

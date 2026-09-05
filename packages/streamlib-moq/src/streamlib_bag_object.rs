@@ -22,11 +22,7 @@ use crate::encoded_media_sample::{
     ColorAxesOnTheWire, EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit, TrackMedium,
 };
 use crate::error::{MoqExtensionError, Result};
-
-/// How this container names itself in the catalog's `packaging` field. Not one
-/// of the two the catalog format standardises, deliberately: a player that does
-/// not know the value skips the track rather than decoding noise.
-pub(crate) const STREAMLIB_BAG_PACKAGING: &str = "streamlib-bag";
+use crate::moq_broadcast_catalog::STREAMLIB_BAG_PACKAGING;
 
 /// A video object's keys, which are the encoded-video bag's keys plus the stamp
 /// that normally rides the frame header.

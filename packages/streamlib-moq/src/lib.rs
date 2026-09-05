@@ -8,27 +8,27 @@
 //! is its own package's Rust, reached directly from its own Python.
 
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyDict};
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-pub mod annex_b_access_unit;
-pub mod cmaf_fragment;
-pub mod cmaf_init_segment;
-pub mod cmaf_init_segment_reader;
-pub mod cmaf_sample_entry;
-pub mod cmaf_track_timeline;
-pub mod encoded_media_sample;
-pub mod error;
-pub mod monotonic_clock;
-pub mod moq_broadcast_catalog;
-pub mod moq_broadcast_publisher;
-pub mod moq_broadcast_subscriber;
-pub mod moq_relay_config;
-pub mod moq_session;
-pub mod streamlib_bag_object;
-pub mod transport_stack;
+mod annex_b_access_unit;
+mod cmaf_fragment;
+mod cmaf_init_segment;
+mod cmaf_init_segment_reader;
+mod cmaf_sample_entry;
+mod cmaf_track_timeline;
+mod encoded_media_sample;
+mod error;
+mod monotonic_clock;
+mod moq_broadcast_catalog;
+mod moq_broadcast_publisher;
+mod moq_broadcast_subscriber;
+mod moq_relay_config;
+mod moq_session;
+mod streamlib_bag_object;
+mod transport_stack;
 
 use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
 use crate::error::MoqExtensionError;
@@ -182,11 +182,7 @@ impl MoqBroadcastPublishingSession {
     }
 
     fn locked_publisher(&self) -> Result<MutexGuard<'_, MoqBroadcastPublisher>, MoqExtensionError> {
-        self.publisher
-            .lock()
-            .map_err(|_| MoqExtensionError::Transport {
-                what: "the MoQ publishing session was left poisoned by an earlier panic".to_owned(),
-            })
+        lock_or_refuse(&self.publisher, "publishing")
     }
 }
 
@@ -275,13 +271,18 @@ impl MoqBroadcastSubscribingSession {
     fn locked_subscriber(
         &self,
     ) -> Result<MutexGuard<'_, MoqBroadcastSubscriber>, MoqExtensionError> {
-        self.subscriber
-            .lock()
-            .map_err(|_| MoqExtensionError::Transport {
-                what: "the MoQ subscribing session was left poisoned by an earlier panic"
-                    .to_owned(),
-            })
+        lock_or_refuse(&self.subscriber, "subscribing")
     }
+}
+
+/// Take a session's lock, or say which session an earlier panic poisoned.
+fn lock_or_refuse<'session, Session>(
+    session: &'session Mutex<Session>,
+    role: &'static str,
+) -> Result<MutexGuard<'session, Session>, MoqExtensionError> {
+    session.lock().map_err(|_| MoqExtensionError::Transport {
+        what: format!("the MoQ {role} session was left poisoned by an earlier panic"),
+    })
 }
 
 /// One access unit off a MoQ broadcast, with every key the video wire contract
@@ -331,9 +332,18 @@ impl ReceivedVideoAccessUnit {
     fn timestamp_ns(&self) -> i64 {
         self.inner.timestamp_ns
     }
+    /// Built from a borrow rather than a clone of the map: this is read once
+    /// per frame on the subscribe path.
     #[getter]
-    fn color(&self) -> Option<BTreeMap<String, String>> {
-        self.inner.color.clone()
+    fn color<'python>(&self, python: Python<'python>) -> PyResult<Option<Bound<'python, PyDict>>> {
+        let Some(axes) = self.inner.color.as_ref() else {
+            return Ok(None);
+        };
+        let color = PyDict::new(python);
+        for (axis, spelling) in axes {
+            color.set_item(axis.as_str(), spelling.as_str())?;
+        }
+        Ok(Some(color))
     }
 }
 

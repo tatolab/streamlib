@@ -3,16 +3,15 @@
 
 //! The QUIC/WebTransport client and the two session shapes built on it.
 //!
-//! Moved from `runtime/streamlib-moq` and re-aimed at draft-16. Three things
-//! the 0.14 path did are deliberately not done here:
+//! Three rules the shape here obeys:
 //!
-//! - The broadcast is no longer appended to the dial URL. Draft-16 puts the
-//!   relay's auth token in the path; the namespace travels in the protocol.
-//! - The extended CONNECT now advertises `moqt-16` as its subprotocol. Draft-16
+//! - The broadcast never appears in the dial URL. Draft-16 puts the relay's
+//!   auth token in the path; the namespace travels in the protocol.
+//! - The extended CONNECT advertises `moqt-16` as its subprotocol. Draft-16
 //!   took version negotiation out of `CLIENT_SETUP`, so this is the only place
-//!   the draft is stated and a relay that will not speak it refuses here.
-//! - The process-global session registry is gone. One processor owns one
-//!   session.
+//!   the draft is stated, and a relay that will not speak it refuses here.
+//! - One processor owns one session. There is no process-global registry for a
+//!   second owner to reach through.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,8 +59,7 @@ const OBJECTS_WAITING_FOR_THE_PROCESSOR: usize = 256;
 ///
 /// TLS 1.3 with the platform's own roots, `h3` as the QUIC ALPN, and `moqt-16`
 /// as the WebTransport subprotocol. There is no certificate-verification
-/// bypass: the 0.14 path had one, and a dial that turns verification off is a
-/// dial.
+/// bypass, because a dial that turns verification off is a dial.
 async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transport::Session> {
     let provider = web_transport::quinn::crypto::default_provider();
 
@@ -483,11 +481,11 @@ impl MoqBroadcastSubscribingSession {
 /// Read one track's objects in order, for as long as it lasts.
 ///
 /// The shape is load-bearing. A subscriber holds only the newest subgroup a
-/// track has produced, so the nested loop this replaces — take a subgroup,
-/// drain it to its end, then ask for the next — stops asking for the whole time
-/// it is draining, and every group opened meanwhile is gone with no error
-/// anywhere. Asking for the next group and reading the current one are raced
-/// instead, and the objects that have already arrived in the old group are
+/// track has produced, so a loop that takes a subgroup, drains it to its end
+/// and only then asks for the next stops asking for the whole time it is
+/// draining — and every group opened meanwhile is gone with no error anywhere.
+/// Asking for the next group and reading the current one are raced instead,
+/// and the objects that have already arrived in the old group are
 /// drained before the new one takes its place, so the order a producer wrote in
 /// is the order that leaves here.
 async fn drain_one_track(
