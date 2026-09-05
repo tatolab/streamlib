@@ -18,7 +18,7 @@ use std::io::Write;
 
 use mp4_atom::{
     Codec, Dinf, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdhd, Mdia, Mfhd, Minf, Moof, Moov, Mvex,
-    Mvhd, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url, Vmhd,
+    Mvhd, Smhd, Stbl, Stco, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url, Vmhd,
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
@@ -756,6 +756,14 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                             stsd: Stsd {
                                 codecs: vec![sample_entry],
                             },
+                            // A fragmented movie has no chunks in its `moov`, so
+                            // this table is empty — but ISO/IEC 14496-12 §8.7.5
+                            // states the box as mandatory with no exception for
+                            // an empty one, and a reader that enforces it
+                            // refuses the whole file without it.
+                            stco: Some(Stco {
+                                entries: Vec::new(),
+                            }),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -1093,6 +1101,32 @@ mod tests {
     /// 20 ms, the span one Opus packet covers.
     const ONE_OPUS_PACKET_NS: i64 = 20_000_000;
 
+    fn write_video_and_audio_tracks(frames: usize) -> Vec<u8> {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        for index in 0..frames {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+        file
+    }
+
     fn write_one_video_track(frames: usize) -> (Vec<u8>, Mp4SinkRunTally) {
         let mut file = Vec::new();
         let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["camera/video".to_string()]);
@@ -1343,6 +1377,91 @@ mod tests {
             audio_traf.tfdt.as_ref().unwrap().base_media_decode_time,
             (microphone_offset_ns as u64 * 48_000) / 1_000_000_000,
             "a later track's first tfdt is its own offset from the epoch, in its own timescale"
+        );
+    }
+
+    /// The regression that shipped: every test in this module reads what the
+    /// writer wrote with the same crate the writer wrote it with, so a box
+    /// `mp4-atom` models as optional and the spec makes mandatory is invisible
+    /// on both sides. An independent parser is the only thing that catches it.
+    #[test]
+    fn an_independent_parser_accepts_the_written_file() {
+        let (file, _) = write_one_video_track(4);
+
+        let size = file.len() as u64;
+        let reader = mp4::Mp4Reader::read_header(std::io::Cursor::new(file), size)
+            .expect("an independent ISOBMFF parser reads the whole file");
+
+        assert_eq!(
+            reader.tracks().len(),
+            1,
+            "the independent parser finds the track the writer described"
+        );
+
+        let two_track_file = write_video_and_audio_tracks(12);
+        let size = two_track_file.len() as u64;
+        let reader = mp4::Mp4Reader::read_header(std::io::Cursor::new(two_track_file), size)
+            .expect("an independent parser reads a file with both track kinds");
+        assert_eq!(reader.tracks().len(), 2);
+        for track in reader.tracks().values() {
+            assert_eq!(
+                track
+                    .trak
+                    .mdia
+                    .minf
+                    .stbl
+                    .stco
+                    .as_ref()
+                    .map(|stco| stco.entries.len()),
+                Some(0),
+                "the box is present and its table is empty, as a fragmented movie's is"
+            );
+        }
+    }
+
+    /// The mirror of the acceptance above: strip the box back out and the same
+    /// independent parser refuses the file, which is what makes it an oracle.
+    #[test]
+    fn an_independent_parser_refuses_the_written_movie_header_with_its_chunk_offset_box_removed() {
+        let (file, _) = write_one_video_track(4);
+        let atoms = parse_written_atoms(&file).expect("the file re-parses");
+        let Any::Ftyp(ftyp) = &atoms[0] else {
+            panic!("the file opens with ftyp, got {:?}", atoms[0]);
+        };
+
+        let mut header_only = Vec::new();
+        ftyp.encode(&mut header_only).expect("ftyp re-encodes");
+        only_moov(&atoms)
+            .encode(&mut header_only)
+            .expect("moov re-encodes");
+        let header_only_size = header_only.len() as u64;
+        mp4::Mp4Reader::read_header(std::io::Cursor::new(header_only), header_only_size).expect(
+            "ftyp and moov alone carry the parser as far as the check, no fragments needed",
+        );
+
+        let mut moov_without_the_chunk_offset_box = only_moov(&atoms).clone();
+        for trak in &mut moov_without_the_chunk_offset_box.trak {
+            trak.mdia.minf.stbl.stco = None;
+        }
+        let mut without_the_chunk_offset_box = Vec::new();
+        ftyp.encode(&mut without_the_chunk_offset_box)
+            .expect("ftyp re-encodes");
+        moov_without_the_chunk_offset_box
+            .encode(&mut without_the_chunk_offset_box)
+            .expect("moov re-encodes");
+        let without_the_box_size = without_the_chunk_offset_box.len() as u64;
+
+        let refusal = mp4::Mp4Reader::read_header(
+            std::io::Cursor::new(without_the_chunk_offset_box),
+            without_the_box_size,
+        )
+        .expect_err("the independent parser refuses a stbl carrying neither stco nor co64");
+        assert!(
+            matches!(
+                refusal,
+                mp4::Error::Box2NotFound(mp4::BoxType::StcoBox, mp4::BoxType::Co64Box)
+            ),
+            "the refusal names the box the writer is on the hook for, got {refusal:?}"
         );
     }
 
@@ -1943,28 +2062,7 @@ mod tests {
     /// streamlib-media-builtins --lib the_checked_in_inspector_fixture`.
     #[test]
     fn the_checked_in_inspector_fixture_is_what_this_writer_produces() {
-        let mut file = Vec::new();
-        let mut writer = Mp4FragmentedFileWriter::new(
-            &mut file,
-            &["camera/video".to_string(), "microphone/audio".to_string()],
-        );
-        for index in 0..12usize {
-            writer
-                .accept_bag(
-                    "camera/video",
-                    &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
-                    index as i64 * ONE_VIDEO_FRAME_NS,
-                )
-                .expect("accepted");
-            writer
-                .accept_bag(
-                    "microphone/audio",
-                    &opus_bag(index as u64, 2),
-                    index as i64 * ONE_OPUS_PACKET_NS,
-                )
-                .expect("accepted");
-        }
-        writer.finish().expect("closes");
+        let file = write_video_and_audio_tracks(12);
 
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../xtask/tests/fixtures/two_track_recording.mp4");
