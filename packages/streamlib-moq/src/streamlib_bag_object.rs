@@ -26,7 +26,7 @@ use crate::moq_broadcast_catalog::STREAMLIB_BAG_PACKAGING;
 
 /// A video object's keys, which are the encoded-video bag's keys plus the stamp
 /// that normally rides the frame header.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct VideoObjectOnTheWire {
     codec: String,
     #[serde(rename = "bitstream", with = "serde_bytes")]
@@ -43,11 +43,47 @@ struct VideoObjectOnTheWire {
 
 /// An audio object's keys, which are the encoded-audio bag's keys plus the
 /// stamp.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AudioObjectOnTheWire {
     codec: String,
     #[serde(rename = "bitstream", with = "serde_bytes")]
     opus_packet: Vec<u8>,
+    is_sync_point: bool,
+    group_index: u64,
+    sequence_index: u64,
+    sample_rate: u32,
+    channels: u32,
+    sample_count: u32,
+    pre_skip: u32,
+    timestamp_ns: i64,
+}
+
+/// The write side of a video object, borrowing what the read side owns.
+///
+/// Encoding runs once per published bag, so an owned mirror would copy the
+/// whole access unit out of its `Bytes` purely to hand it to serde, which then
+/// copies it again into the msgpack output.
+#[derive(Debug, Serialize)]
+struct VideoObjectBeingWritten<'sample> {
+    codec: &'sample str,
+    #[serde(rename = "bitstream", with = "serde_bytes")]
+    annex_b_access_unit: &'sample [u8],
+    is_sync_point: bool,
+    group_index: u64,
+    sequence_index: u64,
+    width: u32,
+    height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color: Option<&'sample ColorAxesOnTheWire>,
+    timestamp_ns: i64,
+}
+
+/// The write side of an audio object, borrowing for the same reason.
+#[derive(Debug, Serialize)]
+struct AudioObjectBeingWritten<'sample> {
+    codec: &'sample str,
+    #[serde(rename = "bitstream", with = "serde_bytes")]
+    opus_packet: &'sample [u8],
     is_sync_point: bool,
     group_index: u64,
     sequence_index: u64,
@@ -70,30 +106,32 @@ struct MediumProbeOnTheWire {
 pub(crate) fn encode_object(sample: &EncodedMediaSample) -> Result<bytes::Bytes> {
     let encoded = match sample {
         EncodedMediaSample::VideoAccessUnit(unit) => {
-            rmp_serde::to_vec_named(&VideoObjectOnTheWire {
-                codec: unit.codec.clone(),
-                annex_b_access_unit: unit.annex_b_access_unit.to_vec(),
+            rmp_serde::to_vec_named(&VideoObjectBeingWritten {
+                codec: &unit.codec,
+                annex_b_access_unit: &unit.annex_b_access_unit,
                 is_sync_point: unit.is_sync_point,
                 group_index: unit.group_index,
                 sequence_index: unit.sequence_index,
                 width: unit.width,
                 height: unit.height,
-                color: unit.color.clone(),
+                color: unit.color.as_ref(),
                 timestamp_ns: unit.timestamp_ns,
             })
         }
-        EncodedMediaSample::AudioPacket(packet) => rmp_serde::to_vec_named(&AudioObjectOnTheWire {
-            codec: packet.codec.clone(),
-            opus_packet: packet.opus_packet.to_vec(),
-            is_sync_point: packet.is_sync_point,
-            group_index: packet.group_index,
-            sequence_index: packet.sequence_index,
-            sample_rate: packet.sample_rate,
-            channels: packet.channels,
-            sample_count: packet.sample_count,
-            pre_skip: packet.pre_skip,
-            timestamp_ns: packet.timestamp_ns,
-        }),
+        EncodedMediaSample::AudioPacket(packet) => {
+            rmp_serde::to_vec_named(&AudioObjectBeingWritten {
+                codec: &packet.codec,
+                opus_packet: &packet.opus_packet,
+                is_sync_point: packet.is_sync_point,
+                group_index: packet.group_index,
+                sequence_index: packet.sequence_index,
+                sample_rate: packet.sample_rate,
+                channels: packet.channels,
+                sample_count: packet.sample_count,
+                pre_skip: packet.pre_skip,
+                timestamp_ns: packet.timestamp_ns,
+            })
+        }
     };
     encoded
         .map(bytes::Bytes::from)
