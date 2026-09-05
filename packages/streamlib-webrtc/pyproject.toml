@@ -9,6 +9,17 @@ description = "WHIP publish and WHEP play for StreamLib."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
+# PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
+# discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
+# own, `THIRD-PARTY-NOTICES.md` for every dependency's. The SPDX id above says
+# BUSL-1.1 and nothing about who the Licensor is or when the Change Date falls
+# — the parameters are the licence, so the text has to travel too.
+#
+# `LICENSE` is a symlink to the repo root, which maturin follows; the notices
+# are this project's own, generated over its own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory <this directory>`.
+# The engine wheel's notices cover the engine wheel and are not inherited here.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 classifiers = [
     "Programming Language :: Rust",

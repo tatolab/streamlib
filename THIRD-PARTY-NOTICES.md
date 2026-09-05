@@ -19,7 +19,7 @@ terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 565 crates
+- **MIT License** — 571 crates
 - **Apache License 2.0** — 30 crates
 - **BSD 3-Clause "New" or "Revised" License** — 26 crates
 - **ISC License** — 22 crates
@@ -7979,6 +7979,7 @@ Used by:
 - [lock_api 0.4.14](https://github.com/Amanieu/parking_lot)
 - [parking_lot 0.12.5](https://github.com/Amanieu/parking_lot)
 - [parking_lot_core 0.9.12](https://github.com/Amanieu/parking_lot)
+- [rustc_version 0.4.1](https://github.com/djc/rustc-version-rs)
 - [thread_local 1.1.9](https://github.com/Amanieu/thread_local-rs)
 
 ````text
@@ -11248,6 +11249,37 @@ SOFTWARE.
 
 Used by:
 
+- [mp4-atom 0.15.0](https://github.com/kixelated/mp4-atom)
+
+````text
+MIT License
+
+Copyright (c) 2024 Luke Curley
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
 - [block2 0.5.1](https://github.com/madsmtm/objc2)
 - [block2 0.6.2](https://github.com/madsmtm/objc2)
 - [block 0.1.6](http://github.com/SSheldon/rust-block)
@@ -11744,6 +11776,7 @@ Used by:
 - [ordered-stream 0.2.0](https://github.com/danieldg/ordered-stream)
 - [parking 2.2.1](https://github.com/smol-rs/parking)
 - [paste 1.0.15](https://github.com/dtolnay/paste)
+- [pastey 0.2.3](https://github.com/as1100k/pastey)
 - [pin-project-internal 1.1.11](https://github.com/taiki-e/pin-project)
 - [pin-project-lite 0.2.17](https://github.com/taiki-e/pin-project-lite)
 - [pin-project 1.1.11](https://github.com/taiki-e/pin-project)
@@ -11761,6 +11794,7 @@ Used by:
 - [rustix 0.38.44](https://github.com/bytecodealliance/rustix)
 - [rustix 1.1.4](https://github.com/bytecodealliance/rustix)
 - [rustversion 1.0.22](https://github.com/dtolnay/rustversion)
+- [semver 1.0.27](https://github.com/dtolnay/semver)
 - [serde 1.0.228](https://github.com/serde-rs/serde)
 - [serde_bytes 0.11.19](https://github.com/serde-rs/bytes)
 - [serde_core 1.0.228](https://github.com/serde-rs/serde)
@@ -12307,6 +12341,38 @@ The MIT License (MIT)
 
 Copyright (c) 2015-2020 the fiat-crypto authors (see
 https://github.com/mit-plv/fiat-crypto/blob/master/AUTHORS).
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+````
+
+### MIT License
+
+Used by:
+
+- [derive_more-impl 2.1.1](https://github.com/JelteF/derive_more)
+- [derive_more 2.1.1](https://github.com/JelteF/derive_more)
+
+````text
+The MIT License (MIT)
+
+Copyright (c) 2016 Jelte Fennema
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

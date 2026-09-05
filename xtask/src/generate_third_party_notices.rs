@@ -1,7 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Regenerates `THIRD-PARTY-NOTICES.md`.
+//! Regenerates a project's `THIRD-PARTY-NOTICES.md`.
+//!
+//! Two projects' shapes, one command. The engine workspace's file is the wheel's
+//! and the SDK crate's; a standalone extension wheel under `packages/` is not a
+//! workspace member, links no engine crate and vendors no C++, so it owes a file
+//! of its own over its own closure. [`NoticesGenerationTarget`] is that choice,
+//! and it decides the manifest, the destination and the appendix together.
+//!
+//! The preamble is written here rather than in `about.hbs`, because what a file
+//! covers and how to regenerate it differ per project while the licence sections
+//! below them do not — one template, one prose block per target.
 //!
 //! Two halves that no single tool covers. `cargo about generate` walks the
 //! resolve graph and reproduces each crate's licence text; the vendored C++
@@ -41,14 +51,50 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-/// Generated at the workspace root, and reached from the wheel and the SDK
-/// crate by symlink so that both ship this exact text rather than a copy that
-/// can drift from it.
+/// Named the same in every project that ships one. The engine's is generated at
+/// the workspace root and reached from the wheel and the SDK crate by symlink so
+/// that both ship this exact text rather than a copy that can drift from it; an
+/// extension wheel's sits in its own package root, which is already its project
+/// root.
 const THIRD_PARTY_NOTICES_FILE_NAME: &str = "THIRD-PARTY-NOTICES.md";
 
-/// The handlebars template `cargo about generate` renders. Alongside
-/// `about.toml`, which is the config it discovers by convention.
+/// The opening paragraph, true of every project that ships this file.
+const NOTICES_PREAMBLE_OPENING: &str = r"# Third-party notices
+
+StreamLib distributes third-party code. This file reproduces each dependency's
+copyright notice and licence text as of its last regeneration, as BSD-3 and MIT
+require of a binary distribution and as Apache-2.0 §4(d) requires of upstream
+`NOTICE` contents. Regeneration is a manual step, so a dependency added since
+then may not be listed — please report one rather than assume it was excluded
+deliberately.
+";
+
+/// What the engine workspace's file covers, and the gate that keeps it honest.
+const ENGINE_WORKSPACE_SCOPE_AND_REGENERATION_PROSE: &str = r"Scope is the whole workspace's dependency closure across every target, which is
+a superset of what any one artifact links — the wheel ships this file entire
+rather than a per-artifact subset, because over-attribution costs a longer file
+and under-attribution is a term unmet.
+
+**Generated — do not edit.** Regenerate with `cargo xtask
+generate-third-party-notices`; the licence policy that decides what may appear
+here lives in `deny.toml` and is enforced on every pull request. StreamLib's own
+terms are in [`LICENSE`](LICENSE) and are not reproduced below.
+";
+
+/// The handlebars template `cargo about generate` renders — the licence
+/// sections only; the preamble above them is written here, per target.
 const CARGO_ABOUT_TEMPLATE_FILE_NAME: &str = "about.hbs";
+
+/// The accepted-licence policy every project in this repo is generated against.
+const CARGO_ABOUT_CONFIG_FILE_NAME: &str = "about.toml";
+
+/// What makes a `packages/` directory an extension wheel: pip records this group
+/// at install, and the engine reads it back when a process takes an engine role.
+const EXTENSION_ENTRY_POINT_GROUP: &str = "streamlib.extensions";
+
+/// The generator whose published-project list decides what the simple index
+/// serves — a wheel it does not name is one pip cannot resolve.
+const SIMPLE_INDEX_GENERATOR_RELATIVE_PATH: &str = "scripts/build_simple_index.py";
 
 /// The crate whose build directory holds the extracted vendored C++ trees.
 const SHADERC_VENDORING_CRATE_NAME: &str = "shaderc-sys";
@@ -255,30 +301,105 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
     },
 ];
 
-/// Regenerate the notices file at the workspace root.
-pub fn run(workspace_root: &Path) -> Result<()> {
-    let mut notices = run_cargo_about_generate(workspace_root)?;
-    let source_trees = VendoredCppSourceTrees {
-        registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
-        workspace_root: workspace_root.to_path_buf(),
-    };
+/// Which project's notices a run generates.
+///
+/// The engine workspace and a standalone extension wheel differ in all three
+/// things a run has to know — the manifest `cargo about` resolves, where the
+/// file lands, and whether the vendored C++ appendix belongs on the end — so
+/// they are one choice rather than three flags that could disagree.
+pub enum NoticesGenerationTarget {
+    /// The engine workspace: the wheel, the SDK crate and everything they link.
+    EngineWorkspace,
+    /// One standalone extension wheel, by its directory relative to the
+    /// workspace root. Not a workspace member, so `cargo about` has to be
+    /// pointed at its manifest and reads its own lockfile.
+    ExtensionPackage { package_directory: PathBuf },
+}
 
-    notices.push('\n');
-    notices.push_str(&render_vendored_cpp_appendix(&source_trees)?);
+impl NoticesGenerationTarget {
+    /// The engine workspace unless an extension package was named.
+    pub fn for_extension_package_directory(package_directory: Option<&Path>) -> Self {
+        match package_directory {
+            None => Self::EngineWorkspace,
+            Some(package_directory) => Self::ExtensionPackage {
+                package_directory: package_directory.to_path_buf(),
+            },
+        }
+    }
 
-    let notices_path = workspace_root.join(THIRD_PARTY_NOTICES_FILE_NAME);
+    /// The project root: the manifest to resolve, and where the file lands.
+    fn project_root(&self, workspace_root: &Path) -> PathBuf {
+        match self {
+            Self::EngineWorkspace => workspace_root.to_path_buf(),
+            Self::ExtensionPackage { package_directory } => workspace_root.join(package_directory),
+        }
+    }
+
+    /// Everything above `## Overview`, which the template renders.
+    fn preamble(&self) -> String {
+        let scope_and_regeneration = match self {
+            Self::EngineWorkspace => ENGINE_WORKSPACE_SCOPE_AND_REGENERATION_PROSE.to_owned(),
+            Self::ExtensionPackage { package_directory } => format!(
+                r"Scope is this wheel's own dependency closure across every target, which is a
+superset of what the built artifact links — the wheel ships this file entire
+rather than a per-artifact subset, because over-attribution costs a longer file
+and under-attribution is a term unmet. This is an extension wheel: it links no
+engine crate, so the `streamlib` wheel's own notices are neither reproduced nor
+implied here.
+
+**Generated — do not edit.** Regenerate with
+`cargo xtask generate-third-party-notices --extension-package-directory {}`;
+the accepted licences are the workspace's own `about.toml`, which this project
+shares — a licence outside that list fails the regeneration itself rather than
+landing here quietly. StreamLib's own terms are in [`LICENSE`](LICENSE) and are
+not reproduced below.
+",
+                package_directory.display()
+            ),
+        };
+        format!("{NOTICES_PREAMBLE_OPENING}\n{scope_and_regeneration}\n")
+    }
+}
+
+/// Regenerate one project's notices file in that project's own root.
+pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()> {
+    let project_root = target.project_root(workspace_root);
+    let mut notices = target.preamble();
+    notices.push_str(&run_cargo_about_generate(workspace_root, &project_root)?);
+
+    if let NoticesGenerationTarget::EngineWorkspace = target {
+        let source_trees = VendoredCppSourceTrees {
+            registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
+            workspace_root: workspace_root.to_path_buf(),
+        };
+        notices.push('\n');
+        notices.push_str(&render_vendored_cpp_appendix(&source_trees)?);
+    }
+
+    let notices_path = project_root.join(THIRD_PARTY_NOTICES_FILE_NAME);
     std::fs::write(&notices_path, notices)
         .with_context(|| format!("writing {}", notices_path.display()))?;
 
-    tracing::info!(
-        "wrote {} ({} vendored C++ projects appended)",
-        notices_path.display(),
-        VENDORED_CPP_PROJECTS.len()
-    );
+    match target {
+        NoticesGenerationTarget::EngineWorkspace => tracing::info!(
+            "wrote {} ({} vendored C++ projects appended)",
+            notices_path.display(),
+            VENDORED_CPP_PROJECTS.len()
+        ),
+        NoticesGenerationTarget::ExtensionPackage { .. } => {
+            tracing::info!("wrote {}", notices_path.display())
+        }
+    }
     Ok(())
 }
 
 /// Render the Rust closure's notices by shelling out to `cargo about`.
+///
+/// Run from the workspace root whatever the target, so the shared `about.toml`
+/// and `about.hbs` resolve the same way for every project — an extension's
+/// accepted-licence list is the engine's, deliberately, because one repo takes
+/// one licensing posture. `--config` is passed rather than left to default,
+/// which would look for an `about.toml` beside the extension's own manifest.
 ///
 /// Its warnings are surfaced rather than swallowed: "unable to synthesize a
 /// license expression for X" is this tool's way of saying a crate reached the
@@ -286,7 +407,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 /// The workspace's own crates warn on every run and are the expected noise —
 /// they carry `license-file`, and a file titled *third-party* notices is not
 /// where our own terms belong.
-fn run_cargo_about_generate(workspace_root: &Path) -> Result<String> {
+fn run_cargo_about_generate(workspace_root: &Path, project_root: &Path) -> Result<String> {
     let output = std::process::Command::new("cargo")
         // `--locked` not only for symmetry: this runs before the `cargo metadata
         // --locked` behind the vendored lookup, so without it a stale lock is
@@ -303,13 +424,12 @@ fn run_cargo_about_generate(workspace_root: &Path) -> Result<String> {
         //
         // No `--workspace`: the root manifest is virtual, so every member is
         // already in scope and the flag leaves the output byte-identical.
-        .args([
-            "about",
-            "generate",
-            "--locked",
-            "--all-features",
-            CARGO_ABOUT_TEMPLATE_FILE_NAME,
-        ])
+        .args(["about", "generate", "--locked", "--all-features"])
+        .arg("--config")
+        .arg(CARGO_ABOUT_CONFIG_FILE_NAME)
+        .arg("--manifest-path")
+        .arg(project_root.join("Cargo.toml"))
+        .arg(CARGO_ABOUT_TEMPLATE_FILE_NAME)
         .current_dir(workspace_root)
         .output()
         .context("spawning `cargo about generate` — `cargo install cargo-about` if missing")?;
@@ -929,5 +1049,105 @@ mod tests {
                 .unwrap_or_else(|failure| panic!("{}: {failure}", path.display()));
             assert!(!contents.trim().is_empty(), "{} is empty", path.display());
         }
+    }
+
+    /// The preamble moved out of `about.hbs` and into this file. It is the one
+    /// part of a generated notices file a human wrote, so a stray edit here
+    /// would rewrite the opening of a legal notice on the next regeneration
+    /// with nothing to catch it.
+    #[test]
+    fn the_committed_engine_notices_open_with_the_preamble_this_file_renders() {
+        let committed =
+            fs::read_to_string(workspace_root().join(THIRD_PARTY_NOTICES_FILE_NAME)).expect("read");
+
+        assert!(
+            committed.starts_with(&NoticesGenerationTarget::EngineWorkspace.preamble()),
+            "the committed notices no longer open with the rendered preamble"
+        );
+    }
+
+    /// An extension's file has to say what it covers and how to reproduce it,
+    /// and must not inherit the engine's claims: its closure is not the
+    /// workspace's, and `deny.toml` does not gate a non-member on any PR.
+    #[test]
+    fn an_extension_preamble_names_its_own_package_and_claims_nothing_it_cannot() {
+        let preamble = NoticesGenerationTarget::ExtensionPackage {
+            package_directory: PathBuf::from("packages/streamlib-webrtc"),
+        }
+        .preamble();
+
+        assert!(preamble.contains(
+            "--extension-package-directory packages/streamlib-webrtc"
+        ));
+        assert!(!preamble.contains("deny.toml"));
+        assert!(!preamble.contains("the whole workspace's dependency closure"));
+    }
+
+    /// Every extension wheel discharges its own notice obligation, and the
+    /// index that serves it knows its name.
+    ///
+    /// Discovered from the entry-point group rather than listed, so a third
+    /// extension is covered the day its `pyproject.toml` lands — and the two
+    /// halves are asserted together because the failure they guard is one
+    /// thing: a wheel that ships without its notices, or ships and is
+    /// unreachable because the index was never told about it.
+    #[test]
+    fn every_extension_wheel_ships_its_notices_and_is_named_by_the_simple_index() {
+        let workspace_root = workspace_root();
+        let published_project_names =
+            fs::read_to_string(workspace_root.join(SIMPLE_INDEX_GENERATOR_RELATIVE_PATH))
+                .expect("read the simple index generator");
+
+        let mut extensions_checked = 0;
+        for entry in fs::read_dir(workspace_root.join("packages")).expect("read packages/") {
+            let package_directory = entry.expect("read a packages/ entry").path();
+            let pyproject_path = package_directory.join("pyproject.toml");
+            let Ok(pyproject_source) = fs::read_to_string(&pyproject_path) else {
+                continue;
+            };
+            if !pyproject_source.contains(EXTENSION_ENTRY_POINT_GROUP) {
+                continue;
+            }
+            extensions_checked += 1;
+
+            let pyproject: toml::Value = toml::from_str(&pyproject_source)
+                .unwrap_or_else(|failure| panic!("{}: {failure}", pyproject_path.display()));
+            let declared = pyproject["project"]["license-files"]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!("{} declares no PEP 639 license-files", pyproject_path.display())
+                });
+            assert!(
+                declared
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(THIRD_PARTY_NOTICES_FILE_NAME)),
+                "{} ships third-party code; {THIRD_PARTY_NOTICES_FILE_NAME} must be in \
+                 license-files",
+                pyproject_path.display()
+            );
+
+            for entry in declared {
+                let path = package_directory
+                    .join(entry.as_str().expect("license-files entries are strings"));
+                let contents = fs::read_to_string(&path)
+                    .unwrap_or_else(|failure| panic!("{}: {failure}", path.display()));
+                assert!(!contents.trim().is_empty(), "{} is empty", path.display());
+            }
+
+            let distribution_name = pyproject["project"]["name"]
+                .as_str()
+                .expect("a distribution name");
+            assert!(
+                published_project_names.contains(&format!("\"{distribution_name}\"")),
+                "{distribution_name} is released but {SIMPLE_INDEX_GENERATOR_RELATIVE_PATH} does \
+                 not publish it — the wheel would be built, attached and unreachable by pip"
+            );
+        }
+
+        assert!(
+            extensions_checked > 0,
+            "no extension wheel was found under packages/ — the discovery rule moved out from \
+             under this test, which would let an extension ship with no notices unnoticed"
+        );
     }
 }
