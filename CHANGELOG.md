@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.54](https://github.com/tatolab/streamlib/compare/v0.18.53...v0.18.54) (2026-09-05)
+
+
+### Features
+
+* **extension:** the MoQ drop policy — a delivery deadline that sheds a stale group, audio ahead of video on the priority ladder ([#2181](https://github.com/tatolab/streamlib/issues/2181)) ([8f306e9](https://github.com/tatolab/streamlib/commit/8f306e9aa80794b1037f274fbbc479012fd15ee7))
+
 ## [0.18.53](https://github.com/tatolab/streamlib/compare/v0.18.52...v0.18.53) (2026-09-05)
 
 
