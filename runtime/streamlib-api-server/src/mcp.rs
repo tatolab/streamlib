@@ -794,10 +794,7 @@ mod tests {
     ];
 
     fn mcp_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
-        crate::handlers::build_router(
-            runtime,
-            None,
-        )
+        crate::handlers::build_router(runtime, None)
     }
 
     /// POST one JSON-RPC message to `/mcp` and return the parsed JSON body (or

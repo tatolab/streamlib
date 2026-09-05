@@ -104,10 +104,7 @@ pub(crate) fn build_router(
         .merge(protected)
         .split_for_parts();
 
-    let state = AppState {
-        runtime,
-        openapi,
-    };
+    let state = AppState { runtime, openapi };
 
     // TraceLayer logs all HTTP requests with method, path, status, and latency.
     let trace_layer = TraceLayer::new_for_http()
@@ -697,10 +694,7 @@ mod router_surface_and_auth_gate_tests {
 
     /// Router in the default (auth-off) mode — every route is open with no token.
     fn auth_disabled_router() -> Router {
-        build_router(
-            Arc::new(ControlPlaneRouterStubRuntime::default()),
-            None,
-        )
+        build_router(Arc::new(ControlPlaneRouterStubRuntime::default()), None)
     }
 
     async fn status_on(router: Router, request: Request<Body>) -> StatusCode {
@@ -845,10 +839,7 @@ mod router_surface_and_auth_gate_tests {
     async fn runtime_shutdown_with_token_is_202_and_reaches_the_runtime() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(
-            runtime,
-            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
-        );
+        let router = build_router(runtime, Some(ApiServerBearerToken::from_secret(TEST_TOKEN)));
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
@@ -908,10 +899,7 @@ mod router_surface_and_auth_gate_tests {
     async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(
-            runtime,
-            None,
-        );
+        let router = build_router(runtime, None);
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
@@ -978,10 +966,7 @@ mod router_surface_and_auth_gate_tests {
     }
 
     fn router_without_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(
-            Arc::new(runtime),
-            None,
-        )
+        build_router(Arc::new(runtime), None)
     }
 
     fn exchange_request(uri: &str) -> Request<Body> {
