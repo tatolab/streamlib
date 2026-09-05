@@ -43,7 +43,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
 
-## Packages & extension model — IN-FLIGHT (→ networking-extension-wheels)
+## Packages & extension model — IN-FLIGHT
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -132,6 +132,28 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `nodes` and `links`: one entry per capability with its name, version and distribution.
   There is no per-app opt-out yet; the first app that needs one gets it as a one-line
   addition. [extension-model]
+- **DECIDED** — The support hook's contract, as built. A wheel declares
+  `[project.entry-points."streamlib.extensions"] <name> = "<module>:load"`; the engine
+  reads `importlib.metadata.entry_points(group="streamlib.extensions")` and calls each
+  `load(host)` once per process taking an engine role — from `Runtime.__init__` in the app
+  process, and from `_helper.py` between the log sink's installation and the processor
+  class's import. `host` is `streamlib.CapabilityExtensionHost`, a `#[pyclass]` with a stub
+  entry: `role` (`"app"` or `"helper"`) and `register_capability(name, version)`. In the
+  app process a registration lands on the runtime and renders in `graph`; in a helper it is
+  recorded for the extension's own reads. A hook that raises fails `Runtime()` with the
+  distribution named; in a helper it fails that processor's start through the log channel
+  and the parent refuses the processor by name, inside the existing 60 s budget. A second
+  registration of one capability name refuses at the second hook, naming both
+  distributions. `GraphResponse` gains `extensions: [{name, version, distribution}]`, a
+  third top-level key, in the OpenAPI schema and the MCP `graph` tool alike. No opt-out.
+  Discovery and the loop are Python; the runtime-side registry and the `graph` key are the
+  one engine change. [networking-extension-wheels — SHIPPED #2149]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_capability_extensions.py -->
+- **DECIDED** — The mechanism's own proof is GPU-free and CI-run: a test-only distribution
+  under the wheel's tests, installed into the venv, whose entry point registers a capability
+  and whose second variant raises — proving discovery, the app-process and helper call
+  sites, hard-fail by name, duplicate refusal, and the `graph` key, with no network and no
+  device. [networking-extension-wheels — SHIPPED #2149]
 - **DECIDED** — An extension wheel is built the way a third party would build one, which
   is the dogfooding the pivot exists for: a standalone maturin project under `packages/`
   with its own workspace root and lockfile — not a member of the engine workspace —
@@ -320,17 +342,24 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `cuda-fisheye-detection`) rewritten in Python, `camera-compute-kernel` (was
   `camera-plugin-sdk-compute`) and `camera-halftone` (mined from the retired Deno
   example) rebuilt as kernel examples, and `tokio-integration` rewritten as a plain cargo
-  project. `examples/` now stands at eleven converted beside five held: the two
+  project. `examples/` now stands at thirteen converted beside two held: the two
   vulkan-video examples left the held column into the proof rig,
   `camera-codec-roundtrip` joined the converted one as the codec blocks' showcase — a
   showcase authored in the current idiom is an ordinary addition under the convention
   below, not conversion backlog — and `camera-audio-recorder` converted out of the held
   column as the recording showcase its rung mined `packages/mp4` for: `CameraSource →
   H264Encoder → Mp4Sink` beside `MicrophoneSource → OpusEncoder → Mp4Sink`, the camera
-  also fanned to a `DisplayWindow`, Ctrl-C stopping and closing the file.
+  also fanned to a `DisplayWindow`, Ctrl-C stopping and closing the file. The networking
+  move then emptied the held networking column into the converted one:
+  `examples/moq-roundtrip` was deleted and rewritten as `examples/moq-broadcast-roundtrip`
+  (publish and subscribe in one app through the relay to a `DisplayWindow`),
+  `examples/webrtc-cloudflare-stream` was replaced by `examples/camera-webrtc-publish`
+  (camera and microphone through the codec blocks to `WhipPublisher`, credentials from the
+  environment), and `examples/whep-player` — a printed deferral at HEAD — was deleted
+  outright.
   [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
-  the count restated at codec-roundtrip-reproof #2087, python-codec-block-api #2108 and
-  opus-mp4-recording-rung #2129]
+  the count restated at codec-roundtrip-reproof #2087, python-codec-block-api #2108,
+  opus-mp4-recording-rung #2129 and networking-extension-wheels #2153]
   <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip -->
   <!-- verify: git ls-files examples/camera-audio-recorder/app.py examples/camera-audio-recorder/pyproject.toml -->
 - **DECIDED** — Retired in one sweep, superseded by deleted machinery or shipped pivots:
@@ -354,8 +383,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   blocks [codec-roundtrip-reproof — SHIPPED #2087], and `packages/opus`, `packages/mp4`,
   `examples/h264-opus-validator` and the held form of `examples/camera-audio-recorder`
   went the same way with the recording rung [opus-mp4-recording-rung — SHIPPED #2129].
-  Held on networking: `packages/{moq,webrtc}`,
-  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}`. Held on audio
+  The networking holds went the same way with the extension wheels:
+  `packages/{moq,webrtc}` were mined for their WHIP/WHEP signalling, RFC 6184
+  depacketiser and catalog shape and deleted, and their three examples resolved with them
+  [networking-extension-wheels — SHIPPED #2153]. Held on audio
   plugins: `packages/clap`. Held on screen capture: `packages/screen-capture`,
   `examples/screen-recorder`. [consumer-tree-disposition — SHIPPED #2052; the sweep left
   every held consumer untouched]
@@ -1741,7 +1772,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ networking-extension-wheels)
+## Networking — transport, moq, webrtc — IN-FLIGHT
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -1758,16 +1789,20 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the cross-host fabric stays OPEN below. MoQ and WebRTC are edge source/sink processors
   ingesting and egressing external streams at a runtime boundary; they are not the
   runtime-to-runtime fabric. The held consumers `packages/{moq,webrtc}` and
-  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolve through the
-  networking align per §Consumers. [extension-model]
+  `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolved through this
+  change and are gone — mined, replaced or deleted per §Consumers.
+  [extension-model; networking-extension-wheels — SHIPPED #2153]
 - **DECIDED** — Both wheels sit on the encoded side of the codec blocks and touch no
-  raw frame, surface or GPU: `WhipPublisher` and `MoqPublishTrack` consume
+  raw frame, surface or GPU: `WhipPublisher` and `MoqBroadcastPublisher` consume
   `EncodedVideoFrame` and `EncodedAudioPacket` bags downstream of `H264Encoder` and
-  `OpusEncoder`; `WhepPlayer` and `MoqSubscribeTrack` emit the same bags upstream of
+  `OpusEncoder`; `WhepPlayer` and `MoqBroadcastSubscriber` emit the same bags upstream of
   `H264Decoder` and `OpusDecoder`. Audio is in scope for both from the first rung. The
   four are ordinary processor extensions — `@processor` classes in the wheel calling the
   wheel's own Rust — each in its own helper, on the tokio runtime the wheel's support
-  hook brought up. [extension-model]
+  hook brought up. The MoQ pair was named `MoqPublishTrack` / `MoqSubscribeTrack` here
+  until the build: under the `Mp4Sink` shape a publisher carries a broadcast of many
+  tracks, so a name saying one track fails the zero-context test.
+  [extension-model; renamed at networking-extension-wheels — SHIPPED #2151]
 - **DECIDED** — The ordering pair never rides the transport's own identifiers. Both are
   reachable — a subscriber can read `SubgroupReader::group_id` and
   `SubgroupObjectReader::object_id` — but neither can carry the producer's: the publisher
@@ -1788,9 +1823,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   container names the tracks: under `cmaf` they are `.catalog`, an init track `0.mp4`
   carrying `ftyp` and `moov`, and `{track_id}.m4s` media tracks, because a subscriber not
   asked to fetch a catalog hardcodes exactly those; under `streamlib_bag` each is its
-  link's channel name. A subscriber or player declares its tracks in config and
-  exposes one output port per track. Endpoint, credential and track configuration is
-  ticket-level, as for every built-in's config. [extension-model]
+  link's channel name. A subscriber or player declares its tracks in config and exposes
+  one output per media kind — `encoded_video`, `encoded_audio` — never one port per track:
+  ports are declared statically by decorator, and a decoder downstream wants a port it can
+  name at wiring time. Endpoint, credential and track configuration is ticket-level, as for
+  every built-in's config. [extension-model; port shape narrowed at
+  networking-extension-wheels — SHIPPED #2150, #2151]
 - **DECIDED** — The control plane keeps nothing from the move. Its one use of
   `runtime/streamlib-moq` — a `/api/moq/catalog` route behind a `moq` feature no crate
   enables — read a process-global session registry that, with the publisher in a helper,
@@ -1841,6 +1879,100 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `moq-transport`, `quinn` and `rustls` have moved since the freeze, and the patches the
   old MoQ path carried for TLS and for newer draft versions may now be upstream — whoever
   moves it checks first. [extension-model]
+- **DECIDED** — `packages/streamlib-webrtc/`: a standalone maturin project — own
+  `Cargo.toml` (`[workspace]` root, `[lib] name = "_native"`, `crate-type = ["cdylib"]`,
+  `pyo3` on `abi3-py310`, `webrtc 0.14`, `tokio`, `hyper` + `hyper-rustls`, `rustls`,
+  `bytes`; no engine crate), own lockfile, `pyproject.toml` depending on `streamlib` by
+  version, `python/streamlib_webrtc/` with `_native.pyi` and `py.typed`. `src/` carries the
+  mined WHIP and WHEP clients, `h264_rtp.rs` with its tests, and `rtp.rs`'s sample
+  conversion; `session.rs` and `RtpTimestampCalculator` were left dead and are not moved.
+  `extension.py:load` brings up the tokio runtime and the rustls provider once and
+  registers `webrtc`. [networking-extension-wheels — SHIPPED #2150]
+- **DECIDED** — `WhipPublisher`: `@processor`, one fan-in input `tracks` (`ordered`), the
+  `Mp4Sink` shape — each inbound link is one RTP track, video or audio by the bag's
+  `codec`, the session's SDP built from the links `inbound_link_names` reports at
+  `setup()`; config `url` and optional `bearer_token`. `WhepPlayer`:
+  `@processor(execution = "manual")`, outputs `encoded_video` and `encoded_audio`, config
+  `url` and optional `bearer_token`; `start()` hands `ctx.outputs` to a processor-owned
+  thread that connects, drains the session and writes bag literals — extent from the SPS,
+  `group_index` advancing on each IDR and `sequence_index` within it, `is_sync_point` from
+  the access unit, Opus parameters from the SDP answer, the stamp from the RTP clock mapped
+  onto the monotonic clock — and `stop()` closes the session inside the 5 s budget. **No
+  session is minted in `setup()`, and a refused connect is retried rather than ending the
+  stream** (2026-09-05, found by the live proof): a WHEP endpoint answers `409 Conflict`
+  while the input it fronts has not started publishing, the ordinary state of a player
+  brought up beside its publisher, so the player carries the same bounded backoff as
+  `MoqBroadcastSubscriber` — a fresh session per attempt, since a closed peer connection
+  cannot be dialled again. A bag the engine refuses is the one failure not retried: it names
+  its port and ends the thread, because reconnecting would spend an endpoint's session
+  forever on a bag refused every time. [networking-extension-wheels — SHIPPED #2150]
+- **DECIDED** — `packages/streamlib-moq/`: the same standalone shape on `moq-transport`,
+  `quinn`, `rustls` and `rustls-native-certs`, with its session and catalog **mined** from
+  `runtime/streamlib-moq` rather than moved — the old document attributed tracks to
+  processor import paths and has no relation to the draft-ietf-moq-catalogformat-01 JSON a
+  player reads, and the process-global `RUNTIME_SESSIONS` registry and `sessions_for_runtime`
+  did not come either, since one processor owns one session. The relay URL is config
+  carrying the relay's auth token in its path and therefore has no default: a draft-16
+  relay is provisioned per account, so no address this wheel could ship would reach one.
+  `extension.py:load` brings up the runtime and registers `moq`. The version check
+  §Networking asked for was made (2026-09-04): `moq-transport` 0.16.2, the draft-16
+  revision, because Cloudflare deploys draft-16 and it carries the acknowledgement and
+  namespace machinery draft-14 lacks — owner ruling, superseding the original draft-14
+  default. Draft-16 requires authentication, so no credential-free public relay remains.
+  [networking-extension-wheels — SHIPPED #2151]
+- **DECIDED** — `MoqBroadcastPublisher`: `@processor`, one fan-in input `tracks`, one MoQ
+  track per inbound link, the catalog derived from them; config `relay_url` (required),
+  `broadcast` (default `streamlib/<runtime_id>`) and `container_format`.
+  `MoqBroadcastSubscriber`: `@processor(execution = "manual")`, outputs `encoded_video` and
+  `encoded_audio`, config `relay_url`, `broadcast`, `video_track`, `audio_track`,
+  `container_format`; the processor-owned thread writes each received object as a bag
+  literal. Naming the MoQ group from the bag's `group_index` was the original design and did
+  not survive contact: `SubgroupsWriter::create` hands back a live writer for a group id at
+  or below the latest and then drops every object written to it with no error on either
+  side — hence `append` and the library's own counter, and the ordering pair riding the
+  object as §Networking's rule above already requires.
+  [networking-extension-wheels — SHIPPED #2151]
+- **DECIDED** — Two container formats, selected by `container_format` on each processor and
+  declared per track in the catalog's own `packaging` field. `"cmaf"` is the default,
+  because interop is the point: the broadcast is laid out as `moq-pub` lays one out — a
+  `.catalog` track carrying draft-ietf-moq-catalogformat-01 JSON, an init track carrying
+  `ftyp` + `moov`, media tracks whose objects are self-contained `moof` + `mdat` fragments —
+  so `moq-js` and `moq-sub` can play it. `"streamlib_bag"` is the msgpack envelope, kept
+  because CMAF is lossy against the bag contract: the ordering pair becomes container
+  timing, `pre_skip` becomes the `dOps` box, colour goes into the VUI, and only the envelope
+  can write the producer's pair back unchanged. The wheel builds CMAF on `mp4-atom`, the
+  same crate the engine's own fMP4 writer is built on, carrying its own Annex-B conversion
+  and sample entries. It is not a port of `Mp4FragmentedFileWriter`, whose growing file,
+  shared `moov` and cross-track epoch are file-shaped and wrong here. Owner ruling,
+  2026-09-04: MoQ had never been finished, and finished means interoperable.
+  [networking-extension-wheels — SHIPPED #2151]
+- **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job over a matrix of the
+  two directories: install the just-built `streamlib` wheel into the venv, `maturin develop`
+  the extension, `cargo test` its crate, `mypy.stubtest` over its `_native`, pyright over
+  its Python, pytest with `-m "not requires_gpu"`, and the portability gate over its `.so`.
+  `release-please-config.json` carries a package entry per wheel (independent versions and
+  tags); the release workflow builds and attaches each wheel on its own tag;
+  `build_simple_index.py` is multi-project — a set of published names, one PEP 503 directory
+  each — with its tests. [networking-extension-wheels — SHIPPED #2152]
+- **DECIDED** — The proof, as built. CI-run, GPU-free, endpoint-free, owned by each wheel:
+  the RFC 6184 packetise/depacketise round trip (the carried tests plus STAP-A and FU-A
+  cases), SDP offer construction and answer parsing, MoQ catalog and object encoding, and
+  each player's bag literal checked against the wire contract on the `wired_link` fixture
+  pattern. Live, rig-only, under `/verify-live` with a networking arm: WHIP publish of the
+  vivid camera and the known signal to Cloudflare Stream and WHEP play-back of the same
+  stream, and MoQ publish and subscribe through a Cloudflare draft-16 relay — credentials
+  read from the environment, absent ones reported as cannot-run, never as pass. **The CMAF
+  arm's interop proof is a live third-party read, not an in-repo fixture comparison**
+  (owner, 2026-09-05): `moq-sub`, built from `cloudflare/moq-rs`, subscribes to the same
+  broadcast and must parse the catalog, accept the init segment and decode the media. That
+  is stronger than matching a captured reference — it is the reference client reading the
+  real broadcast — and weaker in one way worth stating: it is rig-only, so CI protects the
+  container's shape through `mp4-atom` round trips and the `moq-catalog` parse oracle alone.
+  The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` → `H264Decoder` → tap
+  and exchange → `xtask psnr channel-means` against the per-codec vivid baseline within
+  ±0.05 — the network sits inside a path the codec rig already scored, so a mismatch is the
+  wheel's. [networking-extension-wheels — SHIPPED #2153]
+  <!-- verify: git ls-files packages/streamlib-moq packages/streamlib-webrtc -->
 - **OPEN** — Later work, after the move: mesh discovery and the cross-host fabric
   (Zenoh).
 
@@ -1903,16 +2035,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ networking-extension-wheels)
+## Control plane & observability — IN-FLIGHT
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
   (§Packages & extension model), served by the one control plane in the app process
   under the same `RuntimeOperations`-shaped discipline — a handler sees what the app
   process sees, the graph and what the extension registered, and no helper's private
-  state. The `moq` feature and its catalog route, the one coupling of this kind, delete
-  with the networking move. The door's spelling is the first extension's to bring when
-  it needs one. [extension-model]
+  state. The `moq` feature, `/api/moq/catalog`, the `runtime_id` plumbing they carried and
+  their test stubs — the one coupling of this kind — are deleted with the networking move,
+  and `graph` gained the `extensions` key in their place: what loaded, one entry per
+  capability with its name, version and distribution. The door's spelling is the first
+  extension's to bring when it needs one, and neither of the first two wheels needed it —
+  a broadcast's catalog is the MoQ wheel's to serve.
+  [extension-model; networking-extension-wheels — SHIPPED #2149, #2153]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-05-networking-extension-wheels.md -->
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
