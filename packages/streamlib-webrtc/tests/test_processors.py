@@ -26,8 +26,12 @@ from streamlib._engine import ProcessorLinkDataAccess
 from streamlib._processor_hosting import construct_processor_instance
 from streamlib_webrtc import WhepPlayer, WhipPublisher
 from streamlib_webrtc.processors import (
+    FIRST_RECONNECT_DELAY_SECONDS,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
+    LONGEST_RECONNECT_DELAY_SECONDS,
+    LinkOutputWriteFailure,
     VideoOrAudio,
+    _native,
     refuse_audio_rtp_cannot_carry,
     resolve_track_kind,
 )
@@ -319,3 +323,169 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
 
     with pytest.raises(ValueError, match="mono and stereo only"):
         publisher.process(context.limited_access_view_for_helper_process())
+
+
+class RecordingWhepSession:
+    """A `_native.WhepSession` stand-in whose connect outcome is scripted.
+
+    The reconnect loop is the whole reason `WhepPlayer` survives an endpoint
+    that is not yet live, and nothing about it needs a network, a device or the
+    compiled module: the player resolves `_native.WhepSession` at call time, so
+    a fake substituted on the module is what each attempt constructs.
+    """
+
+    #: Every session this class has minted, so a test can assert one per attempt.
+    constructed: "list[RecordingWhepSession]" = []
+    #: What each successive `connect()` does, popped in order: `None` succeeds,
+    #: an `Exception` is raised.
+    connect_outcomes: "list[Exception | None]" = []
+
+    def __init__(self, url: str, bearer_token: "str | None" = None) -> None:
+        del url, bearer_token
+        self.connect_calls = 0
+        self.closed = False
+        RecordingWhepSession.constructed.append(self)
+
+    def connect(self) -> None:
+        self.connect_calls += 1
+        outcome = RecordingWhepSession.connect_outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+
+    def next_media(self, timeout_ms: int) -> None:
+        del timeout_ms
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@pytest.fixture
+def scripted_whep_session(monkeypatch):
+    """Point `WhepPlayer` at the fake, and reset its class-level script."""
+    RecordingWhepSession.constructed = []
+    RecordingWhepSession.connect_outcomes = []
+    monkeypatch.setattr(_native, "WhepSession", RecordingWhepSession)
+    return RecordingWhepSession
+
+
+def _player_for_a_drain_that_returns_immediately() -> WhepPlayer:
+    player = WhepPlayer(url="https://example.invalid/whep")
+    # The drain would otherwise spin on `next_media` returning None; stopping
+    # the player makes each attempt reach the backoff at once.
+    return player
+
+
+def test_a_refused_connect_is_retried_rather_than_ending_the_stream(
+    scripted_whep_session, monkeypatch
+):
+    """The 409 a WHEP endpoint answers before its ingest is live is not the end.
+
+    This is the failure the live proof found: the player gave up permanently on
+    the first refusal, stayed alive, and produced nothing for the rest of the
+    run with nothing downstream able to tell that from an endpoint carrying no
+    media.
+    """
+    scripted_whep_session.connect_outcomes = [
+        RuntimeError("409 Conflict: Live broadcast not started yet"),
+        RuntimeError("409 Conflict: Live broadcast not started yet"),
+        None,
+    ]
+    player = _player_for_a_drain_that_returns_immediately()
+
+    waited: "list[float]" = []
+
+    def stop_after_the_third_attempt(delay_seconds: float) -> None:
+        waited.append(delay_seconds)
+
+    monkeypatch.setattr(player._stop, "wait", stop_after_the_third_attempt)
+    # The third connect succeeds, so the drain runs; end it there.
+    monkeypatch.setattr(player, "_drain_until_stopped", lambda session, outputs: None)
+    monkeypatch.setattr(
+        player._stop, "is_set", lambda: len(scripted_whep_session.constructed) >= 3
+    )
+
+    player._play_until_stopped(outputs=None)
+
+    assert len(scripted_whep_session.constructed) == 3, (
+        "each attempt constructs its own session — a closed peer connection "
+        "cannot be dialled again"
+    )
+    assert all(session.closed for session in scripted_whep_session.constructed)
+    assert waited == [
+        FIRST_RECONNECT_DELAY_SECONDS,
+        FIRST_RECONNECT_DELAY_SECONDS * 2,
+    ], "the backoff doubles between attempts"
+
+
+def test_the_backoff_stops_doubling_at_its_ceiling(scripted_whep_session, monkeypatch):
+    """An endpoint that is down for hours must not back off for hours."""
+    refusals = 12
+    scripted_whep_session.connect_outcomes = [
+        RuntimeError("still down") for _ in range(refusals)
+    ]
+    player = _player_for_a_drain_that_returns_immediately()
+
+    waited: "list[float]" = []
+    monkeypatch.setattr(player._stop, "wait", waited.append)
+    monkeypatch.setattr(
+        player._stop, "is_set", lambda: len(waited) >= refusals - 1
+    )
+
+    player._play_until_stopped(outputs=None)
+
+    ceiling = LONGEST_RECONNECT_DELAY_SECONDS
+    assert max(waited) == ceiling
+    assert waited[-1] == ceiling
+
+
+def test_a_stop_during_the_backoff_ends_the_thread_without_reconnecting(
+    scripted_whep_session, monkeypatch
+):
+    """`stop()` must return well inside the helper's five-second budget."""
+    scripted_whep_session.connect_outcomes = [RuntimeError("down")]
+    player = _player_for_a_drain_that_returns_immediately()
+
+    def stop_arrives_mid_backoff(delay_seconds: float) -> None:
+        del delay_seconds
+        player._stop.set()
+
+    monkeypatch.setattr(player._stop, "wait", stop_arrives_mid_backoff)
+
+    player._play_until_stopped(outputs=None)
+
+    assert len(scripted_whep_session.constructed) == 1, (
+        "a stop arriving during the backoff opens no further session"
+    )
+
+
+def test_a_refused_bag_names_its_port_and_stops_rather_than_reconnecting(
+    scripted_whep_session, monkeypatch
+):
+    """A wire-contract violation is this player's fault, not the endpoint's.
+
+    Retrying it would spend an endpoint's session forever on a bag that will be
+    refused every time, under a message naming neither the port nor the cause.
+    """
+    scripted_whep_session.connect_outcomes = [None]
+    player = _player_for_a_drain_that_returns_immediately()
+
+    def refuse_the_write(session, outputs):
+        del session, outputs
+        raise LinkOutputWriteFailure("encoded_video")
+
+    monkeypatch.setattr(player, "_drain_until_stopped", refuse_the_write)
+
+    errors: "list[str]" = []
+    monkeypatch.setattr(log, "error", errors.append)
+    monkeypatch.setattr(
+        player._stop, "wait", lambda _: pytest.fail("a refused bag must not be retried")
+    )
+
+    player._play_until_stopped(outputs=None)
+
+    assert len(scripted_whep_session.constructed) == 1
+    assert scripted_whep_session.constructed[0].closed
+    assert any("encoded_video" in message for message in errors), (
+        "the port that refused the bag has to reach the log"
+    )

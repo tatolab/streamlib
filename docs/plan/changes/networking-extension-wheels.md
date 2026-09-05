@@ -122,11 +122,19 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
   `url` and optional `bearer_token`. `process()` reads by inbound link and hands the
   bitstream and stamp to `_native.WhipSession` directly. `WhepPlayer`: `@processor(execution
   = "manual")`, outputs `encoded_video` and `encoded_audio`, config `url` and optional
-  `bearer_token`; `setup()` opens `_native.WhepSession`, `start()` hands `ctx.outputs` to a
-  processor-owned thread that drains the session and writes bag literals — extent from the
+  `bearer_token`; `start()` hands `ctx.outputs` to a
+  processor-owned thread that connects, drains the session and writes bag literals — extent from the
   SPS, `group_index` advancing on each IDR and `sequence_index` within it, `is_sync_point`
   from the access unit, Opus parameters from the SDP answer, the stamp from the RTP clock
   mapped onto the monotonic clock — and `stop()` closes the session inside the 5 s budget.
+  **No session is minted in `setup()`, and a refused connect is retried rather than
+  ending the stream** (2026-09-05, found by the live proof): a WHEP endpoint answers
+  `409 Conflict` while the input it fronts has not started publishing, the ordinary
+  state of a player brought up beside its publisher, so the player carries
+  `MoqBroadcastSubscriber`'s bounded backoff — a fresh session per attempt, since a
+  closed peer connection cannot be dialled again. A bag the engine refuses is the one
+  failure not retried: it names its port and ends the thread, because reconnecting
+  would spend an endpoint's session forever on a bag refused every time.
   [networking-extension-wheels]
 
 ## ADDED: §Networking — `streamlib-moq`
@@ -234,8 +242,9 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
 - **MODIFIED** — §Control plane `:1883`: the `moq` feature, `/api/moq/catalog`, the
   `runtime_id` plumbing it carried and its test stubs are deleted; `graph` gains the
   `extensions` key. §Consumers `:349`: the held networking consumers resolve —
-  `packages/{moq,webrtc}` mined, `examples/moq-roundtrip` converted as the MoQ showcase
-  (publish and subscribe in one app through the relay to a `DisplayWindow`),
+  `packages/{moq,webrtc}` mined, `examples/moq-roundtrip` replaced by
+  `examples/moq-broadcast-roundtrip` as the MoQ showcase (publish and subscribe in one
+  app through the relay to a `DisplayWindow`),
   `examples/webrtc-cloudflare-stream` replaced by `examples/camera-webrtc-publish` (camera
   and microphone through the codec blocks to `WhipPublisher`, credentials from the
   environment), `examples/whep-player` deleted; `examples/` then stands at thirteen
@@ -256,7 +265,10 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
 - REMOVED: packages/moq
 - REMOVED: packages/webrtc
 - REMOVED: examples/moq-roundtrip
-  Deleted and rewritten from scratch under the same name, per the conversion doctrine; the
-  gate passes once the rewrite lands in the same PR as the deletion.
+  Deleted and rewritten from scratch as `examples/moq-broadcast-roundtrip`, per the
+  conversion doctrine. Not under the same name, which this bullet first said and the
+  tree disproved: this gate reads a pattern as a literal path and matches a directory
+  prefix, so a rewrite at the old path would hold the bullet red forever. The new name
+  also matches `MoqBroadcastPublisher` / `MoqBroadcastSubscriber`. Owner, 2026-09-05.
 - REMOVED: examples/webrtc-cloudflare-stream
 - REMOVED: examples/whep-player

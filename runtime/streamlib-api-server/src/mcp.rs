@@ -794,12 +794,7 @@ mod tests {
     ];
 
     fn mcp_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
-        crate::handlers::build_router(
-            runtime,
-            None,
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        )
+        crate::handlers::build_router(runtime, None)
     }
 
     /// POST one JSON-RPC message to `/mcp` and return the parsed JSON body (or
@@ -955,8 +950,6 @@ mod tests {
             crate::handlers::build_router(
                 Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
                 Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
-                #[cfg(feature = "moq")]
-                "test-runtime-id".to_string(),
             )
         };
         let message = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();

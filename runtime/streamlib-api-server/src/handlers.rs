@@ -80,7 +80,6 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
     auth_token: Option<ApiServerBearerToken>,
-    #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
     // The read-only tap WebSocket is gated exactly like the shutdown route WHEN
     // auth is opted in — same bearer middleware, same route_layer binding; the
@@ -105,12 +104,7 @@ pub(crate) fn build_router(
         .merge(protected)
         .split_for_parts();
 
-    let state = AppState {
-        runtime,
-        #[cfg(feature = "moq")]
-        runtime_id,
-        openapi,
-    };
+    let state = AppState { runtime, openapi };
 
     // TraceLayer logs all HTTP requests with method, path, status, and latency.
     let trace_layer = TraceLayer::new_for_http()
@@ -139,9 +133,6 @@ pub(crate) fn build_router(
         .route("/api/openapi.json", get(get_openapi_spec))
         .merge(tap_router)
         .merge(mcp_router);
-
-    #[cfg(feature = "moq")]
-    let router = router.route("/api/moq/catalog", get(get_moq_catalog));
 
     router.layer(trace_layer).with_state(state)
 }
@@ -382,24 +373,6 @@ pub(crate) async fn get_openapi_spec(
     State(state): State<AppState>,
 ) -> Json<utoipa::openapi::OpenApi> {
     Json(state.openapi)
-}
-
-/// MoQ broadcast catalog with currently-published tracks.
-///
-/// Returns an empty catalog when no MoQ publish processor has touched this
-/// runtime yet — the package-global session registry in `@tatolab/moq` is
-/// populated lazily on first publish.
-#[cfg(feature = "moq")]
-pub(crate) async fn get_moq_catalog(
-    State(state): State<AppState>,
-) -> Json<streamlib_moq::MoqBroadcastCatalog> {
-    let mut catalog = streamlib_moq::MoqBroadcastCatalog::new();
-    if let Some(sessions) = streamlib_moq::try_sessions_for_runtime(&state.runtime_id) {
-        for track_name in sessions.published_track_names() {
-            catalog.add_track(&track_name, None, &track_name);
-        }
-    }
-    Json(catalog)
 }
 
 // ============================================================================
@@ -716,19 +689,12 @@ mod router_surface_and_auth_gate_tests {
         build_router(
             Arc::new(ControlPlaneRouterStubRuntime::default()),
             Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
         )
     }
 
     /// Router in the default (auth-off) mode — every route is open with no token.
     fn auth_disabled_router() -> Router {
-        build_router(
-            Arc::new(ControlPlaneRouterStubRuntime::default()),
-            None,
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        )
+        build_router(Arc::new(ControlPlaneRouterStubRuntime::default()), None)
     }
 
     async fn status_on(router: Router, request: Request<Body>) -> StatusCode {
@@ -873,12 +839,7 @@ mod router_surface_and_auth_gate_tests {
     async fn runtime_shutdown_with_token_is_202_and_reaches_the_runtime() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(
-            runtime,
-            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        );
+        let router = build_router(runtime, Some(ApiServerBearerToken::from_secret(TEST_TOKEN)));
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
@@ -938,12 +899,7 @@ mod router_surface_and_auth_gate_tests {
     async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
         let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
-        let router = build_router(
-            runtime,
-            None,
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        );
+        let router = build_router(runtime, None);
         let request = Request::builder()
             .method("POST")
             .uri("/api/runtime/shutdown")
@@ -1006,18 +962,11 @@ mod router_surface_and_auth_gate_tests {
         build_router(
             Arc::new(runtime),
             Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
         )
     }
 
     fn router_without_bearer_auth(runtime: ControlPlaneRouterStubRuntime) -> Router {
-        build_router(
-            Arc::new(runtime),
-            None,
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        )
+        build_router(Arc::new(runtime), None)
     }
 
     fn exchange_request(uri: &str) -> Request<Body> {

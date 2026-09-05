@@ -212,12 +212,8 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let config = self.config.clone();
         let host = config.host.clone();
 
-        let app = crate::handlers::build_router(
-            handles.runtime.clone(),
-            handles.auth_token.clone(),
-            #[cfg(feature = "moq")]
-            handles.runtime_id.clone(),
-        );
+        let app =
+            crate::handlers::build_router(handles.runtime.clone(), handles.auth_token.clone());
         let base_port = config.port;
         let tokio_handle = handles.tokio_handle.clone();
 

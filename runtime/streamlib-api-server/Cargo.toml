@@ -24,14 +24,9 @@ crate-type = ["rlib"]
 name = "generate_openapi"
 path = "src/bin/generate_openapi.rs"
 
-[features]
-default = []
-moq = ["dep:streamlib-moq"]
-
 [dependencies]
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.51" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.51" }
-streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.18.51", optional = true }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"

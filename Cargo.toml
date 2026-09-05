@@ -20,7 +20,6 @@ members = [
     "sdk/streamlib-python-wheel", # The importable Python wheel — the app's CPython imports the engine and authors pipelines; every `@processor` runs in its own helper process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into the wheel and the streamlib crate
-    "runtime/streamlib-moq",        # MoQ-over-QUIC transport library (sessions + catalog); the @tatolab/moq package's processors + the api-server build on it
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309) — see docs/architecture/vendored-vulkanalia.md
@@ -191,11 +190,6 @@ skia-safe = { version = "0.86", features = ["vulkan", "gl"] }
 # WebRTC
 str0m = "0.11.1"
 
-# MoQ (Media over QUIC) - optional transport layer (cloudflare/moq-rs)
-moq-transport = "0.14.1"
-web-transport = "0.10"
-quinn = "0.11"
-rustls-native-certs = "0.8"
 
 # HTTP/Web
 axum = { version = "0.8.8", features = ["ws"] }

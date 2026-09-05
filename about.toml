@@ -8,11 +8,20 @@
 # no licence file of their own. The gate that runs on every PR is
 # `cargo deny check licenses` (deny.toml) — that one is the durable half.
 
-# The same sixteen identifiers deny.toml allows — same set, different order.
-# Nothing is silently omitted if the two drift: a licence in the graph but not
-# in `accepted` makes `cargo about generate` itself exit 1 with no output at all,
-# so the notices cannot be regenerated until this list is reconciled. deny.toml
-# guards the other direction, refusing the licence before it reaches the tree.
+# A superset of deny.toml's allow list, and deliberately so: deny.toml guards the
+# workspace closure, while this file is also pointed at each extension wheel's
+# closure — `cargo xtask generate-third-party-notices
+# --extension-package-directory <dir>` passes `--config` back to this one file so
+# every wheel ships one licensing posture. Today the difference is exactly
+# `CDLA-Permissive-2.0`, which no workspace crate reaches but `webpki-root-certs`
+# does inside `packages/streamlib-moq`. Deleting it to "reconcile" the two lists
+# breaks that wheel's notices outright.
+#
+# Nothing is silently omitted if the two drift the other way: a licence in the
+# graph but not in `accepted` makes `cargo about generate` itself exit 1 with no
+# output at all, so the notices cannot be regenerated until this list is
+# widened. deny.toml guards its own direction, refusing the licence before it
+# reaches the workspace.
 #
 # Order is preference, and it decides real obligations. Most of this closure is
 # `MIT OR Apache-2.0`: a disjunction is an election, and cargo-about takes the
