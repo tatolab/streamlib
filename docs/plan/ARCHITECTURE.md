@@ -1297,7 +1297,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   or surface-id carriage for encoded bytes unless a measured need appears. The keys are
   the wire contract, the way `AudioBlock`'s six are: `codec` (`"h264"` / `"h265"`, the
   elementary-stream identity), `bitstream` (msgpack `bin`, one Annex-B access unit),
-  `is_sync_point`, `group_index` and `sequence_index` (the MoQ-mappable ordering pair),
+  `is_sync_point`, `group_index` and `sequence_index` (the producer-scoped ordering
+  pair, carried over MoQ inside the object payload — see §Networking),
   `width` and `height` (the coded extent, before crop), and `color` (the H.273 tuple).
   Timestamp rides the frame header like every bag. A bag the decoder cannot read is
   refused by name, never reshaped — the audio wire codec's doctrine — and the ordering
@@ -1766,13 +1767,34 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   four are ordinary processor extensions — `@processor` classes in the wheel calling the
   wheel's own Rust — each in its own helper, on the tokio runtime the wheel's support
   hook brought up. [extension-model]
-- **DECIDED** — MoQ carries the ordering pair the delivery-profile decision chose for
-  it: `group_index` names the MoQ group and `sequence_index` the object within it, a
-  sync point opening a group; the subscriber writes the pair back onto the bag unchanged
-  so a decoder's sync-point gate behaves as it does over a local link. [extension-model]
+- **DECIDED** — The ordering pair rides the object payload, never the transport's own
+  identifiers. `moq-transport` assigns group and object ids itself and does not hand
+  either back to a subscriber, so nothing keyed on a publisher's ids can work: the
+  publisher appends groups through the library's monotonic counter, and `group_index` /
+  `sequence_index` travel inside the object as ordinary bag keys. A **video** sync point
+  cuts a group, cutting every track at once — never a sync point on any track, because
+  every Opus packet is one and the library retains only the newest subgroup, so that
+  cadence loses almost all audio. The subscriber writes the pair back unchanged **only
+  under `streamlib_bag`**; a CMAF fragment carries neither and the subscriber mints its
+  own, so downstream of a CMAF hop a gapless `sequence_index` is not evidence of a
+  lossless stream and cross-track alignment is not recoverable from it. The pair and the
+  stamp are producer-scoped, not end-to-end. [extension-model]
+- **DECIDED** — A publisher carries both containers, chosen by a `container_format`
+  config key: `cmaf` (the default — CMAF fragments every MoQ player already reads) and
+  `streamlib_bag` (msgpack, the bag's own keys byte-exact). CMAF is the interop format
+  and is lossy against the bag contract; the bag envelope is what a StreamLib subscriber
+  uses when it must hand a decoder back exactly what the producer wrote. [extension-model]
+- **DECIDED** — The draft is declared as the WebTransport subprotocol `moqt-16` on the
+  extended CONNECT, QUIC ALPN staying `h3`; draft-16 removed version negotiation from
+  `CLIENT_SETUP`. `moq-transport` does not dial — it takes an established
+  `web_transport::Session` — so establishing it is the wheel's job. [extension-model]
 - **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
-  inbound link, named by the link's channel, and derives its catalog or session media
-  description from them; a subscriber or player declares its tracks in config and
+  inbound link and derives its catalog or session media description from them. The
+  link's channel names the track in the catalog, not on the wire: a CMAF broadcast's
+  wire names follow the reference publisher's fallback contract — a `.catalog` track, an
+  init track `0.mp4` carrying `ftyp` and `moov`, and `{track_id}.m4s` media tracks —
+  because a subscriber cannot be assumed to read the catalog at all. A subscriber or
+  player declares its tracks in config and
   exposes one output port per track. Endpoint, credential and track configuration is
   ticket-level, as for every built-in's config. [extension-model]
 - **DECIDED** — The control plane keeps nothing from the move. Its one use of
@@ -1793,13 +1815,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   port for them: a publisher reads `EncodedVideoFrame` / `EncodedAudioPacket` and hands
   the bitstream to the wheel's Rust; a player or subscriber writes the bag literal
   against the wire contract, filling every required key from the stream itself — the
-  extent from the SPS, the ordering pair from its own counters (for MoQ, from the group
-  and object it arrived in), a sync point from the access unit, the audio parameters from
+  extent from the SPS, the ordering pair from its own counters (for MoQ, from the object
+  payload — the transport's group and object ids are never exposed), a sync point from
+  the access unit, the audio parameters from
   the session description — rather than from config. The old processors' opaque envelope
   forwarding does not carry over: what crosses a network is a bitstream and the keys a
   decoder needs, not a serialised link payload. [extension-model]
 - **DECIDED** — What the move carries and what it leaves: `runtime/streamlib-moq`'s
-  session and catalog logic moves largely intact; from `packages/webrtc` the RFC 6184
+  catalog shape is mined, not moved, and its session logic was rewritten for draft-16;
+  from `packages/webrtc` the RFC 6184
   depacketiser and the WHIP/WHEP signalling logic are mined, and its dead second RTP path
   (`streaming/session.rs`, constructed nowhere) is not; `packages/{moq,webrtc}` have not
   built since the plugin SDK was deleted and their bag types share no key with today's
@@ -1814,8 +1838,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
   parsing, MoQ catalog and object bytes, and the bag literal a player writes checked
   against the wire contract. Live, rig-only: WHIP publish to Cloudflare Stream and WHEP
-  play back from it, and MoQ publish and subscribe through Cloudflare's public relay —
-  the endpoints every past proof used — with credentials outside the tree, in the
+  play back from it, and MoQ publish and subscribe through a Cloudflare relay —
+  provisioned per account and authenticating, the token riding the CONNECT `:path`;
+  there is no credential-free draft-16 relay, and the URL is a credential that must
+  never reach a log or an error message — with credentials outside the tree, in the
   fixture-script shape the codec rig set (owner, 2026-09-04). The move re-verifies
   against current library versions rather than the pins the held code carried: `webrtc`,
   `moq-transport`, `quinn` and `rustls` have moved since the freeze, and the patches the
