@@ -225,6 +225,7 @@ class MoqBroadcastPublisher:
         self._delivery_deadline_ms = _optional_delivery_deadline_ms(delivery_deadline_ms)
         self._session: "_native.MoqBroadcastPublishingSession | None" = None
         self._medium_by_inbound_link: "dict[str, str]" = {}
+        self._bags_handed_over = 0
         self._bags_published = 0
 
     @input(delivery_profile="ordered")
@@ -293,8 +294,7 @@ class MoqBroadcastPublisher:
                 packet.pre_skip,
                 timestamp_ns,
             )
-        if reaches_the_transport:
-            self._report_progress()
+        self._record_one_bag(reaches_the_transport)
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
@@ -312,14 +312,19 @@ class MoqBroadcastPublisher:
             f"{shed}"
         )
 
-    def _report_progress(self) -> None:
-        self._bags_published += 1
-        if self._bags_published == 1:
-            # "Accepted", not "published": on `cmaf` the first bags are held
-            # for the init segment and reach the transport with the flush, and
-            # the running log must not claim a write the hold has not made.
-            log.info("MoqBroadcastPublisher: first bag accepted by the broadcast")
-        elif self._bags_published % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
+    def _record_one_bag(self, reaches_the_transport: bool) -> None:
+        # The cadence counts every bag handed over, or a run shedding
+        # everything after its sync points would say nothing until teardown.
+        self._bags_handed_over += 1
+        if reaches_the_transport:
+            self._bags_published += 1
+            if self._bags_published == 1:
+                # "Accepted", not "published": on `cmaf` the first bags are
+                # held for the init segment and reach the transport with the
+                # flush, and the running log must not claim a write the hold
+                # has not made.
+                log.info("MoqBroadcastPublisher: first bag accepted by the broadcast")
+        if self._bags_handed_over % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(
                 f"MoqBroadcastPublisher: bags_published={self._bags_published}, "
                 f"{self._what_the_delivery_deadline_shed()}"

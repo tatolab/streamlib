@@ -275,15 +275,22 @@ class _ContextReadingOneVideoBag:
     inputs = _InputsReadingOneVideoBag()
 
 
-def _drive_one_bag_through(reaches_the_transport: bool) -> "tuple[list[str], int]":
+def _drive_bags_through(
+    reaches_the_transport: bool, bag_count: int = 1
+) -> "tuple[list[str], int]":
     publisher = MoqBroadcastPublisher(relay_url=A_RELAY)
     session = _SessionThatAnswers(reaches_the_transport)
     publisher._session = session  # type: ignore[assignment]
     said: "list[str]" = []
     with mock.patch.object(log, "info", said.append):
-        publisher.process(_ContextReadingOneVideoBag())  # type: ignore[arg-type]
+        for _ in range(bag_count):
+            publisher.process(_ContextReadingOneVideoBag())  # type: ignore[arg-type]
         publisher.teardown(None)  # type: ignore[arg-type]
     return said, session.calls
+
+
+def _drive_one_bag_through(reaches_the_transport: bool) -> "tuple[list[str], int]":
+    return _drive_bags_through(reaches_the_transport)
 
 
 def test_a_bag_the_deadline_shed_is_neither_counted_as_published_nor_announced_as_the_first():
@@ -307,3 +314,18 @@ def test_a_bag_that_reached_the_transport_is_counted_and_announced_as_the_first(
     assert any(
         "bags_published=1" in line and "shed nothing" in line for line in said
     ), said
+
+
+def test_a_run_shedding_every_bag_still_reports_at_the_progress_cadence():
+    """The cadence counts bags handed over, not bags written: a publisher
+    shedding everything after its sync points must not fall silent until
+    teardown."""
+    from streamlib_moq.processors import BAGS_BETWEEN_PROGRESS_REPORTS
+
+    said, _ = _drive_bags_through(
+        reaches_the_transport=False, bag_count=BAGS_BETWEEN_PROGRESS_REPORTS
+    )
+
+    progress_lines = [line for line in said if "bags_published=0" in line]
+    assert len(progress_lines) == 2, said  # one at the cadence, one at teardown
+    assert f"shed camera={BAGS_BETWEEN_PROGRESS_REPORTS} objects" in progress_lines[0]

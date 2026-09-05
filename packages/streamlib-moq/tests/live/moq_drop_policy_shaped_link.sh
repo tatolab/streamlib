@@ -170,6 +170,7 @@ run_one_arm() {
                 --video-only \
                 "$@" \
             > "$log_file" 2>&1
+    node_status=$?
     unshape
 
     # The token never reaches the kept log, whatever any layer decided to print.
@@ -180,6 +181,12 @@ run_one_arm() {
         sed -i "s|$CLOUDFLARE_MOQ_SUB_TOKEN|<TOKEN>|g" "$log_file"
     fi
 
+    # 124 is `timeout` ending a node that ran its whole budget. Anything else
+    # is the node failing — and a node that fails can still log the
+    # publisher's teardown on its way out, so the teardown line alone is not
+    # proof the arm ran.
+    [ "$node_status" -eq 124 ] || fail \
+        "the $arm_name arm exited with status $node_status rather than running out its budget; see $log_file"
     grep -q "MoqBroadcastPublisher: teardown" "$log_file" \
         || fail "the $arm_name arm never reached the publisher's teardown; see $log_file"
 }
