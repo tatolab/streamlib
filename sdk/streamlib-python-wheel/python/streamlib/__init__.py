@@ -51,6 +51,10 @@ from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
 from ._engine import TestPatternSource as TestPatternSource
 from ._engine import (
+    decode_msgpack_bytes_to_python_object as decode_msgpack_bytes_to_python_object,
+)
+from ._engine import encode_bag_to_msgpack_bytes as encode_bag_to_msgpack_bytes
+from ._engine import (
     gpu_limited_access_of_the_typed_read_in_progress as gpu_limited_access_of_the_typed_read_in_progress,
 )
 from ._engine import monotonic_now_ns as monotonic_now_ns
@@ -121,6 +125,8 @@ __all__ = [
     "TestPatternSource",
     "VideoFrame",
     "clock",
+    "decode_msgpack_bytes_to_python_object",
+    "encode_bag_to_msgpack_bytes",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "input",
     "log",

@@ -129,6 +129,35 @@ was the reference), so a capability can offer a route without the engine knowing
 capability exists. That is a door on `host`, and like every door it is built when an
 extension needs it; the move deletes the coupling and owes no route.
 
+## Why the engine exposes its bag codec
+
+The first firing of the clause in point 3 above — *what an extension needs and the engine does
+not yet expose is engine work done inside the extension's own change*. The MoQ wheel's data
+tracks (`docs/plan/changes/moq-data-tracks.md`) carry a StreamLib bag across a network the
+engine does not own: the publisher turns a Python dict into msgpack bytes and hands them to
+its own transport, and the subscriber does the reverse. That is a conversion between a bag and
+bytes in the caller's hands. It is not a raw byte port — no link reads or writes bytes, and the
+typed media path is untouched.
+
+The engine already held the only answer to it. `encode_bag_to_msgpack` and
+`decode_msgpack_to_python_object` were `pub(crate)` in the wheel, and one bag-conversion
+function — `decode_tapped_channel_bag_frame_to_python_object` — was already a module-level
+export, so the shape needed no invention. They became two more:
+`encode_bag_to_msgpack_bytes` and `decode_msgpack_bytes_to_python_object`, with exactly the
+codec's rules and no new behavior.
+
+**A copy in the extension was the alternative, and it is the parallel abstraction the doctrine
+forbids.** A bag's rules — a named map with string keys at every level, eight value types,
+`bytes` as msgpack `bin` at 1×, an integer wider than 64 bits refused — are the wire contract,
+not an implementation detail of one wheel. A second encoder would answer them a second time, and
+the day the two answers disagreed the disagreement would surface as a bag that crossed a link
+fine and arrived wrong over the network. One codec is also what lets a non-StreamLib peer read
+what a StreamLib node published: it is the same bytes either way.
+
+The cost of exposing it is the cost of any public surface — the two names are now stubtest-gated
+and cannot change silently. That is the intended cost. An extension author who cannot reach a
+primitive writes their own; the surface is what makes writing their own unnecessary.
+
 ## Rejected alternatives
 
 - **Keep building capabilities into the engine** — every optional feature makes every user
