@@ -1028,29 +1028,42 @@ mod tests {
     /// here either — it skips to the end of the box and never exposes these
     /// bytes at all.
     fn avcc_chroma_trailer_bytes_read_by_a_hand_walk(encoded_sample_entry: &[u8]) -> Vec<u8> {
-        let box_type_offset = encoded_sample_entry
-            .windows(4)
-            .position(|four| four == b"avcC")
-            .expect("the entry carries an avcC");
-        let body = &encoded_sample_entry[box_type_offset + 4..];
+        let (body, body_bytes) = avcc_box_body_and_its_length(encoded_sample_entry);
 
+        // §5.3.3.1, in order: configurationVersion, AVCProfileIndication,
+        // profile_compatibility, AVCLevelIndication, lengthSizeMinusOne behind
+        // six reserved bits, then numOfSequenceParameterSets in the low five
+        // bits of byte 5. Each set is a sixteen-bit length then its bytes.
         let sequence_parameter_set_count = usize::from(body[5] & 0x1F);
         let mut offset = 6;
         for _ in 0..sequence_parameter_set_count {
             offset += 2 + usize::from(u16::from_be_bytes([body[offset], body[offset + 1]]));
         }
+        // numOfPictureParameterSets is a whole byte, then the same pairs.
         let picture_parameter_set_count = usize::from(body[offset]);
         offset += 1;
         for _ in 0..picture_parameter_set_count {
             offset += 2 + usize::from(u16::from_be_bytes([body[offset], body[offset + 1]]));
         }
+        // Whatever the box still holds after the PPS array is the trailer.
+        body[offset..body_bytes].to_vec()
+    }
 
+    /// An `avcC`'s payload and its length, found by scanning the encoded entry
+    /// for the four-character code and reading the size that precedes it.
+    fn avcc_box_body_and_its_length(encoded_sample_entry: &[u8]) -> (&[u8], usize) {
+        let box_type_offset = encoded_sample_entry
+            .windows(4)
+            .position(|four| four == b"avcC")
+            .expect("the entry carries an avcC");
+        // A box's size counts from its own start, four bytes before the code;
+        // its body starts four bytes after. Hence the eight.
         let box_bytes = u32::from_be_bytes(
             encoded_sample_entry[box_type_offset - 4..box_type_offset]
                 .try_into()
                 .expect("four size bytes"),
         ) as usize;
-        body[offset..box_bytes - 8].to_vec()
+        (&encoded_sample_entry[box_type_offset + 4..], box_bytes - 8)
     }
 
     fn encoded_h264_sample_entry(parameter_sets: &ParameterSetsFromAnnexBAccessUnit) -> Vec<u8> {
@@ -1098,16 +1111,7 @@ mod tests {
     #[test]
     fn a_baseline_avcc_carries_no_trailer_because_the_standard_states_none_for_it() {
         let encoded = encoded_h264_sample_entry(&h264_parameter_sets());
-        let box_type_offset = encoded
-            .windows(4)
-            .position(|four| four == b"avcC")
-            .expect("the entry carries an avcC");
-        let box_bytes = u32::from_be_bytes(
-            encoded[box_type_offset - 4..box_type_offset]
-                .try_into()
-                .expect("four size bytes"),
-        ) as usize;
-        let body_bytes = box_bytes - 8;
+        let (_, body_bytes) = avcc_box_body_and_its_length(&encoded);
 
         let sequence_parameter_set = h264_baseline_320x180_sequence_parameter_set();
         let picture_parameter_set = h264_picture_parameter_set();
@@ -1118,6 +1122,48 @@ mod tests {
              writing four more bytes there would describe a chroma format the standard does \
              not put in this record"
         );
+    }
+
+    #[test]
+    fn a_high_profile_sequence_parameter_set_cut_short_of_its_chroma_fields_is_refused_by_name() {
+        let mut parameter_sets = h264_high_profile_parameter_sets(1, 0, 0);
+        parameter_sets.sequence_parameter_set_nal_units[0].truncate(4);
+
+        let refusal = build_video_sample_entry("h264", &parameter_sets, 320, 180)
+            .expect_err("a High-profile record cannot be written without them");
+        assert!(
+            matches!(refusal, MoqExtensionError::MalformedBitstream { .. }),
+            "a set the far end cut short is a runtime condition, not a bad call; got {refusal:?}"
+        );
+        assert!(
+            refusal.to_string().contains("§5.3.3.1"),
+            "the refusal names the clause that requires the trailer: {refusal}"
+        );
+    }
+
+    /// The trailer is four bytes a subscriber's decoder walks past on its way
+    /// to the parameter sets, so an init segment carrying one has to survive
+    /// this crate's own reader — every other init fixture here is baseline.
+    #[test]
+    fn a_high_profile_init_segment_still_reads_back_through_the_subscribers_own_reader() {
+        let entry =
+            build_video_sample_entry("h264", &h264_high_profile_parameter_sets(1, 0, 0), 320, 180)
+                .expect("the High-profile sets are complete");
+        let init_segment = crate::cmaf_init_segment::build_cmaf_init_segment(&[
+            crate::cmaf_init_segment::CmafTrackDescriptionForTheInitSegment {
+                track_id: 1,
+                inbound_link_name: "encoder/encoded_video".to_owned(),
+                cmaf_track_sample_entry: entry.cmaf_track_sample_entry,
+                media_timescale_hz: crate::cmaf_track_timeline::VIDEO_TRACK_TIMESCALE_HZ,
+                coded_extent: Some((320, 180)),
+            },
+        ])
+        .expect("one video track");
+
+        let tracks = crate::cmaf_init_segment_reader::read_cmaf_init_segment(&init_segment)
+            .expect("an init segment this crate wrote is one it can read");
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].coded_extent, Some((320, 180)));
     }
 
     /// The SPS syntax elements the H.265 fixtures vary. Everything else the

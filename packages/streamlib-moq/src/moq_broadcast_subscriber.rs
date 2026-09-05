@@ -1297,6 +1297,52 @@ mod tests {
         assert_eq!(packet.opus_packet, bytes::Bytes::from(opus_packet_bytes));
     }
 
+    /// The bitstream outranks the container. This publisher now writes the
+    /// packet's own count beside it, so only a far end that disagrees can tell
+    /// a TOC-derived count from a `trun`-derived one — and a third-party CMAF
+    /// publisher is exactly who the `cmaf` container is for.
+    #[test]
+    fn an_opus_bag_counts_the_samples_its_packet_carries_when_the_fragment_states_otherwise() {
+        let mut subscriber = a_subscriber_of(
+            MoqContainerFormat::Cmaf,
+            None,
+            Some(media_track_name(AUDIO_TRACK_ID)),
+        );
+        let object_router = &mut subscriber.received_object_router;
+        object_router
+            .route_received_object(
+                INIT_TRACK_NAME,
+                &an_init_object(&[an_audio_init_segment_description()]),
+            )
+            .expect("the init object is the one this module's writer wrote");
+
+        let a_duration_no_opus_packet_decodes_to = 1_234;
+        let fragment = an_audio_fragment_placed_as_the_publisher_places_one(
+            1,
+            &mut CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ),
+            9_000_000_000,
+            &a_twenty_millisecond_stereo_opus_packet(),
+            a_duration_no_opus_packet_decodes_to,
+        );
+        assert_eq!(
+            read_cmaf_fragment(&fragment).expect("the fixture fragment reads back")[0].duration,
+            a_duration_no_opus_packet_decodes_to,
+            "the fixture really does state a duration the packet contradicts"
+        );
+
+        let packet = the_only_audio_packet(
+            object_router
+                .route_received_object(&media_track_name(AUDIO_TRACK_ID), &fragment)
+                .expect("a fragment after the init segment reconstitutes"),
+        );
+
+        assert_eq!(
+            packet.sample_count, SAMPLES_A_TWENTY_MILLISECOND_OPUS_PACKET_DECODES_TO,
+            "RFC 6716 §3.1 puts the count in the packet's own TOC byte, so a far end's \
+             arithmetic is never trusted for it"
+        );
+    }
+
     #[test]
     fn each_opus_frame_count_code_states_how_many_frames_the_packet_carries() {
         // Config 31 is CELT full-band at 20 ms, so one frame is 960 samples.

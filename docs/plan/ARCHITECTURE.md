@@ -1648,7 +1648,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::fragments_keep_closing_after_the_only_video_track_latches -->
 - **DECIDED** — An Opus track is the `Opus` sample entry with `dOps` (version 0, the bag's
   `channels`, PreSkip = `pre_skip`, InputSampleRate 48 000, gain 0; mapping family 0),
-  timescale 48 000, each sample's duration its `sample_count`. **PreSkip is the encoder's
+  timescale 48 000, each sample's duration its `sample_count` — except the sample before a
+  capture gap, whose duration is extended to cover it so the dropout is represented rather
+  than elided (§8.8.12.2; the trigger is a stamp a whole packet or more past the accounted
+  position, so arrival jitter is never written in as timing). **PreSkip is the encoder's
   reported lookahead (312 at 48 kHz), deliberately below the 80 ms (3 840) floor
   Opus-in-ISOBMFF §4.3.2 states.** That floor is RFC 7845 §4.2's recommendation for
   *cropping an existing stream* rendered as a `shall`; the spec's own §4.7 example writes
@@ -1663,6 +1666,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::an_opus_entry_states_the_bags_channels_and_the_encoders_lookahead -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::an_opus_track_states_its_channels_and_the_encoders_pre_skip -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::an_opus_samples_duration_is_its_own_sample_count -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_capture_gap_lands_in_the_preceding_samples_duration_while_that_sample_is_still_pending -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::a_capture_gap_after_a_fragment_closed_lands_in_the_next_fragments_decode_time -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::arrival_jitter_below_one_packet_is_not_written_into_the_container_as_timing -->
 - **DECIDED** — **Three to eight channels record no Opus track yet.** `mp4-atom` 0.15
   writes `ChannelMappingFamily` 0 unconditionally and refuses any other value on read, so
   mapping family 1 has no representation in the container writer. Such a track is refused

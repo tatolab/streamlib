@@ -61,8 +61,9 @@ impl CmafTrackTimeline {
         stamp_ns: i64,
         duration_in_track_timescale: u32,
     ) -> CmafSamplePlacement {
+        let (decode_time, _) = self.account_one_samples_stamp(stamp_ns);
         CmafSamplePlacement {
-            decode_time: self.account_one_samples_stamp(stamp_ns),
+            decode_time,
             duration: duration_in_track_timescale,
         }
     }
@@ -74,7 +75,7 @@ impl CmafTrackTimeline {
     /// §8.8.8.2 makes `sample_duration` the duration of *that* sample; a
     /// publisher that waited for the successor to measure it would add a whole
     /// frame of latency to every frame of a live broadcast, so the field is
-    /// deliberately one sample late rather than on time and late by a frame.
+    /// deliberately one sample late.
     ///
     /// `tfdt` is the truth: every fragment carries its own, placed exactly from
     /// the sample's stamp, so a reader that decodes from `tfdt` — which is what
@@ -86,7 +87,7 @@ impl CmafTrackTimeline {
         &mut self,
         stamp_ns: i64,
     ) -> CmafSamplePlacement {
-        let decode_time = self.account_one_samples_stamp(stamp_ns);
+        let (decode_time, gap_to_the_predecessor_ns) = self.account_one_samples_stamp(stamp_ns);
         CmafSamplePlacement {
             decode_time,
             // Clamped, not truncated: on the nanosecond video timescale a
@@ -96,8 +97,7 @@ impl CmafTrackTimeline {
             // stopping at the field's ceiling is the honest failure.
             duration: u32::try_from(
                 rescale_nanoseconds(
-                    self.newest_gap_ns
-                        .unwrap_or(NOMINAL_FIRST_SAMPLE_DURATION_NS),
+                    gap_to_the_predecessor_ns.unwrap_or(NOMINAL_FIRST_SAMPLE_DURATION_NS),
                     self.timescale_hz,
                 )
                 .max(1),
@@ -107,8 +107,14 @@ impl CmafTrackTimeline {
     }
 
     /// Fold one sample's stamp into the track's epoch and predecessor gap,
-    /// handing back the decode time it lands on.
-    fn account_one_samples_stamp(&mut self, stamp_ns: i64) -> u64 {
+    /// handing back the decode time it lands on and the gap *as of* this
+    /// stamp.
+    ///
+    /// The gap is returned rather than left on `self` so a caller cannot read
+    /// the previous sample's gap by accident: measuring against the
+    /// predecessor means the value this stamp just produced, not the one it
+    /// replaced.
+    fn account_one_samples_stamp(&mut self, stamp_ns: i64) -> (u64, Option<i64>) {
         let epoch_ns = *self.epoch_ns.get_or_insert(stamp_ns);
         if let Some(newest) = self.newest_stamp_ns {
             let gap = stamp_ns.saturating_sub(newest);
@@ -119,7 +125,10 @@ impl CmafTrackTimeline {
         self.newest_stamp_ns = Some(stamp_ns);
 
         let since_epoch_ns = stamp_ns.saturating_sub(epoch_ns).max(0);
-        rescale_nanoseconds(since_epoch_ns, self.timescale_hz)
+        (
+            rescale_nanoseconds(since_epoch_ns, self.timescale_hz),
+            self.newest_gap_ns,
+        )
     }
 }
 

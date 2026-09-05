@@ -82,7 +82,7 @@ pub(crate) fn build_cmaf_init_segment(
                 .iter()
                 .map(|track| track.track_id.saturating_add(1))
                 .max()
-                .expect("a segment describing no tracks is refused above"),
+                .unwrap_or(1),
             ..Default::default()
         },
         mvex: Some(Mvex {
@@ -279,10 +279,15 @@ mod tests {
         let bytes =
             build_cmaf_init_segment(&[a_video_track(1), an_audio_track(2)]).expect("two tracks");
 
+        // Read off the wire rather than through `mp4-atom`: the major brand is
+        // the one field a third-party player gates on before it decodes a
+        // single box, so the assertion should not go through a decoder either.
+        assert_eq!(&bytes[4..8], b"ftyp");
+        assert_eq!(&bytes[8..12], b"iso6", "the major brand");
+
         let Any::Ftyp(ftyp) = &decoded_atoms(&bytes)[0] else {
             panic!("the init segment opens with ftyp");
         };
-        assert_eq!(ftyp.major_brand, b"iso6".into());
         assert_eq!(
             ftyp.compatible_brands,
             vec![b"iso6".into(), b"mp41".into(), b"cmfc".into()],

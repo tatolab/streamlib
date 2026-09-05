@@ -596,6 +596,9 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         sample_count: u32,
     ) -> bool {
         let track = &mut self.tracks[track_index];
+        // `accept_timestamp` set this on the way in, so the total form here is
+        // for the type and not for a case: the first packet of a track is
+        // handled below, by its gap being zero.
         let Some(first_timestamp_ns) = track.first_timestamp_ns else {
             return true;
         };
