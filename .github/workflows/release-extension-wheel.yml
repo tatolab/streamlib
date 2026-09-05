@@ -1,0 +1,145 @@
+name: Release Extension Wheel
+
+# One extension wheel, built the way a third party would build one — its own
+# standalone maturin project, its own lockfile, no engine crate linked — and
+# attached to its own release. Called once per released extension by
+# release-wheel.yml, which owns the PEP 503 simple index that then serves it
+# beside the engine wheel.
+#
+# Only what a tag names is built: an extension's tag never re-runs the engine
+# wheel's build, and the engine's tag never runs this.
+on:
+  workflow_call:
+    inputs:
+      extension_package_directory:
+        description: "The standalone maturin project to build, relative to the repo root"
+        type: string
+        required: true
+      extension_distribution_name:
+        description: "The distribution pip installs, e.g. streamlib-webrtc"
+        type: string
+        required: true
+      extension_import_package_name:
+        description: "The package the smoke test imports, e.g. streamlib_webrtc"
+        type: string
+        required: true
+      tag_name:
+        description: "Release tag to build from and attach the wheel to"
+        type: string
+        required: true
+
+env:
+  # Where the engine wheel an extension depends on resolves from — the same
+  # index this release goes on to republish. Installing against it is what
+  # proves the declared `streamlib` floor is one a user can actually satisfy,
+  # rather than one that only resolves from a checkout.
+  STREAMLIB_SIMPLE_INDEX_URL: https://tatolab.github.io/streamlib/simple/
+
+jobs:
+  build-extension-wheel:
+    name: manylinux wheel (${{ inputs.extension_distribution_name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
+
+      # abi3-py310 and manylinux_2_28, matching the engine wheel exactly: an
+      # extension installs beside it on machines this project never sees, so one
+      # built artifact has to cover the same interpreters and the same glibc
+      # floor. A single build rather than a matrix, for the same reason.
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: ${{ inputs.extension_package_directory }}
+          target: x86_64
+          manylinux: 2_28
+          args: --release --out dist
+          # The engine wheel's dependency set minus everything an extension does
+          # not link: no Vulkan, no protobuf, no glslc, and no python3-devel —
+          # an extension-module wheel links no libpython, and the engine's own
+          # build script comments record that installing those headers replaces
+          # the image's python3 with one maturin refuses. What is left is what
+          # `aws-lc-sys` needs to build the C cryptography `web-transport-quinn`
+          # turns on unconditionally, plus libclang for its bindgen fallback.
+          #
+          # The bounded retry is release-wheel.yml's, deliberately copied rather
+          # than shared: a `before-script-linux` runs inside the manylinux
+          # container, so factoring it into a file would put the engine's own
+          # release path on that file resolving through the mount. The reasoning
+          # behind the numbers is recorded once, there. In short: the mode that
+          # costs is a slow mirror rather than a stalled one, which only a
+          # wall-clock bound detects, and AlmaLinux re-resolves its mirrorlist
+          # per invocation once the cache is cleared.
+          before-script-linux: |
+            set -euo pipefail
+            dnf_attempt_timeout_seconds=420
+            dnf_attempt_limit=3
+            install_build_dependencies_with_bounded_retry() {
+              for attempt in $(seq 1 "$dnf_attempt_limit"); do
+                if timeout --kill-after=10s "${dnf_attempt_timeout_seconds}s" \
+                  dnf install -y --setopt=retries=3 --setopt=timeout=30 "$@"; then
+                  return 0
+                fi
+                echo "::warning::dnf attempt ${attempt} failed or blew the ${dnf_attempt_timeout_seconds}s bound; clearing the cache so the next attempt re-resolves the mirrorlist"
+                dnf clean all >/dev/null 2>&1 || true
+              done
+              echo "::error::dnf install did not complete in ${dnf_attempt_limit} bounded attempts of ${dnf_attempt_timeout_seconds}s"
+              return 1
+            }
+            install_build_dependencies_with_bounded_retry \
+              pkgconfig clang-devel cmake ninja-build
+
+      # A wheel that installs but cannot be imported is not a release artifact,
+      # and licence obligations only discharge if the files reach the artifact a
+      # user installs. Both are asserted against this build rather than trusted
+      # from the test suite: that runs against `maturin develop`, while this is
+      # `maturin-action` inside a manylinux container resolving PEP 639 globs
+      # that are symlinks out of the project root.
+      #
+      # `--index-url` is the published index, not PyPI: `streamlib` is not on
+      # PyPI, and this is the one place the extension's declared floor meets the
+      # wheels a user can really install.
+      - name: The wheel installs from the published index, imports, and carries its notices
+        env:
+          EXTENSION_DISTRIBUTION_NAME: ${{ inputs.extension_distribution_name }}
+          EXTENSION_IMPORT_PACKAGE_NAME: ${{ inputs.extension_import_package_name }}
+          # The engine wheel reads this at import; a runner has no session bus.
+          XDG_RUNTIME_DIR: /tmp/streamlib-runtime-dir
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR"
+          python3 -m venv /tmp/extension-wheel-check
+          /tmp/extension-wheel-check/bin/pip install \
+            --index-url "$STREAMLIB_SIMPLE_INDEX_URL" \
+            "${{ inputs.extension_package_directory }}"/dist/*.whl
+          # Read through importlib.metadata, so a file present in the repo and
+          # absent from the wheel fails rather than passes.
+          /tmp/extension-wheel-check/bin/python -c "
+          import importlib
+          import os
+          from importlib.metadata import distribution
+
+          distribution_name = os.environ['EXTENSION_DISTRIBUTION_NAME']
+          shipped = distribution(distribution_name)
+          for license_file_name in ('LICENSE', 'THIRD-PARTY-NOTICES.md'):
+              text = shipped.read_text('licenses/' + license_file_name) or ''
+              assert text.strip(), license_file_name + ' is absent from .dist-info/licenses/'
+
+          extension = importlib.import_module(os.environ['EXTENSION_IMPORT_PACKAGE_NAME'])
+          exported = list(getattr(extension, '__all__', []))
+          assert exported, distribution_name + ' exports no processor classes'
+          for name in exported:
+              getattr(extension, name)
+          print(distribution_name, 'exports', ', '.join(exported))
+          "
+
+      - name: Attach the wheel to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.tag_name }}" \
+            "${{ inputs.extension_package_directory }}"/dist/*.whl --clobber

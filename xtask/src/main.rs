@@ -766,7 +766,13 @@ enum Commands {
     /// is a command and not a gate; `cargo deny check licenses` is the half that
     /// runs on every PR. See [`generate_third_party_notices`] for the roster and
     /// why each project is on it.
-    GenerateThirdPartyNotices,
+    GenerateThirdPartyNotices {
+        /// Generate for one standalone extension wheel under `packages/`
+        /// instead of the engine workspace: its own closure, its own file, and
+        /// no vendored C++ appendix.
+        #[arg(long, value_name = "PACKAGE_DIRECTORY")]
+        extension_package_directory: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -812,9 +818,13 @@ fn main() -> Result<()> {
         Commands::RunLocalCiGates => run_local_ci_gates(&workspace_root()?)?,
         Commands::Psnr(psnr_command) => psnr::run(psnr_command)?,
         Commands::Mp4Inspect(inspect_command) => mp4_inspect::run(inspect_command)?,
-        Commands::GenerateThirdPartyNotices => {
-            generate_third_party_notices::run(&workspace_root()?)?
-        }
+        Commands::GenerateThirdPartyNotices {
+            extension_package_directory,
+        } => generate_third_party_notices::run(
+            &workspace_root()?,
+            &generate_third_party_notices::NoticesGenerationTarget::
+                from_optional_extension_package_directory(extension_package_directory),
+        )?,
     }
 
     Ok(())

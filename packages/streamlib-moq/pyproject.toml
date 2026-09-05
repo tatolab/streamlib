@@ -9,6 +9,17 @@ description = "Media over QUIC publish and subscribe for StreamLib."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "BUSL-1.1" }
+# PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
+# discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
+# own, `THIRD-PARTY-NOTICES.md` for every dependency's. The SPDX id above says
+# BUSL-1.1 and nothing about who the Licensor is or when the Change Date falls
+# — the parameters are the licence, so the text has to travel too.
+#
+# `LICENSE` is a symlink to the repo root, which maturin follows; the notices
+# are this project's own, generated over its own closure by `cargo xtask
+# generate-third-party-notices --extension-package-directory <this directory>`.
+# The engine wheel's notices cover the engine wheel and are not inherited here.
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
 classifiers = [
     "Programming Language :: Rust",
@@ -18,11 +29,21 @@ classifiers = [
 # The engine is a binary dependency, never a source one: this wheel links no
 # streamlib crate and speaks no engine internals.
 #
-# 0.18.48 is the earliest release carrying both halves this wheel needs — the
-# capability-extension mechanism `extension.py:load` is declared against, and
-# `read_from_inbound_link_with_timestamp`, which the publisher reads every bag
-# through. Verified against an installed 0.18.48, not inferred from a changelog.
-dependencies = ["streamlib>=0.18.48"]
+# 0.18.49 is the earliest release carrying both halves this wheel needs. The
+# capability-extension mechanism `extension.py:load` is declared against arrived
+# in 0.18.48; `read_from_inbound_link_with_timestamp`, which every bag is read
+# through, arrived in 0.18.49 — in the same commit as this wheel, which is why
+# the floor could only be stated once the release wiring existed. Both resolved
+# by `git describe --contains` on the commit that introduced each into
+# `_engine.pyi`, not from a changelog.
+#
+# The ceiling is the last *published* engine version, not the one in the tree.
+# Two lanes install this wheel and they resolve differently: the PR lane
+# installs the engine wheel built from this same checkout, while the release
+# lane installs from the published index, which is rebuilt only after the
+# extension wheels are built. So a floor naming the engine version released in
+# the same run would fail the release smoke test.
+dependencies = ["streamlib>=0.18.49"]
 
 # What pip records at install and the engine reads back through
 # `importlib.metadata` when a process takes an engine role.
