@@ -16,13 +16,13 @@
 //! queue depth: a queue depth measures the uplink, and what a viewer
 //! experiences is how old the picture is.
 
-use std::time::Duration;
+use crate::encoded_media_sample::EncodedMediaSample;
 
 /// How late an object may be before this publisher stops writing it.
 ///
 /// Unconfigured is the shipped behaviour — every object is written however
 /// late it is — and is what the measured baseline arm runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MoqPublisherDeliveryDeadline {
     longest_object_age_ns: Option<i64>,
 }
@@ -51,18 +51,6 @@ impl MoqPublisherDeliveryDeadline {
         }
     }
 
-    /// How the deadline reads, for an operator: the milliseconds, or that
-    /// there is none.
-    pub(crate) fn describe(&self) -> String {
-        match self.longest_object_age_ns {
-            None => "no delivery deadline is configured".to_owned(),
-            Some(longest_object_age_ns) => format!(
-                "the delivery deadline is {} ms",
-                Duration::from_nanos(longest_object_age_ns.max(0) as u64).as_millis()
-            ),
-        }
-    }
-
     /// What to do with one sample on a track that may already be shedding.
     ///
     /// A sync point is never shed, whatever its age: the group a decoder
@@ -71,12 +59,11 @@ impl MoqPublisherDeliveryDeadline {
     /// outrank video here as well as in the priority the group is opened at.
     pub(crate) fn verdict_for_one_sample(
         &self,
-        sample_is_a_sync_point: bool,
-        sample_timestamp_ns: i64,
+        sample: &EncodedMediaSample,
         now_ns: i64,
         the_tracks_open_group_is_already_being_shed: bool,
     ) -> DeliveryDeadlineVerdict {
-        if sample_is_a_sync_point {
+        if sample.is_sync_point() {
             return DeliveryDeadlineVerdict::PublishIt;
         }
         let Some(longest_object_age_ns) = self.longest_object_age_ns else {
@@ -87,7 +74,7 @@ impl MoqPublisherDeliveryDeadline {
         }
         // Saturating, because a stamp ahead of the reading is an age of zero
         // rather than a wrap into lateness.
-        let age_ns = now_ns.saturating_sub(sample_timestamp_ns);
+        let age_ns = now_ns.saturating_sub(sample.timestamp_ns());
         if age_ns > longest_object_age_ns {
             DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup
         } else {
@@ -109,18 +96,41 @@ pub(crate) struct ObjectsTheDeliveryDeadlineShedOnOneTrack {
 mod tests {
     use super::*;
 
+    use crate::encoded_media_sample::EncodedVideoAccessUnit;
+
     const A_STAMP_NS: i64 = 5_000_000_000;
 
     fn a_deadline_of_100_ms() -> MoqPublisherDeliveryDeadline {
         MoqPublisherDeliveryDeadline::of_optional_milliseconds(Some(100))
     }
 
+    fn a_delta_frame_stamped_at(timestamp_ns: i64) -> EncodedMediaSample {
+        a_frame_stamped_at(timestamp_ns, false)
+    }
+
+    fn a_sync_point_stamped_at(timestamp_ns: i64) -> EncodedMediaSample {
+        a_frame_stamped_at(timestamp_ns, true)
+    }
+
+    fn a_frame_stamped_at(timestamp_ns: i64, is_sync_point: bool) -> EncodedMediaSample {
+        EncodedMediaSample::VideoAccessUnit(EncodedVideoAccessUnit {
+            codec: "h264".to_owned(),
+            annex_b_access_unit: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41]),
+            is_sync_point,
+            group_index: 0,
+            sequence_index: 0,
+            width: 320,
+            height: 180,
+            color: None,
+            timestamp_ns,
+        })
+    }
+
     #[test]
     fn a_sample_inside_the_deadline_is_published() {
         assert_eq!(
             a_deadline_of_100_ms().verdict_for_one_sample(
-                false,
-                A_STAMP_NS,
+                &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 99_000_000,
                 false
             ),
@@ -132,8 +142,7 @@ mod tests {
     fn a_sample_exactly_at_the_deadline_is_published() {
         assert_eq!(
             a_deadline_of_100_ms().verdict_for_one_sample(
-                false,
-                A_STAMP_NS,
+                &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 100_000_000,
                 false
             ),
@@ -145,8 +154,7 @@ mod tests {
     fn a_sample_past_the_deadline_is_shed_along_with_the_rest_of_its_group() {
         assert_eq!(
             a_deadline_of_100_ms().verdict_for_one_sample(
-                false,
-                A_STAMP_NS,
+                &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 100_000_001,
                 false
             ),
@@ -157,7 +165,11 @@ mod tests {
     #[test]
     fn a_sample_inside_the_deadline_is_still_shed_while_its_group_is_being_shed() {
         assert_eq!(
-            a_deadline_of_100_ms().verdict_for_one_sample(false, A_STAMP_NS, A_STAMP_NS, true),
+            a_deadline_of_100_ms().verdict_for_one_sample(
+                &a_delta_frame_stamped_at(A_STAMP_NS),
+                A_STAMP_NS,
+                true
+            ),
             DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup
         );
     }
@@ -166,8 +178,7 @@ mod tests {
     fn a_sync_point_is_published_however_late_it_is_and_ends_the_shed() {
         assert_eq!(
             a_deadline_of_100_ms().verdict_for_one_sample(
-                true,
-                A_STAMP_NS,
+                &a_sync_point_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 60_000_000_000,
                 true
             ),
@@ -181,8 +192,7 @@ mod tests {
 
         assert_eq!(
             unconfigured.verdict_for_one_sample(
-                false,
-                A_STAMP_NS,
+                &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 60_000_000_000,
                 false
             ),
@@ -193,7 +203,11 @@ mod tests {
     #[test]
     fn a_stamp_ahead_of_the_reading_is_not_late() {
         assert_eq!(
-            a_deadline_of_100_ms().verdict_for_one_sample(false, A_STAMP_NS, 0, false),
+            a_deadline_of_100_ms().verdict_for_one_sample(
+                &a_delta_frame_stamped_at(A_STAMP_NS),
+                0,
+                false
+            ),
             DeliveryDeadlineVerdict::PublishIt
         );
     }
@@ -203,11 +217,19 @@ mod tests {
         let shed_everything = MoqPublisherDeliveryDeadline::of_optional_milliseconds(Some(0));
 
         assert_eq!(
-            shed_everything.verdict_for_one_sample(false, A_STAMP_NS, A_STAMP_NS + 1, false),
+            shed_everything.verdict_for_one_sample(
+                &a_delta_frame_stamped_at(A_STAMP_NS),
+                A_STAMP_NS + 1,
+                false
+            ),
             DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup
         );
         assert_eq!(
-            shed_everything.verdict_for_one_sample(true, A_STAMP_NS, A_STAMP_NS + 1, false),
+            shed_everything.verdict_for_one_sample(
+                &a_sync_point_stamped_at(A_STAMP_NS),
+                A_STAMP_NS + 1,
+                false
+            ),
             DeliveryDeadlineVerdict::PublishIt
         );
     }
@@ -217,20 +239,8 @@ mod tests {
         let saturated = MoqPublisherDeliveryDeadline::of_optional_milliseconds(Some(u64::MAX));
 
         assert_eq!(
-            saturated.verdict_for_one_sample(false, 0, i64::MAX, false),
+            saturated.verdict_for_one_sample(&a_delta_frame_stamped_at(0), i64::MAX, false),
             DeliveryDeadlineVerdict::PublishIt
-        );
-    }
-
-    #[test]
-    fn the_deadline_describes_itself_for_the_operator() {
-        assert_eq!(
-            MoqPublisherDeliveryDeadline::of_optional_milliseconds(None).describe(),
-            "no delivery deadline is configured"
-        );
-        assert_eq!(
-            a_deadline_of_100_ms().describe(),
-            "the delivery deadline is 100 ms"
         );
     }
 }

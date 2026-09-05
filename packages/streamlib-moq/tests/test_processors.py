@@ -21,6 +21,7 @@ from streamlib_moq.processors import (
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     READER_THREAD_JOIN_TIMEOUT_SECONDS,
     SUBSCRIBER_POLL_TIMEOUT_MS,
+    describe_the_delivery_deadline,
     describe_what_the_delivery_deadline_shed,
     track_medium_of_codec,
 )
@@ -215,3 +216,19 @@ def test_the_shed_report_names_each_link_with_its_objects_and_its_bytes():
         "the delivery deadline shed camera=12 objects/48213 bytes, "
         "second_camera=1 objects/900 bytes"
     )
+
+
+@pytest.mark.parametrize(
+    ("delivery_deadline_ms", "said"),
+    [
+        (None, "no delivery deadline is configured"),
+        (0, "the delivery deadline is 0 ms"),
+        (250, "the delivery deadline is 250 ms"),
+    ],
+)
+def test_the_deadline_a_publisher_runs_under_is_said_where_it_is_configured(
+    delivery_deadline_ms, said
+):
+    """A run's log has to state which arm it is, or a measured before/after
+    cannot be told apart after the fact."""
+    assert describe_the_delivery_deadline(delivery_deadline_ms) == said

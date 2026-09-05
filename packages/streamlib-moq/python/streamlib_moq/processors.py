@@ -116,6 +116,13 @@ def _optional_delivery_deadline_ms(delivery_deadline_ms: Any) -> "int | None":
     return delivery_deadline_ms
 
 
+def describe_the_delivery_deadline(delivery_deadline_ms: "int | None") -> str:
+    """The deadline this publisher runs under, as an operator reads it."""
+    if delivery_deadline_ms is None:
+        return "no delivery deadline is configured"
+    return f"the delivery deadline is {delivery_deadline_ms} ms"
+
+
 def describe_what_the_delivery_deadline_shed(
     shed_by_inbound_link: "Sequence[tuple[str, int, int]]",
 ) -> str:
@@ -238,7 +245,7 @@ class MoqBroadcastPublisher:
         log.info(
             f"MoqBroadcastPublisher: broadcast={broadcast} "
             f"container_format={self._container_format} tracks={len(inbound_links)} "
-            f"{self._session.delivery_deadline}"
+            f"{describe_the_delivery_deadline(self._delivery_deadline_ms)}"
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:

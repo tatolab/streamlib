@@ -219,14 +219,6 @@ impl MoqBroadcastPublishingSession {
             })
             .collect())
     }
-
-    /// The deadline this publisher runs under, in words an operator reads.
-    #[getter]
-    fn delivery_deadline(&self, python: Python<'_>) -> PyResult<String> {
-        Ok(python.detach(|| {
-            Ok::<_, MoqExtensionError>(self.locked_publisher()?.describe_the_delivery_deadline())
-        })?)
-    }
 }
 
 impl MoqBroadcastPublishingSession {
@@ -236,12 +228,13 @@ impl MoqBroadcastPublishingSession {
         inbound_link_name: &str,
         sample: EncodedMediaSample,
     ) -> PyResult<()> {
-        // Read here rather than inside the planner: one reading covers the
-        // whole of one bag's decision, and a test can plan against a stated
-        // instant instead of the clock.
-        let now_ns = monotonic_now_ns();
         python.detach(|| {
             let mut publisher = self.locked_publisher()?;
+            // Read here rather than inside the planner: one reading covers the
+            // whole of one bag's decision, and a test can plan against a stated
+            // instant. Read after the lock rather than before `detach`, or the
+            // first bag's age misses the relay connect `publish` opens with.
+            let now_ns = monotonic_now_ns();
             transport_stack::transport_runtime()?.block_on(publisher.publish(
                 inbound_link_name,
                 sample,

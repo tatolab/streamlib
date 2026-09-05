@@ -26,25 +26,18 @@ use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
 /// the transport config, which is why the endpoint is assembled by hand.
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(4);
 
-/// What the catalog and init tracks are published at, and what each medium is
-/// published at.
-///
-/// The ladder is the reference publisher's band read in the draft's own
-/// direction: draft-16 §10.4.2 documents a smaller `publisher_priority` as
-/// sooner, so descriptive objects outrank audio and audio outranks video. The
-/// two media rungs sit either side of `moq-pub`'s single media literal of 127,
-/// which is what keeps the broadcast interoperable while still saying which
-/// medium a relay should prefer.
-///
-/// The field reads backwards once it leaves the header: `moq-transport` hands
-/// the same number to quinn's `set_priority`, where larger is sooner, so on
-/// this publisher's own uplink the ladder is inverted. That is deliberate and
-/// covered elsewhere — the uplink's ordering is what
-/// [`crate::delivery_deadline`] decides, where audio is never shed because
-/// every Opus packet is a sync point. This number is the statement to the
-/// relay, and the draft's direction is the one it is read in there.
+// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner, and the two
+// media rungs sit either side of `moq-pub`'s single media literal of 127 so the
+// broadcast stays interoperable while still saying which medium to prefer. The
+// number reverses meaning once it leaves the header: `moq-transport` hands the
+// same `u8` to quinn's `set_priority`, where larger is sooner, so no one value
+// can rank audio first at both ends. This one is the statement to the relay.
+
+/// The rung the catalog and init tracks are published at.
 pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
+/// The rung an audio track's groups are opened at.
 pub(crate) const AUDIO_MEDIA_TRACK_PRIORITY: u8 = 126;
+/// The rung a video track's groups are opened at.
 pub(crate) const VIDEO_MEDIA_TRACK_PRIORITY: u8 = 127;
 
 /// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner, so the
@@ -704,11 +697,9 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
     }
 }
 
-/// What the transport does with an object the publisher has already written.
-///
-/// The drop policy rests on these two facts, and neither is documented — a
-/// `moq-transport` bump that changed either would move the only moment a
-/// publisher can shed work, so they are pinned here rather than re-derived.
+/// What the transport does with an object the publisher has already written —
+/// undocumented in `moq-transport`, and what [`crate::delivery_deadline`] rests
+/// on, so pinned here rather than re-derived.
 #[cfg(test)]
 mod tests {
     use super::VIDEO_MEDIA_TRACK_PRIORITY;

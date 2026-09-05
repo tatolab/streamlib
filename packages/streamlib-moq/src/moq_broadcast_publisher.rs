@@ -13,9 +13,8 @@
 //! become unreachable the moment the next one arrived.
 //!
 //! Whether a bag is published at all is decided here too, before any of it
-//! reaches the transport, because that is the only moment a publisher can
-//! still shed work: an object handed to a `SubgroupWriter` is an object
-//! delivered, however late. See [`crate::delivery_deadline`].
+//! reaches the transport — see [`crate::delivery_deadline`] for why that is the
+//! only moment there is.
 //!
 //! The transport is reached only through the instruction list this module
 //! plans, so everything up to the byte handed to a QUIC stream is decided
@@ -243,11 +242,6 @@ impl MoqBroadcastPublisher {
             .objects_the_delivery_deadline_shed()
     }
 
-    /// The deadline this publisher runs under, in words an operator reads.
-    pub(crate) fn describe_the_delivery_deadline(&self) -> String {
-        self.object_write_planner.describe_the_delivery_deadline()
-    }
-
     /// Finish every open group and end the session.
     /// Close the broadcast, handing back the encoded media the hold discards.
     ///
@@ -461,17 +455,16 @@ impl MoqBroadcastObjectWritePlanner {
         // track must not call it silent.
         track.count_one_more_delivered_bag();
 
-        let verdict = delivery_deadline.verdict_for_one_sample(
-            sample.is_sync_point(),
-            sample.timestamp_ns(),
+        match delivery_deadline.verdict_for_one_sample(
+            &sample,
             now_ns,
             track.the_open_group_is_being_shed,
-        );
-        track.the_open_group_is_being_shed =
-            verdict == DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup;
-        if verdict == DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup {
-            track.count_one_object_the_delivery_deadline_shed(encoded_byte_count_of(&sample));
-            return Ok(PlannedMoqObjectWrites::of_a_bag_no_object_is_written_for());
+        ) {
+            DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup => {
+                track.record_one_object_the_delivery_deadline_shed(encoded_byte_count_of(&sample));
+                return Ok(PlannedMoqObjectWrites::of_a_bag_no_object_is_written_for());
+            }
+            DeliveryDeadlineVerdict::PublishIt => track.the_open_group_is_being_shed = false,
         }
 
         match self.container_format {
@@ -676,10 +669,6 @@ impl MoqBroadcastObjectWritePlanner {
             .collect()
     }
 
-    fn describe_the_delivery_deadline(&self) -> String {
-        self.delivery_deadline.describe()
-    }
-
     fn every_declared_track_is_described(&self) -> bool {
         self.declared_tracks
             .iter()
@@ -875,7 +864,8 @@ impl DeclaredMoqTrackPublicationState {
         self.bags_this_track_has_delivered = self.bags_this_track_has_delivered.saturating_add(1);
     }
 
-    fn count_one_object_the_delivery_deadline_shed(&mut self, encoded_byte_count: usize) {
+    fn record_one_object_the_delivery_deadline_shed(&mut self, encoded_byte_count: usize) {
+        self.the_open_group_is_being_shed = true;
         self.objects_the_delivery_deadline_shed =
             self.objects_the_delivery_deadline_shed.saturating_add(1);
         self.bytes_the_delivery_deadline_shed = self

@@ -121,10 +121,6 @@ class MoqBroadcastPublishingSession:
         process.
         """
 
-    @property
-    def delivery_deadline(self) -> str:
-        """The deadline this publisher runs under, in words an operator reads."""
-
 @final
 class MoqBroadcastSubscribingSession:
     """One subscription: the named tracks of one broadcast, draining into a
