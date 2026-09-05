@@ -9,13 +9,13 @@ import beyond `unittest`, and it is stdlib from 3.11 — both workflows that run
 this file are on `ubuntu-latest`, whose `python3` is well past that.
 """
 
+import json
 import tempfile
 import tomllib
 import unittest
 from pathlib import Path
 
 from build_simple_index import (
-    EXTENSION_ENTRY_POINT_GROUP,
     PUBLISHED_PROJECT_NAMES,
     WheelAsset,
     collect_wheel_assets,
@@ -25,6 +25,14 @@ from build_simple_index import (
     render_root_page,
     write_simple_index,
 )
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+
+# What makes a `packages/` directory an extension wheel: pip records this group
+# at install, and the engine reads it back when a process takes an engine role.
+# Read here rather than exported from the generator, which has no use for it —
+# publishing a wheel and declaring an entry point are different concerns.
+EXTENSION_ENTRY_POINT_GROUP = "streamlib.extensions"
 
 WHEEL_FILE_NAME = "streamlib-0.12.0-cp310-abi3-manylinux_2_28_x86_64.whl"
 WHEEL_DOWNLOAD_URL = (
@@ -243,38 +251,59 @@ class RenderingTheIndex(unittest.TestCase):
             )
 
 
-class PublishingEveryProjectThisRepoReleases(unittest.TestCase):
-    """`PUBLISHED_PROJECT_NAMES` is the whole index, so it is the whole answer to
-    "can pip resolve this?" — a released distribution missing from it is built,
-    attached to its release, and unreachable."""
+def extension_package_directory_names():
+    """Every directory under `packages/` that is an extension wheel.
 
-    def released_distribution_names(self):
-        """The engine wheel, plus every extension wheel under `packages/`.
+    An extension is one whose `pyproject.toml` declares the entry-point group
+    pip records at install — discovered rather than listed, so a third extension
+    is covered the day its `pyproject.toml` lands.
+    """
+    names = []
+    for pyproject_path in sorted((REPOSITORY_ROOT / "packages").glob("*/pyproject.toml")):
+        project = tomllib.loads(pyproject_path.read_text(encoding="utf-8")).get(
+            "project", {}
+        )
+        if EXTENSION_ENTRY_POINT_GROUP in project.get("entry-points", {}):
+            names.append((pyproject_path.parent.name, project["name"]))
+    return names
 
-        An extension is one whose `pyproject.toml` declares the entry-point
-        group pip records at install — discovered rather than listed, so a third
-        extension is covered the day its `pyproject.toml` lands.
-        """
-        repository_root = Path(__file__).resolve().parent.parent
-        released = {"streamlib"}
-        for pyproject_path in sorted(
-            (repository_root / "packages").glob("*/pyproject.toml")
-        ):
-            project = tomllib.loads(pyproject_path.read_text(encoding="utf-8")).get(
-                "project", {}
-            )
-            if EXTENSION_ENTRY_POINT_GROUP in project.get("entry-points", {}):
-                released.add(normalize_project_name(project["name"]))
-        return released
+
+class ReleasingEveryProjectThisRepoPublishes(unittest.TestCase):
+    """Four files have to agree about which wheels this repo releases, and each
+    disagreement fails somewhere too late to be obvious: a wheel absent from the
+    index is built, attached and unreachable; one absent from the release
+    configuration is never versioned, tagged or built at all."""
 
     def test_the_discovery_rule_still_finds_the_extension_wheels(self):
-        """A rule that matches nothing would make the check below vacuous."""
-        self.assertGreater(len(self.released_distribution_names()), 1)
+        """A rule that matches nothing would make every check below vacuous."""
+        self.assertTrue(extension_package_directory_names())
 
     def test_the_index_serves_exactly_what_this_repo_releases(self):
-        self.assertEqual(
-            set(PUBLISHED_PROJECT_NAMES), self.released_distribution_names()
+        released = {"streamlib"} | {
+            normalize_project_name(distribution_name)
+            for _, distribution_name in extension_package_directory_names()
+        }
+
+        self.assertEqual(set(PUBLISHED_PROJECT_NAMES), released)
+
+    def test_every_extension_wheel_is_a_release_please_package(self):
+        configured = json.loads(
+            (REPOSITORY_ROOT / "release-please-config.json").read_text(encoding="utf-8")
+        )["packages"]
+        seeded = json.loads(
+            (REPOSITORY_ROOT / ".release-please-manifest.json").read_text(
+                encoding="utf-8"
+            )
         )
+
+        for directory_name, distribution_name in extension_package_directory_names():
+            package_path = f"packages/{directory_name}"
+            self.assertIn(package_path, configured, distribution_name)
+            # Without its own component every package tags `v<version>`, which
+            # collides with the engine wheel's tags.
+            self.assertEqual(configured[package_path]["component"], distribution_name)
+            # release-please refuses a package it has no recorded version for.
+            self.assertIn(package_path, seeded, distribution_name)
 
 
 if __name__ == "__main__":

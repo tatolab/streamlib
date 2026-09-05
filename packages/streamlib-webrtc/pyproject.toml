@@ -37,9 +37,12 @@ classifiers = [
 # by `git describe --contains` on the commit that introduced each into
 # `_engine.pyi`, not from a changelog.
 #
-# The ceiling this floor must stay under is the version in the tree: the CI lane
-# installs the engine wheel built from this same checkout, so a floor above it
-# would send pip to PyPI for a `streamlib` that is not there.
+# The ceiling is the last *published* engine version, not the one in the tree.
+# Two lanes install this wheel and they resolve differently: the PR lane
+# installs the engine wheel built from this same checkout, while the release
+# lane installs from the published index, which is rebuilt only after the
+# extension wheels are built. So a floor naming the engine version released in
+# the same run would fail the release smoke test.
 dependencies = ["streamlib>=0.18.49"]
 
 # What pip records at install and the engine reads back through

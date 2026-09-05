@@ -99,8 +99,12 @@ jobs:
           # deleted, are never handed to cargo.
           for extension_pyproject in packages/*/pyproject.toml; do
             grep -q 'streamlib.extensions' "$extension_pyproject" || continue
-            cargo update --workspace \
-              --manifest-path "$(dirname "$extension_pyproject")/Cargo.toml"
+            extension_manifest="$(dirname "$extension_pyproject")/Cargo.toml"
+            # An extension needs no Rust — a pure-Python one is a complete
+            # extension — and handing cargo a directory with no manifest would
+            # exit non-zero and wedge the release under this step's `bash -e`.
+            [ -f "$extension_manifest" ] || continue
+            cargo update --workspace --manifest-path "$extension_manifest"
           done
           if git diff --quiet; then
             echo "version pins and Cargo.lock already in sync"

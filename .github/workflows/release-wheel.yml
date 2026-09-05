@@ -283,16 +283,24 @@ jobs:
 
   publish-simple-index:
     name: PEP 503 simple index
-    # `always()` plus the explicit result check: an index-only rebuild skips
-    # every wheel job, and a run that releases one project skips the others —
-    # a skipped dependency must not skip this too. A failed one must, though:
-    # regenerating the index while a wheel that was supposed to be attached is
-    # missing publishes an index that quietly omits it.
+    # Every wheel job is a dependency so that one published index describes
+    # every wheel this run attached. `always()` plus the explicit result check:
+    # an index-only rebuild skips every wheel job, and a run that releases one
+    # project skips the others — a skipped dependency must not skip this too.
+    #
+    # The failure check names `build-wheel` alone, deliberately. The generator
+    # rebuilds from the whole release history rather than appending, so a failed
+    # extension build attaches no asset and leaves that project's page exactly
+    # where it was — nothing is corrupted and nothing is omitted that was there
+    # before. Withholding the rebuild would instead keep the engine wheel that
+    # *did* build out of the index, which is a blast radius the engine wheel's
+    # publish path never had. The failed job is red on its own, and the
+    # index-only `workflow_dispatch` above is the repair.
     needs:
       - build-wheel
       - build-streamlib-webrtc-wheel
       - build-streamlib-moq-wheel
-    if: always() && !contains(needs.*.result, 'failure')
+    if: always() && needs.build-wheel.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
