@@ -11,8 +11,13 @@
 //! `avc1`/`hvc1` forbid in-band parameter sets, so a track this reader cannot
 //! describe is a track no decoder can be configured for.
 
-use mp4_atom::{Atom, Codec, Decode, Encode, Ftyp, Header, HvcCArray, Hvcc, Moov, Trak, Visual};
+use mp4_atom::{Atom, Avcc, Codec, Decode, Encode, Ftyp, Header, Hvcc, Moov, Trak, Visual};
 
+use crate::annex_b_access_unit::{
+    AnnexBNalHeaderGrammar, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET,
+    H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET, H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET,
+    ParameterSetsFromAnnexBAccessUnit,
+};
 use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
 
@@ -25,13 +30,6 @@ const H264_WIRE_CODEC: &str = "h264";
 /// The bag's `codec` spelling for a track an `hvc1` or `hev1` sample entry
 /// describes.
 const H265_WIRE_CODEC: &str = "h265";
-
-/// ITU-T H.265 §7.4.2.2 `nal_unit_type` for a video parameter set.
-const H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET: u8 = 32;
-/// ITU-T H.265 §7.4.2.2 `nal_unit_type` for a sequence parameter set.
-const H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 33;
-/// ITU-T H.265 §7.4.2.2 `nal_unit_type` for a picture parameter set.
-const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
 
 /// The four-character code occupies bytes 4..8 of every ISOBMFF box, behind
 /// the 32-bit size — ISO/IEC 14496-12 §4.2.
@@ -51,7 +49,9 @@ pub(crate) struct CmafTrackDescriptionFromTheInitSegment {
     pub(crate) media_timescale_hz: u32,
     /// Video only: the wire codec spelling ("h264" / "h265") the sample entry implies.
     pub(crate) wire_codec: Option<String>,
-    /// Video only: the parameter sets a bag's bitstream must carry inline at every sync point.
+    /// Video only: the parameter sets a bag's bitstream must carry inline at
+    /// every sync point, ordered VPS then SPS then PPS — a decoder handed a
+    /// PPS before the SPS it refers to discards it.
     pub(crate) parameter_set_nal_units: Vec<Vec<u8>>,
     /// Video only: the coded extent the visual sample entry states.
     pub(crate) coded_extent: Option<(u32, u32)>,
@@ -74,10 +74,13 @@ pub(crate) fn read_cmaf_init_segment(
             "the moov describes no tracks, so this broadcast configures no decoder".to_owned(),
         ));
     }
-    moov.trak
+    let track_descriptions: Vec<CmafTrackDescriptionFromTheInitSegment> = moov
+        .trak
         .iter()
         .map(describe_the_track_a_moov_entry_carries)
-        .collect()
+        .collect::<Result<_>>()?;
+    refuse_if_two_traks_share_a_track_id(&track_descriptions)?;
+    Ok(track_descriptions)
 }
 
 /// `ftyp` immediately followed by `moov`, and nothing else — the shape the
@@ -122,19 +125,37 @@ fn decode_the_moov_of_the_init_segment(init_segment_bytes: &[u8]) -> Result<Moov
             moov_header.kind
         )));
     }
-    // A zero size field means "to the end of the enclosing container", which
-    // for a self-delimiting MoQ object is the end of the object.
-    let moov_body_byte_count = moov_header.size.unwrap_or(unread_init_segment_bytes.len());
+    // A zero size field is ISO/IEC 14496-12 §4.2's "to the end of the
+    // enclosing container", which is a length this reader would have to take
+    // on faith rather than check anything against.
+    let moov_body_byte_count = moov_header.size.ok_or_else(|| {
+        refuse_as_malformed_cmaf_init_segment(
+            "the moov atom declares a size of 0, meaning it runs to the end of the object, so \
+             nothing states where its last child box ends — an init object whose ftyp must \
+             declare its own size declares its moov's too"
+                .to_owned(),
+        )
+    })?;
     if moov_body_byte_count > unread_init_segment_bytes.len() {
         return Err(refuse_as_malformed_cmaf_init_segment(format!(
             "the object declares a {moov_body_byte_count} byte moov body but carries only {} bytes after the moov header",
             unread_init_segment_bytes.len()
         )));
     }
-    let mut moov_body_bytes = &unread_init_segment_bytes[..moov_body_byte_count];
-    let moov = Moov::decode_body(&mut moov_body_bytes).map_err(|failure| {
+    let mut unread_moov_body_bytes = &unread_init_segment_bytes[..moov_body_byte_count];
+    let moov = Moov::decode_body(&mut unread_moov_body_bytes).map_err(|failure| {
         refuse_as_malformed_cmaf_init_segment(format!("the moov atom does not parse: {failure}"))
     })?;
+    // `Moov::decode_body` stops at the first child it cannot read whole and
+    // reports success on what it got, so a trak truncated inside a moov of the
+    // declared length would otherwise vanish along with its whole track.
+    if !unread_moov_body_bytes.is_empty() {
+        return Err(refuse_as_malformed_cmaf_init_segment(format!(
+            "the moov's last {} bytes are not a child box that could be read whole, so a trak \
+             they describe would be dropped without account",
+            unread_moov_body_bytes.len()
+        )));
+    }
 
     let byte_count_after_the_moov = unread_init_segment_bytes.len() - moov_body_byte_count;
     if byte_count_after_the_moov != 0 {
@@ -145,37 +166,65 @@ fn decode_the_moov_of_the_init_segment(init_segment_bytes: &[u8]) -> Result<Moov
     Ok(moov)
 }
 
+/// A subscriber reaches a track's media as `{track_id}.m4s`, so two traks
+/// sharing an id name one MoQ track between them.
+fn refuse_if_two_traks_share_a_track_id(
+    track_descriptions: &[CmafTrackDescriptionFromTheInitSegment],
+) -> Result<()> {
+    let mut track_ids_already_described: Vec<u32> = Vec::with_capacity(track_descriptions.len());
+    for track_description in track_descriptions {
+        if track_ids_already_described.contains(&track_description.track_id) {
+            return Err(refuse_as_malformed_cmaf_init_segment(format!(
+                "two traks both state track_id {track_id}, so the media track named \
+                 `{track_id}.m4s` describes neither of them",
+                track_id = track_description.track_id
+            )));
+        }
+        track_ids_already_described.push(track_description.track_id);
+    }
+    Ok(())
+}
+
 fn describe_the_track_a_moov_entry_carries(
     trak: &Trak,
 ) -> Result<CmafTrackDescriptionFromTheInitSegment> {
     let track_id = trak.tkhd.track_id;
+    if track_id == 0 {
+        return Err(refuse_as_malformed_cmaf_init_segment(
+            "a trak states track_id 0, which ISO/IEC 14496-12 §8.3.2.3 reserves, so no media \
+             track this subscriber could subscribe to is named by it"
+                .to_owned(),
+        ));
+    }
     let media_timescale_hz = trak.mdia.mdhd.timescale;
+    if media_timescale_hz == 0 {
+        return Err(refuse_as_malformed_cmaf_init_segment(format!(
+            "track {track_id} states an mdhd timescale of 0, which is not a clock: no decode \
+             time or duration its fragments carry could be read as a time"
+        )));
+    }
     let sample_entry = the_one_sample_entry_of_the_track(trak, track_id)?;
 
     match sample_entry {
-        Codec::Avc1(avc1) => {
-            let mut parameter_set_nal_units = avc1.avcc.sequence_parameter_sets.clone();
-            parameter_set_nal_units.extend(avc1.avcc.picture_parameter_sets.iter().cloned());
-            describe_a_video_track(
-                track_id,
-                media_timescale_hz,
-                H264_WIRE_CODEC,
-                parameter_set_nal_units,
-                &avc1.visual,
-            )
-        }
+        Codec::Avc1(avc1) => describe_a_video_track(
+            track_id,
+            media_timescale_hz,
+            AnnexBNalHeaderGrammar::H264,
+            parameter_sets_of_an_avc_configuration_record(&avc1.avcc),
+            &avc1.visual,
+        ),
         Codec::Hvc1(hvc1) => describe_a_video_track(
             track_id,
             media_timescale_hz,
-            H265_WIRE_CODEC,
-            h265_parameter_set_nal_units_in_decoder_order(&hvc1.hvcc),
+            AnnexBNalHeaderGrammar::H265,
+            parameter_sets_of_an_hevc_configuration_record(&hvc1.hvcc),
             &hvc1.visual,
         ),
         Codec::Hev1(hev1) => describe_a_video_track(
             track_id,
             media_timescale_hz,
-            H265_WIRE_CODEC,
-            h265_parameter_set_nal_units_in_decoder_order(&hev1.hvcc),
+            AnnexBNalHeaderGrammar::H265,
+            parameter_sets_of_an_hevc_configuration_record(&hev1.hvcc),
             &hev1.visual,
         ),
         Codec::Opus(opus) => Ok(CmafTrackDescriptionFromTheInitSegment {
@@ -192,28 +241,36 @@ fn describe_the_track_a_moov_entry_carries(
             sample_rate: Some(opus.dops.input_sample_rate),
             pre_skip: Some(u32::from(opus.dops.pre_skip)),
         }),
-        unreadable_sample_entry => Err(refuse_as_malformed_cmaf_init_segment(format!(
-            "track {track_id} is described by a `{}` sample entry, which this subscriber does not \
-             read: it reads `avc1` for H.264, `hvc1` and `hev1` for H.265, and `Opus`",
-            four_character_code_of_sample_entry(unreadable_sample_entry)
-        ))),
+        unreadable_sample_entry => {
+            let four_character_code = four_character_code_of_sample_entry(unreadable_sample_entry)?;
+            Err(refuse_as_malformed_cmaf_init_segment(format!(
+                "track {track_id} is described by a `{four_character_code}` sample entry, which \
+                 this subscriber does not read: it reads `avc1` for H.264, `hvc1` and `hev1` for \
+                 H.265, and `Opus`"
+            )))
+        }
     }
 }
 
 fn describe_a_video_track(
     track_id: u32,
     media_timescale_hz: u32,
-    wire_codec: &str,
-    parameter_set_nal_units: Vec<Vec<u8>>,
+    nal_header_grammar: AnnexBNalHeaderGrammar,
+    parameter_sets: ParameterSetsFromAnnexBAccessUnit,
     visual: &Visual,
 ) -> Result<CmafTrackDescriptionFromTheInitSegment> {
-    if parameter_set_nal_units.is_empty() {
+    let wire_codec = wire_codec_spelling_of_nal_header_grammar(nal_header_grammar);
+    if !parameter_sets.is_complete_for(nal_header_grammar) {
         return Err(refuse_as_malformed_cmaf_init_segment(format!(
-            "track {track_id} is a {wire_codec} track whose sample entry carries no parameter \
-             sets, and `avc1`/`hvc1` forbid in-band sets — so nothing on this track can ever be \
-             decoded"
+            "track {track_id} is a {wire_codec} track whose sample entry carries no {}, and \
+             `avc1`/`hvc1` forbid in-band parameter sets — so nothing on this track can ever be \
+             decoded",
+            missing_parameter_set_kinds_of(&parameter_sets, nal_header_grammar)
         )));
     }
+    let mut parameter_set_nal_units = parameter_sets.video_parameter_set_nal_units;
+    parameter_set_nal_units.extend(parameter_sets.sequence_parameter_set_nal_units);
+    parameter_set_nal_units.extend(parameter_sets.picture_parameter_set_nal_units);
     Ok(CmafTrackDescriptionFromTheInitSegment {
         track_id,
         track_medium: TrackMedium::Video,
@@ -225,6 +282,70 @@ fn describe_a_video_track(
         sample_rate: None,
         pre_skip: None,
     })
+}
+
+/// The bag's `codec` spelling for the elementary stream a NAL header grammar
+/// reads.
+fn wire_codec_spelling_of_nal_header_grammar(
+    nal_header_grammar: AnnexBNalHeaderGrammar,
+) -> &'static str {
+    match nal_header_grammar {
+        AnnexBNalHeaderGrammar::H264 => H264_WIRE_CODEC,
+        AnnexBNalHeaderGrammar::H265 => H265_WIRE_CODEC,
+    }
+}
+
+/// Which of the sets a decoder needs are absent, spelled for a refusal.
+fn missing_parameter_set_kinds_of(
+    parameter_sets: &ParameterSetsFromAnnexBAccessUnit,
+    nal_header_grammar: AnnexBNalHeaderGrammar,
+) -> String {
+    let mut missing_parameter_set_kinds: Vec<&str> = Vec::new();
+    if nal_header_grammar == AnnexBNalHeaderGrammar::H265
+        && parameter_sets.video_parameter_set_nal_units.is_empty()
+    {
+        missing_parameter_set_kinds.push("video parameter set");
+    }
+    if parameter_sets.sequence_parameter_set_nal_units.is_empty() {
+        missing_parameter_set_kinds.push("sequence parameter set");
+    }
+    if parameter_sets.picture_parameter_set_nal_units.is_empty() {
+        missing_parameter_set_kinds.push("picture parameter set");
+    }
+    missing_parameter_set_kinds.join(" and no ")
+}
+
+fn parameter_sets_of_an_avc_configuration_record(avcc: &Avcc) -> ParameterSetsFromAnnexBAccessUnit {
+    ParameterSetsFromAnnexBAccessUnit {
+        video_parameter_set_nal_units: Vec::new(),
+        sequence_parameter_set_nal_units: avcc.sequence_parameter_sets.clone(),
+        picture_parameter_set_nal_units: avcc.picture_parameter_sets.clone(),
+    }
+}
+
+/// `hvcC` also carries prefix-SEI and other arrays, which configure no decoder
+/// and are not what the publisher lifted out of the bitstream, so only the
+/// three parameter-set kinds come back.
+fn parameter_sets_of_an_hevc_configuration_record(
+    hvcc: &Hvcc,
+) -> ParameterSetsFromAnnexBAccessUnit {
+    let mut parameter_sets = ParameterSetsFromAnnexBAccessUnit::default();
+    for array in &hvcc.arrays {
+        let pile_for_this_nal_unit_type = match array.nal_unit_type {
+            H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET => {
+                &mut parameter_sets.video_parameter_set_nal_units
+            }
+            H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET => {
+                &mut parameter_sets.sequence_parameter_set_nal_units
+            }
+            H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET => {
+                &mut parameter_sets.picture_parameter_set_nal_units
+            }
+            _ => continue,
+        };
+        pile_for_this_nal_unit_type.extend(array.nalus.iter().cloned());
+    }
+    parameter_sets
 }
 
 fn the_one_sample_entry_of_the_track(trak: &Trak, track_id: u32) -> Result<&Codec> {
@@ -239,41 +360,24 @@ fn the_one_sample_entry_of_the_track(trak: &Trak, track_id: u32) -> Result<&Code
     }
 }
 
-/// Every NAL unit `hvcC` carries, ordered VPS then SPS then PPS: a decoder
-/// handed a PPS before the SPS it refers to discards it, and these are
-/// prepended to a bag's bitstream in the order they come back.
-fn h265_parameter_set_nal_units_in_decoder_order(hvcc: &Hvcc) -> Vec<Vec<u8>> {
-    let mut arrays_in_decoder_order: Vec<&HvcCArray> = hvcc.arrays.iter().collect();
-    arrays_in_decoder_order
-        .sort_by_key(|array| decoder_order_rank_of_h265_nal_unit_type(array.nal_unit_type));
-    arrays_in_decoder_order
-        .into_iter()
-        .flat_map(|array| array.nalus.iter().cloned())
-        .collect()
-}
-
-fn decoder_order_rank_of_h265_nal_unit_type(nal_unit_type: u8) -> u8 {
-    match nal_unit_type {
-        H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET => 0,
-        H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET => 1,
-        H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET => 2,
-        _ => 3,
-    }
-}
-
 /// The code a sample entry writes itself as. `mp4_atom::Codec` exposes its
 /// variant's `FourCC` no other way, so an entry is re-encoded to be named.
-fn four_character_code_of_sample_entry(sample_entry: &Codec) -> String {
+fn four_character_code_of_sample_entry(sample_entry: &Codec) -> Result<String> {
     if let Codec::Unknown(four_character_code) = sample_entry {
-        return four_character_code.to_string();
+        return Ok(four_character_code.to_string());
     }
     let mut encoded_sample_entry: Vec<u8> = Vec::new();
-    match sample_entry.encode(&mut encoded_sample_entry) {
-        Ok(()) if encoded_sample_entry.len() >= BOX_HEADER_BYTES => {
-            String::from_utf8_lossy(&encoded_sample_entry[BOX_KIND_BYTE_RANGE]).into_owned()
-        }
-        _ => "unnamed".to_owned(),
-    }
+    sample_entry
+        .encode(&mut encoded_sample_entry)
+        .map_err(|failure| {
+            refuse_as_malformed_cmaf_init_segment(format!(
+                "a sample entry this subscriber does not read could not be re-encoded to be \
+                 named: {failure}"
+            ))
+        })?;
+    // Every box writes its 32-bit size then its four-character code before any
+    // body, so a sample entry that encoded at all carries both.
+    Ok(String::from_utf8_lossy(&encoded_sample_entry[BOX_KIND_BYTE_RANGE]).into_owned())
 }
 
 fn refuse_as_malformed_cmaf_init_segment(what: String) -> MoqExtensionError {
@@ -286,7 +390,6 @@ fn refuse_as_malformed_cmaf_init_segment(what: String) -> MoqExtensionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annex_b_access_unit::ParameterSetsFromAnnexBAccessUnit;
     use crate::cmaf_init_segment::{
         CmafTrackDescriptionForTheInitSegment, build_cmaf_init_segment,
     };
@@ -294,13 +397,17 @@ mod tests {
         CmafTrackSampleEntry, build_opus_sample_entry, build_video_sample_entry,
     };
     use crate::cmaf_track_timeline::{OPUS_TRACK_TIMESCALE_HZ, VIDEO_TRACK_TIMESCALE_HZ};
-    use mp4_atom::{Avc1, Avcc, Hvc1, Vp08};
+    use mp4_atom::{Avc1, Hvc1, HvcCArray, Vp08};
 
     /// What this tree's Opus encoder reports as its own lookahead.
     const THE_ENCODERS_PRE_SKIP: u32 = 312;
 
     const A_SEQUENCE_PARAMETER_SET: [u8; 8] = [0x67, 0x42, 0xC0, 0x1F, 0xDA, 0x02, 0xD0, 0x49];
     const A_PICTURE_PARAMETER_SET: [u8; 4] = [0x68, 0xCE, 0x3C, 0x80];
+
+    const AN_H265_VIDEO_PARAMETER_SET: [u8; 4] = [0x40, 0x01, 0x0C, 0x01];
+    const AN_H265_SEQUENCE_PARAMETER_SET: [u8; 4] = [0x42, 0x01, 0x01, 0x60];
+    const AN_H265_PICTURE_PARAMETER_SET: [u8; 4] = [0x44, 0x01, 0xC1, 0x72];
 
     fn h264_parameter_sets() -> ParameterSetsFromAnnexBAccessUnit {
         ParameterSetsFromAnnexBAccessUnit {
@@ -311,13 +418,20 @@ mod tests {
     }
 
     fn an_h264_track(track_id: u32) -> CmafTrackDescriptionForTheInitSegment {
+        an_h264_track_on_timescale(track_id, VIDEO_TRACK_TIMESCALE_HZ)
+    }
+
+    fn an_h264_track_on_timescale(
+        track_id: u32,
+        media_timescale_hz: u32,
+    ) -> CmafTrackDescriptionForTheInitSegment {
         let entry = build_video_sample_entry("h264", &h264_parameter_sets(), 320, 180)
             .expect("the fixture parameter sets describe an H.264 track");
         CmafTrackDescriptionForTheInitSegment {
             track_id,
             inbound_link_name: "encoder/encoded_video".to_owned(),
             cmaf_track_sample_entry: entry.cmaf_track_sample_entry,
-            media_timescale_hz: VIDEO_TRACK_TIMESCALE_HZ,
+            media_timescale_hz,
             coded_extent: Some((320, 180)),
         }
     }
@@ -344,6 +458,20 @@ mod tests {
         }
     }
 
+    fn an_hvcc_carrying(arrays: Vec<HvcCArray>) -> Hvcc {
+        let mut hvcc = Hvcc::new();
+        hvcc.arrays = arrays;
+        hvcc
+    }
+
+    fn an_hvcc_array(nal_unit_type: u8, nal_unit: &[u8]) -> HvcCArray {
+        HvcCArray {
+            completeness: true,
+            nal_unit_type,
+            nalus: vec![nal_unit.to_vec()],
+        }
+    }
+
     fn a_track_described_by(
         track_id: u32,
         sample_entry: CmafTrackSampleEntry,
@@ -361,6 +489,55 @@ mod tests {
         build_cmaf_init_segment(tracks)
             .expect("the fixture tracks describe a broadcast")
             .to_vec()
+    }
+
+    /// Where the moov box starts: right past the ftyp, whose 32-bit size is
+    /// the object's first four bytes.
+    fn moov_box_offset_of(init_segment_bytes: &[u8]) -> usize {
+        let mut ftyp_box_size_field = [0u8; 4];
+        ftyp_box_size_field.copy_from_slice(&init_segment_bytes[..4]);
+        u32::from_be_bytes(ftyp_box_size_field) as usize
+    }
+
+    /// Cut bytes off the tail of the object and restate the moov's size to
+    /// match, so what is short is the last trak and not the moov.
+    fn with_the_last_trak_truncated_by(
+        init_segment_bytes: &[u8],
+        truncated_byte_count: usize,
+    ) -> Vec<u8> {
+        let moov_box_offset = moov_box_offset_of(init_segment_bytes);
+        let mut truncated_init_segment_bytes =
+            init_segment_bytes[..init_segment_bytes.len() - truncated_byte_count].to_vec();
+        let moov_box_byte_count = (truncated_init_segment_bytes.len() - moov_box_offset) as u32;
+        truncated_init_segment_bytes[moov_box_offset..moov_box_offset + 4]
+            .copy_from_slice(&moov_box_byte_count.to_be_bytes());
+        truncated_init_segment_bytes
+    }
+
+    fn with_the_moov_size_field_zeroed(init_segment_bytes: &[u8]) -> Vec<u8> {
+        let moov_box_offset = moov_box_offset_of(init_segment_bytes);
+        let mut zeroed_init_segment_bytes = init_segment_bytes.to_vec();
+        zeroed_init_segment_bytes[moov_box_offset..moov_box_offset + 4]
+            .copy_from_slice(&0u32.to_be_bytes());
+        zeroed_init_segment_bytes
+    }
+
+    /// Overwrite the sample entry's four-character code in place, which is the
+    /// only way to state a code no `mp4-atom` variant covers — encoding a
+    /// `Codec::Unknown` writes the bare code and no box around it.
+    fn with_the_avc1_sample_entry_kind_replaced(
+        init_segment_bytes: &[u8],
+        replacement_four_character_code: &[u8; 4],
+    ) -> Vec<u8> {
+        let mut replaced_init_segment_bytes = init_segment_bytes.to_vec();
+        let sample_entry_kind_offset = replaced_init_segment_bytes
+            .windows(4)
+            .position(|window| window == b"avc1")
+            .expect("the fixture track is described by an avc1 sample entry");
+        replaced_init_segment_bytes
+            [sample_entry_kind_offset..sample_entry_kind_offset + BOX_KIND_BYTE_RANGE.len()]
+            .copy_from_slice(replacement_four_character_code);
+        replaced_init_segment_bytes
     }
 
     /// Re-encodes an init segment with the first track's `stsd` replaced,
@@ -402,33 +579,25 @@ mod tests {
 
     #[test]
     fn an_h265_tracks_parameter_sets_come_back_as_vps_then_sps_then_pps() {
-        let video_parameter_set = vec![0x40, 0x01, 0x0C, 0x01];
-        let sequence_parameter_set = vec![0x42, 0x01, 0x01, 0x60];
-        let picture_parameter_set = vec![0x44, 0x01, 0xC1, 0x72];
-        let mut hvcc = Hvcc::new();
         // Listed picture-set-first, which is a legal `hvcC`: the arrays are a
         // set, and the order a decoder needs is not the order a writer used.
-        hvcc.arrays = vec![
-            HvcCArray {
-                completeness: true,
-                nal_unit_type: H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET,
-                nalus: vec![picture_parameter_set.clone()],
-            },
-            HvcCArray {
-                completeness: true,
-                nal_unit_type: H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET,
-                nalus: vec![video_parameter_set.clone()],
-            },
-            HvcCArray {
-                completeness: true,
-                nal_unit_type: H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET,
-                nalus: vec![sequence_parameter_set.clone()],
-            },
-        ];
         let scrambled_h265_track = a_track_described_by(
             1,
             CmafTrackSampleEntry::Video(Codec::Hvc1(Hvc1 {
-                hvcc,
+                hvcc: an_hvcc_carrying(vec![
+                    an_hvcc_array(
+                        H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET,
+                        &AN_H265_PICTURE_PARAMETER_SET,
+                    ),
+                    an_hvcc_array(
+                        H265_NAL_UNIT_TYPE_VIDEO_PARAMETER_SET,
+                        &AN_H265_VIDEO_PARAMETER_SET,
+                    ),
+                    an_hvcc_array(
+                        H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET,
+                        &AN_H265_SEQUENCE_PARAMETER_SET,
+                    ),
+                ]),
                 ..Default::default()
             })),
         );
@@ -439,9 +608,9 @@ mod tests {
         assert_eq!(
             tracks[0].parameter_set_nal_units,
             vec![
-                video_parameter_set,
-                sequence_parameter_set,
-                picture_parameter_set
+                AN_H265_VIDEO_PARAMETER_SET.to_vec(),
+                AN_H265_SEQUENCE_PARAMETER_SET.to_vec(),
+                AN_H265_PICTURE_PARAMETER_SET.to_vec()
             ]
         );
         assert_eq!(tracks[0].wire_codec.as_deref(), Some("h265"));
@@ -515,6 +684,45 @@ mod tests {
     }
 
     #[test]
+    fn a_moov_whose_last_trak_is_cut_short_is_refused_rather_than_read_back_one_track_fewer() {
+        let two_tracks = init_segment_bytes_of(&[an_h264_track(1), an_opus_track(2)]);
+
+        let refusal = read_cmaf_init_segment(&with_the_last_trak_truncated_by(&two_tracks, 16))
+            .expect_err("a track the reader cannot see is a track the subscriber never gets");
+
+        assert!(
+            refusal.to_string().contains("not a child box"),
+            "the refusal accounts for the bytes no trak could be read from: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_moov_declaring_a_size_of_zero_is_refused_by_name() {
+        let init_segment_bytes =
+            with_the_moov_size_field_zeroed(&init_segment_bytes_of(&[an_h264_track(1)]));
+
+        let refusal = read_cmaf_init_segment(&init_segment_bytes)
+            .expect_err("a moov running to the end of the object states no end for its children");
+
+        assert!(refusal.to_string().contains("size of 0"), "{refusal}");
+    }
+
+    #[test]
+    fn an_object_carrying_bytes_after_a_size_zero_moov_is_still_refused() {
+        let mut init_segment_bytes =
+            with_the_moov_size_field_zeroed(&init_segment_bytes_of(&[an_h264_track(1)]));
+        init_segment_bytes.extend_from_slice(b"\0\0\0\x08free");
+
+        let refusal = read_cmaf_init_segment(&init_segment_bytes)
+            .expect_err("an init segment is an ftyp and a moov and nothing else");
+
+        assert!(
+            refusal.to_string().contains("size of 0"),
+            "a size-0 moov must not swallow the free box that follows it: {refusal}"
+        );
+    }
+
+    #[test]
     fn an_object_that_does_not_open_with_an_ftyp_is_refused_by_name() {
         let mut init_segment_bytes = init_segment_bytes_of(&[an_h264_track(1)]);
         init_segment_bytes[BOX_KIND_BYTE_RANGE].copy_from_slice(b"styp");
@@ -581,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn a_video_track_carrying_no_parameter_sets_at_all_is_refused_by_name() {
+    fn a_video_track_carrying_no_parameter_sets_at_all_is_refused_naming_both_kinds() {
         let track_with_an_empty_configuration_record = a_track_described_by(
             2,
             CmafTrackSampleEntry::Video(Codec::Avc1(Avc1 {
@@ -597,7 +805,101 @@ mod tests {
 
         assert!(
             refusal.to_string().contains("track 2")
-                && refusal.to_string().contains("no parameter sets"),
+                && refusal.to_string().contains("sequence parameter set")
+                && refusal.to_string().contains("picture parameter set"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn an_h264_track_carrying_a_picture_parameter_set_but_no_sequence_one_is_refused_by_name() {
+        let track_with_only_a_picture_parameter_set = a_track_described_by(
+            2,
+            CmafTrackSampleEntry::Video(Codec::Avc1(Avc1 {
+                avcc: Avcc {
+                    picture_parameter_sets: vec![A_PICTURE_PARAMETER_SET.to_vec()],
+                    ..an_avcc_a_writer_can_encode()
+                },
+                ..Default::default()
+            })),
+        );
+
+        let refusal = read_cmaf_init_segment(&init_segment_bytes_of(&[
+            track_with_only_a_picture_parameter_set,
+        ]))
+        .expect_err("a PPS without the SPS it refers to configures no decoder");
+
+        assert!(
+            refusal.to_string().contains("no sequence parameter set"),
+            "the refusal names what is missing: {refusal}"
+        );
+        assert!(
+            !refusal.to_string().contains("no picture parameter set"),
+            "the PPS it did carry is not missing: {refusal}"
+        );
+    }
+
+    #[test]
+    fn an_h265_track_carrying_an_sps_and_a_pps_but_no_video_parameter_set_is_refused_by_name() {
+        let track_without_a_video_parameter_set = a_track_described_by(
+            2,
+            CmafTrackSampleEntry::Video(Codec::Hvc1(Hvc1 {
+                hvcc: an_hvcc_carrying(vec![
+                    an_hvcc_array(
+                        H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET,
+                        &AN_H265_SEQUENCE_PARAMETER_SET,
+                    ),
+                    an_hvcc_array(
+                        H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET,
+                        &AN_H265_PICTURE_PARAMETER_SET,
+                    ),
+                ]),
+                ..Default::default()
+            })),
+        );
+
+        let refusal = read_cmaf_init_segment(&init_segment_bytes_of(&[
+            track_without_a_video_parameter_set,
+        ]))
+        .expect_err("H.265 needs a VPS beside the SPS and PPS");
+
+        assert!(
+            refusal.to_string().contains("no video parameter set"),
+            "the refusal names what is missing: {refusal}"
+        );
+    }
+
+    #[test]
+    fn two_traks_stating_the_same_track_id_are_refused_naming_the_id_they_share() {
+        let both_called_track_one = init_segment_bytes_of(&[an_h264_track(1), an_opus_track(1)]);
+
+        let refusal = read_cmaf_init_segment(&both_called_track_one)
+            .expect_err("a subscriber asks for `{track_id}.m4s` and would get one of the two");
+
+        assert!(
+            refusal.to_string().contains("track_id 1"),
+            "the refusal names the shared id: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_trak_stating_track_id_zero_is_refused_by_name() {
+        let refusal = read_cmaf_init_segment(&init_segment_bytes_of(&[an_h264_track(0)]))
+            .expect_err("ISO/IEC 14496-12 §8.3.2.3 reserves track id 0");
+
+        assert!(refusal.to_string().contains("track_id 0"), "{refusal}");
+    }
+
+    #[test]
+    fn a_track_whose_mdhd_states_a_timescale_of_zero_is_refused_by_name() {
+        let track_on_no_clock_at_all = an_h264_track_on_timescale(1, 0);
+
+        let refusal = read_cmaf_init_segment(&init_segment_bytes_of(&[track_on_no_clock_at_all]))
+            .expect_err("no decode time can be read off a zero timescale");
+
+        assert!(
+            refusal.to_string().contains("track 1")
+                && refusal.to_string().contains("timescale of 0"),
             "{refusal}"
         );
     }
@@ -615,6 +917,22 @@ mod tests {
             "the refusal names the track and the entry: {refusal}"
         );
         assert!(refusal.to_string().contains("avc1"), "{refusal}");
+    }
+
+    #[test]
+    fn a_track_described_by_a_four_character_code_no_reader_recognises_is_refused_naming_it() {
+        let init_segment_bytes = with_the_avc1_sample_entry_kind_replaced(
+            &init_segment_bytes_of(&[an_h264_track(6)]),
+            b"zzzz",
+        );
+
+        let refusal = read_cmaf_init_segment(&init_segment_bytes)
+            .expect_err("an unrecognised sample entry configures no decoder");
+
+        assert!(
+            refusal.to_string().contains("track 6") && refusal.to_string().contains("zzzz"),
+            "the refusal names the code it could not read: {refusal}"
+        );
     }
 
     #[test]

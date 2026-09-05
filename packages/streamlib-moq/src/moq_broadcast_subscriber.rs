@@ -18,7 +18,7 @@ use std::time::Duration;
 use crate::annex_b_access_unit::annex_b_access_unit_from_length_prefixed_sample;
 use crate::cmaf_fragment::{CmafFragmentSample, read_cmaf_fragment};
 use crate::cmaf_init_segment_reader::read_cmaf_init_segment;
-use crate::cmaf_track_timeline::{OPUS_TRACK_TIMESCALE_HZ, rescale_nanoseconds};
+use crate::cmaf_track_timeline::OPUS_TRACK_TIMESCALE_HZ;
 use crate::encoded_media_sample::{
     EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit, TrackMedium,
 };
@@ -168,18 +168,23 @@ impl MoqBroadcastSubscriber {
     }
 
     /// Drop the connection. Whatever arrived and was never read goes with it.
+    ///
+    /// The subscriber stays reusable: a later `connect` reads a whole new
+    /// broadcast, whose init segment and whose track epochs are its own.
     pub(crate) fn close(&mut self) {
         if let Some(subscribing_session) = self.subscribing_session.take() {
             subscribing_session.close();
         }
-        let unread = self.samples_awaiting_the_reader.len();
-        if unread > 0 {
-            tracing::debug!(
-                unread,
-                "the subscriber closed with samples nothing had read yet"
+        let unread_decoded_bags = self.samples_awaiting_the_reader.len();
+        if unread_decoded_bags > 0 {
+            tracing::info!(
+                unread_decoded_bags,
+                "the subscriber closed with bags it had decoded and nothing had read yet"
             );
         }
         self.samples_awaiting_the_reader.clear();
+        self.received_object_router
+            .forget_what_the_closed_broadcast_described();
     }
 }
 
@@ -199,7 +204,14 @@ struct ReceivedMoqObjectToEncodedSampleRouter {
     media_objects_dropped_before_the_init_segment_arrived: u64,
     the_pre_init_drop_has_been_reported: bool,
     track_names_reported_as_unnamed: BTreeSet<String>,
+    the_stray_track_name_cap_has_been_reported: bool,
 }
+
+/// How many distinct stray track names one subscriber holds to keep its
+/// reporting once-per-track. Bounded because the relay chooses the names: a
+/// far end misrouting objects under freshly minted names would otherwise grow
+/// this set for as long as the subscription lives.
+const MOST_STRAY_TRACK_NAMES_HELD_TO_REPORT_EACH_ONCE: usize = 64;
 
 impl ReceivedMoqObjectToEncodedSampleRouter {
     fn of(
@@ -217,7 +229,19 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
             media_objects_dropped_before_the_init_segment_arrived: 0,
             the_pre_init_drop_has_been_reported: false,
             track_names_reported_as_unnamed: BTreeSet::new(),
+            the_stray_track_name_cap_has_been_reported: false,
         }
+    }
+
+    /// Everything reconstitution carries across objects — the descriptions, the
+    /// ordering counters, the per-track stamp anchors — belongs to one
+    /// broadcast, so a reconnection starts from nothing.
+    fn forget_what_the_closed_broadcast_described(&mut self) {
+        *self = Self::of(
+            self.container_format,
+            self.video_track_name.clone(),
+            self.audio_track_name.clone(),
+        );
     }
 
     /// The bags one object carries: none for an object that is not a sample.
@@ -437,10 +461,8 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
 
         let mut bags = Vec::with_capacity(fragment_samples.len());
         for fragment_sample in fragment_samples {
-            let sample_count = opus_samples_of_track_ticks(
-                u64::from(fragment_sample.duration),
-                audio.media_timescale_hz,
-            )?;
+            let sample_count =
+                opus_sample_count_of_the_packets_table_of_contents(&fragment_sample.sample_bytes)?;
             let ordering_pair = audio.ordering_pair_counter.account_reconstituted_bag(true);
             let timestamp_ns = audio
                 .stamp_anchor
@@ -479,6 +501,21 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
     /// Ignore the object, and say so once per track rather than once per
     /// object: a relay that misroutes one object misroutes all of them.
     fn report_an_object_on_a_track_this_subscriber_did_not_name(&mut self, track_name: &str) {
+        if self.track_names_reported_as_unnamed.len()
+            >= MOST_STRAY_TRACK_NAMES_HELD_TO_REPORT_EACH_ONCE
+            && !self.track_names_reported_as_unnamed.contains(track_name)
+        {
+            if !self.the_stray_track_name_cap_has_been_reported {
+                self.the_stray_track_name_cap_has_been_reported = true;
+                tracing::warn!(
+                    track = %track_name,
+                    named_so_far = MOST_STRAY_TRACK_NAMES_HELD_TO_REPORT_EACH_ONCE,
+                    "that many distinct track names this subscriber did not name have arrived; \
+                     later ones are still ignored, but no longer named or held"
+                );
+            }
+            return;
+        }
         if self
             .track_names_reported_as_unnamed
             .insert(track_name.to_owned())
@@ -584,22 +621,96 @@ fn nanoseconds_of_track_ticks(ticks: u64, media_timescale_hz: NonZeroU32) -> i64
     i64::try_from(nanoseconds).unwrap_or(i64::MAX)
 }
 
-/// A fragment's sample duration as the Opus sample count the bag states.
+/// One millisecond of Opus's own clock, the rate RFC 6716 §2 states every
+/// frame duration against whatever bandwidth the frame was coded at.
+const OPUS_SAMPLES_PER_MILLISECOND: u32 = OPUS_TRACK_TIMESCALE_HZ / 1_000;
+
+/// RFC 6716 §3.2.5: a code-3 packet states its frame count in the low six bits
+/// of the byte after the TOC.
+const OPUS_CODE_THREE_FRAME_COUNT_MASK: u8 = 0b0011_1111;
+
+/// The samples one Opus packet decodes to, read from the packet itself.
 ///
-/// A track written on Opus's own 48 kHz clock makes this the identity, which is
-/// what the publisher writes; the rescale is here for a track that was not.
-fn opus_samples_of_track_ticks(ticks: u64, media_timescale_hz: NonZeroU32) -> Result<u32> {
-    let samples = rescale_nanoseconds(
-        nanoseconds_of_track_ticks(ticks, media_timescale_hz),
-        OPUS_TRACK_TIMESCALE_HZ,
-    );
-    u32::try_from(samples).map_err(|_| MoqExtensionError::MalformedObject {
-        container: CMAF_PACKAGING,
-        what: format!(
-            "a fragment claims a duration of {ticks} ticks at {media_timescale_hz} Hz, which is \
-             {samples} Opus samples — more than an encoded-audio bag's `sample_count` states"
-        ),
-    })
+/// The only authority a subscriber has: a CMAF fragment's `duration` is
+/// whatever the publisher wrote beside the sample, and this wheel's own
+/// publisher writes the gap to the previous bag's stamp there — a nominal
+/// thirtieth of a second on a track's first fragment.
+fn opus_sample_count_of_the_packets_table_of_contents(opus_packet: &[u8]) -> Result<u32> {
+    let Some(&table_of_contents_byte) = opus_packet.first() else {
+        return Err(MoqExtensionError::MalformedObject {
+            container: CMAF_PACKAGING,
+            what: "an Opus packet of zero bytes arrived, and RFC 6716 §3.1 gives every packet a \
+                   TOC byte stating its frame duration and its frame count"
+                .to_owned(),
+        });
+    };
+    // RFC 6716 §3.1: `config` in the top five bits, `s` in the next, `c` in the
+    // low two.
+    let frame_count = match table_of_contents_byte & 0b11 {
+        0 => 1,
+        1 | 2 => 2,
+        _ => {
+            let Some(&frame_count_byte) = opus_packet.get(1) else {
+                return Err(MoqExtensionError::MalformedObject {
+                    container: CMAF_PACKAGING,
+                    what: "an Opus packet states frame-count code 3 and then ends, so the byte \
+                           RFC 6716 §3.2.5 puts its frame count in is not there"
+                        .to_owned(),
+                });
+            };
+            match u32::from(frame_count_byte & OPUS_CODE_THREE_FRAME_COUNT_MASK) {
+                0 => {
+                    return Err(MoqExtensionError::MalformedObject {
+                        container: CMAF_PACKAGING,
+                        what: "an Opus packet states frame-count code 3 and then a frame count of \
+                               zero, which decodes to no audio at all"
+                            .to_owned(),
+                    });
+                }
+                stated_frame_count => stated_frame_count,
+            }
+        }
+    };
+    let tenths_of_a_millisecond =
+        opus_frame_duration_in_tenths_of_a_millisecond_of_a_toc_config(table_of_contents_byte >> 3);
+    // RFC 6716 §3.4 caps a packet at 120 ms. A code-3 packet states its own
+    // frame count in a following byte, so an out-of-range count would
+    // otherwise turn into a sample count no encoder could have produced —
+    // which a decoder downstream would read as a gap.
+    let total_tenths_of_a_millisecond = frame_count * tenths_of_a_millisecond;
+    if total_tenths_of_a_millisecond > LONGEST_OPUS_PACKET_IN_TENTHS_OF_A_MILLISECOND {
+        return Err(MoqExtensionError::MalformedObject {
+            container: CMAF_PACKAGING,
+            what: format!(
+                "the opus packet states {frame_count} frames of {}.{} ms, which is longer than \
+                 the 120 ms RFC 6716 §3.4 allows one packet to carry",
+                tenths_of_a_millisecond / 10,
+                tenths_of_a_millisecond % 10
+            ),
+        });
+    }
+    Ok(total_tenths_of_a_millisecond * OPUS_SAMPLES_PER_MILLISECOND / 10)
+}
+
+/// RFC 6716 §3.4: no Opus packet carries more than 120 ms of audio.
+const LONGEST_OPUS_PACKET_IN_TENTHS_OF_A_MILLISECOND: u32 = 1_200;
+
+/// What a TOC byte's `config` says one of the packet's frames lasts.
+///
+/// RFC 6716 §3.1: `config` 0..=11 is SILK at 10, 20, 40 or 60 ms, 12..=15 is
+/// hybrid at 10 or 20 ms, and 16..=31 is CELT at 2.5, 5, 10 or 20 ms. Tenths of
+/// a millisecond, because the shortest CELT frame is not a whole one.
+fn opus_frame_duration_in_tenths_of_a_millisecond_of_a_toc_config(
+    table_of_contents_config: u8,
+) -> u32 {
+    const SILK_FRAME_DURATIONS: [u32; 4] = [100, 200, 400, 600];
+    const HYBRID_FRAME_DURATIONS: [u32; 2] = [100, 200];
+    const CELT_FRAME_DURATIONS: [u32; 4] = [25, 50, 100, 200];
+    match table_of_contents_config {
+        0..=11 => SILK_FRAME_DURATIONS[usize::from(table_of_contents_config % 4)],
+        12..=15 => HYBRID_FRAME_DURATIONS[usize::from(table_of_contents_config % 2)],
+        _ => CELT_FRAME_DURATIONS[usize::from(table_of_contents_config % 4)],
+    }
 }
 
 #[cfg(test)]
@@ -616,7 +727,7 @@ mod tests {
         CmafTrackDescriptionForTheInitSegment, build_cmaf_init_segment,
     };
     use crate::cmaf_sample_entry::{build_opus_sample_entry, build_video_sample_entry};
-    use crate::cmaf_track_timeline::VIDEO_TRACK_TIMESCALE_HZ;
+    use crate::cmaf_track_timeline::{CmafTrackTimeline, VIDEO_TRACK_TIMESCALE_HZ};
     use crate::moq_broadcast_catalog::media_track_name;
     use crate::streamlib_bag_object::encode_object;
 
@@ -672,7 +783,17 @@ mod tests {
         annex_b
     }
 
+    /// The coded extent every video fixture but the reconnection one uses.
+    const FIXTURE_CODED_EXTENT: (u32, u32) = (320, 180);
+
     fn a_video_init_segment_description() -> CmafTrackDescriptionForTheInitSegment {
+        a_video_init_segment_description_of_coded_extent(FIXTURE_CODED_EXTENT)
+    }
+
+    fn a_video_init_segment_description_of_coded_extent(
+        coded_extent: (u32, u32),
+    ) -> CmafTrackDescriptionForTheInitSegment {
+        let (coded_width, coded_height) = coded_extent;
         let sample_entry = build_video_sample_entry(
             "h264",
             &length_prefix_annex_b_access_unit(
@@ -683,8 +804,8 @@ mod tests {
                 AnnexBNalHeaderGrammar::H264,
             )
             .parameter_sets,
-            320,
-            180,
+            coded_width,
+            coded_height,
         )
         .expect("the fixture parameter sets describe an H.264 track");
         CmafTrackDescriptionForTheInitSegment {
@@ -692,7 +813,7 @@ mod tests {
             inbound_link_name: "encoder/encoded_video".to_owned(),
             cmaf_track_sample_entry: sample_entry.cmaf_track_sample_entry,
             media_timescale_hz: VIDEO_TRACK_TIMESCALE_HZ,
-            coded_extent: Some((320, 180)),
+            coded_extent: Some(coded_extent),
         }
     }
 
@@ -740,38 +861,155 @@ mod tests {
         .expect("the fixture sample is small enough for an mdat")
     }
 
-    fn an_audio_fragment(sequence_number: u32, decode_time: u64, packet: &[u8]) -> bytes::Bytes {
+    /// An audio fragment whose decode time and duration are the ones this
+    /// wheel's own publisher would write for a bag stamped `stamp_ns` — which
+    /// is where the fragment's duration stops being the packet's sample count.
+    fn an_audio_fragment_placed_as_the_publisher_places_one(
+        sequence_number: u32,
+        audio_track_timeline: &mut CmafTrackTimeline,
+        stamp_ns: i64,
+        opus_packet: &[u8],
+    ) -> bytes::Bytes {
+        let placement = audio_track_timeline.place(stamp_ns);
         build_cmaf_fragment(
             AUDIO_TRACK_ID,
             sequence_number,
-            decode_time,
-            // 20 ms at 48 kHz, which is the frame every Opus encoder in this
-            // tree mints.
-            960,
+            placement.decode_time,
+            placement.duration,
             true,
-            packet,
+            opus_packet,
         )
         .expect("the fixture packet is small enough for an mdat")
     }
 
+    /// One Opus packet whose TOC states `config`, mono, and frame-count code
+    /// `c` — with filler where the frames' own bytes would be, which nothing
+    /// on this path reads.
+    fn an_opus_packet_stating_config_and_frame_count_code(
+        table_of_contents_config: u8,
+        frame_count_code: u8,
+    ) -> Vec<u8> {
+        vec![
+            (table_of_contents_config << 3) | frame_count_code,
+            0x00,
+            0x00,
+        ]
+    }
+
+    /// One code-3 Opus packet stating an arbitrary frame count.
+    fn an_opus_packet_stating_config_and_an_arbitrary_frame_count(
+        table_of_contents_config: u8,
+        frame_count: u8,
+    ) -> Vec<u8> {
+        vec![
+            (table_of_contents_config << 3) | 0b11,
+            frame_count & OPUS_CODE_THREE_FRAME_COUNT_MASK,
+            0x00,
+        ]
+    }
+
+    /// The 20 ms stereo CELT packet an `OpusEncoder` in this tree mints:
+    /// config 31, `s` set, frame-count code 0.
+    fn a_twenty_millisecond_stereo_opus_packet() -> Vec<u8> {
+        vec![0xFC, 0x01, 0x02, 0x03, 0x04]
+    }
+
     fn the_only_video_access_unit(bags: Vec<EncodedMediaSample>) -> EncodedVideoAccessUnit {
-        match bags.into_iter().next() {
-            Some(EncodedMediaSample::VideoAccessUnit(unit)) => unit,
+        match bags.as_slice() {
+            [EncodedMediaSample::VideoAccessUnit(unit)] => unit.clone(),
             other => panic!("expected exactly one video access unit, got {other:?}"),
         }
     }
 
     fn the_only_audio_packet(bags: Vec<EncodedMediaSample>) -> EncodedAudioPacket {
-        match bags.into_iter().next() {
-            Some(EncodedMediaSample::AudioPacket(packet)) => packet,
+        match bags.as_slice() {
+            [EncodedMediaSample::AudioPacket(packet)] => packet.clone(),
             other => panic!("expected exactly one Opus packet, got {other:?}"),
         }
+    }
+
+    /// A `tracing` subscriber that keeps the level of every event a test's own
+    /// call emitted, so a test can state how loudly a loss is reported.
+    #[derive(Clone, Default)]
+    struct TracingEventLevelsCapturedWhileASubscriberRuns(
+        std::sync::Arc<std::sync::Mutex<Vec<tracing::Level>>>,
+    );
+
+    impl TracingEventLevelsCapturedWhileASubscriberRuns {
+        fn levels(&self) -> Vec<tracing::Level> {
+            self.0
+                .lock()
+                .expect("no test panics while holding this lock")
+                .clone()
+        }
+    }
+
+    impl tracing::Subscriber for TracingEventLevelsCapturedWhileASubscriberRuns {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            self.0
+                .lock()
+                .expect("no test panics while holding this lock")
+                .push(*event.metadata().level());
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
     }
 
     fn contains_the_byte_run(haystack: &[u8], needle: &[u8]) -> bool {
         haystack
             .windows(needle.len())
             .any(|window| window == needle)
+    }
+
+    #[test]
+    #[should_panic(expected = "expected exactly one video access unit")]
+    fn a_second_video_bag_beside_the_only_one_a_test_named_fails_that_test() {
+        let a_bag = EncodedMediaSample::VideoAccessUnit(EncodedVideoAccessUnit {
+            codec: "h264".to_owned(),
+            annex_b_access_unit: bytes::Bytes::from(annex_b_access_unit_of(&[
+                a_coded_slice_nal_unit(true, 0xAB),
+            ])),
+            is_sync_point: true,
+            group_index: 0,
+            sequence_index: 0,
+            width: FIXTURE_CODED_EXTENT.0,
+            height: FIXTURE_CODED_EXTENT.1,
+            color: None,
+            timestamp_ns: 1,
+        });
+        the_only_video_access_unit(vec![a_bag.clone(), a_bag]);
+    }
+
+    #[test]
+    #[should_panic(expected = "expected exactly one Opus packet")]
+    fn a_second_opus_bag_beside_the_only_one_a_test_named_fails_that_test() {
+        let a_bag = EncodedMediaSample::AudioPacket(EncodedAudioPacket {
+            codec: "opus".to_owned(),
+            opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
+            is_sync_point: true,
+            group_index: 0,
+            sequence_index: 0,
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 960,
+            pre_skip: PUBLISHED_OPUS_PRE_SKIP,
+            timestamp_ns: 1,
+        });
+        the_only_audio_packet(vec![a_bag.clone(), a_bag]);
     }
 
     #[test]
@@ -913,7 +1151,7 @@ mod tests {
         );
         assert_eq!(
             (sync_point.width, sync_point.height),
-            (320, 180),
+            FIXTURE_CODED_EXTENT,
             "the coded extent is recovered from the init segment, which is the only place a \
              CMAF broadcast states it"
         );
@@ -1024,12 +1262,18 @@ mod tests {
             )
             .expect("the init object is the one this module's writer wrote");
 
-        let opus_packet_bytes: Vec<u8> = vec![0xFC, 0x01, 0x02, 0x03, 0x04];
+        let opus_packet_bytes = a_twenty_millisecond_stereo_opus_packet();
+        let mut audio_track_timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
         let packet = the_only_audio_packet(
             object_router
                 .route_received_object(
                     &media_track_name(AUDIO_TRACK_ID),
-                    &an_audio_fragment(1, 0, &opus_packet_bytes),
+                    &an_audio_fragment_placed_as_the_publisher_places_one(
+                        1,
+                        &mut audio_track_timeline,
+                        9_000_000_000,
+                        &opus_packet_bytes,
+                    ),
                 )
                 .expect("a fragment after the init segment reconstitutes"),
         );
@@ -1041,16 +1285,176 @@ mod tests {
         );
         assert_eq!(packet.codec, "opus");
         assert_eq!((packet.channels, packet.sample_rate), (2, 48_000));
-        assert_eq!(
-            packet.sample_count, 960,
-            "an Opus track is written on Opus's own 48 kHz clock, so a fragment's duration is \
-             its sample count"
-        );
         assert!(
             packet.is_sync_point,
             "every Opus packet is a decode entry point"
         );
         assert_eq!(packet.opus_packet, bytes::Bytes::from(opus_packet_bytes));
+    }
+
+    #[test]
+    fn an_opus_bag_counts_the_samples_its_own_packet_carries_rather_than_the_fragments_duration() {
+        let mut subscriber = a_subscriber_of(
+            MoqContainerFormat::Cmaf,
+            None,
+            Some(media_track_name(AUDIO_TRACK_ID)),
+        );
+        let object_router = &mut subscriber.received_object_router;
+        object_router
+            .route_received_object(
+                INIT_TRACK_NAME,
+                &an_init_object(&[an_audio_init_segment_description()]),
+            )
+            .expect("the init object is the one this module's writer wrote");
+
+        let opus_packet_bytes = a_twenty_millisecond_stereo_opus_packet();
+        let mut audio_track_timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
+        let mut reconstituted_sample_counts = Vec::new();
+        let mut fragment_durations_the_publisher_wrote = Vec::new();
+        // Stamps a live capture would carry: 20 ms apart in intent, never in
+        // fact, so no gap between two of them is the packets' own 960 samples.
+        for (sequence_number, stamp_ns) in [9_000_000_000i64, 9_020_500_000, 9_039_500_000]
+            .into_iter()
+            .enumerate()
+        {
+            let fragment = an_audio_fragment_placed_as_the_publisher_places_one(
+                sequence_number as u32 + 1,
+                &mut audio_track_timeline,
+                stamp_ns,
+                &opus_packet_bytes,
+            );
+            fragment_durations_the_publisher_wrote.extend(
+                read_cmaf_fragment(&fragment)
+                    .expect("the fixture fragment is the one this module's writer wrote")
+                    .into_iter()
+                    .map(|fragment_sample| fragment_sample.duration),
+            );
+            reconstituted_sample_counts.push(
+                the_only_audio_packet(
+                    object_router
+                        .route_received_object(&media_track_name(AUDIO_TRACK_ID), &fragment)
+                        .expect("a fragment after the init segment reconstitutes"),
+                )
+                .sample_count,
+            );
+        }
+
+        assert_eq!(
+            reconstituted_sample_counts,
+            vec![960, 960, 960],
+            "three ordinary 20 ms packets carry 960 samples each, whatever the publisher wrote \
+             beside them"
+        );
+        assert!(
+            fragment_durations_the_publisher_wrote
+                .iter()
+                .all(|duration| *duration != 960),
+            "this publisher writes the gap to the previous bag's stamp as a fragment's duration, \
+             and a nominal thirtieth of a second on the first, so a duration-derived count reads \
+             the publisher's pacing rather than the packet; it wrote \
+             {fragment_durations_the_publisher_wrote:?}"
+        );
+    }
+
+    #[test]
+    fn each_opus_frame_count_code_states_how_many_frames_the_packet_carries() {
+        // Config 31 is CELT full-band at 20 ms, so one frame is 960 samples.
+        let twenty_millisecond_config = 31;
+        assert_eq!(
+            opus_sample_count_of_the_packets_table_of_contents(
+                &an_opus_packet_stating_config_and_frame_count_code(twenty_millisecond_config, 0)
+            )
+            .expect("code 0 is one frame"),
+            960
+        );
+        assert_eq!(
+            opus_sample_count_of_the_packets_table_of_contents(
+                &an_opus_packet_stating_config_and_frame_count_code(twenty_millisecond_config, 1)
+            )
+            .expect("code 1 is two frames of equal size"),
+            1_920
+        );
+        assert_eq!(
+            opus_sample_count_of_the_packets_table_of_contents(
+                &an_opus_packet_stating_config_and_frame_count_code(twenty_millisecond_config, 2)
+            )
+            .expect("code 2 is two frames of different sizes"),
+            1_920
+        );
+        assert_eq!(
+            opus_sample_count_of_the_packets_table_of_contents(
+                &an_opus_packet_stating_config_and_an_arbitrary_frame_count(
+                    twenty_millisecond_config,
+                    6
+                )
+            )
+            .expect("code 3 states its own frame count"),
+            5_760,
+            "a code-3 packet lasts its stated frame count times its frame duration"
+        );
+    }
+
+    #[test]
+    fn each_opus_frame_duration_is_counted_at_forty_eight_samples_a_millisecond() {
+        let counted_samples_of_one_frame = |table_of_contents_config: u8| {
+            opus_sample_count_of_the_packets_table_of_contents(
+                &an_opus_packet_stating_config_and_frame_count_code(table_of_contents_config, 0),
+            )
+            .expect("a one-frame packet of any config counts")
+        };
+
+        // RFC 6716 §3.1: SILK narrowband at 10, 20, 40 and 60 ms.
+        assert_eq!(counted_samples_of_one_frame(0), 480);
+        assert_eq!(counted_samples_of_one_frame(1), 960);
+        assert_eq!(counted_samples_of_one_frame(2), 1_920);
+        assert_eq!(counted_samples_of_one_frame(3), 2_880);
+        // SILK wideband keeps the same four durations.
+        assert_eq!(counted_samples_of_one_frame(11), 2_880);
+        // Hybrid super-wideband and full-band, at 10 and 20 ms only.
+        assert_eq!(counted_samples_of_one_frame(12), 480);
+        assert_eq!(counted_samples_of_one_frame(13), 960);
+        assert_eq!(counted_samples_of_one_frame(15), 960);
+        // CELT, which reaches down to 2.5 ms.
+        assert_eq!(counted_samples_of_one_frame(16), 120);
+        assert_eq!(counted_samples_of_one_frame(17), 240);
+        assert_eq!(counted_samples_of_one_frame(18), 480);
+        assert_eq!(counted_samples_of_one_frame(19), 960);
+        assert_eq!(counted_samples_of_one_frame(28), 120);
+        assert_eq!(counted_samples_of_one_frame(31), 960);
+    }
+
+    #[test]
+    fn an_opus_packet_too_short_to_carry_its_own_table_of_contents_is_refused_by_name() {
+        for (packet, what_the_packet_is_missing) in [
+            (Vec::new(), "the TOC byte itself"),
+            (
+                an_opus_packet_stating_config_and_an_arbitrary_frame_count(31, 3)[..1].to_vec(),
+                "the frame-count byte its code-3 TOC promises",
+            ),
+        ] {
+            let refusal = opus_sample_count_of_the_packets_table_of_contents(&packet)
+                .map(drop)
+                .expect_err("a packet that does not carry its own count is not guessed at");
+            assert!(
+                matches!(refusal, MoqExtensionError::MalformedObject { .. }),
+                "a packet missing {what_the_packet_is_missing} came from the far end, which is a \
+                 runtime condition and not a bad call; got {refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_code_three_opus_packet_stating_zero_frames_is_refused_rather_than_counted_as_no_audio() {
+        let refusal = opus_sample_count_of_the_packets_table_of_contents(
+            &an_opus_packet_stating_config_and_an_arbitrary_frame_count(31, 0),
+        )
+        .map(drop)
+        .expect_err("a packet claiming zero frames decodes to nothing");
+        assert!(
+            matches!(refusal, MoqExtensionError::MalformedObject { .. }),
+            "the far end wrote a packet no decoder can read, which is a runtime condition and not \
+             a bad call; got {refusal:?}"
+        );
     }
 
     #[test]
@@ -1160,10 +1564,16 @@ mod tests {
             )
             .expect("the init object is the one this module's writer wrote");
 
+        let mut audio_track_timeline = CmafTrackTimeline::on(OPUS_TRACK_TIMESCALE_HZ);
         let refusal = object_router
             .route_received_object(
                 &media_track_name(AUDIO_TRACK_ID),
-                &an_audio_fragment(1, 0, &[0xFC, 0x00]),
+                &an_audio_fragment_placed_as_the_publisher_places_one(
+                    1,
+                    &mut audio_track_timeline,
+                    9_000_000_000,
+                    &a_twenty_millisecond_stereo_opus_packet(),
+                ),
             )
             .expect_err("the moov describes no audio track, so nothing states its `pre_skip`");
         assert!(
@@ -1211,6 +1621,140 @@ mod tests {
     }
 
     #[test]
+    fn a_reconnected_subscriber_reads_the_new_broadcast_rather_than_the_closed_ones_description() {
+        let mut subscriber = a_subscriber_of(
+            MoqContainerFormat::Cmaf,
+            Some(media_track_name(VIDEO_TRACK_ID)),
+            None,
+        );
+        subscriber
+            .received_object_router
+            .route_received_object(
+                INIT_TRACK_NAME,
+                &an_init_object(&[a_video_init_segment_description()]),
+            )
+            .expect("the init object is the one this module's writer wrote");
+        for (sequence_number, decode_time) in [(1u32, 7_000_000_000u64), (2, 7_033_000_000)] {
+            subscriber
+                .received_object_router
+                .route_received_object(
+                    &media_track_name(VIDEO_TRACK_ID),
+                    &a_video_fragment(sequence_number, decode_time, sequence_number == 1, 0x11),
+                )
+                .expect("a fragment after the init segment reconstitutes");
+        }
+
+        subscriber.close();
+        let monotonic_after_the_close_ns = monotonic_now_ns();
+
+        let reconnected_coded_extent = (640, 360);
+        subscriber
+            .received_object_router
+            .route_received_object(
+                INIT_TRACK_NAME,
+                &an_init_object(&[a_video_init_segment_description_of_coded_extent(
+                    reconnected_coded_extent,
+                )]),
+            )
+            .expect("the init object is the one this module's writer wrote");
+        let mut bags_of_the_second_broadcast = Vec::new();
+        for (sequence_number, decode_time) in [(1u32, 0u64), (2, 33_000_000)] {
+            bags_of_the_second_broadcast.push(the_only_video_access_unit(
+                subscriber
+                    .received_object_router
+                    .route_received_object(
+                        &media_track_name(VIDEO_TRACK_ID),
+                        &a_video_fragment(sequence_number, decode_time, sequence_number == 1, 0x22),
+                    )
+                    .expect("a fragment after the init segment reconstitutes"),
+            ));
+        }
+
+        assert_eq!(
+            bags_of_the_second_broadcast
+                .iter()
+                .map(|unit| (unit.width, unit.height))
+                .collect::<Vec<_>>(),
+            vec![reconnected_coded_extent; 2],
+            "the coded extent a bag states is the one the broadcast it belongs to described"
+        );
+        assert_eq!(
+            bags_of_the_second_broadcast
+                .iter()
+                .map(|unit| (unit.group_index, unit.sequence_index))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (0, 1)],
+            "a new broadcast's ordering starts at its own first bag, so a consumer's gap \
+             detection is not handed a jump it cannot explain"
+        );
+        assert!(
+            bags_of_the_second_broadcast[0].timestamp_ns >= monotonic_after_the_close_ns,
+            "the new broadcast's track is anchored where the subscriber's clock stood when it \
+             began, never at the closed broadcast's anchor"
+        );
+    }
+
+    #[test]
+    fn stray_track_names_are_held_only_up_to_the_cap_that_keeps_the_reporting_once_per_track() {
+        let mut subscriber = a_subscriber_of(
+            MoqContainerFormat::Cmaf,
+            Some(media_track_name(VIDEO_TRACK_ID)),
+            None,
+        );
+        let object_router = &mut subscriber.received_object_router;
+
+        for stray_track_index in 0..MOST_STRAY_TRACK_NAMES_HELD_TO_REPORT_EACH_ONCE * 4 {
+            let bags = object_router
+                .route_received_object(
+                    &format!("stray-{stray_track_index}.m4s"),
+                    b"whatever this is",
+                )
+                .expect("an unnamed track is ignored, not refused");
+            assert!(bags.is_empty());
+        }
+
+        assert_eq!(
+            object_router.track_names_reported_as_unnamed.len(),
+            MOST_STRAY_TRACK_NAMES_HELD_TO_REPORT_EACH_ONCE,
+            "a far end that misroutes every object under a fresh name must not be able to grow \
+             what this subscriber holds for as long as the subscription lives"
+        );
+    }
+
+    #[test]
+    fn closing_on_decoded_bags_nothing_read_reports_that_loss_as_loudly_as_every_other_loss() {
+        let mut subscriber = a_subscriber_of(
+            MoqContainerFormat::StreamlibBag,
+            Some("video".to_owned()),
+            None,
+        );
+        subscriber
+            .samples_awaiting_the_reader
+            .push_back(EncodedMediaSample::AudioPacket(EncodedAudioPacket {
+                codec: "opus".to_owned(),
+                opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
+                is_sync_point: true,
+                group_index: 0,
+                sequence_index: 0,
+                sample_rate: 48_000,
+                channels: 2,
+                sample_count: 960,
+                pre_skip: PUBLISHED_OPUS_PRE_SKIP,
+                timestamp_ns: 1,
+            }));
+
+        let captured_levels = TracingEventLevelsCapturedWhileASubscriberRuns::default();
+        tracing::subscriber::with_default(captured_levels.clone(), || subscriber.close());
+
+        assert_eq!(
+            captured_levels.levels(),
+            vec![tracing::Level::INFO],
+            "media that arrived, was decoded into a bag and was then thrown away is the same \
+             class of loss as every other one this module reports"
+        );
+    }
+
+    #[test]
     fn one_track_name_cannot_carry_both_media_because_one_track_is_one_medium() {
         let refusal = MoqBroadcastSubscriber::new(
             a_relay_config(),
@@ -1245,5 +1789,28 @@ mod tests {
             "one second of the MPEG-2 system clock is one second"
         );
         assert_eq!(nanoseconds_of_track_ticks(0, timescale), 0);
+    }
+
+    #[test]
+    fn an_opus_packet_claiming_more_than_the_standard_allows_is_refused_by_name() {
+        // A code-3 packet states its own frame count in the byte after the TOC,
+        // so a corrupt count is the one way a packet can claim more audio than
+        // Opus permits. Config 3 is SILK at 60 ms; 3 frames of it already
+        // exceed the 120 ms ceiling.
+        let table_of_contents = (3u8 << 3) | 0b11;
+        let refusal = opus_sample_count_of_the_packets_table_of_contents(&[table_of_contents, 3])
+            .expect_err("180 ms of audio is more than one packet may carry");
+
+        assert!(refusal.to_string().contains("120 ms"), "{refusal}");
+    }
+
+    #[test]
+    fn the_longest_packet_the_standard_allows_is_still_read() {
+        // Two 60 ms SILK frames are exactly 120 ms, which is legal.
+        let table_of_contents = (3u8 << 3) | 0b01;
+        let samples = opus_sample_count_of_the_packets_table_of_contents(&[table_of_contents])
+            .expect("120 ms is the ceiling, not past it");
+
+        assert_eq!(samples, 120 * 48);
     }
 }
