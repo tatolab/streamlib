@@ -19,6 +19,7 @@ mod cmaf_init_segment;
 mod cmaf_init_segment_reader;
 mod cmaf_sample_entry;
 mod cmaf_track_timeline;
+mod delivery_deadline;
 mod encoded_media_sample;
 mod error;
 mod monotonic_clock;
@@ -30,8 +31,10 @@ mod moq_session;
 mod streamlib_bag_object;
 mod transport_stack;
 
+use crate::delivery_deadline::MoqPublisherDeliveryDeadline;
 use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
 use crate::error::MoqExtensionError;
+use crate::monotonic_clock::monotonic_now_ns;
 use crate::moq_broadcast_publisher::{MoqBroadcastPublisher, MoqContainerFormat};
 use crate::moq_broadcast_subscriber::MoqBroadcastSubscriber;
 use crate::moq_relay_config::MoqRelayConfig;
@@ -61,14 +64,24 @@ impl MoqBroadcastPublishingSession {
     /// Constructs without connecting: opening the session is what the first
     /// bag does, so a relay round trip never runs inside `setup()`.
     #[new]
-    fn new(relay_url: String, broadcast: String, container_format: &str) -> PyResult<Self> {
+    #[pyo3(signature = (relay_url, broadcast, container_format, delivery_deadline_ms=None))]
+    fn new(
+        relay_url: String,
+        broadcast: String,
+        container_format: &str,
+        delivery_deadline_ms: Option<u64>,
+    ) -> PyResult<Self> {
         let container_format = MoqContainerFormat::of_wire_name(container_format)?;
         let config = MoqRelayConfig {
             relay_endpoint_url: relay_url,
             broadcast_path: broadcast,
         };
         Ok(Self {
-            publisher: Mutex::new(MoqBroadcastPublisher::new(config, container_format)),
+            publisher: Mutex::new(MoqBroadcastPublisher::new(
+                config,
+                container_format,
+                MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
+            )),
         })
     }
 
@@ -179,6 +192,41 @@ impl MoqBroadcastPublishingSession {
     fn is_connected(&self, python: Python<'_>) -> PyResult<bool> {
         Ok(python.detach(|| self.locked_publisher().map(|open| open.is_connected()))?)
     }
+
+    /// What the delivery deadline has shed so far: one
+    /// `(inbound_link_name, objects, bytes)` per link that shed anything.
+    ///
+    /// Empty is a broadcast that has dropped nothing, which the caller says
+    /// out loud rather than leaving unsaid.
+    fn objects_the_delivery_deadline_shed(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<Vec<(String, u64, u64)>> {
+        let shed = python.detach(|| {
+            Ok::<_, MoqExtensionError>(
+                self.locked_publisher()?
+                    .objects_the_delivery_deadline_shed(),
+            )
+        })?;
+        Ok(shed
+            .into_iter()
+            .map(|track| {
+                (
+                    track.inbound_link_name,
+                    track.objects_shed,
+                    track.bytes_shed,
+                )
+            })
+            .collect())
+    }
+
+    /// The deadline this publisher runs under, in words an operator reads.
+    #[getter]
+    fn delivery_deadline(&self, python: Python<'_>) -> PyResult<String> {
+        Ok(python.detach(|| {
+            Ok::<_, MoqExtensionError>(self.locked_publisher()?.describe_the_delivery_deadline())
+        })?)
+    }
 }
 
 impl MoqBroadcastPublishingSession {
@@ -188,10 +236,17 @@ impl MoqBroadcastPublishingSession {
         inbound_link_name: &str,
         sample: EncodedMediaSample,
     ) -> PyResult<()> {
+        // Read here rather than inside the planner: one reading covers the
+        // whole of one bag's decision, and a test can plan against a stated
+        // instant instead of the clock.
+        let now_ns = monotonic_now_ns();
         python.detach(|| {
             let mut publisher = self.locked_publisher()?;
-            transport_stack::transport_runtime()?
-                .block_on(publisher.publish(inbound_link_name, sample))
+            transport_stack::transport_runtime()?.block_on(publisher.publish(
+                inbound_link_name,
+                sample,
+                now_ns,
+            ))
         })?;
         Ok(())
     }

@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
 
@@ -25,15 +26,34 @@ use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
 /// the transport config, which is why the endpoint is assembled by hand.
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(4);
 
-/// What the catalog and init tracks are published at, and what media is
-/// published at — the reference publisher's literals.
+/// What the catalog and init tracks are published at, and what each medium is
+/// published at.
 ///
-/// They read backwards, and are: `SubgroupHeader.publisher_priority` documents
-/// smaller as sooner, while the same number reaches quinn's `set_priority`
-/// where larger is sooner. Matching the reference is what makes a broadcast
-/// interoperable; reasoning about it as a coherent scheme is not possible.
+/// The ladder is the reference publisher's band read in the draft's own
+/// direction: draft-16 §10.4.2 documents a smaller `publisher_priority` as
+/// sooner, so descriptive objects outrank audio and audio outranks video. The
+/// two media rungs sit either side of `moq-pub`'s single media literal of 127,
+/// which is what keeps the broadcast interoperable while still saying which
+/// medium a relay should prefer.
+///
+/// The field reads backwards once it leaves the header: `moq-transport` hands
+/// the same number to quinn's `set_priority`, where larger is sooner, so on
+/// this publisher's own uplink the ladder is inverted. That is deliberate and
+/// covered elsewhere — the uplink's ordering is what
+/// [`crate::delivery_deadline`] decides, where audio is never shed because
+/// every Opus packet is a sync point. This number is the statement to the
+/// relay, and the draft's direction is the one it is read in there.
 pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
-pub(crate) const MEDIA_TRACK_PRIORITY: u8 = 127;
+pub(crate) const AUDIO_MEDIA_TRACK_PRIORITY: u8 = 126;
+pub(crate) const VIDEO_MEDIA_TRACK_PRIORITY: u8 = 127;
+
+/// The rung a medium's groups are opened at.
+pub(crate) fn media_track_priority_of(medium: TrackMedium) -> u8 {
+    match medium {
+        TrackMedium::Audio => AUDIO_MEDIA_TRACK_PRIORITY,
+        TrackMedium::Video => VIDEO_MEDIA_TRACK_PRIORITY,
+    }
+}
 
 /// How long a closing session may spend letting already-written objects reach
 /// the wire before its control loop is aborted.
@@ -271,7 +291,16 @@ impl MoqBroadcastPublishingSession {
 
     /// Write one object, opening a group first if none is open or the open one
     /// has reached the backstop.
-    pub(crate) fn write_object(&mut self, track_name: &str, payload: bytes::Bytes) -> Result<()> {
+    ///
+    /// The priority is the track's own rung and is spent only when a group is
+    /// opened: draft-16 carries `publisher_priority` in the subgroup header,
+    /// so it is a property of the group and not of the object.
+    pub(crate) fn write_object(
+        &mut self,
+        track_name: &str,
+        payload: bytes::Bytes,
+        publisher_priority: u8,
+    ) -> Result<()> {
         let full_enough = self
             .open_subgroup_by_track
             .get(track_name)
@@ -292,7 +321,7 @@ impl MoqBroadcastPublishingSession {
             // the wire, and an audio stream, whose every packet is a sync
             // point, would open one group per packet where only the newest
             // survives. The producer's ordering pair rides the object instead.
-            let opened = subgroups.append(MEDIA_TRACK_PRIORITY).map_err(|failure| {
+            let opened = subgroups.append(publisher_priority).map_err(|failure| {
                 MoqExtensionError::Transport {
                     what: format!("a MoQ group could not be opened on `{track_name}`: {failure}"),
                 }
