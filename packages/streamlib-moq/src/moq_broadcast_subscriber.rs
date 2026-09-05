@@ -1090,7 +1090,7 @@ mod tests {
             .received_object_router
             .route_received_object(
                 "video",
-                &encode_object(&published).expect("the fixture bag encodes"),
+                &encode_object(&published.clone().into()).expect("the fixture bag encodes"),
             )
             .expect("the object is this subscriber's own container");
 

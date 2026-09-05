@@ -12,6 +12,13 @@
 //! retains only a track's latest subgroup, so all but the newest packet would
 //! become unreachable the moment the next one arrived.
 //!
+//! A data object never cuts a group — the audio rule, for the audio reason —
+//! so a broadcast with no video in it is cut by two backstops instead: the
+//! session's object bound, and the age bound planned here, which cuts on the
+//! next write once the open group is about a second old on the publisher's
+//! own clock. A joiner mid-group replays that group from its first object, and
+//! this is what keeps the replay to a second of history rather than minutes.
+//!
 //! Whether a bag is published at all is decided here too, before any of it
 //! reaches the transport — see [`crate::delivery_deadline`] for why that is the
 //! only moment there is.
@@ -22,7 +29,7 @@
 //! broadcast's own progress is recorded until the publisher reports that every
 //! instruction of a plan reached the transport.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytes::Bytes;
 
@@ -48,7 +55,11 @@ use crate::moq_broadcast_catalog::{
     MoqCatalogTrackSelectionParameters, STREAMLIB_BAG_PACKAGING, media_track_name,
 };
 use crate::moq_relay_config::MoqRelayConfig;
-use crate::moq_session::{MoqBroadcastPublishingSession, media_track_priority_of};
+use crate::moq_session::{
+    LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS, MoqBroadcastPublishingSession,
+    track_priority_of,
+};
+use crate::moq_track_sample::{MoqTrackKind, MoqTrackSample};
 use crate::streamlib_bag_object::encode_object;
 
 /// The container name a caller passes for fragmented MP4.
@@ -131,17 +142,24 @@ impl MoqBroadcastPublisher {
     }
 
     /// Fix this broadcast's tracks and their order. Track ids are 1-based in
-    /// the order given, and that order reaches the catalog unchanged.
-    pub(crate) fn declare_tracks(&mut self, inbound_link_names: Vec<String>) -> Result<()> {
-        self.object_write_planner.declare_tracks(inbound_link_names)
+    /// the order given, and that order reaches the catalog unchanged. Under
+    /// `streamlib_bag` the app may name the tracks, one name per link in the
+    /// same order; absent, each is its link's own name.
+    pub(crate) fn declare_tracks(
+        &mut self,
+        inbound_link_names: Vec<String>,
+        track_names: Option<Vec<String>>,
+    ) -> Result<()> {
+        self.object_write_planner
+            .declare_tracks(inbound_link_names, track_names)
     }
 
-    /// Publish one encoded bag, connecting the session on the first bag the
-    /// broadcast is handed.
+    /// Publish one bag, connecting the session on the first bag the broadcast
+    /// is handed.
     pub(crate) async fn publish(
         &mut self,
         inbound_link_name: &str,
-        sample: EncodedMediaSample,
+        sample: MoqTrackSample,
         now_ns: i64,
     ) -> Result<WhatBecameOfOnePublishedBag> {
         // Connected here rather than in `declare_tracks`: a relay round trip
@@ -154,7 +172,7 @@ impl MoqBroadcastPublisher {
 
         // Everything the plan is about to spend, so a plan that does not reach
         // the relay whole can give it back.
-        let placement_before_planning = self.object_write_planner.placement_of_every_track();
+        let spent_before_planning = self.object_write_planner.what_planning_spends();
         let planned =
             self.object_write_planner
                 .plan_the_writes_for(inbound_link_name, sample, now_ns);
@@ -166,7 +184,7 @@ impl MoqBroadcastPublisher {
             Ok(planned) => planned,
             Err(refusal) => {
                 self.object_write_planner
-                    .restore_placement_of_every_track(placement_before_planning);
+                    .give_back_what_planning_spent(spent_before_planning);
                 return Err(refusal);
             }
         };
@@ -179,7 +197,7 @@ impl MoqBroadcastPublisher {
 
         let Some(session) = self.publishing_session.as_mut() else {
             self.object_write_planner
-                .restore_placement_of_every_track(placement_before_planning);
+                .give_back_what_planning_spent(spent_before_planning);
             return Err(MoqExtensionError::NotConnected { role: "publishing" });
         };
         let mut wrote_them_all = Ok(());
@@ -205,7 +223,7 @@ impl MoqBroadcastPublisher {
         }
         if let Err(failure) = wrote_them_all {
             self.object_write_planner
-                .restore_placement_of_every_track(placement_before_planning);
+                .give_back_what_planning_spent(spent_before_planning);
             return Err(failure);
         }
 
@@ -365,6 +383,19 @@ struct MoqBroadcastObjectWritePlanner {
     /// every track's timeline, so the refusal covers every later bag rather
     /// than only the one that would not fit.
     the_hold_stopped_at_its_bound: bool,
+    /// When the broadcast's open group was opened, on the publisher's own
+    /// clock; `None` before the first object. What the age bound is measured
+    /// from on a broadcast with no video.
+    the_open_group_was_opened_at_ns: Option<i64>,
+}
+
+/// What planning spends before a byte reaches the relay, so a plan that does
+/// not reach it whole can give it back.
+#[derive(Debug, Clone, PartialEq)]
+struct WhatPlanningSpends {
+    /// Per track: the next fragment sequence number and the CMAF timeline.
+    cmaf_placement_by_track: Vec<(u32, Option<CmafTrackTimeline>)>,
+    the_open_group_was_opened_at_ns: Option<i64>,
 }
 
 impl MoqBroadcastObjectWritePlanner {
@@ -383,10 +414,15 @@ impl MoqBroadcastObjectWritePlanner {
             samples_held_until_every_cmaf_track_is_described: Vec::new(),
             bytes_held_until_every_cmaf_track_is_described: 0,
             the_hold_stopped_at_its_bound: false,
+            the_open_group_was_opened_at_ns: None,
         }
     }
 
-    fn declare_tracks(&mut self, inbound_link_names: Vec<String>) -> Result<()> {
+    fn declare_tracks(
+        &mut self,
+        inbound_link_names: Vec<String>,
+        track_names: Option<Vec<String>>,
+    ) -> Result<()> {
         if !self.declared_tracks.is_empty() {
             return Err(MoqExtensionError::Refused {
                 what: format!(
@@ -404,6 +440,7 @@ impl MoqBroadcastObjectWritePlanner {
                     .to_owned(),
             });
         }
+        let track_names = self.track_names_the_app_chose(track_names, inbound_link_names.len())?;
 
         for (declared_track_index, inbound_link_name) in inbound_link_names.iter().enumerate() {
             if self
@@ -423,17 +460,19 @@ impl MoqBroadcastObjectWritePlanner {
                 // hardcodes all three when it is not asked to fetch a catalog.
                 MoqContainerFormat::Cmaf => media_track_name(declared_track_index as u32 + 1),
                 MoqContainerFormat::StreamlibBag => {
-                    if inbound_link_name == CATALOG_TRACK_NAME {
+                    let moq_media_track_name = track_names
+                        .as_ref()
+                        .map_or(inbound_link_name, |names| &names[declared_track_index]);
+                    if moq_media_track_name == CATALOG_TRACK_NAME {
                         return Err(MoqExtensionError::Refused {
                             what: format!(
-                                "an inbound link named `{CATALOG_TRACK_NAME}` cannot be published \
-                                 over `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`: this container names \
-                                 each media track after its link, and that name is already this \
+                                "`{CATALOG_TRACK_NAME}` cannot name a media track published over \
+                                 `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`: that name is already this \
                                  broadcast's catalog track"
                             ),
                         });
                     }
-                    inbound_link_name.clone()
+                    moq_media_track_name.clone()
                 }
             };
             self.declared_track_index_by_inbound_link_name
@@ -446,6 +485,60 @@ impl MoqBroadcastObjectWritePlanner {
                 ));
         }
         Ok(())
+    }
+
+    /// The names an app chose for its tracks, checked against the links they
+    /// name: one per link, none empty, none twice, and none at all under
+    /// `cmaf`, whose names are a subscriber's interop contract.
+    fn track_names_the_app_chose(
+        &self,
+        track_names: Option<Vec<String>>,
+        inbound_link_count: usize,
+    ) -> Result<Option<Vec<String>>> {
+        let Some(track_names) = track_names else {
+            return Ok(None);
+        };
+        if self.container_format == MoqContainerFormat::Cmaf {
+            return Err(MoqExtensionError::Refused {
+                what: format!(
+                    "`track_names` cannot be set under `{CMAF_CONTAINER_WIRE_NAME}`: that \
+                     container names its tracks `{CATALOG_TRACK_NAME}`, `{INIT_TRACK_NAME}` and \
+                     `{{track_id}}.m4s`, because a subscriber not asked to fetch a catalog \
+                     hardcodes exactly those; name tracks under \
+                     `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`"
+                ),
+            });
+        }
+        if track_names.len() != inbound_link_count {
+            return Err(MoqExtensionError::Refused {
+                what: format!(
+                    "`track_names` names {} track{} and `tracks` has {} inbound link{}; give one \
+                     name per link, in the order the links were wired",
+                    track_names.len(),
+                    if track_names.len() == 1 { "" } else { "s" },
+                    inbound_link_count,
+                    if inbound_link_count == 1 { "" } else { "s" },
+                ),
+            });
+        }
+        let mut names_seen = HashSet::with_capacity(track_names.len());
+        for track_name in &track_names {
+            if track_name.is_empty() {
+                return Err(MoqExtensionError::Refused {
+                    what: "`track_names` carries an empty name, which names no track on the relay"
+                        .to_owned(),
+                });
+            }
+            if !names_seen.insert(track_name.as_str()) {
+                return Err(MoqExtensionError::Refused {
+                    what: format!(
+                        "`track_names` names `{track_name}` twice; two tracks of one broadcast \
+                         cannot share a name"
+                    ),
+                });
+            }
+        }
+        Ok(Some(track_names))
     }
 
     /// Every MoQ track name the session must create before it announces the
@@ -466,7 +559,7 @@ impl MoqBroadcastObjectWritePlanner {
     fn plan_the_writes_for(
         &mut self,
         inbound_link_name: &str,
-        sample: EncodedMediaSample,
+        sample: MoqTrackSample,
         now_ns: i64,
     ) -> Result<PlannedMoqObjectWrites> {
         let declared_track_index = self.declared_track_index_of(inbound_link_name)?;
@@ -485,7 +578,7 @@ impl MoqBroadcastObjectWritePlanner {
             track.the_open_group_is_being_shed,
         ) {
             DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup => {
-                track.record_one_object_the_delivery_deadline_shed(encoded_byte_count_of(&sample));
+                track.record_one_object_the_delivery_deadline_shed(payload_byte_count_of(&sample));
                 return Ok(PlannedMoqObjectWrites::of_a_bag_the_delivery_deadline_shed());
             }
             DeliveryDeadlineVerdict::PublishIt => track.the_open_group_is_being_shed = false,
@@ -493,16 +586,19 @@ impl MoqBroadcastObjectWritePlanner {
 
         match self.container_format {
             MoqContainerFormat::StreamlibBag => {
-                self.plan_a_streamlib_bag_write(declared_track_index, &sample)
+                self.plan_a_streamlib_bag_write(declared_track_index, &sample, now_ns)
             }
-            MoqContainerFormat::Cmaf => self.plan_a_cmaf_write(declared_track_index, sample),
+            MoqContainerFormat::Cmaf => {
+                self.plan_a_cmaf_write(declared_track_index, sample, now_ns)
+            }
         }
     }
 
     fn plan_a_streamlib_bag_write(
-        &self,
+        &mut self,
         declared_track_index: usize,
-        sample: &EncodedMediaSample,
+        sample: &MoqTrackSample,
+        now_ns: i64,
     ) -> Result<PlannedMoqObjectWrites> {
         let object_payload = encode_object(sample)?;
         let writing_them_all_opens_the_broadcast = !self.the_descriptive_objects_have_been_written;
@@ -515,7 +611,9 @@ impl MoqBroadcastObjectWritePlanner {
                 },
             );
         }
-        if this_sample_cuts_a_new_group_on_every_track(sample) {
+        if this_sample_cuts_a_new_group_on_every_track(sample)
+            || self.the_age_bound_cuts_before_this_write(now_ns)
+        {
             instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
         }
         instructions.push(
@@ -524,9 +622,10 @@ impl MoqBroadcastObjectWritePlanner {
                     .moq_media_track_name
                     .clone(),
                 object_payload,
-                publisher_priority: media_track_priority_of(sample.medium()),
+                publisher_priority: track_priority_of(sample.kind()),
             },
         );
+        self.note_when_the_open_group_was_opened(&instructions, now_ns);
         Ok(PlannedMoqObjectWrites {
             instructions,
             the_delivery_deadline_shed_it: false,
@@ -537,8 +636,21 @@ impl MoqBroadcastObjectWritePlanner {
     fn plan_a_cmaf_write(
         &mut self,
         declared_track_index: usize,
-        sample: EncodedMediaSample,
+        sample: MoqTrackSample,
+        now_ns: i64,
     ) -> Result<PlannedMoqObjectWrites> {
+        // Before the hold, not inside it: a data bag can never be described,
+        // so holding for it would stall every other track up to the hold's
+        // bound and only then refuse — and the refusal would name the wrong
+        // thing.
+        let sample = match sample {
+            MoqTrackSample::DataObject(_) => {
+                return Err(
+                    self.refuse_a_data_bag_a_cmaf_broadcast_cannot_carry(declared_track_index)
+                );
+            }
+            MoqTrackSample::EncodedMedia(sample) => sample,
+        };
         if self.the_hold_stopped_at_its_bound {
             return Err(self.refuse_every_bag_a_stopped_hold_can_never_publish());
         }
@@ -548,9 +660,16 @@ impl MoqBroadcastObjectWritePlanner {
         track.refuse_a_sync_point_the_init_segment_it_is_owed_cannot_describe(&sample)?;
 
         if self.the_descriptive_objects_have_been_written {
+            let mut instructions = Vec::new();
+            if self.the_age_bound_cuts_before_this_write(now_ns) {
+                instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
+            }
+            instructions.extend(
+                self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?,
+            );
+            self.note_when_the_open_group_was_opened(&instructions, now_ns);
             return Ok(PlannedMoqObjectWrites {
-                instructions: self.declared_tracks[declared_track_index]
-                    .plan_the_cmaf_fragment_of(&sample)?,
+                instructions,
                 the_delivery_deadline_shed_it: false,
                 writing_them_all_opens_the_broadcast: false,
             });
@@ -580,6 +699,7 @@ impl MoqBroadcastObjectWritePlanner {
         }
         instructions
             .extend(self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?);
+        self.note_when_the_open_group_was_opened(&instructions, now_ns);
         Ok(PlannedMoqObjectWrites {
             instructions,
             the_delivery_deadline_shed_it: false,
@@ -587,46 +707,107 @@ impl MoqBroadcastObjectWritePlanner {
         })
     }
 
-    /// Take the broadcast's descriptive objects and its hold as written, which
-    /// is what makes it playable and what empties the hold.
-    /// Where every track's fragment numbering and timeline stand right now.
+    /// Whether this write must cut a group first because the broadcast has no
+    /// video to cut on and its open group has aged past the bound.
     ///
-    /// Planning a fragment spends a sequence number and advances its track's
-    /// timeline, and both happen before a single byte reaches the relay. A plan
-    /// that is not fully written must give them back, or the broadcast's
-    /// `mfhd.sequence_number` skips and the next sample's duration is measured
-    /// against a stamp no subscriber ever saw.
-    fn placement_of_every_track(&self) -> Vec<(u32, Option<CmafTrackTimeline>)> {
-        self.declared_tracks
-            .iter()
-            .map(|track| {
-                (
-                    track.next_cmaf_fragment_sequence_number,
-                    track
-                        .cmaf_description
-                        .as_ref()
-                        .map(|description| description.cmaf_track_timeline),
-                )
+    /// "No video" is no track having published a video bag yet: a broadcast
+    /// whose video link has not spoken is cut by age until it does, and its
+    /// first sync point cuts anyway.
+    fn the_age_bound_cuts_before_this_write(&self, now_ns: i64) -> bool {
+        if self.a_track_has_published_video() {
+            return false;
+        }
+        self.the_open_group_was_opened_at_ns
+            .is_some_and(|opened_at_ns| {
+                now_ns.saturating_sub(opened_at_ns)
+                    > LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS
             })
-            .collect()
     }
 
-    /// Put every track's numbering and timeline back where a snapshot found
-    /// them. A description a sample taught the planner is deliberately kept: it
-    /// describes the stream, not the write that failed.
-    fn restore_placement_of_every_track(
+    fn a_track_has_published_video(&self) -> bool {
+        self.declared_tracks.iter().any(|track| {
+            track.first_published_kind == Some(MoqTrackKind::Media(TrackMedium::Video))
+        })
+    }
+
+    /// The open group is the one these instructions cut, or the one the first
+    /// object write opened on the session's side without a cut.
+    fn note_when_the_open_group_was_opened(
         &mut self,
-        placement: Vec<(u32, Option<CmafTrackTimeline>)>,
+        instructions: &[MoqObjectWriteInstruction],
+        now_ns: i64,
     ) {
-        for (track, (sequence_number, timeline)) in self.declared_tracks.iter_mut().zip(placement) {
+        let these_cut_a_group =
+            instructions.contains(&MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
+        if these_cut_a_group || self.the_open_group_was_opened_at_ns.is_none() {
+            self.the_open_group_was_opened_at_ns = Some(now_ns);
+        }
+    }
+
+    fn refuse_a_data_bag_a_cmaf_broadcast_cannot_carry(
+        &self,
+        declared_track_index: usize,
+    ) -> MoqExtensionError {
+        MoqExtensionError::Refused {
+            what: format!(
+                "`{}` delivered a data bag — one with no `bitstream` — and a \
+                 `{CMAF_CONTAINER_WIRE_NAME}` broadcast has no packaging for it: a CMAF fragment \
+                 carries coded media samples and nothing else. A data track needs \
+                 `container_format=\"{STREAMLIB_BAG_CONTAINER_WIRE_NAME}\"`, which carries the \
+                 bag whole",
+                self.declared_tracks[declared_track_index].inbound_link_name
+            ),
+        }
+    }
+
+    /// Where every track's fragment numbering and timeline stand, and when the
+    /// open group was opened.
+    ///
+    /// Planning a fragment spends a sequence number and advances its track's
+    /// timeline, and a cut moves the open group's opening instant — all before
+    /// a single byte reaches the relay. A plan that is not fully written must
+    /// give them back, or the broadcast's `mfhd.sequence_number` skips, the
+    /// next sample's duration is measured against a stamp no subscriber ever
+    /// saw, and the age bound counts from a cut that never happened.
+    fn what_planning_spends(&self) -> WhatPlanningSpends {
+        WhatPlanningSpends {
+            cmaf_placement_by_track: self
+                .declared_tracks
+                .iter()
+                .map(|track| {
+                    (
+                        track.next_cmaf_fragment_sequence_number,
+                        track
+                            .cmaf_description
+                            .as_ref()
+                            .map(|description| description.cmaf_track_timeline),
+                    )
+                })
+                .collect(),
+            the_open_group_was_opened_at_ns: self.the_open_group_was_opened_at_ns,
+        }
+    }
+
+    /// Put back what a snapshot found. A description a sample taught the
+    /// planner is deliberately kept: it describes the stream, not the write
+    /// that failed.
+    fn give_back_what_planning_spent(&mut self, spent: WhatPlanningSpends) {
+        for (track, (sequence_number, timeline)) in self
+            .declared_tracks
+            .iter_mut()
+            .zip(spent.cmaf_placement_by_track)
+        {
             track.next_cmaf_fragment_sequence_number = sequence_number;
             if let (Some(description), Some(timeline)) = (track.cmaf_description.as_mut(), timeline)
             {
                 description.cmaf_track_timeline = timeline;
             }
         }
+        self.the_open_group_was_opened_at_ns = spent.the_open_group_was_opened_at_ns;
     }
 
+    /// Take the broadcast's descriptive objects and its hold as written, which
+    /// is what makes it playable and what empties the hold.
     fn record_that_every_descriptive_object_and_held_sample_was_written(&mut self) {
         self.the_descriptive_objects_have_been_written = true;
         tracing::info!(
@@ -854,8 +1035,10 @@ struct DeclaredMoqTrackPublicationState {
     /// is also what names its MoQ media track.
     cmaf_track_id: u32,
     moq_media_track_name: String,
+    /// What the track's first bag said it carries. A data track has a kind
+    /// and no codec.
+    first_published_kind: Option<MoqTrackKind>,
     first_published_codec: Option<String>,
-    first_published_medium: Option<TrackMedium>,
     bags_this_track_has_delivered: u64,
     cmaf_description: Option<CmafTrackDescriptionLearnedFromItsFirstUsableSample>,
     parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit,
@@ -873,8 +1056,8 @@ impl DeclaredMoqTrackPublicationState {
             inbound_link_name,
             cmaf_track_id,
             moq_media_track_name,
+            first_published_kind: None,
             first_published_codec: None,
-            first_published_medium: None,
             bags_this_track_has_delivered: 0,
             cmaf_description: None,
             parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit::default(),
@@ -902,31 +1085,32 @@ impl DeclaredMoqTrackPublicationState {
 
     fn refuse_a_sample_unlike_the_one_this_track_was_first_published_from(
         &mut self,
-        sample: &EncodedMediaSample,
+        sample: &MoqTrackSample,
     ) -> Result<()> {
-        let medium = sample.medium();
-        let codec = wire_codec_of(sample);
-        match (
-            self.first_published_codec.as_deref(),
-            self.first_published_medium,
-        ) {
-            (Some(first_codec), Some(first_medium)) => {
-                if first_medium != medium || first_codec != codec {
+        let kind = sample.kind();
+        let codec = sample.wire_codec();
+        match self.first_published_kind {
+            Some(first_kind) => {
+                if first_kind != kind || self.first_published_codec.as_deref() != codec {
                     return Err(MoqExtensionError::Refused {
                         what: format!(
-                            "`{}` first published {} `{first_codec}` and this bag carries {} \
-                             `{codec}`; a MoQ track's medium and codec are stated once, by the \
-                             catalog and the init segment, and neither can be revised",
+                            "`{}` first published {} and this bag carries {}; one link is one \
+                             track, and a MoQ track's kind and codec are stated once — by its \
+                             first bag, and on `{CMAF_CONTAINER_WIRE_NAME}` by the catalog and \
+                             the init segment — so neither can be revised",
                             self.inbound_link_name,
-                            first_medium.as_str(),
-                            medium.as_str()
+                            describe_kind_and_codec(
+                                first_kind,
+                                self.first_published_codec.as_deref()
+                            ),
+                            describe_kind_and_codec(kind, codec)
                         ),
                     });
                 }
             }
-            _ => {
-                self.first_published_codec = Some(codec.to_owned());
-                self.first_published_medium = Some(medium);
+            None => {
+                self.first_published_kind = Some(kind);
+                self.first_published_codec = codec.map(str::to_owned);
             }
         }
         Ok(())
@@ -1091,27 +1275,40 @@ impl DeclaredMoqTrackPublicationState {
         )?;
 
         let mut instructions = Vec::new();
-        if this_sample_cuts_a_new_group_on_every_track(sample) {
+        if this_media_sample_cuts_a_new_group_on_every_track(sample) {
             instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
         }
         instructions.push(
             MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                 moq_track_name: self.moq_media_track_name.clone(),
                 object_payload,
-                publisher_priority: media_track_priority_of(sample.medium()),
+                publisher_priority: track_priority_of(MoqTrackKind::Media(sample.medium())),
             },
         );
         Ok(instructions)
     }
 }
 
-/// The one group-cadence rule both containers obey.
+/// The one group-cadence rule both containers obey, over every track kind.
 ///
+/// A data object never cuts: it stands alone like an Opus packet does, and the
+/// transport retains only a track's latest subgroup, so cutting on each one
+/// would leave one object per group and lose all but the newest. A video-free
+/// broadcast is cut by its two backstops instead.
+fn this_sample_cuts_a_new_group_on_every_track(sample: &MoqTrackSample) -> bool {
+    match sample {
+        MoqTrackSample::EncodedMedia(sample) => {
+            this_media_sample_cuts_a_new_group_on_every_track(sample)
+        }
+        MoqTrackSample::DataObject(_) => false,
+    }
+}
+
 /// A group is a GOP across every track at once, so the cut is a video sync
 /// point and nothing else. Every Opus packet is a sync point, and the transport
 /// retains only a track's latest subgroup, so cutting on audio would leave one
 /// packet per group and lose all but the newest.
-fn this_sample_cuts_a_new_group_on_every_track(sample: &EncodedMediaSample) -> bool {
+fn this_media_sample_cuts_a_new_group_on_every_track(sample: &EncodedMediaSample) -> bool {
     match sample {
         EncodedMediaSample::VideoAccessUnit(unit) => unit.is_sync_point,
         EncodedMediaSample::AudioPacket(_) => false,
@@ -1135,10 +1332,19 @@ fn catalog_selection_parameters_of_a_streamlib_bag_track() -> MoqCatalogTrackSel
     }
 }
 
-fn wire_codec_of(sample: &EncodedMediaSample) -> &str {
+/// How a refusal names what a track carries: `video \`h264\``, or `data`.
+fn describe_kind_and_codec(kind: MoqTrackKind, codec: Option<&str>) -> String {
+    match codec {
+        Some(codec) => format!("{} `{codec}`", kind.as_str()),
+        None => kind.as_str().to_owned(),
+    }
+}
+
+/// The bytes one bag puts on the wire, whatever its kind.
+fn payload_byte_count_of(sample: &MoqTrackSample) -> usize {
     match sample {
-        EncodedMediaSample::VideoAccessUnit(unit) => &unit.codec,
-        EncodedMediaSample::AudioPacket(packet) => &packet.codec,
+        MoqTrackSample::EncodedMedia(sample) => encoded_byte_count_of(sample),
+        MoqTrackSample::DataObject(object) => object.envelope_bytes.len(),
     }
 }
 
@@ -1171,7 +1377,10 @@ mod tests {
     use crate::annex_b_access_unit::ANNEX_B_START_CODE;
     use crate::cmaf_fragment::read_cmaf_fragment;
     use crate::encoded_media_sample::{EncodedAudioPacket, EncodedVideoAccessUnit};
-    use crate::moq_session::{AUDIO_MEDIA_TRACK_PRIORITY, VIDEO_MEDIA_TRACK_PRIORITY};
+    use crate::moq_session::{
+        AUDIO_MEDIA_TRACK_PRIORITY, DATA_TRACK_PRIORITY, VIDEO_MEDIA_TRACK_PRIORITY,
+    };
+    use crate::moq_track_sample::DataTrackObject;
 
     const BROADCAST_NAMESPACE: &str = "streamlib/a-broadcast";
 
@@ -1250,6 +1459,14 @@ mod tests {
         })
     }
 
+    /// A data object as Python hands one over: an envelope the engine's codec
+    /// already encoded. The bytes are opaque here, so any bytes will do.
+    fn a_data_object(envelope_bytes: &'static [u8]) -> MoqTrackSample {
+        MoqTrackSample::DataObject(DataTrackObject {
+            envelope_bytes: Bytes::from_static(envelope_bytes),
+        })
+    }
+
     fn a_planner_over(
         container_format: MoqContainerFormat,
         inbound_link_names: &[&str],
@@ -1268,14 +1485,13 @@ mod tests {
             MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
         );
         planner
-            .declare_tracks(
-                inbound_link_names
-                    .iter()
-                    .map(|name| (*name).to_owned())
-                    .collect(),
-            )
+            .declare_tracks(owned(inbound_link_names), None)
             .expect("these inbound links are declarable");
         planner
+    }
+
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
     }
 
     /// Plan one bag's writes and report every one of them written, which is
@@ -1300,10 +1516,10 @@ mod tests {
     fn plan_the_writes_at_and_report_them_all_written(
         planner: &mut MoqBroadcastObjectWritePlanner,
         inbound_link_name: &str,
-        sample: EncodedMediaSample,
+        sample: impl Into<MoqTrackSample>,
         now_ns: i64,
     ) -> Result<Vec<MoqObjectWriteInstruction>> {
-        let planned = planner.plan_the_writes_for(inbound_link_name, sample, now_ns)?;
+        let planned = planner.plan_the_writes_for(inbound_link_name, sample.into(), now_ns)?;
         if planned.writing_them_all_opens_the_broadcast {
             planner.record_that_every_descriptive_object_and_held_sample_was_written();
         }
@@ -1500,19 +1716,19 @@ mod tests {
         // ever saw.
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera"]);
         planner
-            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
             .expect("the first sync point describes the track");
-        let placement_before = planner.placement_of_every_track();
+        let spent_before = planner.what_planning_spends();
 
         let refused = planner.plan_the_writes_for(
             "camera",
-            a_video_sync_point_carrying(&A_SECOND_H264_SEQUENCE_PARAMETER_SET, 33_000_000),
+            a_video_sync_point_carrying(&A_SECOND_H264_SEQUENCE_PARAMETER_SET, 33_000_000).into(),
             33_000_000,
         );
         assert!(refused.is_err(), "drifted parameter sets are refused");
-        planner.restore_placement_of_every_track(placement_before.clone());
+        planner.give_back_what_planning_spent(spent_before.clone());
 
-        assert_eq!(planner.placement_of_every_track(), placement_before);
+        assert_eq!(planner.what_planning_spends(), spent_before);
     }
 
     #[test]
@@ -1522,7 +1738,7 @@ mod tests {
 
         let refusal = refusal_of(
             planner
-                .declare_tracks(vec!["microphone".to_owned()])
+                .declare_tracks(vec!["microphone".to_owned()], None)
                 .expect_err("the tracks are already fixed"),
         );
 
@@ -1539,7 +1755,7 @@ mod tests {
 
         let refusal = refusal_of(
             planner
-                .declare_tracks(Vec::new())
+                .declare_tracks(Vec::new(), None)
                 .expect_err("a broadcast with no tracks publishes nothing"),
         );
 
@@ -1556,11 +1772,14 @@ mod tests {
 
         let refusal = refusal_of(
             planner
-                .declare_tracks(vec![
-                    "camera".to_owned(),
-                    "microphone".to_owned(),
-                    "camera".to_owned(),
-                ])
+                .declare_tracks(
+                    vec![
+                        "camera".to_owned(),
+                        "microphone".to_owned(),
+                        "camera".to_owned(),
+                    ],
+                    None,
+                )
                 .expect_err("two tracks cannot share a name"),
         );
 
@@ -1577,7 +1796,7 @@ mod tests {
 
         let refusal = refusal_of(
             planner
-                .declare_tracks(vec![CATALOG_TRACK_NAME.to_owned()])
+                .declare_tracks(vec![CATALOG_TRACK_NAME.to_owned()], None)
                 .expect_err("that name is already the catalog track"),
         );
 
@@ -1819,16 +2038,16 @@ mod tests {
     fn a_cmaf_plan_the_transport_never_wrote_still_owes_the_init_object_the_catalog_and_the_hold() {
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "microphone"]);
         planner
-            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
             .expect("the video track is held until the audio track speaks");
 
         let never_reached_the_transport = planner
-            .plan_the_writes_for("microphone", an_opus_packet(0), 0)
+            .plan_the_writes_for("microphone", an_opus_packet(0).into(), 0)
             .expect("the audio track describes itself and the broadcast can open");
         assert!(never_reached_the_transport.writing_them_all_opens_the_broadcast);
 
         let planned_again = planner
-            .plan_the_writes_for("microphone", an_opus_packet(20_000_000), 20_000_000)
+            .plan_the_writes_for("microphone", an_opus_packet(20_000_000).into(), 20_000_000)
             .expect("the next bag plans");
 
         assert_eq!(
@@ -1849,7 +2068,7 @@ mod tests {
     fn a_streamlib_bag_plan_the_transport_never_wrote_still_owes_the_catalog() {
         let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["camera"]);
         let never_reached_the_transport = planner
-            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
             .expect("a sync point plans");
         assert_eq!(
             describe_each_write_instruction_as_a_transport_verb(
@@ -1859,7 +2078,7 @@ mod tests {
         );
 
         let planned_again = planner
-            .plan_the_writes_for("camera", a_video_sync_point(33_000_000), 33_000_000)
+            .plan_the_writes_for("camera", a_video_sync_point(33_000_000).into(), 33_000_000)
             .expect("the next sync point plans");
 
         assert_eq!(
@@ -2179,7 +2398,7 @@ mod tests {
         );
 
         publisher
-            .declare_tracks(vec!["camera".to_owned(), "microphone".to_owned()])
+            .declare_tracks(vec!["camera".to_owned(), "microphone".to_owned()], None)
             .expect("the links are declarable");
 
         assert!(
@@ -2230,7 +2449,7 @@ mod tests {
             Some(100),
         );
         let the_hold_keeps_it = held
-            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
             .expect("the video track is held until the audio track speaks");
 
         let mut shed = a_planner_over_with_a_delivery_deadline_of(
@@ -2238,12 +2457,12 @@ mod tests {
             &["camera"],
             Some(100),
         );
-        shed.plan_the_writes_for("camera", a_video_sync_point(0), 0)
+        shed.plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
             .expect("the first sync point plans");
         let the_deadline_sheds_it = shed
             .plan_the_writes_for(
                 "camera",
-                a_video_delta_frame(33_000_000),
+                a_video_delta_frame(33_000_000).into(),
                 33_000_000 + 100_000_001,
             )
             .expect("a shed frame is not a refusal");
@@ -2573,5 +2792,516 @@ mod tests {
             publisher_priorities_of_objects_written_to(&opened, "2.m4s"),
             vec![AUDIO_MEDIA_TRACK_PRIORITY]
         );
+    }
+
+    /// The envelope's bytes are opaque to the planner, so any bytes stand in.
+    const A_DATA_ENVELOPE: &[u8] = b"\x81\xa3bag\x80";
+
+    #[test]
+    fn a_data_object_never_cuts_a_group_however_many_are_written() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
+
+        let first = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("a data object publishes");
+        let second = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            10_000_000,
+        )
+        .expect("the next data object publishes");
+        let third = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            20_000_000,
+        )
+        .expect("the next data object publishes");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&first),
+            vec!["only:.catalog", "object:telemetry"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&second),
+            vec!["object:telemetry"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&third),
+            vec!["object:telemetry"]
+        );
+    }
+
+    #[test]
+    fn a_data_objects_payload_is_the_bytes_python_handed_over_unparsed() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
+
+        let planned = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("a data object publishes");
+
+        assert_eq!(
+            object_payloads_written_to(&planned, "telemetry"),
+            vec![Bytes::from_static(A_DATA_ENVELOPE)]
+        );
+    }
+
+    #[test]
+    fn a_data_track_opens_its_groups_at_the_data_rung() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
+
+        let planned = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("a data object publishes");
+
+        assert_eq!(
+            publisher_priorities_of_objects_written_to(&planned, "telemetry"),
+            vec![DATA_TRACK_PRIORITY]
+        );
+    }
+
+    #[test]
+    fn a_video_free_broadcast_cuts_a_group_once_its_open_group_is_older_than_the_bound() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("the first data object opens the group");
+
+        let at_the_bound = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS,
+        )
+        .expect("a data object at the bound publishes");
+        let past_the_bound = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 1,
+        )
+        .expect("a data object past the bound publishes");
+        let just_after_the_cut = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 2,
+        )
+        .expect("a data object just after the cut publishes");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&at_the_bound),
+            vec!["object:telemetry"],
+            "a group exactly as old as the bound is not older than it"
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&past_the_bound),
+            vec!["cut", "object:telemetry"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&just_after_the_cut),
+            vec!["object:telemetry"],
+            "the cut is what the next age is measured from"
+        );
+    }
+
+    #[test]
+    fn an_audio_only_broadcast_is_cut_by_the_same_age_bound() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["microphone"]);
+        plan_the_writes_and_report_them_all_written(&mut planner, "microphone", an_opus_packet(0))
+            .expect("the first packet opens the group");
+
+        let past_the_bound = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(20_000_000),
+            LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 20_000_000,
+        )
+        .expect("a packet past the bound publishes");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&past_the_bound),
+            vec!["cut", "object:microphone"]
+        );
+    }
+
+    #[test]
+    fn a_video_free_cmaf_broadcast_is_cut_by_the_age_bound_once_it_has_opened() {
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["microphone"]);
+        let opened = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(0),
+        )
+        .expect("the first packet describes the track and opens the broadcast");
+
+        let past_the_bound = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(20_000_000),
+            LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 20_000_000,
+        )
+        .expect("a packet past the bound publishes");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&opened),
+            vec!["only:0.mp4", "only:.catalog", "object:1.m4s"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&past_the_bound),
+            vec!["cut", "object:1.m4s"]
+        );
+    }
+
+    #[test]
+    fn a_broadcast_with_video_never_reaches_the_age_bound() {
+        let mut planner = a_planner_over(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "microphone", "telemetry"],
+        );
+        plan_the_writes_and_report_them_all_written(&mut planner, "camera", a_video_sync_point(0))
+            .expect("the sync point opens the group");
+
+        let audio_seconds_later = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(5_000_000_000),
+        )
+        .expect("audio publishes");
+        let data_seconds_later = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            6_000_000_000,
+        )
+        .expect("data publishes");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&audio_seconds_later),
+            vec!["object:microphone"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&data_seconds_later),
+            vec!["object:telemetry"]
+        );
+    }
+
+    #[test]
+    fn a_plan_the_transport_never_wrote_gives_back_the_open_groups_age() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("the first data object opens the group");
+        let spent_before = planner.what_planning_spends();
+
+        let never_written = planner
+            .plan_the_writes_for(
+                "telemetry",
+                a_data_object(A_DATA_ENVELOPE),
+                LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 1,
+            )
+            .expect("a data object past the bound plans a cut");
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&never_written.instructions),
+            vec!["cut", "object:telemetry"]
+        );
+        planner.give_back_what_planning_spent(spent_before);
+
+        let retried = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 2,
+        )
+        .expect("the retry plans");
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&retried),
+            vec!["cut", "object:telemetry"],
+            "a cut the transport never made must not count as the group's opening"
+        );
+    }
+
+    #[test]
+    fn a_data_object_is_never_shed_by_the_delivery_deadline_however_late_the_reading_is() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["telemetry"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("the first data object publishes");
+
+        let an_hour_later = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            3_600_000_000_000,
+        )
+        .expect("a data object is not a refusal however late");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&an_hour_later),
+            vec!["cut", "object:telemetry"]
+        );
+        assert_eq!(planner.objects_the_delivery_deadline_shed(), vec![]);
+    }
+
+    #[test]
+    fn a_data_bag_under_cmaf_is_refused_by_name_before_any_hold() {
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "telemetry"]);
+
+        let refusal = refusal_of(
+            planner
+                .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+                .expect_err("cmaf has no packaging for a data bag"),
+        );
+
+        assert!(refusal.contains("telemetry"), "{refusal}");
+        assert!(refusal.contains("bitstream"), "{refusal}");
+        assert!(refusal.contains("streamlib_bag"), "{refusal}");
+        assert_eq!(planner.bytes_held_until_every_cmaf_track_is_described, 0);
+        assert!(
+            planner
+                .samples_held_until_every_cmaf_track_is_described
+                .is_empty()
+        );
+        assert!(!planner.the_hold_stopped_at_its_bound);
+    }
+
+    #[test]
+    fn a_media_bag_on_a_link_that_first_published_data_is_refused_by_name() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("the first data object publishes");
+
+        let refusal = refusal_of(
+            plan_the_writes_and_report_them_all_written(
+                &mut planner,
+                "telemetry",
+                an_opus_packet(20_000_000),
+            )
+            .expect_err("a track's kind is stated once"),
+        );
+
+        assert!(refusal.contains("telemetry"), "{refusal}");
+        assert!(refusal.contains("data"), "{refusal}");
+        assert!(refusal.contains("opus"), "{refusal}");
+    }
+
+    #[test]
+    fn a_data_bag_on_a_link_that_first_published_media_is_refused_by_name() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["camera"]);
+        plan_the_writes_and_report_them_all_written(&mut planner, "camera", a_video_sync_point(0))
+            .expect("h264 publishes");
+
+        let refusal = refusal_of(
+            plan_the_writes_at_and_report_them_all_written(
+                &mut planner,
+                "camera",
+                a_data_object(A_DATA_ENVELOPE),
+                33_000_000,
+            )
+            .expect_err("a track's kind is stated once"),
+        );
+
+        assert!(refusal.contains("camera"), "{refusal}");
+        assert!(refusal.contains("h264"), "{refusal}");
+        assert!(refusal.contains("data"), "{refusal}");
+    }
+
+    fn a_streamlib_bag_planner_declaring(
+        inbound_link_names: &[&str],
+        track_names: Option<&[&str]>,
+    ) -> Result<MoqBroadcastObjectWritePlanner> {
+        a_planner_declaring(
+            MoqContainerFormat::StreamlibBag,
+            inbound_link_names,
+            track_names,
+        )
+    }
+
+    fn a_planner_declaring(
+        container_format: MoqContainerFormat,
+        inbound_link_names: &[&str],
+        track_names: Option<&[&str]>,
+    ) -> Result<MoqBroadcastObjectWritePlanner> {
+        let mut planner = MoqBroadcastObjectWritePlanner::of(
+            container_format,
+            BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(None),
+        );
+        planner.declare_tracks(owned(inbound_link_names), track_names.map(owned))?;
+        Ok(planner)
+    }
+
+    #[test]
+    fn track_names_name_the_streamlib_bag_tracks_in_wiring_order() {
+        let mut planner = a_streamlib_bag_planner_declaring(
+            &["encoder/video", "encoder/audio", "probe/out"],
+            Some(&["video", "audio", "telemetry"]),
+        )
+        .expect("one name per link is declarable");
+
+        let planned = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "probe/out",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("a data object publishes");
+
+        assert_eq!(
+            planner.moq_track_names(),
+            vec![".catalog", "video", "audio", "telemetry"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&planned),
+            vec!["only:.catalog", "object:telemetry"],
+            "the third link's bags land on the third name"
+        );
+    }
+
+    #[test]
+    fn absent_track_names_leave_each_streamlib_bag_track_named_after_its_link() {
+        let planner = a_streamlib_bag_planner_declaring(&["encoder/video", "probe/out"], None)
+            .expect("declarable without names");
+
+        assert_eq!(
+            planner.moq_track_names(),
+            vec![".catalog", "encoder/video", "probe/out"]
+        );
+    }
+
+    #[test]
+    fn track_names_unequal_in_count_to_the_inbound_links_are_refused_by_name() {
+        let refusal = refusal_of(
+            a_streamlib_bag_planner_declaring(&["encoder/video", "probe/out"], Some(&["video"]))
+                .err()
+                .expect("one name for two links is refused"),
+        );
+
+        assert!(refusal.contains("track_names"), "{refusal}");
+        assert!(refusal.contains("1 track"), "{refusal}");
+        assert!(refusal.contains("2 inbound links"), "{refusal}");
+    }
+
+    #[test]
+    fn track_names_under_cmaf_are_refused_by_name() {
+        let refusal = refusal_of(
+            a_planner_declaring(
+                MoqContainerFormat::Cmaf,
+                &["encoder/video"],
+                Some(&["video"]),
+            )
+            .err()
+            .expect("cmaf's track names are the interop contract"),
+        );
+
+        assert!(refusal.contains("track_names"), "{refusal}");
+        assert!(refusal.contains("cmaf"), "{refusal}");
+        assert!(refusal.contains("streamlib_bag"), "{refusal}");
+    }
+
+    #[test]
+    fn a_track_name_that_is_the_catalog_tracks_is_refused_by_name() {
+        let refusal = refusal_of(
+            a_streamlib_bag_planner_declaring(&["probe/out"], Some(&[CATALOG_TRACK_NAME]))
+                .err()
+                .expect("that name is already the catalog track"),
+        );
+
+        assert!(refusal.contains(CATALOG_TRACK_NAME), "{refusal}");
+    }
+
+    #[test]
+    fn a_track_name_given_twice_is_refused_by_name() {
+        let refusal = refusal_of(
+            a_streamlib_bag_planner_declaring(
+                &["encoder/video", "probe/out"],
+                Some(&["video", "video"]),
+            )
+            .err()
+            .expect("two tracks cannot share a name"),
+        );
+
+        assert!(refusal.contains("video"), "{refusal}");
+        assert!(refusal.contains("twice"), "{refusal}");
+    }
+
+    #[test]
+    fn an_empty_track_name_is_refused_by_name() {
+        let refusal = refusal_of(
+            a_streamlib_bag_planner_declaring(&["probe/out"], Some(&[""]))
+                .err()
+                .expect("an empty name names no track"),
+        );
+
+        assert!(refusal.contains("empty"), "{refusal}");
+    }
+
+    #[test]
+    fn a_data_tracks_catalog_entry_is_the_entry_a_media_streamlib_bag_track_gets() {
+        let mut planner =
+            a_planner_over(MoqContainerFormat::StreamlibBag, &["camera", "telemetry"]);
+
+        let planned = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("a data object publishes");
+
+        let catalog_object = the_only_object_written_to(&planned, CATALOG_TRACK_NAME)
+            .expect("the catalog is written before the first object");
+        let catalog: serde_json::Value =
+            serde_json::from_slice(&catalog_object).expect("the catalog is JSON");
+        let mut entries_without_their_names: Vec<serde_json::Value> = catalog["tracks"]
+            .as_array()
+            .expect("the catalog names its tracks")
+            .clone();
+        for entry in &mut entries_without_their_names {
+            entry
+                .as_object_mut()
+                .expect("a track entry is an object")
+                .remove("name");
+        }
+        assert_eq!(entries_without_their_names.len(), 2);
+        assert_eq!(
+            entries_without_their_names[0], entries_without_their_names[1],
+            "the data track's entry differs from the media track's"
+        );
+        assert!(entries_without_their_names[1].get("initTrack").is_none());
     }
 }
