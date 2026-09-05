@@ -18,6 +18,7 @@ Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, t
 5. **Frame-ordering / timestamp / drop-sensitive?** → **v4l2loopback motion** (a `testsrc2` source with a visible per-frame counter, so a drop/repeat shows by eye).
 6. **Color-path change?** → the **PSNR fixture rigs** (below), with at least one negative-injection mode to prove the gate isn't vacuous.
 7. **Audio — capture, playback, the device seam, an audio built-in?** → not this skill. The **audio loopback rigs** (below) measure a known signal rather than pixels, and `/verify-audio` drives them.
+8. **An extension wheel that carries media over a network — WHIP/WHEP, MoQ?** → the **networking arm** (below). Same decode-back lock as the codec rigs, with a real endpoint in the middle.
 
 When unsure, default to the more demanding scenario (encode/decode also exercises camera + display). Current run commands live in the fixture scripts under the engine's `tests/fixtures/` — read them for the exact invocation (they drift; don't cache them here).
 
@@ -68,6 +69,29 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 
 **PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout). Chroma has one floor and no acceptable band: either U or V under 30 dB fails the frame outright. For the two video rigs the bars and the four injection modes live in `cargo xtask psnr` — pure GPU-free image math whose unit tests run in CI, so the scorer itself is gated even though the runs that feed it are not; ffmpeg and ImageMagick are out of *those* two scoring paths. The JPEG rig still shells out to ffmpeg.
 
+## Networking arm
+
+Two rig-only fixtures, one per extension wheel, each owned by the wheel it proves. They are the codec rigs' decode-back with a network hop inside it: the vivid camera and the microphone out through `H264Encoder` / `OpusEncoder`, back through the wheel's player or subscriber into `H264Decoder` / `OpusDecoder`, and the decoded frames read by tap + exchange and scored with `cargo xtask psnr channel-means` against `psnr_vivid_baseline.tsv` at ±0.05. **The lock is that score, never a liveness check** — the network sits inside a path the codec rig already scored, so drift is the wheel's.
+
+- **`packages/streamlib-webrtc/tests/live/whip_whep_roundtrip.sh [out]`** — WHIP publish to Cloudflare Stream and WHEP play-back of the same live input.
+- **`packages/streamlib-moq/tests/live/moq_broadcast_roundtrip.sh [out]`** — publish and subscribe through a draft-16 relay, plus the CMAF **interop arm**: `moq-sub`, built from `cloudflare/moq-rs` (`cargo install --git https://github.com/cloudflare/moq-rs moq-sub`), reads the same broadcast. That is the interop proof the owner asked for on 2026-09-05 — a third-party client parsing the catalog, accepting the init segment and decoding the media beats matching a captured reference in-repo. Only an absent `moq-sub` binary or `SKIP_INTEROP=1` downgrades it to a report; a missing subscribe credential is a cannot-run like any other, and a `moq-sub` that runs and refuses fails the run.
+
+  **Two things that arm gets wrong if you rebuild it from scratch**, both found by review after a green run: `moq-sub` fetches `.catalog` only when passed `--catalog`, and without it silently falls back to hardcoded `0.mp4` / `{track_id}.m4s` names — so the catalog writer can be entirely broken and the arm still passes. And `cargo xtask mp4-inspect` bails only on a missing `moov`, so a capture holding just the init segment parses perfectly: the verdict has to read the *fragment* count, not the exit code.
+
+Each takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. The MoQ fixture is CMAF-only on purpose — `streamlib_bag` names each track after its link's own channel, a cuid2 minted at `add` time, so a subscriber in the same graph would need names that do not exist when it is constructed. Proving that container takes two nodes. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — a relay connect and a CMAF init handshake sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
+
+**Each wheel is measured through its own venv** (`packages/<wheel>/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. A stale `.so` there would be scored and reported as a pass for code that is not in the tree, so the fixture refuses by name rather than measuring it — `maturin develop` before every run, the same rule `/verify-audio` has.
+
+### Credentials — and why absent ones are never a pass
+
+Every endpoint in this arm carries its own credential **in the URL path**: Cloudflare Stream puts the stream key there, and a draft-16 MoQ relay is provisioned per account with its token on the CONNECT `:path`. There is no credential-free draft-16 relay, so the URL *is* the secret.
+
+- They are read from the environment, with the repo-root gitignored `.env` as the fallback: `CLOUDFLARE_WHIP_URL`, `CLOUDFLARE_WHEP_URL`, `CLOUDFLARE_MOQ_DRAFT_16_URL`, `CLOUDFLARE_MOQ_PUB_SUB_TOKEN`, `CLOUDFLARE_MOQ_SUB_TOKEN`. An exported `STREAMLIB_*` value always wins.
+- **Absent credentials exit 77 — cannot-run, never a pass.** Report it as cannot-run in the template's Outcome line.
+- **Never echo one.** The scripts redact the endpoint in their own output; do the same in a report, a PR body, or a log excerpt you paste. `streamlib graph` renders every processor's config, so a MoQ or WHIP node's graph JSON contains the token — read it in a pipe, never save it into the evidence directory and never attach it.
+- **One unavoidable exception, so it is not mistaken for a leak.** `moq-sub` takes its URL positionally and reads no environment variable, so the *subscribe* token sits in that process's `/proc/<pid>/cmdline` for the arm's 25 seconds. It is the subscribe-only token, and the fixture scrubs the tool's stderr before keeping the log.
+
+
 ## Audio loopback rigs
 Two fixture rigs guard the audio path, measuring a known signal — tone frequency / amplitude / distortion, plus a DTMF symbol grid whose *spacing* is what a dropped block moves. Both gate on `virtual_audio_device.sh check` and **exit 77** (`SKIP: no virtual audio device available on this machine`) where no PipeWire session is reachable; 77 is cannot-run and is never reported as a pass:
 - **`e2e_audio_loopback.sh <out>`** — `pw-play` into a null sink, `pw-record` off its monitor, no StreamLib in the path, so it answers "is the rig sound" when the engine won't build. Negative modes: `INJECT_BUG=silence` (30 ms of the tone body zeroed), `drop` (30 ms excised, shifting everything after), `gain` (0.6× amplitude).
@@ -100,8 +124,8 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 ````markdown
 ### E2E Test Report
 
-- **Scenario**: encoder/decoder | camera+display-only
-- **App / fixture**: `examples/camera-python-effects` | `examples/camera-display` | `e2e_camera_display.sh`
+- **Scenario**: encoder/decoder | camera+display-only | networking (whip-whep | moq-broadcast)
+- **App / fixture**: `examples/camera-python-effects` | `examples/camera-display` | `e2e_camera_display.sh` | `whip_whep_roundtrip.sh` | `moq_broadcast_roundtrip.sh`
 - **Codec**: h264 | h265 | n/a
 - **Camera device**: `/dev/videoN` (vivid | Cam Link 4K | other)
 - **Resolution**: 1920x1080 | 1280x720 | other
