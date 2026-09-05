@@ -205,8 +205,13 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
   publish and subscribe through a Cloudflare draft-16 relay — credentials read from the
   environment (Cloudflare secrets, per the owner) for MoQ as well as WHIP, since draft-16
   provisions relays per account and carries the token in the URL path; absent ones reported
-  as cannot-run, never as pass. The CMAF arm additionally proves interop by shape: the
-  catalog and init segment match what `moq-pub` writes. The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` →
+  as cannot-run, never as pass. **The CMAF arm's interop proof is a live third-party read,
+  not an in-repo fixture comparison** (owner, 2026-09-05): `moq-sub`, built from
+  `cloudflare/moq-rs`, subscribes to the same broadcast and must parse the catalog, accept
+  the init segment and decode the media. That is stronger than matching a captured
+  reference — it is the reference client reading the real broadcast — and weaker in one
+  way worth stating: it is rig-only, so CI protects the container's shape through
+  `mp4-atom` round trips and the `moq-catalog` parse oracle alone. The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` →
   `H264Decoder` → tap and exchange → `xtask psnr channel-means` against the per-codec vivid
   baseline within ±0.05, the argument `Mp4Sink` made — the network sits inside a path the
   codec rig already scored, so a mismatch is the wheel's. [networking-extension-wheels]
