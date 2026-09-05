@@ -15,7 +15,7 @@
 
 use mp4_atom::{
     Dinf, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdhd, Mdia, Minf, Moov, Mvex, Mvhd, Smhd, Stbl,
-    Stsd, Tkhd, Trak, Trex, Url, Vmhd,
+    Stco, Stsd, Tkhd, Trak, Trex, Url, Vmhd,
 };
 
 use crate::cmaf_sample_entry::CmafTrackSampleEntry;
@@ -138,6 +138,16 @@ pub(crate) fn build_cmaf_init_segment(
                                     .into_stsd_sample_entry(),
                             ],
                         },
+                        // A fragmented movie has no chunks in its `moov`, so
+                        // this table is empty — but it must be present.
+                        // ISO/IEC 14496-12 §8.7.5 makes a chunk offset box
+                        // mandatory in every `stbl`, and the reference MoQ
+                        // subscriber enforces it literally: without one it
+                        // refuses the whole init segment with "stco and co64
+                        // not found" and plays nothing.
+                        stco: Some(Stco {
+                            entries: Vec::new(),
+                        }),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -384,6 +394,32 @@ mod tests {
             panic!("the second atom is the moov");
         };
         assert_eq!(moov.trak[0].mdia.hdlr.name, "encoder/encoded_video");
+    }
+
+    #[test]
+    fn every_track_carries_a_chunk_offset_table_even_though_it_is_empty() {
+        // ISO/IEC 14496-12 §8.7.5 makes a chunk offset box mandatory in every
+        // `stbl`, and the reference MoQ subscriber enforces it: an init
+        // segment without one is refused outright with "stco and co64 not
+        // found", so the whole broadcast plays nowhere.
+        let bytes = build_cmaf_init_segment(&[a_video_track(1), an_audio_track(2)]).unwrap();
+
+        let Any::Moov(moov) = &decoded_atoms(&bytes)[1] else {
+            panic!("the second atom is the moov");
+        };
+        for trak in &moov.trak {
+            let stco = trak
+                .mdia
+                .minf
+                .stbl
+                .stco
+                .as_ref()
+                .expect("a stbl states a chunk offset table");
+            assert!(
+                stco.entries.is_empty(),
+                "a fragmented movie has no chunks in its moov"
+            );
+        }
     }
 
     #[test]
