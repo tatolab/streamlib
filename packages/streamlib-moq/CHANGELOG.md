@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.1.2...streamlib-moq-v0.1.3) (2026-09-05)
+
+
+### Features
+
+* **extension:** the MoQ drop policy — a delivery deadline that sheds a stale group, audio ahead of video on the priority ladder ([#2181](https://github.com/tatolab/streamlib/issues/2181)) ([8f306e9](https://github.com/tatolab/streamlib/commit/8f306e9aa80794b1037f274fbbc479012fd15ee7))
+
 ## [0.1.2](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.1.1...streamlib-moq-v0.1.2) (2026-09-05)
 
 
