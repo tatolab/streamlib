@@ -133,9 +133,11 @@ wire. No `[NEEDS DECISION]` remains.
   on for `{id}.m4s`. Count mismatch refused by name at `setup()`; absent, today's channel
   name stands; refused by name under `cmaf`, whose names interop fixes. This retires the
   live fixture's stated reason for running `cmaf`.
-- **Data never cuts a group and rides `MEDIA_TRACK_PRIORITY`** until #2159 places it on
-  its ladder; that ticket gains a data case in its scope note, filed by `/derive-tickets`
-  as a comment, not a rewrite.
+- **Data never cuts a group.** `MEDIA_TRACK_PRIORITY` is gone: #2159 split it into
+  `AUDIO_MEDIA_TRACK_PRIORITY` (126) and `VIDEO_MEDIA_TRACK_PRIORITY` (127), keyed on
+  `TrackMedium`, which has no data variant — so a data track's rung is #2172's to place
+  when it adds the medium. #2159 gained the data case in its scope note, filed by
+  `/derive-tickets` as a comment, not a rewrite.
 
 ---
 

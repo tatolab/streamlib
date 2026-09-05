@@ -195,10 +195,19 @@ class MoqBroadcastPublisher:
     `delivery_deadline_ms` is how old a bag may be, by its own monotonic stamp,
     and still be published. A bag past it is never written and the rest of its
     group goes with it, because a decoder cannot use a frame whose reference
-    was shed; the shed ends at the next sync point. A sync point is published
-    however late it is, which is what keeps audio out of the policy's reach —
-    every Opus packet is one. Absent is the shipped behaviour and the baseline
-    a measurement is read against: every bag is written however late it is.
+    was shed; the shed ends at the next sync point. So the unit of loss is the
+    rest of a GOP, not a frame: one frame a millisecond late costs the video
+    until the encoder's next IDR, and a stream that emits no further sync
+    point stays shed until it ends — the deadline is only meaningful beside
+    the encoder's keyframe interval. A sync point is published however late it
+    is, which is what keeps audio out of the policy's reach — every Opus packet
+    is one.
+
+    The stamp ages on the way to this publisher — capture, encode, the link
+    into the helper — and not on the way out: the transport's writer never
+    blocks, so a congested uplink leaves the stamp untouched and this deadline
+    does not fire on it. Absent is the shipped behaviour and the baseline a
+    measurement is read against: every bag is written however late it is.
     """
 
     def __init__(
@@ -258,7 +267,7 @@ class MoqBroadcastPublisher:
         session = self._declared_session()
         if medium == "video":
             frame = EncodedVideoFrame(**bag)
-            session.publish_video_access_unit(
+            reaches_the_transport = session.publish_video_access_unit(
                 inbound_link,
                 frame.codec,
                 frame.annex_b_access_unit_bytes,
@@ -272,7 +281,7 @@ class MoqBroadcastPublisher:
             )
         else:
             packet = EncodedAudioPacket(**bag)
-            session.publish_audio_packet(
+            reaches_the_transport = session.publish_audio_packet(
                 inbound_link,
                 packet.opus_packet_bytes,
                 packet.is_sync_point,
@@ -284,7 +293,8 @@ class MoqBroadcastPublisher:
                 packet.pre_skip,
                 timestamp_ns,
             )
-        self._report_progress()
+        if reaches_the_transport:
+            self._report_progress()
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx

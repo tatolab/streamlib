@@ -35,7 +35,9 @@ use crate::delivery_deadline::MoqPublisherDeliveryDeadline;
 use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
 use crate::error::MoqExtensionError;
 use crate::monotonic_clock::monotonic_now_ns;
-use crate::moq_broadcast_publisher::{MoqBroadcastPublisher, MoqContainerFormat};
+use crate::moq_broadcast_publisher::{
+    MoqBroadcastPublisher, MoqContainerFormat, WhatBecameOfOnePublishedBag,
+};
 use crate::moq_broadcast_subscriber::MoqBroadcastSubscriber;
 use crate::moq_relay_config::MoqRelayConfig;
 
@@ -91,7 +93,8 @@ impl MoqBroadcastPublishingSession {
         Ok(())
     }
 
-    /// Publish one access unit on the track that link owns.
+    /// Publish one access unit on the track that link owns. `true` when it
+    /// reaches the transport; `false` when the delivery deadline shed it.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         inbound_link_name, codec, annex_b_access_unit, is_sync_point, group_index,
@@ -110,7 +113,7 @@ impl MoqBroadcastPublishingSession {
         height: u32,
         color: Option<BTreeMap<String, String>>,
         timestamp_ns: i64,
-    ) -> PyResult<()> {
+    ) -> PyResult<bool> {
         // Copied while the GIL is held: the slice borrows Python's buffer.
         let sample = EncodedMediaSample::VideoAccessUnit(EncodedVideoAccessUnit {
             codec,
@@ -126,7 +129,8 @@ impl MoqBroadcastPublishingSession {
         self.publish(python, inbound_link_name, sample)
     }
 
-    /// Publish one Opus packet on the track that link owns.
+    /// Publish one Opus packet on the track that link owns. `true` when it
+    /// reaches the transport; `false` when the delivery deadline shed it.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         inbound_link_name, opus_packet, is_sync_point, group_index, sequence_index,
@@ -145,7 +149,7 @@ impl MoqBroadcastPublishingSession {
         sample_count: u32,
         pre_skip: u32,
         timestamp_ns: i64,
-    ) -> PyResult<()> {
+    ) -> PyResult<bool> {
         let sample = EncodedMediaSample::AudioPacket(EncodedAudioPacket {
             codec: "opus".to_owned(),
             opus_packet: bytes::Bytes::copy_from_slice(opus_packet),
@@ -227,8 +231,8 @@ impl MoqBroadcastPublishingSession {
         python: Python<'_>,
         inbound_link_name: &str,
         sample: EncodedMediaSample,
-    ) -> PyResult<()> {
-        python.detach(|| {
+    ) -> PyResult<bool> {
+        let became = python.detach(|| {
             let mut publisher = self.locked_publisher()?;
             // Read here rather than inside the planner: one reading covers the
             // whole of one bag's decision, and a test can plan against a stated
@@ -241,7 +245,7 @@ impl MoqBroadcastPublishingSession {
                 now_ns,
             ))
         })?;
-        Ok(())
+        Ok(became == WhatBecameOfOnePublishedBag::ReachesTheTransport)
     }
 
     fn locked_publisher(&self) -> Result<MutexGuard<'_, MoqBroadcastPublisher>, MoqExtensionError> {

@@ -164,7 +164,10 @@ if [ "$SKIP_INTEROP" != "1" ] && [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
 fi
 
 # ── The camera ───────────────────────────────────────────────────────
-lsmod | grep -q vivid || sudo modprobe vivid 2>/dev/null \
+# `/proc/modules` rather than `lsmod | grep -q`: under `pipefail`, `grep -q`
+# closing the pipe on its first match kills `lsmod` with SIGPIPE and the
+# pipeline reads as failed — a race that reports a loaded module as absent.
+grep -q '^vivid ' /proc/modules || sudo modprobe vivid 2>/dev/null \
     || cannot_run "vivid module not available (check kernel config)"
 VIVID_DEVICE=""
 while read -r dev; do

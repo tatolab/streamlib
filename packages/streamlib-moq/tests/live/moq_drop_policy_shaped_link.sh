@@ -15,7 +15,13 @@
 # rate limit bite. Measured on the rig, 2026-09-05.
 #
 # WHAT THIS MEASURES, and what it does not. It reports what the publisher shed
-# and what reached the decoder — which is what the drop policy is for.
+# and what reached the decoder. Read the policy arm knowing what the deadline
+# sees: a bag's age at the publisher's input. `moq-transport`'s writer never
+# blocks, so a congested uplink does not age a bag on its way out, and a
+# policy arm that sheds nothing here is the transport's lack of back pressure
+# showing, not proof the link was fine. What the shape does expose is the
+# baseline's decoder counts under a ceiling — how far a reliable transport
+# falls behind — and whether the deadline fires at all under it.
 # Glass-to-glass latency is NOT measured here: under `cmaf` a received bag's
 # stamp is the fragment's decode time on the subscriber's own clock rather than
 # the producer's, so the two ends share no epoch to subtract. Measuring it
@@ -104,7 +110,10 @@ fi
 export STREAMLIB_MOQ_RELAY_URL
 
 # ── The camera ───────────────────────────────────────────────────────
-lsmod | grep -q vivid || cannot_run "vivid module not loaded"
+# `/proc/modules` rather than `lsmod | grep -q`: under `pipefail`, `grep -q`
+# closing the pipe on its first match kills `lsmod` with SIGPIPE and the
+# pipeline reads as failed — a race that reports a loaded module as absent.
+grep -q '^vivid ' /proc/modules || cannot_run "vivid module not loaded"
 VIVID_DEVICE=""
 while read -r dev; do
     if v4l2-ctl -d "$dev" --info 2>/dev/null | grep -q "Video Capture"; then

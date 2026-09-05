@@ -12,9 +12,12 @@
 //! The only reachable moment to shed work is therefore the one before
 //! `write`, which is where this policy sits.
 //!
-//! A sample is late by its own stamp against the monotonic clock, never by a
-//! queue depth: a queue depth measures the uplink, and what a viewer
-//! experiences is how old the picture is.
+//! A sample is late by its own stamp against the monotonic clock. That stamp
+//! ages on the way *to* this publisher — capture, encode, the link into the
+//! helper — and not on the way out: `write` never blocks, so a congested
+//! uplink leaves the stamp untouched and this deadline does not fire on it.
+//! Reading the uplink's own backlog is a `moq-transport` change, not a policy
+//! one.
 
 use crate::encoded_media_sample::EncodedMediaSample;
 

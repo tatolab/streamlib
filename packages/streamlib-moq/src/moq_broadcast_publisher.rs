@@ -143,7 +143,7 @@ impl MoqBroadcastPublisher {
         inbound_link_name: &str,
         sample: EncodedMediaSample,
         now_ns: i64,
-    ) -> Result<()> {
+    ) -> Result<WhatBecameOfOnePublishedBag> {
         // Connected here rather than in `declare_tracks`: a relay round trip
         // inside `setup()` spends the helper's start-up budget before the graph
         // is running. Before the plan rather than after it: a plan is the only
@@ -161,6 +161,7 @@ impl MoqBroadcastPublisher {
         let PlannedMoqObjectWrites {
             instructions,
             writing_them_all_opens_the_broadcast,
+            the_delivery_deadline_shed_it,
         } = match planned {
             Ok(planned) => planned,
             Err(refusal) => {
@@ -169,8 +170,11 @@ impl MoqBroadcastPublisher {
                 return Err(refusal);
             }
         };
+        if the_delivery_deadline_shed_it {
+            return Ok(WhatBecameOfOnePublishedBag::ShedByTheDeliveryDeadline);
+        }
         if instructions.is_empty() {
-            return Ok(());
+            return Ok(WhatBecameOfOnePublishedBag::ReachesTheTransport);
         }
 
         let Some(session) = self.publishing_session.as_mut() else {
@@ -209,7 +213,7 @@ impl MoqBroadcastPublisher {
             self.object_write_planner
                 .record_that_every_descriptive_object_and_held_sample_was_written();
         }
-        Ok(())
+        Ok(WhatBecameOfOnePublishedBag::ReachesTheTransport)
     }
 
     async fn connect_the_publishing_session_unless_it_is_already_up(&mut self) -> Result<()> {
@@ -291,10 +295,22 @@ enum MoqObjectWriteInstruction {
     },
 }
 
+/// What became of one bag `publish` was handed, for the caller that counts and
+/// says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WhatBecameOfOnePublishedBag {
+    /// Its object reached the transport — or the CMAF hold keeps it and it
+    /// reaches the transport with the flush.
+    ReachesTheTransport,
+    /// The delivery deadline shed it; nothing of it reaches the transport.
+    ShedByTheDeliveryDeadline,
+}
+
 /// What one bag became, ready for a transport that has not been reached yet.
 #[derive(Debug, Clone, PartialEq)]
 struct PlannedMoqObjectWrites {
     instructions: Vec<MoqObjectWriteInstruction>,
+    the_delivery_deadline_shed_it: bool,
     /// Whether these instructions carry the broadcast's descriptive objects and
     /// every sample the hold was keeping for them. The planner records that
     /// only once the caller reports all of them written, so a refusal or a dead
@@ -303,12 +319,20 @@ struct PlannedMoqObjectWrites {
 }
 
 impl PlannedMoqObjectWrites {
-    /// A bag the transport is asked for nothing at all for: the CMAF hold is
-    /// keeping it until every track is describable, or the delivery deadline
-    /// shed it.
-    fn of_a_bag_no_object_is_written_for() -> Self {
+    /// A bag the CMAF hold keeps until every track is describable.
+    fn of_a_bag_the_hold_keeps() -> Self {
         Self {
             instructions: Vec::new(),
+            the_delivery_deadline_shed_it: false,
+            writing_them_all_opens_the_broadcast: false,
+        }
+    }
+
+    /// A bag the delivery deadline shed; the transport is asked for nothing.
+    fn of_a_bag_the_delivery_deadline_shed() -> Self {
+        Self {
+            instructions: Vec::new(),
+            the_delivery_deadline_shed_it: true,
             writing_them_all_opens_the_broadcast: false,
         }
     }
@@ -462,7 +486,7 @@ impl MoqBroadcastObjectWritePlanner {
         ) {
             DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup => {
                 track.record_one_object_the_delivery_deadline_shed(encoded_byte_count_of(&sample));
-                return Ok(PlannedMoqObjectWrites::of_a_bag_no_object_is_written_for());
+                return Ok(PlannedMoqObjectWrites::of_a_bag_the_delivery_deadline_shed());
             }
             DeliveryDeadlineVerdict::PublishIt => track.the_open_group_is_being_shed = false,
         }
@@ -505,6 +529,7 @@ impl MoqBroadcastObjectWritePlanner {
         );
         Ok(PlannedMoqObjectWrites {
             instructions,
+            the_delivery_deadline_shed_it: false,
             writing_them_all_opens_the_broadcast,
         })
     }
@@ -526,12 +551,13 @@ impl MoqBroadcastObjectWritePlanner {
             return Ok(PlannedMoqObjectWrites {
                 instructions: self.declared_tracks[declared_track_index]
                     .plan_the_cmaf_fragment_of(&sample)?,
+                the_delivery_deadline_shed_it: false,
                 writing_them_all_opens_the_broadcast: false,
             });
         }
         if !self.every_declared_track_is_described() {
             self.hold_until_every_declared_track_is_described(declared_track_index, sample)?;
-            return Ok(PlannedMoqObjectWrites::of_a_bag_no_object_is_written_for());
+            return Ok(PlannedMoqObjectWrites::of_a_bag_the_hold_keeps());
         }
 
         // Init first, catalog second: a subscriber that reads the catalog and
@@ -556,6 +582,7 @@ impl MoqBroadcastObjectWritePlanner {
             .extend(self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?);
         Ok(PlannedMoqObjectWrites {
             instructions,
+            the_delivery_deadline_shed_it: false,
             writing_them_all_opens_the_broadcast: true,
         })
     }
@@ -2193,6 +2220,42 @@ mod tests {
             vec!["object:camera"]
         );
         assert_eq!(planner.objects_the_delivery_deadline_shed(), vec![]);
+    }
+
+    #[test]
+    fn a_shed_bag_and_a_held_bag_both_write_nothing_but_only_one_of_them_says_it_was_shed() {
+        let mut held = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::Cmaf,
+            &["camera", "microphone"],
+            Some(100),
+        );
+        let the_hold_keeps_it = held
+            .plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .expect("the video track is held until the audio track speaks");
+
+        let mut shed = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        shed.plan_the_writes_for("camera", a_video_sync_point(0), 0)
+            .expect("the first sync point plans");
+        let the_deadline_sheds_it = shed
+            .plan_the_writes_for(
+                "camera",
+                a_video_delta_frame(33_000_000),
+                33_000_000 + 100_000_001,
+            )
+            .expect("a shed frame is not a refusal");
+
+        assert!(the_hold_keeps_it.instructions.is_empty());
+        assert!(!the_hold_keeps_it.the_delivery_deadline_shed_it);
+        assert!(the_deadline_sheds_it.instructions.is_empty());
+        assert!(
+            the_deadline_sheds_it.the_delivery_deadline_shed_it,
+            "the caller counts a held bag as published and a shed bag as not, so the plan has \
+             to tell them apart"
+        );
     }
 
     #[test]

@@ -26,12 +26,15 @@ use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
 /// the transport config, which is why the endpoint is assembled by hand.
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(4);
 
-// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner, and the two
-// media rungs sit either side of `moq-pub`'s single media literal of 127 so the
+// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner. Video keeps
+// `moq-pub`'s media literal of 127 and audio sits one rung ahead of it, so the
 // broadcast stays interoperable while still saying which medium to prefer. The
-// number reverses meaning once it leaves the header: `moq-transport` hands the
-// same `u8` to quinn's `set_priority`, where larger is sooner, so no one value
-// can rank audio first at both ends. This one is the statement to the relay.
+// direction is read from the draft and has not been checked against a relay;
+// a shaped-link run that finds the relay reading it the other way flips the
+// two. The number reverses meaning once it leaves the header: `moq-transport`
+// hands the same `u8` to quinn's `set_priority`, where larger is sooner, so no
+// one value can rank audio first at both ends. This one is the statement to
+// the relay.
 
 /// The rung the catalog and init tracks are published at.
 pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
