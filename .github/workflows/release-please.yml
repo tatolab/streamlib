@@ -16,6 +16,15 @@ jobs:
       release_created: ${{ steps.tag.outputs.release_created || steps.open.outputs.release_created }}
       tag_name: ${{ steps.tag.outputs.tag_name || steps.open.outputs.tag_name }}
       version: ${{ steps.tag.outputs.major || steps.open.outputs.major }}.${{ steps.tag.outputs.minor || steps.open.outputs.minor }}.${{ steps.tag.outputs.patch || steps.open.outputs.patch }}
+      # The extension wheels are separate release-please packages, versioned and
+      # tagged on their own cadence. Only the root package `.` gets unprefixed
+      # outputs; every other path is prefixed with the path itself, which is why
+      # these are read by index rather than by attribute — and why the three
+      # above still mean the engine wheel and nothing else. An output that was
+      # never set is the empty string, which is how a run that released one
+      # project says so about the others.
+      streamlib_webrtc_tag_name: ${{ steps.tag.outputs['packages/streamlib-webrtc--tag_name'] || steps.open.outputs['packages/streamlib-webrtc--tag_name'] }}
+      streamlib_moq_tag_name: ${{ steps.tag.outputs['packages/streamlib-moq--tag_name'] || steps.open.outputs['packages/streamlib-moq--tag_name'] }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,13 +85,30 @@ jobs:
           git checkout "$BRANCH"
           ./target/debug/xtask check-workspace-version-pins --fix
           cargo update --workspace
+          # An extension wheel is its own workspace with its own lockfile, and a
+          # lockfile records its root package's version. release-please bumps
+          # each extension's Cargo.toml through `extra-files`, so without this
+          # the bump alone leaves that lockfile a version behind and every
+          # `--locked` build in the extension's CI lane fails on main. Not an
+          # enrolment in `check-workspace-version-pins`, which stays workspace-
+          # only by design: this is one lockfile catching up to its own manifest.
+          #
+          # Discovered by the entry-point group pip records, so a third
+          # extension needs no edit here — and so the held pre-pivot packages
+          # beside them, which have not resolved since the plugin SDK was
+          # deleted, are never handed to cargo.
+          for extension_pyproject in packages/*/pyproject.toml; do
+            grep -q 'streamlib.extensions' "$extension_pyproject" || continue
+            cargo update --workspace \
+              --manifest-path "$(dirname "$extension_pyproject")/Cargo.toml"
+          done
           if git diff --quiet; then
             echo "version pins and Cargo.lock already in sync"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -u -- Cargo.lock '*Cargo.toml'
+          git add -u -- '*Cargo.lock' '*Cargo.toml'
           git commit -m "chore: sync the version pins and Cargo.lock to the release version"
           git push origin "$BRANCH"
 
@@ -130,12 +156,16 @@ jobs:
   # consumes the `@tatolab/streamlib-client` package it publishes. Restoring it
   # to the release path is a decision for whenever a consumer exists.
 
-  # Build the wheel onto the release just cut and republish the simple index.
+  # Build the wheels onto the releases just cut and republish the simple index.
   # Called in-run for the same reason trigger-schemas is: the release was
   # created by GITHUB_TOKEN, so `on: release` would never fire.
+  #
+  # One call whatever released, because one index serves every project and is
+  # regenerated whole: a blank tag builds nothing for that project, and a run
+  # where all three are blank never gets here at all.
   trigger-wheel-release:
     needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
+    if: ${{ needs.release-please.outputs.release_created || needs.release-please.outputs.streamlib_webrtc_tag_name || needs.release-please.outputs.streamlib_moq_tag_name }}
     permissions:
       contents: write
       pages: write
@@ -143,4 +173,6 @@ jobs:
     uses: ./.github/workflows/release-wheel.yml
     with:
       tag_name: ${{ needs.release-please.outputs.tag_name }}
+      streamlib_webrtc_tag_name: ${{ needs.release-please.outputs.streamlib_webrtc_tag_name }}
+      streamlib_moq_tag_name: ${{ needs.release-please.outputs.streamlib_moq_tag_name }}
     secrets: inherit

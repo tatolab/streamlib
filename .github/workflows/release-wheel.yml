@@ -5,6 +5,12 @@ name: Release Wheel
 # `pip install streamlib --index-url <pages-url>` is one stable incantation.
 # PyPI publication waits for the project rename; the artifact is identical.
 #
+# Every project this repo publishes comes through here, because one index serves
+# them all and it is regenerated whole on every run. Each is versioned, tagged
+# and built independently — a tag names exactly one wheel to build — but the
+# index rebuild waits for all of them, so a run that releases the engine wheel
+# and an extension together publishes one index describing both.
+#
 # Called from release-please.yml rather than triggered by `on: release`, for the
 # same reason `trigger-schemas` is: release-please runs on the default
 # GITHUB_TOKEN, and GitHub does not start workflow runs from events that token
@@ -13,15 +19,36 @@ on:
   workflow_call:
     inputs:
       tag_name:
-        description: "Release tag to attach the wheel to"
+        description: "Release tag to attach the engine wheel to (blank = no engine wheel this run)"
         type: string
-        required: true
+        required: false
+        default: ""
+      streamlib_webrtc_tag_name:
+        description: "Release tag to attach the streamlib-webrtc wheel to (blank = not released)"
+        type: string
+        required: false
+        default: ""
+      streamlib_moq_tag_name:
+        description: "Release tag to attach the streamlib-moq wheel to (blank = not released)"
+        type: string
+        required: false
+        default: ""
   # Rebuilding the index alone is the common manual case — a release edited or
-  # deleted by hand leaves the index describing files that are not there.
+  # deleted by hand leaves the index describing files that are not there. Every
+  # tag input blank is exactly that: no wheel is built and the index is
+  # regenerated from the release history.
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to attach a wheel to (blank = rebuild the index only)"
+        description: "Release tag to attach the engine wheel to (blank = rebuild the index only)"
+        type: string
+        required: false
+      streamlib_webrtc_tag_name:
+        description: "Release tag to attach the streamlib-webrtc wheel to"
+        type: string
+        required: false
+      streamlib_moq_tag_name:
+        description: "Release tag to attach the streamlib-moq wheel to"
         type: string
         required: false
 
@@ -228,12 +255,44 @@ jobs:
           gh release upload "${{ inputs.tag_name }}" \
             sdk/streamlib-python-wheel/dist/*.whl --clobber
 
+  # An extension wheel is a standalone project with its own release cadence, so
+  # each is called out by name and only when its own tag was cut. Two blocks
+  # rather than a matrix over a JSON array: an empty `include` is a matrix
+  # expansion failure, and a third extension is six lines here.
+  build-streamlib-webrtc-wheel:
+    if: inputs.streamlib_webrtc_tag_name != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-webrtc
+      extension_distribution_name: streamlib-webrtc
+      extension_import_package_name: streamlib_webrtc
+      tag_name: ${{ inputs.streamlib_webrtc_tag_name }}
+
+  build-streamlib-moq-wheel:
+    if: inputs.streamlib_moq_tag_name != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-extension-wheel.yml
+    with:
+      extension_package_directory: packages/streamlib-moq
+      extension_distribution_name: streamlib-moq
+      extension_import_package_name: streamlib_moq
+      tag_name: ${{ inputs.streamlib_moq_tag_name }}
+
   publish-simple-index:
     name: PEP 503 simple index
-    # `always()` plus the explicit result check: an index-only rebuild skips the
-    # wheel job, and a skipped dependency must not skip this too.
-    needs: build-wheel
-    if: always() && needs.build-wheel.result != 'failure'
+    # `always()` plus the explicit result check: an index-only rebuild skips
+    # every wheel job, and a run that releases one project skips the others —
+    # a skipped dependency must not skip this too. A failed one must, though:
+    # regenerating the index while a wheel that was supposed to be attached is
+    # missing publishes an index that quietly omits it.
+    needs:
+      - build-wheel
+      - build-streamlib-webrtc-wheel
+      - build-streamlib-moq-wheel
+    if: always() && !contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -257,6 +316,9 @@ jobs:
 
       # Rebuilt from the whole release history rather than appended to, so a
       # re-run repairs a bad index and a deleted release drops out on its own.
+      # The listing is the generator's only input, which is what lets one run
+      # publish every project: an extension's wheel is an asset on its own
+      # release, and the grouping is by the wheel's own name.
       - name: Generate the index from every published release
         env:
           GH_TOKEN: ${{ github.token }}
