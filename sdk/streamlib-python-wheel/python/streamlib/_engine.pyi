@@ -68,7 +68,9 @@ __all__ = [
     "capability_extension_host_for_the_app_process",
     "capability_extension_host_for_the_helper_process",
     "close_test_harness_channel",
+    "decode_msgpack_bytes_to_python_object",
     "decode_tapped_channel_bag_frame_to_python_object",
+    "encode_bag_to_msgpack_bytes",
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
@@ -1550,6 +1552,24 @@ def decode_tapped_channel_bag_frame_to_python_object(
     included; this reads exactly the payload the header declares. Refuses a bag
     shorter than its own declared length rather than returning the prefix that
     did arrive.
+    """
+
+def encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes:
+    """Encode a bag to the msgpack bytes the wire carries, for a caller — an
+    extension wheel with its own transport — that carries them itself.
+
+    The engine's one bag codec, reachable: a dict with string keys at every
+    level, values from `dict`, `list`, `tuple`, `str`, `bytes`, `int`, `float`,
+    `bool` and `None`, `bytes` as msgpack `bin` at 1×. Anything else raises
+    `TypeError`, and an integer wider than 64 bits raises `ValueError`.
+    """
+
+def decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any:
+    """Decode msgpack bytes into ordinary Python data.
+
+    Unlike `decode_tapped_channel_bag_frame_to_python_object` these are payload
+    bytes with no transport frame header in front of them. Nesting is bounded
+    at decode, so bytes from an untrusted peer cannot recurse without limit.
     """
 
 def capability_extension_host_for_the_app_process(

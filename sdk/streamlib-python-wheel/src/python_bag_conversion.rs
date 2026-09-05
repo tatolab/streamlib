@@ -54,6 +54,32 @@ pub(crate) fn decode_msgpack_to_python_object<'py>(
     msgpack_value_to_python_object(python, &value)
 }
 
+/// Encode a bag to the msgpack bytes the wire carries, for a caller carrying
+/// them itself.
+///
+/// An extension wheel putting a bag on its own transport needs the engine's one
+/// codec — a second one in the extension would answer a different question about
+/// what a bag is. Nothing is added here: the same named-map rule, the same
+/// refusals, and no link is read or written.
+#[pyfunction]
+pub(crate) fn encode_bag_to_msgpack_bytes<'py>(
+    bag: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    Ok(PyBytes::new(bag.py(), &encode_bag_to_msgpack(bag)?))
+}
+
+/// Decode msgpack bytes into ordinary Python data.
+///
+/// Unlike the tapped-frame decoder these are payload bytes with no
+/// [`FrameHeader`] in front of them — what an extension's transport delivered.
+#[pyfunction]
+pub(crate) fn decode_msgpack_bytes_to_python_object<'py>(
+    python: Python<'py>,
+    msgpack_bytes: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    decode_msgpack_to_python_object(python, msgpack_bytes)
+}
+
 /// Decode one raw tapped-channel bag into ordinary Python data.
 ///
 /// A tap forwards the channel's wire bytes verbatim, header included, so the
@@ -684,6 +710,100 @@ mod tests {
             let nested_int_keyed = PyDict::new(python);
             nested_int_keyed.set_item("inner", &int_keyed).unwrap();
             assert!(encode_bag_to_msgpack(nested_int_keyed.as_any()).is_err());
+        });
+    }
+
+    /// What an extension holding a bag over its own transport gets back — the
+    /// nesting intact and `bytes` still `bytes`, not a list of integers.
+    #[test]
+    fn the_exported_pair_round_trips_a_nested_bag_carrying_binary() {
+        Python::initialize();
+        Python::attach(|python| {
+            let nested = PyDict::new(python);
+            nested
+                .set_item("payload", PyBytes::new(python, &[0u8, 200, 7]))
+                .unwrap();
+            nested.set_item("items", vec![1i64, 2, 3]).unwrap();
+            let bag = PyDict::new(python);
+            bag.set_item("label", "telemetry").unwrap();
+            bag.set_item("nested", &nested).unwrap();
+
+            let encoded = encode_bag_to_msgpack_bytes(bag.as_any()).unwrap();
+            let decoded =
+                decode_msgpack_bytes_to_python_object(python, encoded.as_bytes()).unwrap();
+
+            assert!(decoded.eq(&bag).unwrap(), "round trip changed the bag");
+            assert!(
+                decoded
+                    .get_item("nested")
+                    .unwrap()
+                    .get_item("payload")
+                    .unwrap()
+                    .is_instance_of::<PyBytes>()
+            );
+        });
+    }
+
+    /// The msgpack framing the fixture's bag puts around a `bin` payload: the
+    /// map header, one key, and the length prefix. A `bin` payload rides at 1×,
+    /// so anything beyond this means it was encoded as something else.
+    const FRAMING_BYTES_AROUND_A_LONE_PAYLOAD: usize = 16;
+
+    /// The byte count is the assertion: the same 1024 bytes as a msgpack array
+    /// would be over 2000, because every value above 127 costs a marker too.
+    #[test]
+    fn the_exported_encode_carries_binary_as_bin_at_one_times_its_length() {
+        Python::initialize();
+        Python::attach(|python| {
+            let payload = vec![0xFFu8; 1024];
+            let bag = PyDict::new(python);
+            bag.set_item("payload", PyBytes::new(python, &payload))
+                .unwrap();
+
+            let encoded = encode_bag_to_msgpack_bytes(bag.as_any()).unwrap();
+            let encoded = encoded.as_bytes();
+
+            assert!(
+                encoded.len() <= payload.len() + FRAMING_BYTES_AROUND_A_LONE_PAYLOAD,
+                "a {}-byte payload encoded to {} bytes — that is not a bin at 1×",
+                payload.len(),
+                encoded.len()
+            );
+            assert!(
+                encoded.windows(payload.len()).any(|run| run == payload),
+                "the payload is not carried verbatim"
+            );
+        });
+    }
+
+    /// The export forwards the codec's refusals rather than softening them —
+    /// an extension author learns the same rule at the same boundary.
+    #[test]
+    fn the_exported_encode_refuses_a_top_level_that_is_not_a_named_map() {
+        Python::initialize();
+        Python::attach(|python| {
+            let list_bag = PyList::new(python, [1i64, 2, 3]).unwrap();
+            let failure = encode_bag_to_msgpack_bytes(list_bag.as_any()).unwrap_err();
+            assert!(
+                failure
+                    .to_string()
+                    .contains("a bag is a dict with string keys"),
+                "got: {failure}"
+            );
+        });
+    }
+
+    #[test]
+    fn the_exported_encode_refuses_a_non_string_key() {
+        Python::initialize();
+        Python::attach(|python| {
+            let int_keyed = PyDict::new(python);
+            int_keyed.set_item(1i64, "value").unwrap();
+            let failure = encode_bag_to_msgpack_bytes(int_keyed.as_any()).unwrap_err();
+            assert!(
+                failure.to_string().contains("bag keys must be strings"),
+                "got: {failure}"
+            );
         });
     }
 
