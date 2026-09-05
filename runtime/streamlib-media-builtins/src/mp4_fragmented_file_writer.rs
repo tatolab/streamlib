@@ -1419,6 +1419,52 @@ mod tests {
         }
     }
 
+    /// The mirror of the acceptance above: strip the box back out and the same
+    /// independent parser refuses the file, which is what makes it an oracle.
+    #[test]
+    fn an_independent_parser_refuses_the_written_movie_header_with_its_chunk_offset_box_removed() {
+        let (file, _) = write_one_video_track(4);
+        let atoms = parse_written_atoms(&file).expect("the file re-parses");
+        let Any::Ftyp(ftyp) = &atoms[0] else {
+            panic!("the file opens with ftyp, got {:?}", atoms[0]);
+        };
+
+        let mut header_only = Vec::new();
+        ftyp.encode(&mut header_only).expect("ftyp re-encodes");
+        only_moov(&atoms)
+            .encode(&mut header_only)
+            .expect("moov re-encodes");
+        let header_only_size = header_only.len() as u64;
+        mp4::Mp4Reader::read_header(std::io::Cursor::new(header_only), header_only_size).expect(
+            "ftyp and moov alone carry the parser as far as the check, no fragments needed",
+        );
+
+        let mut moov_without_the_chunk_offset_box = only_moov(&atoms).clone();
+        for trak in &mut moov_without_the_chunk_offset_box.trak {
+            trak.mdia.minf.stbl.stco = None;
+        }
+        let mut without_the_chunk_offset_box = Vec::new();
+        ftyp.encode(&mut without_the_chunk_offset_box)
+            .expect("ftyp re-encodes");
+        moov_without_the_chunk_offset_box
+            .encode(&mut without_the_chunk_offset_box)
+            .expect("moov re-encodes");
+        let without_the_box_size = without_the_chunk_offset_box.len() as u64;
+
+        let refusal = mp4::Mp4Reader::read_header(
+            std::io::Cursor::new(without_the_chunk_offset_box),
+            without_the_box_size,
+        )
+        .expect_err("the independent parser refuses a stbl carrying neither stco nor co64");
+        assert!(
+            matches!(
+                refusal,
+                mp4::Error::Box2NotFound(mp4::BoxType::StcoBox, mp4::BoxType::Co64Box)
+            ),
+            "the refusal names the box the writer is on the hook for, got {refusal:?}"
+        );
+    }
+
     #[test]
     fn a_video_samples_duration_is_the_delta_to_its_successor() {
         let (file, _) = write_one_video_track(4);
