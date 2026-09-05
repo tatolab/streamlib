@@ -19,7 +19,7 @@ proc-macro2 = "1.0"
 proc-macro-crate = "3"
 
 # Execution types (shared with streamlib for code generation)
-streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.18.50" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.18.51" }
 
 [dev-dependencies]
 crossbeam-channel = "0.5"
