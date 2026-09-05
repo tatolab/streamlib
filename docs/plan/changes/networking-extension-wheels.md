@@ -133,21 +133,58 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
 
 - **DECIDED** — `packages/streamlib-moq/`: the same standalone shape on `moq-transport`,
   `quinn`, `rustls` and `rustls-native-certs`, with `src/moq_session.rs` and
-  `src/moq_catalog.rs` moved from `runtime/streamlib-moq` — the process-global
-  `RUNTIME_SESSIONS` registry and `sessions_for_runtime` do not move, since one processor
-  owns one session — and the relay URL becomes config with the draft-14 Cloudflare relay as
-  its default. `extension.py:load` brings up the runtime and registers `moq`. The move
-  checks current `moq-transport`, `quinn` and `rustls` first; the old path's TLS and
-  draft-version patches may be upstream. [networking-extension-wheels]
+  its catalog mined from `runtime/streamlib-moq` rather than moved — the old document
+  attributed tracks to processor import paths and has no relation to the
+  draft-ietf-moq-catalogformat-01 JSON a player reads, and the process-global
+  `RUNTIME_SESSIONS` registry and `sessions_for_runtime` do not come either, since one
+  processor owns one session — and the relay URL becomes config, carrying the relay's auth token in
+  its path and therefore having no default: a draft-16 relay is provisioned per account,
+  so no address this wheel could ship would reach one. `extension.py:load` brings up
+  the runtime and registers `moq`. The version check this clause asked for was made
+  (2026-09-04): `moq-transport` 0.16.2, the draft-16 revision, because Cloudflare deploys
+  draft-16 and it carries the acknowledgement and namespace machinery draft-14 lacks —
+  owner ruling, superseding this clause's original draft-14 default. Draft-16 requires
+  authentication, so no credential-free public relay remains.
+  [networking-extension-wheels]
 - **DECIDED** — `MoqBroadcastPublisher`: `@processor`, one fan-in input `tracks`, one MoQ
-  track per inbound link named by its channel, the catalog derived from them; config
-  `relay_url` and `broadcast` (default `streamlib/<runtime_id>`). A bag's `is_sync_point`
-  opens a subgroup and `group_index` / `sequence_index` name the group and object.
-  `MoqBroadcastSubscriber`: `@processor(execution = "manual")`, outputs `encoded_video` and
-  `encoded_audio`, config `relay_url`, `broadcast`, `video_track`, `audio_track`; the
-  processor-owned thread writes each received object as a bag literal carrying the group
-  and object it arrived in as the ordering pair, the producer's stamp preserved from the
-  object rather than restamped. [networking-extension-wheels]
+  track per inbound link, the catalog derived from them; config `relay_url` (required — a
+  draft-16 relay is provisioned per account and carries its token in the path, so there is
+  no default that would work), `broadcast` (default `streamlib/<runtime_id>`) and
+  `container_format`. **The container names the tracks**: on `"cmaf"` they are `.catalog`,
+  `0.mp4` and `{track_id}.m4s`, because a subscriber not asked to fetch a catalog hardcodes
+  exactly those; on `"streamlib_bag"` each is its link's channel name.
+  **The MoQ group id is `moq-transport`'s own monotonic counter, and a group is cut by a
+  video sync point cutting every track at once** — the reference publisher's rule, and what
+  makes a group a GOP across audio and video. Naming the group from the bag's `group_index`
+  was this change's original design and does not survive contact: `SubgroupsWriter::create`
+  hands back a live writer for a group id at or below the latest and then drops every
+  object written to it with no error on either side, and a subgroup is retained only while
+  it is the newest — so audio, whose every packet is a sync point, would open one group per
+  packet and lose almost all of them. The producer's ordering pair rides the object instead;
+  it could not ride the transport in any case, because `SubgroupObjectReader::object_id` is
+  a per-subgroup local counter and the session discards the wire object id before an
+  application can read it. `MoqBroadcastSubscriber`: `@processor(execution = "manual")`,
+  outputs `encoded_video` and `encoded_audio`, config `relay_url`, `broadcast`,
+  `video_track`, `audio_track`, `container_format`; the processor-owned thread writes each
+  received object as a bag literal. **On `"streamlib_bag"` the producer's ordering pair and
+  stamp are preserved from the object, never re-minted or restamped; on `"cmaf"` the
+  container carries neither, so the subscriber mints the pair by the engine's own
+  producer-side rule and takes the stamp from the fragment's decode time.**
+  [networking-extension-wheels]
+- **DECIDED** — Two container formats, selected by `container_format` on each processor and
+  declared per track in the catalog's own `packaging` field. `"cmaf"` is the default,
+  because interop is the point: the broadcast is laid out as `moq-pub` lays one out — a
+  `.catalog` track carrying draft-ietf-moq-catalogformat-01 JSON, an init track carrying
+  `ftyp` + `moov`, media tracks whose objects are self-contained `moof` + `mdat` fragments —
+  so `moq-js` and `moq-sub` can play it. `"streamlib_bag"` is the msgpack envelope, kept
+  because CMAF is lossy against the bag contract: the ordering pair becomes container
+  timing, `pre_skip` becomes the `dOps` box, colour goes into the VUI, and only the envelope
+  can write the producer's pair back unchanged. The wheel builds CMAF on `mp4-atom`, the
+  same crate the engine's own fMP4 writer is built on, carrying its own Annex-B conversion
+  and sample entries — the shipped precedent being `streamlib-webrtc`'s own SPS parser. It
+  is not a port of `Mp4FragmentedFileWriter`, whose growing file, shared `moov` and
+  cross-track epoch are file-shaped and wrong here. Owner ruling, 2026-09-04: MoQ had never
+  been finished, and finished means interoperable. [networking-extension-wheels]
 
 ## ADDED: §Networking — the publish path and the CI lane
 
@@ -168,9 +205,16 @@ narrows a decided clause are MODIFIED entries with the fact that forced them.
   literal checked against the wire contract on the `wired_link` fixture pattern. Live,
   rig-only, under `/verify-live` with a networking arm: WHIP publish of the vivid camera
   and the known signal to Cloudflare Stream and WHEP play-back of the same stream, and MoQ
-  publish and subscribe through Cloudflare's public relay — credentials read from the
-  environment (Cloudflare secrets, per the owner), absent ones reported as cannot-run, never
-  as pass. The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` →
+  publish and subscribe through a Cloudflare draft-16 relay — credentials read from the
+  environment (Cloudflare secrets, per the owner) for MoQ as well as WHIP, since draft-16
+  provisions relays per account and carries the token in the URL path; absent ones reported
+  as cannot-run, never as pass. **The CMAF arm's interop proof is a live third-party read,
+  not an in-repo fixture comparison** (owner, 2026-09-05): `moq-sub`, built from
+  `cloudflare/moq-rs`, subscribes to the same broadcast and must parse the catalog, accept
+  the init segment and decode the media. That is stronger than matching a captured
+  reference — it is the reference client reading the real broadcast — and weaker in one
+  way worth stating: it is rig-only, so CI protects the container's shape through
+  `mp4-atom` round trips and the `moq-catalog` parse oracle alone. The decode-back is the lock: `WhepPlayer` / `MoqBroadcastSubscriber` →
   `H264Decoder` → tap and exchange → `xtask psnr channel-means` against the per-codec vivid
   baseline within ±0.05, the argument `Mp4Sink` made — the network sits inside a path the
   codec rig already scored, so a mismatch is the wheel's. [networking-extension-wheels]

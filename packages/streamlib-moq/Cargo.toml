@@ -1,0 +1,74 @@
+[package]
+name = "streamlib-moq"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+description = "Media over QUIC publish and subscribe for StreamLib, as a capability extension wheel."
+repository = "https://github.com/tato123/streamlib"
+license = "BUSL-1.1"
+publish = false
+
+# `_native` is the module `streamlib_moq.processors` imports. cdylib only:
+# nothing links this crate as a Rust library, and the CPython ABI is the one
+# binary boundary an extension is allowed to cross.
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+# abi3-py310 matches the streamlib wheel's floor, so one built artifact covers
+# CPython 3.10 and every later GIL-enabled release.
+pyo3 = { version = "0.29.2", features = ["abi3-py310"] }
+
+# 0.16.x, not the 0.14 line the runtime crate froze on: Cloudflare deploys
+# draft-16, and draft-16 is where SUBSCRIBE_NAMESPACE, MAX_REQUEST_ID and
+# REQUESTS_BLOCKED live. `web-transport` stays on 0.10 because that is what
+# moq-transport itself depends on — a 0.12 here would resolve a second,
+# incompatible copy of the session type.
+moq-transport = "0.16.2"
+web-transport = "0.10.9"
+quinn = "0.11.11"
+url = "2.5.8"
+# `ring` is what this wheel installs as the process default provider, but
+# `aws-lc-rs` is compiled in regardless: `web-transport-quinn`'s default feature
+# set turns on `quinn/rustls-aws-lc-rs`, and cargo feature unification is
+# additive, so no `default-features = false` here can switch it off. The cost is
+# a `cmake` and C-compiler build requirement for `aws-lc-sys`, which is why the
+# CI lane installs cmake. The explicit provider passed to the client config is
+# still the one this wheel chose.
+rustls = { version = "0.23.43", features = ["ring"] }
+rustls-native-certs = "0.8.4"
+
+# The CMAF container path. `mp4-atom` is the same crate the engine's own
+# fragmented-MP4 writer is built on, so the box layer is shared even though no
+# code is: an extension links no engine crate.
+mp4-atom = "0.15"
+# The `streamlib_bag` container path: the bag's own wire keys, msgpack, with
+# `bitstream` as `bin` rather than an array of numbers.
+rmp-serde = "1.3.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_bytes = "0.11.19"
+serde_json = "1.0"
+
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+bytes = "1.12.1"
+thiserror = "2.0.17"
+# The one clock the whole runtime agrees on, read the same way the wheel reads it.
+libc = "0.2"
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }
+# The reference catalog types, as a test oracle only. They are not a dependency
+# of the wheel because `TrackPackaging` is a closed `cmaf`/`loc` enum, and this
+# publisher also declares a `streamlib-bag` packaging it cannot hold — so the
+# catalog is written from this crate's own types and then proved to parse back
+# as the reference's on the CMAF path.
+moq-catalog = "0.2.3"
+serde_json = "1.0"
+
+# Not a member of the engine workspace: an extension wheel is built exactly as a
+# third party would build one, with its own root, its own lockfile and its own
+# release cadence.
+[workspace]

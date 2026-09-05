@@ -1,0 +1,58 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "streamlib-moq"
+version = "0.1.0"
+description = "Media over QUIC publish and subscribe for StreamLib."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Multimedia :: Video",
+]
+# The engine is a binary dependency, never a source one: this wheel links no
+# streamlib crate and speaks no engine internals.
+#
+# 0.18.48 is the earliest release carrying both halves this wheel needs — the
+# capability-extension mechanism `extension.py:load` is declared against, and
+# `read_from_inbound_link_with_timestamp`, which the publisher reads every bag
+# through. Verified against an installed 0.18.48, not inferred from a changelog.
+dependencies = ["streamlib>=0.18.48"]
+
+# What pip records at install and the engine reads back through
+# `importlib.metadata` when a process takes an engine role.
+[project.entry-points."streamlib.extensions"]
+moq = "streamlib_moq.extension:load"
+
+[tool.maturin]
+python-source = "python"
+module-name = "streamlib_moq._native"
+features = ["pyo3/extension-module"]
+
+[tool.pyright]
+include = ["python", "tests"]
+# The package is checked from source, not from an install, so `tests/` needs the
+# package root on the search path.
+extraPaths = ["python"]
+# Checked at the version floor rather than whatever interpreter the venv happens
+# to be — `requires-python` is the promise.
+pythonVersion = "3.10"
+# Standard rather than strict, matching the engine wheel: strict turns on
+# `reportPrivateUsage`, which fights the `_native` shape this package is built
+# on, and demands annotations on every pytest fixture parameter.
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# `_native` is a compiled artifact, so a checkout has the stub and not the `.so`
+# it describes. `mypy.stubtest` is what checks the stub against the real binary.
+reportMissingModuleSource = "none"
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_gpu: needs a real GPU; deselected in CI with -m 'not requires_gpu'",
+]

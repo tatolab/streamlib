@@ -204,6 +204,8 @@ jobs:
         include:
           - extension: streamlib-webrtc
             native_module: streamlib_webrtc._native
+          - extension: streamlib-moq
+            native_module: streamlib_moq._native
 
     steps:
       - uses: actions/checkout@v4
@@ -220,6 +222,17 @@ jobs:
         uses: ./.github/actions/install-linux-engine-build-dependencies
         with:
           packages: python3-dev
+
+      # `streamlib-moq` builds `aws-lc-sys`, which needs cmake and a C
+      # compiler. The runner image ships both, and apt-installing cmake here
+      # instead costs a 13 MB download through the mirror this repo already had
+      # to put a time bound on — a bound that download exceeded. Assert it
+      # rather than fetch it, so a runner that ever drops cmake fails in seconds
+      # with a legible reason instead of inside an aws-lc-sys build script.
+      - name: The build tools the extension's native dependencies assume
+        run: |
+          cmake --version
+          cc --version
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
