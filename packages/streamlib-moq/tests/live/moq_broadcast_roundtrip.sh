@@ -391,7 +391,11 @@ if [ "$SKIP_INTEROP" != "1" ]; then
     elif [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
         INTEROP_VERDICT="cannot run — no subscribe credential (STREAMLIB_MOQ_SUB_URL or CLOUDFLARE_MOQ_SUB_TOKEN)"
     else
-        timeout 25 moq-sub "$STREAMLIB_MOQ_SUB_URL" \
+        # `--name` is required and is the broadcast, not a track: moq-sub
+        # subscribes to the namespace and then fetches `.catalog`, `0.mp4` and
+        # the `{track_id}.m4s` tracks by the fallback contract. It writes one
+        # fMP4 stream to stdout.
+        timeout 25 moq-sub --name "$BROADCAST" "$STREAMLIB_MOQ_SUB_URL" \
             > "$OUTPUT_DIR/moq_sub_output.mp4" 2> "$OUTPUT_DIR/moq_sub.log" || true
         interop_bytes="$(stat -c %s "$OUTPUT_DIR/moq_sub_output.mp4" 2>/dev/null || echo 0)"
         if [ "$interop_bytes" -gt 0 ] \
