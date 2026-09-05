@@ -156,11 +156,6 @@ expression = "BUSL-1.1"
 license-files = []
 
 [[licenses.clarify]]
-name = "streamlib-moq"
-expression = "BUSL-1.1"
-license-files = []
-
-[[licenses.clarify]]
 name = "streamlib-processor-schema"
 expression = "BUSL-1.1"
 license-files = []
