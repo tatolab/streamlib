@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.51](https://github.com/tatolab/streamlib/compare/v0.18.50...v0.18.51) (2026-09-05)
+
+
+### Bug Fixes
+
+* **media:** Mp4Sink writes the mandatory chunk offset box, and §Networking drops the claims MoQ falsified ([#2163](https://github.com/tatolab/streamlib/issues/2163)) ([37ffe73](https://github.com/tatolab/streamlib/commit/37ffe7375f22251152bab76fb646681765d86a1c))
+
 ## [0.18.50](https://github.com/tatolab/streamlib/compare/v0.18.49...v0.18.50) (2026-09-05)
 
 
