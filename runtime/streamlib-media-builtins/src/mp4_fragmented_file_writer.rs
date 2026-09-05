@@ -18,7 +18,7 @@ use std::io::Write;
 
 use mp4_atom::{
     Codec, Dinf, Dref, Encode, FixedPoint, Ftyp, Hdlr, Mdhd, Mdia, Mfhd, Minf, Moof, Moov, Mvex,
-    Mvhd, Smhd, Stbl, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url, Vmhd,
+    Mvhd, Smhd, Stbl, Stco, Stsd, Tfdt, Tfhd, Tkhd, Traf, Trak, Trex, Trun, TrunEntry, Url, Vmhd,
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
@@ -756,6 +756,14 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                             stsd: Stsd {
                                 codecs: vec![sample_entry],
                             },
+                            // A fragmented movie has no chunks in its `moov`, so
+                            // this table is empty — but §8.5.1 makes a chunk
+                            // offset box mandatory in every `stbl` regardless,
+                            // and a reader that enforces it refuses the whole
+                            // file without one.
+                            stco: Some(Stco {
+                                entries: Vec::new(),
+                            }),
                             ..Default::default()
                         },
                         ..Default::default()
@@ -1343,6 +1351,25 @@ mod tests {
             audio_traf.tfdt.as_ref().unwrap().base_media_decode_time,
             (microphone_offset_ns as u64 * 48_000) / 1_000_000_000,
             "a later track's first tfdt is its own offset from the epoch, in its own timescale"
+        );
+    }
+
+    /// The regression that shipped: every test in this module reads what the
+    /// writer wrote with the same crate the writer wrote it with, so a box
+    /// `mp4-atom` models as optional and the spec makes mandatory is invisible
+    /// on both sides. An independent parser is the only thing that catches it.
+    #[test]
+    fn an_independent_parser_accepts_the_written_file() {
+        let (file, _) = write_one_video_track(4);
+
+        let size = file.len() as u64;
+        let reader = mp4::Mp4Reader::read_header(std::io::Cursor::new(file), size)
+            .expect("an independent ISOBMFF parser reads the whole file");
+
+        assert_eq!(
+            reader.tracks().len(),
+            1,
+            "the independent parser finds the track the writer described"
         );
     }
 

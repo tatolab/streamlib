@@ -40,6 +40,11 @@ libc = { workspace = true }
 hardware-tests = ["streamlib/hardware-tests"]
 
 [dev-dependencies]
+# An independent ISOBMFF parser, used only as a conformance oracle. The writer
+# and every hand-written test here share `mp4-atom`, so a box that crate treats
+# as optional is invisible to both — which is exactly how a missing `stco`
+# shipped. This one enforces the spec's mandatory boxes.
+mp4 = "0.14"
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
