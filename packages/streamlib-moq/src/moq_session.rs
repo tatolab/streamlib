@@ -35,6 +35,13 @@ const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(4);
 pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
 pub(crate) const MEDIA_TRACK_PRIORITY: u8 = 127;
 
+/// How long a closing session may spend letting already-written objects reach
+/// the wire before its control loop is aborted.
+///
+/// A helper's teardown reply and its exit are each bounded at five seconds, and
+/// `teardown` has other work to do, so this takes a small share of the first.
+const FINAL_DRAIN_BEFORE_ABORT: Duration = Duration::from_millis(750);
+
 /// The most objects this publisher lets one MoQ group hold before cutting the
 /// next one.
 ///
@@ -100,14 +107,7 @@ async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transpo
     transport.keep_alive_interval(Some(QUIC_KEEP_ALIVE_INTERVAL));
     client_config.transport_config(Arc::new(transport));
 
-    let endpoint = quinn::Endpoint::client(
-        "[::]:0"
-            .parse()
-            .expect("the unspecified IPv6 address parses"),
-    )
-    .map_err(|failure| MoqExtensionError::Transport {
-        what: format!("a QUIC endpoint could not be opened: {failure}"),
-    })?;
+    let endpoint = open_a_client_endpoint()?;
 
     let request = web_transport::quinn::proto::ConnectRequest::new(dial_url)
         .with_protocol(moq_transport_subprotocol()?);
@@ -118,6 +118,32 @@ async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transpo
             what: format!("the relay did not accept the WebTransport session: {failure}"),
         })?;
     Ok(session.into())
+}
+
+/// Open the UDP socket a QUIC client dials from.
+///
+/// The IPv6 unspecified address first, because on a dual-stack host it accepts
+/// both families from one socket; a host built without IPv6 refuses to bind it
+/// at all, and there the IPv4 unspecified address is the only one there is.
+fn open_a_client_endpoint() -> Result<quinn::Endpoint> {
+    let unspecified_ipv6 = "[::]:0"
+        .parse()
+        .expect("the unspecified IPv6 address parses");
+    let unspecified_ipv4 = "0.0.0.0:0"
+        .parse()
+        .expect("the unspecified IPv4 address parses");
+
+    match quinn::Endpoint::client(unspecified_ipv6) {
+        Ok(endpoint) => Ok(endpoint),
+        Err(ipv6_failure) => quinn::Endpoint::client(unspecified_ipv4).map_err(|ipv4_failure| {
+            MoqExtensionError::Transport {
+                what: format!(
+                    "a QUIC endpoint could not be opened on either family: [::]:0 gave \
+                     {ipv6_failure} and 0.0.0.0:0 gave {ipv4_failure}"
+                ),
+            }
+        }),
+    }
 }
 
 /// Run one MoQ session's control loop, saying what ended it.
@@ -316,11 +342,25 @@ impl MoqBroadcastPublishingSession {
     }
 
     /// Finish every subgroup and end the session's tasks.
-    pub(crate) fn close(mut self) {
+    /// Finish every open group, let what is already written reach the wire, and
+    /// end the session's tasks.
+    ///
+    /// Dropping the writers finishes their subgroup streams, but it is the
+    /// session's own control loop that forwards the bytes — so aborting it in
+    /// the same breath discards whatever had not left yet. The wait is bounded
+    /// well inside the helper's five-second teardown budget, and a session that
+    /// ends on its own before the budget expires costs nothing.
+    pub(crate) async fn close(mut self) {
         self.open_subgroup_by_track.clear();
         self.subgroups_by_track.clear();
         self.publish_namespace_task.abort();
-        self.session_task.abort();
+
+        if tokio::time::timeout(FINAL_DRAIN_BEFORE_ABORT, &mut self.session_task)
+            .await
+            .is_err()
+        {
+            self.session_task.abort();
+        }
     }
 }
 

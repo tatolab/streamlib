@@ -139,34 +139,56 @@ impl MoqBroadcastPublisher {
         self.connect_the_publishing_session_unless_it_is_already_up()
             .await?;
 
+        // Everything the plan is about to spend, so a plan that does not reach
+        // the relay whole can give it back.
+        let placement_before_planning = self.object_write_planner.placement_of_every_track();
+        let planned = self
+            .object_write_planner
+            .plan_the_writes_for(inbound_link_name, sample);
         let PlannedMoqObjectWrites {
             instructions,
             writing_them_all_opens_the_broadcast,
-        } = self
-            .object_write_planner
-            .plan_the_writes_for(inbound_link_name, sample)?;
+        } = match planned {
+            Ok(planned) => planned,
+            Err(refusal) => {
+                self.object_write_planner
+                    .restore_placement_of_every_track(placement_before_planning);
+                return Err(refusal);
+            }
+        };
         if instructions.is_empty() {
             return Ok(());
         }
 
-        let session = self
-            .publishing_session
-            .as_mut()
-            .ok_or(MoqExtensionError::NotConnected { role: "publishing" })?;
+        let Some(session) = self.publishing_session.as_mut() else {
+            self.object_write_planner
+                .restore_placement_of_every_track(placement_before_planning);
+            return Err(MoqExtensionError::NotConnected { role: "publishing" });
+        };
+        let mut wrote_them_all = Ok(());
         for instruction in instructions {
-            match instruction {
+            wrote_them_all = match instruction {
                 MoqObjectWriteInstruction::CutANewGroupOnEveryTrack => {
                     session.open_a_new_group_on_every_track();
+                    Ok(())
                 }
                 MoqObjectWriteInstruction::WriteTheOnlyObjectATrackEverCarries {
                     moq_track_name,
                     object_payload,
-                } => session.write_the_only_object_of(&moq_track_name, object_payload)?,
+                } => session.write_the_only_object_of(&moq_track_name, object_payload),
                 MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                     moq_track_name,
                     object_payload,
-                } => session.write_object(&moq_track_name, object_payload)?,
+                } => session.write_object(&moq_track_name, object_payload),
+            };
+            if wrote_them_all.is_err() {
+                break;
             }
+        }
+        if let Err(failure) = wrote_them_all {
+            self.object_write_planner
+                .restore_placement_of_every_track(placement_before_planning);
+            return Err(failure);
         }
 
         if writing_them_all_opens_the_broadcast {
@@ -216,7 +238,7 @@ impl MoqBroadcastPublisher {
             );
         }
         if let Some(session) = self.publishing_session.take() {
-            session.close();
+            session.close().await;
         }
         discarded
     }
@@ -484,6 +506,44 @@ impl MoqBroadcastObjectWritePlanner {
 
     /// Take the broadcast's descriptive objects and its hold as written, which
     /// is what makes it playable and what empties the hold.
+    /// Where every track's fragment numbering and timeline stand right now.
+    ///
+    /// Planning a fragment spends a sequence number and advances its track's
+    /// timeline, and both happen before a single byte reaches the relay. A plan
+    /// that is not fully written must give them back, or the broadcast's
+    /// `mfhd.sequence_number` skips and the next sample's duration is measured
+    /// against a stamp no subscriber ever saw.
+    fn placement_of_every_track(&self) -> Vec<(u32, Option<CmafTrackTimeline>)> {
+        self.declared_tracks
+            .iter()
+            .map(|track| {
+                (
+                    track.next_cmaf_fragment_sequence_number,
+                    track
+                        .cmaf_description
+                        .as_ref()
+                        .map(|description| description.cmaf_track_timeline),
+                )
+            })
+            .collect()
+    }
+
+    /// Put every track's numbering and timeline back where a snapshot found
+    /// them. A description a sample taught the planner is deliberately kept: it
+    /// describes the stream, not the write that failed.
+    fn restore_placement_of_every_track(
+        &mut self,
+        placement: Vec<(u32, Option<CmafTrackTimeline>)>,
+    ) {
+        for (track, (sequence_number, timeline)) in self.declared_tracks.iter_mut().zip(placement) {
+            track.next_cmaf_fragment_sequence_number = sequence_number;
+            if let (Some(description), Some(timeline)) = (track.cmaf_description.as_mut(), timeline)
+            {
+                description.cmaf_track_timeline = timeline;
+            }
+        }
+    }
+
     fn record_that_every_descriptive_object_and_held_sample_was_written(&mut self) {
         self.the_descriptive_objects_have_been_written = true;
         tracing::info!(
@@ -1255,6 +1315,29 @@ mod tests {
             MoqContainerFormat::of_wire_name("streamlib_bag").expect("streamlib_bag is published"),
             MoqContainerFormat::StreamlibBag
         );
+    }
+
+    #[test]
+    fn a_plan_that_is_refused_gives_back_the_fragment_numbering_it_spent() {
+        // Planning spends a sequence number and advances the track's timeline
+        // before a byte reaches the relay. A plan that is refused must give
+        // both back, or the broadcast's `mfhd.sequence_number` skips and the
+        // next sample's duration is measured against a stamp no subscriber
+        // ever saw.
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera"]);
+        planner
+            .plan_the_writes_for("camera", a_video_sync_point(0))
+            .expect("the first sync point describes the track");
+        let placement_before = planner.placement_of_every_track();
+
+        let refused = planner.plan_the_writes_for(
+            "camera",
+            a_video_sync_point_carrying(&A_SECOND_H264_SEQUENCE_PARAMETER_SET, 33_000_000),
+        );
+        assert!(refused.is_err(), "drifted parameter sets are refused");
+        planner.restore_placement_of_every_track(placement_before.clone());
+
+        assert_eq!(planner.placement_of_every_track(), placement_before);
     }
 
     #[test]
