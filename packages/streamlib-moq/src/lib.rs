@@ -214,10 +214,10 @@ impl MoqBroadcastPublishingSession {
         Ok(discarded.map(|discarded| {
             format!(
                 "{} held samples ({} bytes) were discarded unwritten: the broadcast never \
-                 became playable because {} never became describable",
+                 became playable because {}",
                 discarded.held_sample_count,
                 discarded.held_byte_count,
-                discarded.tracks_that_were_never_describable
+                discarded.why_the_broadcast_never_opened
             )
         }))
     }
