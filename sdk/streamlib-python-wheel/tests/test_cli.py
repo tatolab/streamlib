@@ -662,6 +662,37 @@ def test_the_control_node_probe_opens_a_character_device_without_seeking(tmp_pat
     assert cli.control_node_is_writable_by_this_user(tmp_path / "absent") is False
 
 
+def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path, monkeypatch):
+    """`run` and `dev` export `STREAMLIB_APP_DIRECTORY` before the app's code
+    runs, so a built-in that names itself to the machine — a virtual camera's
+    default label — keys on the app rather than on the shell's working
+    directory. The entry file records what it sees and stops before any engine
+    is built."""
+    monkeypatch.delenv(cli.APP_DIRECTORY_ENVIRONMENT_VARIABLE, raising=False)
+    recorded = tmp_path / "recorded-app-directory.txt"
+    write_app(
+        tmp_path,
+        "app.py",
+        "import os\n"
+        f"open({str(recorded)!r}, 'w').write(os.environ.get('STREAMLIB_APP_DIRECTORY', ''))\n"
+        "raise RuntimeError('stop before the engine')\n",
+    )
+
+    exit_code = cli.launch_app_node(
+        "run",
+        requested_anchor_directory=tmp_path,
+        requested_entry_file=None,
+        bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
+        bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
+        node_name=None,
+    )
+
+    assert exit_code == 1, "the entry file stopped the launch on purpose"
+    assert recorded.read_text() == str(tmp_path), (
+        "the app's anchor directory must reach the app's own code through the environment"
+    )
+
+
 def _v4l2loopback_is_loaded() -> bool:
     try:
         return "v4l2loopback" in Path("/proc/modules").read_text()

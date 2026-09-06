@@ -34,7 +34,7 @@ use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::v4l2_color::resolved_color_to_v4l2_color;
-use crate::video_frame::{ColorInfo, VideoFrame};
+use crate::video_frame::VideoFrame;
 
 /// The name every log line and refusal carries.
 pub(crate) const VIRTUAL_CAMERA_SINK_PROCESSOR_NAME: &str = "VirtualCameraSink";
