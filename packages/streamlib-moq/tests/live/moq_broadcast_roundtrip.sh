@@ -476,6 +476,8 @@ run_one_container_format() {
     [ "$NODE_NEEDED_SIGKILL" -eq 0 ] \
         || fail "the node did not exit on SIGTERM and needed SIGKILL; a teardown that hangs is a finding, not a slow exit"
 
+    report_what_the_data_track_accounted_for "$container_format" "$arm_dir"
+
     # ── Measure ──────────────────────────────────────────────────────
     echo ""
     say "Log gates:"
@@ -559,16 +561,23 @@ run_the_data_arm() {
         ARM_DATA_VERDICT="fail — $(data_bag_tally "$arm_dir/data_bags.json") matched; see $arm_dir/data_bags.json"
     fi
     say "Data track:        $ARM_DATA_VERDICT"
+}
 
-    # The subscriber counts what the relay never delivered and says so at its
-    # progress cadence. A gap is not a failure — it is loss the wheel saw and
-    # accounted for — but a run that reports none is a different claim from one
-    # that reports some, so the line is kept rather than summarised away.
-    grep -F "MoqBroadcastSubscriber: \`data_bags\`" "$LOG_FILE" | tail -3 \
-        > "$arm_dir/data_bags_progress.log" || true
-    if [ -s "$arm_dir/data_bags_progress.log" ]; then
-        say "Data progress:     $(tail -1 "$arm_dir/data_bags_progress.log")"
-    fi
+# The subscriber counts what the relay never delivered and says so at its
+# progress cadence and again at teardown. Read after the node has stopped
+# because a run shorter than one cadence has only the teardown line, and that
+# line is the one that always fires. A gap is not a failure — it is loss the
+# wheel saw and accounted for — but a run reporting none is a different claim
+# from one reporting some, so it is kept rather than summarised away.
+report_what_the_data_track_accounted_for() {
+    local container_format="$1"
+    local arm_dir="$2"
+    [ "$container_format" = "streamlib_bag" ] || return 0
+
+    grep -F "sequence_gaps" "$LOG_FILE" | tail -1 \
+        > "$arm_dir/data_bags_accounting.log" || true
+    [ -s "$arm_dir/data_bags_accounting.log" ] || return 0
+    say "Data accounting:   $(sed 's/.*MoqBroadcastSubscriber: //' "$arm_dir/data_bags_accounting.log")"
 }
 
 data_bag_tally() {
