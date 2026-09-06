@@ -39,7 +39,7 @@ use crate::monotonic_clock::monotonic_now_ns;
 use crate::moq_broadcast_publisher::{
     MoqBroadcastPublisher, MoqContainerFormat, WhatBecameOfOnePublishedBag,
 };
-use crate::moq_broadcast_subscriber::MoqBroadcastSubscriber;
+use crate::moq_broadcast_subscriber::{MoqBroadcastSubscriber, ReceivedTrackSample};
 use crate::moq_relay_config::MoqRelayConfig;
 use crate::moq_track_sample::{DataTrackObject, MoqTrackSample};
 
@@ -309,13 +309,17 @@ struct MoqBroadcastSubscribingSession {
 #[pymethods]
 impl MoqBroadcastSubscribingSession {
     #[new]
-    #[pyo3(signature = (relay_url, broadcast, container_format, video_track=None, audio_track=None))]
+    #[pyo3(signature = (
+        relay_url, broadcast, container_format, video_track=None, audio_track=None,
+        data_track=None
+    ))]
     fn new(
         relay_url: String,
         broadcast: String,
         container_format: &str,
         video_track: Option<String>,
         audio_track: Option<String>,
+        data_track: Option<String>,
     ) -> PyResult<Self> {
         let container_format = MoqContainerFormat::of_wire_name(container_format)?;
         let config = MoqRelayConfig {
@@ -328,6 +332,7 @@ impl MoqBroadcastSubscribingSession {
                 container_format,
                 video_track,
                 audio_track,
+                data_track,
             )?),
         })
     }
@@ -342,7 +347,8 @@ impl MoqBroadcastSubscribingSession {
         Ok(())
     }
 
-    /// The next sample, or `None` if none arrived within `timeout_ms`.
+    /// The next sample — an access unit, an Opus packet or a data object — or
+    /// `None` if none arrived within `timeout_ms`.
     fn next_media(&self, python: Python<'_>, timeout_ms: u64) -> PyResult<Option<Py<PyAny>>> {
         let received = python.detach(|| {
             let mut subscriber = self.locked_subscriber()?;
@@ -351,12 +357,27 @@ impl MoqBroadcastSubscribingSession {
         })?;
 
         Ok(match received {
-            Some(EncodedMediaSample::VideoAccessUnit(access_unit)) => {
-                Some(Py::new(python, ReceivedVideoAccessUnit::from(access_unit))?.into_any())
-            }
-            Some(EncodedMediaSample::AudioPacket(packet)) => {
-                Some(Py::new(python, ReceivedOpusPacket::from(packet))?.into_any())
-            }
+            Some(ReceivedTrackSample {
+                sample: MoqTrackSample::EncodedMedia(EncodedMediaSample::VideoAccessUnit(unit)),
+                ..
+            }) => Some(Py::new(python, ReceivedVideoAccessUnit::from(unit))?.into_any()),
+            Some(ReceivedTrackSample {
+                sample: MoqTrackSample::EncodedMedia(EncodedMediaSample::AudioPacket(packet)),
+                ..
+            }) => Some(Py::new(python, ReceivedOpusPacket::from(packet))?.into_any()),
+            Some(ReceivedTrackSample {
+                track_name,
+                sample: MoqTrackSample::DataObject(object),
+            }) => Some(
+                Py::new(
+                    python,
+                    ReceivedDataObject {
+                        track_name,
+                        payload: object.envelope_bytes,
+                    },
+                )?
+                .into_any(),
+            ),
             None => None,
         })
     }
@@ -508,6 +529,36 @@ impl ReceivedOpusPacket {
     }
 }
 
+/// One object off a MoQ data track, whole: the envelope the publisher's
+/// Python built around the user's bag, for this wheel's Python to decode. No
+/// stamp accessor, because the stamp is inside the envelope.
+#[pyclass]
+struct ReceivedDataObject {
+    track_name: String,
+    payload: bytes::Bytes,
+}
+
+#[pymethods]
+impl ReceivedDataObject {
+    /// Built by `next_media` on receive; constructible so the drain loop's
+    /// dispatch on this type can be driven without a session.
+    #[new]
+    fn new(track_name: String, payload: &[u8]) -> Self {
+        Self {
+            track_name,
+            payload: bytes::Bytes::copy_from_slice(payload),
+        }
+    }
+    #[getter]
+    fn track_name(&self) -> &str {
+        &self.track_name
+    }
+    #[getter]
+    fn payload<'python>(&self, python: Python<'python>) -> Bound<'python, PyBytes> {
+        PyBytes::new(python, &self.payload)
+    }
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(bring_up_the_transport_stack, module)?)?;
@@ -515,5 +566,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<MoqBroadcastSubscribingSession>()?;
     module.add_class::<ReceivedVideoAccessUnit>()?;
     module.add_class::<ReceivedOpusPacket>()?;
+    module.add_class::<ReceivedDataObject>()?;
     Ok(())
 }

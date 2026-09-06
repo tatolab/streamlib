@@ -8,6 +8,8 @@ extension model, so it is what these check — over a real `Runtime`, which need
 no device to build a graph. Nothing here reaches a relay.
 """
 
+from dataclasses import dataclass
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -21,25 +23,34 @@ from streamlib import (
     OpusEncoder,
     RuntimeContextLimitedAccess,
     decode_msgpack_bytes_to_python_object,
+    encode_bag_to_msgpack_bytes,
+    input,
     output,
     processor,
 )
-from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
+from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber, _native
 from streamlib_moq import processors as processors_module
 from streamlib_moq.processors import (
     BAGS_BETWEEN_PROGRESS_REPORTS,
     CONTAINER_FORMATS,
+    DATA_BAGS_OUTPUT_PORT,
     DATA_OBJECT_BAG_KEY,
     DATA_OBJECT_SEQUENCE_INDEX_KEY,
     DATA_OBJECT_TIMESTAMP_NS_KEY,
     DATA_TRACK_KIND,
+    HELPER_LINK_FRAME_HEADER_BYTES,
     HELPER_LINK_PAYLOAD_CEILING_BYTES,
     READER_THREAD_JOIN_TIMEOUT_SECONDS,
     SUBSCRIBER_POLL_TIMEOUT_MS,
+    WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE,
+    DataTrackSequenceGapCount,
+    data_object_envelope_of,
     data_track_object_bytes,
     describe_the_delivery_deadline,
     describe_what_the_delivery_deadline_shed,
     framed_bag_byte_count,
+    the_bitstream_alone_puts_the_bag_near_the_link_ceiling,
+    the_envelope_alone_could_put_the_bag_past_the_link_ceiling,
     track_kind_of_bag,
     track_medium_of_codec,
 )
@@ -79,6 +90,22 @@ SUBSCRIBER_CONFIG = {
     "video_track": "1.m4s",
     "audio_track": "2.m4s",
 }
+A_DATA_TRACK_SUBSCRIBER_CONFIG = {
+    "relay_url": A_RELAY,
+    "broadcast": A_BROADCAST,
+    "container_format": "streamlib_bag",
+    "data_track": "telemetry",
+}
+A_DATA_ENVELOPE = {"sequence_index": 7, "timestamp_ns": 5_000_000_000, "bag": A_DATA_BAG}
+
+
+@processor(description="Reads the data bags a subscriber writes, as a graph's own sink")
+class TelemetryReader:
+    @input(delivery_profile="ordered")
+    def data_bags(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read("data_bags")
 
 
 @pytest.fixture
@@ -175,16 +202,406 @@ def test_the_relay_refusal_says_where_a_draft_16_token_goes():
 
 
 def test_a_subscriber_naming_no_track_at_all_is_refused_by_name():
-    """Two static output ports and no track named for either would subscribe to
+    """Three static output ports and no track named for any would subscribe to
     nothing and produce nothing, which reads from outside as a hang."""
-    with pytest.raises(ValueError, match="video_track"):
+    with pytest.raises(ValueError, match=r"video_track.*audio_track.*data_track"):
         MoqBroadcastSubscriber(relay_url=A_RELAY, broadcast=A_BROADCAST)
 
 
-def test_a_subscriber_may_name_one_track_and_leave_the_other_port_silent():
+@pytest.mark.parametrize("config", ["video_track", "audio_track", "data_track"])
+def test_a_track_named_as_the_empty_string_is_refused_by_name_at_construction(config):
+    """The wheel's Rust refuses it too, but on the reading thread, where a
+    refusal is retried with backoff — so said here, or a config mistake reads
+    from outside as a subscriber that never connects."""
+    with pytest.raises(ValueError, match=config):
+        MoqBroadcastSubscriber(
+            relay_url=A_RELAY,
+            broadcast=A_BROADCAST,
+            container_format="streamlib_bag",
+            **{config: ""},
+        )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("video_track", "audio_track"), ("video_track", "data_track"), ("audio_track", "data_track")],
+)
+def test_one_name_given_to_two_tracks_is_refused_by_name_at_construction(first, second):
+    with pytest.raises(ValueError, match=rf"{first}.*{second}"):
+        MoqBroadcastSubscriber(
+            relay_url=A_RELAY,
+            broadcast=A_BROADCAST,
+            container_format="streamlib_bag",
+            **{first: "both", second: "both"},
+        )
+
+
+def test_a_subscriber_may_name_one_track_and_leave_the_other_ports_silent():
     MoqBroadcastSubscriber(
         relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="1.m4s"
     )
+
+
+def test_a_subscriber_naming_only_a_data_track_is_added_like_any_other(runtime):
+    added = runtime.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
+
+    assert added.display_name == "MoqBroadcastSubscriber"
+
+
+def test_the_subscribers_data_bags_port_wires_to_a_processor_that_reads_it(runtime):
+    """A data track is a matter of wiring on this side too: a static port a
+    downstream names at wiring time, beside the two decoders' ports."""
+    subscriber = runtime.add(MoqBroadcastSubscriber, config=A_DATA_TRACK_SUBSCRIBER_CONFIG)
+    reader = runtime.add(TelemetryReader)
+
+    runtime.connect(subscriber.output("data_bags"), reader.input("data_bags"))
+
+
+def test_a_data_track_beside_both_media_tracks_is_accepted_under_streamlib_bag():
+    MoqBroadcastSubscriber(
+        relay_url=A_RELAY,
+        broadcast=A_BROADCAST,
+        container_format="streamlib_bag",
+        video_track="video",
+        audio_track="audio",
+        data_track="telemetry",
+    )
+
+
+def test_a_data_track_under_cmaf_is_refused_by_name_at_construction():
+    """CMAF has no packaging for a data track, and the default container is
+    `cmaf` — so a subscriber that named one and nothing else must hear it
+    here, not as a broadcast that never produces."""
+    with pytest.raises(ValueError, match=r"data_track.*cmaf"):
+        MoqBroadcastSubscriber(relay_url=A_RELAY, broadcast=A_BROADCAST, data_track="telemetry")
+
+
+def test_the_documented_envelope_decodes_to_its_three_parts_with_the_bag_whole():
+    envelope = data_object_envelope_of(encode_bag_to_msgpack_bytes(A_DATA_ENVELOPE))
+
+    assert (envelope.sequence_index, envelope.timestamp_ns) == (7, 5_000_000_000)
+    assert envelope.bag == A_DATA_BAG
+    assert type(envelope.bag["blob"]) is bytes
+
+
+@pytest.mark.parametrize(
+    ("payload", "named"),
+    [
+        (encode_bag_to_msgpack_bytes({"timestamp_ns": 1, "bag": {}}), "`sequence_index`"),
+        (encode_bag_to_msgpack_bytes({"sequence_index": 1, "bag": {}}), "`timestamp_ns`"),
+        (encode_bag_to_msgpack_bytes({"sequence_index": 1, "timestamp_ns": 1}), "`bag`"),
+        (
+            encode_bag_to_msgpack_bytes({"sequence_index": 1, "timestamp_ns": 1, "bag": [1]}),
+            "`bag` is a list",
+        ),
+        (
+            encode_bag_to_msgpack_bytes({"sequence_index": True, "timestamp_ns": 1, "bag": {}}),
+            "`sequence_index` is True",
+        ),
+        (
+            encode_bag_to_msgpack_bytes({"sequence_index": 1, "timestamp_ns": "now", "bag": {}}),
+            "`timestamp_ns` is 'now'",
+        ),
+        # A msgpack array of three, and a map cut off after its header.
+        (b"\x93\x01\x02\x03", "is a list, not the map"),
+        (b"\x81", "not msgpack"),
+        # Keys the engine's decoder accepts and its encoder refuses, spelled
+        # by hand: an int key, one inside a list of maps, and a non-UTF-8 key
+        # the decoder hands back as bytes.
+        (
+            b"\x83\xaesequence_index\x01\xactimestamp_ns\x02\xa3bag\x81\x01\xa1x",
+            r"not a str at `bag`: 1 \(int\)",
+        ),
+        (
+            b"\x83\xaesequence_index\x01\xactimestamp_ns\x02\xa3bag"
+            b"\x81\xa4rows\x91\x81\x01\xa1x",
+            r"not a str at `bag\.rows\[0\]`: 1 \(int\)",
+        ),
+        (
+            b"\x83\xaesequence_index\x01\xactimestamp_ns\x02\xa3bag\x81\xa1\xff\xa1x",
+            r"not a str at `bag`: b'\\xff' \(bytes\)",
+        ),
+    ],
+)
+def test_an_object_that_is_not_the_envelope_is_refused_naming_what_is_wrong(payload, named):
+    """The publisher writes the envelope and the subscriber reads it, and the
+    two meet only on the wire — so a refusal has to say which key drifted, or
+    an operator cannot tell which side did."""
+    with pytest.raises(ValueError, match=named):
+        data_object_envelope_of(payload)
+
+
+def test_the_gap_count_counts_jumps_and_the_objects_they_skipped():
+    count = DataTrackSequenceGapCount()
+    for sequence_index in (5, 6, 7, 10, 11, 20):
+        count.account(sequence_index)
+
+    assert (count.gaps, count.objects_missed) == (2, 10)
+
+
+def test_a_first_object_is_not_a_gap_however_far_into_the_stream_the_subscriber_joined():
+    count = DataTrackSequenceGapCount()
+    count.account(500)
+    count.account(501)
+
+    assert (count.gaps, count.objects_missed) == (0, 0)
+
+
+def test_a_publisher_that_restarted_its_count_is_not_read_as_a_loss():
+    count = DataTrackSequenceGapCount()
+    for sequence_index in (8, 9, 0, 1):
+        count.account(sequence_index)
+
+    assert (count.gaps, count.objects_missed) == (0, 0)
+
+
+def test_a_reconnected_session_starts_its_count_afresh_and_keeps_what_was_lost():
+    count = DataTrackSequenceGapCount()
+    count.account(0)
+    count.account(3)
+    count.forget_the_closed_broadcasts_count()
+    count.account(100)
+
+    assert (count.gaps, count.objects_missed) == (1, 2)
+
+
+def _a_data_object(payload: bytes) -> _native.ReceivedDataObject:
+    return _native.ReceivedDataObject("telemetry", payload)
+
+
+@dataclass(frozen=True)
+class _AnAccessUnit:
+    """What the native layer hands the media path, stated by a test."""
+
+    codec: str = "h264"
+    bitstream: bytes = A_VIDEO_BAG["bitstream"]
+    is_sync_point: bool = True
+    group_index: int = 0
+    sequence_index: int = 0
+    width: int = 320
+    height: int = 180
+    color: "dict[str, str] | None" = None
+    timestamp_ns: int = 1
+
+
+class _OutputsRecordingWrites:
+    def __init__(self) -> None:
+        self.writes: "list[tuple[str, dict[str, Any], int | None]]" = []
+
+    def write(self, port: str, bag: "dict[str, Any]", timestamp_ns: "int | None" = None) -> None:
+        self.writes.append((port, bag, timestamp_ns))
+
+
+def _a_data_track_subscriber() -> MoqBroadcastSubscriber:
+    return MoqBroadcastSubscriber(
+        relay_url=A_RELAY,
+        broadcast=A_BROADCAST,
+        container_format="streamlib_bag",
+        data_track="telemetry",
+    )
+
+
+def _an_envelope_of(sequence_index: int) -> bytes:
+    return encode_bag_to_msgpack_bytes(
+        {"sequence_index": sequence_index, "timestamp_ns": sequence_index, "bag": {"n": sequence_index}}
+    )
+
+
+def test_gaps_are_said_on_the_data_ports_progress_line_at_the_cadence():
+    subscriber = _a_data_track_subscriber()
+    outputs = _OutputsRecordingWrites()
+    said: "list[str]" = []
+    # Two objects, then a jump over three, then the rest of one cadence.
+    sequence_indices = [0, 1, *range(5, 5 + BAGS_BETWEEN_PROGRESS_REPORTS - 2)]
+
+    with mock.patch.object(log, "info", said.append):
+        for sequence_index in sequence_indices:
+            subscriber._write_a_data_object(
+                _a_data_object(_an_envelope_of(sequence_index)),
+                outputs,  # type: ignore[arg-type]
+            )
+
+    assert len(outputs.writes) == BAGS_BETWEEN_PROGRESS_REPORTS
+    cadence_lines = [
+        line for line in said if f"bags_written={BAGS_BETWEEN_PROGRESS_REPORTS}" in line
+    ]
+    assert len(cadence_lines) == 1, said
+    assert "sequence_gaps=1 objects_missed=3" in cadence_lines[0], cadence_lines[0]
+    assert "objects_refused=0 on `telemetry`" in cadence_lines[0], cadence_lines[0]
+
+
+def test_refused_objects_are_said_once_in_full_and_then_counted_at_the_cadence():
+    """A far end writing the wrong shape writes it on every object, and a line
+    per object would bury the log of a stream that never recovers."""
+    subscriber = _a_data_track_subscriber()
+    said: "list[str]" = []
+
+    with mock.patch.object(log, "warn", said.append):
+        for _ in range(BAGS_BETWEEN_PROGRESS_REPORTS):
+            subscriber._write_a_data_object(
+                _a_data_object(b"\x93\x01\x02\x03"),
+                _OutputsRecordingWrites(),  # type: ignore[arg-type]
+            )
+
+    assert len(said) == 2, said
+    assert "is a list, not the map" in said[0] and "`telemetry`" in said[0], said[0]
+    assert f"objects_refused={BAGS_BETWEEN_PROGRESS_REPORTS}" in said[1], said[1]
+
+
+def test_stop_says_what_the_data_track_wrote_and_lost_even_when_the_cadence_never_fired():
+    subscriber = _a_data_track_subscriber()
+    for sequence_index in (0, 4):
+        subscriber._write_a_data_object(
+            _a_data_object(_an_envelope_of(sequence_index)),
+            _OutputsRecordingWrites(),  # type: ignore[arg-type]
+        )
+    said: "list[str]" = []
+
+    with mock.patch.object(log, "info", said.append):
+        subscriber.stop(None)  # type: ignore[arg-type]
+
+    assert any(
+        "stop" in line and "bags_written=2" in line and "sequence_gaps=1 objects_missed=3" in line
+        for line in said
+    ), said
+
+
+def test_a_subscriber_naming_no_data_track_says_nothing_about_one_at_stop():
+    subscriber = MoqBroadcastSubscriber(relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="1.m4s")
+    said: "list[str]" = []
+
+    with mock.patch.object(log, "info", said.append):
+        subscriber.stop(None)  # type: ignore[arg-type]
+
+    assert said == []
+
+
+def test_the_oversize_guard_measures_a_data_bag_by_its_envelope_not_by_a_bitstream_it_lacks():
+    """The media precheck reads `bitstream` and counts a bag without one as
+    near-zero, so a data bag routed through it would never be measured and an
+    oversize one would be dropped by the link unsaid. The ceiling is patched
+    above the media precheck's margin so that precheck stays silent here and
+    only the envelope's own length can make the guard look."""
+    subscriber = _a_data_track_subscriber()
+    bag = {"blob": b"\x00" * 100_000}
+    envelope = encode_bag_to_msgpack_bytes({"sequence_index": 0, "timestamp_ns": 0, "bag": bag})
+    a_ceiling_the_media_precheck_never_reaches = 100_000
+    said: "list[str]" = []
+
+    with (
+        mock.patch.object(
+            processors_module,
+            "HELPER_LINK_PAYLOAD_CEILING_BYTES",
+            a_ceiling_the_media_precheck_never_reaches,
+        ),
+        mock.patch.object(log, "error", said.append),
+    ):
+        assert not the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag)
+        subscriber._write_a_data_object(
+            _a_data_object(envelope),
+            _OutputsRecordingWrites(),  # type: ignore[arg-type]
+        )
+
+    assert said and "data_bags" in said[0] and "framed" in said[0], said
+
+
+def test_a_data_bag_far_under_the_ceiling_is_never_encoded_a_second_time():
+    subscriber = _a_data_track_subscriber()
+    envelope = encode_bag_to_msgpack_bytes(A_DATA_ENVELOPE)
+
+    with mock.patch.object(
+        processors_module, "encode_bag_to_msgpack_bytes"
+    ) as the_exact_measure:
+        subscriber._write_a_data_object(
+            _a_data_object(envelope),
+            _OutputsRecordingWrites(),  # type: ignore[arg-type]
+        )
+
+    the_exact_measure.assert_not_called()
+
+
+_THE_WIDEST_ENVELOPE_WHOSE_BAG_SURELY_FITS = (
+    HELPER_LINK_PAYLOAD_CEILING_BYTES - HELPER_LINK_FRAME_HEADER_BYTES
+) // WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE
+
+
+@pytest.mark.parametrize(
+    ("envelope_byte_count", "reaches_the_ceiling"),
+    [
+        (_THE_WIDEST_ENVELOPE_WHOSE_BAG_SURELY_FITS, False),
+        (_THE_WIDEST_ENVELOPE_WHOSE_BAG_SURELY_FITS + 1, True),
+    ],
+)
+def test_the_envelope_bound_reaches_the_ceiling_exactly_where_the_widest_re_encode_would(
+    envelope_byte_count, reaches_the_ceiling
+):
+    assert (
+        the_envelope_alone_could_put_the_bag_past_the_link_ceiling(envelope_byte_count)
+        is reaches_the_ceiling
+    )
+
+
+def _bytes_a_wire_value_re_encodes_to(wire: bytes) -> int:
+    value = decode_msgpack_bytes_to_python_object(wire)
+    beside_a_nil = len(encode_bag_to_msgpack_bytes({"v": None}))
+    return len(encode_bag_to_msgpack_bytes({"v": value})) - beside_a_nil + 1
+
+
+@pytest.mark.parametrize(
+    ("wire", "what"),
+    [
+        (b"\xca\x00\x00\x00\x00", "an f32, which re-encodes as an f64"),
+        (b"\xd4\x01\x00", "a fixext1, which re-encodes as the ext it came from"),
+        (b"\xc7\x01\x05\x00", "an ext8, which re-encodes as a shorter fixext"),
+        (b"\xcd\x00\x07", "a uint16 spelled long, which re-encodes as a fixint"),
+        (b"\xa1\xff", "a fixstr that is not UTF-8, which re-encodes as a bin"),
+        (b"\xa2\xff\xfe", "a two-byte fixstr that is not UTF-8, likewise"),
+    ],
+)
+def test_the_widening_the_bound_allows_for_covers_every_wire_form_the_codec_widens(wire, what):
+    """The bound multiplies the envelope by this factor, so a wire form the
+    codec re-encodes wider than that would slip an oversize bag past it."""
+    assert (
+        _bytes_a_wire_value_re_encodes_to(wire)
+        <= len(wire) * WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE
+    ), what
+
+
+@pytest.mark.parametrize(
+    "wire", [b"\xca\x00\x00\x00\x00", b"\xa1\xff"], ids=["an f32", "a non-UTF-8 fixstr"]
+)
+def test_the_widening_is_real_so_the_bound_is_not_a_needless_margin(wire):
+    assert _bytes_a_wire_value_re_encodes_to(wire) > len(wire)
+
+
+class _SessionHandingOverObjectsThenStopping:
+    """`next_media` as the drain loop calls it: each object in turn, then a
+    `None` that also asks the subscriber to stop."""
+
+    def __init__(self, subscriber: MoqBroadcastSubscriber, objects: "list[Any]") -> None:
+        self._subscriber = subscriber
+        self._objects = list(objects)
+
+    def next_media(self, timeout_ms: int) -> Any:
+        assert timeout_ms == SUBSCRIBER_POLL_TIMEOUT_MS
+        if self._objects:
+            return self._objects.pop(0)
+        self._subscriber._stop.set()
+        return None
+
+
+def test_the_drain_loop_routes_a_received_data_object_to_the_data_path():
+    """The one line that decides whether a data object ever reaches the data
+    path dispatches on the native type, so it is driven with the real one."""
+    subscriber = _a_data_track_subscriber()
+    outputs = _OutputsRecordingWrites()
+    session = _SessionHandingOverObjectsThenStopping(
+        subscriber, [_a_data_object(encode_bag_to_msgpack_bytes(A_DATA_ENVELOPE))]
+    )
+
+    subscriber._drain_until_stopped(session, outputs)  # type: ignore[arg-type]
+
+    assert outputs.writes == [(DATA_BAGS_OUTPUT_PORT, A_DATA_BAG, 5_000_000_000)]
 
 
 @pytest.mark.parametrize(
@@ -231,12 +648,12 @@ def test_a_bag_past_the_link_ceiling_is_reported_once_and_not_every_frame():
     subscriber = MoqBroadcastSubscriber(
         relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="1.m4s"
     )
+    bag = {**A_VIDEO_BAG, "bitstream": b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)}
     said: "list[str]" = []
     with mock.patch.object(log, "error", said.append):
         for _ in range(3):
             subscriber._report_a_bag_the_link_will_drop(
-                "encoded_video",
-                {**A_VIDEO_BAG, "bitstream": b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)},
+                "encoded_video", bag, the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag)
             )
 
     assert len(said) == 1
@@ -603,7 +1020,9 @@ def test_the_oversize_guard_charges_the_framed_encoded_bag_not_the_bitstream_alo
         mock.patch.object(processors_module, "HELPER_LINK_PAYLOAD_CEILING_BYTES", 150),
         mock.patch.object(log, "error", said.append),
     ):
-        subscriber._report_a_bag_the_link_will_drop("encoded_video", bag)
+        subscriber._report_a_bag_the_link_will_drop(
+            "encoded_video", bag, the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag)
+        )
 
     assert len(bag["bitstream"]) <= 150 < framed_bag_byte_count(bag)
     assert said and "encoded_video" in said[0] and "framed" in said[0], said
@@ -616,12 +1035,17 @@ def test_the_oversize_guard_measures_the_framed_size_only_near_the_ceiling():
     subscriber = MoqBroadcastSubscriber(
         relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="video"
     )
+    outputs = _OutputsRecordingWrites()
     with mock.patch.object(
         processors_module, "encode_bag_to_msgpack_bytes"
     ) as the_exact_measure:
-        subscriber._report_a_bag_the_link_will_drop("encoded_video", dict(A_VIDEO_BAG))
+        subscriber._write_a_media_bag(
+            _AnAccessUnit(),  # type: ignore[arg-type]
+            outputs,  # type: ignore[arg-type]
+        )
 
     the_exact_measure.assert_not_called()
+    assert [(port, stamp) for port, _, stamp in outputs.writes] == [("encoded_video", 1)]
 
 
 def test_the_oversize_guard_stops_measuring_once_it_has_reported():
@@ -635,6 +1059,7 @@ def test_the_oversize_guard_stops_measuring_once_it_has_reported():
         subscriber._report_a_bag_the_link_will_drop(
             "encoded_video",
             {**A_VIDEO_BAG, "bitstream": b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)},
+            True,
         )
 
     the_exact_measure.assert_not_called()

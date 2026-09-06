@@ -19,7 +19,9 @@ from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 track, named by the container: `{track_id}.m4s` on `cmaf`, the link's own channel name on
 `streamlib_bag` unless `track_names` says otherwise. `MoqBroadcastSubscriber` emits
 `encoded_video` and `encoded_audio`, filling every key of the wire contract from the stream
-itself.
+itself, and `data_bags`, each bag exactly as its producer wrote it and stamped as its
+producer stamped it. Which track feeds which port is `video_track`, `audio_track` and
+`data_track` — one data track per subscriber; a second is a second subscriber.
 
 A link's first bag settles what its track carries. A bag with a `bitstream` key is encoded
 media — `H264Encoder` or `OpusEncoder` output, by its `codec`. A bag without one is **data**:
@@ -30,7 +32,10 @@ data object carries the bag whole under `bag`, beside a per-track `sequence_inde
 publisher mints and the bag's own `timestamp_ns`, so nothing in the user's bag is renamed or
 reserved. A data object never cuts a MoQ group; a broadcast with no video is cut by two
 backstops instead — 128 objects, or an open group about a second old — so a late joiner replays
-at most a second of history.
+at most a second of history. On the way back the subscriber decodes the envelope, writes the
+bag verbatim with the producer's `timestamp_ns` as the write stamp, and keeps `sequence_index`
+out of the bag: a jump in it is counted and said in the subscriber's log at its progress
+cadence, never raised, because the engine offers no lossless link.
 
 ```python
 publisher = rt.add(
