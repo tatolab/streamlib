@@ -275,6 +275,11 @@ struct SubgroupState {
     // Set when the writer abandons the subgroup. Unlike `closed`, readers
     // honour it ahead of the objects still buffered above: none is delivered.
     abandoned: Option<DataStreamResetCode>,
+
+    // How many leading objects a forwarder has fully written to its transport:
+    // `None` until one starts forwarding this subgroup, then the furthest any
+    // has got. What lets the writer see a backlog the transport never blocks on.
+    forwarded: Option<usize>,
 }
 
 impl Default for SubgroupState {
@@ -283,6 +288,7 @@ impl Default for SubgroupState {
             objects: Vec::new(),
             closed: Ok(()),
             abandoned: None,
+            forwarded: None,
         }
     }
 }
@@ -371,6 +377,24 @@ impl SubgroupWriter {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// How many leading objects a forwarder has fully written to its
+    /// transport, or `None` while nothing is forwarding this subgroup.
+    pub fn forwarded(&self) -> Option<usize> {
+        self.state.lock().forwarded
+    }
+
+    /// How many written objects have not yet left through a forwarder, or
+    /// `None` while nothing is forwarding this subgroup.
+    ///
+    /// `write` never blocks, so this is the only account a writer gets of a
+    /// transport that has fallen behind it.
+    pub fn unforwarded(&self) -> Option<usize> {
+        let state = self.state.lock();
+        state
+            .forwarded
+            .map(|forwarded| state.objects.len().saturating_sub(forwarded))
     }
 }
 
@@ -480,6 +504,28 @@ impl SubgroupReader {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Record that a forwarder is on this subgroup, with nothing written yet.
+    ///
+    /// Distinct from the first `mark_forwarded`: a forwarder parked on its
+    /// first object's payload is already the backlog a writer wants to see.
+    pub fn mark_forwarding_started(&self) {
+        if let Some(mut state) = self.state.lock_mut() {
+            state.forwarded.get_or_insert(0);
+        }
+    }
+
+    /// Record that every object `next` has handed out so far has been fully
+    /// written to the transport. The shared cursor only ever moves forward,
+    /// so cloned readers running in parallel report the furthest of them.
+    pub fn mark_forwarded(&self) {
+        if let Some(mut state) = self.state.lock_mut() {
+            let furthest = state.forwarded.map_or(self.read_index, |forwarded| {
+                cmp::max(forwarded, self.read_index)
+            });
+            state.forwarded = Some(furthest);
+        }
     }
 }
 
@@ -1163,5 +1209,65 @@ mod tests {
                 .unwrap_err(),
             ServeError::Cancel
         );
+    }
+
+    // ---------------------------------------------------------------
+    // The forwarder's cursor: what the writer can see of its backlog
+    // ---------------------------------------------------------------
+    #[tokio::test]
+    async fn the_unforwarded_count_is_unknown_until_a_forwarder_starts_and_then_follows_it() {
+        let (mut writer, mut reader) = make_subgroups();
+
+        let mut sg = writer.append(0).unwrap();
+        let gid = sg.group_id;
+        sg.write(payload(gid, 0)).unwrap();
+        sg.write(payload(gid, 1)).unwrap();
+        assert_eq!(sg.forwarded(), None);
+        assert_eq!(sg.unforwarded(), None, "nothing is forwarding yet");
+
+        let mut sub = reader.next().await.unwrap().unwrap();
+        sub.mark_forwarding_started();
+        assert_eq!(sg.forwarded(), Some(0));
+        assert_eq!(
+            sg.unforwarded(),
+            Some(2),
+            "a forwarder is on it, behind by both"
+        );
+
+        let mut first = sub.next().await.unwrap().unwrap();
+        first.read_all().await.unwrap();
+        sub.mark_forwarded();
+        assert_eq!(sg.unforwarded(), Some(1));
+
+        let mut second = sub.next().await.unwrap().unwrap();
+        second.read_all().await.unwrap();
+        sub.mark_forwarded();
+        assert_eq!(sg.unforwarded(), Some(0));
+
+        sg.write(payload(gid, 2)).unwrap();
+        assert_eq!(sg.unforwarded(), Some(1), "a new write is behind again");
+    }
+
+    #[tokio::test]
+    async fn the_shared_cursor_is_the_furthest_of_two_forwarders() {
+        let (mut writer, mut reader) = make_subgroups();
+
+        let mut sg = writer.append(0).unwrap();
+        let gid = sg.group_id;
+        for oid in 0..3u64 {
+            sg.write(payload(gid, oid)).unwrap();
+        }
+
+        let mut ahead = reader.next().await.unwrap().unwrap();
+        let mut behind = ahead.clone();
+        for _ in 0..2 {
+            ahead.next().await.unwrap().unwrap();
+            ahead.mark_forwarded();
+        }
+        behind.next().await.unwrap().unwrap();
+        behind.mark_forwarded();
+
+        assert_eq!(sg.forwarded(), Some(2), "the cursor never moves backwards");
+        assert_eq!(sg.unforwarded(), Some(1));
     }
 }

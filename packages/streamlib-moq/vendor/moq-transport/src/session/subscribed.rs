@@ -562,6 +562,10 @@ impl ObjectForwarder {
             return Ok(());
         };
 
+        // Before the stream opens, not after: a peer withholding stream credit
+        // is a backlog the writer should see too.
+        subgroup_reader.mark_forwarding_started();
+
         let mut send_stream = publisher.open_uni().await?;
         tracing::trace!("[PUBLISHER] serve_subgroup: opened unidirectional stream");
 
@@ -786,6 +790,7 @@ impl ObjectForwarder {
                 return Err(ServeError::Size.into());
             }
 
+            subgroup_reader.mark_forwarded();
             object_count += 1;
         }
 
@@ -831,6 +836,8 @@ impl ObjectForwarder {
                 Ok(None) => return (bytes::BytesMut::new(), Ok(()), None),
                 Err(err) => return (bytes::BytesMut::new(), Err(err.into()), None),
             };
+
+        subgroup_reader.mark_forwarding_started();
 
         match state.lock_mut() {
             Some(mut state) => state.record_stream_opened(),
@@ -1513,5 +1520,73 @@ mod tests {
         let payload = buffer.copy_to_bytes(object.payload_length);
         assert_eq!(&payload[..], b"hello");
         assert!(!buffer.has_remaining(), "no second header was ever written");
+    }
+
+    /// The writer's unforwarded count follows the forwarder object by object,
+    /// including while the forwarder is parked and not being polled.
+    #[tokio::test]
+    async fn the_unforwarded_count_tracks_a_parked_forwarder() {
+        use bytes::Bytes;
+
+        use crate::coding::TrackNamespace;
+
+        let (track_writer, track_reader) =
+            serve::Track::new(TrackNamespace::from_utf8_path("test"), "video").produce();
+        let mut subgroups_writer = track_writer.subgroups().unwrap();
+        let mut subgroup_writer = subgroups_writer
+            .create(serve::Subgroup {
+                group_id: 1,
+                subgroup_id: 0,
+                priority: 0,
+            })
+            .unwrap();
+        subgroup_writer.write(Bytes::from_static(b"first")).unwrap();
+        assert_eq!(subgroup_writer.unforwarded(), None, "no forwarder yet");
+
+        let mut subgroups = match track_reader.mode().await.unwrap() {
+            TrackReaderMode::Subgroups(subgroups) => subgroups,
+            _ => panic!("expected subgroups mode"),
+        };
+        let subgroup = subgroups.next().await.unwrap().expect("subgroup available");
+        let header = data::SubgroupHeader {
+            header_type: data::StreamHeaderType::SubgroupIdExt,
+            track_alias: 1,
+            group_id: subgroup.group_id,
+            subgroup_id: Some(subgroup.subgroup_id),
+            publisher_priority: subgroup.priority,
+        };
+        let state = State::<ObjectForwarderState>::default();
+
+        let fut = ObjectForwarder::serve_subgroup_to_parts(header, subgroup, state, all_objects());
+        tokio::pin!(fut);
+
+        // The forwarder writes the first object and parks on the next.
+        tokio::select! {
+            _ = &mut fut => panic!("forwarder should still be awaiting the next object"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        assert_eq!(subgroup_writer.unforwarded(), Some(0));
+
+        // Two more objects while the forwarder is not polled: both are behind.
+        subgroup_writer
+            .write(Bytes::from_static(b"second"))
+            .unwrap();
+        subgroup_writer.write(Bytes::from_static(b"third")).unwrap();
+        assert_eq!(subgroup_writer.unforwarded(), Some(2));
+
+        tokio::select! {
+            _ = &mut fut => panic!("forwarder should still be awaiting the next object"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {}
+        }
+        assert_eq!(
+            subgroup_writer.unforwarded(),
+            Some(0),
+            "the forwarder caught up"
+        );
+
+        drop(subgroup_writer);
+        let (_buffer, res, termination) = fut.await;
+        res.expect("a finished subgroup serves cleanly");
+        assert_eq!(termination, Some(SubgroupTermination::Fin));
     }
 }

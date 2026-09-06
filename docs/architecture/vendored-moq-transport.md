@@ -104,6 +104,16 @@ stands upstream.
    This is what makes `DataStreamResetCode::DeliveryTimeout` reachable: before
    it, `close` drained every written object and only then reset, so nothing a
    publisher could do took a stale backlog off the wire. Upstream: not filed.
+2. **The forwarder's cursor lives in the shared subgroup state, so the writer
+   can read how many of its objects have not left.** Files:
+   `src/serve/subgroup.rs`, `src/session/subscribed.rs`. Adds
+   `SubgroupState.forwarded`; `SubgroupReader::mark_forwarding_started` (called
+   once a forwarder has its first object, before the stream opens) and
+   `mark_forwarded` (after each object's payload is fully written, keeping the
+   furthest cursor across cloned readers); `SubgroupWriter::forwarded` and
+   `unforwarded`, both `None` while nothing is forwarding the subgroup. `write`
+   never blocks, so this is the writer's only account of a transport that has
+   fallen behind it. Upstream: not filed.
 
 ## Re-vendor recipe
 
