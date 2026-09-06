@@ -396,6 +396,8 @@ def test_this_wheel_is_the_only_streamlib_cli():
         "tap",
         "logs",
         "exchange",
+        # The one machine-setup verb: touches no node, speaks no control plane.
+        "enable-virtual-camera",
     }
 
 
