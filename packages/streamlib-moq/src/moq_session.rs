@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::delivery_deadline::UplinkBacklogReading;
 use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
@@ -26,6 +27,18 @@ use crate::moq_track_sample::MoqTrackKind;
 /// layer speaks up well inside that. `web_transport`'s builder does not expose
 /// the transport config, which is why the endpoint is assembled by hand.
 const QUIC_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(4);
+
+/// The most bytes QUIC may hold unacknowledged on a session.
+///
+/// quinn's default is 10 MiB, which on a congested uplink absorbs seconds of
+/// backlog before a write ever blocks — and a write that never blocks is a
+/// backlog the forwarder's cursor never shows. Bounded to a few round trips
+/// of a 1080p stream at a relay round trip of about 100 ms, so the cursor
+/// falls behind within a frame interval of the link falling behind, and a
+/// reset has at most this much stale data to discard. The cost is a ceiling
+/// on throughput: a path with more than this in flight — about 40 Mbit/s at
+/// 100 ms — is throttled to it.
+const QUIC_SEND_WINDOW_BYTES: u64 = 512 * 1024;
 
 // Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner. Video keeps
 // `moq-pub`'s media literal of 127 and audio sits one rung ahead of it, so the
@@ -106,12 +119,20 @@ pub(crate) const LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS: i64 = 1_00
 /// is. Set where a stall is visible as latency rather than as memory.
 const OBJECTS_WAITING_FOR_THE_PROCESSOR: usize = 256;
 
-/// Open the WebTransport session a MoQ session runs on.
+/// Open the WebTransport session a MoQ session runs on, and hand back a
+/// second handle on it that still reaches the QUIC connection.
 ///
 /// TLS 1.3 with the platform's own roots, `h3` as the QUIC ALPN, and `moqt-16`
 /// as the WebTransport subprotocol. There is no certificate-verification
 /// bypass, because a dial that turns verification off is a dial.
-async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transport::Session> {
+///
+/// The generic `web_transport::Session` the MoQ session consumes hides the
+/// connection under it; the `quinn`-flavoured handle it is built from does
+/// not, and a clone of it kept beside the session is how the path's round
+/// trip, congestion window and loss counters are read.
+async fn connect_web_transport_session(
+    dial_url: url::Url,
+) -> Result<(web_transport::Session, web_transport::quinn::Session)> {
     let provider = web_transport::quinn::crypto::default_provider();
 
     let mut roots = rustls::RootCertStore::empty();
@@ -149,6 +170,7 @@ async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transpo
     let mut client_config = quinn::ClientConfig::new(Arc::new(quic_crypto));
     let mut transport = quinn::TransportConfig::default();
     transport.keep_alive_interval(Some(QUIC_KEEP_ALIVE_INTERVAL));
+    transport.send_window(QUIC_SEND_WINDOW_BYTES);
     client_config.transport_config(Arc::new(transport));
 
     let endpoint = open_a_client_endpoint()?;
@@ -161,7 +183,172 @@ async fn connect_web_transport_session(dial_url: url::Url) -> Result<web_transpo
         .map_err(|failure| MoqExtensionError::Transport {
             what: format!("the relay did not accept the WebTransport session: {failure}"),
         })?;
-    Ok(session.into())
+    Ok((session.clone().into(), session))
+}
+
+/// What the QUIC connection under a session reports about its path, read at
+/// the moment of asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct QuicUplinkReadings {
+    pub(crate) round_trip_time: Duration,
+    pub(crate) congestion_window_bytes: u64,
+    pub(crate) lost_packets: u64,
+    pub(crate) congestion_events: u64,
+}
+
+/// One object as written into an open group: what a backlog reading is made
+/// of once the forwarder is behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ObjectWrittenToAnOpenGroup {
+    timestamp_ns: i64,
+    byte_count: usize,
+}
+
+/// A track's open group: its writer, and every object written into it in
+/// order — one entry per `write`, which is what lets the writer's unforwarded
+/// count be turned back into stamps and bytes.
+struct OpenMoqGroup {
+    writer: moq_transport::serve::SubgroupWriter,
+    objects: Vec<ObjectWrittenToAnOpenGroup>,
+}
+
+impl OpenMoqGroup {
+    fn uplink_backlog_reading(&self) -> UplinkBacklogReading {
+        let Some(unforwarded_objects) = self.writer.unforwarded() else {
+            return UplinkBacklogReading::default();
+        };
+        let first_unforwarded = self.objects.len().saturating_sub(unforwarded_objects);
+        let unforwarded = &self.objects[first_unforwarded..];
+        UplinkBacklogReading {
+            unforwarded_objects: Some(unforwarded.len()),
+            unforwarded_bytes: unforwarded.iter().map(|object| object.byte_count).sum(),
+            oldest_unforwarded_stamp_ns: unforwarded.first().map(|object| object.timestamp_ns),
+        }
+    }
+}
+
+/// One superseded group a cut abandoned rather than finished, with what its
+/// forwarder had not written when it was reset.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GroupTheUplinkBacklogAbandoned {
+    pub(crate) moq_track_name: String,
+    pub(crate) unforwarded_objects: usize,
+    pub(crate) unforwarded_bytes: usize,
+}
+
+/// Every track's open group, keyed by MoQ track name.
+#[derive(Default)]
+struct OpenGroupsByTrack {
+    open: HashMap<String, OpenMoqGroup>,
+}
+
+impl OpenGroupsByTrack {
+    /// Append one object to the track's open group, opening one at the given
+    /// rung first if none is open or the open one has reached the backstop.
+    fn append(
+        &mut self,
+        track_name: &str,
+        subgroups: &mut moq_transport::serve::SubgroupsWriter,
+        payload: bytes::Bytes,
+        publisher_priority: u8,
+        object_stamp_ns: i64,
+    ) -> Result<()> {
+        let full_enough = self
+            .open
+            .get(track_name)
+            .is_some_and(|open| open.writer.len() >= HIGHEST_OBJECTS_IN_ONE_GROUP);
+        if full_enough {
+            // Dropped before the next is created, never after: two live
+            // subgroups on one track means the older one's objects are already
+            // unreachable to a subscriber, which retains only the latest.
+            self.open.remove(track_name);
+        }
+
+        if !self.open.contains_key(track_name) {
+            // `append`, not `create`: the group id is the library's own
+            // monotonic counter. Naming it from the producer's `group_index`
+            // instead looks appealing and is a silent-loss trap — a lower id
+            // than the latest yields a live writer whose objects never reach
+            // the wire, and an audio stream, whose every packet is a sync
+            // point, would open one group per packet where only the newest
+            // survives. The producer's ordering pair rides the object instead.
+            let writer = subgroups.append(publisher_priority).map_err(|failure| {
+                MoqExtensionError::Transport {
+                    what: format!("a MoQ group could not be opened on `{track_name}`: {failure}"),
+                }
+            })?;
+            self.open.insert(
+                track_name.to_owned(),
+                OpenMoqGroup {
+                    writer,
+                    objects: Vec::new(),
+                },
+            );
+        }
+
+        let open = self
+            .open
+            .get_mut(track_name)
+            .expect("the group was just opened");
+        let written = ObjectWrittenToAnOpenGroup {
+            timestamp_ns: object_stamp_ns,
+            byte_count: payload.len(),
+        };
+        if let Err(failure) = open.writer.write(payload) {
+            // A failed write leaves the subgroup in a state the next object
+            // cannot use, so it goes rather than being written into again.
+            self.open.remove(track_name);
+            return Err(MoqExtensionError::Transport {
+                what: format!("a MoQ object could not be written to `{track_name}`: {failure}"),
+            });
+        }
+        open.objects.push(written);
+        Ok(())
+    }
+
+    /// Close every open group so the next object on each track opens a fresh
+    /// one: the named tracks' groups are abandoned — their unforwarded objects
+    /// never leave, and the forwarder resets their streams with
+    /// `DeliveryTimeout` — and every other is finished by dropping its writer.
+    fn cut_every_group(
+        &mut self,
+        abandon_the_group_of: &[String],
+    ) -> Vec<GroupTheUplinkBacklogAbandoned> {
+        let mut abandoned = Vec::new();
+        for (track_name, group) in self.open.drain() {
+            if !abandon_the_group_of.contains(&track_name) {
+                continue;
+            }
+            let reading = group.uplink_backlog_reading();
+            match group
+                .writer
+                .abandon(moq_transport::data::DataStreamResetCode::DeliveryTimeout)
+            {
+                Ok(()) => abandoned.push(GroupTheUplinkBacklogAbandoned {
+                    moq_track_name: track_name,
+                    unforwarded_objects: reading.unforwarded_objects.unwrap_or(0),
+                    unforwarded_bytes: reading.unforwarded_bytes,
+                }),
+                Err(failure) => tracing::debug!(
+                    track = %track_name,
+                    %failure,
+                    "the superseded MoQ group could not be abandoned; it finishes instead"
+                ),
+            }
+        }
+        abandoned
+    }
+
+    fn uplink_backlog_readings(&self) -> HashMap<String, UplinkBacklogReading> {
+        self.open
+            .iter()
+            .map(|(track_name, group)| (track_name.clone(), group.uplink_backlog_reading()))
+            .collect()
+    }
+
+    fn clear(&mut self) {
+        self.open.clear();
+    }
 }
 
 /// Open the UDP socket a QUIC client dials from.
@@ -212,7 +399,10 @@ fn spawn_the_session_control_loop(
 /// One publishing session: one QUIC connection, one broadcast, N named tracks.
 pub(crate) struct MoqBroadcastPublishingSession {
     subgroups_by_track: HashMap<String, moq_transport::serve::SubgroupsWriter>,
-    open_subgroup_by_track: HashMap<String, moq_transport::serve::SubgroupWriter>,
+    open_groups_by_track: OpenGroupsByTrack,
+    /// A second handle on the connection the MoQ session runs over, kept for
+    /// what the generic session hides: the QUIC path's own readings.
+    quic_connection: web_transport::quinn::Session,
     /// Held for the session's life. Dropping it answers every SUBSCRIBE for a
     /// track name that was not pre-created with `NotFound` — harmless while
     /// every track is created up front, and a silent outage the moment one is
@@ -229,7 +419,7 @@ impl MoqBroadcastPublishingSession {
     /// subscription arriving immediately finds what it asks for.
     pub(crate) async fn connect(config: MoqRelayConfig, track_names: Vec<String>) -> Result<Self> {
         let namespace = config.namespace()?;
-        let session = connect_web_transport_session(config.dial_url()?).await?;
+        let (session, quic_connection) = connect_web_transport_session(config.dial_url()?).await?;
 
         let (session, mut publisher, _subscriber) = moq_transport::session::Session::connect(
             session,
@@ -295,7 +485,8 @@ impl MoqBroadcastPublishingSession {
 
         Ok(Self {
             subgroups_by_track,
-            open_subgroup_by_track: HashMap::new(),
+            open_groups_by_track: OpenGroupsByTrack::default(),
+            quic_connection,
             _tracks_request: tracks_request,
             session_task,
             publish_namespace_task,
@@ -303,14 +494,33 @@ impl MoqBroadcastPublishingSession {
     }
 
     /// Close every open group so the next object on each track opens a fresh
-    /// one.
+    /// one, abandoning the named tracks' groups and finishing the rest.
     ///
     /// The reference publisher cuts every track together on a video sync point,
-    /// which is what makes a group a GOP across audio and video alike. Closing
-    /// is what dropping the writer does: it finishes the subgroup's QUIC
-    /// stream.
-    pub(crate) fn open_a_new_group_on_every_track(&mut self) {
-        self.open_subgroup_by_track.clear();
+    /// which is what makes a group a GOP across audio and video alike.
+    /// Finishing is what dropping the writer does: the forwarder drains what
+    /// is written and FINs the subgroup's QUIC stream. Abandoning is the
+    /// vendored crate's other exit: the forwarder writes nothing more and
+    /// resets the stream with `DeliveryTimeout`, so a backlog the uplink is
+    /// behind on stops being carried. What each abandoned group still owed is
+    /// handed back for the planner to count.
+    pub(crate) fn cut_a_new_group_on_every_track(
+        &mut self,
+        abandon_the_superseded_group_of: &[String],
+    ) -> Vec<GroupTheUplinkBacklogAbandoned> {
+        let abandoned = self
+            .open_groups_by_track
+            .cut_every_group(abandon_the_superseded_group_of);
+        for group in &abandoned {
+            tracing::info!(
+                track = %group.moq_track_name,
+                unforwarded_objects = group.unforwarded_objects,
+                unforwarded_bytes = group.unforwarded_bytes,
+                "a superseded MoQ group the uplink was behind on was abandoned with a stream \
+                 reset"
+            );
+        }
+        abandoned
     }
 
     /// Write one object, opening a group first if none is open or the open one
@@ -318,56 +528,43 @@ impl MoqBroadcastPublishingSession {
     ///
     /// The priority is the track's own rung and is spent only when a group is
     /// opened: draft-16 carries `publisher_priority` in the subgroup header,
-    /// so it is a property of the group and not of the object.
+    /// so it is a property of the group and not of the object. The stamp is
+    /// kept beside the object so the backlog reading can age it.
     pub(crate) fn write_object(
         &mut self,
         track_name: &str,
         payload: bytes::Bytes,
         publisher_priority: u8,
+        object_stamp_ns: i64,
     ) -> Result<()> {
-        let full_enough = self
-            .open_subgroup_by_track
-            .get(track_name)
-            .is_some_and(|open| open.len() >= HIGHEST_OBJECTS_IN_ONE_GROUP);
-        if full_enough {
-            // Dropped before the next is created, never after: two live
-            // subgroups on one track means the older one's objects are already
-            // unreachable to a subscriber, which retains only the latest.
-            self.open_subgroup_by_track.remove(track_name);
-        }
+        let subgroups = subgroups_writer_for(&mut self.subgroups_by_track, track_name)?;
+        self.open_groups_by_track.append(
+            track_name,
+            subgroups,
+            payload,
+            publisher_priority,
+            object_stamp_ns,
+        )
+    }
 
-        if !self.open_subgroup_by_track.contains_key(track_name) {
-            let subgroups = subgroups_writer_for(&mut self.subgroups_by_track, track_name)?;
-            // `append`, not `create`: the group id is the library's own
-            // monotonic counter. Naming it from the producer's `group_index`
-            // instead looks appealing and is a silent-loss trap — a lower id
-            // than the latest yields a live writer whose objects never reach
-            // the wire, and an audio stream, whose every packet is a sync
-            // point, would open one group per packet where only the newest
-            // survives. The producer's ordering pair rides the object instead.
-            let opened = subgroups.append(publisher_priority).map_err(|failure| {
-                MoqExtensionError::Transport {
-                    what: format!("a MoQ group could not be opened on `{track_name}`: {failure}"),
-                }
-            })?;
-            self.open_subgroup_by_track
-                .insert(track_name.to_owned(), opened);
-        }
+    /// What every track's open group is behind by on the uplink, keyed by
+    /// MoQ track name; a track with no open group is absent.
+    pub(crate) fn uplink_backlog_readings(&self) -> HashMap<String, UplinkBacklogReading> {
+        self.open_groups_by_track.uplink_backlog_readings()
+    }
 
-        let open = self
-            .open_subgroup_by_track
-            .get_mut(track_name)
-            .expect("the group was just opened");
-        let written = open.write(payload);
-        if let Err(failure) = written {
-            // A failed write leaves the subgroup in a state the next object
-            // cannot use, so it goes rather than being written into again.
-            self.open_subgroup_by_track.remove(track_name);
-            return Err(MoqExtensionError::Transport {
-                what: format!("a MoQ object could not be written to `{track_name}`: {failure}"),
-            });
+    /// What the QUIC path under this session reports right now.
+    pub(crate) fn quic_uplink_readings(&self) -> QuicUplinkReadings {
+        // The `quinn`-flavoured session has a `stats` of its own that hides
+        // the congestion window, so the connection it derefs to is asked.
+        let connection: &quinn::Connection = &self.quic_connection;
+        let stats = connection.stats();
+        QuicUplinkReadings {
+            round_trip_time: connection.rtt(),
+            congestion_window_bytes: stats.path.cwnd,
+            lost_packets: stats.path.lost_packets,
+            congestion_events: stats.path.congestion_events,
         }
-        Ok(())
     }
 
     /// Write one object as the whole of its own track — one group, one object,
@@ -404,7 +601,7 @@ impl MoqBroadcastPublishingSession {
     /// well inside the helper's five-second teardown budget, and a session that
     /// ends on its own before the budget expires costs nothing.
     pub(crate) async fn close(mut self) {
-        self.open_subgroup_by_track.clear();
+        self.open_groups_by_track.clear();
         self.subgroups_by_track.clear();
         self.publish_namespace_task.abort();
 
@@ -479,7 +676,7 @@ impl MoqBroadcastSubscribingSession {
     /// Connect and start draining every named track.
     pub(crate) async fn connect(config: MoqRelayConfig, track_names: Vec<String>) -> Result<Self> {
         let namespace = config.namespace()?;
-        let session = connect_web_transport_session(config.dial_url()?).await?;
+        let (session, _quic_connection) = connect_web_transport_session(config.dial_url()?).await?;
 
         let (session, _publisher, subscriber) = moq_transport::session::Session::connect(
             session,
@@ -723,14 +920,195 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
 
 /// What the transport does with an object the publisher has already written —
 /// undocumented in `moq-transport`, and what [`crate::delivery_deadline`] rests
-/// on, so pinned here rather than re-derived.
+/// on, so pinned here rather than re-derived — and what this wheel's own
+/// open-group bookkeeping makes of the vendored crate's forwarder cursor.
 #[cfg(test)]
 mod tests {
-    use super::VIDEO_MEDIA_TRACK_PRIORITY;
-    use moq_transport::serve::{ServeError, Track, TrackReaderMode};
+    use super::{GroupTheUplinkBacklogAbandoned, OpenGroupsByTrack, VIDEO_MEDIA_TRACK_PRIORITY};
+    use crate::delivery_deadline::UplinkBacklogReading;
+    use moq_transport::data::DataStreamResetCode;
+    use moq_transport::serve::{
+        ServeError, SubgroupsReader, SubgroupsWriter, Track, TrackReaderMode,
+    };
 
     const A_NAMESPACE: &str = "streamlib/a-broadcast";
     const A_TRACK: &str = "1.m4s";
+
+    /// A track's subgroups writer and the reader on the far side of it.
+    async fn a_tracks_subgroups() -> (SubgroupsWriter, SubgroupsReader) {
+        let namespace = moq_transport::coding::TrackNamespace::try_from(A_NAMESPACE)
+            .expect("the namespace parses");
+        let (track_writer, track_reader) = Track::new(namespace, A_TRACK).produce();
+        let subgroups_writer = track_writer
+            .subgroups()
+            .expect("a fresh track enters subgroups mode");
+        let TrackReaderMode::Subgroups(subgroups_reader) =
+            track_reader.mode().await.expect("the track reads back")
+        else {
+            panic!("a track published as subgroups reads back as subgroups");
+        };
+        (subgroups_writer, subgroups_reader)
+    }
+
+    fn a_payload_of(byte_count: usize) -> bytes::Bytes {
+        bytes::Bytes::from(vec![0xAB_u8; byte_count])
+    }
+
+    #[tokio::test]
+    async fn the_backlog_reading_is_nobody_forwarding_until_a_forwarder_starts() {
+        let (mut subgroups, _reader) = a_tracks_subgroups().await;
+        let mut open = OpenGroupsByTrack::default();
+
+        open.append(
+            A_TRACK,
+            &mut subgroups,
+            a_payload_of(100),
+            VIDEO_MEDIA_TRACK_PRIORITY,
+            1_000,
+        )
+        .expect("the object is written");
+        open.append(
+            A_TRACK,
+            &mut subgroups,
+            a_payload_of(200),
+            VIDEO_MEDIA_TRACK_PRIORITY,
+            2_000,
+        )
+        .expect("the object is written");
+
+        assert_eq!(
+            open.uplink_backlog_readings(),
+            std::collections::HashMap::from([(
+                A_TRACK.to_owned(),
+                UplinkBacklogReading {
+                    unforwarded_objects: None,
+                    unforwarded_bytes: 0,
+                    oldest_unforwarded_stamp_ns: None,
+                },
+            )])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_backlog_reading_turns_the_forwarder_cursor_into_stamps_and_bytes() {
+        let (mut subgroups, mut reader) = a_tracks_subgroups().await;
+        let mut open = OpenGroupsByTrack::default();
+        for (stamp_ns, byte_count) in [(1_000, 100), (2_000, 200), (3_000, 300)] {
+            open.append(
+                A_TRACK,
+                &mut subgroups,
+                a_payload_of(byte_count),
+                VIDEO_MEDIA_TRACK_PRIORITY,
+                stamp_ns,
+            )
+            .expect("the object is written");
+        }
+
+        // A forwarder that has written the first object and is on the second.
+        let mut forwarding = reader
+            .next()
+            .await
+            .expect("the opened group reaches the reader")
+            .expect("there is an opened group");
+        forwarding.mark_forwarding_started();
+        forwarding
+            .read_next()
+            .await
+            .expect("the first object reads");
+        forwarding.mark_forwarded();
+
+        assert_eq!(
+            open.uplink_backlog_readings()[A_TRACK],
+            UplinkBacklogReading {
+                unforwarded_objects: Some(2),
+                unforwarded_bytes: 500,
+                oldest_unforwarded_stamp_ns: Some(2_000),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cut_abandons_the_named_groups_with_delivery_timeout_and_finishes_the_rest() {
+        let (mut video_subgroups, mut video_reader) = a_tracks_subgroups().await;
+        let (mut audio_subgroups, mut audio_reader) = a_tracks_subgroups().await;
+        let mut open = OpenGroupsByTrack::default();
+        for stamp_ns in [1_000, 2_000, 3_000] {
+            open.append(
+                "video",
+                &mut video_subgroups,
+                a_payload_of(1_000),
+                VIDEO_MEDIA_TRACK_PRIORITY,
+                stamp_ns,
+            )
+            .expect("the object is written");
+        }
+        open.append("audio", &mut audio_subgroups, a_payload_of(50), 126, 1_000)
+            .expect("the object is written");
+        let mut video_forwarding = video_reader.next().await.unwrap().unwrap();
+        video_forwarding.mark_forwarding_started();
+        video_forwarding
+            .read_next()
+            .await
+            .expect("the first object reads");
+        video_forwarding.mark_forwarded();
+        let mut audio_forwarding = audio_reader.next().await.unwrap().unwrap();
+        audio_forwarding.mark_forwarding_started();
+
+        let abandoned = open.cut_every_group(&["video".to_owned()]);
+
+        assert_eq!(
+            abandoned,
+            vec![GroupTheUplinkBacklogAbandoned {
+                moq_track_name: "video".to_owned(),
+                unforwarded_objects: 2,
+                unforwarded_bytes: 2_000,
+            }]
+        );
+        assert!(
+            open.uplink_backlog_readings().is_empty(),
+            "nothing is open after a cut"
+        );
+        // The abandoned group's forwarder is told so ahead of the two objects
+        // it had not written; the finished group's forwarder drains and ends.
+        assert!(matches!(
+            video_forwarding.read_next().await,
+            Err(ServeError::Abandoned(DataStreamResetCode::DeliveryTimeout))
+        ));
+        assert_eq!(
+            audio_forwarding
+                .read_next()
+                .await
+                .expect("the object reads"),
+            Some(a_payload_of(50))
+        );
+        assert_eq!(
+            audio_forwarding.read_next().await.expect("the group ends"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cut_that_abandons_nothing_finishes_every_group_as_before() {
+        let (mut subgroups, mut reader) = a_tracks_subgroups().await;
+        let mut open = OpenGroupsByTrack::default();
+        open.append(
+            A_TRACK,
+            &mut subgroups,
+            a_payload_of(10),
+            VIDEO_MEDIA_TRACK_PRIORITY,
+            1,
+        )
+        .expect("the object is written");
+        let mut forwarding = reader.next().await.unwrap().unwrap();
+
+        assert!(open.cut_every_group(&[]).is_empty());
+
+        assert_eq!(
+            forwarding.read_next().await.unwrap(),
+            Some(a_payload_of(10))
+        );
+        assert_eq!(forwarding.read_next().await.unwrap(), None);
+    }
 
     /// The writer, and the reader positioned on the group it opened.
     async fn one_open_group() -> (

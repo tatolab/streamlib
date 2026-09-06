@@ -32,7 +32,7 @@ mod moq_track_sample;
 mod streamlib_bag_object;
 mod transport_stack;
 
-use crate::delivery_deadline::MoqPublisherDeliveryDeadline;
+use crate::delivery_deadline::{MoqPublisherDeliveryDeadline, UplinkBacklogOnOneTrack};
 use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
 use crate::error::MoqExtensionError;
 use crate::monotonic_clock::monotonic_now_ns;
@@ -41,6 +41,7 @@ use crate::moq_broadcast_publisher::{
 };
 use crate::moq_broadcast_subscriber::{MoqBroadcastSubscriber, ReceivedTrackSample};
 use crate::moq_relay_config::MoqRelayConfig;
+use crate::moq_session::QuicUplinkReadings;
 use crate::moq_track_sample::{DataTrackObject, MoqTrackSample};
 
 /// Bring up the tokio runtime and the TLS provider this wheel's sessions share.
@@ -252,6 +253,81 @@ impl MoqBroadcastPublishingSession {
                 )
             })
             .collect())
+    }
+
+    /// The uplink backlog per inbound link — every declared link, a zero
+    /// included: what stands unforwarded now, the sheds the backlog began,
+    /// and the superseded groups abandoned for it with what those never
+    /// delivered.
+    fn uplink_backlog_by_track(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<Vec<MoqPublisherUplinkBacklogOnOneTrack>> {
+        let backlog = python.detach(|| {
+            Ok::<_, MoqExtensionError>(self.locked_publisher()?.uplink_backlog_by_track())
+        })?;
+        Ok(backlog
+            .into_iter()
+            .map(MoqPublisherUplinkBacklogOnOneTrack::from)
+            .collect())
+    }
+
+    /// What the QUIC connection under the session reports about the uplink
+    /// path right now, or `None` before the session connects.
+    fn quic_uplink_readings(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<Option<MoqPublisherQuicUplinkReadings>> {
+        let readings = python.detach(|| {
+            Ok::<_, MoqExtensionError>(self.locked_publisher()?.quic_uplink_readings())
+        })?;
+        Ok(readings.map(MoqPublisherQuicUplinkReadings::from))
+    }
+}
+
+/// One inbound link's uplink backlog, as the publisher reads it: what is
+/// behind now and what the backlog has cost so far.
+#[pyclass(frozen, get_all)]
+struct MoqPublisherUplinkBacklogOnOneTrack {
+    inbound_link_name: String,
+    unforwarded_objects: Option<u64>,
+    sheds_the_backlog_began: u64,
+    groups_abandoned: u64,
+    objects_abandoned: u64,
+    bytes_abandoned: u64,
+}
+
+impl From<UplinkBacklogOnOneTrack> for MoqPublisherUplinkBacklogOnOneTrack {
+    fn from(backlog: UplinkBacklogOnOneTrack) -> Self {
+        Self {
+            inbound_link_name: backlog.inbound_link_name,
+            unforwarded_objects: backlog.unforwarded_objects,
+            sheds_the_backlog_began: backlog.sheds_the_backlog_began,
+            groups_abandoned: backlog.groups_abandoned,
+            objects_abandoned: backlog.objects_abandoned,
+            bytes_abandoned: backlog.bytes_abandoned,
+        }
+    }
+}
+
+/// What the QUIC path under the publishing session reports: its round trip,
+/// its congestion window, and what it has lost.
+#[pyclass(frozen, get_all)]
+struct MoqPublisherQuicUplinkReadings {
+    round_trip_time_ms: f64,
+    congestion_window_bytes: u64,
+    lost_packets: u64,
+    congestion_events: u64,
+}
+
+impl From<QuicUplinkReadings> for MoqPublisherQuicUplinkReadings {
+    fn from(readings: QuicUplinkReadings) -> Self {
+        Self {
+            round_trip_time_ms: readings.round_trip_time.as_secs_f64() * 1_000.0,
+            congestion_window_bytes: readings.congestion_window_bytes,
+            lost_packets: readings.lost_packets,
+            congestion_events: readings.congestion_events,
+        }
     }
 }
 
@@ -567,5 +643,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ReceivedVideoAccessUnit>()?;
     module.add_class::<ReceivedOpusPacket>()?;
     module.add_class::<ReceivedDataObject>()?;
+    module.add_class::<MoqPublisherUplinkBacklogOnOneTrack>()?;
+    module.add_class::<MoqPublisherQuicUplinkReadings>()?;
     Ok(())
 }

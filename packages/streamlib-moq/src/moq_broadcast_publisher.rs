@@ -43,7 +43,9 @@ use crate::cmaf_track_timeline::{
     CmafTrackTimeline, OPUS_TRACK_TIMESCALE_HZ, VIDEO_TRACK_TIMESCALE_HZ,
 };
 use crate::delivery_deadline::{
-    DeliveryDeadlineVerdict, MoqPublisherDeliveryDeadline, ObjectsTheDeliveryDeadlineShedOnOneTrack,
+    DeliveryDeadlineVerdict, MoqPublisherDeliveryDeadline,
+    ObjectsTheDeliveryDeadlineShedOnOneTrack, UplinkBacklogOnOneTrack, UplinkBacklogReading,
+    WhyTheDeadlineSheds,
 };
 use crate::encoded_media_sample::{EncodedMediaSample, TrackMedium};
 use crate::error::{MoqExtensionError, Result};
@@ -53,8 +55,8 @@ use crate::moq_broadcast_catalog::{
 };
 use crate::moq_relay_config::MoqRelayConfig;
 use crate::moq_session::{
-    LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS, MoqBroadcastPublishingSession,
-    track_priority_of,
+    GroupTheUplinkBacklogAbandoned, LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS,
+    MoqBroadcastPublishingSession, QuicUplinkReadings, track_priority_of,
 };
 use crate::moq_track_sample::{MoqTrackKind, MoqTrackSample, WhatATrackCarries};
 use crate::streamlib_bag_object::encode_object;
@@ -170,9 +172,16 @@ impl MoqBroadcastPublisher {
         // Everything the plan is about to spend, so a plan that does not reach
         // the relay whole can give it back.
         let spent_before_planning = self.object_write_planner.what_planning_spends();
-        let planned =
-            self.object_write_planner
-                .plan_the_writes_for(inbound_link_name, sample, now_ns);
+        // Read before the plan, at the same instant as the clock: what the
+        // transport is behind on is as much an input to this bag's verdict
+        // as the bag's own stamp is.
+        let uplink_backlog = self.uplink_backlog_readings();
+        let planned = self.object_write_planner.plan_the_writes_for(
+            inbound_link_name,
+            sample,
+            now_ns,
+            &uplink_backlog,
+        );
         let PlannedMoqObjectWrites {
             instructions,
             writing_them_all_opens_the_broadcast,
@@ -198,10 +207,15 @@ impl MoqBroadcastPublisher {
             return Err(MoqExtensionError::NotConnected { role: "publishing" });
         };
         let mut wrote_them_all = Ok(());
+        let mut groups_abandoned = Vec::new();
         for instruction in instructions {
             wrote_them_all = match instruction {
-                MoqObjectWriteInstruction::CutANewGroupOnEveryTrack => {
-                    session.open_a_new_group_on_every_track();
+                MoqObjectWriteInstruction::CutANewGroupOnEveryTrack {
+                    abandon_the_superseded_group_of,
+                } => {
+                    groups_abandoned.extend(
+                        session.cut_a_new_group_on_every_track(&abandon_the_superseded_group_of),
+                    );
                     Ok(())
                 }
                 MoqObjectWriteInstruction::WriteTheOnlyObjectATrackEverCarries {
@@ -212,12 +226,22 @@ impl MoqBroadcastPublisher {
                     moq_track_name,
                     object_payload,
                     publisher_priority,
-                } => session.write_object(&moq_track_name, object_payload, publisher_priority),
+                    object_stamp_ns,
+                } => session.write_object(
+                    &moq_track_name,
+                    object_payload,
+                    publisher_priority,
+                    object_stamp_ns,
+                ),
             };
             if wrote_them_all.is_err() {
                 break;
             }
         }
+        // Recorded whatever came after it: an abandon has already reset its
+        // stream, and a refusal further down the plan does not un-reset it.
+        self.object_write_planner
+            .record_the_groups_the_uplink_backlog_abandoned(groups_abandoned);
         if let Err(failure) = wrote_them_all {
             self.object_write_planner
                 .give_back_what_planning_spent(spent_before_planning);
@@ -247,6 +271,33 @@ impl MoqBroadcastPublisher {
     /// Whether the relay session is up.
     pub(crate) fn is_connected(&self) -> bool {
         self.publishing_session.is_some()
+    }
+
+    /// What every track's open group is behind by on the uplink, keyed by
+    /// MoQ track name. Empty before the session connects.
+    fn uplink_backlog_readings(&self) -> HashMap<String, UplinkBacklogReading> {
+        self.publishing_session
+            .as_ref()
+            .map(MoqBroadcastPublishingSession::uplink_backlog_readings)
+            .unwrap_or_default()
+    }
+
+    /// The uplink backlog per inbound link: what stands unforwarded now and
+    /// what it has cost so far — sheds begun, groups abandoned.
+    ///
+    /// Read back across the CPython boundary for the same reason the shed
+    /// counts are: a loss reported only below it is reported to nobody.
+    pub(crate) fn uplink_backlog_by_track(&self) -> Vec<UplinkBacklogOnOneTrack> {
+        self.object_write_planner
+            .uplink_backlog_by_track(&self.uplink_backlog_readings())
+    }
+
+    /// What the QUIC connection under the session reports about the uplink,
+    /// or `None` before it connects.
+    pub(crate) fn quic_uplink_readings(&self) -> Option<QuicUplinkReadings> {
+        self.publishing_session
+            .as_ref()
+            .map(MoqBroadcastPublishingSession::quic_uplink_readings)
     }
 
     /// What the delivery deadline has shed so far, per inbound link.
@@ -296,7 +347,13 @@ impl MoqBroadcastPublisher {
 /// sync point that caused it, with no relay in reach.
 #[derive(Debug, Clone, PartialEq)]
 enum MoqObjectWriteInstruction {
-    CutANewGroupOnEveryTrack,
+    /// Close every track's open group so the next object opens a fresh one.
+    /// Each is finished, except the named ones: the uplink is behind on
+    /// those past the deadline, so they are abandoned with a stream reset
+    /// and their unforwarded objects never leave.
+    CutANewGroupOnEveryTrack {
+        abandon_the_superseded_group_of: Vec<String>,
+    },
     WriteTheOnlyObjectATrackEverCarries {
         moq_track_name: String,
         object_payload: Bytes,
@@ -307,6 +364,9 @@ enum MoqObjectWriteInstruction {
         /// The rung the track's group is opened at — audio outranks video, and
         /// both sit below the descriptive tracks.
         publisher_priority: u8,
+        /// The sample's own stamp, or a data object's write instant: what the
+        /// backlog reading ages the object by once the forwarder is behind it.
+        object_stamp_ns: i64,
     },
 }
 
@@ -544,9 +604,14 @@ impl MoqBroadcastObjectWritePlanner {
         inbound_link_name: &str,
         sample: MoqTrackSample,
         now_ns: i64,
+        uplink_backlog: &HashMap<String, UplinkBacklogReading>,
     ) -> Result<PlannedMoqObjectWrites> {
         let declared_track_index = self.declared_track_index_of(inbound_link_name)?;
         let delivery_deadline = self.delivery_deadline;
+        // Decided from every track's reading before this bag's own, because a
+        // cut is a cut on every track at once.
+        let abandon_the_superseded_group_of =
+            self.media_tracks_whose_uplink_backlog_is_past_the_deadline(uplink_backlog, now_ns);
         let track = &mut self.declared_tracks[declared_track_index];
         track.refuse_a_sample_unlike_the_one_this_track_was_first_published_from(&sample)?;
         // Counted before the deadline reads it, because this counts what the
@@ -555,25 +620,39 @@ impl MoqBroadcastObjectWritePlanner {
         // track must not call it silent.
         track.count_one_more_delivered_bag();
 
+        let the_tracks_uplink_backlog = uplink_backlog
+            .get(&track.moq_media_track_name)
+            .copied()
+            .unwrap_or_default();
         match delivery_deadline.verdict_for_one_sample(
             &sample,
             now_ns,
             track.the_open_group_is_being_shed,
+            the_tracks_uplink_backlog,
         ) {
-            DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup => {
-                track.record_one_object_the_delivery_deadline_shed(payload_byte_count_of(&sample));
+            DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup(why) => {
+                track.record_one_object_the_delivery_deadline_shed(
+                    payload_byte_count_of(&sample),
+                    why,
+                );
                 return Ok(PlannedMoqObjectWrites::of_a_bag_the_delivery_deadline_shed());
             }
             DeliveryDeadlineVerdict::PublishIt => track.the_open_group_is_being_shed = false,
         }
 
         let planned = match self.container_format {
-            MoqContainerFormat::StreamlibBag => {
-                self.plan_a_streamlib_bag_write(declared_track_index, &sample, now_ns)?
-            }
-            MoqContainerFormat::Cmaf => {
-                self.plan_a_cmaf_write(declared_track_index, sample, now_ns)?
-            }
+            MoqContainerFormat::StreamlibBag => self.plan_a_streamlib_bag_write(
+                declared_track_index,
+                &sample,
+                now_ns,
+                abandon_the_superseded_group_of,
+            )?,
+            MoqContainerFormat::Cmaf => self.plan_a_cmaf_write(
+                declared_track_index,
+                sample,
+                now_ns,
+                abandon_the_superseded_group_of,
+            )?,
         };
         // A held bag asks the transport for nothing, so the open group's age
         // is untouched by it.
@@ -588,6 +667,7 @@ impl MoqBroadcastObjectWritePlanner {
         declared_track_index: usize,
         sample: &MoqTrackSample,
         now_ns: i64,
+        abandon_the_superseded_group_of: Vec<String>,
     ) -> Result<PlannedMoqObjectWrites> {
         let object_payload = encode_object(sample)?;
         let writing_them_all_opens_the_broadcast = !self.the_descriptive_objects_have_been_written;
@@ -603,7 +683,9 @@ impl MoqBroadcastObjectWritePlanner {
         if this_sample_cuts_a_new_group_on_every_track(sample)
             || self.the_age_bound_cuts_before_this_write(now_ns)
         {
-            instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
+            instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack {
+                abandon_the_superseded_group_of,
+            });
         }
         instructions.push(
             MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
@@ -612,6 +694,7 @@ impl MoqBroadcastObjectWritePlanner {
                     .clone(),
                 object_payload,
                 publisher_priority: track_priority_of(sample.kind()),
+                object_stamp_ns: object_stamp_of(sample, now_ns),
             },
         );
         Ok(PlannedMoqObjectWrites {
@@ -626,6 +709,7 @@ impl MoqBroadcastObjectWritePlanner {
         declared_track_index: usize,
         sample: MoqTrackSample,
         now_ns: i64,
+        abandon_the_superseded_group_of: Vec<String>,
     ) -> Result<PlannedMoqObjectWrites> {
         // Before the hold, not inside it: a data bag can never be described,
         // so holding for it would stall every other track up to the hold's
@@ -651,10 +735,13 @@ impl MoqBroadcastObjectWritePlanner {
         if self.the_descriptive_objects_have_been_written {
             let mut instructions = Vec::new();
             if self.the_age_bound_cuts_before_this_write(now_ns) {
-                instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
+                instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack {
+                    abandon_the_superseded_group_of: abandon_the_superseded_group_of.clone(),
+                });
             }
             instructions.extend(
-                self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?,
+                self.declared_tracks[declared_track_index]
+                    .plan_the_cmaf_fragment_of(&sample, &abandon_the_superseded_group_of)?,
             );
             return Ok(PlannedMoqObjectWrites {
                 instructions,
@@ -679,14 +766,19 @@ impl MoqBroadcastObjectWritePlanner {
                 object_payload: self.build_the_broadcast_catalog()?,
             },
         ];
+        // Nothing is open when the broadcast opens, so there is no group for
+        // a cut inside the flush to abandon.
+        let nothing_to_abandon: Vec<String> = Vec::new();
         for held_sample in &self.samples_held_until_every_cmaf_track_is_described {
             instructions.extend(
                 self.declared_tracks[held_sample.declared_track_index]
-                    .plan_the_cmaf_fragment_of(&held_sample.sample)?,
+                    .plan_the_cmaf_fragment_of(&held_sample.sample, &nothing_to_abandon)?,
             );
         }
-        instructions
-            .extend(self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?);
+        instructions.extend(
+            self.declared_tracks[declared_track_index]
+                .plan_the_cmaf_fragment_of(&sample, &nothing_to_abandon)?,
+        );
         Ok(PlannedMoqObjectWrites {
             instructions,
             the_delivery_deadline_shed_it: false,
@@ -721,8 +813,12 @@ impl MoqBroadcastObjectWritePlanner {
         instructions: &[MoqObjectWriteInstruction],
         now_ns: i64,
     ) {
-        let these_cut_a_group =
-            instructions.contains(&MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
+        let these_cut_a_group = instructions.iter().any(|instruction| {
+            matches!(
+                instruction,
+                MoqObjectWriteInstruction::CutANewGroupOnEveryTrack { .. }
+            )
+        });
         if these_cut_a_group || self.the_open_group_was_opened_at_ns.is_none() {
             self.the_open_group_was_opened_at_ns = Some(now_ns);
         }
@@ -858,6 +954,76 @@ impl MoqBroadcastObjectWritePlanner {
                 inbound_link_name: track.inbound_link_name.clone(),
                 objects_shed: track.objects_the_delivery_deadline_shed,
                 bytes_shed: track.bytes_the_delivery_deadline_shed,
+            })
+            .collect()
+    }
+
+    /// The media tracks whose open group the uplink is behind on past the
+    /// deadline — what the next cut abandons rather than finishes.
+    ///
+    /// Never a data track: whether a data object may be dropped is undecided,
+    /// so none is, and its superseded group finishes as before. Never
+    /// anything without a configured deadline, which is the baseline.
+    fn media_tracks_whose_uplink_backlog_is_past_the_deadline(
+        &self,
+        uplink_backlog: &HashMap<String, UplinkBacklogReading>,
+        now_ns: i64,
+    ) -> Vec<String> {
+        self.declared_tracks
+            .iter()
+            .filter(|track| track.carries_media())
+            .filter(|track| {
+                uplink_backlog
+                    .get(&track.moq_media_track_name)
+                    .is_some_and(|reading| {
+                        self.delivery_deadline
+                            .the_uplink_backlog_is_past_the_deadline(*reading, now_ns)
+                    })
+            })
+            .map(|track| track.moq_media_track_name.clone())
+            .collect()
+    }
+
+    /// Take the session's account of the groups a cut abandoned into the
+    /// tracks' own counts.
+    fn record_the_groups_the_uplink_backlog_abandoned(
+        &mut self,
+        groups_abandoned: Vec<GroupTheUplinkBacklogAbandoned>,
+    ) {
+        for group in groups_abandoned {
+            if let Some(track) = self
+                .declared_tracks
+                .iter_mut()
+                .find(|track| track.moq_media_track_name == group.moq_track_name)
+            {
+                track.record_a_group_the_uplink_backlog_abandoned(
+                    group.unforwarded_objects,
+                    group.unforwarded_bytes,
+                );
+            }
+        }
+    }
+
+    /// Every declared track's uplink backlog — the reading as it stands and
+    /// the counts so far — by the link an operator wired. Every track is
+    /// listed, a zero included, because the backlog's absence is the thing an
+    /// operator most wants to read.
+    fn uplink_backlog_by_track(
+        &self,
+        uplink_backlog: &HashMap<String, UplinkBacklogReading>,
+    ) -> Vec<UplinkBacklogOnOneTrack> {
+        self.declared_tracks
+            .iter()
+            .map(|track| UplinkBacklogOnOneTrack {
+                inbound_link_name: track.inbound_link_name.clone(),
+                unforwarded_objects: uplink_backlog
+                    .get(&track.moq_media_track_name)
+                    .and_then(|reading| reading.unforwarded_objects)
+                    .map(|objects| objects as u64),
+                sheds_the_backlog_began: track.sheds_the_uplink_backlog_began,
+                groups_abandoned: track.groups_the_uplink_backlog_abandoned,
+                objects_abandoned: track.objects_the_uplink_backlog_abandoned,
+                bytes_abandoned: track.bytes_the_uplink_backlog_abandoned,
             })
             .collect()
     }
@@ -1085,6 +1251,13 @@ struct DeclaredMoqTrackPublicationState {
     the_open_group_is_being_shed: bool,
     objects_the_delivery_deadline_shed: u64,
     bytes_the_delivery_deadline_shed: u64,
+    /// How many of those sheds the uplink backlog began, rather than the
+    /// bag's own stamp: the count that says the link, not the pipeline
+    /// upstream, was behind.
+    sheds_the_uplink_backlog_began: u64,
+    groups_the_uplink_backlog_abandoned: u64,
+    objects_the_uplink_backlog_abandoned: u64,
+    bytes_the_uplink_backlog_abandoned: u64,
 }
 
 impl DeclaredMoqTrackPublicationState {
@@ -1103,6 +1276,10 @@ impl DeclaredMoqTrackPublicationState {
             the_open_group_is_being_shed: false,
             objects_the_delivery_deadline_shed: 0,
             bytes_the_delivery_deadline_shed: 0,
+            sheds_the_uplink_backlog_began: 0,
+            groups_the_uplink_backlog_abandoned: 0,
+            objects_the_uplink_backlog_abandoned: 0,
+            bytes_the_uplink_backlog_abandoned: 0,
         }
     }
 
@@ -1110,13 +1287,36 @@ impl DeclaredMoqTrackPublicationState {
         self.bags_this_track_has_delivered = self.bags_this_track_has_delivered.saturating_add(1);
     }
 
-    fn record_one_object_the_delivery_deadline_shed(&mut self, encoded_byte_count: usize) {
+    fn record_one_object_the_delivery_deadline_shed(
+        &mut self,
+        encoded_byte_count: usize,
+        why: WhyTheDeadlineSheds,
+    ) {
         self.the_open_group_is_being_shed = true;
         self.objects_the_delivery_deadline_shed =
             self.objects_the_delivery_deadline_shed.saturating_add(1);
         self.bytes_the_delivery_deadline_shed = self
             .bytes_the_delivery_deadline_shed
             .saturating_add(encoded_byte_count as u64);
+        if why == WhyTheDeadlineSheds::TheUplinkBacklogIsPastTheDeadline {
+            self.sheds_the_uplink_backlog_began =
+                self.sheds_the_uplink_backlog_began.saturating_add(1);
+        }
+    }
+
+    fn record_a_group_the_uplink_backlog_abandoned(
+        &mut self,
+        unforwarded_objects: usize,
+        unforwarded_bytes: usize,
+    ) {
+        self.groups_the_uplink_backlog_abandoned =
+            self.groups_the_uplink_backlog_abandoned.saturating_add(1);
+        self.objects_the_uplink_backlog_abandoned = self
+            .objects_the_uplink_backlog_abandoned
+            .saturating_add(unforwarded_objects as u64);
+        self.bytes_the_uplink_backlog_abandoned = self
+            .bytes_the_uplink_backlog_abandoned
+            .saturating_add(unforwarded_bytes as u64);
     }
 
     /// Whether this track's first bag said it carries `kind`.
@@ -1124,6 +1324,13 @@ impl DeclaredMoqTrackPublicationState {
         self.first_published
             .as_ref()
             .is_some_and(|carried| carried.kind == kind)
+    }
+
+    /// Whether this track's first bag said it carries either medium.
+    fn carries_media(&self) -> bool {
+        self.first_published
+            .as_ref()
+            .is_some_and(|carried| matches!(carried.kind, MoqTrackKind::Media(_)))
     }
 
     fn refuse_a_sample_unlike_the_one_this_track_was_first_published_from(
@@ -1269,6 +1476,7 @@ impl DeclaredMoqTrackPublicationState {
     fn plan_the_cmaf_fragment_of(
         &mut self,
         sample: &EncodedMediaSample,
+        abandon_the_superseded_group_of: &[String],
     ) -> Result<Vec<MoqObjectWriteInstruction>> {
         let sample_bytes = self.mdat_sample_bytes_of(sample)?;
         let Some(description) = self.cmaf_description.as_mut() else {
@@ -1309,13 +1517,16 @@ impl DeclaredMoqTrackPublicationState {
 
         let mut instructions = Vec::new();
         if this_media_sample_cuts_a_new_group_on_every_track(sample) {
-            instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack);
+            instructions.push(MoqObjectWriteInstruction::CutANewGroupOnEveryTrack {
+                abandon_the_superseded_group_of: abandon_the_superseded_group_of.to_vec(),
+            });
         }
         instructions.push(
             MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                 moq_track_name: self.moq_media_track_name.clone(),
                 object_payload,
                 publisher_priority: track_priority_of(MoqTrackKind::Media(sample.medium())),
+                object_stamp_ns: sample.timestamp_ns(),
             },
         );
         Ok(instructions)
@@ -1400,6 +1611,16 @@ fn refuse_track_names_that_do_not_name_the_links(
         }
     }
     Ok(())
+}
+
+/// The stamp the backlog reading ages an object by: a media sample's own, and
+/// for a data object — whose stamp is inside an envelope this Rust never
+/// parses — the instant it is written.
+fn object_stamp_of(sample: &MoqTrackSample, now_ns: i64) -> i64 {
+    match sample {
+        MoqTrackSample::EncodedMedia(sample) => sample.timestamp_ns(),
+        MoqTrackSample::DataObject(_) => now_ns,
+    }
 }
 
 /// The bytes one bag puts on the wire, whatever its kind.
@@ -1557,6 +1778,28 @@ mod tests {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
+    /// No session, or nothing any forwarder is behind on.
+    fn no_uplink_backlog() -> HashMap<String, UplinkBacklogReading> {
+        HashMap::new()
+    }
+
+    /// The uplink behind on `objects` of `moq_track_name`'s open group, the
+    /// oldest of them stamped at `oldest_stamp_ns`.
+    fn an_uplink_backlog_on(
+        moq_track_name: &str,
+        oldest_stamp_ns: i64,
+        objects: usize,
+    ) -> HashMap<String, UplinkBacklogReading> {
+        HashMap::from([(
+            moq_track_name.to_owned(),
+            UplinkBacklogReading {
+                unforwarded_objects: Some(objects),
+                unforwarded_bytes: objects * 1000,
+                oldest_unforwarded_stamp_ns: Some(oldest_stamp_ns),
+            },
+        )])
+    }
+
     /// Plan one bag's writes and report every one of them written, which is
     /// what the publisher does when the transport accepted the whole plan.
     ///
@@ -1582,7 +1825,12 @@ mod tests {
         sample: impl Into<MoqTrackSample>,
         now_ns: i64,
     ) -> Result<Vec<MoqObjectWriteInstruction>> {
-        let planned = planner.plan_the_writes_for(inbound_link_name, sample.into(), now_ns)?;
+        let planned = planner.plan_the_writes_for(
+            inbound_link_name,
+            sample.into(),
+            now_ns,
+            &no_uplink_backlog(),
+        )?;
         if planned.writing_them_all_opens_the_broadcast {
             planner.record_that_every_descriptive_object_and_held_sample_was_written();
         }
@@ -1597,7 +1845,12 @@ mod tests {
         instructions
             .iter()
             .map(|instruction| match instruction {
-                MoqObjectWriteInstruction::CutANewGroupOnEveryTrack => "cut".to_owned(),
+                MoqObjectWriteInstruction::CutANewGroupOnEveryTrack {
+                    abandon_the_superseded_group_of,
+                } if abandon_the_superseded_group_of.is_empty() => "cut".to_owned(),
+                MoqObjectWriteInstruction::CutANewGroupOnEveryTrack {
+                    abandon_the_superseded_group_of,
+                } => format!("cut(abandon:{})", abandon_the_superseded_group_of.join("+")),
                 MoqObjectWriteInstruction::WriteTheOnlyObjectATrackEverCarries {
                     moq_track_name,
                     ..
@@ -1800,7 +2053,12 @@ mod tests {
         // ever saw.
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera"]);
         planner
-            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(0).into(),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect("the first sync point describes the track");
         let spent_before = planner.what_planning_spends();
 
@@ -1808,6 +2066,7 @@ mod tests {
             "camera",
             a_video_sync_point_carrying(&A_SECOND_H264_SEQUENCE_PARAMETER_SET, 33_000_000).into(),
             33_000_000,
+            &no_uplink_backlog(),
         );
         assert!(refused.is_err(), "drifted parameter sets are refused");
         planner.give_back_what_planning_spent(spent_before.clone());
@@ -2122,16 +2381,31 @@ mod tests {
     fn a_cmaf_plan_the_transport_never_wrote_still_owes_the_init_object_the_catalog_and_the_hold() {
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "microphone"]);
         planner
-            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(0).into(),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect("the video track is held until the audio track speaks");
 
         let never_reached_the_transport = planner
-            .plan_the_writes_for("microphone", an_opus_packet(0).into(), 0)
+            .plan_the_writes_for(
+                "microphone",
+                an_opus_packet(0).into(),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect("the audio track describes itself and the broadcast can open");
         assert!(never_reached_the_transport.writing_them_all_opens_the_broadcast);
 
         let planned_again = planner
-            .plan_the_writes_for("microphone", an_opus_packet(20_000_000).into(), 20_000_000)
+            .plan_the_writes_for(
+                "microphone",
+                an_opus_packet(20_000_000).into(),
+                20_000_000,
+                &no_uplink_backlog(),
+            )
             .expect("the next bag plans");
 
         assert_eq!(
@@ -2152,7 +2426,12 @@ mod tests {
     fn a_streamlib_bag_plan_the_transport_never_wrote_still_owes_the_catalog() {
         let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["camera"]);
         let never_reached_the_transport = planner
-            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(0).into(),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect("a sync point plans");
         assert_eq!(
             describe_each_write_instruction_as_a_transport_verb(
@@ -2162,7 +2441,12 @@ mod tests {
         );
 
         let planned_again = planner
-            .plan_the_writes_for("camera", a_video_sync_point(33_000_000).into(), 33_000_000)
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(33_000_000).into(),
+                33_000_000,
+                &no_uplink_backlog(),
+            )
             .expect("the next sync point plans");
 
         assert_eq!(
@@ -2340,7 +2624,12 @@ mod tests {
         plan_the_writes_and_report_them_all_written(&mut planner, "camera", a_video_sync_point(0))
             .expect("video is held while `telemetry` has not said what it is");
         planner
-            .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+            .plan_the_writes_for(
+                "telemetry",
+                a_data_object(A_DATA_ENVELOPE),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect_err("cmaf has no packaging for a data bag");
 
         let discarded = planner
@@ -2560,7 +2849,12 @@ mod tests {
             Some(100),
         );
         let the_hold_keeps_it = held
-            .plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(0).into(),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect("the video track is held until the audio track speaks");
 
         let mut shed = a_planner_over_with_a_delivery_deadline_of(
@@ -2568,13 +2862,19 @@ mod tests {
             &["camera"],
             Some(100),
         );
-        shed.plan_the_writes_for("camera", a_video_sync_point(0).into(), 0)
-            .expect("the first sync point plans");
+        shed.plan_the_writes_for(
+            "camera",
+            a_video_sync_point(0).into(),
+            0,
+            &no_uplink_backlog(),
+        )
+        .expect("the first sync point plans");
         let the_deadline_sheds_it = shed
             .plan_the_writes_for(
                 "camera",
                 a_video_delta_frame(33_000_000).into(),
                 33_000_000 + 100_000_001,
+                &no_uplink_backlog(),
             )
             .expect("a shed frame is not a refusal");
 
@@ -3131,6 +3431,7 @@ mod tests {
                 "telemetry",
                 a_data_object(A_DATA_ENVELOPE),
                 LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS + 1,
+                &no_uplink_backlog(),
             )
             .expect("a data object past the bound plans a cut");
         assert_eq!(
@@ -3189,7 +3490,12 @@ mod tests {
 
         let refusal = refusal_of(
             planner
-                .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+                .plan_the_writes_for(
+                    "telemetry",
+                    a_data_object(A_DATA_ENVELOPE),
+                    0,
+                    &no_uplink_backlog(),
+                )
                 .expect_err("cmaf has no packaging for a data bag"),
         );
 
@@ -3228,7 +3534,12 @@ mod tests {
 
         let refusal = refusal_of(
             planner
-                .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+                .plan_the_writes_for(
+                    "telemetry",
+                    a_data_object(A_DATA_ENVELOPE),
+                    0,
+                    &no_uplink_backlog(),
+                )
                 .expect_err("cmaf has no packaging for a data bag"),
         );
         let opened = plan_the_writes_and_report_them_all_written(
@@ -3269,7 +3580,12 @@ mod tests {
     fn a_data_link_refused_first_under_cmaf_never_holds_the_media_declared_beside_it() {
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "telemetry"]);
         planner
-            .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+            .plan_the_writes_for(
+                "telemetry",
+                a_data_object(A_DATA_ENVELOPE),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect_err("cmaf has no packaging for a data bag");
 
         let opened = plan_the_writes_and_report_them_all_written(
@@ -3305,7 +3621,12 @@ mod tests {
      {
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["telemetry", "camera"]);
         planner
-            .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+            .plan_the_writes_for(
+                "telemetry",
+                a_data_object(A_DATA_ENVELOPE),
+                0,
+                &no_uplink_backlog(),
+            )
             .expect_err("cmaf has no packaging for a data bag");
 
         let opened = plan_the_writes_and_report_them_all_written(
@@ -3550,5 +3871,268 @@ mod tests {
             "the data track's entry differs from the media track's"
         );
         assert!(entries_without_their_names[1].get("initTrack").is_none());
+    }
+
+    /// A cut abandons the superseded group of every media track whose uplink
+    /// backlog is older than the deadline, finishes the rest, and the abandon
+    /// rides the cut instruction so nothing is abandoned without a newer sync
+    /// point to supersede it.
+    #[test]
+    fn a_sync_point_abandons_the_superseded_groups_the_uplink_is_behind_on_past_the_deadline() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "microphone"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(0),
+            0,
+        )
+        .expect("the packet plans");
+
+        // The forwarder is still on the camera's first object at two seconds;
+        // the microphone's backlog is fresh.
+        let mut uplink_backlog = an_uplink_backlog_on("camera", 0, 30);
+        uplink_backlog.extend(an_uplink_backlog_on("microphone", 1_990_000_000, 1));
+        let planned = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(2_000_000_000).into(),
+                2_000_000_000,
+                &uplink_backlog,
+            )
+            .expect("the next sync point plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&planned.instructions),
+            vec!["cut(abandon:camera)", "object:camera"]
+        );
+    }
+
+    #[test]
+    fn a_data_tracks_superseded_group_is_never_abandoned_however_stale_its_backlog() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "telemetry"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            0,
+        )
+        .expect("the data object plans");
+
+        let planned = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(2_000_000_000).into(),
+                2_000_000_000,
+                &an_uplink_backlog_on("telemetry", 0, 100),
+            )
+            .expect("the next sync point plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&planned.instructions),
+            vec!["cut", "object:camera"]
+        );
+    }
+
+    #[test]
+    fn without_a_deadline_a_cut_abandons_nothing_however_stale_the_backlog() {
+        let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["camera"]);
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+
+        let planned = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(60_000_000_000).into(),
+                60_000_000_000,
+                &an_uplink_backlog_on("camera", 0, 100),
+            )
+            .expect("the next sync point plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&planned.instructions),
+            vec!["cut", "object:camera"]
+        );
+    }
+
+    #[test]
+    fn a_cut_on_a_cmaf_broadcast_abandons_by_the_same_rule() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::Cmaf,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the video track describes itself and the broadcast opens");
+
+        let planned = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(2_000_000_000).into(),
+                2_000_000_000,
+                &an_uplink_backlog_on("1.m4s", 0, 30),
+            )
+            .expect("the next sync point plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&planned.instructions),
+            vec!["cut(abandon:1.m4s)", "object:1.m4s"]
+        );
+    }
+
+    /// The deadline fires on the backlog as well as on the stamp: a frame on
+    /// time by its own stamp is shed when the forwarder is still on an object
+    /// of its group older than the deadline, and the shed is counted as one
+    /// the backlog began.
+    #[test]
+    fn a_frame_on_time_by_its_stamp_is_shed_when_the_uplink_is_behind_past_the_deadline() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+
+        let shed = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_delta_frame(200_000_000).into(),
+                200_000_000,
+                &an_uplink_backlog_on("camera", 0, 5),
+            )
+            .expect("a shed frame is not a refusal");
+        let still_shed = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_delta_frame(233_000_000).into(),
+                233_000_000,
+                &no_uplink_backlog(),
+            )
+            .expect("the rest of the group goes with it");
+
+        assert!(shed.the_delivery_deadline_shed_it);
+        assert!(still_shed.the_delivery_deadline_shed_it);
+        let backlog = planner.uplink_backlog_by_track(&no_uplink_backlog());
+        assert_eq!(backlog.len(), 1);
+        assert_eq!(backlog[0].inbound_link_name, "camera");
+        assert_eq!(
+            backlog[0].sheds_the_backlog_began, 1,
+            "one shed began on the backlog; its continuation is not a second"
+        );
+        assert_eq!(
+            planner.objects_the_delivery_deadline_shed()[0].objects_shed,
+            2
+        );
+    }
+
+    #[test]
+    fn a_shed_the_stamp_began_is_not_counted_to_the_backlog() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_delta_frame(33_000_000).into(),
+                33_000_000 + 100_000_001,
+                &no_uplink_backlog(),
+            )
+            .expect("the late frame is shed");
+
+        let backlog = planner.uplink_backlog_by_track(&no_uplink_backlog());
+        assert_eq!(backlog[0].sheds_the_backlog_began, 0);
+        assert_eq!(
+            planner.objects_the_delivery_deadline_shed()[0].objects_shed,
+            1
+        );
+    }
+
+    #[test]
+    fn the_groups_a_cut_abandoned_are_counted_to_the_link_that_owns_the_track() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "microphone"],
+            Some(100),
+        );
+        planner.record_the_groups_the_uplink_backlog_abandoned(vec![
+            GroupTheUplinkBacklogAbandoned {
+                moq_track_name: "camera".to_owned(),
+                unforwarded_objects: 12,
+                unforwarded_bytes: 48_213,
+            },
+            GroupTheUplinkBacklogAbandoned {
+                moq_track_name: "camera".to_owned(),
+                unforwarded_objects: 3,
+                unforwarded_bytes: 900,
+            },
+            GroupTheUplinkBacklogAbandoned {
+                moq_track_name: "a-track-this-broadcast-does-not-carry".to_owned(),
+                unforwarded_objects: 1,
+                unforwarded_bytes: 1,
+            },
+        ]);
+
+        let backlog = planner.uplink_backlog_by_track(&an_uplink_backlog_on("camera", 0, 7));
+        let camera = backlog
+            .iter()
+            .find(|track| track.inbound_link_name == "camera")
+            .expect("the camera is listed");
+        let microphone = backlog
+            .iter()
+            .find(|track| track.inbound_link_name == "microphone")
+            .expect("the microphone is listed even with nothing to say");
+
+        assert_eq!(camera.unforwarded_objects, Some(7));
+        assert_eq!(camera.groups_abandoned, 2);
+        assert_eq!(camera.objects_abandoned, 15);
+        assert_eq!(camera.bytes_abandoned, 49_113);
+        assert_eq!(microphone.unforwarded_objects, None);
+        assert_eq!(microphone.groups_abandoned, 0);
     }
 }
