@@ -255,6 +255,7 @@ def test_bytes_survive_the_round_trip_as_bytes_at_every_depth(
 
     received_bag, _ = data_track_round_trip.receive()
 
+    assert received_bag is not None
     assert isinstance(received_bag["blob"], bytes)
     assert isinstance(received_bag["nested"]["deeper"]["payload"], bytes)
     assert received_bag["nested"]["deeper"]["payload"] == b"\xde\xad\xbe\xef"
