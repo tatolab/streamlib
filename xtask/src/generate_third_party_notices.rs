@@ -774,7 +774,7 @@ mod tests {
     /// shaderc-side projects declare, each naming the project it covers.
     ///
     /// Paired with the real workspace root, so the comment-block projects read
-    /// the actual vendored headers — `check-vendored-vulkanalia` hashes those
+    /// the actual vendored headers — `check-vendored-trees` hashes those
     /// trees, so a re-vendor that drops a copyright line fails here.
     fn vendored_cpp_source_trees_fixture() -> (TempDir, VendoredCppSourceTrees) {
         let fixture = TempDir::new().expect("temp dir");

@@ -15,7 +15,7 @@ pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_unbounded_cstr_from_ptr;
-pub mod check_vendored_vulkanalia;
+pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
 pub mod generate_third_party_notices;
@@ -123,7 +123,7 @@ pub fn ensure_source_walking_gate_read_source(
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
     ("check-boundaries", check_boundaries::run),
-    ("check-vendored-vulkanalia", check_vendored_vulkanalia::run),
+    ("check-vendored-trees", check_vendored_trees::run),
     (
         "check-no-in-process-placement",
         check_no_in_process_placement::run,
@@ -714,14 +714,15 @@ enum Commands {
     /// backstop can live.
     CheckBoundedAptInstall,
 
-    /// Drift trip-wire for the vendored vulkanalia fork trees
-    /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
-    /// dir and fails on any byte change vs. the recorded hash — the guard
-    /// against accidental in-place edits (a workspace `cargo fmt --all`
-    /// sweep is the classic cause). Deliberate re-vendors update the
-    /// recorded hashes in the same commit per
-    /// `docs/architecture/vendored-vulkanalia.md`.
-    CheckVendoredVulkanalia,
+    /// Drift trip-wire for the vendored third-party trees — the vulkanalia
+    /// fork (`vendor/tatolab-vulkanalia{,-sys,-vma}`) and the MoQ wheel's
+    /// `moq-transport` (`packages/streamlib-moq/vendor/moq-transport`): hashes
+    /// each vendored crate dir and fails on any byte change vs. the recorded
+    /// hash — the guard against accidental in-place edits (a workspace `cargo
+    /// fmt --all` sweep is the classic cause). Deliberate re-vendors and
+    /// recorded patches update the hashes in the same commit per the tree's
+    /// provenance doc under `docs/architecture/`.
+    CheckVendoredTrees,
 
     /// CI gate keeping every in-tree `{ path = "…", version = "…" }` requirement
     /// equal to `[workspace.package] version`. release-please's `simple` release
@@ -808,7 +809,7 @@ fn main() -> Result<()> {
         }
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
         Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
-        Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
+        Commands::CheckVendoredTrees => check_vendored_trees::run(&workspace_root()?)?,
         Commands::CheckWorkspaceVersionPins { fix } => {
             let workspace_root = workspace_root()?;
             if fix {

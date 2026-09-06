@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 # Logging — `main` installs the subscriber that surfaces
-# check-vendored-vulkanalia's `tracing::info!` output.
+# check-vendored-trees' `tracing::info!` output.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
