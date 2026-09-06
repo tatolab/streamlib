@@ -10,11 +10,26 @@ where they meet: a producer's bag crosses a live link into the publisher's
 subscription would have delivered, is decoded, and crosses a second live link
 to a consumer. What arrives is compared with what was sent.
 
-Only the relay is stood in for — the live fixture is what proves that hop, and
-it needs a rig and an account. Everything on either side of it here is the
-shipped code over real iceoryx2 ports, because the claim is about a bag
-surviving a round trip and a bag has to survive the wire before the envelope
-has anything to carry.
+What is shipped code here is the envelope: the publisher's classification and
+encode, the subscriber's decode and write, and two real iceoryx2 links — the
+bag has to survive the wire before the envelope has anything to carry.
+
+Three layers are stood in for, and none of them is reachable from a test:
+
+- **This wheel's own Rust sessions.** `MoqBroadcastPublishingSession` writes
+  the object bytes and `MoqBroadcastSubscribingSession.next_media` hands them
+  back, and both need a relay. So the object goes straight from the one to a
+  hand-built `ReceivedDataObject` — a real one, minted by the same compiled
+  module — and `_drain_until_stopped`'s dispatch on its type is not exercised
+  here either.
+- **`ctx.inputs`' link-name resolution.** `read_from_inbound_link_with_timestamp`
+  lives on `LinkInputDataReader`, which app code cannot construct, and
+  `ProcessorLinkDataAccess` exposes no inbound-link-name reader. The bag really
+  crosses the link; the name it is filed under is supplied rather than read, so
+  the publisher's per-link maps are keyed on a stated name.
+
+The live fixture is what proves the relay hop, and it needs a rig and an
+account.
 
 Both link ends live on this thread because iceoryx2's ports are `!Send`, and
 each is wired destination-first because a send with no subscriber attached is
@@ -27,13 +42,13 @@ from typing import Any
 
 import pytest
 
-from streamlib import ProcessorLinkDataAccess
+from streamlib import ProcessorLinkDataAccess, decode_msgpack_bytes_to_python_object
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber, _native
 from streamlib_moq.processors import DATA_BAGS_OUTPUT_PORT, TRACKS_INPUT_PORT
 
 A_RELAY = "https://relay.invalid/a-token"
 A_BROADCAST = "streamlib/a-broadcast"
-THE_TRACK = "telemetry"
+THE_DATA_TRACK_NAME = "telemetry"
 
 #: What the producer publishes on, as a graph names it: the producing
 #: processor's id, lowercased, then its port. It is the publisher's track key
@@ -51,11 +66,13 @@ A_TELEMETRY_BAG: "dict[str, Any]" = {
 }
 
 
-class _TheRelayStandingIn:
-    """The publishing session, answering as a relay that delivers everything.
+class _ThePublishingSessionKeepingWhatItWasHanded:
+    """`MoqBroadcastPublishingSession`, which needs a relay, standing still.
 
     It keeps each published object so the round trip can hand it to the
-    subscriber as the `ReceivedDataObject` a subscription would have.
+    subscriber as the `ReceivedDataObject` a subscription would have delivered,
+    and answers the rest of the session surface `process()` and `teardown()`
+    reach for.
     """
 
     def __init__(self) -> None:
@@ -114,14 +131,15 @@ class DataTrackRoundTripUnderTest:
     """One bag's whole path, from the producer's write to the consumer's read.
 
     `send` puts a bag on the producer's link and drives the publisher; the
-    relay stand-in hands each object straight to the subscriber, which decodes
-    it and writes on `data_bags`. `receive` reads the far end.
+    standing-still publishing session hands each object straight to the
+    subscriber, which decodes it and writes on `data_bags`. `receive` reads the
+    far end.
     """
 
     def __init__(
         self,
         publisher: MoqBroadcastPublisher,
-        relay: _TheRelayStandingIn,
+        publishing_session: _ThePublishingSessionKeepingWhatItWasHanded,
         subscriber: MoqBroadcastSubscriber,
         producer_links: ProcessorLinkDataAccess,
         publisher_links: ProcessorLinkDataAccess,
@@ -129,7 +147,7 @@ class DataTrackRoundTripUnderTest:
         consumer_links: ProcessorLinkDataAccess,
     ) -> None:
         self._publisher = publisher
-        self._relay = relay
+        self._publishing_session = publishing_session
         self._subscriber = subscriber
         self._producer_links = producer_links
         self._publisher_context = _PublisherContextOverALiveLink(
@@ -142,7 +160,7 @@ class DataTrackRoundTripUnderTest:
     def send(self, bag: "dict[str, Any]", timestamp_ns: int) -> None:
         self._producer_links.write_to_output_port(THE_PRODUCERS_LINK, bag, timestamp_ns)
         self._publisher.process(self._publisher_context)  # type: ignore[arg-type]
-        self._deliver_what_the_relay_was_handed()
+        self._deliver_what_the_publishing_session_was_handed()
 
     def receive(self) -> "tuple[Any, int] | tuple[None, None]":
         return self._consumer_links.read_from_input_port_with_timestamp(
@@ -151,15 +169,16 @@ class DataTrackRoundTripUnderTest:
 
     @property
     def objects_published(self) -> "list[tuple[str, bytes]]":
-        return self._relay.objects_published
+        return self._publishing_session.objects_published
 
-    def _deliver_what_the_relay_was_handed(self) -> None:
-        for track_name, object_bytes in self._relay.objects_published[self._objects_routed :]:
+    def _deliver_what_the_publishing_session_was_handed(self) -> None:
+        published = self._publishing_session.objects_published
+        for track_name, object_bytes in published[self._objects_routed :]:
             self._subscriber._write_a_data_object(  # type: ignore[arg-type]
                 _native.ReceivedDataObject(track_name, object_bytes),
                 self._subscriber_outputs,
             )
-        self._objects_routed = len(self._relay.objects_published)
+        self._objects_routed = len(published)
 
 
 @pytest.fixture
@@ -180,19 +199,19 @@ def data_track_round_trip(
         f"{unique}/bags", DATA_BAGS_OUTPUT_PORT, DATA_BAGS_OUTPUT_PORT
     )
 
-    relay = _TheRelayStandingIn()
+    publishing_session = _ThePublishingSessionKeepingWhatItWasHanded()
     publisher = MoqBroadcastPublisher(relay_url=A_RELAY, container_format="streamlib_bag")
-    publisher._session = relay  # type: ignore[assignment]
+    publisher._session = publishing_session  # type: ignore[assignment]
     subscriber = MoqBroadcastSubscriber(
         relay_url=A_RELAY,
         broadcast=A_BROADCAST,
         container_format="streamlib_bag",
-        data_track=THE_TRACK,
+        data_track=THE_DATA_TRACK_NAME,
     )
 
     yield DataTrackRoundTripUnderTest(
         publisher,
-        relay,
+        publishing_session,
         subscriber,
         producer_links,
         publisher_links,
@@ -273,11 +292,16 @@ def test_the_stamp_the_producer_wrote_is_the_stamp_the_far_end_reads(
     assert received_timestamp_ns == 7_000_000_000
 
 
-def test_a_run_of_bags_arrives_whole_and_in_order_with_each_stamp_kept(
+def test_a_run_of_bags_arrives_whole_with_each_stamp_kept_and_its_index_minted(
     data_track_round_trip: DataTrackRoundTripUnderTest,
 ):
     """A single bag cannot show the per-link sequence minting, nor that one
-    bag's keys do not leak into the next."""
+    bag's keys do not leak into the next.
+
+    The index is read off the envelope rather than the arriving bag, because it
+    deliberately never enters one — it is the subscriber's material for
+    counting gaps and nothing the consumer sees.
+    """
     sent = [
         {"frame": frame, "blob": bytes([frame]) * 4, "nested": {"n": frame}}
         for frame in range(5)
@@ -288,6 +312,9 @@ def test_a_run_of_bags_arrives_whole_and_in_order_with_each_stamp_kept(
     received = [data_track_round_trip.receive() for _ in sent]
 
     assert received == [(bag, 1_000 + frame) for frame, bag in enumerate(sent)]
-    assert [track for track, _ in data_track_round_trip.objects_published] == [
-        THE_PRODUCERS_LINK
-    ] * len(sent)
+    published = data_track_round_trip.objects_published
+    assert [track for track, _ in published] == [THE_PRODUCERS_LINK] * len(sent)
+    assert [
+        decode_msgpack_bytes_to_python_object(envelope)["sequence_index"]
+        for _, envelope in published
+    ] == list(range(len(sent)))

@@ -9,22 +9,24 @@ arms' PSNR lock: a bag that crossed a real draft-16 relay is compared with the
 bag `moq_live_telemetry_processors.TelemetryBagSource` wrote, key for key and
 byte for byte.
 
-Three things are asserted per bag, and each fails a different way of losing
-data that a liveness check would report as fine:
+Three things are asserted per bag, each failing a different way of losing data
+that a liveness check would report as fine. That the bag is exactly its three
+keys catches an envelope key leaking in or a key going missing. That `blob` is
+the bytes its own `frame` implies catches a corrupted byte and a `bytes` that
+came back a `str`. And that `stamp_ns` equals the transport frame's stamp
+catches a restamp on the way — the two are independent copies of one instant
+written by the source, and they agree only if the publisher's envelope carried
+it and the subscriber restated it.
 
-  the bag is exactly its three keys   — the envelope leaked into it, or a key
-                                        was dropped
-  `blob` is the frame's own bytes     — `bytes` came back a `str`, a byte was
-                                        corrupted, or one bag was replayed as
-                                        every bag
-  `stamp_ns` is the frame's stamp     — something restamped on the way, so the
-                                        producer's instant did not survive
-
-The stamp comparison reads the payload and the transport frame's header, which
-are two independent copies of one instant written by the source: they agree
-only if the publisher's envelope carried the stamp and the subscriber restated
-it. Ordering is *not* asserted — a subscriber that joins mid-group replays the
-open group, which is MoQ's behaviour and accepted rather than masked.
+One thing is asserted over the sample rather than per bag, because no per-bag
+check can see it: a replayed bag is self-consistent by construction, so a far
+end delivering one bag over and over satisfies all three above. Only the set of
+frames shows it, so a sample of several bags carrying fewer than two distinct
+frames fails as a source that stopped progressing. A *handful* of repeats is
+not that and does not fail — a subscriber that joins mid-group replays the open
+group, which is MoQ's behaviour and accepted rather than masked — so repeats
+are counted and reported instead. Ordering is not asserted, for the same
+reason.
 
 Takes what `streamlib tap` returned — one file per tap round, because a
 single tap collects over a window of about half a second and a sample that
@@ -111,10 +113,20 @@ def report_for(tapped_bags: "list[dict[str, Any]]") -> "dict[str, Any]":
         faults.extend(bag_faults)
         if not bag_faults and isinstance(bag, dict):
             frames.append(bag["frame"])
+    distinct_frames = sorted(set(frames))
+    if len(tapped_bags) > 1 and len(distinct_frames) < 2:
+        faults.append(
+            f"{len(tapped_bags)} bags came back carrying "
+            f"{len(distinct_frames)} distinct frame(s), so the far end is "
+            f"delivering one bag over and over rather than the stream the "
+            f"source is writing"
+        )
     return {
         "verdict": "FAIL" if faults else "PASS",
         "bags_compared": len(tapped_bags),
         "bags_matching_what_was_sent": len(frames),
+        "distinct_frames": len(distinct_frames),
+        "bags_repeating_a_frame": len(frames) - len(distinct_frames),
         "frames": frames,
         "faults": faults,
     }

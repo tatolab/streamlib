@@ -73,9 +73,11 @@
 #                             sourced from the repo-root `.env` when present.
 #   STREAMLIB_MOQ_SUB_URL     what `moq-sub` dials for the interop arm. Falls
 #                             back to the relay host + CLOUDFLARE_MOQ_SUB_TOKEN.
-#   STREAMLIB_MOQ_BROADCAST   the broadcast both halves name (default below);
-#                             every container past the first appends its own
-#                             name, so the two arms never share one broadcast
+#   STREAMLIB_MOQ_BROADCAST   the broadcast both halves name (default below).
+#                             `cmaf` keeps it bare, so an interop run is named
+#                             exactly what it always was; every other container
+#                             appends its own name, so no two arms share one
+#                             broadcast whatever order they run in
 #   CONTAINER_FORMATS         which arms to run, space separated (default
 #                             "cmaf streamlib_bag")
 #   SAMPLE_COUNT/SAMPLE_EVERY the exchange budget (defaults 6 / 2)
