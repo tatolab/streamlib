@@ -9,7 +9,8 @@ or relax the commercial-use restriction. Every new Rust file carries:
     // SPDX-License-Identifier: BUSL-1.1
 
 Exception — vendored third-party trees keep the licence they arrived under. Never add a BUSL
-header to one, never reformat those sources:
+header to one, and never reformat or "improve" those sources — a change to one is a
+recorded patch against its upstream, never a drive-by edit:
 
 - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0. See
   `docs/architecture/vendored-vulkanalia.md`.

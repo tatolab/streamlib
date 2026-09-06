@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Both gate-test suites run over throwaway repos they create
+          # The two repo-creating gate-test suites run over repos they create
           # themselves — no authenticated git operation, so the checkout token
           # has no business in the local git config.
           persist-credentials: false
