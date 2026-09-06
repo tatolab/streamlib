@@ -911,6 +911,13 @@ impl MoqBroadcastObjectWritePlanner {
     /// out of the init segment's wait — and no media bag came after it to
     /// open the broadcast.
     fn describe_why_the_broadcast_never_opened(&self) -> String {
+        if self.the_hold_stopped_at_its_bound {
+            return format!(
+                "the hold stopped at its {HIGHEST_BYTES_HELD_WHILE_A_DECLARED_CMAF_TRACK_HAS_NOT_SPOKEN}-byte \
+                 bound while {}",
+                self.describe_the_tracks_the_init_segment_is_waiting_on()
+            );
+        }
         if !self.every_cmaf_media_track_is_described() {
             return format!(
                 "{} — so the init segment could not be built",
@@ -924,8 +931,8 @@ impl MoqBroadcastObjectWritePlanner {
             .map(|track| format!("`{}`", track.inbound_link_name))
             .collect();
         if data_links.is_empty() {
-            return "every media track was described and no media bag arrived after the last \
-                    description to open the broadcast"
+            return "every media track was described, and the descriptive objects were never \
+                    written"
                 .to_owned();
         }
         format!(
@@ -2331,7 +2338,7 @@ mod tests {
     {
         let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "telemetry"]);
         plan_the_writes_and_report_them_all_written(&mut planner, "camera", a_video_sync_point(0))
-            .expect("video is held while the third link has not said what it is");
+            .expect("video is held while `telemetry` has not said what it is");
         planner
             .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
             .expect_err("cmaf has no packaging for a data bag");
