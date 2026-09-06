@@ -569,8 +569,9 @@ class MoqBroadcastPublisher:
     until the encoder's next IDR, and a stream that emits no further sync
     point stays shed until it ends — the deadline is only meaningful beside
     the encoder's keyframe interval. A sync point is published however late it
-    is, which is what keeps audio out of the policy's reach — every Opus packet
-    is one.
+    is, which is what keeps audio out of the shed's reach — every Opus packet
+    is one. The shed decides what is written; a superseded audio group the
+    uplink is behind on is still abandoned at the cut, like video's.
 
     The deadline reads two things. The stamp ages on the way to this
     publisher — capture, encode, the link into the helper. The uplink backlog
@@ -585,6 +586,11 @@ class MoqBroadcastPublisher:
     counters. Absent is the shipped behaviour and the baseline a measurement
     is read against: every bag is written however late it is, and no group is
     ever abandoned.
+
+    Deadline or not, the session bounds its QUIC send window to 512 KiB — a
+    few round trips of a 1080p stream — because a backlog the transport
+    absorbs silently is one the publisher cannot read. That is a ceiling on
+    throughput of about 40 Mbit/s at a 100 ms round trip to the relay.
     """
 
     def __init__(

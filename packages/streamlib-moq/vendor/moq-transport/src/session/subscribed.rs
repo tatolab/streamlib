@@ -631,6 +631,10 @@ impl ObjectForwarder {
                 return Ok(Some(subgroup_object_reader));
             }
 
+            // Filtered out, so never written: as far as the writer's backlog
+            // is concerned it is done with.
+            subgroup_reader.mark_forwarded();
+
             tracing::trace!(
                 "[PUBLISHER] serve_subgroup: filtered object group_id={}, object_id={}",
                 subgroup_reader.group_id,
@@ -757,7 +761,11 @@ impl ObjectForwarder {
                 bytes_sent += chunk.len();
                 // A write parked on a full send window is where a stale backlog
                 // sits, and an abandon has to be able to pre-empt it — so the
-                // write is raced against one rather than awaited alone.
+                // write is raced against one rather than awaited alone. Dropping
+                // the write mid-chunk leaves a prefix on the stream and `owed`
+                // stale; both are safe only because the error returned here is
+                // always turned into a RESET_STREAM by the caller, which discards
+                // the partial object. This arm must never become a FIN.
                 tokio::select! {
                     biased;
                     code = subgroup_reader.until_abandoned() => {

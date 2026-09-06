@@ -329,7 +329,9 @@ impl OpenGroupsByTrack {
                     unforwarded_objects: reading.unforwarded_objects.unwrap_or(0),
                     unforwarded_bytes: reading.unforwarded_bytes,
                 }),
-                Err(failure) => tracing::debug!(
+                // Reachable only once the reader side is gone, in which case
+                // there is no forwarder left for the abandon to pre-empt.
+                Err(failure) => tracing::warn!(
                     track = %track_name,
                     %failure,
                     "the superseded MoQ group could not be abandoned; it finishes instead"
@@ -508,19 +510,10 @@ impl MoqBroadcastPublishingSession {
         &mut self,
         abandon_the_superseded_group_of: &[String],
     ) -> Vec<GroupTheUplinkBacklogAbandoned> {
-        let abandoned = self
-            .open_groups_by_track
-            .cut_every_group(abandon_the_superseded_group_of);
-        for group in &abandoned {
-            tracing::info!(
-                track = %group.moq_track_name,
-                unforwarded_objects = group.unforwarded_objects,
-                unforwarded_bytes = group.unforwarded_bytes,
-                "a superseded MoQ group the uplink was behind on was abandoned with a stream \
-                 reset"
-            );
-        }
-        abandoned
+        // Counted by the planner and said through the Python log, not logged
+        // here: this crate's `tracing` events reach no dispatcher in a helper.
+        self.open_groups_by_track
+            .cut_every_group(abandon_the_superseded_group_of)
     }
 
     /// Write one object, opening a group first if none is open or the open one
@@ -924,7 +917,10 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
 /// open-group bookkeeping makes of the vendored crate's forwarder cursor.
 #[cfg(test)]
 mod tests {
-    use super::{GroupTheUplinkBacklogAbandoned, OpenGroupsByTrack, VIDEO_MEDIA_TRACK_PRIORITY};
+    use super::{
+        AUDIO_MEDIA_TRACK_PRIORITY, GroupTheUplinkBacklogAbandoned, OpenGroupsByTrack,
+        VIDEO_MEDIA_TRACK_PRIORITY,
+    };
     use crate::delivery_deadline::UplinkBacklogReading;
     use moq_transport::data::DataStreamResetCode;
     use moq_transport::serve::{
@@ -1042,8 +1038,14 @@ mod tests {
             )
             .expect("the object is written");
         }
-        open.append("audio", &mut audio_subgroups, a_payload_of(50), 126, 1_000)
-            .expect("the object is written");
+        open.append(
+            "audio",
+            &mut audio_subgroups,
+            a_payload_of(50),
+            AUDIO_MEDIA_TRACK_PRIORITY,
+            1_000,
+        )
+        .expect("the object is written");
         let mut video_forwarding = video_reader.next().await.unwrap().unwrap();
         video_forwarding.mark_forwarding_started();
         video_forwarding
@@ -1085,6 +1087,49 @@ mod tests {
             audio_forwarding.read_next().await.expect("the group ends"),
             None
         );
+    }
+
+    /// What the forwarder races each chunk write against: resolves on an
+    /// abandon with its code, and never for a group that finishes instead.
+    #[tokio::test]
+    async fn until_abandoned_resolves_with_the_abandons_code_and_never_on_a_finish() {
+        let (mut subgroups, mut reader) = a_tracks_subgroups().await;
+        let mut open = OpenGroupsByTrack::default();
+        open.append(
+            A_TRACK,
+            &mut subgroups,
+            a_payload_of(10),
+            VIDEO_MEDIA_TRACK_PRIORITY,
+            1,
+        )
+        .expect("the object is written");
+        let abandoned_group = reader.next().await.unwrap().unwrap();
+        let waiting = tokio::spawn(async move { abandoned_group.until_abandoned().await });
+        tokio::task::yield_now().await;
+
+        open.cut_every_group(&[A_TRACK.to_owned()]);
+
+        assert_eq!(
+            waiting.await.expect("the wait finishes"),
+            DataStreamResetCode::DeliveryTimeout
+        );
+
+        open.append(
+            A_TRACK,
+            &mut subgroups,
+            a_payload_of(10),
+            VIDEO_MEDIA_TRACK_PRIORITY,
+            2,
+        )
+        .expect("the next group opens");
+        let finished_group = reader.next().await.unwrap().unwrap();
+        open.cut_every_group(&[]);
+        let never = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            finished_group.until_abandoned(),
+        )
+        .await;
+        assert!(never.is_err(), "a finished group was never abandoned");
     }
 
     #[tokio::test]

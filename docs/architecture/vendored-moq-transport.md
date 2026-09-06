@@ -55,9 +55,13 @@ wheel's formatting gate is a no-op over it. `src/util/` is not reachable from
 - `cargo fmt --all --check` in the wheel directory covers the vendored tree.
 - `cargo test --locked --lib` and `cargo clippy --locked --lib --all-targets`
   in the wheel directory select the root package alone. The vendored crate's
-  own tests run with `cargo test -p moq-transport` from the same directory;
-  the wheel's own tests pin every patched behaviour through the crate's public
-  API, so the lane still protects the patches.
+  own tests — where the forwarder's race against an abandon, its reset code
+  and its cursor marks are pinned — run with `cargo test -p moq-transport`
+  from the same directory. The wheel's own tests pin what the crate's public
+  API exposes: an abandon honoured ahead of buffered objects,
+  `until_abandoned` resolving, and the cursor arithmetic behind the backlog
+  reading. Neither the drift guard (bytes, not behaviour) nor the wheel's
+  lane stands in for the crate's own tests.
 - The wheel's third-party notices attribute the crate as before; `cargo about`
   synthesises the MIT text from the manifest's SPDX expression, since the
   published crate ships no licence file of its own.
@@ -110,10 +114,11 @@ stands upstream.
    `SubgroupState.forwarded`; `SubgroupReader::mark_forwarding_started` (called
    once a forwarder has its first object, before the stream opens) and
    `mark_forwarded` (after each object's payload is fully written, keeping the
-   furthest cursor across cloned readers); `SubgroupWriter::forwarded` and
-   `unforwarded`, both `None` while nothing is forwarding the subgroup. `write`
-   never blocks, so this is the writer's only account of a transport that has
-   fallen behind it. Upstream: not filed.
+   furthest cursor across cloned readers, and marking an object the delivery
+   filter skips as done with, since it will never be written);
+   `SubgroupWriter::forwarded` and `unforwarded`, both `None` while nothing is
+   forwarding the subgroup. `write` never blocks, so this is the writer's only
+   account of a transport that has fallen behind it. Upstream: not filed.
 
 ## Re-vendor recipe
 

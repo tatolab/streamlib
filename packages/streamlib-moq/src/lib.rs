@@ -285,6 +285,46 @@ impl MoqBroadcastPublishingSession {
     }
 }
 
+impl MoqBroadcastPublishingSession {
+    /// `true` when the sample reaches the transport; `false` when the delivery
+    /// deadline shed it.
+    fn publish_media(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        sample: EncodedMediaSample,
+    ) -> PyResult<bool> {
+        let became = self.publish(python, inbound_link_name, sample.into())?;
+        Ok(became == WhatBecameOfOnePublishedBag::ReachesTheTransport)
+    }
+
+    fn publish(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        sample: MoqTrackSample,
+    ) -> PyResult<WhatBecameOfOnePublishedBag> {
+        let became = python.detach(|| {
+            let mut publisher = self.locked_publisher()?;
+            // Read here rather than inside the planner: one reading covers the
+            // whole of one bag's decision, and a test can plan against a stated
+            // instant. Read after the lock rather than before `detach`, or the
+            // first bag's age misses the relay connect `publish` opens with.
+            let now_ns = monotonic_now_ns();
+            transport_stack::transport_runtime()?.block_on(publisher.publish(
+                inbound_link_name,
+                sample,
+                now_ns,
+            ))
+        })?;
+        Ok(became)
+    }
+
+    fn locked_publisher(&self) -> Result<MutexGuard<'_, MoqBroadcastPublisher>, MoqExtensionError> {
+        lock_or_refuse(&self.publisher, "publishing")
+    }
+}
+
 /// One inbound link's uplink backlog, as the publisher reads it: what is
 /// behind now and what the backlog has cost so far.
 #[pyclass(frozen, get_all)]
@@ -328,46 +368,6 @@ impl From<QuicUplinkReadings> for MoqPublisherQuicUplinkReadings {
             lost_packets: readings.lost_packets,
             congestion_events: readings.congestion_events,
         }
-    }
-}
-
-impl MoqBroadcastPublishingSession {
-    /// `true` when the sample reaches the transport; `false` when the delivery
-    /// deadline shed it.
-    fn publish_media(
-        &self,
-        python: Python<'_>,
-        inbound_link_name: &str,
-        sample: EncodedMediaSample,
-    ) -> PyResult<bool> {
-        let became = self.publish(python, inbound_link_name, sample.into())?;
-        Ok(became == WhatBecameOfOnePublishedBag::ReachesTheTransport)
-    }
-
-    fn publish(
-        &self,
-        python: Python<'_>,
-        inbound_link_name: &str,
-        sample: MoqTrackSample,
-    ) -> PyResult<WhatBecameOfOnePublishedBag> {
-        let became = python.detach(|| {
-            let mut publisher = self.locked_publisher()?;
-            // Read here rather than inside the planner: one reading covers the
-            // whole of one bag's decision, and a test can plan against a stated
-            // instant. Read after the lock rather than before `detach`, or the
-            // first bag's age misses the relay connect `publish` opens with.
-            let now_ns = monotonic_now_ns();
-            transport_stack::transport_runtime()?.block_on(publisher.publish(
-                inbound_link_name,
-                sample,
-                now_ns,
-            ))
-        })?;
-        Ok(became)
-    }
-
-    fn locked_publisher(&self) -> Result<MutexGuard<'_, MoqBroadcastPublisher>, MoqExtensionError> {
-        lock_or_refuse(&self.publisher, "publishing")
     }
 }
 

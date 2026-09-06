@@ -92,9 +92,16 @@ impl MoqPublisherDeliveryDeadline {
     /// the group a decoder re-enters at is the one that turns a late frame
     /// into a stall rather than a skip, and every Opus packet is one — which
     /// is what makes audio outrank video here as well as in the priority the
-    /// group is opened at. A data object is never shed either: each stands
-    /// alone, so a late one leaves no group undecodable, and whether one may
-    /// be dropped at all is undecided — answered here by dropping none.
+    /// group is opened at. That rule is per sample: it decides what is
+    /// written, never what becomes of a group already written. A superseded
+    /// group the uplink is behind on past the deadline is abandoned at the
+    /// cut whether it carried video or audio — every Opus packet is a sync
+    /// point, so an audio group is superseded the moment the next one opens,
+    /// and its stale packets delivered late are a gap either way. A data
+    /// object is never shed, and a data group never abandoned: each object
+    /// stands alone, so a late one leaves no group undecodable, and whether
+    /// one may be dropped at all is undecided — answered here by dropping
+    /// none.
     pub(crate) fn verdict_for_one_sample(
         &self,
         sample: &MoqTrackSample,

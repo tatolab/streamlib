@@ -768,16 +768,14 @@ impl MoqBroadcastObjectWritePlanner {
         ];
         // Nothing is open when the broadcast opens, so there is no group for
         // a cut inside the flush to abandon.
-        let nothing_to_abandon: Vec<String> = Vec::new();
         for held_sample in &self.samples_held_until_every_cmaf_track_is_described {
             instructions.extend(
                 self.declared_tracks[held_sample.declared_track_index]
-                    .plan_the_cmaf_fragment_of(&held_sample.sample, &nothing_to_abandon)?,
+                    .plan_the_cmaf_fragment_of(&held_sample.sample, &[])?,
             );
         }
         instructions.extend(
-            self.declared_tracks[declared_track_index]
-                .plan_the_cmaf_fragment_of(&sample, &nothing_to_abandon)?,
+            self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample, &[])?,
         );
         Ok(PlannedMoqObjectWrites {
             instructions,
@@ -961,9 +959,13 @@ impl MoqBroadcastObjectWritePlanner {
     /// The media tracks whose open group the uplink is behind on past the
     /// deadline — what the next cut abandons rather than finishes.
     ///
-    /// Never a data track: whether a data object may be dropped is undecided,
-    /// so none is, and its superseded group finishes as before. Never
-    /// anything without a configured deadline, which is the baseline.
+    /// Video and audio alike: the per-sample rule that never sheds a sync
+    /// point decides what is written, not what becomes of a group a newer
+    /// sync point has superseded, and a stale audio group delivered late is
+    /// a gap either way. Never a data track: whether a data object may be
+    /// dropped is undecided, so none is, and its superseded group finishes
+    /// as before. Never anything without a configured deadline, which is the
+    /// baseline.
     fn media_tracks_whose_uplink_backlog_is_past_the_deadline(
         &self,
         uplink_backlog: &HashMap<String, UplinkBacklogReading>,
@@ -1879,6 +1881,25 @@ mod tests {
                     object_payload,
                     ..
                 } if moq_track_name == wanted_track_name => Some(object_payload.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The stamp each object appended to a track carries for the backlog
+    /// reading to age it by.
+    fn object_stamps_of_objects_written_to(
+        instructions: &[MoqObjectWriteInstruction],
+        wanted_track_name: &str,
+    ) -> Vec<i64> {
+        instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
+                    moq_track_name,
+                    object_stamp_ns,
+                    ..
+                } if moq_track_name == wanted_track_name => Some(*object_stamp_ns),
                 _ => None,
             })
             .collect()
@@ -3915,6 +3936,122 @@ mod tests {
         assert_eq!(
             describe_each_write_instruction_as_a_transport_verb(&planned.instructions),
             vec!["cut(abandon:camera)", "object:camera"]
+        );
+    }
+
+    /// The per-sample rule never sheds an Opus packet; it does not protect a
+    /// superseded audio group the uplink is still behind on.
+    #[test]
+    fn a_sync_point_abandons_a_superseded_audio_group_the_uplink_is_behind_on_too() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "microphone"],
+            Some(100),
+        );
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(0),
+            0,
+        )
+        .expect("the packet plans");
+
+        let mut uplink_backlog = an_uplink_backlog_on("camera", 0, 30);
+        uplink_backlog.extend(an_uplink_backlog_on("microphone", 0, 90));
+        let planned = planner
+            .plan_the_writes_for(
+                "camera",
+                a_video_sync_point(2_000_000_000).into(),
+                2_000_000_000,
+                &uplink_backlog,
+            )
+            .expect("the next sync point plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&planned.instructions),
+            vec!["cut(abandon:camera+microphone)", "object:camera"]
+        );
+    }
+
+    /// The backlog reading ages an object by the stamp the instruction
+    /// carries: a media sample's own, so the reading is producer lateness
+    /// plus uplink wait, and for a data object — whose stamp is inside an
+    /// envelope this Rust never parses — the instant it is written.
+    #[test]
+    fn an_appended_media_object_carries_its_own_stamp_and_a_data_object_its_write_instant() {
+        let mut planner = a_planner_over(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "microphone", "telemetry"],
+        );
+
+        let video = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(1_000_000_000),
+            1_500_000_000,
+        )
+        .expect("the sync point plans");
+        let audio = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(1_020_000_000),
+            1_600_000_000,
+        )
+        .expect("the packet plans");
+        let data = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "telemetry",
+            a_data_object(A_DATA_ENVELOPE),
+            1_700_000_000,
+        )
+        .expect("the data object plans");
+
+        assert_eq!(
+            object_stamps_of_objects_written_to(&video, "camera"),
+            vec![1_000_000_000]
+        );
+        assert_eq!(
+            object_stamps_of_objects_written_to(&audio, "microphone"),
+            vec![1_020_000_000]
+        );
+        assert_eq!(
+            object_stamps_of_objects_written_to(&data, "telemetry"),
+            vec![1_700_000_000]
+        );
+    }
+
+    #[test]
+    fn a_cmaf_fragment_carries_its_samples_own_stamp() {
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "microphone"]);
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(1_000_000_000),
+            1_500_000_000,
+        )
+        .expect("the video track is held until the audio track speaks");
+        let opened = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(1_020_000_000),
+            1_600_000_000,
+        )
+        .expect("the audio track describes itself and the broadcast opens");
+
+        assert_eq!(
+            object_stamps_of_objects_written_to(&opened, "1.m4s"),
+            vec![1_000_000_000]
+        );
+        assert_eq!(
+            object_stamps_of_objects_written_to(&opened, "2.m4s"),
+            vec![1_020_000_000]
         );
     }
 

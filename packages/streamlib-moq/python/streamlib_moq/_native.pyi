@@ -56,7 +56,9 @@ class MoqBroadcastPublishingSession:
         fall on a group before the rest of it is shed and, once a newer sync
         point supersedes it, the group is abandoned with a stream reset.
         Absent is the shipped behaviour: every bag is written however late it
-        is, and no group is ever abandoned.
+        is, and no group is ever abandoned. Deadline or not, the QUIC send
+        window is bounded to 512 KiB, a throughput ceiling of about 40 Mbit/s
+        at a 100 ms round trip.
         """
 
     def declare_tracks(

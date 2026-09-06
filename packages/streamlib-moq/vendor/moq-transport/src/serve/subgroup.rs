@@ -516,9 +516,12 @@ impl SubgroupReader {
         }
     }
 
-    /// Record that every object `next` has handed out so far has been fully
-    /// written to the transport. The shared cursor only ever moves forward,
-    /// so cloned readers running in parallel report the furthest of them.
+    /// Record that every object `next` has handed out so far is done with:
+    /// written to the transport in full, or filtered out and never to be
+    /// written. The shared cursor only ever moves forward, so cloned readers
+    /// running in parallel report the furthest of them — and one that starts
+    /// after another has drained the subgroup inherits that high-water mark
+    /// rather than reporting its own lag.
     pub fn mark_forwarded(&self) {
         if let Some(mut state) = self.state.lock_mut() {
             let furthest = state.forwarded.map_or(self.read_index, |forwarded| {
