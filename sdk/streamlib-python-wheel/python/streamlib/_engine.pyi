@@ -411,16 +411,16 @@ class VirtualCameraSink:
 
     Config keys: `name`, the camera's name in every picker, defaulting to
     "StreamLib Camera" plus a short id that is unique per instance and app and
-    stable across runs; `door`, "auto" (default), "v4l2loopback", or "pipewire".
-    Under "auto" the sink creates a v4l2loopback device when the module's
-    control node is writable — the door every application sees — and otherwise
-    registers a PipeWire camera node, which needs no module and no root. The
-    door is logged at setup; without permission to create a loopback camera
-    the log names `streamlib enable-virtual-camera`, the one-time command
-    that grants it behind your desktop's password prompt. "v4l2loopback"
-    refuses by name at `setup()` in that case, and the runtime keeps running.
-    The engine never loads a module or asks for elevation. Until the PipeWire
-    door lands, "auto" without that permission refuses the same way and says so.
+    stable across runs; `door`, "auto" (default) or "v4l2loopback" — "pipewire"
+    is reserved for the PipeWire camera door, which is not built yet and
+    refuses by name today. Under "auto" the sink creates a v4l2loopback device
+    when the module's control node is writable — the door every application
+    sees. The door is logged at setup; without permission to create a loopback
+    camera the log names `streamlib enable-virtual-camera`, the one-time
+    command that grants it behind your desktop's password prompt.
+    "v4l2loopback" refuses by name at `setup()` in that case, and so does
+    "auto" until the PipeWire door lands — saying so — and the runtime keeps
+    running. The engine never loads a module or asks for elevation.
 
     A loopback device a reader still holds at teardown is left in place and
     reclaimed by name at the next setup. Frames are stamped with their

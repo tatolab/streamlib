@@ -1092,7 +1092,12 @@ fn negotiate_output_format_and_start_streaming(
             len: mapping_len,
         };
         let written_by_gpu = gpu
-            .escalate(|full| full.import_host_mapping_for_gpu_writes(mapping.ptr, mapping.len))
+            .escalate(|full| {
+                // SAFETY: `mapping` is unmapped only when its `MappedOutputBuffer`
+                // drops, after `written_by_gpu` by field order, and the RHI is
+                // the range's only writer.
+                unsafe { full.import_host_mapping_for_gpu_writes(mapping.ptr, mapping.len) }
+            })
             .map_err(|e| {
                 Error::Runtime(format!(
                     "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": the RHI could not \

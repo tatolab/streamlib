@@ -979,9 +979,9 @@ mod image_to_yuyv_buffer_tests {
         // Page-rounded like a V4L2 mapping; the pass writes only the frame.
         let range =
             PageAlignedHostRange::new(((stride_bytes * height) as usize).next_multiple_of(4096));
-        let mut mapping = gpu
-            .import_host_mapping_for_gpu_writes(range.ptr, range.byte_len)
-            .expect("host mapping");
+        let mut mapping =
+            unsafe { gpu.import_host_mapping_for_gpu_writes(range.ptr, range.byte_len) }
+                .expect("host mapping");
         tracing::info!(
             tier = mapping.tier().as_str(),
             reason = ?mapping.fallback_reason(),

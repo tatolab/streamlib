@@ -1956,9 +1956,14 @@ impl GpuContext {
     /// device's mapped output buffer — taking the imported tier when the
     /// driver allows it and host-cached staging otherwise. See
     /// [`HostMappingWrittenByGpu`](crate::vulkan::rhi::HostMappingWrittenByGpu)
-    /// for the per-frame protocol and the range's lifetime rule.
+    /// for the per-frame protocol.
+    ///
+    /// # Safety
+    ///
+    /// The range must stay mapped, writable and unaliased until the returned
+    /// value drops.
     #[cfg(target_os = "linux")]
-    pub fn import_host_mapping_for_gpu_writes(
+    pub unsafe fn import_host_mapping_for_gpu_writes(
         &self,
         host_range_ptr: *mut u8,
         host_range_byte_len: usize,
@@ -1968,11 +1973,14 @@ impl GpuContext {
             host_range_byte_len,
             "GpuContext::import_host_mapping_for_gpu_writes"
         );
-        crate::vulkan::rhi::HostMappingWrittenByGpu::import_for_gpu_writes(
-            &self.device.inner,
-            host_range_ptr,
-            host_range_byte_len,
-        )
+        // SAFETY: the caller upholds this method's own contract.
+        unsafe {
+            crate::vulkan::rhi::HostMappingWrittenByGpu::import_for_gpu_writes(
+                &self.device.inner,
+                host_range_ptr,
+                host_range_byte_len,
+            )
+        }
     }
 
     /// Build a swapchain-backed [`PresentTarget`](crate::vulkan::rhi::PresentTarget)
@@ -4476,14 +4484,22 @@ impl GpuContextFullAccess {
     ///
     /// FullAccess-only: it allocates device memory (an import or a staging
     /// buffer), which is setup-time work under the escalate gate.
+    ///
+    /// # Safety
+    ///
+    /// The range must stay mapped, writable and unaliased until the returned
+    /// value drops.
     #[cfg(target_os = "linux")]
-    pub fn import_host_mapping_for_gpu_writes(
+    pub unsafe fn import_host_mapping_for_gpu_writes(
         &self,
         host_range_ptr: *mut u8,
         host_range_byte_len: usize,
     ) -> Result<crate::vulkan::rhi::HostMappingWrittenByGpu> {
-        self.host_inner()
-            .import_host_mapping_for_gpu_writes(host_range_ptr, host_range_byte_len)
+        // SAFETY: the caller upholds this method's own contract.
+        unsafe {
+            self.host_inner()
+                .import_host_mapping_for_gpu_writes(host_range_ptr, host_range_byte_len)
+        }
     }
 
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding

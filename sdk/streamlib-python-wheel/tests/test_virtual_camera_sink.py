@@ -27,7 +27,6 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import VirtualCameraSink
 
 VIRTUAL_CAMERA_SINK_APP = Path(__file__).parent / "virtual_camera_sink_app.py"
 CONTROL_NODE = Path("/dev/v4l2loopback")
@@ -270,13 +269,13 @@ def read_yuyv_frames(video_node: Path, count: int):
 
 def test_the_marker_class_cannot_be_instantiated():
     with pytest.raises(TypeError):
-        VirtualCameraSink()
+        streamlib.VirtualCameraSink()
 
 
 def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
-        sink = runtime.add(VirtualCameraSink)
+        sink = runtime.add(streamlib.VirtualCameraSink)
         assert sink.display_name == "VirtualCameraSink"
     finally:
         runtime.shutdown()

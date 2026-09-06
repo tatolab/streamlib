@@ -69,7 +69,13 @@ impl HostMappingWrittenByGpu {
     /// `host_range_byte_len` must be > 0; the imported tier additionally
     /// needs the range aligned to the driver's import alignment, which a
     /// page-aligned `mmap` of a whole buffer satisfies.
-    pub fn import_for_gpu_writes(
+    ///
+    /// # Safety
+    ///
+    /// The range must stay mapped, writable and unaliased until the returned
+    /// value drops: the imported tier has the driver pin those pages, and
+    /// `publish_to_host` writes through the pointer.
+    pub unsafe fn import_for_gpu_writes(
         vulkan_device: &Arc<HostVulkanDevice>,
         host_range_ptr: *mut u8,
         host_range_byte_len: usize,
@@ -109,6 +115,11 @@ impl HostMappingWrittenByGpu {
             vulkan_device,
             byte_len,
         )?;
+        // The publish copies the whole allocation and a pass writes only its
+        // frame, so the bytes it never touches — row padding, the guard band —
+        // must start defined; VMA hands out whatever was there.
+        // SAFETY: a fresh mapped allocation of exactly `byte_len` bytes.
+        unsafe { std::ptr::write_bytes(staging.mapped_ptr(), 0, host_range_byte_len) };
         let gpu_written_memory_is_host_cached =
             staging.vma_allocation_is_host_cached().unwrap_or(false);
         Ok(Self {
@@ -291,9 +302,10 @@ mod tests {
             return;
         }
         let range = PageAlignedHostRange::new(4096 * 4);
-        let mut mapping =
+        let mut mapping = unsafe {
             HostMappingWrittenByGpu::import_for_gpu_writes(&device, range.ptr, range.byte_len)
-                .expect("import");
+        }
+        .expect("import");
         assert_eq!(mapping.tier(), HostMappingTier::ImportedHostPointer);
         assert!(mapping.fallback_reason().is_none());
 
@@ -323,9 +335,10 @@ mod tests {
         // staged tier is what remains.
         let misaligned_ptr = unsafe { range.ptr.add(4) };
         let misaligned_len = range.byte_len - 4;
-        let mut mapping =
+        let mut mapping = unsafe {
             HostMappingWrittenByGpu::import_for_gpu_writes(&device, misaligned_ptr, misaligned_len)
-                .expect("the staged tier never refuses");
+        }
+        .expect("the staged tier never refuses");
         assert_eq!(mapping.tier(), HostMappingTier::HostCachedStagingCopy);
         let reason = mapping
             .fallback_reason()

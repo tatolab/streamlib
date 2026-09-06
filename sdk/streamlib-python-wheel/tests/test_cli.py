@@ -636,7 +636,9 @@ def test_enable_virtual_camera_names_the_package_when_the_module_is_not_installe
     with pytest.raises(cli.MachineSetupError) as refusal:
         cli.enable_virtual_camera(print_only=False)
 
-    assert "linux-modules-9.9.9-test" in str(refusal.value)
+    message = str(refusal.value)
+    assert "v4l2loopback-dkms" in message, message
+    assert "linux-modules-9.9.9-test" in message, message
 
 
 def test_the_privilege_helper_prefers_pkexec_under_a_session_and_sudo_without_one():

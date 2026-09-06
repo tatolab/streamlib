@@ -699,8 +699,9 @@ def enable_virtual_camera(*, print_only: bool) -> int:
     if not virtual_camera_module_is_installed(kernel_release):
         raise MachineSetupError(
             f"the {VIRTUAL_CAMERA_MODULE_NAME} module is not installed for kernel "
-            f"{kernel_release}. Install the package that ships it — on Ubuntu "
-            f"`linux-modules-{kernel_release}` (or `v4l2loopback-dkms`) — then re-run."
+            f"{kernel_release}. Install `v4l2loopback-dkms` (Debian/Ubuntu; it builds "
+            f"against the running kernel), or on a kernel that ships the module, "
+            f"`linux-modules-{kernel_release}` — then re-run."
         )
     helper = choose_privilege_helper()
     if helper is None:
