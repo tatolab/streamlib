@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from streamlib import (
@@ -23,6 +24,7 @@ from streamlib import (
     LinkOutputDataWriter,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    decode_msgpack_bytes_to_python_object,
     encode_bag_to_msgpack_bytes,
     input,
     log,
@@ -35,6 +37,7 @@ from . import _native
 TRACKS_INPUT_PORT = "tracks"
 ENCODED_VIDEO_OUTPUT_PORT = "encoded_video"
 ENCODED_AUDIO_OUTPUT_PORT = "encoded_audio"
+DATA_BAGS_OUTPUT_PORT = "data_bags"
 
 #: What a broadcast's objects are, and what its catalog declares them to be.
 #:
@@ -248,6 +251,112 @@ def the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag: Mapping[str, Any
         + BYTES_UNDER_THE_CEILING_WITHIN_WHICH_THE_FRAMED_SIZE_IS_MEASURED
         > HELPER_LINK_PAYLOAD_CEILING_BYTES
     )
+
+
+def the_envelope_alone_could_put_the_bag_past_the_link_ceiling(
+    envelope_byte_count: int,
+) -> bool:
+    """Whether a data object is large enough that only the exact framed size
+    can say which side of the ceiling its bag falls.
+
+    The envelope's bytes bound the bag's from above: the bag is encoded inside
+    it whole, beside two small integers. So an envelope that fits under the
+    ceiling with the frame header carries a bag that does too, and no second
+    encode is spent to say so.
+    """
+    return (
+        HELPER_LINK_FRAME_HEADER_BYTES + envelope_byte_count
+        > HELPER_LINK_PAYLOAD_CEILING_BYTES
+    )
+
+
+@dataclass(frozen=True)
+class DataObjectEnvelope:
+    """One data track object, decoded: the publisher's per-track count, the
+    bag's own stamp, and the user's bag whole."""
+
+    sequence_index: int
+    timestamp_ns: int
+    bag: "dict[str, Any]"
+
+
+def data_object_envelope_of(payload: bytes) -> DataObjectEnvelope:
+    """Decode one data object, refusing by name whatever is not the envelope.
+
+    The shape is the change file's, not the publisher's code: the publisher
+    writes it and this reads it, and the two meet only on the wire. A far end
+    that wrote something else is refused with the key it left out or mistyped,
+    so an operator can read which side drifted.
+    """
+    try:
+        decoded = decode_msgpack_bytes_to_python_object(payload)
+    except ValueError as failure:
+        raise ValueError(
+            f"the object is not msgpack the engine's codec can decode: {failure}"
+        ) from failure
+    if not isinstance(decoded, dict):
+        raise ValueError(
+            f"the object is a {type(decoded).__name__}, not the map of "
+            f"`{DATA_OBJECT_SEQUENCE_INDEX_KEY}`, `{DATA_OBJECT_TIMESTAMP_NS_KEY}` "
+            f"and `{DATA_OBJECT_BAG_KEY}` a data object is"
+        )
+    for key in (
+        DATA_OBJECT_SEQUENCE_INDEX_KEY,
+        DATA_OBJECT_TIMESTAMP_NS_KEY,
+        DATA_OBJECT_BAG_KEY,
+    ):
+        if key not in decoded:
+            raise ValueError(
+                f"the object carries no `{key}` key; it carries "
+                f"{', '.join(f'`{present}`' for present in decoded) or 'nothing'}"
+            )
+    sequence_index = decoded[DATA_OBJECT_SEQUENCE_INDEX_KEY]
+    timestamp_ns = decoded[DATA_OBJECT_TIMESTAMP_NS_KEY]
+    for key, value in (
+        (DATA_OBJECT_SEQUENCE_INDEX_KEY, sequence_index),
+        (DATA_OBJECT_TIMESTAMP_NS_KEY, timestamp_ns),
+    ):
+        # `bool` is an `int` in Python and a distinct type on the wire.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"the object's `{key}` is {value!r}, not an int")
+    bag = decoded[DATA_OBJECT_BAG_KEY]
+    if not isinstance(bag, dict):
+        raise ValueError(
+            f"the object's `{DATA_OBJECT_BAG_KEY}` is a {type(bag).__name__}, not "
+            f"the map a bag is"
+        )
+    return DataObjectEnvelope(sequence_index, timestamp_ns, bag)
+
+
+class DataTrackSequenceGapCount:
+    """What a data track's `sequence_index` says was lost between the objects
+    that arrived — kept for the log, because the engine offers no lossless link
+    and a gap is said, never raised."""
+
+    def __init__(self) -> None:
+        self.gaps = 0
+        self.objects_missed = 0
+        self._last_sequence_index: "int | None" = None
+
+    def account(self, sequence_index: int) -> None:
+        last = self._last_sequence_index
+        self._last_sequence_index = sequence_index
+        # A first object has nothing to be a gap from, and an index at or
+        # below the last is a publisher that restarted its count, not a loss.
+        if last is None or sequence_index <= last:
+            return
+        missed = sequence_index - last - 1
+        if missed:
+            self.gaps += 1
+            self.objects_missed += missed
+
+    def forget_the_closed_broadcasts_count(self) -> None:
+        """A new session may be a new publisher, whose count starts at its
+        own zero; what was lost before stays counted."""
+        self._last_sequence_index = None
+
+    def describe(self) -> str:
+        return f"sequence_gaps={self.gaps} objects_missed={self.objects_missed}"
 
 
 def _optional_track_names(track_names: Any) -> "list[str] | None":
@@ -524,15 +633,27 @@ def _color_axes_of(frame: EncodedVideoFrame) -> "dict[str, str] | None":
 
 @processor(
     execution="manual",
-    description="Plays encoded video and audio back from a MoQ broadcast",
+    description=(
+        "Plays encoded video, encoded audio and data bags back from a MoQ "
+        "broadcast"
+    ),
 )
 class MoqBroadcastSubscriber:
-    """One MoQ broadcast in, encoded bags out.
+    """One MoQ broadcast in; encoded bags and data bags out.
 
-    Two output ports rather than one per track: ports are declared statically,
-    and a decoder downstream wants a port it can name when the graph is wired.
-    Which MoQ track feeds which port is config — `video_track` and
-    `audio_track` — and a port whose track is unnamed simply never produces.
+    Three output ports rather than one per track: ports are declared
+    statically, and a downstream wants a port it can name when the graph is
+    wired. Which MoQ track feeds which port is config — `video_track`,
+    `audio_track` and `data_track` — and a port whose track is unnamed simply
+    never produces. One data track per subscriber; a second is a second
+    subscriber, because a demux key written into the bag would be pollution.
+
+    A data track's object is the publisher's envelope around a user's bag.
+    `data_bags` carries that bag verbatim, stamped as its producer stamped it,
+    and the envelope's `sequence_index` never enters it: it is what gaps are
+    counted by, and the count is said through the log at the progress cadence
+    rather than raised, because the engine offers no lossless link. Data rides
+    `"streamlib_bag"` only, so `data_track` under `"cmaf"` is refused.
 
     On `"streamlib_bag"` every bag key crosses byte-exact, the producer's
     ordering pair and stamp included. On `"cmaf"` the container carries neither,
@@ -548,6 +669,7 @@ class MoqBroadcastSubscriber:
         video_track: "str | None" = None,
         audio_track: "str | None" = None,
         container_format: ContainerFormat = "cmaf",
+        data_track: "str | None" = None,
     ) -> None:
         self._relay_url = _required_relay_url(relay_url, "MoqBroadcastSubscriber")
         if not isinstance(broadcast, str) or not broadcast:
@@ -555,22 +677,31 @@ class MoqBroadcastSubscriber:
                 "MoqBroadcastSubscriber: `broadcast` is required and names the "
                 f"namespace to subscribe to; got {broadcast!r}"
             )
-        if video_track is None and audio_track is None:
+        if video_track is None and audio_track is None and data_track is None:
             raise ValueError(
-                "MoqBroadcastSubscriber: name at least one of `video_track` and "
-                "`audio_track`; a subscriber with neither would subscribe to "
-                "nothing and produce nothing."
+                "MoqBroadcastSubscriber: name at least one of `video_track`, "
+                "`audio_track` and `data_track`; a subscriber naming none would "
+                "subscribe to nothing and produce nothing."
+            )
+        self._container_format = _required_container_format(
+            container_format, "MoqBroadcastSubscriber"
+        )
+        if data_track is not None and self._container_format == "cmaf":
+            raise ValueError(
+                f"MoqBroadcastSubscriber: `data_track` names a data track "
+                f"({data_track!r}), and the `cmaf` container has no packaging for "
+                f"one; a data track rides `container_format=\"streamlib_bag\"` only."
             )
         self._broadcast = broadcast
         self._video_track = video_track
         self._audio_track = audio_track
-        self._container_format = _required_container_format(
-            container_format, "MoqBroadcastSubscriber"
-        )
+        self._data_track = data_track
         self._stop = threading.Event()
         self._reader: "threading.Thread | None" = None
         self._reported_an_oversized_bag = False
         self._bags_written: "dict[str, int]" = {}
+        self._data_sequence_gaps = DataTrackSequenceGapCount()
+        self._data_objects_refused = 0
 
     @output()
     def encoded_video(self) -> None:
@@ -579,6 +710,11 @@ class MoqBroadcastSubscriber:
     @output()
     def encoded_audio(self) -> None:
         """Opus packets, as `EncodedAudioPacket` bags."""
+
+    @output()
+    def data_bags(self) -> None:
+        """The data track's bags, each exactly as its producer wrote it and
+        stamped as its producer stamped it."""
 
     def start(self, ctx: RuntimeContextFullAccess) -> None:
         """Hand the outputs to a thread this processor owns.
@@ -610,12 +746,14 @@ class MoqBroadcastSubscriber:
                     self._container_format,
                     self._video_track,
                     self._audio_track,
+                    self._data_track,
                 )
                 session.connect()
                 log.info(
                     f"MoqBroadcastSubscriber: subscribed to {self._broadcast}"
                 )
                 delay_seconds = FIRST_RECONNECT_DELAY_SECONDS
+                self._data_sequence_gaps.forget_the_closed_broadcasts_count()
                 self._drain_until_stopped(session, outputs)
             except Exception as failure:
                 log.warn(
@@ -636,13 +774,59 @@ class MoqBroadcastSubscriber:
         self, session: "_native.MoqBroadcastSubscribingSession", outputs: LinkOutputDataWriter
     ) -> None:
         while not self._stop.is_set():
-            media = session.next_media(SUBSCRIBER_POLL_TIMEOUT_MS)
-            if media is None:
+            received = session.next_media(SUBSCRIBER_POLL_TIMEOUT_MS)
+            if received is None:
                 continue
-            port, bag = _bag_for(media)
-            self._report_a_bag_the_link_will_drop(port, bag)
-            outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
-            self._report_progress(port)
+            if isinstance(received, _native.ReceivedDataObject):
+                self._write_a_data_object(received, outputs)
+            else:
+                self._write_a_media_bag(received, outputs)
+
+    def _write_a_media_bag(
+        self,
+        media: "_native.ReceivedVideoAccessUnit | _native.ReceivedOpusPacket",
+        outputs: LinkOutputDataWriter,
+    ) -> None:
+        port, bag = _bag_for(media)
+        self._report_a_bag_the_link_will_drop(
+            port, bag, the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag)
+        )
+        outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
+        self._report_progress(port)
+
+    def _write_a_data_object(self, received: ReceivedData, outputs: LinkOutputDataWriter) -> None:
+        """The user's bag verbatim under the producer's stamp — or nothing, for
+        an object that is not the envelope, which is said and dropped."""
+        try:
+            envelope = data_object_envelope_of(received.payload)
+        except ValueError as refusal:
+            self._report_a_refused_data_object(received.track_name, refusal)
+            return
+        self._data_sequence_gaps.account(envelope.sequence_index)
+        self._report_a_bag_the_link_will_drop(
+            DATA_BAGS_OUTPUT_PORT,
+            envelope.bag,
+            the_envelope_alone_could_put_the_bag_past_the_link_ceiling(len(received.payload)),
+        )
+        outputs.write(DATA_BAGS_OUTPUT_PORT, envelope.bag, timestamp_ns=envelope.timestamp_ns)
+        self._report_progress(DATA_BAGS_OUTPUT_PORT)
+
+    def _report_a_refused_data_object(self, track_name: str, refusal: ValueError) -> None:
+        # The first in full, then at the cadence: a far end writing the wrong
+        # shape writes it on every object, and a line per object would bury
+        # the log of a stream that never recovers.
+        self._data_objects_refused += 1
+        if self._data_objects_refused == 1:
+            log.warn(
+                f"MoqBroadcastSubscriber: an object on data track `{track_name}` is "
+                f"not a data object and was dropped: {refusal}. The next such "
+                f"drops are counted, and the count is said at the progress cadence."
+            )
+        elif self._data_objects_refused % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
+            log.warn(
+                f"MoqBroadcastSubscriber: objects_refused={self._data_objects_refused} "
+                f"on data track `{track_name}`, the latest because {refusal}"
+            )
 
     def _report_progress(self, port: str) -> None:
         written = self._bags_written.get(port, 0) + 1
@@ -650,12 +834,28 @@ class MoqBroadcastSubscriber:
         if written == 1:
             log.info(f"MoqBroadcastSubscriber: first bag written on `{port}`")
         elif written % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
-            log.info(f"MoqBroadcastSubscriber: `{port}` bags_written={written}")
+            lost = (
+                f", {self._describe_what_the_data_track_lost()}"
+                if port == DATA_BAGS_OUTPUT_PORT
+                else ""
+            )
+            log.info(f"MoqBroadcastSubscriber: `{port}` bags_written={written}{lost}")
 
-    def _report_a_bag_the_link_will_drop(self, port: str, bag: "Mapping[str, Any]") -> None:
+    def _describe_what_the_data_track_lost(self) -> str:
+        return (
+            f"{self._data_sequence_gaps.describe()} "
+            f"objects_refused={self._data_objects_refused} on `{self._data_track}`"
+        )
+
+    def _report_a_bag_the_link_will_drop(
+        self,
+        port: str,
+        bag: "Mapping[str, Any]",
+        the_cheap_bound_reaches_the_ceiling: bool,
+    ) -> None:
         if self._reported_an_oversized_bag:
             return
-        if not the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag):
+        if not the_cheap_bound_reaches_the_ceiling:
             return
         framed_byte_count = framed_bag_byte_count(bag)
         if framed_byte_count <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
@@ -671,18 +871,25 @@ class MoqBroadcastSubscriber:
     def stop(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
         self._stop.set()
-        if self._reader is None:
-            return
-        # Bounded well inside the helper's five-second teardown budget: the
-        # thread's own wait for an object is bounded at
-        # SUBSCRIBER_POLL_TIMEOUT_MS, and its backoff waits on the same event.
-        self._reader.join(timeout=READER_THREAD_JOIN_TIMEOUT_SECONDS)
-        if self._reader.is_alive():
-            log.warn(
-                "MoqBroadcastSubscriber: the reading thread is still connecting; "
-                "the session will close when that connect returns"
+        if self._reader is not None:
+            # Bounded well inside the helper's five-second teardown budget: the
+            # thread's own wait for an object is bounded at
+            # SUBSCRIBER_POLL_TIMEOUT_MS, and its backoff waits on the same event.
+            self._reader.join(timeout=READER_THREAD_JOIN_TIMEOUT_SECONDS)
+            if self._reader.is_alive():
+                log.warn(
+                    "MoqBroadcastSubscriber: the reading thread is still connecting; "
+                    "the session will close when that connect returns"
+                )
+            self._reader = None
+        if self._data_track is not None:
+            # The cadence line only fires on a written bag, so a run that lost
+            # or refused more than it wrote would otherwise end unsaid.
+            log.info(
+                f"MoqBroadcastSubscriber: stop, `{DATA_BAGS_OUTPUT_PORT}` "
+                f"bags_written={self._bags_written.get(DATA_BAGS_OUTPUT_PORT, 0)}, "
+                f"{self._describe_what_the_data_track_lost()}"
             )
-        self._reader = None
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
@@ -715,6 +922,15 @@ class ReceivedAccessUnit(Protocol):
     def height(self) -> int: ...
     @property
     def color(self) -> "dict[str, str] | None": ...
+
+
+class ReceivedData(Protocol):
+    """What the data path reads off one received data object."""
+
+    @property
+    def track_name(self) -> str: ...
+    @property
+    def payload(self) -> bytes: ...
 
 
 class ReceivedPacket(Protocol):

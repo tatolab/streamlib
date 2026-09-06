@@ -1,26 +1,31 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""What `MoqBroadcastSubscriber` writes, read back as what a decoder casts it to.
+"""What `MoqBroadcastSubscriber` writes, read back as what a decoder casts it to
+— and, for a data track, read back as the bag its producer wrote.
 
 The bags go over real iceoryx2 links rather than being compared as dicts,
 because the thing worth pinning is that every key survives the wire — that
-`bitstream` arrives as `bytes` and not as a list of integers, and that the
-engine's own casts accept the map without a key missing.
+`bitstream` arrives as `bytes` and not as a list of integers, that the
+engine's own casts accept the map without a key missing, and that a data
+bag's `bytes` value is still `bytes` under the producer's own stamp.
 
 GPU-free: the links are wired directly and no runtime is started.
 """
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
+from unittest import mock
 
 import pytest
 
-from streamlib import EncodedAudioPacket, EncodedVideoFrame
+from streamlib import EncodedAudioPacket, EncodedVideoFrame, encode_bag_to_msgpack_bytes, log
 from streamlib._engine import ProcessorLinkDataAccess
+from streamlib_moq import MoqBroadcastSubscriber
 from streamlib_moq.processors import (
+    DATA_BAGS_OUTPUT_PORT,
     encoded_audio_packet_bag,
     encoded_video_frame_bag,
 )
@@ -30,6 +35,18 @@ OUTPUT_PORT = "encoded_out"
 
 ANNEX_B_ACCESS_UNIT = b"\x00\x00\x00\x01\x67\x42\xe0\x1f\x00\x00\x00\x01\x65\x88\x84"
 OPUS_PACKET = b"\x78\x01\x02\x03"
+
+DATA_TRACK = "telemetry"
+
+#: The data object's shape as the change file fixes it. The publisher writes it
+#: and the subscriber reads it, and the two meet only on the wire — so these
+#: bytes are built here from the documented shape, never from the publisher's
+#: own code, and a drift on either side is ticket 4's end-to-end run to catch.
+THE_DOCUMENTED_ENVELOPE: "dict[str, Any]" = {
+    "sequence_index": 7,
+    "timestamp_ns": 123,
+    "bag": {"a": b"x", "n": {"k": [1, 2.5, None]}},
+}
 
 
 @dataclass(frozen=True)
@@ -56,6 +73,42 @@ class AnOpusPacketOffTheBroadcast:
     channels: int = 1
     sample_count: int = 960
     pre_skip: int = 312
+
+
+@dataclass(frozen=True)
+class ADataObjectOffTheBroadcast:
+    """What the native layer hands the data path: the object's bytes, whole."""
+
+    payload: bytes
+    track_name: str = DATA_TRACK
+
+
+class OutputsWritingOverTheWiredLink:
+    """`ctx.outputs` as the subscriber's data path sees it, over the fixture's
+    one link — so the write, stamp included, is the engine's own."""
+
+    def __init__(self, source: ProcessorLinkDataAccess) -> None:
+        self._source = source
+        self.ports_written: "list[str]" = []
+
+    def write(
+        self, port: str, bag: Mapping[str, Any], timestamp_ns: "int | None" = None
+    ) -> None:
+        self.ports_written.append(port)
+        self._source.write_to_output_port(OUTPUT_PORT, bag, timestamp_ns)
+
+
+def a_data_track_subscriber() -> MoqBroadcastSubscriber:
+    return MoqBroadcastSubscriber(
+        relay_url="https://relay.invalid/a-token",
+        broadcast="a-broadcast",
+        container_format="streamlib_bag",
+        data_track=DATA_TRACK,
+    )
+
+
+def an_envelope_stating(**overrides: Any) -> bytes:
+    return encode_bag_to_msgpack_bytes({**THE_DOCUMENTED_ENVELOPE, **overrides})
 
 
 class WiredLinkUnderTest:
@@ -207,3 +260,75 @@ def test_multichannel_opus_crosses_the_wire_whole(wired_link: WiredLinkUnderTest
     )
 
     assert EncodedAudioPacket(**bag).channels == 6
+
+
+def test_a_data_object_reaches_the_reader_as_the_bag_its_producer_wrote_under_its_stamp(
+    wired_link: WiredLinkUnderTest,
+):
+    """The bag verbatim, `bytes` still `bytes`, the producer's `timestamp_ns`
+    on the frame header — and neither envelope key inside the bag."""
+    subscriber = a_data_track_subscriber()
+    outputs = OutputsWritingOverTheWiredLink(wired_link.source)
+
+    subscriber._write_a_data_object(
+        ADataObjectOffTheBroadcast(an_envelope_stating()),
+        outputs,  # type: ignore[arg-type]
+    )
+    bag, timestamp_ns = wired_link.destination.read_from_input_port_with_timestamp(
+        INPUT_PORT
+    )
+    assert bag is not None, "the wired input received nothing"
+
+    assert outputs.ports_written == [DATA_BAGS_OUTPUT_PORT]
+    assert bag == THE_DOCUMENTED_ENVELOPE["bag"]
+    assert type(bag["a"]) is bytes
+    assert timestamp_ns == 123
+    assert "sequence_index" not in bag and "timestamp_ns" not in bag
+
+
+def test_an_object_missing_an_envelope_key_is_refused_by_name_and_nothing_is_written(
+    wired_link: WiredLinkUnderTest,
+):
+    subscriber = a_data_track_subscriber()
+    outputs = OutputsWritingOverTheWiredLink(wired_link.source)
+    said: "list[str]" = []
+
+    with mock.patch.object(log, "warn", said.append):
+        subscriber._write_a_data_object(
+            ADataObjectOffTheBroadcast(
+                encode_bag_to_msgpack_bytes({"sequence_index": 7, "bag": {"a": b"x"}})
+            ),
+            outputs,  # type: ignore[arg-type]
+        )
+
+    assert outputs.ports_written == []
+    assert wired_link.destination.read_from_input_port(INPUT_PORT) is None
+    assert len(said) == 1, said
+    assert "`timestamp_ns`" in said[0] and f"`{DATA_TRACK}`" in said[0], said[0]
+
+
+def test_a_jump_in_the_sequence_index_is_counted_while_every_bag_still_reaches_the_reader(
+    wired_link: WiredLinkUnderTest,
+):
+    """A gap is said, never raised: the engine offers no lossless link, and a
+    subscriber that stopped writing on one would turn a loss into an outage."""
+    subscriber = a_data_track_subscriber()
+    outputs = OutputsWritingOverTheWiredLink(wired_link.source)
+
+    for sequence_index in (3, 4, 9):
+        subscriber._write_a_data_object(
+            ADataObjectOffTheBroadcast(
+                an_envelope_stating(sequence_index=sequence_index, bag={"n": sequence_index})
+            ),
+            outputs,  # type: ignore[arg-type]
+        )
+
+    assert [wired_link.destination.read_from_input_port(INPUT_PORT) for _ in range(3)] == [
+        {"n": 3},
+        {"n": 4},
+        {"n": 9},
+    ]
+    assert (
+        subscriber._data_sequence_gaps.gaps,
+        subscriber._data_sequence_gaps.objects_missed,
+    ) == (1, 4)
