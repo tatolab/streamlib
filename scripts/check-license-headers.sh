@@ -65,10 +65,8 @@ report_files_missing_header() {
 
 failed_language_checks=()
 
-# Every Rust file in the repo, not an enumerated set of zone dirs. The old list
-# named runtime/ sdk/ adapters/ vendor/ examples/, which silently exempted
-# `xtask/` and `tools/` — and `xtask/src/check_no_inventory_submit.rs` had been
-# sitting there with a `2026` copyright line the rule does not permit.
+# Every Rust file in the repo, not an enumerated set of zone dirs: a list of
+# zones silently exempts every zone nobody remembered to add to it.
 #
 # The vendored trees are verbatim third-party copies under their own licences
 # and deliberately carry NO BUSL headers — the vulkanalia fork is Apache-2.0

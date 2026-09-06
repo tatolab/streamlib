@@ -11,7 +11,7 @@ or relax the commercial-use restriction. Every new Rust file carries:
 Exception — vendored third-party trees keep the licence they arrived under. Never add a BUSL
 header to one, never reformat those sources:
 
-- `vendor/tatolab-vulkanalia*` — the vulkanalia fork, Apache-2.0. See
+- `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0. See
   `docs/architecture/vendored-vulkanalia.md`.
 - `packages/streamlib-moq/vendor/moq-transport` — the MoQ wheel's moq-transport, MIT OR
   Apache-2.0 under Cloudflare's SPDX headers.
@@ -142,7 +142,8 @@ detour into `runtime/` to learn what a built-in publishes on means you skipped i
   `runtime/streamlib-consumer-rhi/`). Nothing else touches `vulkanalia`. CI enforces.
 - Logging is `tracing` only — no `println!`/`eprintln!` (CI enforces).
 - No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
-- New Rust files carry the BUSL header. Never touch `vendor/tatolab-vulkanalia*` or license files.
+- New Rust files carry the BUSL header, except in the vendored trees §Licensing lists.
+  Never touch `vendor/tatolab-vulkanalia*` or license files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a

@@ -235,7 +235,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             &["scripts/check-license-headers.sh"],
         ),
         (
-            "license header gate tests",
+            "license-header-gate tests",
             "bash",
             &[".claude/scripts/tests/license-header-gate.test.sh"],
         ),

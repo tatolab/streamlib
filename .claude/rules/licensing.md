@@ -10,7 +10,7 @@
 
 - Vendored third-party trees keep the licence they arrived under. Never add a BUSL header to
   one, never reformat or "improve" those sources:
-  - `vendor/tatolab-vulkanalia*` — the vulkanalia fork, Apache-2.0.
+  - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0.
   - `packages/streamlib-moq/vendor/moq-transport` — the MoQ wheel's moq-transport, MIT OR
     Apache-2.0 under Cloudflare's SPDX headers.
 - The exception is those paths and nothing else. A vendored tree not listed there, or

@@ -49,8 +49,9 @@ yourself.
 - **Naming** (`.claude/rules/naming.md`): zero-context test; a bare `Writer` / `Handle`
   / `State` / `ctx` is a finding.
 - **Doc conventions and license headers.** New `.rs` files carry the BUSL header — never in
-  a vendored third-party tree (`vendor/tatolab-vulkanalia*`,
-  `packages/streamlib-moq/vendor/moq-transport`), where adding one is the licence violation.
+  a vendored third-party tree (`vendor/tatolab-vulkanalia{,-sys,-vma}`,
+  `packages/streamlib-moq/vendor/moq-transport`), where adding one is the licence
+  violation. Those paths and nothing else — any other tree still carries it.
   Rustdoc one-line, no `# Example` sections. Learnings ship their index line.
   Supersession is annotated, not overwritten.
 
