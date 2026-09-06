@@ -30,11 +30,10 @@ import os
 import streamlib
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 
-#: CMAF and not `streamlib_bag`, and one node is the reason. That container
-#: names each track after its link's own channel — a cuid2 minted at `add` time
-#: — so a subscriber in the same graph would need names that do not exist until
-#: after it has been constructed. Proving it takes two nodes, the second reading
-#: the first's names off `graph`; there is no such fixture yet.
+#: CMAF, because the `moq-sub` interop read is what this node proves. A
+#: `streamlib_bag` run is no longer blocked on track naming — the publisher's
+#: `track_names` lets a subscriber name what it wants — and that arm, with a
+#: data track beside the media, is the fixture's next one; it is not built yet.
 CONTAINER_FORMAT = "cmaf"
 
 #: What the subscriber asks for. Under CMAF the container names media tracks

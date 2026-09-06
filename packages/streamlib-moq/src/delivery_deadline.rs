@@ -19,7 +19,7 @@
 //! Reading the uplink's own backlog is a `moq-transport` change, not a policy
 //! one.
 
-use crate::encoded_media_sample::EncodedMediaSample;
+use crate::moq_track_sample::MoqTrackSample;
 
 /// How late an object may be before this publisher stops writing it.
 ///
@@ -60,12 +60,19 @@ impl MoqPublisherDeliveryDeadline {
     /// re-enters at is the one that turns a late frame into a stall rather
     /// than a skip, and every Opus packet is one — which is what makes audio
     /// outrank video here as well as in the priority the group is opened at.
+    /// A data object is never shed either: each stands alone, so a late one
+    /// leaves no group undecodable, and whether one may be dropped at all is
+    /// undecided — answered here by dropping none.
     pub(crate) fn verdict_for_one_sample(
         &self,
-        sample: &EncodedMediaSample,
+        sample: &MoqTrackSample,
         now_ns: i64,
         the_tracks_open_group_is_already_being_shed: bool,
     ) -> DeliveryDeadlineVerdict {
+        let sample = match sample {
+            MoqTrackSample::DataObject(_) => return DeliveryDeadlineVerdict::PublishIt,
+            MoqTrackSample::EncodedMedia(sample) => sample,
+        };
         if sample.is_sync_point() {
             return DeliveryDeadlineVerdict::PublishIt;
         }
@@ -99,7 +106,8 @@ pub(crate) struct ObjectsTheDeliveryDeadlineShedOnOneTrack {
 mod tests {
     use super::*;
 
-    use crate::encoded_media_sample::EncodedVideoAccessUnit;
+    use crate::encoded_media_sample::{EncodedMediaSample, EncodedVideoAccessUnit};
+    use crate::moq_track_sample::DataTrackObject;
 
     const A_STAMP_NS: i64 = 5_000_000_000;
 
@@ -107,25 +115,33 @@ mod tests {
         MoqPublisherDeliveryDeadline::of_optional_milliseconds(Some(100))
     }
 
-    fn a_delta_frame_stamped_at(timestamp_ns: i64) -> EncodedMediaSample {
+    fn a_delta_frame_stamped_at(timestamp_ns: i64) -> MoqTrackSample {
         a_frame_stamped_at(timestamp_ns, false)
     }
 
-    fn a_sync_point_stamped_at(timestamp_ns: i64) -> EncodedMediaSample {
+    fn a_sync_point_stamped_at(timestamp_ns: i64) -> MoqTrackSample {
         a_frame_stamped_at(timestamp_ns, true)
     }
 
-    fn a_frame_stamped_at(timestamp_ns: i64, is_sync_point: bool) -> EncodedMediaSample {
-        EncodedMediaSample::VideoAccessUnit(EncodedVideoAccessUnit {
-            codec: "h264".to_owned(),
-            annex_b_access_unit: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41]),
-            is_sync_point,
-            group_index: 0,
-            sequence_index: 0,
-            width: 320,
-            height: 180,
-            color: None,
-            timestamp_ns,
+    fn a_frame_stamped_at(timestamp_ns: i64, is_sync_point: bool) -> MoqTrackSample {
+        MoqTrackSample::EncodedMedia(EncodedMediaSample::VideoAccessUnit(
+            EncodedVideoAccessUnit {
+                codec: "h264".to_owned(),
+                annex_b_access_unit: bytes::Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x41]),
+                is_sync_point,
+                group_index: 0,
+                sequence_index: 0,
+                width: 320,
+                height: 180,
+                color: None,
+                timestamp_ns,
+            },
+        ))
+    }
+
+    fn a_data_object() -> MoqTrackSample {
+        MoqTrackSample::DataObject(DataTrackObject {
+            envelope_bytes: bytes::Bytes::from_static(b"\x81\xa3bag\x80"),
         })
     }
 
@@ -185,6 +201,14 @@ mod tests {
                 A_STAMP_NS + 60_000_000_000,
                 true
             ),
+            DeliveryDeadlineVerdict::PublishIt
+        );
+    }
+
+    #[test]
+    fn a_data_object_is_published_however_old_the_reading_says_it_is_and_even_mid_shed() {
+        assert_eq!(
+            a_deadline_of_100_ms().verdict_for_one_sample(&a_data_object(), i64::MAX, true),
             DeliveryDeadlineVerdict::PublishIt
         );
     }

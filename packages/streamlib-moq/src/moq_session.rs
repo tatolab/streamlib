@@ -20,6 +20,7 @@ use std::time::Duration;
 use crate::encoded_media_sample::TrackMedium;
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_relay_config::{MoqRelayConfig, moq_transport_subprotocol};
+use crate::moq_track_sample::MoqTrackKind;
 
 /// Cloudflare's relay idles a connection out at roughly 10–15 s, so the QUIC
 /// layer speaks up well inside that. `web_transport`'s builder does not expose
@@ -42,6 +43,13 @@ pub(crate) const DESCRIPTIVE_TRACK_PRIORITY: u8 = 0;
 pub(crate) const AUDIO_MEDIA_TRACK_PRIORITY: u8 = 126;
 /// The rung a video track's groups are opened at.
 pub(crate) const VIDEO_MEDIA_TRACK_PRIORITY: u8 = 127;
+/// The rung a data track's groups are opened at.
+///
+/// Video's rung as a placeholder, not a ranking: the ladder places audio ahead
+/// of video and has not placed data, because whether a data object may ever be
+/// dropped is undecided — so a data track rides the media literal it would
+/// have ridden before the ladder existed.
+pub(crate) const DATA_TRACK_PRIORITY: u8 = VIDEO_MEDIA_TRACK_PRIORITY;
 
 /// Draft-16 §10.4.2 reads a smaller `publisher_priority` as sooner, so the
 /// ladder is only a ladder while it descends.
@@ -50,11 +58,12 @@ const _: () = assert!(
         && AUDIO_MEDIA_TRACK_PRIORITY < VIDEO_MEDIA_TRACK_PRIORITY
 );
 
-/// The rung a medium's groups are opened at.
-pub(crate) fn media_track_priority_of(medium: TrackMedium) -> u8 {
-    match medium {
-        TrackMedium::Audio => AUDIO_MEDIA_TRACK_PRIORITY,
-        TrackMedium::Video => VIDEO_MEDIA_TRACK_PRIORITY,
+/// The rung a track kind's groups are opened at.
+pub(crate) fn track_priority_of(kind: MoqTrackKind) -> u8 {
+    match kind {
+        MoqTrackKind::Media(TrackMedium::Audio) => AUDIO_MEDIA_TRACK_PRIORITY,
+        MoqTrackKind::Media(TrackMedium::Video) => VIDEO_MEDIA_TRACK_PRIORITY,
+        MoqTrackKind::Data => DATA_TRACK_PRIORITY,
     }
 }
 
@@ -76,6 +85,18 @@ const FINAL_DRAIN_BEFORE_ABORT: Duration = Duration::from_millis(750);
 /// bound; and a subscriber joining mid-group gets that group from its first
 /// object, so an endless group is an endless replay.
 const HIGHEST_OBJECTS_IN_ONE_GROUP: usize = 128;
+
+/// How old the open group of a broadcast with no video may be before the next
+/// object cuts a new one.
+///
+/// The second backstop for the same broadcast, for the same two reasons: a
+/// sparse data track — one object a second — would take minutes to reach the
+/// object bound, and a joiner mid-group replays all of it. Applied by the
+/// planner, which alone knows whether any track has published video, as a
+/// stamp comparison on the publisher's own clock at the next write — no timer,
+/// so a broadcast that stops writing holds its last group open until it writes
+/// again or closes.
+pub(crate) const LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS: i64 = 1_000_000_000;
 
 /// How many received objects may wait for the reading processor before the
 /// drain stops pulling.

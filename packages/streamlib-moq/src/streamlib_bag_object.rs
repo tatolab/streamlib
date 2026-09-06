@@ -15,6 +15,10 @@
 //! the keys are the point, and a reader in another language should see them.
 //! `bitstream` is msgpack `bin`, never an array of numbers, exactly as it rides
 //! a link.
+//!
+//! A data track's object is the same container from the other side: Python
+//! builds the envelope around the user's bag and encodes it with the engine's
+//! own codec, so the bytes arrive here already this container's object.
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +27,7 @@ use crate::encoded_media_sample::{
 };
 use crate::error::{MoqExtensionError, Result};
 use crate::moq_broadcast_catalog::STREAMLIB_BAG_PACKAGING;
+use crate::moq_track_sample::MoqTrackSample;
 
 /// A video object's keys, which are the encoded-video bag's keys plus the stamp
 /// that normally rides the frame header.
@@ -103,7 +108,11 @@ struct MediumProbeOnTheWire {
 }
 
 /// Encode one sample as this container's object payload.
-pub(crate) fn encode_object(sample: &EncodedMediaSample) -> Result<bytes::Bytes> {
+pub(crate) fn encode_object(sample: &MoqTrackSample) -> Result<bytes::Bytes> {
+    let sample = match sample {
+        MoqTrackSample::DataObject(object) => return Ok(object.envelope_bytes.clone()),
+        MoqTrackSample::EncodedMedia(sample) => sample,
+    };
     let encoded = match sample {
         EncodedMediaSample::VideoAccessUnit(unit) => {
             rmp_serde::to_vec_named(&VideoObjectBeingWritten {

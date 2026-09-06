@@ -28,6 +28,7 @@ mod moq_broadcast_publisher;
 mod moq_broadcast_subscriber;
 mod moq_relay_config;
 mod moq_session;
+mod moq_track_sample;
 mod streamlib_bag_object;
 mod transport_stack;
 
@@ -40,6 +41,7 @@ use crate::moq_broadcast_publisher::{
 };
 use crate::moq_broadcast_subscriber::MoqBroadcastSubscriber;
 use crate::moq_relay_config::MoqRelayConfig;
+use crate::moq_track_sample::{DataTrackObject, MoqTrackSample};
 
 /// Bring up the tokio runtime and the TLS provider this wheel's sessions share.
 #[pyfunction]
@@ -87,9 +89,19 @@ impl MoqBroadcastPublishingSession {
         })
     }
 
-    /// Fix the broadcast's tracks, in the order their links were wired.
-    fn declare_tracks(&self, python: Python<'_>, inbound_link_names: Vec<String>) -> PyResult<()> {
-        python.detach(|| self.locked_publisher()?.declare_tracks(inbound_link_names))?;
+    /// Fix the broadcast's tracks, in the order their links were wired, under
+    /// the names the app chose for them or, absent those, their links' own.
+    #[pyo3(signature = (inbound_link_names, track_names=None))]
+    fn declare_tracks(
+        &self,
+        python: Python<'_>,
+        inbound_link_names: Vec<String>,
+        track_names: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        python.detach(|| {
+            self.locked_publisher()?
+                .declare_tracks(inbound_link_names, track_names)
+        })?;
         Ok(())
     }
 
@@ -126,7 +138,7 @@ impl MoqBroadcastPublishingSession {
             color,
             timestamp_ns,
         });
-        self.publish(python, inbound_link_name, sample)
+        self.publish_media(python, inbound_link_name, sample)
     }
 
     /// Publish one Opus packet on the track that link owns. `true` when it
@@ -162,7 +174,25 @@ impl MoqBroadcastPublishingSession {
             pre_skip,
             timestamp_ns,
         });
-        self.publish(python, inbound_link_name, sample)
+        self.publish_media(python, inbound_link_name, sample)
+    }
+
+    /// Publish one data object — the envelope Python built and encoded — on
+    /// the track that link owns. Written as the object payload whole; nothing
+    /// in it is parsed here.
+    fn publish_data_object(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        object_bytes: &[u8],
+    ) -> PyResult<()> {
+        let sample = MoqTrackSample::DataObject(DataTrackObject {
+            envelope_bytes: bytes::Bytes::copy_from_slice(object_bytes),
+        });
+        // The deadline never sheds a data object, so the outcome carries
+        // nothing the caller does not already know.
+        self.publish(python, inbound_link_name, sample)?;
+        Ok(())
     }
 
     /// Finish every open group and drop the connection.
@@ -184,10 +214,10 @@ impl MoqBroadcastPublishingSession {
         Ok(discarded.map(|discarded| {
             format!(
                 "{} held samples ({} bytes) were discarded unwritten: the broadcast never \
-                 became playable because {} never became describable",
+                 became playable because {}",
                 discarded.held_sample_count,
                 discarded.held_byte_count,
-                discarded.tracks_that_were_never_describable
+                discarded.why_the_broadcast_never_opened
             )
         }))
     }
@@ -226,12 +256,24 @@ impl MoqBroadcastPublishingSession {
 }
 
 impl MoqBroadcastPublishingSession {
-    fn publish(
+    /// `true` when the sample reaches the transport; `false` when the delivery
+    /// deadline shed it.
+    fn publish_media(
         &self,
         python: Python<'_>,
         inbound_link_name: &str,
         sample: EncodedMediaSample,
     ) -> PyResult<bool> {
+        let became = self.publish(python, inbound_link_name, sample.into())?;
+        Ok(became == WhatBecameOfOnePublishedBag::ReachesTheTransport)
+    }
+
+    fn publish(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        sample: MoqTrackSample,
+    ) -> PyResult<WhatBecameOfOnePublishedBag> {
         let became = python.detach(|| {
             let mut publisher = self.locked_publisher()?;
             // Read here rather than inside the planner: one reading covers the
@@ -245,7 +287,7 @@ impl MoqBroadcastPublishingSession {
                 now_ns,
             ))
         })?;
-        Ok(became == WhatBecameOfOnePublishedBag::ReachesTheTransport)
+        Ok(became)
     }
 
     fn locked_publisher(&self) -> Result<MutexGuard<'_, MoqBroadcastPublisher>, MoqExtensionError> {

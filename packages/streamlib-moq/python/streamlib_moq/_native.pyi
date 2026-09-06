@@ -53,12 +53,22 @@ class MoqBroadcastPublishingSession:
         bag is written however late it is.
         """
 
-    def declare_tracks(self, inbound_link_names: Sequence[str]) -> None:
+    def declare_tracks(
+        self,
+        inbound_link_names: Sequence[str],
+        track_names: "Sequence[str] | None" = None,
+    ) -> None:
         """Fix the broadcast's tracks, in the order their links were wired.
 
         The order is load-bearing on `cmaf`: a subscriber zips the catalog's
         entries against the init segment's tracks positionally, so a track's
         place here is its identity there.
+
+        `track_names`, under `streamlib_bag`, names the tracks positionally —
+        one per link, in the same order; absent, each track is its link's own
+        name. Refused by name when the count differs from the links', when a
+        name is empty, given twice or the catalog track's, and under `cmaf`
+        altogether, whose names are a subscriber's interop contract.
         """
 
     def publish_video_access_unit(
@@ -102,6 +112,16 @@ class MoqBroadcastPublishingSession:
         On `cmaf`, 3–8 channels are refused by name: the `dOps` box encodes
         ChannelMappingFamily 0 only, so a multichannel stream has no honest
         representation there. `streamlib_bag` carries it.
+        """
+
+    def publish_data_object(self, inbound_link_name: str, object_bytes: bytes) -> None:
+        """Publish one data object on the track that link owns.
+
+        `object_bytes` is the whole object payload — the envelope Python built
+        around the user's bag and encoded with the engine's codec — written as
+        it is; nothing in it is parsed here. Never cuts a group and is never
+        shed by the delivery deadline. Refused by name under `cmaf`, which has
+        no packaging for it, before any hold is entered.
         """
 
     def close(self) -> "str | None":
