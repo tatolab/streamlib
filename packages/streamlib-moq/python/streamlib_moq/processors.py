@@ -253,19 +253,29 @@ def the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag: Mapping[str, Any
     )
 
 
+#: The most a wire value grows when the engine's codec decodes and re-encodes
+#: it: an `f32` on the wire decodes to a Python float and re-encodes as an
+#: `f64`, five bytes to nine. Nothing else grows — the codec re-emits its ext
+#: passthrough map as the ext it came from, and every other form it writes is
+#: already the shortest.
+WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE = 2
+
+
 def the_envelope_alone_could_put_the_bag_past_the_link_ceiling(
     envelope_byte_count: int,
 ) -> bool:
     """Whether a data object is large enough that only the exact framed size
     can say which side of the ceiling its bag falls.
 
-    The envelope's bytes bound the bag's from above: the bag is encoded inside
-    it whole, beside two small integers. So an envelope that fits under the
-    ceiling with the frame header carries a bag that does too, and no second
-    encode is spent to say so.
+    The bag is not handed on as the bytes that arrived: the write decodes and
+    re-encodes it through the engine's codec, which widens a value by at most
+    `WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE`. So an envelope that fits
+    under the ceiling with the frame header even at that widening carries a
+    bag that does too, and no second encode is spent to say so.
     """
     return (
-        HELPER_LINK_FRAME_HEADER_BYTES + envelope_byte_count
+        HELPER_LINK_FRAME_HEADER_BYTES
+        + envelope_byte_count * WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE
         > HELPER_LINK_PAYLOAD_CEILING_BYTES
     )
 
@@ -325,7 +335,43 @@ def data_object_envelope_of(payload: bytes) -> DataObjectEnvelope:
             f"the object's `{DATA_OBJECT_BAG_KEY}` is a {type(bag).__name__}, not "
             f"the map a bag is"
         )
+    unwritable_key = _the_first_key_the_engine_cannot_write_in(bag, DATA_OBJECT_BAG_KEY)
+    if unwritable_key is not None:
+        raise ValueError(
+            f"the object's `{DATA_OBJECT_BAG_KEY}` carries {unwritable_key}; the "
+            f"engine's codec writes a named map, so every key at every level "
+            f"must be a str"
+        )
     return DataObjectEnvelope(sequence_index, timestamp_ns, bag)
+
+
+def _the_first_key_the_engine_cannot_write_in(bag: "dict[Any, Any]", path: str) -> "str | None":
+    """Where a decoded bag first carries a key the engine's codec refuses at
+    the write — an int, or a non-UTF-8 string the decoder hands back as
+    `bytes` — or None when every key at every level is a `str`.
+
+    Wire-legal msgpack a non-StreamLib publisher can send; refused here rather
+    than at the write, where the codec's refusal would end the subscription
+    over one object.
+    """
+    for key, value in bag.items():
+        if not isinstance(key, str):
+            return f"a key that is not a str at `{path}`: {key!r} ({type(key).__name__})"
+        found = _the_first_key_the_engine_cannot_write_within(value, f"{path}.{key}")
+        if found is not None:
+            return found
+    return None
+
+
+def _the_first_key_the_engine_cannot_write_within(value: Any, path: str) -> "str | None":
+    if isinstance(value, dict):
+        return _the_first_key_the_engine_cannot_write_in(value, path)
+    if isinstance(value, list):
+        for index, element in enumerate(value):
+            found = _the_first_key_the_engine_cannot_write_within(element, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None
 
 
 class DataTrackSequenceGapCount:
@@ -794,11 +840,15 @@ class MoqBroadcastSubscriber:
         outputs.write(port, bag, timestamp_ns=media.timestamp_ns)
         self._report_progress(port)
 
-    def _write_a_data_object(self, received: ReceivedData, outputs: LinkOutputDataWriter) -> None:
+    def _write_a_data_object(
+        self, received: "_native.ReceivedDataObject", outputs: LinkOutputDataWriter
+    ) -> None:
         """The user's bag verbatim under the producer's stamp — or nothing, for
         an object that is not the envelope, which is said and dropped."""
+        # Read once: the getter copies the whole envelope on every read.
+        payload = received.payload
         try:
-            envelope = data_object_envelope_of(received.payload)
+            envelope = data_object_envelope_of(payload)
         except ValueError as refusal:
             self._report_a_refused_data_object(received.track_name, refusal)
             return
@@ -806,7 +856,7 @@ class MoqBroadcastSubscriber:
         self._report_a_bag_the_link_will_drop(
             DATA_BAGS_OUTPUT_PORT,
             envelope.bag,
-            the_envelope_alone_could_put_the_bag_past_the_link_ceiling(len(received.payload)),
+            the_envelope_alone_could_put_the_bag_past_the_link_ceiling(len(payload)),
         )
         outputs.write(DATA_BAGS_OUTPUT_PORT, envelope.bag, timestamp_ns=envelope.timestamp_ns)
         self._report_progress(DATA_BAGS_OUTPUT_PORT)
@@ -922,15 +972,6 @@ class ReceivedAccessUnit(Protocol):
     def height(self) -> int: ...
     @property
     def color(self) -> "dict[str, str] | None": ...
-
-
-class ReceivedData(Protocol):
-    """What the data path reads off one received data object."""
-
-    @property
-    def track_name(self) -> str: ...
-    @property
-    def payload(self) -> bytes: ...
 
 
 class ReceivedPacket(Protocol):

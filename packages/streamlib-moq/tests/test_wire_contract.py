@@ -23,7 +23,7 @@ import pytest
 
 from streamlib import EncodedAudioPacket, EncodedVideoFrame, encode_bag_to_msgpack_bytes, log
 from streamlib._engine import ProcessorLinkDataAccess
-from streamlib_moq import MoqBroadcastSubscriber
+from streamlib_moq import MoqBroadcastSubscriber, _native
 from streamlib_moq.processors import (
     DATA_BAGS_OUTPUT_PORT,
     encoded_audio_packet_bag,
@@ -75,12 +75,9 @@ class AnOpusPacketOffTheBroadcast:
     pre_skip: int = 312
 
 
-@dataclass(frozen=True)
-class ADataObjectOffTheBroadcast:
+def a_data_object_off_the_broadcast(payload: bytes) -> _native.ReceivedDataObject:
     """What the native layer hands the data path: the object's bytes, whole."""
-
-    payload: bytes
-    track_name: str = DATA_TRACK
+    return _native.ReceivedDataObject(DATA_TRACK, payload)
 
 
 class OutputsWritingOverTheWiredLink:
@@ -271,7 +268,7 @@ def test_a_data_object_reaches_the_reader_as_the_bag_its_producer_wrote_under_it
     outputs = OutputsWritingOverTheWiredLink(wired_link.source)
 
     subscriber._write_a_data_object(
-        ADataObjectOffTheBroadcast(an_envelope_stating()),
+        a_data_object_off_the_broadcast(an_envelope_stating()),
         outputs,  # type: ignore[arg-type]
     )
     bag, timestamp_ns = wired_link.destination.read_from_input_port_with_timestamp(
@@ -295,7 +292,7 @@ def test_an_object_missing_an_envelope_key_is_refused_by_name_and_nothing_is_wri
 
     with mock.patch.object(log, "warn", said.append):
         subscriber._write_a_data_object(
-            ADataObjectOffTheBroadcast(
+            a_data_object_off_the_broadcast(
                 encode_bag_to_msgpack_bytes({"sequence_index": 7, "bag": {"a": b"x"}})
             ),
             outputs,  # type: ignore[arg-type]
@@ -317,7 +314,7 @@ def test_a_jump_in_the_sequence_index_is_counted_while_every_bag_still_reaches_t
 
     for sequence_index in (3, 4, 9):
         subscriber._write_a_data_object(
-            ADataObjectOffTheBroadcast(
+            a_data_object_off_the_broadcast(
                 an_envelope_stating(sequence_index=sequence_index, bag={"n": sequence_index})
             ),
             outputs,  # type: ignore[arg-type]
@@ -332,3 +329,32 @@ def test_a_jump_in_the_sequence_index_is_counted_while_every_bag_still_reaches_t
         subscriber._data_sequence_gaps.gaps,
         subscriber._data_sequence_gaps.objects_missed,
     ) == (1, 4)
+
+
+
+def test_a_bag_with_a_key_the_engine_cannot_write_is_refused_by_name_before_the_write(
+    wired_link: WiredLinkUnderTest,
+):
+    """Wire-legal msgpack a non-StreamLib publisher can send: an int key in a
+    nested map, which the engine's decoder accepts and its encoder refuses at
+    the write. Refused before the write, so one object cannot end the
+    subscription and take the media ports with it."""
+    subscriber = a_data_track_subscriber()
+    outputs = OutputsWritingOverTheWiredLink(wired_link.source)
+    # {"sequence_index": 1, "timestamp_ns": 2, "bag": {"nested": {1: "x"}}},
+    # spelled by hand because the engine's encoder will not write it.
+    wire = (
+        b"\x83\xaesequence_index\x01\xactimestamp_ns\x02\xa3bag"
+        b"\x81\xa6nested\x81\x01\xa1x"
+    )
+    said: "list[str]" = []
+
+    with mock.patch.object(log, "warn", said.append):
+        subscriber._write_a_data_object(
+            a_data_object_off_the_broadcast(wire),
+            outputs,  # type: ignore[arg-type]
+        )
+
+    assert outputs.ports_written == []
+    assert wired_link.destination.read_from_input_port(INPUT_PORT) is None
+    assert len(said) == 1 and "not a str at `bag.nested`: 1 (int)" in said[0], said

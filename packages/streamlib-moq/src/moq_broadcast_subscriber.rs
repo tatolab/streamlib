@@ -27,12 +27,21 @@ use crate::monotonic_clock::monotonic_now_ns;
 use crate::moq_broadcast_catalog::{CMAF_PACKAGING, INIT_TRACK_NAME};
 use crate::moq_broadcast_publisher::MoqContainerFormat;
 use crate::moq_relay_config::MoqRelayConfig;
-use crate::moq_session::MoqBroadcastSubscribingSession;
+use crate::moq_session::{MoqBroadcastSubscribingSession, ReceivedMoqObject};
 use crate::moq_track_sample::{DataTrackObject, MoqTrackKind, MoqTrackSample};
 use crate::streamlib_bag_object::decode_object;
 
 /// What a refusal from this path calls the session it was reading.
 const SUBSCRIBING_SESSION_ROLE: &str = "subscribing";
+
+/// One sample as the reader takes it, with the track that carried it. Media
+/// lands on the port its kind names; a data object's track is the Python's to
+/// name in its log.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ReceivedTrackSample {
+    pub(crate) track_name: String,
+    pub(crate) sample: MoqTrackSample,
+}
 
 /// One subscribed broadcast, read as encoded bags and data objects.
 pub(crate) struct MoqBroadcastSubscriber {
@@ -45,7 +54,7 @@ pub(crate) struct MoqBroadcastSubscriber {
     subscribing_session: Option<MoqBroadcastSubscribingSession>,
     /// One CMAF object may carry more than one sample, and `next_sample` hands
     /// back one. The rest wait here rather than being dropped.
-    samples_awaiting_the_reader: VecDeque<MoqTrackSample>,
+    samples_awaiting_the_reader: VecDeque<ReceivedTrackSample>,
 }
 
 impl MoqBroadcastSubscriber {
@@ -162,7 +171,7 @@ impl MoqBroadcastSubscriber {
     pub(crate) async fn next_sample(
         &mut self,
         timeout: Duration,
-    ) -> Result<Option<MoqTrackSample>> {
+    ) -> Result<Option<ReceivedTrackSample>> {
         if let Some(sample) = self.samples_awaiting_the_reader.pop_front() {
             return Ok(Some(sample));
         }
@@ -172,17 +181,30 @@ impl MoqBroadcastSubscriber {
                 .ok_or(MoqExtensionError::NotConnected {
                     role: SUBSCRIBING_SESSION_ROLE,
                 })?;
-        let Some(received_object) = subscribing_session.next_object(timeout).await? else {
+        let Some(ReceivedMoqObject {
+            track_name,
+            payload,
+        }) = subscribing_session.next_object(timeout).await?
+        else {
             return Ok(None);
         };
 
         let mut reconstituted = self
             .received_object_router
-            .route_received_object(&received_object.track_name, &received_object.payload)?
+            .route_received_object(&track_name, payload)?
             .into_iter();
-        let first = reconstituted.next();
-        self.samples_awaiting_the_reader.extend(reconstituted);
-        Ok(first)
+        let Some(first) = reconstituted.next() else {
+            return Ok(None);
+        };
+        self.samples_awaiting_the_reader
+            .extend(reconstituted.map(|sample| ReceivedTrackSample {
+                track_name: track_name.clone(),
+                sample,
+            }));
+        Ok(Some(ReceivedTrackSample {
+            track_name,
+            sample: first,
+        }))
     }
 
     /// Whether the QUIC connection is open.
@@ -275,28 +297,24 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
     fn route_received_object(
         &mut self,
         track_name: &str,
-        payload: &[u8],
+        payload: bytes::Bytes,
     ) -> Result<Vec<MoqTrackSample>> {
         match self.container_format {
             MoqContainerFormat::StreamlibBag => match self.kind_of_track(track_name) {
                 Some(MoqTrackKind::Media(medium)) => {
-                    Ok(vec![decode_object(payload, medium)?.into()])
+                    Ok(vec![decode_object(&payload, medium)?.into()])
                 }
                 // Whole and unread: the envelope's keys are the Python's to
                 // decode, and nothing of a data object is parsed on this side.
                 Some(MoqTrackKind::Data) => Ok(vec![MoqTrackSample::DataObject(DataTrackObject {
-                    envelope_bytes: bytes::Bytes::copy_from_slice(payload),
+                    envelope_bytes: payload,
                 })]),
                 None => {
                     self.report_an_object_on_a_track_this_subscriber_did_not_name(track_name);
                     Ok(Vec::new())
                 }
             },
-            MoqContainerFormat::Cmaf => Ok(self
-                .route_a_cmaf_object(track_name, payload)?
-                .into_iter()
-                .map(MoqTrackSample::from)
-                .collect()),
+            MoqContainerFormat::Cmaf => self.route_a_cmaf_object(track_name, &payload),
         }
     }
 
@@ -304,7 +322,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
         &mut self,
         track_name: &str,
         payload: &[u8],
-    ) -> Result<Vec<EncodedMediaSample>> {
+    ) -> Result<Vec<MoqTrackSample>> {
         if track_name == INIT_TRACK_NAME {
             self.absorb_the_init_segment(payload)?;
             return Ok(Vec::new());
@@ -423,7 +441,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
     fn video_bags_of(
         &mut self,
         fragment_samples: Vec<CmafFragmentSample>,
-    ) -> Result<Vec<EncodedMediaSample>> {
+    ) -> Result<Vec<MoqTrackSample>> {
         let video = self.video_track_reconstitution.as_mut().ok_or_else(|| {
             MoqExtensionError::MalformedObject {
                 container: CMAF_PACKAGING,
@@ -463,7 +481,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
                 })
                 .stamp_of(fragment_sample.decode_time, video.media_timescale_hz);
 
-            bags.push(EncodedMediaSample::VideoAccessUnit(
+            bags.push(MoqTrackSample::from(EncodedMediaSample::VideoAccessUnit(
                 EncodedVideoAccessUnit {
                     codec: video.codec.clone(),
                     annex_b_access_unit: bytes::Bytes::from(annex_b_access_unit),
@@ -478,7 +496,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
                     color: None,
                     timestamp_ns,
                 },
-            ));
+            )));
         }
         Ok(bags)
     }
@@ -486,7 +504,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
     fn audio_bags_of(
         &mut self,
         fragment_samples: Vec<CmafFragmentSample>,
-    ) -> Result<Vec<EncodedMediaSample>> {
+    ) -> Result<Vec<MoqTrackSample>> {
         let audio = self.audio_track_reconstitution.as_mut().ok_or_else(|| {
             MoqExtensionError::MalformedObject {
                 container: CMAF_PACKAGING,
@@ -509,19 +527,21 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
                 })
                 .stamp_of(fragment_sample.decode_time, audio.media_timescale_hz);
 
-            bags.push(EncodedMediaSample::AudioPacket(EncodedAudioPacket {
-                codec: audio.codec.clone(),
-                opus_packet: bytes::Bytes::from(fragment_sample.sample_bytes),
-                // RFC 6716 §3.1: every Opus packet is a decode entry point.
-                is_sync_point: true,
-                group_index: ordering_pair.group_index,
-                sequence_index: ordering_pair.sequence_index,
-                sample_rate: audio.sample_rate,
-                channels: audio.channels,
-                sample_count,
-                pre_skip: audio.pre_skip,
-                timestamp_ns,
-            }));
+            bags.push(MoqTrackSample::from(EncodedMediaSample::AudioPacket(
+                EncodedAudioPacket {
+                    codec: audio.codec.clone(),
+                    opus_packet: bytes::Bytes::from(fragment_sample.sample_bytes),
+                    // RFC 6716 §3.1: every Opus packet is a decode entry point.
+                    is_sync_point: true,
+                    group_index: ordering_pair.group_index,
+                    sequence_index: ordering_pair.sequence_index,
+                    sample_rate: audio.sample_rate,
+                    channels: audio.channels,
+                    sample_count,
+                    pre_skip: audio.pre_skip,
+                    timestamp_ns,
+                },
+            )));
         }
         Ok(bags)
     }
@@ -1151,18 +1171,19 @@ mod tests {
     fn a_data_track_object_is_handed_back_byte_for_byte_and_never_parsed() {
         // Not msgpack, not anything: the Rust hands a data object through
         // whole, and what its bytes mean is the Python's to decide.
-        let published: &[u8] = b"\x83\xaesequence_index\x07 whatever the envelope holds";
+        let published =
+            bytes::Bytes::from_static(b"\x83\xaesequence_index\x07 whatever the envelope holds");
         let mut subscriber = a_data_track_subscriber_of("telemetry");
 
         let samples = subscriber
             .received_object_router
-            .route_received_object("telemetry", published)
+            .route_received_object("telemetry", published.clone())
             .expect("a data object is never malformed on this side; nothing here reads it");
 
         assert_eq!(
             samples,
             vec![MoqTrackSample::DataObject(DataTrackObject {
-                envelope_bytes: bytes::Bytes::copy_from_slice(published),
+                envelope_bytes: published,
             })],
             "the same bytes out, untouched"
         );
@@ -1178,7 +1199,7 @@ mod tests {
 
         let samples = subscriber
             .received_object_router
-            .route_received_object("telemetry", b"whatever this is")
+            .route_received_object("telemetry", bytes::Bytes::from_static(b"whatever this is"))
             .expect("an unnamed track is ignored, not refused");
 
         assert!(samples.is_empty());
@@ -1216,7 +1237,7 @@ mod tests {
 
         let samples = subscriber
             .received_object_router
-            .route_received_object("telemetry", &published)
+            .route_received_object("telemetry", published.clone())
             .expect("nothing on this side reads a data object");
 
         assert!(matches!(
@@ -1226,41 +1247,31 @@ mod tests {
     }
 
     #[test]
-    fn one_track_name_cannot_carry_media_and_data_because_one_track_is_one_kind() {
-        for (video_track_name, audio_track_name) in [
-            (Some("both".to_owned()), None),
-            (None, Some("both".to_owned())),
+    fn one_track_name_cannot_carry_two_kinds_because_one_track_is_one_kind() {
+        let both = || Some("both".to_owned());
+        for (video_track_name, audio_track_name, data_track_name, the_configs_that_collide) in [
+            (both(), both(), None, ["`video_track`", "`audio_track`"]),
+            (both(), None, both(), ["`video_track`", "`data_track`"]),
+            (None, both(), both(), ["`audio_track`", "`data_track`"]),
         ] {
             let refusal = MoqBroadcastSubscriber::new(
                 a_relay_config(),
                 MoqContainerFormat::StreamlibBag,
                 video_track_name,
                 audio_track_name,
-                Some("both".to_owned()),
+                data_track_name,
             )
             .map(drop)
             .expect_err("one track is one kind");
             assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
+            let said = refusal.to_string();
             assert!(
-                refusal.to_string().contains("`data_track`"),
-                "the refusal names both configs that collide; got {refusal}"
+                the_configs_that_collide
+                    .iter()
+                    .all(|config| said.contains(config)),
+                "the refusal names both configs that collide; got {said}"
             );
         }
-    }
-
-    #[test]
-    fn a_data_track_named_as_the_empty_string_is_refused_rather_than_subscribed_to() {
-        let refusal = MoqBroadcastSubscriber::new(
-            a_relay_config(),
-            MoqContainerFormat::StreamlibBag,
-            None,
-            None,
-            Some(String::new()),
-        )
-        .map(drop)
-        .expect_err("the empty string names no track on the relay");
-        assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
-        assert!(refusal.to_string().contains("`data_track`"), "{refusal}");
     }
 
     #[test]
@@ -1324,7 +1335,7 @@ mod tests {
             .received_object_router
             .route_received_object(
                 "video",
-                &encode_object(&published.clone().into()).expect("the fixture bag encodes"),
+                encode_object(&published.clone().into()).expect("the fixture bag encodes"),
             )
             .expect("the object is this subscriber's own container");
 
@@ -1346,7 +1357,7 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
@@ -1354,7 +1365,7 @@ mod tests {
             object_router
                 .route_received_object(
                     &media_track_name(VIDEO_TRACK_ID),
-                    &a_video_fragment(1, 0, true, 0xAA),
+                    a_video_fragment(1, 0, true, 0xAA),
                 )
                 .expect("a fragment after the init segment reconstitutes"),
         );
@@ -1362,7 +1373,7 @@ mod tests {
             object_router
                 .route_received_object(
                     &media_track_name(VIDEO_TRACK_ID),
-                    &a_video_fragment(2, 33_000_000, false, 0xBB),
+                    a_video_fragment(2, 33_000_000, false, 0xBB),
                 )
                 .expect("a fragment after the init segment reconstitutes"),
         );
@@ -1411,7 +1422,7 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
@@ -1421,7 +1432,7 @@ mod tests {
                 object_router
                     .route_received_object(
                         &media_track_name(VIDEO_TRACK_ID),
-                        &a_video_fragment(
+                        a_video_fragment(
                             index as u32 + 1,
                             index as u64 * 33_000_000,
                             is_sync_point,
@@ -1452,7 +1463,7 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
@@ -1460,7 +1471,7 @@ mod tests {
             object_router
                 .route_received_object(
                     &media_track_name(VIDEO_TRACK_ID),
-                    &a_video_fragment(1, 7_000_000_000, true, 0x11),
+                    a_video_fragment(1, 7_000_000_000, true, 0x11),
                 )
                 .expect("a fragment after the init segment reconstitutes"),
         );
@@ -1468,7 +1479,7 @@ mod tests {
             object_router
                 .route_received_object(
                     &media_track_name(VIDEO_TRACK_ID),
-                    &a_video_fragment(2, 7_033_000_000, false, 0x22),
+                    a_video_fragment(2, 7_033_000_000, false, 0x22),
                 )
                 .expect("a fragment after the init segment reconstitutes"),
         );
@@ -1496,7 +1507,7 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[an_audio_init_segment_description()]),
+                an_init_object(&[an_audio_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
@@ -1506,7 +1517,7 @@ mod tests {
             object_router
                 .route_received_object(
                     &media_track_name(AUDIO_TRACK_ID),
-                    &an_audio_fragment_placed_as_the_publisher_places_one(
+                    an_audio_fragment_placed_as_the_publisher_places_one(
                         1,
                         &mut audio_track_timeline,
                         9_000_000_000,
@@ -1546,7 +1557,7 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[an_audio_init_segment_description()]),
+                an_init_object(&[an_audio_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
@@ -1566,7 +1577,7 @@ mod tests {
 
         let packet = the_only_audio_packet(
             object_router
-                .route_received_object(&media_track_name(AUDIO_TRACK_ID), &fragment)
+                .route_received_object(&media_track_name(AUDIO_TRACK_ID), fragment)
                 .expect("a fragment after the init segment reconstitutes"),
         );
 
@@ -1691,7 +1702,7 @@ mod tests {
             let bags = object_router
                 .route_received_object(
                     &media_track_name(VIDEO_TRACK_ID),
-                    &a_video_fragment(sequence_number, 0, true, 0x33),
+                    a_video_fragment(sequence_number, 0, true, 0x33),
                 )
                 .expect("an undecodable fragment is dropped, not refused");
             assert!(bags.is_empty(), "nothing can be decoded without the moov");
@@ -1704,13 +1715,13 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
         let bags = object_router
             .route_received_object(
                 &media_track_name(VIDEO_TRACK_ID),
-                &a_video_fragment(4, 0, true, 0x44),
+                a_video_fragment(4, 0, true, 0x44),
             )
             .expect("a fragment after the init segment reconstitutes");
         assert_eq!(
@@ -1731,12 +1742,12 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
         let bags = object_router
-            .route_received_object("99.m4s", b"whatever this is")
+            .route_received_object("99.m4s", bytes::Bytes::from_static(b"whatever this is"))
             .expect(
                 "an unnamed track is ignored, not refused: one stray object must not end a \
                  live subscription",
@@ -1761,7 +1772,7 @@ mod tests {
             .received_object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
         assert!(
@@ -1781,7 +1792,7 @@ mod tests {
         object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
 
@@ -1789,7 +1800,7 @@ mod tests {
         let refusal = object_router
             .route_received_object(
                 &media_track_name(AUDIO_TRACK_ID),
-                &an_audio_fragment_placed_as_the_publisher_places_one(
+                an_audio_fragment_placed_as_the_publisher_places_one(
                     1,
                     &mut audio_track_timeline,
                     9_000_000_000,
@@ -1853,7 +1864,7 @@ mod tests {
             .received_object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description()]),
+                an_init_object(&[a_video_init_segment_description()]),
             )
             .expect("the init object is the one this module's writer wrote");
         for (sequence_number, decode_time) in [(1u32, 7_000_000_000u64), (2, 7_033_000_000)] {
@@ -1861,7 +1872,7 @@ mod tests {
                 .received_object_router
                 .route_received_object(
                     &media_track_name(VIDEO_TRACK_ID),
-                    &a_video_fragment(sequence_number, decode_time, sequence_number == 1, 0x11),
+                    a_video_fragment(sequence_number, decode_time, sequence_number == 1, 0x11),
                 )
                 .expect("a fragment after the init segment reconstitutes");
         }
@@ -1874,7 +1885,7 @@ mod tests {
             .received_object_router
             .route_received_object(
                 INIT_TRACK_NAME,
-                &an_init_object(&[a_video_init_segment_description_of_coded_extent(
+                an_init_object(&[a_video_init_segment_description_of_coded_extent(
                     reconnected_coded_extent,
                 )]),
             )
@@ -1886,7 +1897,7 @@ mod tests {
                     .received_object_router
                     .route_received_object(
                         &media_track_name(VIDEO_TRACK_ID),
-                        &a_video_fragment(sequence_number, decode_time, sequence_number == 1, 0x22),
+                        a_video_fragment(sequence_number, decode_time, sequence_number == 1, 0x22),
                     )
                     .expect("a fragment after the init segment reconstitutes"),
             ));
@@ -1929,7 +1940,7 @@ mod tests {
             let bags = object_router
                 .route_received_object(
                     &format!("stray-{stray_track_index}.m4s"),
-                    b"whatever this is",
+                    bytes::Bytes::from_static(b"whatever this is"),
                 )
                 .expect("an unnamed track is ignored, not refused");
             assert!(bags.is_empty());
@@ -1952,20 +1963,23 @@ mod tests {
         );
         subscriber
             .samples_awaiting_the_reader
-            .push_back(MoqTrackSample::EncodedMedia(
-                EncodedMediaSample::AudioPacket(EncodedAudioPacket {
-                    codec: "opus".to_owned(),
-                    opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
-                    is_sync_point: true,
-                    group_index: 0,
-                    sequence_index: 0,
-                    sample_rate: 48_000,
-                    channels: 2,
-                    sample_count: 960,
-                    pre_skip: PUBLISHED_OPUS_PRE_SKIP,
-                    timestamp_ns: 1,
-                }),
-            ));
+            .push_back(ReceivedTrackSample {
+                track_name: "video".to_owned(),
+                sample: MoqTrackSample::EncodedMedia(EncodedMediaSample::AudioPacket(
+                    EncodedAudioPacket {
+                        codec: "opus".to_owned(),
+                        opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
+                        is_sync_point: true,
+                        group_index: 0,
+                        sequence_index: 0,
+                        sample_rate: 48_000,
+                        channels: 2,
+                        sample_count: 960,
+                        pre_skip: PUBLISHED_OPUS_PRE_SKIP,
+                        timestamp_ns: 1,
+                    },
+                )),
+            });
 
         let captured_levels = TracingEventLevelsCapturedWhileASubscriberRuns::default();
         tracing::subscriber::with_default(captured_levels.clone(), || subscriber.close());
@@ -1979,31 +1993,28 @@ mod tests {
     }
 
     #[test]
-    fn one_track_name_cannot_carry_both_media_because_one_track_is_one_medium() {
-        let refusal = MoqBroadcastSubscriber::new(
-            a_relay_config(),
-            MoqContainerFormat::StreamlibBag,
-            Some("both".to_owned()),
-            Some("both".to_owned()),
-            None,
-        )
-        .map(drop)
-        .expect_err("one track is one medium");
-        assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
-    }
-
-    #[test]
     fn a_track_named_as_the_empty_string_is_refused_rather_than_subscribed_to() {
-        let refusal = MoqBroadcastSubscriber::new(
-            a_relay_config(),
-            MoqContainerFormat::StreamlibBag,
-            Some(String::new()),
-            None,
-            None,
-        )
-        .map(drop)
-        .expect_err("the empty string names no track on the relay");
-        assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
+        let empty = || Some(String::new());
+        for (video_track_name, audio_track_name, data_track_name, the_config) in [
+            (empty(), None, None, "`video_track`"),
+            (None, empty(), None, "`audio_track`"),
+            (None, None, empty(), "`data_track`"),
+        ] {
+            let refusal = MoqBroadcastSubscriber::new(
+                a_relay_config(),
+                MoqContainerFormat::StreamlibBag,
+                video_track_name,
+                audio_track_name,
+                data_track_name,
+            )
+            .map(drop)
+            .expect_err("the empty string names no track on the relay");
+            assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
+            assert!(
+                refusal.to_string().contains(the_config),
+                "the refusal names the config that is empty; got {refusal}"
+            );
+        }
     }
 
     #[test]

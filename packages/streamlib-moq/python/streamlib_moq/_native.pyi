@@ -279,6 +279,10 @@ class ReceivedDataObject:
     the envelope is the Python's.
     """
 
+    def __new__(cls, track_name: str, payload: bytes) -> ReceivedDataObject:
+        """Built by `next_media` on receive; constructible so a test can hand
+        the subscriber's data path one without a session."""
+
     @property
     def track_name(self) -> str:
         """The data track this subscription named."""

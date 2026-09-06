@@ -39,7 +39,7 @@ use crate::monotonic_clock::monotonic_now_ns;
 use crate::moq_broadcast_publisher::{
     MoqBroadcastPublisher, MoqContainerFormat, WhatBecameOfOnePublishedBag,
 };
-use crate::moq_broadcast_subscriber::MoqBroadcastSubscriber;
+use crate::moq_broadcast_subscriber::{MoqBroadcastSubscriber, ReceivedTrackSample};
 use crate::moq_relay_config::MoqRelayConfig;
 use crate::moq_track_sample::{DataTrackObject, MoqTrackSample};
 
@@ -304,9 +304,6 @@ impl MoqBroadcastPublishingSession {
 #[pyclass]
 struct MoqBroadcastSubscribingSession {
     subscriber: Mutex<MoqBroadcastSubscriber>,
-    /// The one data track this subscription names, if any: what a received
-    /// data object reports as its track.
-    data_track_name: Option<String>,
 }
 
 #[pymethods]
@@ -335,9 +332,8 @@ impl MoqBroadcastSubscribingSession {
                 container_format,
                 video_track,
                 audio_track,
-                data_track.clone(),
+                data_track,
             )?),
-            data_track_name: data_track,
         })
     }
 
@@ -361,15 +357,27 @@ impl MoqBroadcastSubscribingSession {
         })?;
 
         Ok(match received {
-            Some(MoqTrackSample::EncodedMedia(EncodedMediaSample::VideoAccessUnit(
-                access_unit,
-            ))) => Some(Py::new(python, ReceivedVideoAccessUnit::from(access_unit))?.into_any()),
-            Some(MoqTrackSample::EncodedMedia(EncodedMediaSample::AudioPacket(packet))) => {
-                Some(Py::new(python, ReceivedOpusPacket::from(packet))?.into_any())
-            }
-            Some(MoqTrackSample::DataObject(object)) => {
-                Some(Py::new(python, self.received_data_object(object)?)?.into_any())
-            }
+            Some(ReceivedTrackSample {
+                sample: MoqTrackSample::EncodedMedia(EncodedMediaSample::VideoAccessUnit(unit)),
+                ..
+            }) => Some(Py::new(python, ReceivedVideoAccessUnit::from(unit))?.into_any()),
+            Some(ReceivedTrackSample {
+                sample: MoqTrackSample::EncodedMedia(EncodedMediaSample::AudioPacket(packet)),
+                ..
+            }) => Some(Py::new(python, ReceivedOpusPacket::from(packet))?.into_any()),
+            Some(ReceivedTrackSample {
+                track_name,
+                sample: MoqTrackSample::DataObject(object),
+            }) => Some(
+                Py::new(
+                    python,
+                    ReceivedDataObject {
+                        track_name,
+                        payload: object.envelope_bytes,
+                    },
+                )?
+                .into_any(),
+            ),
             None => None,
         })
     }
@@ -394,26 +402,6 @@ impl MoqBroadcastSubscribingSession {
         &self,
     ) -> Result<MutexGuard<'_, MoqBroadcastSubscriber>, MoqExtensionError> {
         lock_or_refuse(&self.subscriber, "subscribing")
-    }
-
-    /// A data object under the name this subscription gave its data track.
-    /// The router routes one only to a track it named, so a subscription
-    /// naming none never reaches the refusal.
-    fn received_data_object(
-        &self,
-        object: DataTrackObject,
-    ) -> Result<ReceivedDataObject, MoqExtensionError> {
-        let track_name =
-            self.data_track_name
-                .clone()
-                .ok_or_else(|| MoqExtensionError::Transport {
-                    what: "a data object was routed on a subscription that named no data track"
-                        .to_owned(),
-                })?;
-        Ok(ReceivedDataObject {
-            track_name,
-            payload: object.envelope_bytes,
-        })
     }
 }
 
@@ -552,6 +540,15 @@ struct ReceivedDataObject {
 
 #[pymethods]
 impl ReceivedDataObject {
+    /// Built by `next_media` on receive; constructible so the drain loop's
+    /// dispatch on this type can be driven without a session.
+    #[new]
+    fn new(track_name: String, payload: &[u8]) -> Self {
+        Self {
+            track_name,
+            payload: bytes::Bytes::copy_from_slice(payload),
+        }
+    }
     #[getter]
     fn track_name(&self) -> &str {
         &self.track_name
