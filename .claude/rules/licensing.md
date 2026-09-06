@@ -8,6 +8,12 @@
   // SPDX-License-Identifier: BUSL-1.1
   ```
 
-- `vendor/tatolab-vulkanalia*` is the vendored vulkanalia fork — stays Apache-2.0. Never add a
-  BUSL header there, never reformat or "improve" those sources.
+- Vendored third-party trees keep the licence they arrived under. Never add a BUSL header to
+  one, and never reformat or "improve" those sources — a change to one is a recorded
+  patch against its upstream, never a drive-by edit:
+  - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0.
+  - `packages/streamlib-moq/vendor/moq-transport` — the MoQ wheel's moq-transport, MIT OR
+    Apache-2.0 under Cloudflare's SPDX headers.
+- The exception is those paths and nothing else. A vendored tree not listed there, or
+  first-party code beside one, still carries the BUSL header.
 - Never modify `LICENSE`, `LICENSES/`, or `docs/license/` without explicit approval.

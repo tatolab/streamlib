@@ -48,9 +48,12 @@ yourself.
   revert. A gate never seen red is a blocker.
 - **Naming** (`.claude/rules/naming.md`): zero-context test; a bare `Writer` / `Handle`
   / `State` / `ctx` is a finding.
-- **Doc conventions and license headers.** New `.rs` files carry the BUSL header (never
-  in `vendor/tatolab-vulkanalia*`). Rustdoc one-line, no `# Example` sections. Learnings
-  ship their index line. Supersession is annotated, not overwritten.
+- **Doc conventions and license headers.** New `.rs` files carry the BUSL header — never in
+  a vendored third-party tree (`vendor/tatolab-vulkanalia{,-sys,-vma}`,
+  `packages/streamlib-moq/vendor/moq-transport`), where adding one is the licence
+  violation. Those paths and nothing else — any other tree still carries it.
+  Rustdoc one-line, no `# Example` sections. Learnings ship their index line.
+  Supersession is annotated, not overwritten.
 
 ## How you run
 1. Read the ticket, its change proposal if any, and the full diff against the base.

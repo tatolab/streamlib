@@ -1,13 +1,17 @@
 name: Repo Gates
 
 # The toolchain-free gates: bash, git and jq only, no Rust, no Python, no
-# network. The first two began as their own workflows; all three finish in
-# seconds, so they share one runner.
+# network. Two of them began as their own workflows; all finish in seconds, so
+# they share one runner.
 #
 # - License headers: every Rust and Python file carries the BUSL header. The
 #   implementation is `scripts/check-license-headers.sh` rather than inline YAML
 #   so that `cargo xtask run-local-ci-gates` runs the identical check — inline
 #   workflow bash is, by construction, something no one can run before pushing.
+# - license-header-gate: unit tests for that check's exemption list. The list is
+#   the half that fails silently — a pathspec that stops covering first-party
+#   code goes green — and running the check over this repo can never exercise
+#   it, because a vendored tree only ever appears here in its exempt state.
 # - ship-change-removed-gate: unit tests for the only mechanism that proves a
 #   change's REMOVED inventory actually left the tree before the change may
 #   archive. The gate shipped without tests and was green on 25 of 36 bullets
@@ -39,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The ship-change gate tests run over throwaway repos they create
+          # The two repo-creating gate-test suites run over repos they create
           # themselves — no authenticated git operation, so the checkout token
           # has no business in the local git config.
           persist-credentials: false
@@ -49,6 +53,9 @@ jobs:
 
       - name: License headers (Rust + Python)
         run: bash scripts/check-license-headers.sh
+
+      - name: license-header-gate tests
+        run: bash .claude/scripts/tests/license-header-gate.test.sh
 
       - name: ship-change-removed-gate tests
         run: bash .claude/scripts/tests/ship-change-removed-gate.test.sh
