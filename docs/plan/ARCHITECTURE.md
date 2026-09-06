@@ -1844,8 +1844,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `HIGHEST_OBJECTS_IN_ONE_GROUP = 128` objects in one group, and an open group older than
   one second on the publisher's own monotonic clock, cut on the next bag's arrival rather
   than by a timer. A broadcast with video reaches neither. What a late joiner replays is
-  therefore the open group — MoQ's behavior and media's, accepted rather than masked, and
-  bounded to about a second where video would not bound it (owner, 2026-09-05).
+  therefore the open group — MoQ's behavior and media's, accepted rather than masked,
+  bounded to about a second of production while the publisher is writing (owner,
+  2026-09-05). The bound is what the age backstop can give without a timer, and it is worth
+  stating exactly: a publisher that stops writing holds its last group open until it writes
+  again or closes, so a joiner arriving during an idle stretch still replays that group
+  however old the idle has made it. An idle close would need a timer, which no processor
+  here owns; a downstream that wants only the live edge filters on the stamp it already
+  receives.
   [extension-model; the data pair and the age backstop at moq-data-tracks — SHIPPED #2172]
 - **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
   inbound link and derives its catalog or session media description from them. The
@@ -2063,8 +2069,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   already is. `bitstream` is the encoded wire contract's defining key, which both media bag
   types require, so a user data bag that happens to name one is refused as media with a
   message naming the key and the user renames it. The publisher mints a per-track monotonic
-  `sequence_index`, builds the object in Python as `{"sequence_index", "timestamp_ns",
-  "bag"}` with the user's map nested whole under `bag` rather than flattened — nesting
+  `sequence_index`, builds the object in Python as `{"sequence_index": int,
+  "timestamp_ns": int, "bag": <the bag>}` with the user's map nested whole under `bag`
+  rather than flattened — nesting
   reserves no name in the user's namespace where flattening would reserve four — encodes it
   with `streamlib.encode_bag_to_msgpack_bytes` and hands the bytes to
   `_native.MoqBroadcastPublishingSession.publish_data_object`, whose Rust writes them as
@@ -2081,7 +2088,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Track names under `streamlib_bag` are the app's to choose.
   `MoqBroadcastPublisher` takes `track_names`, positional in wiring order — the order
   `runtime.connect` ran, which is the order `cmaf` already numbers `{track_id}.m4s` by. A
-  count unequal to the inbound links is refused by name at `setup()`; absent, a track is
+  count unequal to the inbound links is refused by name at `setup()`, and so is a repeated
+  name — `Tracks::create` overwrites a track of the same name without saying so, orphaning
+  its subscribers, so the duplicate is caught before the session can. Absent, a track is
   its link's channel name as before. That name is `{processor_id}/{port}` on a cuid2 minted
   at `add`, which a subscriber in another node cannot know — so before `track_names` the
   only broadcast a second node could name was `cmaf`, and the live fixture ran `cmaf` for
