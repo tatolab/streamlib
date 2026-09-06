@@ -50,8 +50,17 @@ YUYV = struct.unpack("<I", b"YUYV")[0]
 
 # `struct v4l2_capability`: driver[16] card[32] bus_info[32] version caps device_caps reserved[3].
 CAPABILITY_FORMAT = "16s32s32sIII3I"
-# `struct v4l2_buffer` on 64-bit: index type bytesused flags field | timeval(2×q) | timecode(4I+8s) sequence memory | m(8) length reserved2 request_fd.
-BUFFER_FORMAT = "IIIII" + "qq" + "IIII8s" + "II" + "Q" + "II"
+# `struct v4l2_buffer` on 64-bit: index type bytesused flags field | timeval (two
+# 8-byte words) | timecode (type flags frames seconds minutes hours userbits[4])
+# sequence memory | m (an 8-byte union) length reserved2 request_fd — 88 bytes.
+BUFFER_FORMAT = "IIIII" + "qq" + "II8s" + "II" + "Q" + "III"
+# C pads the struct's tail to its 8-byte alignment; Python's native mode does not.
+BUFFER_STRUCT_SIZE = 88
+BUFFER_MEMORY_OFFSET = struct.calcsize("IIIIIqqII8sI")
+BUFFER_M_OFFSET = struct.calcsize("IIIIIqqII8sII")
+BUFFER_LENGTH_OFFSET = BUFFER_M_OFFSET + 8
+assert struct.calcsize(BUFFER_FORMAT) == 84
+assert (BUFFER_MEMORY_OFFSET, BUFFER_M_OFFSET, BUFFER_LENGTH_OFFSET) == (60, 64, 72)
 
 # A camera that exists must appear within the sink's setup; one that was
 # removed must be gone once the process has exited.
@@ -63,6 +72,58 @@ READ_TIMEOUT_SECONDS = 10.0
 
 def control_node_is_writable() -> bool:
     return CONTROL_NODE.exists() and os.access(CONTROL_NODE, os.W_OK)
+
+
+# The module's control ioctls, as `v4l2loopback.h` 0.15 declares them: query a
+# device's config by number, remove a device by number (EBUSY while held).
+V4L2LOOPBACK_CTL_QUERY = 0xC0487E03
+V4L2LOOPBACK_CTL_REMOVE = 0x40047E02
+V4L2LOOPBACK_CONFIG_SIZE = 72
+V4L2LOOPBACK_CONFIG_LABEL_OFFSET = 8
+
+# Every label a test here can create, so teardown recognises its own devices.
+THIS_SUITES_LABEL_PREFIXES = ("StreamLib test ", "StreamLib frames ", "Refused cam")
+
+
+def remove_loopback_devices_labelled_by_this_suite() -> None:
+    """A test that kills its app skips the sink's teardown, so the device it
+    created would outlive the run; this puts the rig back the way it was."""
+    if not control_node_is_writable():
+        return
+    control = os.open(CONTROL_NODE, os.O_RDWR)
+    try:
+        for node in Path("/dev").glob("video*"):
+            try:
+                number = int(node.name.removeprefix("video"))
+            except ValueError:
+                continue
+            config = bytearray(V4L2LOOPBACK_CONFIG_SIZE)
+            struct.pack_into("i", config, 0, number)
+            try:
+                fcntl.ioctl(control, V4L2LOOPBACK_CTL_QUERY, config)
+            except OSError:
+                continue
+            label = bytes(config[V4L2LOOPBACK_CONFIG_LABEL_OFFSET:V4L2LOOPBACK_CONFIG_LABEL_OFFSET + 32])
+            label = label.split(b"\0", 1)[0].decode(errors="replace")
+            if label.startswith(THIS_SUITES_LABEL_PREFIXES):
+                # The app was just killed; its descriptor may close a beat later.
+                deadline = time.monotonic() + 2.0
+                while True:
+                    try:
+                        fcntl.ioctl(control, V4L2LOOPBACK_CTL_REMOVE, number)
+                        break
+                    except OSError as refusal:
+                        if refusal.errno != 16 or time.monotonic() >= deadline:  # EBUSY
+                            break
+                        time.sleep(0.05)
+    finally:
+        os.close(control)
+
+
+@pytest.fixture(autouse=True)
+def leave_no_camera_behind():
+    yield
+    remove_loopback_devices_labelled_by_this_suite()
 
 
 needs_the_loopback_permission = pytest.mark.skipif(
@@ -159,12 +220,13 @@ def read_yuyv_frames(video_node: Path, count: int):
 
         mappings = []
         for index in range(granted):
-            described = bytearray(struct.calcsize(BUFFER_FORMAT))
-            struct.pack_into("IIII", described, 0, index, V4L2_BUF_TYPE_VIDEO_CAPTURE, 0, 0)
-            struct.pack_into("I", described, struct.calcsize("IIIIIqqIIII8sI"), V4L2_MEMORY_MMAP)
+            described = bytearray(BUFFER_STRUCT_SIZE)
+            struct.pack_into("II", described, 0, index, V4L2_BUF_TYPE_VIDEO_CAPTURE)
+            struct.pack_into("I", described, BUFFER_MEMORY_OFFSET, V4L2_MEMORY_MMAP)
             fcntl.ioctl(fd, VIDIOC_QUERYBUF, described)
-            offset, length = struct.unpack_from("QI", described, struct.calcsize("IIIIIqqIIII8sII"))
-            mappings.append(mmap.mmap(fd, length, mmap.MAP_SHARED, mmap.PROT_READ, offset=offset & 0xFFFFFFFF))
+            (offset,) = struct.unpack_from("I", described, BUFFER_M_OFFSET)
+            (length,) = struct.unpack_from("I", described, BUFFER_LENGTH_OFFSET)
+            mappings.append(mmap.mmap(fd, length, mmap.MAP_SHARED, mmap.PROT_READ, offset=offset))
             fcntl.ioctl(fd, VIDIOC_QBUF, described)
         fcntl.ioctl(fd, VIDIOC_STREAMON, struct.pack("i", V4L2_BUF_TYPE_VIDEO_CAPTURE))
 
@@ -172,9 +234,9 @@ def read_yuyv_frames(video_node: Path, count: int):
         deadline = time.monotonic() + READ_TIMEOUT_SECONDS
         try:
             while len(frames) < count and time.monotonic() < deadline:
-                dequeued = bytearray(struct.calcsize(BUFFER_FORMAT))
-                struct.pack_into("II", dequeued, 4, V4L2_BUF_TYPE_VIDEO_CAPTURE, 0)
-                struct.pack_into("I", dequeued, struct.calcsize("IIIIIqqIIII8sI"), V4L2_MEMORY_MMAP)
+                dequeued = bytearray(BUFFER_STRUCT_SIZE)
+                struct.pack_into("I", dequeued, 4, V4L2_BUF_TYPE_VIDEO_CAPTURE)
+                struct.pack_into("I", dequeued, BUFFER_MEMORY_OFFSET, V4L2_MEMORY_MMAP)
                 try:
                     fcntl.ioctl(fd, VIDIOC_DQBUF, dequeued)
                 except BlockingIOError:
