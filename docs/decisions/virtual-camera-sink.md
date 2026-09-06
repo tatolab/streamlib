@@ -127,3 +127,21 @@ Chrome asks for four buffers and the module clamps a request to the parameter, w
 is two. The label is what readers show in their camera pickers. The line is the user's to
 run, once, and the engine never runs it; a `modules-load.d` entry and a `modprobe.d` options
 file are how it survives a reboot, and the refusal message says so.
+
+## Two doors, one open at a time, and as many cameras as the graph adds
+
+Owner ruling, later on 2026-09-06, widening the loopback-only decision above: the sink has
+both doors, and the graph adds as many sinks as it wants, each a camera of its own with its
+own `name`. What settled the shape between the doors was one observation from the probe:
+the session manager mirrors every V4L2 capture device into the portal's camera set, so a
+loopback device is already visible to portal-based applications as well as to `/dev/video*`
+ones. The loopback door is therefore the widest, and the PipeWire door is not a
+compatibility widening but the door that needs no module and no root — what a fresh install
+gets — and the one that is zero-copy. Opening both for one sink would list the same camera
+twice in every portal-aware picker, so the rule is one door per instance, chosen at
+`setup()`: a free loopback device if one exists, else the PipeWire node. N instances then
+need N loopback devices for the loopback door (`devices=N` and a `card_label` list on the
+module line), and any instance past the last free device takes the PipeWire door and says
+so. `name` is the one thing a user must be able to set: it is what every picker shows, and
+on the loopback door it is also how an instance finds its device among several, since the
+module fixes each device's label at load time and the sink can only choose, never rename.
