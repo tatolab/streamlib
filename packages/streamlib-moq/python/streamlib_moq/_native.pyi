@@ -21,6 +21,8 @@ from typing import final
 __all__ = [
     "MoqBroadcastPublishingSession",
     "MoqBroadcastSubscribingSession",
+    "MoqPublisherQuicUplinkReadings",
+    "MoqPublisherUplinkBacklogOnOneTrack",
     "ReceivedDataObject",
     "ReceivedOpusPacket",
     "ReceivedVideoAccessUnit",
@@ -50,8 +52,11 @@ class MoqBroadcastPublishingSession:
         provisions relays per account and there is nowhere else to put it.
 
         `delivery_deadline_ms` is how old a bag may be, by its own monotonic
-        stamp, and still be published. Absent is the shipped behaviour: every
-        bag is written however late it is.
+        stamp, and still be published — and how far behind the uplink may
+        fall on a group before the rest of it is shed and, once a newer sync
+        point supersedes it, the group is abandoned with a stream reset.
+        Absent is the shipped behaviour: every bag is written however late it
+        is, and no group is ever abandoned.
         """
 
     def declare_tracks(
@@ -146,6 +151,20 @@ class MoqBroadcastPublishingSession:
         boundary: this wheel's Rust reaches no `tracing` dispatcher inside a
         helper process.
         """
+
+    def uplink_backlog_by_track(self) -> "list[MoqPublisherUplinkBacklogOnOneTrack]":
+        """The uplink backlog per inbound link, every declared link listed.
+
+        What stands unforwarded on the link's open group right now, how many
+        sheds the backlog began (as opposed to the bag's own stamp), and the
+        superseded groups a cut abandoned for it with the objects and bytes
+        those never delivered. Read back for the same reason the shed counts
+        are.
+        """
+
+    def quic_uplink_readings(self) -> "MoqPublisherQuicUplinkReadings | None":
+        """What the QUIC path under the session reports right now, or `None`
+        before the session connects."""
 
 @final
 class MoqBroadcastSubscribingSession:
@@ -269,6 +288,46 @@ class ReceivedOpusPacket:
 
     @property
     def timestamp_ns(self) -> int: ...
+
+@final
+class MoqPublisherUplinkBacklogOnOneTrack:
+    """One inbound link's uplink backlog, as the publisher reads it."""
+
+    @property
+    def inbound_link_name(self) -> str: ...
+    @property
+    def unforwarded_objects(self) -> "int | None":
+        """Objects of the link's open group no forwarder has written to the
+        transport yet; `None` while nothing is forwarding it, which is not a
+        backlog."""
+
+    @property
+    def sheds_the_backlog_began(self) -> int:
+        """Sheds that began because the uplink was behind past the deadline,
+        rather than because the bag itself was late."""
+
+    @property
+    def groups_abandoned(self) -> int:
+        """Superseded groups a cut abandoned with a `DeliveryTimeout` reset."""
+
+    @property
+    def objects_abandoned(self) -> int: ...
+    @property
+    def bytes_abandoned(self) -> int:
+        """The object payloads those abandoned groups never delivered."""
+
+@final
+class MoqPublisherQuicUplinkReadings:
+    """What the QUIC path under the publishing session reports."""
+
+    @property
+    def round_trip_time_ms(self) -> float: ...
+    @property
+    def congestion_window_bytes(self) -> int: ...
+    @property
+    def lost_packets(self) -> int: ...
+    @property
+    def congestion_events(self) -> int: ...
 
 @final
 class ReceivedDataObject:

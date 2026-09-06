@@ -47,6 +47,7 @@ from streamlib_moq.processors import (
     data_object_envelope_of,
     data_track_object_bytes,
     describe_the_delivery_deadline,
+    describe_the_uplink_backlog,
     describe_what_the_delivery_deadline_shed,
     framed_bag_byte_count,
     the_bitstream_alone_puts_the_bag_near_the_link_ceiling,
@@ -715,8 +716,32 @@ def test_the_deadline_a_publisher_runs_under_is_said_where_it_is_configured(
     assert describe_the_delivery_deadline(delivery_deadline_ms) == said
 
 
+@dataclass(frozen=True)
+class _UplinkBacklogOnOneTrack:
+    inbound_link_name: str
+    unforwarded_objects: "int | None"
+    sheds_the_backlog_began: int
+    groups_abandoned: int
+    objects_abandoned: int
+    bytes_abandoned: int
+
+
+@dataclass(frozen=True)
+class _QuicUplinkReadings:
+    round_trip_time_ms: float
+    congestion_window_bytes: int
+    lost_packets: int
+    congestion_events: int
+
+
+A_QUIET_PATH = _QuicUplinkReadings(
+    round_trip_time_ms=42.5, congestion_window_bytes=131072, lost_packets=3, congestion_events=1
+)
+
+
 class _SessionThatAnswers:
-    """A publishing session whose every publish call gives one fixed answer."""
+    """A publishing session whose every publish call gives one fixed answer,
+    and whose uplink is behind by one group per shed bag."""
 
     def __init__(self, reaches_the_transport: bool) -> None:
         self._answer = reaches_the_transport
@@ -729,6 +754,21 @@ class _SessionThatAnswers:
 
     def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
         return [] if self._answer else [("camera", self.calls, 900 * self.calls)]
+
+    def uplink_backlog_by_track(self) -> "list[_UplinkBacklogOnOneTrack]":
+        return [
+            _UplinkBacklogOnOneTrack(
+                inbound_link_name="camera",
+                unforwarded_objects=0 if self._answer else self.calls,
+                sheds_the_backlog_began=0 if self._answer else 1,
+                groups_abandoned=0 if self._answer else 1,
+                objects_abandoned=0 if self._answer else self.calls,
+                bytes_abandoned=0 if self._answer else 900 * self.calls,
+            )
+        ]
+
+    def quic_uplink_readings(self) -> "_QuicUplinkReadings | None":
+        return A_QUIET_PATH
 
     def close(self) -> "str | None":
         return None
@@ -782,6 +822,12 @@ class _SessionRecordingWhatWasPublished:
 
     def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
         return []
+
+    def uplink_backlog_by_track(self) -> "list[_UplinkBacklogOnOneTrack]":
+        return []
+
+    def quic_uplink_readings(self) -> "_QuicUplinkReadings | None":
+        return None
 
     def close(self) -> "str | None":
         return None
@@ -865,6 +911,70 @@ def test_a_run_shedding_every_bag_still_reports_at_the_progress_cadence():
     progress_lines = [line for line in said if "bags_published=0" in line]
     assert len(progress_lines) == 2, said  # one at the cadence, one at teardown
     assert f"shed camera={BAGS_BETWEEN_PROGRESS_REPORTS} objects" in progress_lines[0]
+
+
+def test_an_unconnected_uplink_is_said_as_such():
+    assert describe_the_uplink_backlog([], None) == "the uplink is not connected"
+
+
+def test_the_uplink_report_names_the_path_and_every_link_a_zero_and_a_missing_forwarder_included():
+    """The backlog's absence is what an operator most wants to read, and a
+    link nothing is forwarding must not read as caught up."""
+    said = describe_the_uplink_backlog(
+        [
+            _UplinkBacklogOnOneTrack("camera", 12, 3, 2, 40, 1_234_567),
+            _UplinkBacklogOnOneTrack("microphone", 0, 0, 0, 0, 0),
+            _UplinkBacklogOnOneTrack("telemetry", None, 0, 0, 0, 0),
+        ],
+        A_QUIET_PATH,
+    )
+
+    assert said == (
+        "the uplink reads rtt=42.5 ms cwnd=131072 bytes lost_packets=3 congestion_events=1; "
+        "camera: 12 objects unforwarded, 3 sheds begun on the backlog, 2 groups abandoned "
+        "(40 objects/1234567 bytes), "
+        "microphone: 0 objects unforwarded, 0 sheds begun on the backlog, 0 groups abandoned "
+        "(0 objects/0 bytes), "
+        "telemetry: no forwarder, 0 sheds begun on the backlog, 0 groups abandoned "
+        "(0 objects/0 bytes)"
+    )
+
+
+def test_a_connected_uplink_with_no_tracks_declared_still_reads_its_path():
+    said = describe_the_uplink_backlog([], A_QUIET_PATH)
+
+    assert said.startswith("the uplink reads rtt=42.5 ms")
+    assert not said.endswith(";")
+
+
+def test_the_uplink_backlog_is_said_at_the_progress_cadence_and_at_teardown():
+    """An abandoned group is a loss, and a loss said only below the CPython
+    boundary is said to nobody — so it rides the same two lines the shed
+    counts do."""
+    from streamlib_moq.processors import BAGS_BETWEEN_PROGRESS_REPORTS
+
+    said, _ = _drive_bags_through(
+        reaches_the_transport=False, bag_count=BAGS_BETWEEN_PROGRESS_REPORTS
+    )
+
+    progress_line, teardown_line = [line for line in said if "bags_published=0" in line]
+    assert (
+        f"camera: {BAGS_BETWEEN_PROGRESS_REPORTS} objects unforwarded, 1 sheds begun on the "
+        f"backlog, 1 groups abandoned ({BAGS_BETWEEN_PROGRESS_REPORTS} objects/"
+        f"{900 * BAGS_BETWEEN_PROGRESS_REPORTS} bytes)"
+    ) in progress_line, progress_line
+    assert "rtt=42.5 ms" in progress_line
+    assert "teardown" in teardown_line and "groups abandoned" in teardown_line, teardown_line
+
+
+def test_a_run_whose_uplink_never_fell_behind_says_so_rather_than_saying_nothing():
+    said, _ = _drive_one_bag_through(reaches_the_transport=True)
+
+    assert any(
+        "camera: 0 objects unforwarded, 0 sheds begun on the backlog, 0 groups abandoned "
+        "(0 objects/0 bytes)" in line
+        for line in said
+    ), said
 
 
 def test_a_bag_without_a_bitstream_key_is_a_data_track():
