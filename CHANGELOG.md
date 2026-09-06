@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.58](https://github.com/tatolab/streamlib/compare/v0.18.57...v0.18.58) (2026-09-06)
+
+
+### Features
+
+* **engine:** VirtualCameraSink — the loopback door, one GPU pass into its buffers, and the enable-virtual-camera verb ([#2199](https://github.com/tatolab/streamlib/issues/2199)) ([0dfbe57](https://github.com/tatolab/streamlib/commit/0dfbe578b445489057af033c8244c0e202827a77))
+
 ## [0.18.57](https://github.com/tatolab/streamlib/compare/v0.18.56...v0.18.57) (2026-09-06)
 
 
