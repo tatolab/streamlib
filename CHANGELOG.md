@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.57](https://github.com/tatolab/streamlib/compare/v0.18.56...v0.18.57) (2026-09-06)
+
+
+### Features
+
+* **extension:** the MoQ publisher sheds an uplink backlog — vendored moq-transport, abandon with a draft-16 reset, the unforwarded count and the QUIC path ([#2191](https://github.com/tatolab/streamlib/issues/2191)) ([facbf7b](https://github.com/tatolab/streamlib/commit/facbf7bdc48777e0941c1675b11fca317d9773ec))
+
 ## [0.18.56](https://github.com/tatolab/streamlib/compare/v0.18.55...v0.18.56) (2026-09-06)
 
 

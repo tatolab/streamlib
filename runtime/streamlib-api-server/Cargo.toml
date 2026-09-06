@@ -25,8 +25,8 @@ name = "generate_openapi"
 path = "src/bin/generate_openapi.rs"
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.56" }
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.56" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.57" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.18.57" }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
@@ -58,7 +58,7 @@ percent-encoding = "2.3"
 # Enables the engine's `test-support` in-memory `TapSubscription` constructor
 # for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent
 # from the production `cargo build` dependency graph.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.56", features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.18.57", features = ["test-support"] }
 tempfile = "3"
 tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"
