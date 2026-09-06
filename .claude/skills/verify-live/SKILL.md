@@ -78,7 +78,9 @@ Two rig-only fixtures, one per extension wheel, each owned by the wheel it prove
 
   **Two things that arm gets wrong if you rebuild it from scratch**, both found by review after a green run: `moq-sub` fetches `.catalog` only when passed `--catalog`, and without it silently falls back to hardcoded `0.mp4` / `{track_id}.m4s` names — so the catalog writer can be entirely broken and the arm still passes. And `cargo xtask mp4-inspect` bails only on a missing `moov`, so a capture holding just the init segment parses perfectly: the verdict has to read the *fragment* count, not the exit code.
 
-Each takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. The MoQ fixture is CMAF-only on purpose — `streamlib_bag` names each track after its link's own channel, a cuid2 minted at `add` time, so a subscriber in the same graph would need names that do not exist when it is constructed. Proving that container takes two nodes. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — a relay connect and a CMAF init handshake sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
+  **The MoQ fixture runs both containers**, one node each, in turn: `cmaf` — which is the only one `moq-sub` can read, so the interop arm belongs to it alone — and `streamlib_bag`, which carries a **data arm** beside the media. `CONTAINER_FORMATS` selects them (default `"cmaf streamlib_bag"`); each arm takes the next control port up, its own broadcast name and its own subdirectory of the output. The data arm publishes a telemetry bag per tick through `track_names=["video", "audio", "telemetry"]` and reads it back off the subscriber's `data_bags`. Its verdict is **exact, not tolerant** — every bag says which frame it is, and both its `blob` and its `stamp_ns` are derived from that, so each bag carries its own expected value across the network; `verify_tapped_telemetry_bags.py` recomputes them. A bag that came back a `str` instead of `bytes`, one bag replayed as every bag, and a restamp on the way all fail it, and the stamp is checked twice over — from the payload and from the transport frame's header, which agree only if the producer's instant survived untouched. Several tap rounds are merged because one tap collects over a window of about half a second.
+
+Each takes `SAMPLE_COUNT`, `SAMPLE_EVERY`, `TOLERANCE`, `RUN_SECONDS` and `MEDIA_DEADLINE_SECONDS` from the environment; read the script header for the full list. `MEDIA_DEADLINE_SECONDS` is the one that matters when a run reports no frames — a relay connect and a CMAF init handshake sit between the graph coming up and the first decoded frame, so the fixture waits for one bag before spending the exchange budget.
 
 **Each wheel is measured through its own venv** (`packages/<wheel>/.venv`), which must hold the engine wheel *and* a current `maturin develop` build of the extension. A stale `.so` there would be scored and reported as a pass for code that is not in the tree, so the fixture refuses by name rather than measuring it — `maturin develop` before every run, the same rule `/verify-audio` has.
 
@@ -124,7 +126,7 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 ````markdown
 ### E2E Test Report
 
-- **Scenario**: encoder/decoder | camera+display-only | networking (whip-whep | moq-broadcast)
+- **Scenario**: encoder/decoder | camera+display-only | networking (whip-whep | moq-broadcast cmaf | moq-broadcast streamlib_bag)
 - **App / fixture**: `examples/camera-python-effects` | `examples/camera-display` | `e2e_camera_display.sh` | `whip_whep_roundtrip.sh` | `moq_broadcast_roundtrip.sh`
 - **Codec**: h264 | h265 | n/a
 - **Camera device**: `/dev/videoN` (vivid | Cam Link 4K | other)
