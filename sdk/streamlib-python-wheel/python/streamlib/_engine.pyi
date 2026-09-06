@@ -494,9 +494,10 @@ class Runtime:
         processor is running once its helper process has registered and wired
         its ports; anything published into the graph before that is dropped by
         the link. Raises `RuntimeError` if a processor failed instead of
-        starting, if `timeout` elapses, or if this runtime has already been
-        shut down; and `ValueError` for a `timeout` that is negative, NaN, or
-        too large to be a duration.
+        starting — carrying that processor's own refusal text, so a built-in
+        that refused at setup is read by name — if `timeout` elapses, or if
+        this runtime has already been shut down; and `ValueError` for a
+        `timeout` that is negative, NaN, or too large to be a duration.
         """
 
     def shutdown(self) -> None:
