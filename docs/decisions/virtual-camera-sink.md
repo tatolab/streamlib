@@ -97,3 +97,33 @@ stays as it is, the same discipline the audio arm keeps by `dlsym`.
 
 The example that proves it and the ticket split are the change's business. The outcome
 of the import experiment is the first ticket's first step, not a plan question.
+
+## The RHI primitive is one abstraction with a tier inside
+
+Added by the `virtual-camera-sink` change, 2026-09-06. The GPU has to land YUYV into a host
+range the loopback module mapped for us, and there are two ways to do that: import the range
+itself through `VK_EXT_external_memory_host` and let the conversion kernel write it, or write
+host-cached staging and copy once. They are one concern with a capability tier inside it, not
+two APIs, for the same reason the engine's opaque-fd pool has a host-cached tier that degrades
+to the write-combined pool with a warning rather than exposing a second pool to callers. A
+sink that had to choose between two primitives would carry the platform's quirk into a
+built-in that should only know "give me a buffer the kernel can write and make it visible to
+the host". The staged tier is host-cached and never the sequential-write allocation the
+storage-buffer path hands out, because reading write-combined memory with `memcpy` is the
+exact 37 ms trap the decode path paid before its staging fix. Which tier a driver takes is a
+fact about that driver, logged once per sink; the first ticket measures it on the platform
+floor and the plan entry records the answer at fold time.
+
+## The modprobe line the message prescribes
+
+`sudo modprobe v4l2loopback exclusive_caps=1 max_buffers=4 card_label="StreamLib Virtual Camera"`.
+
+`exclusive_caps=1` because Chromium's V4L2 enumerator lists a node only when it reports
+`VIDEO_CAPTURE` and not `VIDEO_OUTPUT`; without the parameter a loopback node reports both
+and Chrome never shows it. In 0.15.x the capabilities are computed per opener — OUTPUT to the
+writer holding the stream, CAPTURE-only to everyone else — so the writer is unaffected; the
+folklore that the parameter breaks producers is pre-0.13 behaviour. `max_buffers=4` because
+Chrome asks for four buffers and the module clamps a request to the parameter, whose default
+is two. The label is what readers show in their camera pickers. The line is the user's to
+run, once, and the engine never runs it; a `modules-load.d` entry and a `modprobe.d` options
+file are how it survives a reboot, and the refusal message says so.
