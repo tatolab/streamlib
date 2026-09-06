@@ -71,6 +71,8 @@ class TelemetryProbe:
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         ctx.outputs.write("telemetry", {"frame": 1, "note": "hi", "blob": b"\x00"})
+
+
 SUBSCRIBER_CONFIG = {
     "relay_url": A_RELAY,
     "broadcast": A_BROADCAST,
@@ -605,3 +607,34 @@ def test_the_oversize_guard_charges_the_framed_encoded_bag_not_the_bitstream_alo
 
     assert len(bag["bitstream"]) <= 150 < framed_bag_byte_count(bag)
     assert said and "encoded_video" in said[0] and "framed" in said[0], said
+
+
+def test_the_oversize_guard_measures_the_framed_size_only_near_the_ceiling():
+    """The exact measure is an encode of the whole bag on the reader thread,
+    so a bag whose bitstream leaves it far under the ceiling is never
+    encoded twice — the engine's own write is the only encode it gets."""
+    subscriber = MoqBroadcastSubscriber(
+        relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="video"
+    )
+    with mock.patch.object(
+        processors_module, "encode_bag_to_msgpack_bytes"
+    ) as the_exact_measure:
+        subscriber._report_a_bag_the_link_will_drop("encoded_video", dict(A_VIDEO_BAG))
+
+    the_exact_measure.assert_not_called()
+
+
+def test_the_oversize_guard_stops_measuring_once_it_has_reported():
+    subscriber = MoqBroadcastSubscriber(
+        relay_url=A_RELAY, broadcast=A_BROADCAST, video_track="video"
+    )
+    subscriber._reported_an_oversized_bag = True
+    with mock.patch.object(
+        processors_module, "encode_bag_to_msgpack_bytes"
+    ) as the_exact_measure:
+        subscriber._report_a_bag_the_link_will_drop(
+            "encoded_video",
+            {**A_VIDEO_BAG, "bitstream": b"x" * (HELPER_LINK_PAYLOAD_CEILING_BYTES + 1)},
+        )
+
+    the_exact_measure.assert_not_called()

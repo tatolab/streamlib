@@ -89,15 +89,13 @@ const HIGHEST_OBJECTS_IN_ONE_GROUP: usize = 128;
 /// How old the open group of a broadcast with no video may be before the next
 /// object cuts a new one.
 ///
-/// The second backstop for the same broadcast, for the same two reasons, and
-/// applied by the planner rather than here because only the planner knows
-/// whether any track has published video. A sparse data track — one object a
-/// second — would take minutes to reach the object bound, and a joiner
-/// mid-group replays all of it; this bounds the replay to about a second. No
-/// timer: a stamp comparison on the publisher's own monotonic clock at the
-/// next write, so a broadcast that stops writing holds its last group open
-/// until it writes again or closes. A broadcast with video never reaches it —
-/// the video sync point cuts first.
+/// The second backstop for the same broadcast, for the same two reasons: a
+/// sparse data track — one object a second — would take minutes to reach the
+/// object bound, and a joiner mid-group replays all of it. Applied by the
+/// planner, which alone knows whether any track has published video, as a
+/// stamp comparison on the publisher's own clock at the next write — no timer,
+/// so a broadcast that stops writing holds its last group open until it writes
+/// again or closes.
 pub(crate) const LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS: i64 = 1_000_000_000;
 
 /// How many received objects may wait for the reading processor before the

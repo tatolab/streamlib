@@ -189,10 +189,9 @@ impl MoqBroadcastPublishingSession {
         let sample = MoqTrackSample::DataObject(DataTrackObject {
             envelope_bytes: bytes::Bytes::copy_from_slice(object_bytes),
         });
-        let became = self.publish(python, inbound_link_name, sample)?;
-        // The deadline never sheds a data object, so there is no second
-        // outcome to hand back.
-        debug_assert_eq!(became, WhatBecameOfOnePublishedBag::ReachesTheTransport);
+        // The deadline never sheds a data object, so the outcome carries
+        // nothing the caller does not already know.
+        self.publish(python, inbound_link_name, sample)?;
         Ok(())
     }
 

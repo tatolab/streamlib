@@ -81,6 +81,14 @@ HELPER_LINK_PAYLOAD_CEILING_BYTES = 16 * 1024 * 1024
 #: `streamlib-ipc-types`' `FRAME_HEADER_SIZE`, unexported for the same reason.
 HELPER_LINK_FRAME_HEADER_BYTES = 76
 
+#: How close to the ceiling a bag's `bitstream` alone must bring it before the
+#: framed size is measured exactly. The exact measure is an encode of the whole
+#: bag — a copy of the bitstream on the reader thread, per bag — so it is paid
+#: only where it could change the answer: an encoded-media bag's other keys are
+#: a few hundred bytes, so a bitstream further under the ceiling than this
+#: cannot put the framed bag over it.
+BYTES_UNDER_THE_CEILING_WITHIN_WHICH_THE_FRAMED_SIZE_IS_MEASURED = 64 * 1024
+
 #: The three keys of a data track's object. The user's bag rides whole under
 #: `bag`, so no name inside it is reserved; the other two are the publisher's —
 #: a per-track count and the bag's own link stamp — for the subscriber to count
@@ -229,6 +237,19 @@ def framed_bag_byte_count(bag: Mapping[str, Any]) -> int:
     return HELPER_LINK_FRAME_HEADER_BYTES + len(encode_bag_to_msgpack_bytes(bag))
 
 
+def the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag: Mapping[str, Any]) -> bool:
+    """Whether an encoded-media bag is close enough to the ceiling that only
+    the exact framed size can say which side of it the bag falls."""
+    bitstream = bag.get("bitstream")
+    bitstream_byte_count = len(bitstream) if isinstance(bitstream, bytes) else 0
+    return (
+        HELPER_LINK_FRAME_HEADER_BYTES
+        + bitstream_byte_count
+        + BYTES_UNDER_THE_CEILING_WITHIN_WHICH_THE_FRAMED_SIZE_IS_MEASURED
+        > HELPER_LINK_PAYLOAD_CEILING_BYTES
+    )
+
+
 def _optional_track_names(track_names: Any) -> "list[str] | None":
     """The names an app chose for its tracks, or None for the links' own.
 
@@ -351,7 +372,7 @@ class MoqBroadcastPublisher:
             self._delivery_deadline_ms,
         )
         self._session.declare_tracks(inbound_links, self._track_names)
-        named = (
+        the_track_names_this_broadcast_was_given = (
             f"track_names={self._track_names} "
             if self._track_names is not None
             else ""
@@ -359,7 +380,8 @@ class MoqBroadcastPublisher:
         log.info(
             f"MoqBroadcastPublisher: broadcast={broadcast} "
             f"container_format={self._container_format} tracks={len(inbound_links)} "
-            f"{named}{describe_the_delivery_deadline(self._delivery_deadline_ms)}"
+            f"{the_track_names_this_broadcast_was_given}"
+            f"{describe_the_delivery_deadline(self._delivery_deadline_ms)}"
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -631,10 +653,12 @@ class MoqBroadcastSubscriber:
             log.info(f"MoqBroadcastSubscriber: `{port}` bags_written={written}")
 
     def _report_a_bag_the_link_will_drop(self, port: str, bag: "Mapping[str, Any]") -> None:
+        if self._reported_an_oversized_bag:
+            return
+        if not the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag):
+            return
         framed_byte_count = framed_bag_byte_count(bag)
         if framed_byte_count <= HELPER_LINK_PAYLOAD_CEILING_BYTES:
-            return
-        if self._reported_an_oversized_bag:
             return
         self._reported_an_oversized_bag = True
         log.error(

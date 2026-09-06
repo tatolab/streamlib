@@ -13,11 +13,8 @@
 //! become unreachable the moment the next one arrived.
 //!
 //! A data object never cuts a group — the audio rule, for the audio reason —
-//! so a broadcast with no video in it is cut by two backstops instead: the
-//! session's object bound, and the age bound planned here, which cuts on the
-//! next write once the open group is about a second old on the publisher's
-//! own clock. A joiner mid-group replays that group from its first object, and
-//! this is what keeps the replay to a second of history rather than minutes.
+//! so a broadcast with no video in it is cut by the session's object bound and
+//! by the age bound planned here.
 //!
 //! Whether a bag is published at all is decided here too, before any of it
 //! reaches the transport — see [`crate::delivery_deadline`] for why that is the
@@ -59,7 +56,7 @@ use crate::moq_session::{
     LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS, MoqBroadcastPublishingSession,
     track_priority_of,
 };
-use crate::moq_track_sample::{MoqTrackKind, MoqTrackSample};
+use crate::moq_track_sample::{MoqTrackKind, MoqTrackSample, WhatATrackCarries};
 use crate::streamlib_bag_object::encode_object;
 
 /// The container name a caller passes for fragmented MP4.
@@ -440,9 +437,14 @@ impl MoqBroadcastObjectWritePlanner {
                     .to_owned(),
             });
         }
-        let track_names = self.track_names_the_app_chose(track_names, inbound_link_names.len())?;
+        let moq_media_track_names =
+            self.moq_media_track_names_for(&inbound_link_names, track_names)?;
 
-        for (declared_track_index, inbound_link_name) in inbound_link_names.iter().enumerate() {
+        for (declared_track_index, (inbound_link_name, moq_media_track_name)) in inbound_link_names
+            .iter()
+            .zip(moq_media_track_names)
+            .enumerate()
+        {
             if self
                 .declared_track_index_by_inbound_link_name
                 .contains_key(inbound_link_name)
@@ -454,27 +456,6 @@ impl MoqBroadcastObjectWritePlanner {
                     ),
                 });
             }
-            let moq_media_track_name = match self.container_format {
-                // `.catalog`, `0.mp4` and `{track_id}.m4s` are a fallback
-                // contract, not this wheel's to vary: the reference subscriber
-                // hardcodes all three when it is not asked to fetch a catalog.
-                MoqContainerFormat::Cmaf => media_track_name(declared_track_index as u32 + 1),
-                MoqContainerFormat::StreamlibBag => {
-                    let moq_media_track_name = track_names
-                        .as_ref()
-                        .map_or(inbound_link_name, |names| &names[declared_track_index]);
-                    if moq_media_track_name == CATALOG_TRACK_NAME {
-                        return Err(MoqExtensionError::Refused {
-                            what: format!(
-                                "`{CATALOG_TRACK_NAME}` cannot name a media track published over \
-                                 `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`: that name is already this \
-                                 broadcast's catalog track"
-                            ),
-                        });
-                    }
-                    moq_media_track_name.clone()
-                }
-            };
             self.declared_track_index_by_inbound_link_name
                 .insert(inbound_link_name.clone(), declared_track_index);
             self.declared_tracks
@@ -487,28 +468,66 @@ impl MoqBroadcastObjectWritePlanner {
         Ok(())
     }
 
-    /// The names an app chose for its tracks, checked against the links they
-    /// name: one per link, none empty, none twice, and none at all under
-    /// `cmaf`, whose names are a subscriber's interop contract.
-    fn track_names_the_app_chose(
+    /// The name each track answers to on the relay, one per inbound link in
+    /// declaration order.
+    ///
+    /// Under `cmaf` they are the container's own — `.catalog`, `0.mp4` and
+    /// `{track_id}.m4s` are a fallback contract, not this wheel's to vary,
+    /// because the reference subscriber hardcodes all three when it is not
+    /// asked to fetch a catalog — and names from the app are refused. Under
+    /// `streamlib_bag` they are the app's, one per link, or absent that each
+    /// link's own name.
+    fn moq_media_track_names_for(
         &self,
+        inbound_link_names: &[String],
         track_names: Option<Vec<String>>,
-        inbound_link_count: usize,
-    ) -> Result<Option<Vec<String>>> {
-        let Some(track_names) = track_names else {
-            return Ok(None);
+    ) -> Result<Vec<String>> {
+        let track_names = match self.container_format {
+            MoqContainerFormat::Cmaf => {
+                if track_names.is_some() {
+                    return Err(MoqExtensionError::Refused {
+                        what: format!(
+                            "`track_names` cannot be set under `{CMAF_CONTAINER_WIRE_NAME}`: that \
+                             container names its tracks `{CATALOG_TRACK_NAME}`, \
+                             `{INIT_TRACK_NAME}` and `{{track_id}}.m4s`, because a subscriber not \
+                             asked to fetch a catalog hardcodes exactly those; name tracks under \
+                             `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`"
+                        ),
+                    });
+                }
+                return Ok((1..=inbound_link_names.len())
+                    .map(|track_id| media_track_name(track_id as u32))
+                    .collect());
+            }
+            MoqContainerFormat::StreamlibBag => match track_names {
+                None => inbound_link_names.to_vec(),
+                Some(track_names) => {
+                    self.refuse_track_names_that_do_not_name_the_links(
+                        &track_names,
+                        inbound_link_names.len(),
+                    )?;
+                    track_names
+                }
+            },
         };
-        if self.container_format == MoqContainerFormat::Cmaf {
+        if track_names.iter().any(|name| name == CATALOG_TRACK_NAME) {
             return Err(MoqExtensionError::Refused {
                 what: format!(
-                    "`track_names` cannot be set under `{CMAF_CONTAINER_WIRE_NAME}`: that \
-                     container names its tracks `{CATALOG_TRACK_NAME}`, `{INIT_TRACK_NAME}` and \
-                     `{{track_id}}.m4s`, because a subscriber not asked to fetch a catalog \
-                     hardcodes exactly those; name tracks under \
-                     `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`"
+                    "`{CATALOG_TRACK_NAME}` cannot name a media track published over \
+                     `{STREAMLIB_BAG_CONTAINER_WIRE_NAME}`: that name is already this \
+                     broadcast's catalog track"
                 ),
             });
         }
+        Ok(track_names)
+    }
+
+    /// One name per link, none empty, none twice.
+    fn refuse_track_names_that_do_not_name_the_links(
+        &self,
+        track_names: &[String],
+        inbound_link_count: usize,
+    ) -> Result<()> {
         if track_names.len() != inbound_link_count {
             return Err(MoqExtensionError::Refused {
                 what: format!(
@@ -522,7 +541,7 @@ impl MoqBroadcastObjectWritePlanner {
             });
         }
         let mut names_seen = HashSet::with_capacity(track_names.len());
-        for track_name in &track_names {
+        for track_name in track_names {
             if track_name.is_empty() {
                 return Err(MoqExtensionError::Refused {
                     what: "`track_names` carries an empty name, which names no track on the relay"
@@ -538,7 +557,7 @@ impl MoqBroadcastObjectWritePlanner {
                 });
             }
         }
-        Ok(Some(track_names))
+        Ok(())
     }
 
     /// Every MoQ track name the session must create before it announces the
@@ -584,14 +603,20 @@ impl MoqBroadcastObjectWritePlanner {
             DeliveryDeadlineVerdict::PublishIt => track.the_open_group_is_being_shed = false,
         }
 
-        match self.container_format {
+        let planned = match self.container_format {
             MoqContainerFormat::StreamlibBag => {
-                self.plan_a_streamlib_bag_write(declared_track_index, &sample, now_ns)
+                self.plan_a_streamlib_bag_write(declared_track_index, &sample, now_ns)?
             }
             MoqContainerFormat::Cmaf => {
-                self.plan_a_cmaf_write(declared_track_index, sample, now_ns)
+                self.plan_a_cmaf_write(declared_track_index, sample, now_ns)?
             }
+        };
+        // A held or shed bag asks the transport for nothing, so the open
+        // group's age is untouched by it.
+        if !planned.instructions.is_empty() {
+            self.note_when_the_open_group_was_opened(&planned.instructions, now_ns);
         }
+        Ok(planned)
     }
 
     fn plan_a_streamlib_bag_write(
@@ -625,7 +650,6 @@ impl MoqBroadcastObjectWritePlanner {
                 publisher_priority: track_priority_of(sample.kind()),
             },
         );
-        self.note_when_the_open_group_was_opened(&instructions, now_ns);
         Ok(PlannedMoqObjectWrites {
             instructions,
             the_delivery_deadline_shed_it: false,
@@ -642,7 +666,8 @@ impl MoqBroadcastObjectWritePlanner {
         // Before the hold, not inside it: a data bag can never be described,
         // so holding for it would stall every other track up to the hold's
         // bound and only then refuse — and the refusal would name the wrong
-        // thing.
+        // thing. The link's first bag has already marked it as data, which
+        // is what takes it out of everything the init segment describes.
         let sample = match sample {
             MoqTrackSample::DataObject(_) => {
                 return Err(
@@ -667,7 +692,6 @@ impl MoqBroadcastObjectWritePlanner {
             instructions.extend(
                 self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?,
             );
-            self.note_when_the_open_group_was_opened(&instructions, now_ns);
             return Ok(PlannedMoqObjectWrites {
                 instructions,
                 the_delivery_deadline_shed_it: false,
@@ -699,7 +723,6 @@ impl MoqBroadcastObjectWritePlanner {
         }
         instructions
             .extend(self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample)?);
-        self.note_when_the_open_group_was_opened(&instructions, now_ns);
         Ok(PlannedMoqObjectWrites {
             instructions,
             the_delivery_deadline_shed_it: false,
@@ -708,11 +731,8 @@ impl MoqBroadcastObjectWritePlanner {
     }
 
     /// Whether this write must cut a group first because the broadcast has no
-    /// video to cut on and its open group has aged past the bound.
-    ///
-    /// "No video" is no track having published a video bag yet: a broadcast
-    /// whose video link has not spoken is cut by age until it does, and its
-    /// first sync point cuts anyway.
+    /// video to cut on — no track has published a video bag yet — and its open
+    /// group has aged past the bound.
     fn the_age_bound_cuts_before_this_write(&self, now_ns: i64) -> bool {
         if self.a_track_has_published_video() {
             return false;
@@ -725,9 +745,9 @@ impl MoqBroadcastObjectWritePlanner {
     }
 
     fn a_track_has_published_video(&self) -> bool {
-        self.declared_tracks.iter().any(|track| {
-            track.first_published_kind == Some(MoqTrackKind::Media(TrackMedium::Video))
-        })
+        self.declared_tracks
+            .iter()
+            .any(|track| track.carries(MoqTrackKind::Media(TrackMedium::Video)))
     }
 
     /// The open group is the one these instructions cut, or the one the first
@@ -752,9 +772,10 @@ impl MoqBroadcastObjectWritePlanner {
             what: format!(
                 "`{}` delivered a data bag — one with no `bitstream` — and a \
                  `{CMAF_CONTAINER_WIRE_NAME}` broadcast has no packaging for it: a CMAF fragment \
-                 carries coded media samples and nothing else. A data track needs \
-                 `container_format=\"{STREAMLIB_BAG_CONTAINER_WIRE_NAME}\"`, which carries the \
-                 bag whole",
+                 carries coded media samples and nothing else. The link publishes nothing on \
+                 this broadcast, whose media tracks are described without it; a data track \
+                 needs `container_format=\"{STREAMLIB_BAG_CONTAINER_WIRE_NAME}\"`, which carries \
+                 the bag whole",
                 self.declared_tracks[declared_track_index].inbound_link_name
             ),
         }
@@ -877,10 +898,21 @@ impl MoqBroadcastObjectWritePlanner {
             .collect()
     }
 
+    /// Whether the init segment can be built: every track it describes has
+    /// said what it is. A link that has shown itself to be data is outside
+    /// the init segment altogether — a `cmaf` broadcast publishes nothing on
+    /// it and does not wait on it.
     fn every_declared_track_is_described(&self) -> bool {
+        self.tracks_the_cmaf_init_segment_describes()
+            .all(|track| track.cmaf_description.is_some())
+    }
+
+    fn tracks_the_cmaf_init_segment_describes(
+        &self,
+    ) -> impl Iterator<Item = &DeclaredMoqTrackPublicationState> {
         self.declared_tracks
             .iter()
-            .all(|track| track.cmaf_description.is_some())
+            .filter(|track| !track.carries(MoqTrackKind::Data))
     }
 
     /// What a `close()` throws away, or `None` when the hold is empty.
@@ -903,7 +935,7 @@ impl MoqBroadcastObjectWritePlanner {
 
     fn build_the_cmaf_init_segment(&self) -> Result<Bytes> {
         let mut init_segment_track_descriptions = Vec::with_capacity(self.declared_tracks.len());
-        for track in &self.declared_tracks {
+        for track in self.tracks_the_cmaf_init_segment_describes() {
             let Some(description) = track.cmaf_description.as_ref() else {
                 return Err(MoqExtensionError::Refused {
                     what: format!(
@@ -928,7 +960,7 @@ impl MoqBroadcastObjectWritePlanner {
         let catalog = match self.container_format {
             MoqContainerFormat::Cmaf => {
                 let mut catalog_track_descriptions = Vec::with_capacity(self.declared_tracks.len());
-                for track in &self.declared_tracks {
+                for track in self.tracks_the_cmaf_init_segment_describes() {
                     let Some(description) = track.cmaf_description.as_ref() else {
                         return Err(MoqExtensionError::Refused {
                             what: format!(
@@ -993,8 +1025,7 @@ impl MoqBroadcastObjectWritePlanner {
     /// sends the operator to the wrong end of the graph.
     fn describe_the_tracks_the_init_segment_is_waiting_on(&self) -> String {
         let waiting_on: Vec<String> = self
-            .declared_tracks
-            .iter()
+            .tracks_the_cmaf_init_segment_describes()
             .filter(|track| track.cmaf_description.is_none())
             .map(|track| match track.bags_this_track_has_delivered {
                 0 => format!("`{}` has delivered no bag at all", track.inbound_link_name),
@@ -1035,10 +1066,7 @@ struct DeclaredMoqTrackPublicationState {
     /// is also what names its MoQ media track.
     cmaf_track_id: u32,
     moq_media_track_name: String,
-    /// What the track's first bag said it carries. A data track has a kind
-    /// and no codec.
-    first_published_kind: Option<MoqTrackKind>,
-    first_published_codec: Option<String>,
+    first_published: Option<WhatATrackCarries>,
     bags_this_track_has_delivered: u64,
     cmaf_description: Option<CmafTrackDescriptionLearnedFromItsFirstUsableSample>,
     parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit,
@@ -1056,8 +1084,7 @@ impl DeclaredMoqTrackPublicationState {
             inbound_link_name,
             cmaf_track_id,
             moq_media_track_name,
-            first_published_kind: None,
-            first_published_codec: None,
+            first_published: None,
             bags_this_track_has_delivered: 0,
             cmaf_description: None,
             parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit::default(),
@@ -1083,37 +1110,34 @@ impl DeclaredMoqTrackPublicationState {
             .saturating_add(encoded_byte_count as u64);
     }
 
+    /// Whether this track's first bag said it carries `kind`.
+    fn carries(&self, kind: MoqTrackKind) -> bool {
+        self.first_published
+            .as_ref()
+            .is_some_and(|carried| carried.kind == kind)
+    }
+
     fn refuse_a_sample_unlike_the_one_this_track_was_first_published_from(
         &mut self,
         sample: &MoqTrackSample,
     ) -> Result<()> {
-        let kind = sample.kind();
-        let codec = sample.wire_codec();
-        match self.first_published_kind {
-            Some(first_kind) => {
-                if first_kind != kind || self.first_published_codec.as_deref() != codec {
-                    return Err(MoqExtensionError::Refused {
-                        what: format!(
-                            "`{}` first published {} and this bag carries {}; one link is one \
-                             track, and a MoQ track's kind and codec are stated once — by its \
-                             first bag, and on `{CMAF_CONTAINER_WIRE_NAME}` by the catalog and \
-                             the init segment — so neither can be revised",
-                            self.inbound_link_name,
-                            describe_kind_and_codec(
-                                first_kind,
-                                self.first_published_codec.as_deref()
-                            ),
-                            describe_kind_and_codec(kind, codec)
-                        ),
-                    });
-                }
-            }
+        match &self.first_published {
+            Some(first) if !first.matches(sample) => Err(MoqExtensionError::Refused {
+                what: format!(
+                    "`{}` first published {first} and this bag carries {}; one link is one \
+                     track, and a MoQ track's kind and codec are stated once — by its first \
+                     bag, and on `{CMAF_CONTAINER_WIRE_NAME}` by the catalog and the init \
+                     segment — so neither can be revised",
+                    self.inbound_link_name,
+                    sample.what_it_carries()
+                ),
+            }),
+            Some(_) => Ok(()),
             None => {
-                self.first_published_kind = Some(kind);
-                self.first_published_codec = codec.map(str::to_owned);
+                self.first_published = Some(sample.what_it_carries());
+                Ok(())
             }
         }
-        Ok(())
     }
 
     /// Describe this track if this bag is the first one that can: a video track
@@ -1332,14 +1356,6 @@ fn catalog_selection_parameters_of_a_streamlib_bag_track() -> MoqCatalogTrackSel
     }
 }
 
-/// How a refusal names what a track carries: `video \`h264\``, or `data`.
-fn describe_kind_and_codec(kind: MoqTrackKind, codec: Option<&str>) -> String {
-    match codec {
-        Some(codec) => format!("{} `{codec}`", kind.as_str()),
-        None => kind.as_str().to_owned(),
-    }
-}
-
 /// The bytes one bag puts on the wire, whatever its kind.
 fn payload_byte_count_of(sample: &MoqTrackSample) -> usize {
     match sample {
@@ -1485,12 +1501,12 @@ mod tests {
             MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
         );
         planner
-            .declare_tracks(owned(inbound_link_names), None)
+            .declare_tracks(each_name_owned(inbound_link_names), None)
             .expect("these inbound links are declarable");
         planner
     }
 
-    fn owned(names: &[&str]) -> Vec<String> {
+    fn each_name_owned(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_owned()).collect()
     }
 
@@ -3094,6 +3110,117 @@ mod tests {
         assert!(!planner.the_hold_stopped_at_its_bound);
     }
 
+    fn catalog_track_names_in(catalog_object: &Bytes) -> Vec<String> {
+        let catalog: serde_json::Value =
+            serde_json::from_slice(catalog_object).expect("the catalog is JSON");
+        catalog["tracks"]
+            .as_array()
+            .expect("the catalog names its tracks")
+            .iter()
+            .map(|track| {
+                track["name"]
+                    .as_str()
+                    .expect("a track has a name")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cmaf_broadcast_opens_without_a_data_link_once_that_link_has_shown_what_it_carries() {
+        let mut planner = a_planner_over(
+            MoqContainerFormat::Cmaf,
+            &["camera", "microphone", "telemetry"],
+        );
+        let held_video = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+        )
+        .expect("video is held until every describable track has spoken");
+        let held_audio = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "microphone",
+            an_opus_packet(0),
+        )
+        .expect("audio is held too: the third link has not yet said what it is");
+        assert!(held_video.is_empty());
+        assert!(held_audio.is_empty());
+
+        let refusal = refusal_of(
+            planner
+                .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+                .expect_err("cmaf has no packaging for a data bag"),
+        );
+        let opened = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+        )
+        .expect("the next media bag opens the broadcast without the data link");
+
+        assert!(refusal.contains("telemetry"), "{refusal}");
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&opened),
+            vec![
+                "only:0.mp4",
+                "only:.catalog",
+                "cut",
+                "object:1.m4s",
+                "object:2.m4s",
+                "object:1.m4s",
+            ],
+            "the media held for the data link must reach the transport once the link is known"
+        );
+        let catalog_object = the_only_object_written_to(&opened, CATALOG_TRACK_NAME)
+            .expect("the catalog is written with the init object");
+        assert_eq!(
+            catalog_track_names_in(&catalog_object),
+            vec!["1.m4s", "2.m4s"],
+            "the catalog describes the two media tracks and not the data link"
+        );
+        assert_eq!(planner.bytes_held_until_every_cmaf_track_is_described, 0);
+        assert_eq!(
+            planner.describe_the_tracks_the_init_segment_is_waiting_on(),
+            "no track"
+        );
+    }
+
+    #[test]
+    fn a_data_link_refused_first_under_cmaf_never_holds_the_media_declared_beside_it() {
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["camera", "telemetry"]);
+        planner
+            .plan_the_writes_for("telemetry", a_data_object(A_DATA_ENVELOPE), 0)
+            .expect_err("cmaf has no packaging for a data bag");
+
+        let opened = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+        )
+        .expect("the one describable track describes itself and the broadcast opens");
+        let later = plan_the_writes_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(33_000_000),
+        )
+        .expect("the video track publishes on");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&opened),
+            vec!["only:0.mp4", "only:.catalog", "cut", "object:1.m4s"]
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&later),
+            vec!["cut", "object:1.m4s"]
+        );
+        assert!(
+            planner
+                .samples_held_until_every_cmaf_track_is_described
+                .is_empty()
+        );
+    }
+
     #[test]
     fn a_media_bag_on_a_link_that_first_published_data_is_refused_by_name() {
         let mut planner = a_planner_over(MoqContainerFormat::StreamlibBag, &["telemetry"]);
@@ -3161,7 +3288,10 @@ mod tests {
             BROADCAST_NAMESPACE.to_owned(),
             MoqPublisherDeliveryDeadline::of_optional_milliseconds(None),
         );
-        planner.declare_tracks(owned(inbound_link_names), track_names.map(owned))?;
+        planner.declare_tracks(
+            each_name_owned(inbound_link_names),
+            track_names.map(each_name_owned),
+        )?;
         Ok(planner)
     }
 

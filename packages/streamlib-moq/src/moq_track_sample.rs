@@ -43,6 +43,31 @@ impl MoqTrackKind {
     }
 }
 
+/// What a track carries, as its first bag stated it: a kind, and for media
+/// its codec. Stated once and never revised.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WhatATrackCarries {
+    pub(crate) kind: MoqTrackKind,
+    pub(crate) codec: Option<String>,
+}
+
+impl WhatATrackCarries {
+    /// Whether a later sample carries the same kind and codec, compared
+    /// without owning the sample's codec.
+    pub(crate) fn matches(&self, sample: &MoqTrackSample) -> bool {
+        self.kind == sample.kind() && self.codec.as_deref() == sample.wire_codec()
+    }
+}
+
+impl std::fmt::Display for WhatATrackCarries {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.codec {
+            Some(codec) => write!(formatter, "{} `{codec}`", self.kind.as_str()),
+            None => formatter.write_str(self.kind.as_str()),
+        }
+    }
+}
+
 impl From<EncodedMediaSample> for MoqTrackSample {
     fn from(sample: EncodedMediaSample) -> Self {
         MoqTrackSample::EncodedMedia(sample)
@@ -55,6 +80,14 @@ impl MoqTrackSample {
         match self {
             MoqTrackSample::EncodedMedia(sample) => MoqTrackKind::Media(sample.medium()),
             MoqTrackSample::DataObject(_) => MoqTrackKind::Data,
+        }
+    }
+
+    /// What a track first publishing this sample carries from then on.
+    pub(crate) fn what_it_carries(&self) -> WhatATrackCarries {
+        WhatATrackCarries {
+            kind: self.kind(),
+            codec: self.wire_codec().map(str::to_owned),
         }
     }
 
