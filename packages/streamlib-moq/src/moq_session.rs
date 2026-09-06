@@ -330,8 +330,9 @@ impl OpenGroupsByTrack {
                     unforwarded_bytes: reading.unforwarded_bytes,
                 }),
                 // Reachable only once the reader side is gone, in which case
-                // there is no forwarder left for the abandon to pre-empt.
-                Err(failure) => tracing::warn!(
+                // there was no forwarder for the abandon to pre-empt and nothing
+                // is lost — so it is neither counted nor raised above debug.
+                Err(failure) => tracing::debug!(
                     track = %track_name,
                     %failure,
                     "the superseded MoQ group could not be abandoned; it finishes instead"

@@ -1597,4 +1597,54 @@ mod tests {
         res.expect("a finished subgroup serves cleanly");
         assert_eq!(termination, Some(SubgroupTermination::Fin));
     }
+
+    /// Objects the delivery filter skips are never written, so the writer's
+    /// backlog must not count them: a subscriber joining mid-subgroup would
+    /// otherwise read the skipped prefix as a permanent backlog.
+    #[tokio::test]
+    async fn objects_the_delivery_filter_skips_are_done_with_for_the_writers_backlog() {
+        use bytes::Bytes;
+
+        use crate::coding::{Location, TrackNamespace};
+
+        let (track_writer, track_reader) =
+            serve::Track::new(TrackNamespace::from_utf8_path("test"), "video").produce();
+        let mut subgroups_writer = track_writer.subgroups().unwrap();
+        let mut subgroup_writer = subgroups_writer
+            .create(serve::Subgroup {
+                group_id: 1,
+                subgroup_id: 0,
+                priority: 0,
+            })
+            .unwrap();
+        for payload in [b"skipped".as_slice(), b"skipped too", b"wanted"] {
+            subgroup_writer
+                .write(Bytes::copy_from_slice(payload))
+                .unwrap();
+        }
+
+        let mut subgroups = match track_reader.mode().await.unwrap() {
+            TrackReaderMode::Subgroups(subgroups) => subgroups,
+            _ => panic!("expected subgroups mode"),
+        };
+        let mut subgroup = subgroups.next().await.unwrap().expect("subgroup available");
+        let from_the_third_object = DeliveryFilter {
+            forward: true,
+            start_location: Some(Location::new(1, 2)),
+            end_group_id: None,
+        };
+
+        let first_allowed =
+            ObjectForwarder::next_allowed_object(&mut subgroup, from_the_third_object)
+                .await
+                .unwrap()
+                .expect("the third object is allowed");
+
+        assert_eq!(first_allowed.object_id, 2);
+        assert_eq!(
+            subgroup_writer.unforwarded(),
+            Some(1),
+            "the two skipped objects are done with; only the allowed one is still to be written"
+        );
+    }
 }

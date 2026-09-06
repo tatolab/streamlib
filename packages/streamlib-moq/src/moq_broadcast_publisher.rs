@@ -1869,20 +1869,43 @@ mod tests {
             .collect()
     }
 
-    fn object_payloads_written_to(
-        instructions: &[MoqObjectWriteInstruction],
+    /// One object a plan appends to a track's open group, as the plan states it.
+    struct ObjectAppendedByThePlan<'plan> {
+        object_payload: &'plan Bytes,
+        publisher_priority: u8,
+        object_stamp_ns: i64,
+    }
+
+    /// Every object the instructions append to one track, in order.
+    fn objects_appended_to<'plan>(
+        instructions: &'plan [MoqObjectWriteInstruction],
         wanted_track_name: &str,
-    ) -> Vec<Bytes> {
+    ) -> Vec<ObjectAppendedByThePlan<'plan>> {
         instructions
             .iter()
             .filter_map(|instruction| match instruction {
                 MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
                     moq_track_name,
                     object_payload,
-                    ..
-                } if moq_track_name == wanted_track_name => Some(object_payload.clone()),
+                    publisher_priority,
+                    object_stamp_ns,
+                } if moq_track_name == wanted_track_name => Some(ObjectAppendedByThePlan {
+                    object_payload,
+                    publisher_priority: *publisher_priority,
+                    object_stamp_ns: *object_stamp_ns,
+                }),
                 _ => None,
             })
+            .collect()
+    }
+
+    fn object_payloads_written_to(
+        instructions: &[MoqObjectWriteInstruction],
+        wanted_track_name: &str,
+    ) -> Vec<Bytes> {
+        objects_appended_to(instructions, wanted_track_name)
+            .into_iter()
+            .map(|object| object.object_payload.clone())
             .collect()
     }
 
@@ -1892,16 +1915,9 @@ mod tests {
         instructions: &[MoqObjectWriteInstruction],
         wanted_track_name: &str,
     ) -> Vec<i64> {
-        instructions
-            .iter()
-            .filter_map(|instruction| match instruction {
-                MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
-                    moq_track_name,
-                    object_stamp_ns,
-                    ..
-                } if moq_track_name == wanted_track_name => Some(*object_stamp_ns),
-                _ => None,
-            })
+        objects_appended_to(instructions, wanted_track_name)
+            .into_iter()
+            .map(|object| object.object_stamp_ns)
             .collect()
     }
 
@@ -1910,16 +1926,9 @@ mod tests {
         instructions: &[MoqObjectWriteInstruction],
         wanted_track_name: &str,
     ) -> Vec<u8> {
-        instructions
-            .iter()
-            .filter_map(|instruction| match instruction {
-                MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
-                    moq_track_name,
-                    publisher_priority,
-                    ..
-                } if moq_track_name == wanted_track_name => Some(*publisher_priority),
-                _ => None,
-            })
+        objects_appended_to(instructions, wanted_track_name)
+            .into_iter()
+            .map(|object| object.publisher_priority)
             .collect()
     }
 

@@ -36,7 +36,7 @@ const VENDORED_TREES: &[(&str, u64)] = &[
     ("vendor/tatolab-vulkanalia-vma", 0x765e_4ed7_3be3_2585),
     (
         "packages/streamlib-moq/vendor/moq-transport",
-        0x7afc_ef6f_fcba_328e,
+        0xefe1_10d9_befd_75b6,
     ),
 ];
 
