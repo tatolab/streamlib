@@ -3,7 +3,7 @@
 
 #![cfg(target_os = "linux")]
 
-//! V4L2 colorspace → [`ColorInfo`] translation.
+//! V4L2 colorspace ↔ [`ColorInfo`] translation.
 //!
 //! Mirrors FFmpeg's `libavcodec/v4l2_buffers.c` mapping plus the
 //! V4L2 `*_DEFAULT` resolution rules from `<linux/videodev2.h>`. V4L2
@@ -15,6 +15,10 @@
 //! Each axis returns `Option<T>` — `None` is the canonical "unknown"
 //! representation. `V4L2_COLORSPACE_DEFAULT` and any unrecognized
 //! enumerant propagate as `None`.
+//!
+//! The inverse, [`color_info_to_v4l2_color`], is what a V4L2 *output*
+//! device is told at `S_FMT`: an absent axis becomes the V4L2 default so
+//! a reader's own `V4L2_MAP_*_DEFAULT` derives it from the colorspace.
 
 use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer};
 
@@ -71,6 +75,60 @@ pub fn v4l2_color_to_color_info(
         transfer: transfer_from_v4l2(xfer_func, colorspace),
         matrix: matrix_from_v4l2(ycbcr_enc, colorspace),
         range: range_from_v4l2(quantization, colorspace),
+    }
+}
+
+/// The four `v4l2_pix_format` colour fields a writer sets at `S_FMT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4l2PixFormatColorFields {
+    pub colorspace: u32,
+    pub xfer_func: u32,
+    pub ycbcr_enc: u32,
+    pub quantization: u32,
+}
+
+/// Translate a [`ColorInfo`] to the V4L2 fields a reader will see. The
+/// colorspace enumerant is chosen from the primaries; a primaries value
+/// V4L2 cannot name, or an absent one, leaves `V4L2_COLORSPACE_DEFAULT`
+/// (the loopback module then reports sRGB). The other three axes carry
+/// their own enumerant when the H.273 value has one and `*_DEFAULT`
+/// otherwise, which lets the reader derive it from the colorspace.
+pub fn color_info_to_v4l2_color(info: &ColorInfo) -> V4l2PixFormatColorFields {
+    V4l2PixFormatColorFields {
+        colorspace: match info.primaries {
+            Some(Primaries::Smpte170m) => V4L2_COLORSPACE_SMPTE170M,
+            Some(Primaries::Smpte240m) => V4L2_COLORSPACE_SMPTE240M,
+            Some(Primaries::Bt709) => match info.transfer {
+                Some(Transfer::Srgb) => V4L2_COLORSPACE_SRGB,
+                _ => V4L2_COLORSPACE_REC709,
+            },
+            Some(Primaries::Bt470M) => V4L2_COLORSPACE_470_SYSTEM_M,
+            Some(Primaries::Bt470Bg) => V4L2_COLORSPACE_470_SYSTEM_BG,
+            Some(Primaries::Bt2020) => V4L2_COLORSPACE_BT2020,
+            Some(Primaries::Smpte431) => V4L2_COLORSPACE_DCI_P3,
+            _ => V4L2_COLORSPACE_DEFAULT,
+        },
+        xfer_func: match info.transfer {
+            Some(Transfer::Bt709) => V4L2_XFER_FUNC_709,
+            Some(Transfer::Srgb) => V4L2_XFER_FUNC_SRGB,
+            Some(Transfer::Smpte240m) => V4L2_XFER_FUNC_SMPTE240M,
+            Some(Transfer::Linear) => V4L2_XFER_FUNC_NONE,
+            Some(Transfer::Smpte2084) => V4L2_XFER_FUNC_SMPTE2084,
+            _ => V4L2_XFER_FUNC_DEFAULT,
+        },
+        ycbcr_enc: match info.matrix {
+            Some(Matrix::Smpte170m) | Some(Matrix::Bt470Bg) => V4L2_YCBCR_ENC_601,
+            Some(Matrix::Bt709) => V4L2_YCBCR_ENC_709,
+            Some(Matrix::Bt2020Ncl) => V4L2_YCBCR_ENC_BT2020,
+            Some(Matrix::Bt2020Cl) => V4L2_YCBCR_ENC_BT2020_CONST_LUM,
+            Some(Matrix::Smpte240m) => V4L2_YCBCR_ENC_SMPTE240M,
+            _ => V4L2_YCBCR_ENC_DEFAULT,
+        },
+        quantization: match info.range {
+            Some(Range::Full) => V4L2_QUANTIZATION_FULL_RANGE,
+            Some(Range::Limited) => V4L2_QUANTIZATION_LIM_RANGE,
+            None => V4L2_QUANTIZATION_DEFAULT,
+        },
     }
 }
 
@@ -298,5 +356,64 @@ mod tests {
         assert_eq!(info.transfer, None);
         assert_eq!(info.matrix, None);
         assert_eq!(info.range, None);
+    }
+
+    /// The inverse map round-trips through the forward one for every
+    /// four-tuple both sides can name: what the sink writes at `S_FMT` is
+    /// what a StreamLib camera would read back as the same `ColorInfo`.
+    #[test]
+    fn color_info_to_v4l2_round_trips_through_the_forward_map() {
+        let cases = [
+            ColorInfo {
+                primaries: Some(Primaries::Bt709),
+                transfer: Some(Transfer::Srgb),
+                matrix: Some(Matrix::Smpte170m),
+                range: Some(Range::Limited),
+            },
+            ColorInfo {
+                primaries: Some(Primaries::Bt709),
+                transfer: Some(Transfer::Bt709),
+                matrix: Some(Matrix::Bt709),
+                range: Some(Range::Limited),
+            },
+            ColorInfo {
+                primaries: Some(Primaries::Smpte170m),
+                transfer: Some(Transfer::Bt709),
+                matrix: Some(Matrix::Smpte170m),
+                range: Some(Range::Full),
+            },
+            ColorInfo {
+                primaries: Some(Primaries::Bt2020),
+                transfer: Some(Transfer::Smpte2084),
+                matrix: Some(Matrix::Bt2020Ncl),
+                range: Some(Range::Limited),
+            },
+        ];
+        for info in cases {
+            let fields = color_info_to_v4l2_color(&info);
+            let back = v4l2_color_to_color_info(
+                fields.colorspace,
+                fields.xfer_func,
+                fields.ycbcr_enc,
+                fields.quantization,
+            );
+            assert_eq!(back, info, "round trip through {fields:?}");
+        }
+    }
+
+    /// An all-absent `ColorInfo` writes every field as `*_DEFAULT`, so a
+    /// reader derives the axes from the colorspace the module reports.
+    #[test]
+    fn an_unknown_color_info_writes_v4l2_defaults_on_every_axis() {
+        let fields = color_info_to_v4l2_color(&ColorInfo::default());
+        assert_eq!(
+            fields,
+            V4l2PixFormatColorFields {
+                colorspace: V4L2_COLORSPACE_DEFAULT,
+                xfer_func: V4L2_XFER_FUNC_DEFAULT,
+                ycbcr_enc: V4L2_YCBCR_ENC_DEFAULT,
+                quantization: V4L2_QUANTIZATION_DEFAULT,
+            }
+        );
     }
 }

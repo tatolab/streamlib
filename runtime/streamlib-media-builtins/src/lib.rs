@@ -58,6 +58,8 @@ pub mod test_pattern_source;
 #[cfg(target_os = "linux")]
 pub mod v4l2_color;
 pub mod video_frame;
+#[cfg(target_os = "linux")]
+pub mod virtual_camera_sink;
 #[cfg(test)]
 mod worker_thread_test_support;
 
@@ -98,6 +100,8 @@ pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};
 pub use video_frame::VideoFrame;
+#[cfg(target_os = "linux")]
+pub use virtual_camera_sink::{VirtualCameraDoor, VirtualCameraSink, VirtualCameraSinkConfig};
 
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
@@ -115,6 +119,8 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();
+    #[cfg(target_os = "linux")]
+    PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
     #[cfg(target_os = "linux")]
