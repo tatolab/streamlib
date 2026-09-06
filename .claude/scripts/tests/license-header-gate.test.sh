@@ -4,9 +4,11 @@
 # The gate holds BUSL over every first-party source file while leaving a
 # vendored tree's own licence headers alone, and those two pull against each
 # other. The exemption is the side that fails silently: an over-wide pathspec
-# stops covering first-party code and nothing goes red. So every exempt path
-# here is paired with the sibling paths a typo would reach — one segment away,
-# one suffix away, and one character away with no separator at all.
+# stops covering first-party code and nothing goes red. So every exempt path is
+# paired with at least one sibling a typo would reach: a directory one segment
+# out, a name one suffix longer, or that same name with one more character and
+# no separator at all. The four cases below the vulkanalia block cover the four
+# exempt dirs between them.
 #
 # No toolchain, no network: bash + git. Each case is a throwaway repo, because
 # the gate discovers files with `git ls-files` and would otherwise read the
@@ -122,6 +124,16 @@ expect_fail_naming "the copyright line without the SPDX line fails" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
+printf '// Copyright (c) 2024 Someone Else\n// SPDX-License-Identifier: BUSL-1.1\n' | plant runtime/streamlib-engine/src/lib.rs
+expect_fail_naming "the SPDX line without the copyright line fails" Rust \
+  "runtime/streamlib-engine/src/lib.rs"
+
+new_repo
+printf '// Copyright (c) 2025 Jonathan Fontanez, All Rights Reserved\n// SPDX-License-Identifier: BUSL-1.1\n' | plant runtime/streamlib-engine/src/lib.rs
+expect_fail_naming "a header line with trailing text fails — both lines match whole" Rust \
+  "runtime/streamlib-engine/src/lib.rs"
+
+new_repo
 { printf '#!/usr/bin/env python3\n'; busl_python; } | plant tools/thing.py
 expect_pass "a shebang moves the Python header to lines 2-3"
 
@@ -135,6 +147,16 @@ new_repo
 apache_rust | plant vendor/tatolab-vulkanalia-extras/src/lib.rs
 expect_fail_naming "a vulkanalia sibling the exclusions do not name still fails" Rust \
   "vendor/tatolab-vulkanalia-extras/src/lib.rs"
+
+new_repo
+apache_rust | plant vendor/tatolab-vulkanalia-sys-extras/src/lib.rs
+expect_fail_naming "a sibling of the -sys tree still fails" Rust \
+  "vendor/tatolab-vulkanalia-sys-extras/src/lib.rs"
+
+new_repo
+apache_rust | plant vendor/tatolab-vulkanalia-vmax/src/lib.rs
+expect_fail_naming "a sibling of the -vma tree, no separator, still fails" Rust \
+  "vendor/tatolab-vulkanalia-vmax/src/lib.rs"
 
 new_repo
 cloudflare_rust | plant packages/streamlib-moq/vendor/moq-transport/src/lib.rs
