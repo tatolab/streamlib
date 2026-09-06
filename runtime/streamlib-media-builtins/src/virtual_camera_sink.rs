@@ -173,7 +173,10 @@ impl V4l2LoopbackConfig {
 
 /// Linux `_IOC(dir, type, nr, size)`.
 const fn linux_ioc(direction: c_ulong, io_type: u8, number: u8, size: usize) -> c_ulong {
-    (direction << 30) | ((size as c_ulong) << 16) | ((io_type as c_ulong) << 8) | (number as c_ulong)
+    (direction << 30)
+        | ((size as c_ulong) << 16)
+        | ((io_type as c_ulong) << 8)
+        | (number as c_ulong)
 }
 const IOC_WRITE: c_ulong = 1;
 const IOC_READ: c_ulong = 2;
@@ -342,7 +345,11 @@ pub(crate) enum DoorDecision {
 }
 
 /// The refusal text for a loopback door with no permission behind it.
-fn no_permission_refusal(camera_name: &str, access: ControlNodeAccess, door: VirtualCameraDoor) -> String {
+fn no_permission_refusal(
+    camera_name: &str,
+    access: ControlNodeAccess,
+    door: VirtualCameraDoor,
+) -> String {
     let mut message = format!(
         "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": no permission to create a \
          v4l2loopback camera: {V4L2LOOPBACK_CONTROL_NODE_PATH} is {}. Run \
@@ -387,9 +394,10 @@ pub(crate) fn find_device_carrying_label(
     node: &dyn LoopbackControlNode,
     label: &str,
 ) -> Option<u32> {
-    node.candidate_device_numbers()
-        .into_iter()
-        .find(|&number| node.query_device(number).is_some_and(|c| c.label() == label))
+    node.candidate_device_numbers().into_iter().find(|&number| {
+        node.query_device(number)
+            .is_some_and(|c| c.label() == label)
+    })
 }
 
 /// FNV-1a over the bytes, so the id is the same on every run and every
@@ -571,8 +579,11 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
             .processor_display_name()
             .or_else(|| ctx.processor_id())
             .unwrap_or_else(|| VIRTUAL_CAMERA_SINK_PROCESSOR_NAME.to_string());
-        self.camera_name =
-            camera_name_for(self.config.name.as_deref(), &app_directory, &processor_display_name);
+        self.camera_name = camera_name_for(
+            self.config.name.as_deref(),
+            &app_directory,
+            &processor_display_name,
+        );
         self.dropped_frame_report = Some(CumulativeCountReportThreshold::reporting_every(
             DROPPED_FRAME_REPORT_STEP,
         ));
@@ -657,7 +668,10 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
         Ok(())
     }
 
-    fn process(&mut self, _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>) -> Result<()> {
+    fn process(
+        &mut self,
+        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
         if !self.inputs.has_data("video") {
             return Ok(());
         }
@@ -806,7 +820,10 @@ impl VirtualCameraSink::Processor {
                 height = frame.height,
                 "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: first frame presented"
             );
-        } else if self.frames_written.is_multiple_of(WRITTEN_FRAME_LOG_INTERVAL) {
+        } else if self
+            .frames_written
+            .is_multiple_of(WRITTEN_FRAME_LOG_INTERVAL)
+        {
             tracing::info!(
                 camera = %self.camera_name,
                 frames_written = self.frames_written,
@@ -828,7 +845,8 @@ fn negotiate_output_format_and_start_streaming(
     camera_name: &str,
 ) -> Result<StreamingOutputFormat> {
     let yuyv = u32::from_le_bytes(*b"YUYV");
-    let color_fields = color_info_to_v4l2_color(frame.color_info.as_ref().unwrap_or(&ColorInfo::default()));
+    let color_fields =
+        color_info_to_v4l2_color(frame.color_info.as_ref().unwrap_or(&ColorInfo::default()));
 
     let mut format: v4l::v4l_sys::v4l2_format = unsafe { std::mem::zeroed() };
     format.type_ = OUTPUT_BUFFER_TYPE;
@@ -842,7 +860,11 @@ fn negotiate_output_format_and_start_streaming(
     format.fmt.pix.xfer_func = color_fields.xfer_func;
     format.fmt.pix.__bindgen_anon_1.ycbcr_enc = color_fields.ycbcr_enc;
     format.fmt.pix.quantization = color_fields.quantization;
-    device.ioctl(v4l::v4l2::vidioc::VIDIOC_S_FMT as c_ulong, &mut format, "S_FMT")?;
+    device.ioctl(
+        v4l::v4l2::vidioc::VIDIOC_S_FMT as c_ulong,
+        &mut format,
+        "S_FMT",
+    )?;
     let (bytesperline, sizeimage, set_pixelformat) = unsafe {
         (
             format.fmt.pix.bytesperline,
@@ -863,7 +885,11 @@ fn negotiate_output_format_and_start_streaming(
         parm.type_ = OUTPUT_BUFFER_TYPE;
         parm.parm.output.timeperframe.numerator = 1;
         parm.parm.output.timeperframe.denominator = fps;
-        if let Err(e) = device.ioctl(v4l::v4l2::vidioc::VIDIOC_S_PARM as c_ulong, &mut parm, "S_PARM") {
+        if let Err(e) = device.ioctl(
+            v4l::v4l2::vidioc::VIDIOC_S_PARM as c_ulong,
+            &mut parm,
+            "S_PARM",
+        ) {
             tracing::debug!(camera = camera_name, error = %e, "S_PARM declined; readers keep the device's interval");
         }
     }
@@ -872,7 +898,11 @@ fn negotiate_output_format_and_start_streaming(
     request.count = LOOPBACK_DEVICE_BUFFER_COUNT;
     request.type_ = OUTPUT_BUFFER_TYPE;
     request.memory = v4l::memory::Memory::Mmap as u32;
-    device.ioctl(v4l::v4l2::vidioc::VIDIOC_REQBUFS as c_ulong, &mut request, "REQBUFS")?;
+    device.ioctl(
+        v4l::v4l2::vidioc::VIDIOC_REQBUFS as c_ulong,
+        &mut request,
+        "REQBUFS",
+    )?;
     if request.count == 0 {
         return Err(Error::Runtime(format!(
             "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": the device granted no output buffers"
@@ -885,7 +915,11 @@ fn negotiate_output_format_and_start_streaming(
         description.type_ = OUTPUT_BUFFER_TYPE;
         description.memory = v4l::memory::Memory::Mmap as u32;
         description.index = index;
-        device.ioctl(v4l::v4l2::vidioc::VIDIOC_QUERYBUF as c_ulong, &mut description, "QUERYBUF")?;
+        device.ioctl(
+            v4l::v4l2::vidioc::VIDIOC_QUERYBUF as c_ulong,
+            &mut description,
+            "QUERYBUF",
+        )?;
         let mapping_len = description.length as usize;
         let offset = unsafe { description.m.offset } as libc::off_t;
         let mapping_ptr = unsafe {
@@ -925,7 +959,11 @@ fn negotiate_output_format_and_start_streaming(
     }
 
     let mut buffer_type = OUTPUT_BUFFER_TYPE;
-    device.ioctl(v4l::v4l2::vidioc::VIDIOC_STREAMON as c_ulong, &mut buffer_type, "STREAMON")?;
+    device.ioctl(
+        v4l::v4l2::vidioc::VIDIOC_STREAMON as c_ulong,
+        &mut buffer_type,
+        "STREAMON",
+    )?;
 
     tracing::info!(
         camera = camera_name,
@@ -953,13 +991,21 @@ fn stop_streaming_and_release_buffers(
     streaming: &mut StreamingOutputFormat,
 ) -> Result<()> {
     let mut buffer_type = OUTPUT_BUFFER_TYPE;
-    let stream_off = device.ioctl(v4l::v4l2::vidioc::VIDIOC_STREAMOFF as c_ulong, &mut buffer_type, "STREAMOFF");
+    let stream_off = device.ioctl(
+        v4l::v4l2::vidioc::VIDIOC_STREAMOFF as c_ulong,
+        &mut buffer_type,
+        "STREAMOFF",
+    );
     streaming.buffers.clear();
     let mut request: v4l::v4l_sys::v4l2_requestbuffers = unsafe { std::mem::zeroed() };
     request.count = 0;
     request.type_ = OUTPUT_BUFFER_TYPE;
     request.memory = v4l::memory::Memory::Mmap as u32;
-    let release = device.ioctl(v4l::v4l2::vidioc::VIDIOC_REQBUFS as c_ulong, &mut request, "REQBUFS(0)");
+    let release = device.ioctl(
+        v4l::v4l2::vidioc::VIDIOC_REQBUFS as c_ulong,
+        &mut request,
+        "REQBUFS(0)",
+    );
     stream_off.and(release)
 }
 
@@ -1016,10 +1062,18 @@ fn write_frame_into_buffer(
     )?;
     let color_info = frame.color_info.as_ref().or(streaming.color_info.as_ref());
     let resolved_color = resolve_color_defaults(
-        color_info.and_then(|c| c.primaries.as_ref()).map(Primaries::engine_id),
-        color_info.and_then(|c| c.transfer.as_ref()).map(Transfer::engine_id),
-        color_info.and_then(|c| c.matrix.as_ref()).map(Matrix::engine_id),
-        color_info.and_then(|c| c.range.as_ref()).map(Range::engine_id),
+        color_info
+            .and_then(|c| c.primaries.as_ref())
+            .map(Primaries::engine_id),
+        color_info
+            .and_then(|c| c.transfer.as_ref())
+            .map(Transfer::engine_id),
+        color_info
+            .and_then(|c| c.matrix.as_ref())
+            .map(Matrix::engine_id),
+        color_info
+            .and_then(|c| c.range.as_ref())
+            .map(Range::engine_id),
         ColorSpaceKind::Yuv,
     );
     let buffer = &streaming.buffers[buffer_index];
@@ -1083,8 +1137,13 @@ fn queue_buffer(
     description.field = V4L2_FIELD_NONE;
     description.bytesused = streaming.sizeimage;
     description.timestamp.tv_sec = timestamp_ns.div_euclid(1_000_000_000) as libc::time_t;
-    description.timestamp.tv_usec = (timestamp_ns.rem_euclid(1_000_000_000) / 1_000) as libc::suseconds_t;
-    device.ioctl(v4l::v4l2::vidioc::VIDIOC_QBUF as c_ulong, &mut description, "QBUF")?;
+    description.timestamp.tv_usec =
+        (timestamp_ns.rem_euclid(1_000_000_000) / 1_000) as libc::suseconds_t;
+    device.ioctl(
+        v4l::v4l2::vidioc::VIDIOC_QBUF as c_ulong,
+        &mut description,
+        "QBUF",
+    )?;
     buffer.queued = true;
     Ok(())
 }
@@ -1148,11 +1207,22 @@ mod tests {
         let app = Path::new("/home/someone/apps/desk");
         let first = camera_name_for(None, app, "VirtualCameraSink");
         let second = camera_name_for(None, app, "VirtualCameraSink 2");
-        let other_app = camera_name_for(None, Path::new("/home/someone/apps/lab"), "VirtualCameraSink");
+        let other_app = camera_name_for(
+            None,
+            Path::new("/home/someone/apps/lab"),
+            "VirtualCameraSink",
+        );
 
         assert!(first.starts_with("StreamLib Camera "), "{first}");
-        assert_eq!(first.len(), "StreamLib Camera ".len() + 4, "four characters of id");
-        assert_ne!(first, second, "two instances in one app never share a label");
+        assert_eq!(
+            first.len(),
+            "StreamLib Camera ".len() + 4,
+            "four characters of id"
+        );
+        assert_ne!(
+            first, second,
+            "two instances in one app never share a label"
+        );
         assert_ne!(first, other_app, "two apps never share a label");
         assert_eq!(
             first,
@@ -1165,13 +1235,21 @@ mod tests {
             first,
             "a blank name is no name"
         );
-        assert!(first.len() < 32, "the label fits the module's 32-byte field");
+        assert!(
+            first.len() < 32,
+            "the label fits the module's 32-byte field"
+        );
     }
 
     #[test]
-    fn auto_takes_the_loopback_door_when_the_control_node_opens_and_refuses_naming_the_verb_otherwise() {
+    fn auto_takes_the_loopback_door_when_the_control_node_opens_and_refuses_naming_the_verb_otherwise()
+     {
         assert_eq!(
-            decide_door(VirtualCameraDoor::Auto, "Desk cam", ControlNodeAccess::Writable),
+            decide_door(
+                VirtualCameraDoor::Auto,
+                "Desk cam",
+                ControlNodeAccess::Writable
+            ),
             DoorDecision::Loopback
         );
         for access in [ControlNodeAccess::Absent, ControlNodeAccess::NotWritable] {
@@ -1181,15 +1259,20 @@ mod tests {
                 panic!("auto without permission refuses until the PipeWire door lands");
             };
             assert!(message.contains(ENABLE_VIRTUAL_CAMERA_VERB), "{message}");
-            assert!(message.contains("PipeWire"), "auto says why it refuses today: {message}");
+            assert!(
+                message.contains("PipeWire"),
+                "auto says why it refuses today: {message}"
+            );
         }
     }
 
     #[test]
     fn a_forced_loopback_door_without_permission_refuses_naming_the_verb() {
-        let DoorDecision::Refused(absent) =
-            decide_door(VirtualCameraDoor::V4l2Loopback, "Desk cam", ControlNodeAccess::Absent)
-        else {
+        let DoorDecision::Refused(absent) = decide_door(
+            VirtualCameraDoor::V4l2Loopback,
+            "Desk cam",
+            ControlNodeAccess::Absent,
+        ) else {
             panic!("refused");
         };
         assert_eq!(
@@ -1207,7 +1290,11 @@ mod tests {
         };
         assert!(locked.contains("is not writable by this user."), "{locked}");
         assert_eq!(
-            decide_door(VirtualCameraDoor::V4l2Loopback, "Desk cam", ControlNodeAccess::Writable),
+            decide_door(
+                VirtualCameraDoor::V4l2Loopback,
+                "Desk cam",
+                ControlNodeAccess::Writable
+            ),
             DoorDecision::Loopback
         );
     }

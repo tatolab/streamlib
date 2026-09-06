@@ -217,7 +217,9 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     assert len(first) == 1 and len(second) == 1, "two sinks are exactly two cameras"
     assert first != second
 
-    driver, card, capabilities = query_capability(first[0])
+    answer = query_capability(first[0])
+    assert answer is not None, "the camera node answers QUERYCAP"
+    driver, card, capabilities = answer
     assert driver == "v4l2 loopback"
     assert card == camera_name
     assert capabilities & V4L2_CAP_VIDEO_CAPTURE, "readers see a capture device"

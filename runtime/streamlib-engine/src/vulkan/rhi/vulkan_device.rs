@@ -1118,13 +1118,15 @@ impl HostVulkanDevice {
         // well-defined to chain once the extension is advertised.
         #[cfg(target_os = "linux")]
         let min_imported_host_pointer_alignment: u64 = if has_external_memory_host {
-            let mut host_props = vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::builder().build();
+            let mut host_props =
+                vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::builder().build();
             let mut props2 = vk::PhysicalDeviceProperties2::builder()
                 .push_next(&mut host_props)
                 .build();
             unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
             tracing::info!(
-                min_imported_host_pointer_alignment = host_props.min_imported_host_pointer_alignment,
+                min_imported_host_pointer_alignment =
+                    host_props.min_imported_host_pointer_alignment,
                 "VK_EXT_external_memory_host: host-pointer import alignment"
             );
             host_props.min_imported_host_pointer_alignment
@@ -3714,7 +3716,8 @@ impl HostVulkanDevice {
         tracing::debug!(
             byte_len,
             memory_type_index,
-            host_cached = memory_type_index_is_host_cached(&self.memory_properties, memory_type_index),
+            host_cached =
+                memory_type_index_is_host_cached(&self.memory_properties, memory_type_index),
             live = count,
             "HostVulkanDevice: host pointer imported as device memory"
         );

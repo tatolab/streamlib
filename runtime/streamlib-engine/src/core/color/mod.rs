@@ -16,7 +16,9 @@ mod resolved;
 mod tone;
 mod transfer;
 
-pub use matrix::{RgbToYuvDecomposition, YuvToRgbDecomposition, rgb_to_yuv_matrix, yuv_to_rgb_matrix};
+pub use matrix::{
+    RgbToYuvDecomposition, YuvToRgbDecomposition, rgb_to_yuv_matrix, yuv_to_rgb_matrix,
+};
 pub use resolve::resolve_color_defaults;
 pub use resolved::{
     ColorSpaceKind, ColorTraits, HdrStaticMetadata, MatrixId, PrimariesId, RangeId,

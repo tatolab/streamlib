@@ -103,8 +103,10 @@ impl HostMappingWrittenByGpu {
             "VK_EXT_external_memory_host is not enabled on this device".to_string()
         };
 
-        let staging =
-            HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads(vulkan_device, byte_len)?;
+        let staging = HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads(
+            vulkan_device,
+            byte_len,
+        )?;
         let staging_is_host_cached = staging.vma_allocation_is_host_cached().unwrap_or(false);
         Ok(Self {
             storage_buffer: StorageBuffer::from_host_vulkan_buffer(Arc::new(staging)),
@@ -273,8 +275,9 @@ mod tests {
             return;
         }
         let range = PageAlignedHostRange::new(4096 * 4);
-        let mapping = HostMappingWrittenByGpu::import_for_gpu_writes(&device, range.ptr, range.byte_len)
-            .expect("import");
+        let mapping =
+            HostMappingWrittenByGpu::import_for_gpu_writes(&device, range.ptr, range.byte_len)
+                .expect("import");
         assert_eq!(mapping.tier(), HostMappingTier::ImportedHostPointer);
         assert!(mapping.fallback_reason().is_none());
 
@@ -308,7 +311,9 @@ mod tests {
             HostMappingWrittenByGpu::import_for_gpu_writes(&device, misaligned_ptr, misaligned_len)
                 .expect("the staged tier never refuses");
         assert_eq!(mapping.tier(), HostMappingTier::HostCachedStagingCopy);
-        let reason = mapping.fallback_reason().expect("a fallback carries its reason");
+        let reason = mapping
+            .fallback_reason()
+            .expect("a fallback carries its reason");
         assert!(
             reason.contains("align") || reason.contains("not enabled"),
             "reason names the refusal: {reason}"
@@ -320,6 +325,10 @@ mod tests {
             written.iter().all(|&b| b == 0xA5),
             "publish_to_host lands the staging copy in the range"
         );
-        assert_eq!(range.as_slice()[0], 0, "bytes before the range are untouched");
+        assert_eq!(
+            range.as_slice()[0],
+            0,
+            "bytes before the range are untouched"
+        );
     }
 }

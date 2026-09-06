@@ -1039,10 +1039,7 @@ impl HostVulkanBuffer {
             )));
         }
         let alignment = vulkan_device.min_imported_host_pointer_alignment();
-        if alignment == 0
-            || (host_ptr as u64) % alignment != 0
-            || byte_len % alignment != 0
-        {
+        if alignment == 0 || (host_ptr as u64) % alignment != 0 || byte_len % alignment != 0 {
             return Err(Error::Configuration(format!(
                 "{CONSTRUCTOR}: host range {host_ptr:p}+{byte_len} is not aligned to the \
                  driver's {alignment}-byte import alignment"
@@ -1090,7 +1087,8 @@ impl HostVulkanBuffer {
                 requirements.size
             )));
         }
-        let memory_type_bits = requirements.memory_type_bits & host_pointer_properties.memory_type_bits;
+        let memory_type_bits =
+            requirements.memory_type_bits & host_pointer_properties.memory_type_bits;
         let memory = vulkan_device
             .import_host_pointer_memory(host_ptr, byte_len, memory_type_bits)
             .map_err(|e| {
