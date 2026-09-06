@@ -211,18 +211,8 @@ impl RuntimeContext {
     /// disambiguated display name.
     pub fn with_processor_display_name(&self, processor_display_name: String) -> Self {
         Self {
-            gpu: self.gpu.clone(),
-            time: Arc::clone(&self.time),
-            runtime_id: Arc::clone(&self.runtime_id),
-            processor_id: self.processor_id.clone(),
             processor_display_name: Some(processor_display_name),
-            pause_gate: self.pause_gate.clone(),
-            runtime_ops: Arc::clone(&self.runtime_ops),
-            tokio_handle: self.tokio_handle.clone(),
-            iceoryx2_node: self.iceoryx2_node.clone(),
-            audio_clock: Arc::clone(&self.audio_clock),
-            #[cfg(target_os = "linux")]
-            surface_socket_path: self.surface_socket_path.clone(),
+            ..self.clone()
         }
     }
 

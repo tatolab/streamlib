@@ -554,7 +554,12 @@ struct GpuSide {
 /// Why the sink is dropping every frame it is handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LatchedRefusal {
-    OddWidth { width: u32 },
+    /// YUYV packs two pixels a macropixel, so the width must be even and the
+    /// picture must have an extent the device can size.
+    UnusableExtent {
+        width: u32,
+        height: u32,
+    },
     DeviceConfiguration(String),
 }
 
@@ -756,15 +761,18 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
 
 impl VirtualCameraSink::Processor {
     fn present_one_frame(&mut self, frame: &VideoFrame) -> std::result::Result<(), LatchedRefusal> {
-        if frame.width % 2 != 0 || frame.width == 0 || frame.height == 0 {
-            return Err(LatchedRefusal::OddWidth { width: frame.width });
+        let yuyv_bytes = u64::from(frame.width) * 2 * u64::from(frame.height);
+        if frame.width % 2 != 0 || yuyv_bytes == 0 || yuyv_bytes > u64::from(u32::MAX) {
+            return Err(LatchedRefusal::UnusableExtent {
+                width: frame.width,
+                height: frame.height,
+            });
         }
         let (Some(device), Some(gpu_side)) = (self.device.as_ref(), self.gpu_side.as_mut()) else {
             return Ok(());
         };
 
-        if self.streaming.as_ref().is_some_and(|s| !s.matches(frame)) {
-            let mut stale = self.streaming.take().expect("checked");
+        if let Some(mut stale) = self.streaming.take_if(|s| !s.matches(frame)) {
             tracing::info!(
                 camera = %self.camera_name,
                 from = format!("{}x{}", stale.width, stale.height),
@@ -798,18 +806,16 @@ impl VirtualCameraSink::Processor {
             }
             self.streaming = Some(streaming);
         }
-        let streaming = self.streaming.as_mut().expect("just negotiated");
+        let Some(streaming) = self.streaming.as_mut() else {
+            return Ok(());
+        };
 
         reclaim_dequeued_buffers(device, streaming);
         let Some(buffer_index) = next_free_buffer(streaming) else {
             self.frames_dropped_every_buffer_queued += 1;
-            if self
-                .dropped_frame_report
-                .get_or_insert_with(|| {
-                    CumulativeCountReportThreshold::reporting_every(DROPPED_FRAME_REPORT_STEP)
-                })
-                .count_is_worth_reporting(self.frames_dropped_every_buffer_queued)
-            {
+            if self.dropped_frame_report.as_mut().is_some_and(|report| {
+                report.count_is_worth_reporting(self.frames_dropped_every_buffer_queued)
+            }) {
                 tracing::warn!(
                     camera = %self.camera_name,
                     frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
@@ -877,6 +883,26 @@ fn open_device_awaiting_udev_grant(device_number: u32) -> std::io::Result<Opened
     }
 }
 
+/// A zeroed `v4l2_buffer` naming one of the device's memory-mapped output
+/// buffers.
+fn output_mmap_buffer_description(index: u32) -> v4l::v4l_sys::v4l2_buffer {
+    let mut description: v4l::v4l_sys::v4l2_buffer = unsafe { std::mem::zeroed() };
+    description.type_ = OUTPUT_BUFFER_TYPE;
+    description.memory = v4l::memory::Memory::Mmap as u32;
+    description.index = index;
+    description
+}
+
+/// A `v4l2_requestbuffers` asking the device for `count` memory-mapped
+/// output buffers; zero releases them.
+fn output_mmap_buffer_request(count: u32) -> v4l::v4l_sys::v4l2_requestbuffers {
+    let mut request: v4l::v4l_sys::v4l2_requestbuffers = unsafe { std::mem::zeroed() };
+    request.count = count;
+    request.type_ = OUTPUT_BUFFER_TYPE;
+    request.memory = v4l::memory::Memory::Mmap as u32;
+    request
+}
+
 /// `S_FMT`, `S_PARM`, `REQBUFS`, `QUERYBUF` + `mmap` + import, `STREAMON` —
 /// in that order and no other: the loopback's poll returns nothing between
 /// `REQBUFS` and `STREAMON`, so a queue before start would hang forever.
@@ -936,10 +962,7 @@ fn negotiate_output_format_and_start_streaming(
         }
     }
 
-    let mut request: v4l::v4l_sys::v4l2_requestbuffers = unsafe { std::mem::zeroed() };
-    request.count = LOOPBACK_DEVICE_BUFFER_COUNT;
-    request.type_ = OUTPUT_BUFFER_TYPE;
-    request.memory = v4l::memory::Memory::Mmap as u32;
+    let mut request = output_mmap_buffer_request(LOOPBACK_DEVICE_BUFFER_COUNT);
     device.ioctl(
         v4l::v4l2::vidioc::VIDIOC_REQBUFS as c_ulong,
         &mut request,
@@ -953,10 +976,7 @@ fn negotiate_output_format_and_start_streaming(
 
     let mut buffers = Vec::with_capacity(request.count as usize);
     for index in 0..request.count {
-        let mut description: v4l::v4l_sys::v4l2_buffer = unsafe { std::mem::zeroed() };
-        description.type_ = OUTPUT_BUFFER_TYPE;
-        description.memory = v4l::memory::Memory::Mmap as u32;
-        description.index = index;
+        let mut description = output_mmap_buffer_description(index);
         device.ioctl(
             v4l::v4l2::vidioc::VIDIOC_QUERYBUF as c_ulong,
             &mut description,
@@ -1039,10 +1059,7 @@ fn stop_streaming_and_release_buffers(
         "STREAMOFF",
     );
     streaming.buffers.clear();
-    let mut request: v4l::v4l_sys::v4l2_requestbuffers = unsafe { std::mem::zeroed() };
-    request.count = 0;
-    request.type_ = OUTPUT_BUFFER_TYPE;
-    request.memory = v4l::memory::Memory::Mmap as u32;
+    let mut request = output_mmap_buffer_request(0);
     let release = device.ioctl(
         v4l::v4l2::vidioc::VIDIOC_REQBUFS as c_ulong,
         &mut request,
@@ -1055,9 +1072,7 @@ fn stop_streaming_and_release_buffers(
 /// buffer is free again.
 fn reclaim_dequeued_buffers(device: &OpenedLoopbackDevice, streaming: &mut StreamingOutputFormat) {
     loop {
-        let mut description: v4l::v4l_sys::v4l2_buffer = unsafe { std::mem::zeroed() };
-        description.type_ = OUTPUT_BUFFER_TYPE;
-        description.memory = v4l::memory::Memory::Mmap as u32;
+        let mut description = output_mmap_buffer_description(0);
         let result = unsafe {
             libc::ioctl(
                 device.fd,
@@ -1118,11 +1133,12 @@ fn write_frame_into_buffer(
             .map(Range::engine_id),
         ColorSpaceKind::Yuv,
     );
-    let buffer = &streaming.buffers[buffer_index];
+    let bytesperline = streaming.bytesperline;
+    let buffer = &mut streaming.buffers[buffer_index];
     let kernel = gpu_side.converter.prepare_image_to_yuyv_buffer(
         registration.texture(),
         buffer.written_by_gpu.storage_buffer(),
-        streaming.bytesperline,
+        bytesperline,
         &resolved_color,
     )?;
 
@@ -1172,10 +1188,7 @@ fn queue_buffer(
     timestamp_ns: i64,
 ) -> Result<()> {
     let buffer = &mut streaming.buffers[buffer_index];
-    let mut description: v4l::v4l_sys::v4l2_buffer = unsafe { std::mem::zeroed() };
-    description.type_ = OUTPUT_BUFFER_TYPE;
-    description.memory = v4l::memory::Memory::Mmap as u32;
-    description.index = buffer.index;
+    let mut description = output_mmap_buffer_description(buffer.index);
     description.field = V4L2_FIELD_NONE;
     description.bytesused = streaming.sizeimage;
     description.timestamp.tv_sec = timestamp_ns.div_euclid(1_000_000_000) as libc::time_t;

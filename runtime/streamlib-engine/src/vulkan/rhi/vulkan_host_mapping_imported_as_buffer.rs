@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 //! A caller-owned host range the GPU writes — one primitive, two tiers.
 //!
 //! The imported tier binds the range itself as a `VkBuffer` through
@@ -50,14 +52,14 @@ pub struct HostMappingWrittenByGpu {
     host_range_byte_len: usize,
     tier: HostMappingTier,
     fallback_reason: Option<String>,
-    staging_is_host_cached: bool,
+    gpu_written_memory_is_host_cached: bool,
 }
 
 // SAFETY: the raw pointer is a caller-owned mapping the caller keeps alive
-// for this value's lifetime; nothing here aliases it across threads beyond
-// the one `memcpy` in `publish_to_host`, which the caller serialises.
+// for this value's lifetime, written only through `publish_to_host(&mut
+// self)` — exclusive by signature, so moving the value to another thread
+// moves the only writer with it.
 unsafe impl Send for HostMappingWrittenByGpu {}
-unsafe impl Sync for HostMappingWrittenByGpu {}
 
 impl HostMappingWrittenByGpu {
     /// Import `host_range_ptr..+host_range_byte_len` for GPU writes, taking
@@ -94,7 +96,7 @@ impl HostMappingWrittenByGpu {
                         host_range_byte_len,
                         tier: HostMappingTier::ImportedHostPointer,
                         fallback_reason: None,
-                        staging_is_host_cached: true,
+                        gpu_written_memory_is_host_cached: true,
                     });
                 }
                 Err(refusal) => refusal.to_string(),
@@ -107,14 +109,15 @@ impl HostMappingWrittenByGpu {
             vulkan_device,
             byte_len,
         )?;
-        let staging_is_host_cached = staging.vma_allocation_is_host_cached().unwrap_or(false);
+        let gpu_written_memory_is_host_cached =
+            staging.vma_allocation_is_host_cached().unwrap_or(false);
         Ok(Self {
             storage_buffer: StorageBuffer::from_host_vulkan_buffer(Arc::new(staging)),
             host_range_ptr,
             host_range_byte_len,
             tier: HostMappingTier::HostCachedStagingCopy,
             fallback_reason: Some(import_refusal),
-            staging_is_host_cached,
+            gpu_written_memory_is_host_cached,
         })
     }
 
@@ -138,7 +141,7 @@ impl HostMappingWrittenByGpu {
     /// staged tier wherever the device offered one. False means the one
     /// copy reads write-combined memory, the slow path.
     pub fn gpu_written_memory_is_host_cached(&self) -> bool {
-        self.staging_is_host_cached
+        self.gpu_written_memory_is_host_cached
     }
 
     /// Length of the host range in bytes.
@@ -162,7 +165,7 @@ impl HostMappingWrittenByGpu {
     /// submission that wrote the buffer has been waited for. On the
     /// imported tier the writes are already there; on the staged tier this
     /// is the one copy.
-    pub fn publish_to_host(&self) {
+    pub fn publish_to_host(&mut self) {
         if self.tier == HostMappingTier::ImportedHostPointer {
             return;
         }
@@ -192,45 +195,49 @@ impl std::fmt::Debug for HostMappingWrittenByGpu {
     }
 }
 
+/// A page-aligned anonymous mapping of `byte_len` bytes, released on drop —
+/// the stand-in for a V4L2 buffer mapping in this crate's device tests.
+#[cfg(test)]
+pub(crate) struct PageAlignedHostRange {
+    pub(crate) ptr: *mut u8,
+    pub(crate) byte_len: usize,
+}
+
+#[cfg(test)]
+impl PageAlignedHostRange {
+    pub(crate) fn new(byte_len: usize) -> Self {
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                byte_len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
+        Self {
+            ptr: ptr.cast(),
+            byte_len,
+        }
+    }
+
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.byte_len) }
+    }
+}
+
+#[cfg(test)]
+impl Drop for PageAlignedHostRange {
+    fn drop(&mut self) {
+        unsafe { libc::munmap(self.ptr.cast(), self.byte_len) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A page-aligned anonymous mapping of `byte_len` bytes, released on drop.
-    struct PageAlignedHostRange {
-        ptr: *mut u8,
-        byte_len: usize,
-    }
-
-    impl PageAlignedHostRange {
-        fn new(byte_len: usize) -> Self {
-            let ptr = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    byte_len,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            };
-            assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
-            Self {
-                ptr: ptr.cast(),
-                byte_len,
-            }
-        }
-
-        fn as_slice(&self) -> &[u8] {
-            unsafe { std::slice::from_raw_parts(self.ptr, self.byte_len) }
-        }
-    }
-
-    impl Drop for PageAlignedHostRange {
-        fn drop(&mut self) {
-            unsafe { libc::munmap(self.ptr.cast(), self.byte_len) };
-        }
-    }
 
     fn device_or_skip() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
@@ -244,7 +251,11 @@ mod tests {
 
     /// Write the first and last byte of every page of `mapping`'s buffer to
     /// `value` on the GPU, release to host, and wait.
-    fn fill_on_gpu(device: &Arc<HostVulkanDevice>, mapping: &HostMappingWrittenByGpu, value: u8) {
+    fn fill_on_gpu(
+        device: &Arc<HostVulkanDevice>,
+        mapping: &mut HostMappingWrittenByGpu,
+        value: u8,
+    ) {
         let word = u32::from_le_bytes([value; 4]);
         let mut recorder = RhiCommandRecorder::new(device, "host_mapping_fill").expect("recorder");
         recorder.begin().expect("begin");
@@ -275,13 +286,13 @@ mod tests {
             return;
         }
         let range = PageAlignedHostRange::new(4096 * 4);
-        let mapping =
+        let mut mapping =
             HostMappingWrittenByGpu::import_for_gpu_writes(&device, range.ptr, range.byte_len)
                 .expect("import");
         assert_eq!(mapping.tier(), HostMappingTier::ImportedHostPointer);
         assert!(mapping.fallback_reason().is_none());
 
-        fill_on_gpu(&device, &mapping, 0x5A);
+        fill_on_gpu(&device, &mut mapping, 0x5A);
         assert!(
             range.as_slice().iter().all(|&b| b == 0x5A),
             "the kernel's writes must land in the caller's pages"
@@ -307,7 +318,7 @@ mod tests {
         // staged tier is what remains.
         let misaligned_ptr = unsafe { range.ptr.add(4) };
         let misaligned_len = range.byte_len - 4;
-        let mapping =
+        let mut mapping =
             HostMappingWrittenByGpu::import_for_gpu_writes(&device, misaligned_ptr, misaligned_len)
                 .expect("the staged tier never refuses");
         assert_eq!(mapping.tier(), HostMappingTier::HostCachedStagingCopy);
@@ -319,7 +330,7 @@ mod tests {
             "reason names the refusal: {reason}"
         );
 
-        fill_on_gpu(&device, &mapping, 0xA5);
+        fill_on_gpu(&device, &mut mapping, 0xA5);
         let written = &range.as_slice()[4..];
         assert!(
             written.iter().all(|&b| b == 0xA5),

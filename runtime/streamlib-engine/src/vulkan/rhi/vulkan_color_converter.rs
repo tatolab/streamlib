@@ -194,6 +194,12 @@ impl VulkanColorConverter {
         if let Some(k) = guard.as_ref() {
             return Ok(Arc::clone(k));
         }
+        let kernel = Arc::new(self.build_image_to_yuyv_buffer_kernel()?);
+        *guard = Some(Arc::clone(&kernel));
+        Ok(kernel)
+    }
+
+    fn build_image_to_yuyv_buffer_kernel(&self) -> Result<VulkanComputeKernel> {
         if self.dst_format != PixelFormat::Yuyv422 {
             return Err(Error::NotSupported(format!(
                 "color converter image→buffer path: destination {:?} is not YUYV",
@@ -208,7 +214,7 @@ impl VulkanColorConverter {
             "color_convert_image_to_buffer:{:?}_to_{:?}",
             self.src_format, self.dst_format
         );
-        let kernel = Arc::new(VulkanComputeKernel::new(
+        VulkanComputeKernel::new(
             &self.vulkan_device,
             &ComputeKernelDescriptor {
                 entry_point: "main",
@@ -217,9 +223,7 @@ impl VulkanColorConverter {
                 bindings: IMAGE_TO_YUYV_BUFFER_BINDINGS,
                 push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
             },
-        )?);
-        *guard = Some(Arc::clone(&kernel));
-        Ok(kernel)
+        )
     }
 
     fn finish_buffer_to_image(
@@ -874,43 +878,8 @@ mod image_to_yuyv_buffer_tests {
     use crate::core::color::{MatrixId, PrimariesId, RangeId, rgb_to_yuv_matrix};
     use crate::core::context::GpuContext;
     use crate::core::rhi::VulkanLayout;
+    use crate::vulkan::rhi::vulkan_host_mapping_imported_as_buffer::PageAlignedHostRange;
     use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
-
-    /// A page-aligned anonymous mapping, released on drop.
-    struct PageAlignedHostRange {
-        ptr: *mut u8,
-        byte_len: usize,
-    }
-
-    impl PageAlignedHostRange {
-        fn new(byte_len: usize) -> Self {
-            let ptr = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    byte_len,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-                    -1,
-                    0,
-                )
-            };
-            assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
-            Self {
-                ptr: ptr.cast(),
-                byte_len,
-            }
-        }
-
-        fn as_slice(&self) -> &[u8] {
-            unsafe { std::slice::from_raw_parts(self.ptr, self.byte_len) }
-        }
-    }
-
-    impl Drop for PageAlignedHostRange {
-        fn drop(&mut self) {
-            unsafe { libc::munmap(self.ptr.cast(), self.byte_len) };
-        }
-    }
 
     /// The CPU reference: the same matrix table the kernel is pushed, one
     /// macropixel at a time, chroma averaged across the pair.
@@ -1001,7 +970,7 @@ mod image_to_yuyv_buffer_tests {
         // Page-rounded like a V4L2 mapping; the pass writes only the frame.
         let range =
             PageAlignedHostRange::new(((stride_bytes * height) as usize).next_multiple_of(4096));
-        let mapping = gpu
+        let mut mapping = gpu
             .import_host_mapping_for_gpu_writes(range.ptr, range.byte_len)
             .expect("host mapping");
         tracing::info!(
