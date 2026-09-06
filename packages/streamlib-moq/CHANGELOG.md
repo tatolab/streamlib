@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.1.4...streamlib-moq-v0.1.5) (2026-09-06)
+
+
+### Features
+
+* **extension:** streamlib-moq subscribes to a data track — data_track config, the data_bags output, envelope decode and the gap count ([#2185](https://github.com/tatolab/streamlib/issues/2185)) ([9fc66f6](https://github.com/tatolab/streamlib/commit/9fc66f6be946ba0d6d88a4aa2454acf012bed038))
+
 ## [0.1.4](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.1.3...streamlib-moq-v0.1.4) (2026-09-06)
 
 
