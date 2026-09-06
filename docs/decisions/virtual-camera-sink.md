@@ -215,3 +215,13 @@ blunt, not v1.
 A sink that lacks the permission says so by name — which file is absent or not writable
 and which command grants it — and the runtime keeps running; under `auto` it takes the
 PipeWire door in the meantime and still names the command.
+
+## The default name carries a short stable id
+
+Owner, 2026-09-06: two people who never named their camera must not collide on "StreamLib
+Camera". The default is that name plus four characters of a hash over the app's entry
+directory and the instance's display name. Random per run would have satisfied uniqueness
+but broken reclaim: a device left behind by a crash carries the label the sink chose, and
+the next run can only recognise it if it chooses the same label again. Stable per app and
+instance gives both — no collisions between instances or apps, and a label the sink can
+find again.
