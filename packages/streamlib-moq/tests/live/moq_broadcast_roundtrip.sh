@@ -12,7 +12,12 @@
 # network sits inside a path the codec rig already scored, so a mismatch here is
 # this wheel's.
 #
-# Three arms, each reported separately:
+# Two containers, run in turn as two nodes: `cmaf`, which `moq-sub` reads, and
+# `streamlib_bag`, which carries a data track beside the media and names its
+# tracks rather than numbering them. Each is a separate node on its own port
+# and its own broadcast, written into its own subdirectory of the output.
+#
+# Four arms, each reported separately per container:
 #   video   the decode-back, `cargo xtask psnr channel-means` against
 #           `psnr_vivid_baseline.tsv`. This is the gate.
 #   audio   the block-level channel contract on the decoded audio port, over
@@ -23,6 +28,15 @@
 #           before the far side subscribed. Scoring signal identity across a
 #           network hop wants a looping source the engine does not have, and is
 #           `/verify-audio`'s shape rather than this one's.
+#   data    `streamlib_bag` only: the telemetry bags the publisher classified
+#           as data, read back off the subscriber's `data_bags` and compared
+#           with what was sent. Every bag says which frame it is, and both its
+#           `blob` and its `stamp_ns` are derived from that — so each bag
+#           carries its own expected value across the network and the
+#           comparison is exact rather than tolerant. The stamp is read twice,
+#           from the payload and from the transport frame's header, and they
+#           agree only if the producer's instant survived the round trip
+#           untouched.
 #   interop the CMAF proof (owner, 2026-09-05): `moq-sub`, built from
 #           `cloudflare/moq-rs`, reads the same broadcast. A third-party client
 #           parsing the catalog, accepting the init segment and decoding the
@@ -59,9 +73,19 @@
 #                             sourced from the repo-root `.env` when present.
 #   STREAMLIB_MOQ_SUB_URL     what `moq-sub` dials for the interop arm. Falls
 #                             back to the relay host + CLOUDFLARE_MOQ_SUB_TOKEN.
-#   STREAMLIB_MOQ_BROADCAST   the broadcast both halves name (default below)
+#   STREAMLIB_MOQ_BROADCAST   the broadcast both halves name (default below).
+#                             `cmaf` keeps it bare, so an interop run is named
+#                             exactly what it always was; every other container
+#                             appends its own name, so no two arms share one
+#                             broadcast whatever order they run in
+#   CONTAINER_FORMATS         which arms to run, space separated (default
+#                             "cmaf streamlib_bag")
 #   SAMPLE_COUNT/SAMPLE_EVERY the exchange budget (defaults 6 / 2)
-#   CONTROL_PLANE_PORT        default 9412
+#   DATA_TAP_ROUNDS           taps the data arm merges (default 3)
+#   DATA_BAG_COUNT            bags asked for per round (default 8)
+#   MINIMUM_DATA_BAGS         fewer than this back is a failure (default 3)
+#   CONTROL_PLANE_PORT        the first arm's port; each later arm takes the
+#                             next one up (default 9412)
 #   RUN_SECONDS               node budget (default 120)
 #   MEDIA_DEADLINE_SECONDS    how long to wait for the first decoded frame
 #                             after the graph is up (default 45) — a relay
@@ -87,8 +111,16 @@ ENGINE_FIXTURES="$REPO_ROOT/runtime/streamlib-engine/tests/fixtures"
 BASELINE_TSV="$ENGINE_FIXTURES/psnr_vivid_baseline.tsv"
 
 OUTPUT_DIR="${1:-/tmp/streamlib-moq-live-$(date +%s)}"
+CONTAINER_FORMATS="${CONTAINER_FORMATS:-cmaf streamlib_bag}"
 SAMPLE_COUNT="${SAMPLE_COUNT:-6}"
 SAMPLE_EVERY="${SAMPLE_EVERY:-2}"
+DATA_TAP_ROUNDS="${DATA_TAP_ROUNDS:-3}"
+DATA_BAG_COUNT="${DATA_BAG_COUNT:-8}"
+# A floor no healthy run misses rather than a target: what the data arm gates
+# on is every bag matching, and one tap collects over a window of about half a
+# second, so a count large enough to be interesting would make the floor itself
+# the flake.
+MINIMUM_DATA_BAGS="${MINIMUM_DATA_BAGS:-3}"
 CONTROL_PLANE_PORT="${CONTROL_PLANE_PORT:-9412}"
 RUN_SECONDS="${RUN_SECONDS:-120}"
 MEDIA_DEADLINE_SECONDS="${MEDIA_DEADLINE_SECONDS:-45}"
@@ -158,8 +190,10 @@ fi
 # The interop arm is the owner's CMAF proof, not a bonus: a run that cannot
 # reach it has not verified what it reports, so an absent subscribe credential
 # is a cannot-run like any other. `SKIP_INTEROP=1` is the way to ask for the
-# video and audio arms alone.
-if [ "$SKIP_INTEROP" != "1" ] && [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
+# video and audio arms alone. Asked for only where a `cmaf` arm is actually
+# going to run — a `streamlib_bag`-only run has no interop arm to credential.
+if [ "$SKIP_INTEROP" != "1" ] && [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ] \
+    && [[ " $CONTAINER_FORMATS " == *" cmaf "* ]]; then
     cannot_run "no subscribe credential for the CMAF interop arm. Export STREAMLIB_MOQ_SUB_URL, or put CLOUDFLARE_MOQ_SUB_TOKEN in the repo-root .env. Pass SKIP_INTEROP=1 to run the video and audio arms without it."
 fi
 
@@ -178,18 +212,8 @@ while read -r dev; do
 done < <(v4l2-ctl --list-devices 2>/dev/null | awk '/vivid/{getline; print $1}')
 [ -n "$VIVID_DEVICE" ] || cannot_run "no vivid capture device found"
 
-# A busy control port would misdirect this run rather than fail it: the API
-# server walks up to ten ports when the one it was given is taken, so a second
-# node already on this one would be measured instead.
-if (echo >"/dev/tcp/127.0.0.1/$CONTROL_PLANE_PORT") 2>/dev/null; then
-    fail "something is already listening on 127.0.0.1:$CONTROL_PLANE_PORT; this run would measure that node instead of its own"
-fi
-
+# ── What every arm shares ────────────────────────────────────────────
 mkdir -p "$OUTPUT_DIR"
-EXCHANGED_DIR="$OUTPUT_DIR/exchanged"
-MEASURED_DIR="$OUTPUT_DIR/measured"
-LOG_FILE="$OUTPUT_DIR/pipeline.log"
-CONTROL_PLANE_URL="http://127.0.0.1:$CONTROL_PLANE_PORT"
 
 ORIGINAL_PATTERN="$(v4l2-ctl -d "$VIVID_DEVICE" -C test_pattern 2>/dev/null | awk '{print $2}')"
 [[ "$ORIGINAL_PATTERN" =~ ^[0-9]+$ ]] || ORIGINAL_PATTERN=0
@@ -230,9 +254,8 @@ v4l2-ctl -d "$VIVID_DEVICE" -c "test_pattern=$VIVID_TEST_PATTERN" 2>"$OUTPUT_DIR
 say "Output dir:        $OUTPUT_DIR"
 say "Vivid device:      $VIVID_DEVICE"
 say "Test pattern:      $VIVID_TEST_PATTERN (was $ORIGINAL_PATTERN, restored on exit)"
-say "Container:         cmaf"
+say "Containers:        $CONTAINER_FORMATS"
 say "Broadcast:         $BROADCAST"
-say "Control plane:     $CONTROL_PLANE_URL"
 say "Relay:             <redacted — the URL carries the account's token>"
 
 # ── Build the scorer ─────────────────────────────────────────────────
@@ -283,25 +306,6 @@ else
     say "Audio source:      the backend default (no PipeWire session for the fixture sink)"
 fi
 
-# ── Run ──────────────────────────────────────────────────────────────
-say "Publishing and subscribing through the relay..."
-DISPLAY="${DISPLAY:-:0}" \
-RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
-    timeout --kill-after=5 "$RUN_SECONDS" \
-        "$VENV_PYTHON" "$SCRIPT_DIR/moq_broadcast_roundtrip_node.py" \
-            --camera "$VIVID_DEVICE" \
-            ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
-            --broadcast "$BROADCAST" \
-            --control-plane-port "$CONTROL_PLANE_PORT" \
-            ${DELIVERY_DEADLINE_MS:+--delivery-deadline-ms "$DELIVERY_DEADLINE_MS"} \
-        > "$LOG_FILE" 2>&1 &
-NODE_PID=$!
-
-for _ in $(seq 1 120); do
-    "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1 && break
-    sleep 0.5
-done
-
 # A channel is `{processor_id}/{output_port}` with the id chunk lowercased, and
 # the id is a cuid2 minted at add time — the display name is not it. Derived
 # from the live graph, in a pipe: the graph renders every processor's config,
@@ -321,18 +325,6 @@ print(node["id"].lower() + "/" + wanted_port)
 ' "$1" "$2"
 }
 
-DECODED_VIDEO_CHANNEL="$(channel_of video_decoder video)" \
-    || { tail -40 "$LOG_FILE" >&2; fail "could not read the video decoder's channel off the live graph"; }
-DECODED_AUDIO_CHANNEL="$(channel_of audio_decoder audio)" \
-    || { tail -40 "$LOG_FILE" >&2; fail "could not read the audio decoder's channel off the live graph"; }
-say "Decoded video:     $DECODED_VIDEO_CHANNEL"
-say "Decoded audio:     $DECODED_AUDIO_CHANNEL"
-
-# The relay connect, the CMAF init handshake and the first IDR all sit between
-# the graph coming up and the first decoded frame. Waiting for one bag before
-# spending the exchange budget is what keeps a slow connect from reading as an
-# empty channel — `exchange` gives up after 8 tap rounds.
-say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..."
 # `tap` never fails on a quiet channel — it returns a partial sample and exits 0
 # — so the bag count is the only readiness signal. Reading its exit code instead
 # reports a channel that has produced nothing as ready, and the run then spends
@@ -346,92 +338,305 @@ except Exception:
     print(0)
 '
 }
-FIRST_FRAME_SEEN=0
-for _ in $(seq 1 "$MEDIA_DEADLINE_SECONDS"); do
-    if [ "$(tapped_bag_count "$DECODED_VIDEO_CHANNEL")" -gt 0 ] 2>/dev/null; then
-        FIRST_FRAME_SEEN=1
-        break
+
+# ── One arm: one container format, launched to verdict ───────────────
+# The two containers are two runs of one graph rather than two graphs. Each
+# takes its own control port, its own broadcast name and its own output
+# directory, and the node is stopped before the next arm starts: two nodes on
+# one port would let a run measure the other one's.
+run_one_container_format() {
+    local container_format="$1"
+    local control_plane_port="$2"
+    local broadcast="$3"
+    local arm_dir="$OUTPUT_DIR/$container_format"
+    local exchanged_dir="$arm_dir/exchanged"
+    local measured_dir="$arm_dir/measured"
+
+    CONTROL_PLANE_URL="http://127.0.0.1:$control_plane_port"
+    LOG_FILE="$arm_dir/pipeline.log"
+    mkdir -p "$arm_dir"
+
+    ARM_VIDEO_VERDICT="fail — the arm did not reach its measurement"
+    ARM_AUDIO_VERDICT="skipped"
+    ARM_INTEROP_VERDICT="skipped"
+    ARM_DATA_VERDICT="n/a — this container carries no data track"
+
+    echo ""
+    say "── $container_format ──────────────────────────────────────────"
+    say "Broadcast:         $broadcast"
+    say "Control plane:     $CONTROL_PLANE_URL"
+
+    # A busy control port would misdirect this run rather than fail it: the API
+    # server walks up to ten ports when the one it was given is taken, so a
+    # second node already on this one would be measured instead.
+    if (echo >"/dev/tcp/127.0.0.1/$control_plane_port") 2>/dev/null; then
+        fail "something is already listening on 127.0.0.1:$control_plane_port; this run would measure that node instead of its own"
     fi
-    kill -0 "$NODE_PID" 2>/dev/null || break
-    sleep 1
-done
-if [ "$FIRST_FRAME_SEEN" -ne 1 ]; then
-    tail -60 "$LOG_FILE" >&2
-    fail "no frame reached the decoder within ${MEDIA_DEADLINE_SECONDS}s. The relay never delivered, or the subscriber is asking for a track name nothing publishes."
-fi
 
-# ── The video arm: the decode-back ───────────────────────────────────
-if ! "$STREAMLIB_CLI" exchange \
-        --channel "$DECODED_VIDEO_CHANNEL" \
-        --out "$EXCHANGED_DIR" \
-        --count "$SAMPLE_COUNT" \
-        --every "$SAMPLE_EVERY" \
-        --url "$CONTROL_PLANE_URL" \
-        > "$OUTPUT_DIR/exchanged_paths.txt" 2> "$OUTPUT_DIR/exchange.log"; then
-    cat "$OUTPUT_DIR/exchange.log" >&2
-    tail -40 "$LOG_FILE" >&2
-    fail "exchanged fewer frames than asked for"
-fi
-cat "$OUTPUT_DIR/exchange.log"
+    # ── Run ──────────────────────────────────────────────────────────
+    say "Publishing and subscribing through the relay..."
+    DISPLAY="${DISPLAY:-:0}" \
+    RUST_LOG="${RUST_LOG:-warn,streamlib=info,streamlib_media_builtins=info}" \
+        timeout --kill-after=5 "$RUN_SECONDS" \
+            "$VENV_PYTHON" "$SCRIPT_DIR/moq_broadcast_roundtrip_node.py" \
+                --camera "$VIVID_DEVICE" \
+                ${AUDIO_CAPTURE_DEVICE:+--audio-capture-device "$AUDIO_CAPTURE_DEVICE"} \
+                --broadcast "$broadcast" \
+                --container-format "$container_format" \
+                --control-plane-port "$control_plane_port" \
+                ${DELIVERY_DEADLINE_MS:+--delivery-deadline-ms "$DELIVERY_DEADLINE_MS"} \
+            > "$LOG_FILE" 2>&1 &
+    NODE_PID=$!
 
-# Read the printed paths, not the directory: --out is not cleared, so a listing
-# can hand back an earlier run's frames.
-mkdir -p "$MEASURED_DIR"
-sample_index=0
-while read -r exchanged_png; do
-    [ -f "$exchanged_png" ] || continue
-    cp "$exchanged_png" "$MEASURED_DIR/$(printf "%04d" "$sample_index").png"
-    sample_index=$(( sample_index + 1 ))
-done < "$OUTPUT_DIR/exchanged_paths.txt"
-[ "$sample_index" -eq "$SAMPLE_COUNT" ] \
-    || fail "copied $sample_index of $SAMPLE_COUNT exchanged frames; a drift lock measured on fewer samples than the run asked for reports a thinner gate as a full one"
-say "Captured $sample_index frames"
+    for _ in $(seq 1 120); do
+        "$STREAMLIB_CLI" graph --url "$CONTROL_PLANE_URL" >/dev/null 2>&1 && break
+        sleep 0.5
+    done
 
-# ── The audio arm: the block contract on what came back ──────────────
-# Judged against what was *sent*, not in isolation. A rig whose default capture
-# device publishes nothing — no live input, muted, no source — would otherwise
-# read as this wheel losing the audio it was handed, which is the one confusion
-# an audio arm exists to prevent. So the encoder's own output is tapped first:
-# silent there means the arm cannot run, and only a decoder that stayed empty
-# while the encoder spoke is a failure.
-ENCODED_AUDIO_CHANNEL="$(channel_of audio_encoder encoded_audio)" || ENCODED_AUDIO_CHANNEL=""
-PUBLISHED_AUDIO_BAGS=0
-if [ -n "$ENCODED_AUDIO_CHANNEL" ]; then
-    PUBLISHED_AUDIO_BAGS="$(tapped_bag_count "$ENCODED_AUDIO_CHANNEL")"
-fi
-if [ "${PUBLISHED_AUDIO_BAGS:-0}" -eq 0 ] 2>/dev/null; then
-    AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
-elif PYTHON="$VENV_PYTHON" "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
-        --url "$CONTROL_PLANE_URL" --port audio --count 8 \
-        > "$OUTPUT_DIR/audio_channel.json" 2> "$OUTPUT_DIR/audio_channel.log"; then
-    AUDIO_VERDICT="pass"
-else
-    AUDIO_VERDICT="fail"
-fi
-say "Audio channel:     $AUDIO_VERDICT ($OUTPUT_DIR/audio_channel.json)"
+    local decoded_video_channel decoded_audio_channel
+    decoded_video_channel="$(channel_of video_decoder video)" \
+        || { tail -40 "$LOG_FILE" >&2; fail "could not read the video decoder's channel off the live graph"; }
+    decoded_audio_channel="$(channel_of audio_decoder audio)" \
+        || { tail -40 "$LOG_FILE" >&2; fail "could not read the audio decoder's channel off the live graph"; }
+    say "Decoded video:     $decoded_video_channel"
+    say "Decoded audio:     $decoded_audio_channel"
+
+    # The relay connect, the CMAF init handshake and the first IDR all sit
+    # between the graph coming up and the first decoded frame. Waiting for one
+    # bag before spending the exchange budget is what keeps a slow connect from
+    # reading as an empty channel — `exchange` gives up after 8 tap rounds.
+    say "Waiting for the first decoded frame (deadline ${MEDIA_DEADLINE_SECONDS}s)..."
+    local first_frame_seen=0
+    for _ in $(seq 1 "$MEDIA_DEADLINE_SECONDS"); do
+        if [ "$(tapped_bag_count "$decoded_video_channel")" -gt 0 ] 2>/dev/null; then
+            first_frame_seen=1
+            break
+        fi
+        kill -0 "$NODE_PID" 2>/dev/null || break
+        sleep 1
+    done
+    if [ "$first_frame_seen" -ne 1 ]; then
+        tail -60 "$LOG_FILE" >&2
+        fail "no frame reached the decoder within ${MEDIA_DEADLINE_SECONDS}s. The relay never delivered, or the subscriber is asking for a track name nothing publishes."
+    fi
+
+    # ── The video arm: the decode-back ───────────────────────────────
+    if ! "$STREAMLIB_CLI" exchange \
+            --channel "$decoded_video_channel" \
+            --out "$exchanged_dir" \
+            --count "$SAMPLE_COUNT" \
+            --every "$SAMPLE_EVERY" \
+            --url "$CONTROL_PLANE_URL" \
+            > "$arm_dir/exchanged_paths.txt" 2> "$arm_dir/exchange.log"; then
+        cat "$arm_dir/exchange.log" >&2
+        tail -40 "$LOG_FILE" >&2
+        fail "exchanged fewer frames than asked for"
+    fi
+    cat "$arm_dir/exchange.log"
+
+    # Read the printed paths, not the directory: --out is not cleared, so a
+    # listing can hand back an earlier run's frames.
+    mkdir -p "$measured_dir"
+    local sample_index=0
+    while read -r exchanged_png; do
+        [ -f "$exchanged_png" ] || continue
+        cp "$exchanged_png" "$measured_dir/$(printf "%04d" "$sample_index").png"
+        sample_index=$(( sample_index + 1 ))
+    done < "$arm_dir/exchanged_paths.txt"
+    [ "$sample_index" -eq "$SAMPLE_COUNT" ] \
+        || fail "copied $sample_index of $SAMPLE_COUNT exchanged frames; a drift lock measured on fewer samples than the run asked for reports a thinner gate as a full one"
+    say "Captured $sample_index frames"
+
+    # ── The audio arm: the block contract on what came back ──────────
+    # Judged against what was *sent*, not in isolation. A rig whose default
+    # capture device publishes nothing — no live input, muted, no source —
+    # would otherwise read as this wheel losing the audio it was handed, which
+    # is the one confusion an audio arm exists to prevent. So the encoder's own
+    # output is tapped first: silent there means the arm cannot run, and only a
+    # decoder that stayed empty while the encoder spoke is a failure.
+    local encoded_audio_channel published_audio_bags
+    encoded_audio_channel="$(channel_of audio_encoder encoded_audio)" || encoded_audio_channel=""
+    published_audio_bags=0
+    if [ -n "$encoded_audio_channel" ]; then
+        published_audio_bags="$(tapped_bag_count "$encoded_audio_channel")"
+    fi
+    if [ "${published_audio_bags:-0}" -eq 0 ] 2>/dev/null; then
+        ARM_AUDIO_VERDICT="cannot run — this rig's capture device published no Opus packets, so nothing was sent to measure coming back"
+    elif PYTHON="$VENV_PYTHON" "$ENGINE_FIXTURES/verify_audio_channel.sh" audio_decoder \
+            --url "$CONTROL_PLANE_URL" --port audio --count 8 \
+            > "$arm_dir/audio_channel.json" 2> "$arm_dir/audio_channel.log"; then
+        ARM_AUDIO_VERDICT="pass"
+    else
+        ARM_AUDIO_VERDICT="fail"
+    fi
+    say "Audio channel:     $ARM_AUDIO_VERDICT ($arm_dir/audio_channel.json)"
+
+    run_the_data_arm "$container_format" "$arm_dir"
+    run_the_interop_arm "$container_format" "$arm_dir" "$broadcast"
+
+    stop_node
+    [ "$NODE_NEEDED_SIGKILL" -eq 0 ] \
+        || fail "the node did not exit on SIGTERM and needed SIGKILL; a teardown that hangs is a finding, not a slow exit"
+
+    report_what_the_data_track_accounted_for "$container_format" "$arm_dir"
+
+    # ── Measure ──────────────────────────────────────────────────────
+    echo ""
+    say "Log gates:"
+    for pattern in OUT_OF_DEVICE_MEMORY DEVICE_LOST "process() failed" "Validation Error"; do
+        printf '  %-24s %s\n' "$pattern" "$(grep -cF "$pattern" "$LOG_FILE" 2>/dev/null; true)"
+    done
+    echo ""
+
+    if "$REPO_ROOT/target/release/xtask" psnr channel-means \
+            --images "$measured_dir" \
+            --baseline "$BASELINE_TSV" \
+            --tolerance "$TOLERANCE" \
+            --report "$arm_dir/channel_means.tsv"; then
+        ARM_VIDEO_VERDICT="pass"
+        say "Per-sample stats:  $arm_dir/channel_means.tsv"
+    else
+        ARM_VIDEO_VERDICT="fail — the frames that came back off the relay drift from the baseline"
+    fi
+    say "Video decode-back: $ARM_VIDEO_VERDICT"
+}
+
+# ── The data arm: what came back is what went out ────────────────────
+# The media arms lock on a channel mean; a data track has no such statistic and
+# needs none. Every telemetry bag says which frame it is, and its `blob` and
+# its `stamp_ns` are both derived from that — so the bag carries its own
+# expected value across the network and the comparison is exact rather than
+# tolerant. Several tap rounds because one collects over about half a second,
+# and a sample that narrow could miss an intermittent corruption entirely.
+run_the_data_arm() {
+    local container_format="$1"
+    local arm_dir="$2"
+    [ "$container_format" = "streamlib_bag" ] || return 0
+
+    local data_channel
+    data_channel="$(channel_of subscriber data_bags)" || data_channel=""
+    if [ -z "$data_channel" ]; then
+        ARM_DATA_VERDICT="fail — the running graph has no subscriber data_bags channel"
+        say "Data track:        $ARM_DATA_VERDICT"
+        return 0
+    fi
+    say "Data bags:         $data_channel"
+
+    # The relay's data subscription settles on its own schedule, so the first
+    # bag is waited for the way the first frame is rather than assumed to have
+    # arrived with the video.
+    local first_bag_seen=0
+    for _ in $(seq 1 "$MEDIA_DEADLINE_SECONDS"); do
+        if [ "$(tapped_bag_count "$data_channel")" -gt 0 ] 2>/dev/null; then
+            first_bag_seen=1
+            break
+        fi
+        kill -0 "$NODE_PID" 2>/dev/null || break
+        sleep 1
+    done
+    if [ "$first_bag_seen" -ne 1 ]; then
+        ARM_DATA_VERDICT="fail — no data bag reached the subscriber within ${MEDIA_DEADLINE_SECONDS}s"
+        say "Data track:        $ARM_DATA_VERDICT"
+        return 0
+    fi
+
+    local round tapped_files=()
+    for round in $(seq 1 "$DATA_TAP_ROUNDS"); do
+        local tapped_json="$arm_dir/tapped_data_bags_$round.json"
+        if "$STREAMLIB_CLI" tap "$data_channel" --count "$DATA_BAG_COUNT" \
+                --url "$CONTROL_PLANE_URL" > "$tapped_json" \
+                2>> "$arm_dir/tap_data_bags.log"; then
+            tapped_files+=("$tapped_json")
+        fi
+    done
+    if [ "${#tapped_files[@]}" -eq 0 ]; then
+        ARM_DATA_VERDICT="fail — every tap on $data_channel failed; see $arm_dir/tap_data_bags.log"
+        say "Data track:        $ARM_DATA_VERDICT"
+        return 0
+    fi
+
+    if "$VENV_PYTHON" "$SCRIPT_DIR/verify_tapped_telemetry_bags.py" \
+            "${tapped_files[@]}" --minimum-bags "$MINIMUM_DATA_BAGS" \
+            > "$arm_dir/data_bags.json" 2> "$arm_dir/data_bags.log"; then
+        ARM_DATA_VERDICT="pass — $(data_bag_tally "$arm_dir/data_bags.json") bags came back byte-for-byte and stamped as sent"
+    else
+        ARM_DATA_VERDICT="fail — $(data_bag_tally "$arm_dir/data_bags.json") matched; see $arm_dir/data_bags.json"
+    fi
+    say "Data track:        $ARM_DATA_VERDICT"
+}
+
+# The subscriber counts what the relay never delivered and says so at its
+# progress cadence and again at teardown. Read after the node has stopped
+# because a run shorter than one cadence has only the teardown line, and that
+# line is the one that always fires. A gap is not a failure — it is loss the
+# wheel saw and accounted for — but a run reporting none is a different claim
+# from one reporting some, so it is kept rather than summarised away.
+report_what_the_data_track_accounted_for() {
+    local container_format="$1"
+    local arm_dir="$2"
+    [ "$container_format" = "streamlib_bag" ] || return 0
+
+    grep -F "sequence_gaps" "$LOG_FILE" | tail -1 \
+        > "$arm_dir/data_bags_accounting.log" || true
+    [ -s "$arm_dir/data_bags_accounting.log" ] || return 0
+    say "Data accounting:   $(sed 's/.*MoqBroadcastSubscriber: //' "$arm_dir/data_bags_accounting.log")"
+}
+
+data_bag_tally() {
+    python3 -c '
+import json, sys
+try:
+    report = json.load(open(sys.argv[1]))
+except Exception:
+    print("no")
+    sys.exit(0)
+print("%d of %d" % (report["bags_matching_what_was_sent"], report["bags_compared"]))
+' "$1"
+}
 
 # ── The interop arm: a third-party client reads the same broadcast ───
-INTEROP_VERDICT="skipped"
-if [ "$SKIP_INTEROP" != "1" ]; then
+# CMAF only, and not because `streamlib_bag` is unproven: `moq-sub` decodes an
+# fMP4 stream, and a bag broadcast is not one. What proves that container is
+# the data arm above and this wheel's own subscriber beside it.
+run_the_interop_arm() {
+    local container_format="$1"
+    local arm_dir="$2"
+    local broadcast="$3"
+    if [ "$container_format" != "cmaf" ]; then
+        ARM_INTEROP_VERDICT="n/a — moq-sub reads fMP4, which this container is not"
+        say "CMAF interop:      $ARM_INTEROP_VERDICT"
+        return 0
+    fi
+    if [ "$SKIP_INTEROP" = "1" ]; then
+        ARM_INTEROP_VERDICT="skipped"
+        say "CMAF interop:      $ARM_INTEROP_VERDICT"
+        return 0
+    fi
     if ! command -v moq-sub >/dev/null; then
-        INTEROP_VERDICT="cannot run — moq-sub is not on PATH (cargo install --git https://github.com/cloudflare/moq-rs moq-sub)"
-    elif [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
-        INTEROP_VERDICT="cannot run — no subscribe credential (STREAMLIB_MOQ_SUB_URL or CLOUDFLARE_MOQ_SUB_TOKEN)"
-    else
-        # `--name` is the broadcast, not a track. `--catalog` is what makes this
-        # the catalog proof: without it moq-sub never asks for `.catalog` and
-        # falls straight to its hardcoded `0.mp4` / `{track_id}.m4s` names, so
-        # the whole catalog writer could be reverted and the arm would still be
-        # green. It writes one fMP4 stream to stdout.
-        timeout 25 moq-sub --catalog --name "$BROADCAST" "$STREAMLIB_MOQ_SUB_URL" \
-            > "$OUTPUT_DIR/moq_sub_output.mp4" 2> "$OUTPUT_DIR/moq_sub_raw.log" || true
-        # The URL is a credential and this is a third-party binary's stderr, so
-        # it is scrubbed before the log is kept rather than trusted not to echo.
-        # A literal replacement, not `sed`: a URL is not a regular expression,
-        # and one with an IPv6 literal host (`https://[::1]/<token>`) reads as a
-        # bracket expression that matches something else entirely — leaving the
-        # token in the log while the scrub reports success.
-        REDACT_SUBSCRIBE_URL="$STREAMLIB_MOQ_SUB_URL" python3 -c '
+        ARM_INTEROP_VERDICT="cannot run — moq-sub is not on PATH (cargo install --git https://github.com/cloudflare/moq-rs moq-sub)"
+        say "CMAF interop:      $ARM_INTEROP_VERDICT"
+        return 0
+    fi
+    if [ -z "${STREAMLIB_MOQ_SUB_URL:-}" ]; then
+        ARM_INTEROP_VERDICT="cannot run — no subscribe credential (STREAMLIB_MOQ_SUB_URL or CLOUDFLARE_MOQ_SUB_TOKEN)"
+        say "CMAF interop:      $ARM_INTEROP_VERDICT"
+        return 0
+    fi
+
+    # `--name` is the broadcast, not a track. `--catalog` is what makes this
+    # the catalog proof: without it moq-sub never asks for `.catalog` and falls
+    # straight to its hardcoded `0.mp4` / `{track_id}.m4s` names, so the whole
+    # catalog writer could be reverted and the arm would still be green. It
+    # writes one fMP4 stream to stdout.
+    timeout 25 moq-sub --catalog --name "$broadcast" "$STREAMLIB_MOQ_SUB_URL" \
+        > "$arm_dir/moq_sub_output.mp4" 2> "$arm_dir/moq_sub_raw.log" || true
+    # The URL is a credential and this is a third-party binary's stderr, so it
+    # is scrubbed before the log is kept rather than trusted not to echo. A
+    # literal replacement, not `sed`: a URL is not a regular expression, and one
+    # with an IPv6 literal host (`https://[::1]/<token>`) reads as a bracket
+    # expression that matches something else entirely — leaving the token in the
+    # log while the scrub reports success.
+    REDACT_SUBSCRIBE_URL="$STREAMLIB_MOQ_SUB_URL" python3 -c '
 import os, sys
 
 secret = os.environ["REDACT_SUBSCRIBE_URL"]
@@ -439,70 +644,68 @@ with open(sys.argv[1], "rb") as raw:
     body = raw.read()
 with open(sys.argv[2], "wb") as scrubbed:
     scrubbed.write(body.replace(secret.encode(), b"<redacted subscribe url>"))
-' "$OUTPUT_DIR/moq_sub_raw.log" "$OUTPUT_DIR/moq_sub.log" 2>/dev/null || true
-        rm -f "$OUTPUT_DIR/moq_sub_raw.log"
-        interop_bytes="$(stat -c %s "$OUTPUT_DIR/moq_sub_output.mp4" 2>/dev/null || echo 0)"
-        if [ "$interop_bytes" -gt 0 ] \
-            && "$REPO_ROOT/target/release/xtask" mp4-inspect "$OUTPUT_DIR/moq_sub_output.mp4" \
-                > "$OUTPUT_DIR/moq_sub_inspect.json" 2>/dev/null; then
-            # `mp4-inspect` bails only on a missing `moov`, so a capture holding
-            # the init segment and nothing else parses cleanly. The fragment
-            # count is what says media actually arrived and decoded.
-            INTEROP_FRAGMENTS="$(python3 -c '
+' "$arm_dir/moq_sub_raw.log" "$arm_dir/moq_sub.log" 2>/dev/null || true
+    rm -f "$arm_dir/moq_sub_raw.log"
+
+    local interop_bytes interop_fragments
+    interop_bytes="$(stat -c %s "$arm_dir/moq_sub_output.mp4" 2>/dev/null || echo 0)"
+    if [ "$interop_bytes" -gt 0 ] \
+        && "$REPO_ROOT/target/release/xtask" mp4-inspect "$arm_dir/moq_sub_output.mp4" \
+            > "$arm_dir/moq_sub_inspect.json" 2>/dev/null; then
+        # `mp4-inspect` bails only on a missing `moov`, so a capture holding the
+        # init segment and nothing else parses cleanly. The fragment count is
+        # what says media actually arrived and decoded.
+        interop_fragments="$(python3 -c '
 import json, sys
 try:
     print(len(json.load(open(sys.argv[1])).get("fragments", [])))
 except Exception:
     print(0)
-' "$OUTPUT_DIR/moq_sub_inspect.json")"
-            if [ "${INTEROP_FRAGMENTS:-0}" -gt 0 ] 2>/dev/null; then
-                INTEROP_VERDICT="pass — moq-sub fetched the catalog, accepted the init segment and decoded $INTEROP_FRAGMENTS fragments ($interop_bytes bytes)"
-            else
-                INTEROP_VERDICT="fail — moq-sub read $interop_bytes bytes but the capture carries no media fragment, so only the init segment arrived"
-            fi
+' "$arm_dir/moq_sub_inspect.json")"
+        if [ "${interop_fragments:-0}" -gt 0 ] 2>/dev/null; then
+            ARM_INTEROP_VERDICT="pass — moq-sub fetched the catalog, accepted the init segment and decoded $interop_fragments fragments ($interop_bytes bytes)"
         else
-            INTEROP_VERDICT="fail — moq-sub produced $interop_bytes bytes that no parser could read; see moq_sub.log"
+            ARM_INTEROP_VERDICT="fail — moq-sub read $interop_bytes bytes but the capture carries no media fragment, so only the init segment arrived"
         fi
+    else
+        ARM_INTEROP_VERDICT="fail — moq-sub produced $interop_bytes bytes that no parser could read; see $arm_dir/moq_sub.log"
     fi
-fi
-say "CMAF interop:      $INTEROP_VERDICT"
+    say "CMAF interop:      $ARM_INTEROP_VERDICT"
+}
 
-stop_node
-[ "$NODE_NEEDED_SIGKILL" -eq 0 ] \
-    || fail "the node did not exit on SIGTERM and needed SIGKILL; a teardown that hangs is a finding, not a slow exit"
-
-# ── Measure ──────────────────────────────────────────────────────────
-echo ""
-say "Log gates:"
-for pattern in OUT_OF_DEVICE_MEMORY DEVICE_LOST "process() failed" "Validation Error"; do
-    printf '  %-24s %s\n' "$pattern" "$(grep -cF "$pattern" "$LOG_FILE" 2>/dev/null; true)"
+# ── Every arm, then one verdict ──────────────────────────────────────
+RESULT_LINES=()
+EVERY_VERDICT=""
+ARM_PORT="$CONTROL_PLANE_PORT"
+for container_format in $CONTAINER_FORMATS; do
+    arm_broadcast="$BROADCAST"
+    [ "$container_format" = "cmaf" ] || arm_broadcast="$BROADCAST-$container_format"
+    run_one_container_format "$container_format" "$ARM_PORT" "$arm_broadcast"
+    RESULT_LINES+=(
+        "$container_format: video $ARM_VIDEO_VERDICT · audio $ARM_AUDIO_VERDICT · interop $ARM_INTEROP_VERDICT · data $ARM_DATA_VERDICT"
+    )
+    EVERY_VERDICT="$EVERY_VERDICT$ARM_VIDEO_VERDICT$ARM_AUDIO_VERDICT$ARM_INTEROP_VERDICT$ARM_DATA_VERDICT"
+    ARM_PORT=$(( ARM_PORT + 1 ))
 done
-echo ""
 
-if "$REPO_ROOT/target/release/xtask" psnr channel-means \
-        --images "$MEASURED_DIR" \
-        --baseline "$BASELINE_TSV" \
-        --tolerance "$TOLERANCE" \
-        --report "$OUTPUT_DIR/channel_means.tsv"; then
-    say "Output dir:        $OUTPUT_DIR"
-    say "Per-sample stats:  $OUTPUT_DIR/channel_means.tsv"
-    say "RESULT: video PASS · audio $AUDIO_VERDICT · interop $INTEROP_VERDICT"
-    # A `fail` is a wheel that did not deliver; a `cannot run` is an arm that
-    # never ran. Neither may exit 0, because 0 is read as "everything this run
-    # claims to prove was proved" — and an arm that did not run proved nothing.
-    # 77 keeps the distinction: a cannot-run is never a pass. `SKIP_INTEROP=1`
-    # is the way to ask for the other two arms on purpose, and is not this.
-    case "$AUDIO_VERDICT$INTEROP_VERDICT" in
-        *fail*) exit 1 ;;
-    esac
-    case "$AUDIO_VERDICT$INTEROP_VERDICT" in
-        *"cannot run"*)
-            say "RESULT: cannot run — an arm above never ran, so this run verified less than it reports"
-            exit 77
-            ;;
-    esac
-    exit 0
-fi
+echo ""
 say "Output dir:        $OUTPUT_DIR"
-say "RESULT: FAIL — the frames that came back off the relay drift from the baseline"
-exit 1
+for result_line in "${RESULT_LINES[@]}"; do
+    say "RESULT: $result_line"
+done
+
+# A `fail` is a wheel that did not deliver; a `cannot run` is an arm that never
+# ran. Neither may exit 0, because 0 is read as "everything this run claims to
+# prove was proved" — and an arm that did not run proved nothing. 77 keeps the
+# distinction: a cannot-run is never a pass. `SKIP_INTEROP=1` is the way to ask
+# for the other arms on purpose, and is not this.
+case "$EVERY_VERDICT" in
+    *fail*) exit 1 ;;
+esac
+case "$EVERY_VERDICT" in
+    *"cannot run"*)
+        say "RESULT: cannot run — an arm above never ran, so this run verified less than it reports"
+        exit 77
+        ;;
+esac
+exit 0

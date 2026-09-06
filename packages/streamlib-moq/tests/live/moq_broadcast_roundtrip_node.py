@@ -11,6 +11,13 @@
 measured: the same shape, with display names the driving script can find
 processors by and a control plane it can read them through.
 
+`--container-format streamlib_bag` runs the same graph with a third track: a
+`TelemetryBagSource` publishing one small bag per tick into `tracks`, and the
+subscriber's `data_bags` read by a `TelemetryBagSink` on the far side. The
+tracks are named rather than numbered there — `track_names` is what lets a
+subscriber ask for `video`, `audio` and `telemetry` — and the data arm's
+verdict is `verify_tapped_telemetry_bags.py` over what came back.
+
 Nothing joins the two halves locally. Every frame the decoder publishes crossed
 the network twice, so a channel mean taken off its output and matched against
 the vivid baseline the codec rig captured is a statement about this wheel — the
@@ -26,22 +33,31 @@ directory either.
 
 import argparse
 import os
+from typing import Any
 
 import streamlib
+from moq_live_telemetry_processors import TelemetryBagSink, TelemetryBagSource
 from streamlib_moq import MoqBroadcastPublisher, MoqBroadcastSubscriber
 
-#: CMAF, because the `moq-sub` interop read is what this node proves. A
-#: `streamlib_bag` run is no longer blocked on track naming — the publisher's
-#: `track_names` lets a subscriber name what it wants — and that arm, with a
-#: data track beside the media, is the fixture's next one; it is not built yet.
-CONTAINER_FORMAT = "cmaf"
+#: Both containers this wheel writes, each its own arm of the proof. `cmaf` is
+#: the one `moq-sub` reads, so it is what the interop arm needs; `streamlib_bag`
+#: is the one a data track rides, and the only one whose track names the app
+#: chooses.
+CONTAINER_FORMATS = ("cmaf", "streamlib_bag")
 
-#: What the subscriber asks for. Under CMAF the container names media tracks
+#: What the subscriber asks for under CMAF: the container names media tracks
 #: `{track_id}.m4s`, numbered from one in declaration order — which is
 #: `runtime.connect` order, so wiring video into `tracks` first is what makes
 #: video track one.
-VIDEO_TRACK_NAME = "1.m4s"
-AUDIO_TRACK_NAME = "2.m4s"
+CMAF_VIDEO_TRACK_NAME = "1.m4s"
+CMAF_AUDIO_TRACK_NAME = "2.m4s"
+
+#: What the subscriber asks for under `streamlib_bag`, and what the publisher's
+#: `track_names` declares them as — positionally, in wiring order, so this
+#: tuple's order is the order the connects below run in.
+BAG_VIDEO_TRACK_NAME = "video"
+BAG_AUDIO_TRACK_NAME = "audio"
+BAG_DATA_TRACK_NAME = "telemetry"
 
 #: Stated rather than left to the encoder's default, because the baseline this
 #: run locks against was captured with it stated: one baseline scores two paths
@@ -88,6 +104,15 @@ def main() -> None:
             "the network (default: the backend's own default device)"
         ),
     )
+    parser.add_argument(
+        "--container-format",
+        choices=CONTAINER_FORMATS,
+        default="cmaf",
+        help=(
+            "which container the broadcast is written in; `streamlib_bag` adds "
+            "the named tracks and the telemetry data track"
+        ),
+    )
     parser.add_argument("--control-plane-port", type=int, default=9000)
     # The drop policy's two arms are one run each with this set and unset: the
     # baseline is as much of the deliverable as the improvement is, so the
@@ -121,29 +146,43 @@ def main() -> None:
     arguments = parser.parse_args()
 
     relay_url = _relay_url_from_the_environment()
+    carries_a_data_track = arguments.container_format == "streamlib_bag"
 
     runtime = streamlib.Runtime()
 
+    publisher_config: "dict[str, Any]" = {
+        "relay_url": relay_url,
+        "broadcast": arguments.broadcast,
+        "container_format": arguments.container_format,
+        "delivery_deadline_ms": arguments.delivery_deadline_ms,
+    }
+    subscriber_config: "dict[str, Any]" = {
+        "relay_url": relay_url,
+        "broadcast": arguments.broadcast,
+        "container_format": arguments.container_format,
+        "video_track": CMAF_VIDEO_TRACK_NAME,
+        "audio_track": None if arguments.video_only else CMAF_AUDIO_TRACK_NAME,
+    }
+    if carries_a_data_track:
+        # Positional, in the order the connects below run: video, then audio
+        # where there is any, then telemetry. Under CMAF the names are the
+        # interop contract and the publisher refuses to be given them.
+        publisher_config["track_names"] = [
+            BAG_VIDEO_TRACK_NAME,
+            *([] if arguments.video_only else [BAG_AUDIO_TRACK_NAME]),
+            BAG_DATA_TRACK_NAME,
+        ]
+        subscriber_config["video_track"] = BAG_VIDEO_TRACK_NAME
+        subscriber_config["audio_track"] = (
+            None if arguments.video_only else BAG_AUDIO_TRACK_NAME
+        )
+        subscriber_config["data_track"] = BAG_DATA_TRACK_NAME
+
     publisher = runtime.add(
-        MoqBroadcastPublisher,
-        config={
-            "relay_url": relay_url,
-            "broadcast": arguments.broadcast,
-            "container_format": CONTAINER_FORMAT,
-            "delivery_deadline_ms": arguments.delivery_deadline_ms,
-        },
-        display_name="publisher",
+        MoqBroadcastPublisher, config=publisher_config, display_name="publisher"
     )
     subscriber = runtime.add(
-        MoqBroadcastSubscriber,
-        config={
-            "relay_url": relay_url,
-            "broadcast": arguments.broadcast,
-            "container_format": CONTAINER_FORMAT,
-            "video_track": VIDEO_TRACK_NAME,
-            "audio_track": None if arguments.video_only else AUDIO_TRACK_NAME,
-        },
-        display_name="subscriber",
+        MoqBroadcastSubscriber, config=subscriber_config, display_name="subscriber"
     )
 
     camera = runtime.add(
@@ -202,6 +241,19 @@ def main() -> None:
             subscriber.output("encoded_audio"), audio_decoder.input("encoded_audio")
         )
         runtime.connect(audio_decoder.output("audio"), speaker.input("audio"))
+
+    if carries_a_data_track:
+        telemetry_source = runtime.add(
+            TelemetryBagSource, display_name="telemetry_source"
+        )
+        telemetry_sink = runtime.add(TelemetryBagSink, display_name="telemetry_sink")
+        # Last into `tracks`, so `track_names` names it last.
+        runtime.connect(
+            telemetry_source.output("telemetry"), publisher.input("tracks")
+        )
+        runtime.connect(
+            subscriber.output("data_bags"), telemetry_sink.input("data_bags")
+        )
 
     # Loopback rather than the default every interface: this node exists to be
     # tapped from the machine it runs on, and it carries no authentication —
