@@ -38,7 +38,7 @@ extension-module = ["pyo3/extension-module"]
 # exist for them.
 pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
 
-streamlib = { path = "../streamlib-sdk", version = "0.18.55" }
+streamlib = { path = "../streamlib-sdk", version = "0.18.56" }
 
 # The one control plane, hosted in-process by a runtime that enables it
 # (`rt.host_control_plane(...)`) — what makes a Python-launched app show up in
@@ -49,14 +49,14 @@ streamlib-api-server = { path = "../../runtime/streamlib-api-server" }
 # The native media built-ins the wheel exports as pre-built named blocks
 # (`rt.add(TestPatternSource)`), statically linked so they are current by
 # construction.
-streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.18.55" }
+streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.18.56" }
 
 # The workspace's single DLPack home: the `#[repr(C)]` v0.8 ABI mirrors, the
 # managed-tensor builders, and the layout regression test that pins them. The
 # pixel-exchange surface builds its capsules here rather than growing a second
 # copy of the spec — the CUDA half of the same adapter is what the device-memory
 # export path uses.
-streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.18.55" }
+streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.18.56" }
 
 # The bag's value tree. A bag crosses into Python as ordinary Python data, and
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
@@ -90,8 +90,8 @@ cudarc = { workspace = true }
 # consumer-side Vulkan import that turns its DMA-BUF plane fds into mapped
 # memory. Both already ride in the binary via the engine; named here so the
 # wheel can call them.
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.18.55" }
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.18.55" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.18.56" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.18.56" }
 
 [lints]
 workspace = true
