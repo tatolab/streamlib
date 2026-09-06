@@ -107,11 +107,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   contestable: a first-party capability ships inside the wheel only if (a) its per-frame
   path has a deadline the helper hop cannot meet — a vsync-paced present loop, a device
   audio callback — or (b) it needs an engine-only primitive the handle-shaped surface does
-  not export, and in either case (c) a named consumer exists. Everything else is an
+  not export, or (c) it presents an OS-facing device to the other applications on the
+  machine — a virtual camera; a virtual microphone would be the same case — which
+  `pip install streamlib` alone must make available, with no further package to install;
+  and in every case (d) a named consumer exists. Everything else is an
   extension. What an extension needs and the engine does not yet expose is engine work,
   done as engine code inside the extension's own change, rather than by the extension
   reaching past the surface. Known gaps at the pivot: a Python compute dispatch cannot
-  bind a storage buffer, and codec sessions are not exported to Python. [extension-model]
+  bind a storage buffer, and codec sessions are not exported to Python. [extension-model;
+  clause (c) added by virtual-camera-sink, 2026-09-06]
 - **DECIDED** — The `streamlib` wheel exports its bag codec as two module-level functions
   with stub entries: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
   `decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any`. They are the
@@ -807,6 +811,26 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [importable-python-library — SHIPPED #1709; extension-model for the scope clause]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_native_builtin_blocks.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
+- **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
+  (c): `VirtualCameraSink`, in the media built-ins crate, Linux only, several instances
+  allowed with one device each. It takes video on an input `video` declared `newest`, the
+  display's shape, and presents the frames as a V4L2 capture device that any application
+  on the machine opens as a camera. The backend is v4l2loopback: memory-mapped output
+  streaming, YUYV, the device format set from the first frame's extent and re-negotiated
+  when the extent changes, and the frame's monotonic timestamp passed through on every
+  queued buffer so a consumer sees the capture instant. Config `device` is optional: unset
+  picks the first loopback output device found, the camera source's own rule; set names
+  one. No loopback device, a device of another driver, or a device another producer holds
+  refuses at `setup()` by name, carrying the `modprobe` line to run — the processor never
+  reaches Running and the runtime keeps running, the codec blocks' shape; nothing in the
+  engine loads a module or asks for elevation. The per-frame path is one GPU pass: the
+  RGBA→YUYV conversion kernel writes straight into the mapped loopback buffer through a
+  host-pointer import the RHI gains (`VK_EXT_external_memory_host`), so no CPU touches a
+  pixel; where the driver refuses that import, the same kernel writes into cached host
+  staging and one copy lands it, and the import experiment on the platform floor settles
+  which branch is the default. The device is reached through V4L2 ioctls alone: no
+  user-space library is linked and the wheel's `DT_NEEDED` set does not grow.
+  [virtual-camera-sink]
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD import-export, present target,
   audio clock, color resolution, codec sessions — never against private engine guts;
@@ -1790,6 +1814,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   by the app's own project, the shader precedent — never discovered from
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
+- **OPEN** — A PipeWire camera-role node as a second door for the virtual camera. A
+  `Video/Source` node with `media.role = Camera` lands in the set the desktop portal
+  exposes, beside the V4L2 cameras, and would carry the engine's DMA-BUF textures with
+  no module and no root; but on the platform floor only Firefox on distributions that
+  flipped its PipeWire-camera default and Chrome behind a flag look there, so it has no
+  consumer. Held until one appears; the loopback door is the one that ships.
+  [virtual-camera-sink]
 
 ## Networking — transport, moq, webrtc — IN-FLIGHT
 

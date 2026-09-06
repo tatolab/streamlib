@@ -16,11 +16,12 @@ expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 "module" (pre-pivot module-system terms).
 
 **Built-in**: a first-party native processor shipped inside the wheel (camera, display,
-audio, the seven codec blocks) — instantiated and configured from Python; its per-frame
-path never enters the interpreter. Since the 2026-09-04 extension-model pivot, not the
-default home for a first-party capability: a new built-in must meet the criterion in
-§Packages & extension model — a deadline the helper hop cannot meet, or an engine-only
-primitive, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
+audio, the seven codec blocks, the virtual camera) — instantiated and configured from
+Python; its per-frame path never enters the interpreter. Since the 2026-09-04
+extension-model pivot, not the default home for a first-party capability: a new built-in
+must meet the criterion in §Packages & extension model — a deadline the helper hop cannot
+meet, an engine-only primitive, or an OS-facing device the wheel must present to other
+applications, and a named consumer. _Avoid_: "built-in" for an optional capability (that is an
 **extension wheel**).
 
 **Extension wheel**: a separate PyPI package — Rust inside for speed, a Python processor as
