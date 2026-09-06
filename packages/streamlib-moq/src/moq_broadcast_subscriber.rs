@@ -28,12 +28,13 @@ use crate::moq_broadcast_catalog::{CMAF_PACKAGING, INIT_TRACK_NAME};
 use crate::moq_broadcast_publisher::MoqContainerFormat;
 use crate::moq_relay_config::MoqRelayConfig;
 use crate::moq_session::MoqBroadcastSubscribingSession;
+use crate::moq_track_sample::{DataTrackObject, MoqTrackKind, MoqTrackSample};
 use crate::streamlib_bag_object::decode_object;
 
 /// What a refusal from this path calls the session it was reading.
 const SUBSCRIBING_SESSION_ROLE: &str = "subscribing";
 
-/// One subscribed broadcast, read as encoded bags.
+/// One subscribed broadcast, read as encoded bags and data objects.
 pub(crate) struct MoqBroadcastSubscriber {
     relay_config: MoqRelayConfig,
     /// Every track the session subscribes to, in the order it opens them: the
@@ -44,52 +45,71 @@ pub(crate) struct MoqBroadcastSubscriber {
     subscribing_session: Option<MoqBroadcastSubscribingSession>,
     /// One CMAF object may carry more than one sample, and `next_sample` hands
     /// back one. The rest wait here rather than being dropped.
-    samples_awaiting_the_reader: VecDeque<EncodedMediaSample>,
+    samples_awaiting_the_reader: VecDeque<MoqTrackSample>,
 }
 
 impl MoqBroadcastSubscriber {
     /// Describe a subscription: where to connect, which container to read, and
-    /// which track carries each medium.
+    /// which track carries each kind — video, audio, data.
     pub(crate) fn new(
         relay_config: MoqRelayConfig,
         container_format: MoqContainerFormat,
         video_track_name: Option<String>,
         audio_track_name: Option<String>,
+        data_track_name: Option<String>,
     ) -> Result<Self> {
-        if video_track_name.is_none() && audio_track_name.is_none() {
+        if video_track_name.is_none() && audio_track_name.is_none() && data_track_name.is_none() {
             return Err(MoqExtensionError::Refused {
-                what: "a subscriber naming neither a video track nor an audio track subscribes \
-                       to nothing and publishes nothing, which reads from outside as a hang — \
-                       name at least one of `video_track` and `audio_track`"
+                what: "a subscriber naming no track subscribes to nothing and publishes nothing, \
+                       which reads from outside as a hang — name at least one of `video_track`, \
+                       `audio_track` and `data_track`"
                     .to_owned(),
             });
         }
-        for (medium, configured_track_name) in [
-            (TrackMedium::Video, &video_track_name),
-            (TrackMedium::Audio, &audio_track_name),
-        ] {
+        let configured_track_names = [
+            (MoqTrackKind::Media(TrackMedium::Video), &video_track_name),
+            (MoqTrackKind::Media(TrackMedium::Audio), &audio_track_name),
+            (MoqTrackKind::Data, &data_track_name),
+        ];
+        for (kind, configured_track_name) in configured_track_names {
             if configured_track_name.as_deref().is_some_and(str::is_empty) {
                 return Err(MoqExtensionError::Refused {
                     what: format!(
-                        "`{}_track` is the empty string, which names no track on the relay; \
-                         leave it unset to subscribe to no {} at all",
-                        medium.as_str(),
-                        medium.as_str()
+                        "`{kind}_track` is the empty string, which names no track on the relay; \
+                         leave it unset to subscribe to no {kind} at all",
+                        kind = kind.as_str()
                     ),
                 });
             }
         }
-        if video_track_name.is_some() && video_track_name == audio_track_name {
+        for (index, (kind, configured_track_name)) in configured_track_names.iter().enumerate() {
+            let Some(track_name) = configured_track_name.as_deref() else {
+                continue;
+            };
+            if let Some((other_kind, _)) = configured_track_names[index + 1..]
+                .iter()
+                .find(|(_, other_track_name)| other_track_name.as_deref() == Some(track_name))
+            {
+                return Err(MoqExtensionError::Refused {
+                    what: format!(
+                        "`{}_track` and `{}_track` are both `{track_name}`, and one track is one \
+                         kind, so every object on it would be read twice under two different \
+                         contracts",
+                        kind.as_str(),
+                        other_kind.as_str()
+                    ),
+                });
+            }
+        }
+        if container_format == MoqContainerFormat::Cmaf && data_track_name.is_some() {
             return Err(MoqExtensionError::Refused {
-                what: format!(
-                    "`video_track` and `audio_track` are both `{}`, and one track is one medium, \
-                     so every object on it would be decoded twice under two different contracts",
-                    video_track_name.as_deref().unwrap_or_default()
-                ),
+                what: "`data_track` names a data track, and the `cmaf` container has no packaging \
+                       for one; a data track rides `streamlib_bag` only"
+                    .to_owned(),
             });
         }
 
-        let mut subscribed_track_names = Vec::with_capacity(3);
+        let mut subscribed_track_names = Vec::with_capacity(4);
         if container_format == MoqContainerFormat::Cmaf {
             // First, and subscribed to even when it is the only track that ever
             // sends: a fragment is undecodable without the parameter sets, the
@@ -98,6 +118,7 @@ impl MoqBroadcastSubscriber {
         }
         subscribed_track_names.extend(video_track_name.iter().cloned());
         subscribed_track_names.extend(audio_track_name.iter().cloned());
+        subscribed_track_names.extend(data_track_name.iter().cloned());
 
         Ok(Self {
             relay_config,
@@ -106,6 +127,7 @@ impl MoqBroadcastSubscriber {
                 container_format,
                 video_track_name,
                 audio_track_name,
+                data_track_name,
             ),
             subscribing_session: None,
             samples_awaiting_the_reader: VecDeque::new(),
@@ -131,7 +153,8 @@ impl MoqBroadcastSubscriber {
         Ok(())
     }
 
-    /// The next bag, or `None` if none was reconstituted inside `timeout`.
+    /// The next sample — an encoded bag, or a data track's object — or `None`
+    /// if none arrived inside `timeout`.
     ///
     /// `None` is also what an object that is not itself a sample returns — the
     /// init segment, an object on a track this subscriber did not name — so a
@@ -139,7 +162,7 @@ impl MoqBroadcastSubscriber {
     pub(crate) async fn next_sample(
         &mut self,
         timeout: Duration,
-    ) -> Result<Option<EncodedMediaSample>> {
+    ) -> Result<Option<MoqTrackSample>> {
         if let Some(sample) = self.samples_awaiting_the_reader.pop_front() {
             return Ok(Some(sample));
         }
@@ -194,6 +217,7 @@ struct ReceivedMoqObjectToEncodedSampleRouter {
     container_format: MoqContainerFormat,
     video_track_name: Option<String>,
     audio_track_name: Option<String>,
+    data_track_name: Option<String>,
     the_init_segment_has_arrived: bool,
     video_track_reconstitution: Option<CmafVideoTrackReconstitution>,
     audio_track_reconstitution: Option<CmafAudioTrackReconstitution>,
@@ -218,11 +242,13 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
         container_format: MoqContainerFormat,
         video_track_name: Option<String>,
         audio_track_name: Option<String>,
+        data_track_name: Option<String>,
     ) -> Self {
         Self {
             container_format,
             video_track_name,
             audio_track_name,
+            data_track_name,
             the_init_segment_has_arrived: false,
             video_track_reconstitution: None,
             audio_track_reconstitution: None,
@@ -241,24 +267,36 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
             self.container_format,
             self.video_track_name.clone(),
             self.audio_track_name.clone(),
+            self.data_track_name.clone(),
         );
     }
 
-    /// The bags one object carries: none for an object that is not a sample.
+    /// The samples one object carries: none for an object that is not one.
     fn route_received_object(
         &mut self,
         track_name: &str,
         payload: &[u8],
-    ) -> Result<Vec<EncodedMediaSample>> {
+    ) -> Result<Vec<MoqTrackSample>> {
         match self.container_format {
-            MoqContainerFormat::StreamlibBag => {
-                let Some(medium) = self.medium_of_track(track_name) else {
+            MoqContainerFormat::StreamlibBag => match self.kind_of_track(track_name) {
+                Some(MoqTrackKind::Media(medium)) => {
+                    Ok(vec![decode_object(payload, medium)?.into()])
+                }
+                // Whole and unread: the envelope's keys are the Python's to
+                // decode, and nothing of a data object is parsed on this side.
+                Some(MoqTrackKind::Data) => Ok(vec![MoqTrackSample::DataObject(DataTrackObject {
+                    envelope_bytes: bytes::Bytes::copy_from_slice(payload),
+                })]),
+                None => {
                     self.report_an_object_on_a_track_this_subscriber_did_not_name(track_name);
-                    return Ok(Vec::new());
-                };
-                Ok(vec![decode_object(payload, medium)?])
-            }
-            MoqContainerFormat::Cmaf => self.route_a_cmaf_object(track_name, payload),
+                    Ok(Vec::new())
+                }
+            },
+            MoqContainerFormat::Cmaf => Ok(self
+                .route_a_cmaf_object(track_name, payload)?
+                .into_iter()
+                .map(MoqTrackSample::from)
+                .collect()),
         }
     }
 
@@ -271,7 +309,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
             self.absorb_the_init_segment(payload)?;
             return Ok(Vec::new());
         }
-        let Some(medium) = self.medium_of_track(track_name) else {
+        let Some(MoqTrackKind::Media(medium)) = self.kind_of_track(track_name) else {
             self.report_an_object_on_a_track_this_subscriber_did_not_name(track_name);
             return Ok(Vec::new());
         };
@@ -488,11 +526,13 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
         Ok(bags)
     }
 
-    fn medium_of_track(&self, track_name: &str) -> Option<TrackMedium> {
+    fn kind_of_track(&self, track_name: &str) -> Option<MoqTrackKind> {
         if self.video_track_name.as_deref() == Some(track_name) {
-            Some(TrackMedium::Video)
+            Some(MoqTrackKind::Media(TrackMedium::Video))
         } else if self.audio_track_name.as_deref() == Some(track_name) {
-            Some(TrackMedium::Audio)
+            Some(MoqTrackKind::Media(TrackMedium::Audio))
+        } else if self.data_track_name.as_deref() == Some(track_name) {
+            Some(MoqTrackKind::Data)
         } else {
             None
         }
@@ -523,7 +563,7 @@ impl ReceivedMoqObjectToEncodedSampleRouter {
             tracing::warn!(
                 track = %track_name,
                 "an object arrived on a track this subscriber did not name; ignoring it, \
-                 because neither output port has a contract for it"
+                 because no output port has a contract for it"
             );
         }
     }
@@ -754,8 +794,20 @@ mod tests {
             container_format,
             video_track_name,
             audio_track_name,
+            None,
         )
         .expect("the fixture names at least one track, which is the only refusal `new` makes")
+    }
+
+    fn a_data_track_subscriber_of(data_track_name: &str) -> MoqBroadcastSubscriber {
+        MoqBroadcastSubscriber::new(
+            a_relay_config(),
+            MoqContainerFormat::StreamlibBag,
+            None,
+            None,
+            Some(data_track_name.to_owned()),
+        )
+        .expect("a data track alone is a subscription")
     }
 
     /// A real H.264 SPS and PPS: profile 0x42 (baseline), level 0x1f.
@@ -918,16 +970,20 @@ mod tests {
     /// writes beside it: 20 ms of Opus's own 48 kHz clock.
     const SAMPLES_A_TWENTY_MILLISECOND_OPUS_PACKET_DECODES_TO: u32 = 960;
 
-    fn the_only_video_access_unit(bags: Vec<EncodedMediaSample>) -> EncodedVideoAccessUnit {
+    fn the_only_video_access_unit(bags: Vec<MoqTrackSample>) -> EncodedVideoAccessUnit {
         match bags.as_slice() {
-            [EncodedMediaSample::VideoAccessUnit(unit)] => unit.clone(),
+            [MoqTrackSample::EncodedMedia(EncodedMediaSample::VideoAccessUnit(unit))] => {
+                unit.clone()
+            }
             other => panic!("expected exactly one video access unit, got {other:?}"),
         }
     }
 
-    fn the_only_audio_packet(bags: Vec<EncodedMediaSample>) -> EncodedAudioPacket {
+    fn the_only_audio_packet(bags: Vec<MoqTrackSample>) -> EncodedAudioPacket {
         match bags.as_slice() {
-            [EncodedMediaSample::AudioPacket(packet)] => packet.clone(),
+            [MoqTrackSample::EncodedMedia(EncodedMediaSample::AudioPacket(packet))] => {
+                packet.clone()
+            }
             other => panic!("expected exactly one Opus packet, got {other:?}"),
         }
     }
@@ -995,7 +1051,7 @@ mod tests {
             color: None,
             timestamp_ns: 1,
         });
-        the_only_video_access_unit(vec![a_bag.clone(), a_bag]);
+        the_only_video_access_unit(vec![a_bag.clone().into(), a_bag.into()]);
     }
 
     #[test]
@@ -1013,20 +1069,198 @@ mod tests {
             pre_skip: PUBLISHED_OPUS_PRE_SKIP,
             timestamp_ns: 1,
         });
-        the_only_audio_packet(vec![a_bag.clone(), a_bag]);
+        the_only_audio_packet(vec![a_bag.clone().into(), a_bag.into()]);
     }
 
     #[test]
     fn a_subscriber_naming_no_track_at_all_is_refused_rather_than_left_to_produce_nothing() {
-        let refusal =
-            MoqBroadcastSubscriber::new(a_relay_config(), MoqContainerFormat::Cmaf, None, None)
-                .map(drop)
-                .expect_err("naming neither track subscribes to nothing");
+        let refusal = MoqBroadcastSubscriber::new(
+            a_relay_config(),
+            MoqContainerFormat::Cmaf,
+            None,
+            None,
+            None,
+        )
+        .map(drop)
+        .expect_err("naming no track subscribes to nothing");
         assert!(
             matches!(refusal, MoqExtensionError::Refused { .. }),
             "a caller that named no track passed something wrong, so this is a ValueError on the \
              Python side; got {refusal:?}"
         );
+        assert!(
+            refusal.to_string().contains("`data_track`"),
+            "the refusal names every track a subscriber can name; got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_subscriber_naming_only_a_data_track_subscribes_to_it_and_nothing_else() {
+        let subscriber = a_data_track_subscriber_of("telemetry");
+        assert_eq!(
+            subscriber.subscribed_track_names,
+            vec!["telemetry".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_streamlib_bag_subscriber_naming_a_data_track_subscribes_to_it_beside_its_media() {
+        let subscriber = MoqBroadcastSubscriber::new(
+            a_relay_config(),
+            MoqContainerFormat::StreamlibBag,
+            Some("video".to_owned()),
+            Some("audio".to_owned()),
+            Some("telemetry".to_owned()),
+        )
+        .expect("three tracks of three kinds");
+        assert_eq!(
+            subscriber.subscribed_track_names,
+            vec![
+                "video".to_owned(),
+                "audio".to_owned(),
+                "telemetry".to_owned()
+            ],
+            "the data track joins the media tracks; nothing about them changes"
+        );
+    }
+
+    #[test]
+    fn a_data_track_under_cmaf_is_refused_by_name() {
+        let refusal = MoqBroadcastSubscriber::new(
+            a_relay_config(),
+            MoqContainerFormat::Cmaf,
+            Some(media_track_name(VIDEO_TRACK_ID)),
+            None,
+            Some("telemetry".to_owned()),
+        )
+        .map(drop)
+        .expect_err("CMAF has no packaging for a data track");
+        assert!(
+            matches!(refusal, MoqExtensionError::Refused { .. }),
+            "the caller asked for a container that cannot carry what they named, which is a \
+             bad call; got {refusal:?}"
+        );
+        let said = refusal.to_string();
+        assert!(
+            said.contains("`data_track`") && said.contains("`cmaf`"),
+            "the refusal names the config and the container; got {said}"
+        );
+    }
+
+    #[test]
+    fn a_data_track_object_is_handed_back_byte_for_byte_and_never_parsed() {
+        // Not msgpack, not anything: the Rust hands a data object through
+        // whole, and what its bytes mean is the Python's to decide.
+        let published: &[u8] = b"\x83\xaesequence_index\x07 whatever the envelope holds";
+        let mut subscriber = a_data_track_subscriber_of("telemetry");
+
+        let samples = subscriber
+            .received_object_router
+            .route_received_object("telemetry", published)
+            .expect("a data object is never malformed on this side; nothing here reads it");
+
+        assert_eq!(
+            samples,
+            vec![MoqTrackSample::DataObject(DataTrackObject {
+                envelope_bytes: bytes::Bytes::copy_from_slice(published),
+            })],
+            "the same bytes out, untouched"
+        );
+    }
+
+    #[test]
+    fn a_data_object_on_a_subscriber_that_named_no_data_track_is_ignored_as_a_stray() {
+        let mut subscriber = a_subscriber_of(
+            MoqContainerFormat::StreamlibBag,
+            Some("video".to_owned()),
+            None,
+        );
+
+        let samples = subscriber
+            .received_object_router
+            .route_received_object("telemetry", b"whatever this is")
+            .expect("an unnamed track is ignored, not refused");
+
+        assert!(samples.is_empty());
+        assert!(
+            subscriber
+                .received_object_router
+                .track_names_reported_as_unnamed
+                .contains("telemetry"),
+            "no output port has a contract for it, and the drop is reported once per track"
+        );
+    }
+
+    #[test]
+    fn a_media_object_on_the_data_track_is_still_handed_through_as_bytes() {
+        // The kind is the config's, not the bytes': an encoded-media object
+        // that a publisher misrouted onto the data track is a data object here,
+        // and the Python's envelope refusal is what names it.
+        let published = encode_object(
+            &EncodedMediaSample::AudioPacket(EncodedAudioPacket {
+                codec: "opus".to_owned(),
+                opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
+                is_sync_point: true,
+                group_index: 0,
+                sequence_index: 0,
+                sample_rate: 48_000,
+                channels: 2,
+                sample_count: 960,
+                pre_skip: PUBLISHED_OPUS_PRE_SKIP,
+                timestamp_ns: 1,
+            })
+            .into(),
+        )
+        .expect("the fixture bag encodes");
+        let mut subscriber = a_data_track_subscriber_of("telemetry");
+
+        let samples = subscriber
+            .received_object_router
+            .route_received_object("telemetry", &published)
+            .expect("nothing on this side reads a data object");
+
+        assert!(matches!(
+            samples.as_slice(),
+            [MoqTrackSample::DataObject(DataTrackObject { envelope_bytes })] if *envelope_bytes == published
+        ));
+    }
+
+    #[test]
+    fn one_track_name_cannot_carry_media_and_data_because_one_track_is_one_kind() {
+        for (video_track_name, audio_track_name) in [
+            (Some("both".to_owned()), None),
+            (None, Some("both".to_owned())),
+        ] {
+            let refusal = MoqBroadcastSubscriber::new(
+                a_relay_config(),
+                MoqContainerFormat::StreamlibBag,
+                video_track_name,
+                audio_track_name,
+                Some("both".to_owned()),
+            )
+            .map(drop)
+            .expect_err("one track is one kind");
+            assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
+            assert!(
+                refusal.to_string().contains("`data_track`"),
+                "the refusal names both configs that collide; got {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_data_track_named_as_the_empty_string_is_refused_rather_than_subscribed_to() {
+        let refusal = MoqBroadcastSubscriber::new(
+            a_relay_config(),
+            MoqContainerFormat::StreamlibBag,
+            None,
+            None,
+            Some(String::new()),
+        )
+        .map(drop)
+        .expect_err("the empty string names no track on the relay");
+        assert!(matches!(refusal, MoqExtensionError::Refused { .. }));
+        assert!(refusal.to_string().contains("`data_track`"), "{refusal}");
     }
 
     #[test]
@@ -1096,7 +1330,7 @@ mod tests {
 
         assert_eq!(
             bags,
-            vec![published],
+            vec![published.into()],
             "every key including the producer's ordering pair and its stamp comes back unchanged"
         );
     }
@@ -1718,18 +1952,20 @@ mod tests {
         );
         subscriber
             .samples_awaiting_the_reader
-            .push_back(EncodedMediaSample::AudioPacket(EncodedAudioPacket {
-                codec: "opus".to_owned(),
-                opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
-                is_sync_point: true,
-                group_index: 0,
-                sequence_index: 0,
-                sample_rate: 48_000,
-                channels: 2,
-                sample_count: 960,
-                pre_skip: PUBLISHED_OPUS_PRE_SKIP,
-                timestamp_ns: 1,
-            }));
+            .push_back(MoqTrackSample::EncodedMedia(
+                EncodedMediaSample::AudioPacket(EncodedAudioPacket {
+                    codec: "opus".to_owned(),
+                    opus_packet: bytes::Bytes::from(a_twenty_millisecond_stereo_opus_packet()),
+                    is_sync_point: true,
+                    group_index: 0,
+                    sequence_index: 0,
+                    sample_rate: 48_000,
+                    channels: 2,
+                    sample_count: 960,
+                    pre_skip: PUBLISHED_OPUS_PRE_SKIP,
+                    timestamp_ns: 1,
+                }),
+            ));
 
         let captured_levels = TracingEventLevelsCapturedWhileASubscriberRuns::default();
         tracing::subscriber::with_default(captured_levels.clone(), || subscriber.close());
@@ -1749,6 +1985,7 @@ mod tests {
             MoqContainerFormat::StreamlibBag,
             Some("both".to_owned()),
             Some("both".to_owned()),
+            None,
         )
         .map(drop)
         .expect_err("one track is one medium");
@@ -1761,6 +1998,7 @@ mod tests {
             a_relay_config(),
             MoqContainerFormat::StreamlibBag,
             Some(String::new()),
+            None,
             None,
         )
         .map(drop)

@@ -21,6 +21,7 @@ from typing import final
 __all__ = [
     "MoqBroadcastPublishingSession",
     "MoqBroadcastSubscribingSession",
+    "ReceivedDataObject",
     "ReceivedOpusPacket",
     "ReceivedVideoAccessUnit",
     "bring_up_the_transport_stack",
@@ -158,13 +159,22 @@ class MoqBroadcastSubscribingSession:
         container_format: str,
         video_track: "str | None" = None,
         audio_track: "str | None" = None,
-    ) -> MoqBroadcastSubscribingSession: ...
+        data_track: "str | None" = None,
+    ) -> MoqBroadcastSubscribingSession:
+        """Describe a subscription without connecting.
+
+        Each track name is the one the broadcast publishes under. Refused by
+        name when none of the three is given, when one is the empty string,
+        when two are the same name, and when `data_track` is given under
+        `cmaf`, which has no packaging for a data track.
+        """
+
     def connect(self) -> None:
         """Connect and begin draining. Called from the processor's own thread."""
 
     def next_media(
         self, timeout_ms: int
-    ) -> "ReceivedVideoAccessUnit | ReceivedOpusPacket | None":
+    ) -> "ReceivedVideoAccessUnit | ReceivedOpusPacket | ReceivedDataObject | None":
         """The next object, or `None` if none arrived in `timeout_ms`.
 
         The timeout is what lets a reading thread notice it has been asked to
@@ -259,3 +269,21 @@ class ReceivedOpusPacket:
 
     @property
     def timestamp_ns(self) -> int: ...
+
+@final
+class ReceivedDataObject:
+    """One object off the data track, whole and undecoded.
+
+    No `timestamp_ns` here: a data object's stamp is inside its envelope,
+    beside the publisher's `sequence_index` and the user's bag, and decoding
+    the envelope is the Python's.
+    """
+
+    @property
+    def track_name(self) -> str:
+        """The data track this subscription named."""
+
+    @property
+    def payload(self) -> bytes:
+        """The object's bytes as they arrived — the envelope the publisher
+        encoded with the engine's bag codec, parsed by nothing on the way."""
