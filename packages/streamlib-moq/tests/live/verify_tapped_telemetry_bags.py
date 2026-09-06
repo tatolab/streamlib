@@ -26,8 +26,10 @@ only if the publisher's envelope carried the stamp and the subscriber restated
 it. Ordering is *not* asserted — a subscriber that joins mid-group replays the
 open group, which is MoQ's behaviour and accepted rather than masked.
 
-Takes what `streamlib tap` returned; prints the report as JSON; exit status is
-the verdict.
+Takes what `streamlib tap` returned — one file per tap round, because a
+single tap collects over a window of about half a second and a sample that
+narrow cannot show an intermittent corruption. Prints the report as JSON; exit
+status is the verdict.
 """
 
 import argparse
@@ -120,7 +122,11 @@ def report_for(tapped_bags: "list[dict[str, Any]]") -> "dict[str, Any]":
 
 def main(argv: "list[str]") -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("tapped_bags_json", help="what `streamlib tap` returned")
+    parser.add_argument(
+        "tapped_bags_json",
+        nargs="+",
+        help="what `streamlib tap` returned, one file per round",
+    )
     parser.add_argument(
         "--minimum-bags",
         type=int,
@@ -129,9 +135,11 @@ def main(argv: "list[str]") -> int:
     )
     arguments = parser.parse_args(argv[1:])
 
-    with open(arguments.tapped_bags_json) as tapped_bags_file:
-        tap_result = json.load(tapped_bags_file)
-    bags = tap_result["bags"] if isinstance(tap_result, dict) else tap_result
+    bags: "list[dict[str, Any]]" = []
+    for tapped_bags_path in arguments.tapped_bags_json:
+        with open(tapped_bags_path) as tapped_bags_file:
+            tap_result = json.load(tapped_bags_file)
+        bags.extend(tap_result["bags"] if isinstance(tap_result, dict) else tap_result)
 
     report = report_for(bags)
     if len(bags) < arguments.minimum_bags:
