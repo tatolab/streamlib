@@ -4,13 +4,16 @@
 //! Engine-owned color converter — `(src_format, dst_format)`-keyed
 //! kernel that consumes [`ResolvedColorInfo`] as push-constant state.
 //! The compute kernels are
-//! `vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.comp` and
-//! `vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.comp`.
+//! `vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.comp`,
+//! `vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.comp` and, in the
+//! other direction, `vulkan/rhi/shaders/color_convert_rgba_image_to_yuyv_buffer.comp`.
 //!
 //! Per-frame [`ResolvedColorInfo`] changes cost one
 //! `set_push_constants_value` call rather than a pipeline rebuild.
 
-use crate::core::color::{ColorSpaceKind, ResolvedColorInfo, TransferId, yuv_to_rgb_matrix};
+use crate::core::color::{
+    ColorSpaceKind, ResolvedColorInfo, TransferId, rgb_to_yuv_matrix, yuv_to_rgb_matrix,
+};
 use crate::core::rhi::PixelFormat;
 
 #[cfg(target_os = "linux")]
@@ -27,14 +30,17 @@ use crate::core::rhi::Texture;
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ColorConverterPushConstants {
-    /// Row 0 of the YCbCr→RGB matrix, `(r·y, r·cb, r·cr, _pad)`.
+    /// Row 0 of the colour matrix: YCbCr→RGB `(r·y, r·cb, r·cr, _pad)` on
+    /// the decode kernels, RGB→YCbCr `(y·r, y·g, y·b, _pad)` on the encode
+    /// one.
     pub matrix_row0: [f32; 4],
-    /// Row 1 of the YCbCr→RGB matrix, `(g·y, g·cb, g·cr, _pad)`.
+    /// Row 1 of the colour matrix, same convention as `matrix_row0`.
     pub matrix_row1: [f32; 4],
-    /// Row 2 of the YCbCr→RGB matrix, `(b·y, b·cb, b·cr, _pad)`.
+    /// Row 2 of the colour matrix, same convention as `matrix_row0`.
     pub matrix_row2: [f32; 4],
-    /// Byte-domain offset subtracted from raw YCbCr before the matrix
-    /// multiply, `(y_offset, cb_offset, cr_offset, _pad)`.
+    /// Byte-domain offset `(y_offset, cb_offset, cr_offset, _pad)`:
+    /// subtracted from raw YCbCr before the decode multiply, added after
+    /// the encode one.
     pub range_offset: [f32; 4],
     /// Frame width in pixels.
     pub width: u32,
@@ -49,9 +55,10 @@ pub struct ColorConverterPushConstants {
     /// tone mapping.
     pub flags: u32,
     /// Row stride in bytes for the primary plane (Y plane for NV12,
-    /// the packed plane for YUYV). Set to `width` for tightly-packed
-    /// data; honors V4L2 `bytesperline` padding for camera sources
-    /// where vivid + some UVC drivers use 2×width strides.
+    /// the packed plane for YUYV) — of the source on the decode kernels,
+    /// of the destination on the encode one. Set to `width` for
+    /// tightly-packed data; honors V4L2 `bytesperline` padding, which
+    /// vivid + some UVC drivers report as 2×width strides.
     pub plane0_stride_bytes: u32,
     /// Row stride in bytes for the secondary plane (UV plane for
     /// NV12). Set to `width` for tightly-packed NV12; ignored for
@@ -113,6 +120,35 @@ impl ColorConverterPushConstants {
             plane0_stride_bytes: layout.plane0_stride_bytes,
             plane1_stride_bytes: layout.plane1_stride_bytes,
             plane1_offset_bytes: layout.plane1_offset_bytes,
+        }
+    }
+
+    /// Build push-constants for the RGB→YCbCr kernel: the matrix rows are
+    /// the encoding decomposition and `range_offset` is added after the
+    /// multiply. The source is the engine's RGBA texture, already in the
+    /// output curve, so the transfer path stays off.
+    pub fn from_resolved_for_rgb_to_ycbcr(
+        info: &ResolvedColorInfo,
+        width: u32,
+        height: u32,
+        destination_stride_bytes: u32,
+    ) -> Self {
+        let decomposition = rgb_to_yuv_matrix(info.matrix, info.range);
+        let m = decomposition.matrix_row_major;
+        let off = decomposition.offset;
+        Self {
+            matrix_row0: [m[0], m[1], m[2], 0.0],
+            matrix_row1: [m[3], m[4], m[5], 0.0],
+            matrix_row2: [m[6], m[7], m[8], 0.0],
+            range_offset: [off[0], off[1], off[2], 0.0],
+            width,
+            height,
+            transfer_in: info.transfer as u32,
+            transfer_out: info.transfer as u32,
+            flags: 0,
+            plane0_stride_bytes: destination_stride_bytes,
+            plane1_stride_bytes: 0,
+            plane1_offset_bytes: 0,
         }
     }
 }
@@ -268,6 +304,21 @@ impl RhiColorConverterInner {
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.inner
             .prepare_buffer_to_image_pixel(src, src_layout, dst, info, dst_transfer)
+    }
+
+    /// Bind an RGBA texture source, a YUYV storage-buffer destination and
+    /// the encoding push-constants on the image→buffer kernel, and return
+    /// it for recorder-driven dispatch.
+    #[cfg(target_os = "linux")]
+    pub fn prepare_image_to_yuyv_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::StorageBuffer,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.inner
+            .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
     }
 
     /// macOS stub — Apple-platform color conversion lives in the
@@ -444,6 +495,25 @@ impl RhiColorConverter {
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner()
             .prepare_buffer_to_image_pixel(src, src_layout, dst, info, dst_transfer)
+    }
+
+    /// The reverse of [`Self::prepare_buffer_to_image_storage`]: bind an
+    /// RGBA texture source (`SHADER_READ_ONLY_OPTIMAL` when the dispatch
+    /// runs), a YUYV storage-buffer destination of at least
+    /// `dst_stride_bytes × height` bytes, and the encoding push-constants,
+    /// and return the kernel for recorder-driven dispatch. Dispatch it
+    /// over `⌈width/2 / 16⌉ × ⌈height / 16⌉` groups — one thread per
+    /// macropixel.
+    #[cfg(target_os = "linux")]
+    pub fn prepare_image_to_yuyv_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::StorageBuffer,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.host_inner()
+            .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
     }
 
     /// macOS stub.
@@ -629,6 +699,28 @@ mod tests {
         assert!((pc.matrix_row0[0] - 1.0).abs() < 1e-4);
         assert!((pc.matrix_row0[2] - 1.402).abs() < 1e-4);
         assert_eq!(pc.range_offset, [0.0, 128.0, 128.0, 0.0]);
+    }
+
+    /// The encode direction carries the inverse matrix, adds its offset,
+    /// puts the destination stride where the decode kernels read a source
+    /// stride, and leaves the transfer path off.
+    #[test]
+    fn from_resolved_for_rgb_to_ycbcr_carries_the_encoding_table_and_the_destination_stride() {
+        let info = ResolvedColorInfo {
+            primaries: PrimariesId::Bt709,
+            transfer: TransferId::Srgb,
+            matrix: MatrixId::Smpte170m,
+            range: RangeId::Limited,
+        };
+        let pc = ColorConverterPushConstants::from_resolved_for_rgb_to_ycbcr(&info, 640, 480, 1280);
+        // Y′ = (0.299 R + 0.587 G + 0.114 B) · 219/255 + 16.
+        assert!((pc.matrix_row0[0] - 0.299 * 219.0 / 255.0).abs() < 1e-4);
+        assert!((pc.matrix_row0[1] - 0.587 * 219.0 / 255.0).abs() < 1e-4);
+        assert_eq!(pc.range_offset, [16.0, 128.0, 128.0, 0.0]);
+        assert_eq!((pc.width, pc.height), (640, 480));
+        assert_eq!(pc.plane0_stride_bytes, 1280);
+        assert_eq!(pc.flags, 0, "the source is already in the output curve");
+        assert_eq!(pc.transfer_in, pc.transfer_out);
     }
 
     /// PQ source + sRGB destination forces the transfer-conversion

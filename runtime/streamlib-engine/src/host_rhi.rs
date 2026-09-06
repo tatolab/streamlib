@@ -63,7 +63,8 @@ pub use crate::vulkan::rhi::{
 
 #[cfg(target_os = "linux")]
 pub use crate::vulkan::rhi::{
-    MAX_FRAMES_IN_FLIGHT, PixelBufferUploadFinalTextureLayout, PresentFrame, PresentScalingMode,
+    HostMappingTier, HostMappingWrittenByGpu, MAX_FRAMES_IN_FLIGHT,
+    PixelBufferUploadFinalTextureLayout, PresentFrame, PresentScalingMode,
     VulkanPresentCompositor, VulkanPresentTarget,
 };
 

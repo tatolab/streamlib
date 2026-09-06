@@ -1923,6 +1923,29 @@ impl GpuContext {
         crate::vulkan::rhi::RhiCommandRecorder::new(vulkan_device, label)
     }
 
+    /// Import a caller-owned host range for GPU writes — the loopback
+    /// device's mapped output buffer — taking the imported tier when the
+    /// driver allows it and host-cached staging otherwise. See
+    /// [`HostMappingWrittenByGpu`](crate::vulkan::rhi::HostMappingWrittenByGpu)
+    /// for the per-frame protocol and the range's lifetime rule.
+    #[cfg(target_os = "linux")]
+    pub fn import_host_mapping_for_gpu_writes(
+        &self,
+        host_range_ptr: *mut u8,
+        host_range_byte_len: usize,
+    ) -> Result<crate::vulkan::rhi::HostMappingWrittenByGpu> {
+        tracing::debug!(
+            rhi_op = "import_host_mapping_for_gpu_writes",
+            host_range_byte_len,
+            "GpuContext::import_host_mapping_for_gpu_writes"
+        );
+        crate::vulkan::rhi::HostMappingWrittenByGpu::import_for_gpu_writes(
+            &self.device.inner,
+            host_range_ptr,
+            host_range_byte_len,
+        )
+    }
+
     /// Build a swapchain-backed [`PresentTarget`](crate::vulkan::rhi::PresentTarget)
     /// from a native `window` handle, at the requested initial extent +
     /// vsync preference. `color_traits` drives the `VkColorSpaceKHR`
@@ -4406,6 +4429,21 @@ impl GpuContextFullAccess {
         label: &str,
     ) -> Result<crate::vulkan::rhi::RhiCommandRecorder> {
         self.host_inner().create_command_recorder(label)
+    }
+
+    /// Import a caller-owned host range for GPU writes. See
+    /// [`GpuContext::import_host_mapping_for_gpu_writes`](crate::core::context::GpuContext::import_host_mapping_for_gpu_writes).
+    ///
+    /// FullAccess-only: it allocates device memory (an import or a staging
+    /// buffer), which is setup-time work under the escalate gate.
+    #[cfg(target_os = "linux")]
+    pub fn import_host_mapping_for_gpu_writes(
+        &self,
+        host_range_ptr: *mut u8,
+        host_range_byte_len: usize,
+    ) -> Result<crate::vulkan::rhi::HostMappingWrittenByGpu> {
+        self.host_inner()
+            .import_host_mapping_for_gpu_writes(host_range_ptr, host_range_byte_len)
     }
 
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding

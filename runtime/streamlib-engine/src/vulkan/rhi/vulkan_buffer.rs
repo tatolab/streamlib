@@ -119,6 +119,12 @@ pub struct HostVulkanBuffer {
     /// Whether this buffer was imported from a DMA-BUF fd.
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
+    /// Whether this buffer's memory is a caller-owned host range imported
+    /// through `VK_EXT_external_memory_host`. Never mapped by the driver:
+    /// `mapped_ptr` is the caller's own pointer, and teardown frees the
+    /// `VkDeviceMemory` without unmapping.
+    #[cfg(target_os = "linux")]
+    imported_from_host_pointer: bool,
     /// Whether this buffer was allocated from the OPAQUE_FD export pool
     /// (vs the DMA_BUF export pool). Determines which `handle_type` is
     /// passed to `vkGetMemoryFdKHR` on export.
@@ -235,6 +241,8 @@ impl HostVulkanBuffer {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            imported_from_host_pointer: false,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             mapped_ptr,
@@ -577,6 +585,7 @@ impl HostVulkanBuffer {
             allocation: Some(allocation),
             imported_memory: None,
             imported_from_dma_buf: false,
+            imported_from_host_pointer: false,
             is_opaque_fd_export: true,
             mapped_ptr,
             extra_imported_planes: Vec::new(),
@@ -654,6 +663,7 @@ impl HostVulkanBuffer {
             allocation: Some(allocation),
             imported_memory: None,
             imported_from_dma_buf: false,
+            imported_from_host_pointer: false,
             is_opaque_fd_export: true,
             mapped_ptr: std::ptr::null_mut(),
             extra_imported_planes: Vec::new(),
@@ -751,6 +761,7 @@ impl HostVulkanBuffer {
             allocation: Some(allocation),
             imported_memory: None,
             imported_from_dma_buf: false,
+            imported_from_host_pointer: false,
             is_opaque_fd_export: false,
             mapped_ptr,
             extra_imported_planes: Vec::new(),
@@ -936,6 +947,7 @@ impl HostVulkanBuffer {
             allocation: None,
             imported_memory: Some(plane0.memory),
             imported_from_dma_buf: true,
+            imported_from_host_pointer: false,
             is_opaque_fd_export: false,
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
@@ -987,10 +999,179 @@ impl HostVulkanBuffer {
             allocation: None,
             imported_memory: Some(plane.memory),
             imported_from_dma_buf: true,
+            imported_from_host_pointer: false,
             is_opaque_fd_export: false,
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
             size: plane.size,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl HostVulkanBuffer {
+    /// Import a caller-owned host range as a `STORAGE_BUFFER` through
+    /// `VK_EXT_external_memory_host`, so a compute pass writes the range
+    /// in place.
+    ///
+    /// `host_ptr` and `byte_len` must both be multiples of
+    /// [`HostVulkanDevice::min_imported_host_pointer_alignment`], and the
+    /// range must outlive the returned buffer — the driver pins it, it
+    /// never copies it. Refused by name when the extension is absent or
+    /// the driver declines this range (a mapping of another driver's
+    /// device memory is the case the caller has to expect).
+    pub fn from_imported_host_pointer_as_storage_buffer(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        host_ptr: *mut u8,
+        byte_len: u64,
+    ) -> Result<Self> {
+        use vulkanalia::vk::ExtExternalMemoryHostExtensionDeviceCommands as _;
+
+        const CONSTRUCTOR: &str = "HostVulkanBuffer::from_imported_host_pointer_as_storage_buffer";
+        if !vulkan_device.supports_host_pointer_import() {
+            return Err(Error::NotSupported(format!(
+                "{CONSTRUCTOR}: VK_EXT_external_memory_host is not enabled on this device"
+            )));
+        }
+        if byte_len == 0 {
+            return Err(Error::Configuration(format!(
+                "{CONSTRUCTOR}: byte_len must be > 0"
+            )));
+        }
+        let alignment = vulkan_device.min_imported_host_pointer_alignment();
+        if alignment == 0
+            || (host_ptr as u64) % alignment != 0
+            || byte_len % alignment != 0
+        {
+            return Err(Error::Configuration(format!(
+                "{CONSTRUCTOR}: host range {host_ptr:p}+{byte_len} is not aligned to the \
+                 driver's {alignment}-byte import alignment"
+            )));
+        }
+
+        let device = vulkan_device.device();
+        let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
+
+        let mut host_pointer_properties = vk::MemoryHostPointerPropertiesEXT::builder().build();
+        unsafe {
+            device.get_memory_host_pointer_properties_ext(
+                handle_type,
+                host_ptr.cast_const().cast(),
+                &mut host_pointer_properties,
+            )
+        }
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "{CONSTRUCTOR}: the driver declined to import the host range {host_ptr:p}+{byte_len}: {e}"
+            ))
+        })?;
+
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(handle_type)
+            .build();
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(byte_len)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info)
+            .build();
+        let buffer = unsafe { device.create_buffer(&buffer_info, None) }
+            .map_err(|e| Error::GpuError(format!("{CONSTRUCTOR}: vkCreateBuffer failed: {e}")))?;
+
+        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        if requirements.size > byte_len {
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(Error::GpuError(format!(
+                "{CONSTRUCTOR}: the buffer needs {} bytes of memory but the host range is {byte_len}",
+                requirements.size
+            )));
+        }
+        let memory_type_bits = requirements.memory_type_bits & host_pointer_properties.memory_type_bits;
+        let memory = vulkan_device
+            .import_host_pointer_memory(host_ptr, byte_len, memory_type_bits)
+            .map_err(|e| {
+                unsafe { device.destroy_buffer(buffer, None) };
+                e
+            })?;
+        unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+            vulkan_device.free_imported_memory(memory);
+            unsafe { device.destroy_buffer(buffer, None) };
+            Error::GpuError(format!("{CONSTRUCTOR}: vkBindBufferMemory failed: {e}"))
+        })?;
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: None,
+            imported_memory: Some(memory),
+            imported_from_dma_buf: false,
+            imported_from_host_pointer: true,
+            is_opaque_fd_export: false,
+            mapped_ptr: host_ptr,
+            extra_imported_planes: Vec::new(),
+            size: byte_len,
+        })
+    }
+
+    /// Allocate a `STORAGE_BUFFER` the CPU reads back after the GPU writes
+    /// it — HOST_VISIBLE, persistently mapped, and on a HOST_CACHED type
+    /// wherever the device has one. Never the sequential-write allocation
+    /// [`Self::new_storage_buffer_host_visible`] hands out: reading
+    /// write-combined memory with `memcpy` runs at a few hundred MB/s.
+    ///
+    /// Not exportable — this is private staging, never a shared surface.
+    pub fn new_storage_buffer_host_cached_for_cpu_reads(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_len: u64,
+    ) -> Result<Self> {
+        const CONSTRUCTOR: &str = "HostVulkanBuffer::new_storage_buffer_host_cached_for_cpu_reads";
+        if byte_len == 0 {
+            return Err(Error::Configuration(format!(
+                "{CONSTRUCTOR}: byte_len must be > 0"
+            )));
+        }
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(byte_len)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
+            ..Default::default()
+        };
+        let allocator = vulkan_device.allocator();
+        let (buffer, allocation) = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
+            .map_err(|e| Error::GpuError(format!("{CONSTRUCTOR}: vmaCreateBuffer failed: {e}")))?;
+        let alloc_info = allocator.get_allocation_info(allocation);
+        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
+        if mapped_ptr.is_null() {
+            unsafe { allocator.destroy_buffer(buffer, allocation) };
+            return Err(Error::GpuError(format!(
+                "{CONSTRUCTOR}: VMA mapped pointer is null — expected persistent mapping"
+            )));
+        }
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: Some(allocation),
+            imported_memory: None,
+            imported_from_dma_buf: false,
+            imported_from_host_pointer: false,
+            is_opaque_fd_export: false,
+            mapped_ptr,
+            extra_imported_planes: Vec::new(),
+            size: byte_len,
         })
     }
 }
@@ -1073,6 +1254,18 @@ fn teardown_imported_plane(vulkan_device: &Arc<HostVulkanDevice>, plane: VulkanI
 
 impl Drop for HostVulkanBuffer {
     fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        if self.imported_from_host_pointer {
+            unsafe {
+                self.vulkan_device
+                    .device()
+                    .destroy_buffer(self.buffer, None)
+            };
+            if let Some(memory) = self.imported_memory.take() {
+                self.vulkan_device.free_imported_memory(memory);
+            }
+            return;
+        }
         #[cfg(target_os = "linux")]
         if self.imported_from_dma_buf {
             // DMA-BUF import path: raw DeviceMemory, not VMA.

@@ -144,6 +144,9 @@ pub use vulkan_texture_readback::VulkanTextureReadback;
 mod vulkan_color_converter;
 pub use vulkan_color_converter::VulkanColorConverter;
 
+mod vulkan_host_mapping_imported_as_buffer;
+pub use vulkan_host_mapping_imported_as_buffer::{HostMappingTier, HostMappingWrittenByGpu};
+
 #[cfg(target_os = "linux")]
 mod vulkan_video_session;
 #[cfg(target_os = "linux")]

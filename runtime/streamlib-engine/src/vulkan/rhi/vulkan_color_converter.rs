@@ -34,12 +34,18 @@ const BUFFER_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_image(1),  // RGBA output
 ];
 
+const IMAGE_TO_YUYV_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
+    ComputeBindingSpec::sampled_texture(0), // RGBA input, fetched by texel
+    ComputeBindingSpec::storage_buffer(1),  // YUYV byte output
+];
+
 /// Vulkan implementation of [`crate::core::rhi::RhiColorConverter`].
 pub struct VulkanColorConverter {
     vulkan_device: Arc<HostVulkanDevice>,
     src_format: PixelFormat,
     dst_format: PixelFormat,
     buffer_to_image_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
+    image_to_yuyv_buffer_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
 }
 
 impl VulkanColorConverter {
@@ -56,6 +62,7 @@ impl VulkanColorConverter {
             src_format,
             dst_format,
             buffer_to_image_kernel: Mutex::new(None),
+            image_to_yuyv_buffer_kernel: Mutex::new(None),
         })
     }
 
@@ -143,6 +150,78 @@ impl VulkanColorConverter {
         Self::dispatch_buffer_to_image(&kernel, dst)
     }
 
+    /// Bind an RGBA texture source, a YUYV storage-buffer destination and
+    /// the encoding push-constants on the image→buffer kernel, and return
+    /// it for the caller to dispatch over `⌈width/2 / 16⌉ × ⌈height / 16⌉`
+    /// groups. The destination must hold `dst_stride_bytes × height` bytes.
+    pub fn prepare_image_to_yuyv_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::StorageBuffer,
+        dst_stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Result<Arc<VulkanComputeKernel>> {
+        let (width, height) = (src.width(), src.height());
+        if dst_stride_bytes < width * 2 || dst_stride_bytes % 4 != 0 {
+            return Err(Error::Configuration(format!(
+                "color converter image→YUYV: destination stride {dst_stride_bytes} must be a \
+                 multiple of 4 and at least 2 × width ({width})"
+            )));
+        }
+        let needed = u64::from(dst_stride_bytes) * u64::from(height);
+        if dst.byte_size() < needed {
+            return Err(Error::Configuration(format!(
+                "color converter image→YUYV: destination holds {} bytes but {height} rows of \
+                 {dst_stride_bytes} need {needed}",
+                dst.byte_size()
+            )));
+        }
+        let kernel = self.get_or_build_image_to_yuyv_buffer_kernel()?;
+        kernel.set_sampled_texture(0, src)?;
+        kernel.set_storage_buffer_storage(1, dst)?;
+        let push = ColorConverterPushConstants::from_resolved_for_rgb_to_ycbcr(
+            info,
+            width,
+            height,
+            dst_stride_bytes,
+        );
+        kernel.set_push_constants_value(&push)?;
+        Ok(kernel)
+    }
+
+    fn get_or_build_image_to_yuyv_buffer_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
+        let mut guard = self.image_to_yuyv_buffer_kernel.lock();
+        if let Some(k) = guard.as_ref() {
+            return Ok(Arc::clone(k));
+        }
+        if self.dst_format != PixelFormat::Yuyv422 {
+            return Err(Error::NotSupported(format!(
+                "color converter image→buffer path: destination {:?} is not YUYV",
+                self.dst_format
+            )));
+        }
+        let spv: &[u8] = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/color_convert_rgba_image_to_yuyv_buffer.spv"
+        ));
+        let label = format!(
+            "color_convert_image_to_buffer:{:?}_to_{:?}",
+            self.src_format, self.dst_format
+        );
+        let kernel = Arc::new(VulkanComputeKernel::new(
+            &self.vulkan_device,
+            &ComputeKernelDescriptor {
+                entry_point: "main",
+                label: label.as_str(),
+                spv,
+                bindings: IMAGE_TO_YUYV_BUFFER_BINDINGS,
+                push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+            },
+        )?);
+        *guard = Some(Arc::clone(&kernel));
+        Ok(kernel)
+    }
+
     fn finish_buffer_to_image(
         &self,
         kernel: &VulkanComputeKernel,
@@ -220,19 +299,20 @@ impl VulkanColorConverter {
 }
 
 fn validate_format_pair(src: PixelFormat, dst: PixelFormat) -> Result<()> {
-    let src_ok = matches!(
+    let decode_pair = matches!(
         src,
         PixelFormat::Nv12VideoRange
             | PixelFormat::Nv12FullRange
             | PixelFormat::Yuyv422
             | PixelFormat::Rgba32
             | PixelFormat::Bgra32
-    );
-    let dst_ok = matches!(dst, PixelFormat::Rgba32);
-    if !src_ok || !dst_ok {
+    ) && matches!(dst, PixelFormat::Rgba32);
+    let encode_pair = matches!(src, PixelFormat::Rgba32 | PixelFormat::Bgra32)
+        && matches!(dst, PixelFormat::Yuyv422);
+    if !decode_pair && !encode_pair {
         return Err(Error::NotSupported(format!(
             "color converter: unsupported format pair {:?} → {:?} (today: \
-             {{NV12, YUYV, RGBA, BGRA}} → RGBA only)",
+             {{NV12, YUYV, RGBA, BGRA}} → RGBA, and {{RGBA, BGRA}} → YUYV)",
             src, dst
         )));
     }
