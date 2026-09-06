@@ -133,7 +133,7 @@ extension needs it; the move deletes the coupling and owes no route.
 
 The first firing of the clause in point 3 above — *what an extension needs and the engine does
 not yet expose is engine work done inside the extension's own change*. The MoQ wheel's data
-tracks (`docs/plan/changes/moq-data-tracks.md`) carry a StreamLib bag across a network the
+tracks (`docs/plan/ARCHITECTURE.md` §Networking) carry a StreamLib bag across a network the
 engine does not own: the publisher turns a Python dict into msgpack bytes and hands them to
 its own transport, and the subscriber does the reverse. That is a conversion between a bag and
 bytes in the caller's hands. It is not a raw byte port — no link reads or writes bytes, and the

@@ -43,7 +43,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
 
-## Packages & extension model — IN-FLIGHT (→ moq-data-tracks)
+## Packages & extension model — IN-FLIGHT
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -112,6 +112,19 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   done as engine code inside the extension's own change, rather than by the extension
   reaching past the surface. Known gaps at the pivot: a Python compute dispatch cannot
   bind a storage buffer, and codec sessions are not exported to Python. [extension-model]
+- **DECIDED** — The `streamlib` wheel exports its bag codec as two module-level functions
+  with stub entries: `encode_bag_to_msgpack_bytes(bag: Mapping[str, Any]) -> bytes` and
+  `decode_msgpack_bytes_to_python_object(msgpack_bytes: bytes) -> Any`. They are the
+  existing `encode_bag_to_msgpack` and `decode_msgpack_to_python_object` made reachable,
+  with exactly the codec's rules — a dict with string keys at every level, the eight value
+  types, `bytes` as `bin` at 1×, refusal by name of anything else — and no new behavior.
+  This is the first firing of the clause above that engine work an extension needs is done
+  as engine code inside the extension's own change: an extension carrying a bag across its
+  own transport needs the one codec, and a second one in the wheel would be the parallel
+  abstraction the doctrine forbids. It is not a raw byte port — no link reads or writes
+  bytes; the pair converts between a bag and bytes in the caller's own hands.
+  `docs/decisions/extension-model.md` records why. [moq-data-tracks — SHIPPED #2171]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_bag_codec_export.py -->
 - **DECIDED** — The capability-extension mechanism, decided on the first real extension
   and expected to move where implementation teaches otherwise. The entry-point group is
   `streamlib.extensions`; an entry names one callable the wheel exports, `load(host)`.
@@ -1778,7 +1791,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT (→ moq-data-tracks)
+## Networking — transport, moq, webrtc — IN-FLIGHT
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -1823,22 +1836,42 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   applies to every track at once; the cut is keyed on the video track alone, never on
   whichever bag happens to carry `is_sync_point` — every Opus packet carries it, and the
   library retains only a track's newest subgroup, so cutting on audio would leave one
-  packet per group and lose all but the newest. [extension-model]
+  packet per group and lose all but the newest. A data track has no producer pair — the
+  engine mints none for an arbitrary bag — so the publisher mints one `sequence_index` per
+  data track, monotonic for that track's life, carried in the envelope and never written
+  into the bag; and a data bag never cuts a group, for audio's reason. A broadcast with no
+  video never reaches the video cut and rides two backstops instead:
+  `HIGHEST_OBJECTS_IN_ONE_GROUP = 128` objects in one group, and an open group older than
+  one second on the publisher's own monotonic clock, cut on the next bag's arrival rather
+  than by a timer. A broadcast with video reaches neither. What a late joiner replays is
+  therefore the open group — MoQ's behavior and media's, accepted rather than masked,
+  bounded to about a second of production while the publisher is writing (owner,
+  2026-09-05). The bound is what the age backstop can give without a timer, and it is worth
+  stating exactly: a publisher that stops writing holds its last group open until it writes
+  again or closes, so a joiner arriving during an idle stretch still replays that group
+  however old the idle has made it. An idle close would need a timer, which no processor
+  here owns; a downstream that wants only the live edge filters on the stamp it already
+  receives.
+  [extension-model; the data pair and the age backstop at moq-data-tracks — SHIPPED #2172]
 - **DECIDED** — Many tracks follow the `Mp4Sink` shape: a publisher takes one track per
   inbound link and derives its catalog or session media description from them. The
   container names the tracks: under `cmaf` they are `.catalog`, an init track `0.mp4`
   carrying `ftyp` and `moov`, and `{track_id}.m4s` media tracks, because a subscriber not
   asked to fetch a catalog hardcodes exactly those; under `streamlib_bag` each is its
-  link's channel name. Both subscribers expose one output per media kind —
-  `encoded_video`, `encoded_audio` — never one port per track: ports are declared statically
+  link's channel name, unless the publisher was given `track_names` — positional in wiring
+  order. Both subscribers expose one output per track kind — `encoded_video`,
+  `encoded_audio`, and on `MoqBroadcastSubscriber` a third, `data_bags` — never one port per
+  track: ports are declared statically
   by decorator, and a decoder downstream wants a port it can name at wiring time. Which
   track feeds which port is config only where the transport cannot say: `MoqBroadcastSubscriber`
-  takes `video_track` and `audio_track`, because a MoQ broadcast may carry any number of
-  tracks and a subscriber picks; `WhepPlayer` takes neither, because a WHEP answer names
+  takes `video_track`, `audio_track` and `data_track`, because a MoQ broadcast may carry any
+  number of tracks and a subscriber picks, and one naming none of the three is refused;
+  `WhepPlayer` takes neither media name, because a WHEP answer names
   the session's media and there is nothing left to choose. Endpoint and credential
   configuration is ticket-level, as for every built-in's config.
   [extension-model; port shape narrowed and the player's track config corrected at
-  networking-extension-wheels — SHIPPED #2150, #2151]
+  networking-extension-wheels — SHIPPED #2150, #2151; the data port and name at
+  moq-data-tracks — SHIPPED #2172, #2173]
 - **DECIDED** — The control plane keeps nothing from the move. Its one use of
   `runtime/streamlib-moq` — a `/api/moq/catalog` route behind a `moq` feature no crate
   enables — read a process-global session registry that, with the publisher in a helper,
@@ -1861,8 +1894,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `streamlib_bag`, from the object payload; under `cmaf` minted by the subscriber), a
   sync point from the access unit, the audio parameters from
   the session description — rather than from config. The old processors' opaque envelope
-  forwarding does not carry over: what crosses a network is a bitstream and the keys a
-  decoder needs, not a serialised link payload. [extension-model]
+  forwarding does not carry over: what crosses a network on a **media** track is a
+  bitstream and the keys a decoder needs, not a serialised link payload. That clause
+  scopes to media, which is what it was deciding — on a data track the object *is* the
+  bag, whole and nested, because for data the bag is the payload. It is the opposite of
+  opaque forwarding either way: the old processors restamped on receive, and a data track
+  carries the user's own keys byte-exact under the producer's own stamp.
+  [extension-model; narrowed to media at moq-data-tracks — SHIPPED #2172, #2173]
 - **DECIDED** — What the move carries and what it leaves: `runtime/streamlib-moq`'s
   catalog shape is mined, not moved, and its session logic was rewritten for draft-16;
   from `packages/webrtc` the RFC 6184
@@ -1932,9 +1970,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [networking-extension-wheels — SHIPPED #2151]
 - **DECIDED** — `MoqBroadcastPublisher`: `@processor`, one fan-in input `tracks`, one MoQ
   track per inbound link, the catalog derived from them; config `relay_url` (required),
-  `broadcast` (default `streamlib/<runtime_id>`) and `container_format`.
-  `MoqBroadcastSubscriber`: `@processor(execution = "manual")`, outputs `encoded_video` and
-  `encoded_audio`, config `relay_url`, `broadcast`, `video_track`, `audio_track`,
+  `broadcast` (default `streamlib/<runtime_id>`), `container_format`, `track_names` and
+  `delivery_deadline_ms`.
+  `MoqBroadcastSubscriber`: `@processor(execution = "manual")`, outputs `encoded_video`,
+  `encoded_audio` and `data_bags`, config `relay_url`, `broadcast`, `video_track`,
+  `audio_track`, `data_track`,
   `container_format`; the processor-owned thread writes each received object as a bag
   literal. Naming the MoQ group from the bag's `group_index` was the original design and did
   not survive contact: `SubgroupsWriter::create` hands back a live writer for a group id at
@@ -1955,7 +1995,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   and sample entries. It is not a port of `Mp4FragmentedFileWriter`, whose growing file,
   shared `moov` and cross-track epoch are file-shaped and wrong here. Owner ruling,
   2026-09-04: MoQ had never been finished, and finished means interoperable.
-  [networking-extension-wheels — SHIPPED #2151]
+  `streamlib_bag` is also the only container a data track
+  rides, and the only one whose track names the app chooses: a `cmaf` broadcast refuses a
+  data bag by name at its first bag, before any hold, and refuses `track_names` and
+  `data_track` at `setup()`. A mixed broadcast — CMAF media a `moq-js` reads beside a bag
+  data track — needs per-track `packaging` in the catalog and its own `moq-sub` check, and
+  is named here as a later rung rather than built.
+  [networking-extension-wheels — SHIPPED #2151; the data container at moq-data-tracks —
+  SHIPPED #2172, #2173]
 - **DECIDED** — `python-wheel.yml` carries an `extension-wheels` job over a matrix of the
   two directories: install the just-built `streamlib` wheel into the venv, `maturin develop`
   the extension, `cargo test` its crate, `mypy.stubtest` over its `_native`, pyright over
@@ -1983,6 +2030,94 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   ±0.05 — the network sits inside a path the codec rig already scored, so a mismatch is the
   wheel's. [networking-extension-wheels — SHIPPED #2153]
   <!-- verify: git ls-files packages/streamlib-moq packages/streamlib-webrtc -->
+- **DECIDED** — A media bag past its deadline is shed rather than delivered late.
+  `MoqBroadcastPublisher` takes `delivery_deadline_ms`; a media bag older than it by its
+  own monotonic stamp is never written, and the rest of its group is shed with it, ending
+  at the next sync point. A sync point is always written, so a shed never outlives one
+  group; every Opus packet is a sync point, so audio is never shed; a data object is never
+  shed. `MEDIA_TRACK_PRIORITY` split into `AUDIO_MEDIA_TRACK_PRIORITY = 126` and
+  `VIDEO_MEDIA_TRACK_PRIORITY = 127`, read in draft-16 §10.4.2's direction and never
+  checked against a relay, which is free to ignore it; a data track rides video's rung as a
+  stated placeholder until a consumer asks otherwise. Absent, the publisher is the shipped
+  baseline and every bag is written however late. [moq-data-tracks — SHIPPED #2159]
+- **DECIDED** — The deadline alone cannot see the uplink, because `moq-transport` never
+  blocks and never pre-empts: a bag hands off to a forwarder and the writer learns nothing
+  of the backlog behind it. So the wheel vendors `moq-transport` 0.16.2 at
+  `packages/streamlib-moq/vendor/moq-transport` as a path dependency on the vulkanalia
+  precedent — MIT OR Apache-2.0 under its own headers, pinned by
+  `cargo xtask check-vendored-trees`, its patches recorded in
+  `docs/architecture/vendored-moq-transport.md` — for exactly two of them:
+  `SubgroupWriter::abandon` honoured ahead of already-buffered objects and raced by the
+  forwarder against every chunk write, resetting the stream with a draft-16 code
+  (`DeliveryTimeout` reachable at last); and the forwarder's cursor in shared state, so a
+  writer can read how many of its objects have not left the process. On those, the deadline
+  fires on the oldest unforwarded object's stamp as well as on the arriving bag's own, and
+  a cut abandons the superseded group of every media track whose backlog is past the
+  deadline — video and audio, never data, never the open group. The QUIC send window is
+  bounded to 512 KiB so the cursor can fall behind at all rather than the stack swallowing
+  the backlog silently, and the shed and the abandon are counted per link and said with the
+  QUIC path's readings. Vendored rather than patched from git because a path dependency
+  reaches the manylinux release build and the draft-16 line is frozen upstream; the patches
+  stay ours and are never sent upstream (owner, 2026-09-06).
+  [moq-data-tracks — SHIPPED #2179, #2180]
+  <!-- verify: cargo xtask check-vendored-trees -->
+- **DECIDED** — A MoQ broadcast carries data tracks beside video and audio, under
+  `streamlib_bag` only. `MoqBroadcastPublisher` classifies each inbound link by its first
+  bag: a bag carrying a `bitstream` key is encoded media and takes the typed path
+  unchanged; a bag without one is data, and that link is a data track for the publisher's
+  life — a later media bag on it is refused by name, as a codec change on a media link
+  already is. `bitstream` is the encoded wire contract's defining key, which both media bag
+  types require, so a user data bag that happens to name one is refused as media with a
+  message naming the key and the user renames it. The publisher mints a per-track monotonic
+  `sequence_index`, builds the object in Python as `{"sequence_index": int,
+  "timestamp_ns": int, "bag": <the bag>}` with the user's map nested whole under `bag`
+  rather than flattened — nesting
+  reserves no name in the user's namespace where flattening would reserve four — encodes it
+  with `streamlib.encode_bag_to_msgpack_bytes` and hands the bytes to
+  `_native.MoqBroadcastPublishingSession.publish_data_object`, whose Rust writes them as
+  the object payload and handles no engine object. `MoqBroadcastSubscriber` reads a
+  `ReceivedDataObject` (`track_name`, `payload`) on its `data_bags` output, decodes the
+  envelope, refuses one missing any of the three keys by name, and writes `bag` verbatim
+  with `timestamp_ns` as the stamp; `sequence_index` never enters the written bag, and a
+  jump in it is counted and reported through the Python log at the progress cadence. One
+  data track per subscriber — two data tracks are two subscribers, which keeps the bag
+  verbatim where a demux key would be pollution. The catalog is unchanged: a data track's
+  entry is the entry every `streamlib_bag` track already gets, `codec` the literal
+  `streamlib-bag` with every media field empty, because the catalog is written at connect
+  before any bag has said what it is. [moq-data-tracks — SHIPPED #2172, #2173]
+- **DECIDED** — Track names under `streamlib_bag` are the app's to choose.
+  `MoqBroadcastPublisher` takes `track_names`, positional in wiring order — the order
+  `runtime.connect` ran, which is the order `cmaf` already numbers `{track_id}.m4s` by. A
+  count unequal to the inbound links is refused by name at `setup()`, and so is a repeated
+  name — `Tracks::create` overwrites a track of the same name without saying so, orphaning
+  its subscribers, so the duplicate is caught before the session can. Absent, a track is
+  its link's channel name as before. That name is `{processor_id}/{port}` on a cuid2 minted
+  at `add`, which a subscriber in another node cannot know — so before `track_names` the
+  only broadcast a second node could name was `cmaf`, and the live fixture ran `cmaf` for
+  that reason and said so. It no longer needs to. [moq-data-tracks — SHIPPED #2172]
+- **DECIDED** — The wheel's oversize warning is charged against what the link charges: the
+  **framed** encoded bag, header included, against the helper-link ceiling — not
+  `len(bitstream)`, which under-reported by the bag's other keys and by the frame header.
+  The media path's guard is corrected to the same measure. The exact measure is an encode,
+  so it is taken only once a cheap prefilter says the bag is near enough to the ceiling for
+  the answer to be in doubt. The ceiling itself stays the engine's and unexported; the
+  wheel's copy stays a warning that lands at the wrong size on drift, never a failing test.
+  [moq-data-tracks — SHIPPED #2172]
+- **DECIDED** — The data track's proof. CI-run, GPU-free, endpoint-free, owned by the
+  wheel: the envelope round trip on the `wired_link` fixture — a nested bag with a `bytes`
+  value crosses the publisher's encode, the subscriber's decode and a real link, and
+  arrives `==` with `bytes` still `bytes`; a `cmaf` broadcast refusing a data bag by name
+  at its first bag with no hold entered; the `track_names` count mismatch and the `cmaf`
+  refusals by name; a publisher classifying a bitstream-less bag as data and a later media
+  bag on that link as a refusal; and a video-free publisher fed two data bags stamped more
+  than the age backstop apart cutting a group between them, and one fed bags inside it not
+  cutting. Live, rig-only, under `/verify-live`'s networking arm: the MoQ round-trip
+  fixture runs both containers, and its `streamlib_bag` arm carries video, audio and a
+  telemetry data track with `track_names` set through the Cloudflare draft-16 relay — the
+  data bags received `==` and stamped as sent, the media decode-back locking PSNR as
+  before. The `cmaf` arm and its `moq-sub` read are unchanged.
+  [moq-data-tracks — SHIPPED #2174]
+  <!-- verify: pytest packages/streamlib-moq/tests/test_data_track_round_trip.py -->
 - **OPEN** — Later work, after the move: mesh discovery and the cross-host fabric
   (Zenoh).
 
