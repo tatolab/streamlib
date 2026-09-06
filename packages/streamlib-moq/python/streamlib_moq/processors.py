@@ -254,10 +254,12 @@ def the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag: Mapping[str, Any
 
 
 #: The most a wire value grows when the engine's codec decodes and re-encodes
-#: it: an `f32` on the wire decodes to a Python float and re-encodes as an
-#: `f64`, five bytes to nine. Nothing else grows — the codec re-emits its ext
-#: passthrough map as the ext it came from, and every other form it writes is
-#: already the shortest.
+#: it. Two forms grow: an `f32` decodes to a Python float and re-encodes as an
+#: `f64`, five bytes to nine; a `str` that is not UTF-8 decodes to `bytes` and
+#: re-encodes as a `bin`, one length byte longer, three bytes to four at its
+#: shortest. Nothing else does — the codec re-emits its ext passthrough map as
+#: the ext it came from, and every other form it writes is already the
+#: shortest. Nine fifths is what this has to clear.
 WIDEST_THE_ENGINE_RE_ENCODES_A_WIRE_VALUE = 2
 
 
@@ -387,8 +389,11 @@ class DataTrackSequenceGapCount:
     def account(self, sequence_index: int) -> None:
         last = self._last_sequence_index
         self._last_sequence_index = sequence_index
-        # A first object has nothing to be a gap from, and an index at or
-        # below the last is a publisher that restarted its count, not a loss.
+        # A first object has nothing to be a gap from. An index at or below the
+        # last is a publisher that restarted its count, not a loss and not a
+        # reorder: the session's drain hands a track's objects out in
+        # publication order, finishing what arrived of an old group before a
+        # new one replaces it, so a backward step never comes from the wire.
         if last is None or sequence_index <= last:
             return
         missed = sequence_index - last - 1

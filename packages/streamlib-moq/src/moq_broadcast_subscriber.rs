@@ -37,7 +37,7 @@ const SUBSCRIBING_SESSION_ROLE: &str = "subscribing";
 /// One sample as the reader takes it, with the track that carried it. Media
 /// lands on the port its kind names; a data object's track is the Python's to
 /// name in its log.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct ReceivedTrackSample {
     pub(crate) track_name: String,
     pub(crate) sample: MoqTrackSample,

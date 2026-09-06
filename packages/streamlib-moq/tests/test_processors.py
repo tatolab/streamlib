@@ -526,6 +526,8 @@ def _bytes_a_wire_value_re_encodes_to(wire: bytes) -> int:
         (b"\xd4\x01\x00", "a fixext1, which re-encodes as the ext it came from"),
         (b"\xc7\x01\x05\x00", "an ext8, which re-encodes as a shorter fixext"),
         (b"\xcd\x00\x07", "a uint16 spelled long, which re-encodes as a fixint"),
+        (b"\xa1\xff", "a fixstr that is not UTF-8, which re-encodes as a bin"),
+        (b"\xa2\xff\xfe", "a two-byte fixstr that is not UTF-8, likewise"),
     ],
 )
 def test_the_widening_the_bound_allows_for_covers_every_wire_form_the_codec_widens(wire, what):
@@ -537,10 +539,11 @@ def test_the_widening_the_bound_allows_for_covers_every_wire_form_the_codec_wide
     ), what
 
 
-def test_the_widening_is_real_so_the_bound_is_not_a_needless_margin():
-    an_f32 = b"\xca\x00\x00\x00\x00"
-
-    assert _bytes_a_wire_value_re_encodes_to(an_f32) > len(an_f32)
+@pytest.mark.parametrize(
+    "wire", [b"\xca\x00\x00\x00\x00", b"\xa1\xff"], ids=["an f32", "a non-UTF-8 fixstr"]
+)
+def test_the_widening_is_real_so_the_bound_is_not_a_needless_margin(wire):
+    assert _bytes_a_wire_value_re_encodes_to(wire) > len(wire)
 
 
 class _SessionHandingOverObjectsThenStopping:
