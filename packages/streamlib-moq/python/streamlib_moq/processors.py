@@ -256,7 +256,7 @@ def the_bitstream_alone_puts_the_bag_near_the_link_ceiling(bag: Mapping[str, Any
 #: The most a wire value grows when the engine's codec decodes and re-encodes
 #: it. Two forms grow: an `f32` decodes to a Python float and re-encodes as an
 #: `f64`, five bytes to nine; a `str` that is not UTF-8 decodes to `bytes` and
-#: re-encodes as a `bin`, one length byte longer, three bytes to four at its
+#: re-encodes as a `bin`, one length byte longer, two bytes to three at its
 #: shortest. Nothing else does — the codec re-emits its ext passthrough map as
 #: the ext it came from, and every other form it writes is already the
 #: shortest. Nine fifths is what this has to clear.
