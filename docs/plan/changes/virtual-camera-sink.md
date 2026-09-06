@@ -337,8 +337,7 @@ and one live probe.
 
 ## REMOVED
 
-None. This change adds a capability and deletes nothing; the ship gate has nothing to
-verify.
+None — this change adds a capability and deletes nothing; the ship gate has nothing to verify.
 
 ## Known limits, recorded for the tickets
 
