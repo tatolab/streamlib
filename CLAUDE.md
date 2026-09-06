@@ -8,9 +8,16 @@ or relax the commercial-use restriction. Every new Rust file carries:
     // Copyright (c) 2025 Jonathan Fontanez
     // SPDX-License-Identifier: BUSL-1.1
 
-Exception: `vendor/tatolab-vulkanalia*` is the vendored vulkanalia fork and stays Apache-2.0 —
-never add a BUSL header there, never reformat those sources. Do not modify `LICENSE`, `LICENSES/`,
-or `docs/license/` without explicit approval. See `docs/architecture/vendored-vulkanalia.md`.
+Exception — vendored third-party trees keep the licence they arrived under. Never add a BUSL
+header to one, never reformat those sources:
+
+- `vendor/tatolab-vulkanalia*` — the vulkanalia fork, Apache-2.0. See
+  `docs/architecture/vendored-vulkanalia.md`.
+- `packages/streamlib-moq/vendor/moq-transport` — the MoQ wheel's moq-transport, MIT OR
+  Apache-2.0 under Cloudflare's SPDX headers.
+
+The exception is those paths and nothing else; BUSL is not relaxed anywhere a path is not
+listed. Do not modify `LICENSE`, `LICENSES/`, or `docs/license/` without explicit approval.
 
 ---
 

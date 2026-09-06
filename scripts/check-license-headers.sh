@@ -70,17 +70,23 @@ failed_language_checks=()
 # `xtask/` and `tools/` — and `xtask/src/check_no_inventory_submit.rs` had been
 # sitting there with a `2026` copyright line the rule does not permit.
 #
-# The three vendored vulkanalia fork dirs are Apache-2.0 verbatim copies and
-# deliberately carry NO BUSL headers — see
-# docs/architecture/vendored-vulkanalia.md and CLAUDE.md's licensing exception.
-# Exact-dir exclusions (a future vendor/tatolab-vulkanalia-extras/ crate would
-# NOT be excluded).
+# The vendored trees are verbatim third-party copies under their own licences
+# and deliberately carry NO BUSL headers — the vulkanalia fork is Apache-2.0
+# (docs/architecture/vendored-vulkanalia.md), the MoQ wheel's moq-transport is
+# MIT OR Apache-2.0 under Cloudflare's SPDX headers. One exception, listed by
+# path; see CLAUDE.md's licensing section.
+#
+# Exact-dir exclusions, so a sibling one path segment away is still covered: a
+# future vendor/tatolab-vulkanalia-extras/, or a second crate vendored beside
+# moq-transport, would NOT be excluded. Rust only — neither tree ships a `.py`,
+# so the Python check below buys its lack of exemptions for free.
 report_files_missing_header \
   "// Copyright (c) 2025 Jonathan Fontanez" Rust \
   '*.rs' \
   ':(exclude)vendor/tatolab-vulkanalia/*' \
   ':(exclude)vendor/tatolab-vulkanalia-sys/*' \
-  ':(exclude)vendor/tatolab-vulkanalia-vma/*' ||
+  ':(exclude)vendor/tatolab-vulkanalia-vma/*' \
+  ':(exclude)packages/streamlib-moq/vendor/moq-transport/*' ||
   failed_language_checks+=("Rust")
 
 report_files_missing_header \
