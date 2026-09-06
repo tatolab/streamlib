@@ -5339,19 +5339,6 @@ mod tests {
         println!("escalate releases gate on panic via RAII Drop: OK");
     }
 
-    /// LimitedAccess + FullAccess interleaving (#1006 scenario 5).
-    ///
-    /// LimitedAccess ops route through the shared command-queue
-    /// mutex; FullAccess escalates through the separate
-    /// `EscalateGate`. Concurrent callers — thread A holds an
-    /// escalate mid-closure, thread B issues an `acquire_pixel_buffer`
-    /// Limited call — must both complete without deadlock.
-    /// Documented model: the two locks are independent and Limited
-    /// observes no partial-Full state.
-    ///
-    /// Mental revert: collapsing both locks into one would let
-    /// thread B block on the escalate gate; the assertion that
-    /// Limited completes before the escalate releases would fail.
     /// Two processors driving one format pair from their own threads must
     /// not share a kernel's staged bindings: the cached handle is one
     /// object, an owned converter is the caller's alone.
@@ -5395,6 +5382,19 @@ mod tests {
         );
     }
 
+    /// LimitedAccess + FullAccess interleaving (#1006 scenario 5).
+    ///
+    /// LimitedAccess ops route through the shared command-queue
+    /// mutex; FullAccess escalates through the separate
+    /// `EscalateGate`. Concurrent callers — thread A holds an
+    /// escalate mid-closure, thread B issues an `acquire_pixel_buffer`
+    /// Limited call — must both complete without deadlock.
+    /// Documented model: the two locks are independent and Limited
+    /// observes no partial-Full state.
+    ///
+    /// Mental revert: collapsing both locks into one would let
+    /// thread B block on the escalate gate; the assertion that
+    /// Limited completes before the escalate releases would fail.
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs GPU + #[serial] discipline; \

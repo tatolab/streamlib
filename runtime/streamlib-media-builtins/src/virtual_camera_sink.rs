@@ -23,7 +23,7 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::color::{ColorSpaceKind, resolve_color_defaults};
+use streamlib::sdk::color::ColorSpaceKind;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
     HostMappingWrittenByGpu, RhiCommandRecorder, VulkanAccess, VulkanStage,
@@ -34,19 +34,24 @@ use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::v4l2_color::color_info_to_v4l2_color;
-use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer, VideoFrame};
+use crate::video_frame::{ColorInfo, VideoFrame};
 
 /// The name every log line and refusal carries.
-pub const VIRTUAL_CAMERA_SINK_PROCESSOR_NAME: &str = "VirtualCameraSink";
+pub(crate) const VIRTUAL_CAMERA_SINK_PROCESSOR_NAME: &str = "VirtualCameraSink";
 
 /// The v4l2loopback module's control node.
-pub const V4L2LOOPBACK_CONTROL_NODE_PATH: &str = "/dev/v4l2loopback";
+pub(crate) const V4L2LOOPBACK_CONTROL_NODE_PATH: &str = "/dev/v4l2loopback";
 
 /// The one-time command that grants the loopback door.
-pub const ENABLE_VIRTUAL_CAMERA_VERB: &str = "streamlib enable-virtual-camera";
+pub(crate) const ENABLE_VIRTUAL_CAMERA_VERB: &str = "streamlib enable-virtual-camera";
 
 /// What an unnamed camera is called, before its stable id.
 const DEFAULT_CAMERA_NAME_PREFIX: &str = "StreamLib Camera";
+
+/// The module's `card_label` holds 32 bytes with its NUL, so a camera's name
+/// is at most 31 — capped once, where the name is minted, so the string the
+/// sink logs, stores and reclaims by is one value.
+const CARD_LABEL_CAPACITY_BYTES: usize = 31;
 
 /// Chrome asks for four buffers and the module clamps a request to the
 /// device's count, so four is what every reader can have.
@@ -105,30 +110,30 @@ pub struct VirtualCameraSinkConfig {
 /// `CTL_ADD` takes and `CTL_QUERY` fills.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct V4l2LoopbackConfig {
+pub(crate) struct V4l2LoopbackConfig {
     /// `/dev/video<nr>`; `-1` on `CTL_ADD` lets the module pick.
-    pub output_nr: i32,
+    pub(crate) output_nr: i32,
     /// The header's reserved `capture_nr` slot.
-    pub unused: i32,
+    pub(crate) unused: i32,
     /// NUL-terminated device label — what every picker shows.
-    pub card_label: [u8; 32],
-    pub min_width: u32,
-    pub max_width: u32,
-    pub min_height: u32,
-    pub max_height: u32,
+    pub(crate) card_label: [u8; 32],
+    pub(crate) min_width: u32,
+    pub(crate) max_width: u32,
+    pub(crate) min_height: u32,
+    pub(crate) max_height: u32,
     /// Buffers per device; `<= 0` takes the module default.
-    pub max_buffers: i32,
+    pub(crate) max_buffers: i32,
     /// Concurrent openers; `<= 0` takes the module default.
-    pub max_openers: i32,
-    pub debug: i32,
+    pub(crate) max_openers: i32,
+    pub(crate) debug: i32,
     /// `0` announces OUTPUT to the writer and CAPTURE to readers — the
     /// only mode Chromium's enumerator lists.
-    pub announce_all_caps: i32,
+    pub(crate) announce_all_caps: i32,
 }
 
 impl V4l2LoopbackConfig {
     /// An all-zero config; `CTL_QUERY` for `device_number`.
-    pub fn query_of(device_number: u32) -> Self {
+    pub(crate) fn query_of(device_number: u32) -> Self {
         Self {
             output_nr: device_number as i32,
             ..Self::zeroed()
@@ -137,7 +142,7 @@ impl V4l2LoopbackConfig {
 
     /// The device one sink creates: labelled, capture-only to readers,
     /// four buffers, the number the module's choice.
-    pub fn for_new_camera(label: &str) -> Self {
+    pub(crate) fn for_new_camera(label: &str) -> Self {
         let mut config = Self {
             output_nr: -1,
             max_buffers: LOOPBACK_DEVICE_BUFFER_COUNT as i32,
@@ -145,7 +150,7 @@ impl V4l2LoopbackConfig {
             ..Self::zeroed()
         };
         let bytes = label.as_bytes();
-        let copied = bytes.len().min(config.card_label.len() - 1);
+        let copied = bytes.len().min(CARD_LABEL_CAPACITY_BYTES);
         config.card_label[..copied].copy_from_slice(&bytes[..copied]);
         config
     }
@@ -167,7 +172,7 @@ impl V4l2LoopbackConfig {
     }
 
     /// The label as text, up to its NUL.
-    pub fn label(&self) -> String {
+    pub(crate) fn label(&self) -> String {
         let end = self
             .card_label
             .iter()
@@ -189,14 +194,14 @@ const IOC_READ: c_ulong = 2;
 const V4L2LOOPBACK_CTL_IOCTL_MAGIC: u8 = b'~';
 
 /// `V4L2LOOPBACK_CTL_VERSION`: fills a `u32` with the module's version code.
-pub const V4L2LOOPBACK_CTL_VERSION: c_ulong = linux_ioc(
+pub(crate) const V4L2LOOPBACK_CTL_VERSION: c_ulong = linux_ioc(
     IOC_READ,
     V4L2LOOPBACK_CTL_IOCTL_MAGIC,
     0,
     std::mem::size_of::<u32>(),
 );
 /// `V4L2LOOPBACK_CTL_ADD`: takes a config, returns the device number.
-pub const V4L2LOOPBACK_CTL_ADD: c_ulong = linux_ioc(
+pub(crate) const V4L2LOOPBACK_CTL_ADD: c_ulong = linux_ioc(
     IOC_WRITE,
     V4L2LOOPBACK_CTL_IOCTL_MAGIC,
     1,
@@ -204,14 +209,14 @@ pub const V4L2LOOPBACK_CTL_ADD: c_ulong = linux_ioc(
 );
 /// `V4L2LOOPBACK_CTL_REMOVE`: takes the device number by value; `EBUSY`
 /// while any opener holds the device.
-pub const V4L2LOOPBACK_CTL_REMOVE: c_ulong = linux_ioc(
+pub(crate) const V4L2LOOPBACK_CTL_REMOVE: c_ulong = linux_ioc(
     IOC_WRITE,
     V4L2LOOPBACK_CTL_IOCTL_MAGIC,
     2,
     std::mem::size_of::<u32>(),
 );
 /// `V4L2LOOPBACK_CTL_QUERY`: fills a config for `output_nr`.
-pub const V4L2LOOPBACK_CTL_QUERY: c_ulong = linux_ioc(
+pub(crate) const V4L2LOOPBACK_CTL_QUERY: c_ulong = linux_ioc(
     IOC_READ | IOC_WRITE,
     V4L2LOOPBACK_CTL_IOCTL_MAGIC,
     3,
@@ -268,6 +273,18 @@ impl LoopbackControlNodeOnDisk {
             .write(true)
             .open(V4L2LOOPBACK_CONTROL_NODE_PATH)
     }
+
+    /// One control ioctl over a fresh read-write open of the node; the
+    /// ioctl's own return on success.
+    fn control_ioctl<A>(&self, request: c_ulong, argument: A) -> std::io::Result<i32> {
+        use std::os::fd::AsRawFd as _;
+        let node = self.open_read_write()?;
+        let result = unsafe { libc::ioctl(node.as_raw_fd(), request, argument) };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(result)
+    }
 }
 
 impl LoopbackControlNode for LoopbackControlNodeOnDisk {
@@ -299,45 +316,27 @@ impl LoopbackControlNode for LoopbackControlNodeOnDisk {
     }
 
     fn query_device(&self, device_number: u32) -> Option<V4l2LoopbackConfig> {
-        use std::os::fd::AsRawFd as _;
-        let node = self.open_read_write().ok()?;
         let mut config = V4l2LoopbackConfig::query_of(device_number);
-        let result = unsafe { libc::ioctl(node.as_raw_fd(), V4L2LOOPBACK_CTL_QUERY, &mut config) };
-        (result >= 0).then_some(config)
+        self.control_ioctl(V4L2LOOPBACK_CTL_QUERY, &mut config)
+            .ok()
+            .map(|_| config)
     }
 
     fn add_device(&self, config: &V4l2LoopbackConfig) -> std::io::Result<u32> {
-        use std::os::fd::AsRawFd as _;
-        let node = self.open_read_write()?;
-        let result = unsafe { libc::ioctl(node.as_raw_fd(), V4L2LOOPBACK_CTL_ADD, config) };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(result as u32)
+        self.control_ioctl(V4L2LOOPBACK_CTL_ADD, config)
+            .map(|number| number as u32)
     }
 
     fn remove_device(&self, device_number: u32) -> std::io::Result<()> {
-        use std::os::fd::AsRawFd as _;
-        let node = self.open_read_write()?;
-        let result = unsafe {
-            libc::ioctl(
-                node.as_raw_fd(),
-                V4L2LOOPBACK_CTL_REMOVE,
-                device_number as c_ulong,
-            )
-        };
-        if result < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
+        self.control_ioctl(V4L2LOOPBACK_CTL_REMOVE, device_number as c_ulong)
+            .map(|_| ())
     }
 
     fn module_version(&self) -> Option<(u32, u32, u32)> {
-        use std::os::fd::AsRawFd as _;
-        let node = self.open_read_write().ok()?;
         let mut code: u32 = 0;
-        let result = unsafe { libc::ioctl(node.as_raw_fd(), V4L2LOOPBACK_CTL_VERSION, &mut code) };
-        (result >= 0).then(|| ((code >> 16) & 0xff, (code >> 8) & 0xff, code & 0xff))
+        self.control_ioctl(V4L2LOOPBACK_CTL_VERSION, &mut code)
+            .ok()
+            .map(|_| ((code >> 16) & 0xff, (code >> 8) & 0xff, code & 0xff))
     }
 }
 
@@ -478,7 +477,13 @@ pub(crate) fn camera_name_for(
     processor_display_name: &str,
 ) -> String {
     match configured_name.map(str::trim).filter(|n| !n.is_empty()) {
-        Some(name) => name.to_string(),
+        Some(name) => {
+            let mut end = name.len().min(CARD_LABEL_CAPACITY_BYTES);
+            while !name.is_char_boundary(end) {
+                end -= 1;
+            }
+            name[..end].trim_end().to_string()
+        }
         None => format!(
             "{DEFAULT_CAMERA_NAME_PREFIX} {}",
             stable_camera_id(app_directory, processor_display_name)
@@ -1164,31 +1169,6 @@ fn write_frame_into_buffer(
         frame.width,
         frame.height,
     )?;
-    let color_info = frame.color_info.as_ref().or(streaming.color_info.as_ref());
-    let resolved_color = resolve_color_defaults(
-        color_info
-            .and_then(|c| c.primaries.as_ref())
-            .map(Primaries::engine_id),
-        color_info
-            .and_then(|c| c.transfer.as_ref())
-            .map(Transfer::engine_id),
-        color_info
-            .and_then(|c| c.matrix.as_ref())
-            .map(Matrix::engine_id),
-        color_info
-            .and_then(|c| c.range.as_ref())
-            .map(Range::engine_id),
-        ColorSpaceKind::Yuv,
-    );
-    let bytesperline = streaming.bytesperline;
-    let buffer = &mut streaming.buffers[buffer_index];
-    let kernel = gpu_side.converter.prepare_image_to_yuyv_buffer(
-        registration.texture(),
-        buffer.written_by_gpu.storage_buffer(),
-        bytesperline,
-        &resolved_color,
-    )?;
-
     // A published frame arrives sampled-ready; the encoder built-in holds the
     // same line. A transition from an unknown layout would discard the
     // picture, so a frame in any other layout is refused rather than bridged.
@@ -1202,6 +1182,21 @@ fn write_frame_into_buffer(
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
         )));
     }
+    let resolved_color = frame
+        .color_info
+        .as_ref()
+        .or(streaming.color_info.as_ref())
+        .cloned()
+        .unwrap_or_default()
+        .resolve_defaults(ColorSpaceKind::Yuv);
+    let bytesperline = streaming.bytesperline;
+    let buffer = &mut streaming.buffers[buffer_index];
+    let kernel = gpu_side.converter.prepare_image_to_yuyv_buffer(
+        registration.texture(),
+        buffer.written_by_gpu.storage_buffer(),
+        bytesperline,
+        &resolved_color,
+    )?;
     let recorder = &mut gpu_side.recorder;
     recorder.begin()?;
     // A failure between `begin()` and the submit leaves the recorder mid-
@@ -1348,6 +1343,19 @@ mod tests {
         assert!(
             first.len() < 32,
             "the label fits the module's 32-byte field"
+        );
+
+        // A configured name longer than the module's field is capped once, on
+        // a character boundary, so the name the sink stores is the name it
+        // reclaims by.
+        let long = camera_name_for(Some(&"Desk camera ".repeat(4)), app, "x");
+        assert!(long.len() <= 31, "{long:?}");
+        assert_eq!(V4l2LoopbackConfig::for_new_camera(&long).label(), long);
+        let multibyte = camera_name_for(Some(&"é".repeat(20)), app, "x");
+        assert_eq!(
+            multibyte,
+            "é".repeat(15),
+            "cut on a character boundary, never inside one"
         );
     }
 

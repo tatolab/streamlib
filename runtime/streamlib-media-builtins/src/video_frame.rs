@@ -359,6 +359,22 @@ impl Range {
 }
 
 impl ColorInfo {
+    /// The fully resolved description the engine's colour kernels take:
+    /// every absent axis filled with `resolve_color_defaults`' answer for a
+    /// source of `kind`.
+    pub(crate) fn resolve_defaults(
+        &self,
+        kind: streamlib::sdk::color::ColorSpaceKind,
+    ) -> streamlib::sdk::color::ResolvedColorInfo {
+        streamlib::sdk::color::resolve_color_defaults(
+            self.primaries.as_ref().map(Primaries::engine_id),
+            self.transfer.as_ref().map(Transfer::engine_id),
+            self.matrix.as_ref().map(Matrix::engine_id),
+            self.range.as_ref().map(Range::engine_id),
+            kind,
+        )
+    }
+
     /// The engine's colorspace-pick input: primaries + transfer only.
     pub fn engine_color_traits(&self) -> streamlib::sdk::color::ColorTraits {
         streamlib::sdk::color::ColorTraits {

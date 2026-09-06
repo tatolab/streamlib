@@ -250,8 +250,6 @@ mod tests {
         }
     }
 
-    /// Write the first and last byte of every page of `mapping`'s buffer to
-    /// `value` on the GPU, release to host, and wait.
     /// Fill the mapping's buffer with `value` from the GPU side: a host-
     /// visible staging buffer written on the CPU, copied by the GPU into the
     /// mapping's buffer, released to the host, published.
