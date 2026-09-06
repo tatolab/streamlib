@@ -130,7 +130,12 @@ expect_fail_naming "the SPDX line without the copyright line fails" Rust \
 
 new_repo
 printf '// Copyright (c) 2025 Jonathan Fontanez, All Rights Reserved\n// SPDX-License-Identifier: BUSL-1.1\n' | plant runtime/streamlib-engine/src/lib.rs
-expect_fail_naming "a header line with trailing text fails — both lines match whole" Rust \
+expect_fail_naming "a copyright line with trailing text fails — it is matched whole" Rust \
+  "runtime/streamlib-engine/src/lib.rs"
+
+new_repo
+printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: BUSL-1.1 AND MIT\n' | plant runtime/streamlib-engine/src/lib.rs
+expect_fail_naming "an SPDX line with trailing text fails — so is that one" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo

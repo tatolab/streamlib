@@ -143,8 +143,9 @@ detour into `runtime/` to learn what a built-in publishes on means you skipped i
   `runtime/streamlib-consumer-rhi/`). Nothing else touches `vulkanalia`. CI enforces.
 - Logging is `tracing` only — no `println!`/`eprintln!` (CI enforces).
 - No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
-- New Rust files carry the BUSL header, except in the vendored trees §Licensing lists.
-  Never touch `vendor/tatolab-vulkanalia*` or license files.
+- New Rust files carry the BUSL header, except in the vendored trees §Licensing lists, where
+  a change is a recorded patch against upstream and never a drive-by edit. Never touch the
+  licence files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
