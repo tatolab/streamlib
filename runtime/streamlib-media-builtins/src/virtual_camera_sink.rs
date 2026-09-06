@@ -671,8 +671,10 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
         );
 
         let gpu_full = ctx.gpu_full_access();
+        // This sink's own converter: two sinks in one graph must not share a
+        // kernel's staged bindings across their threads.
         let converter = gpu_full
-            .color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+            .create_color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
             .map_err(|e| {
                 Error::Runtime(format!(
                     "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": no RGBA→YUYV converter: {e}",
@@ -1157,24 +1159,32 @@ fn write_frame_into_buffer(
     }
     let recorder = &mut gpu_side.recorder;
     recorder.begin()?;
-    recorder.record_image_barrier(
-        registration.texture(),
-        source_layout,
-        source_layout,
-        VulkanStage::ALL_COMMANDS,
-        VulkanStage::COMPUTE_SHADER,
-        VulkanAccess::MEMORY_WRITE,
-        VulkanAccess::SHADER_SAMPLED_READ,
-    )?;
-    const WORKGROUP: u32 = 16;
-    recorder.record_dispatch(
-        &kernel,
-        frame.width.div_ceil(2).div_ceil(WORKGROUP),
-        frame.height.div_ceil(WORKGROUP),
-        1,
-    )?;
-    buffer.written_by_gpu.record_release_to_host(recorder)?;
-    recorder.submit_and_wait()?;
+    // A failure between `begin()` and the submit leaves the recorder mid-
+    // recording; abandoning it is what lets the next frame begin again.
+    let recorded = (|| -> Result<()> {
+        recorder.record_image_barrier(
+            registration.texture(),
+            source_layout,
+            source_layout,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::COMPUTE_SHADER,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::SHADER_SAMPLED_READ,
+        )?;
+        const WORKGROUP: u32 = 16;
+        recorder.record_dispatch(
+            &kernel,
+            frame.width.div_ceil(2).div_ceil(WORKGROUP),
+            frame.height.div_ceil(WORKGROUP),
+            1,
+        )?;
+        buffer.written_by_gpu.record_release_to_host(recorder)?;
+        recorder.submit_and_wait()
+    })();
+    if let Err(failure) = recorded {
+        recorder.abort_recording();
+        return Err(failure);
+    }
     buffer.written_by_gpu.publish_to_host();
     Ok(())
 }

@@ -1848,6 +1848,12 @@ impl GpuContext {
     /// handle. Per-frame `ResolvedColorInfo` lives in push constants,
     /// so one cached converter handles every variation of source color
     /// description without invalidating.
+    ///
+    /// The cached converter's kernel — and the bindings staged on it
+    /// between `prepare_*` and the dispatch — is one object shared by every
+    /// holder of the handle, so two processors driving the same format pair
+    /// from their own threads race it. A processor that records the
+    /// dispatch itself takes [`Self::create_color_converter`] instead.
     #[cfg(target_os = "linux")]
     pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
         // Fast path: read lock; cache stores Arc<Inner> so we can build
@@ -1874,6 +1880,29 @@ impl GpuContext {
             "GpuContext::color_converter — converter constructed"
         );
         Ok(RhiColorConverter::from_arc_into_raw(inner_arc))
+    }
+
+    /// A color converter of the caller's own — the same `(src, dst)` kernel
+    /// [`Self::color_converter`] would hand out, built fresh and never
+    /// placed in the cache, so a processor recording its dispatch from its
+    /// own thread shares no pending state with any other.
+    #[cfg(target_os = "linux")]
+    pub fn create_color_converter(
+        &self,
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<RhiColorConverter> {
+        let vulkan_device = &self.device.inner;
+        let inner = crate::vulkan::rhi::VulkanColorConverter::new(vulkan_device, src, dst)?;
+        tracing::debug!(
+            rhi_op = "create_color_converter",
+            ?src,
+            ?dst,
+            "GpuContext::create_color_converter — owned converter constructed"
+        );
+        Ok(RhiColorConverter::from_arc_into_raw(Arc::new(
+            crate::core::rhi::RhiColorConverterInner { inner },
+        )))
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -4327,6 +4356,17 @@ impl GpuContextFullAccess {
     #[cfg(target_os = "linux")]
     pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
         self.host_inner().color_converter(src, dst)
+    }
+
+    /// A color converter of the caller's own. See
+    /// [`GpuContext::create_color_converter`](crate::core::context::GpuContext::create_color_converter).
+    #[cfg(target_os = "linux")]
+    pub fn create_color_converter(
+        &self,
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<RhiColorConverter> {
+        self.host_inner().create_color_converter(src, dst)
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.

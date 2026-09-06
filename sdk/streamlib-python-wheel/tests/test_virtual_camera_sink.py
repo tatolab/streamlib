@@ -118,6 +118,21 @@ def await_camera(camera_name: str, present: bool, app) -> list[Path]:
     )
 
 
+def await_capture_capability(video_node: Path, app):
+    """Other openers see CAPTURE once the writer is streaming; until the sink
+    has queued its first frame the module still answers OUTPUT."""
+    deadline = time.monotonic() + CAMERA_APPEARS_TIMEOUT_SECONDS
+    answer = None
+    while time.monotonic() < deadline:
+        answer = query_capability(video_node)
+        if answer is not None and answer[2] & V4L2_CAP_VIDEO_CAPTURE:
+            return answer
+        time.sleep(CAMERA_POLL_INTERVAL_SECONDS)
+    raise AssertionError(
+        f"{video_node} never announced capture (last answer {answer}); app output:\n{app.output}"
+    )
+
+
 def read_yuyv_frames(video_node: Path, count: int):
     """Capture `count` frames the way any V4L2 application would: negotiate
     the format the writer set, map the device's buffers, stream, dequeue.
@@ -241,15 +256,13 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     app = start_app_under_test(
         VIRTUAL_CAMERA_SINK_APP, "--name", camera_name, "--second-name", second_name
     )
-    app.await_marker("MARKER:EVERY_PROCESSOR_RUNNING")
+    app.await_marker("EVERY_PROCESSOR_RUNNING")
     first = await_camera(camera_name, present=True, app=app)
     second = await_camera(second_name, present=True, app=app)
     assert len(first) == 1 and len(second) == 1, "two sinks are exactly two cameras"
     assert first != second
 
-    answer = query_capability(first[0])
-    assert answer is not None, "the camera node answers QUERYCAP"
-    driver, card, capabilities = answer
+    driver, card, capabilities = await_capture_capability(first[0], app)
     assert driver == "v4l2 loopback"
     assert card == camera_name
     assert capabilities & V4L2_CAP_VIDEO_CAPTURE, "readers see a capture device"
@@ -272,8 +285,9 @@ def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(start_app_under_
         VIRTUAL_CAMERA_SINK_APP,
         "--name", camera_name, "--width", str(width), "--height", str(height),
     )
-    app.await_marker("MARKER:EVERY_PROCESSOR_RUNNING")
+    app.await_marker("EVERY_PROCESSOR_RUNNING")
     (node,) = await_camera(camera_name, present=True, app=app)
+    await_capture_capability(node, app)
 
     read_started_ns = time.monotonic_ns()
     got_width, got_height, sizeimage, frames = read_yuyv_frames(node, FRAMES_TO_READ)
