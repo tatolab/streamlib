@@ -162,7 +162,7 @@ impl VulkanColorConverter {
         info: &ResolvedColorInfo,
     ) -> Result<Arc<VulkanComputeKernel>> {
         let (width, height) = (src.width(), src.height());
-        if dst_stride_bytes < width * 2 || dst_stride_bytes % 4 != 0 {
+        if dst_stride_bytes < width * 2 || !dst_stride_bytes.is_multiple_of(4) {
             return Err(Error::Configuration(format!(
                 "color converter image→YUYV: destination stride {dst_stride_bytes} must be a \
                  multiple of 4 and at least 2 × width ({width})"

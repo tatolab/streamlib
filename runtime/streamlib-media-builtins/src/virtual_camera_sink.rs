@@ -418,16 +418,14 @@ pub(crate) fn create_or_reclaim_device_then<T>(
     match then(device_number, reclaimed) {
         Ok(value) => Ok(value),
         Err(failure) => {
-            if !reclaimed {
-                if let Err(remove_failure) = node.remove_device(device_number) {
-                    tracing::warn!(
-                        camera = label,
-                        device_number,
-                        error = %remove_failure,
-                        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: the device created by a setup that \
-                         then failed could not be removed; the next setup reclaims it by label"
-                    );
-                }
+            if !reclaimed && let Err(remove_failure) = node.remove_device(device_number) {
+                tracing::warn!(
+                    camera = label,
+                    device_number,
+                    error = %remove_failure,
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: the device created by a setup that \
+                     then failed could not be removed; the next setup reclaims it by label"
+                );
             }
             Err(failure)
         }
@@ -578,7 +576,7 @@ unsafe impl Send for PageMappingOfDeviceBuffer {}
 struct MappedOutputBuffer {
     index: u32,
     written_by_gpu: HostMappingWrittenByGpu,
-    mapping: PageMappingOfDeviceBuffer,
+    _page_mapping: PageMappingOfDeviceBuffer,
     queued: bool,
 }
 
@@ -813,7 +811,7 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
 impl VirtualCameraSink::Processor {
     fn present_one_frame(&mut self, frame: &VideoFrame) -> std::result::Result<(), LatchedRefusal> {
         let yuyv_bytes = u64::from(frame.width) * 2 * u64::from(frame.height);
-        if frame.width % 2 != 0 || yuyv_bytes == 0 || yuyv_bytes > u64::from(u32::MAX) {
+        if !frame.width.is_multiple_of(2) || yuyv_bytes == 0 || yuyv_bytes > u64::from(u32::MAX) {
             return Err(LatchedRefusal::UnusableExtent {
                 width: frame.width,
                 height: frame.height,
@@ -991,7 +989,8 @@ fn negotiate_output_format_and_start_streaming(
             format.fmt.pix.pixelformat,
         )
     };
-    if set_pixelformat != yuyv || bytesperline < frame.width * 2 || bytesperline % 4 != 0 {
+    if set_pixelformat != yuyv || bytesperline < frame.width * 2 || !bytesperline.is_multiple_of(4)
+    {
         return Err(Error::Runtime(format!(
             "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": the device set \
              {}x{} bytesperline={bytesperline} rather than YUYV at 2×width",
@@ -1067,7 +1066,7 @@ fn negotiate_output_format_and_start_streaming(
         buffers.push(MappedOutputBuffer {
             index,
             written_by_gpu,
-            mapping,
+            _page_mapping: mapping,
             queued: false,
         });
     }
