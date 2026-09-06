@@ -818,7 +818,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   in and pulled out from every other application's point of view, whose frames are
   whatever the graph writes. It takes video on an input `video` declared `newest`, the
   display's shape. Config: `name`, the camera's name in every picker, defaulting to
-  `StreamLib Camera`; `door`, optional, `auto` by default. Two doors, one per instance,
+  `StreamLib Camera` followed by a four-character id derived from the app's entry
+  directory and the instance's display name — distinct across instances and apps, the
+  same on every run of the same app, so unnamed cameras never collide and a device left
+  behind is still recognised; `door`, optional, `auto` by default. Two doors, one per instance,
   chosen at `setup()` and logged once. The **v4l2loopback** door creates its own device
   through the module's control node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to
   `name`, capture-only capabilities announced, four buffers) and removes it with

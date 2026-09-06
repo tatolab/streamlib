@@ -7,24 +7,22 @@ from every other application's point of view, showing whatever the graph writes.
 instances as the graph adds, each with its own `name`. Two doors, one per instance: a
 v4l2loopback device the sink creates through the module's control node, else a PipeWire
 camera-role node. Implements §Media I/O's DECIDED entry
-(`docs/plan/ARCHITECTURE.md:814-854`) and the built-in criterion's clause (c) (`:106-119`).
+(`docs/plan/ARCHITECTURE.md:814-857`) and the built-in criterion's clause (c) (`:106-119`).
 Rationale and the rig facts are `docs/decisions/virtual-camera-sink.md` (owner rulings,
 2026-09-06, recorded in the entry by this change).
 
 **Scale gate — this skill, plus the ADR.** New behavior with a public marker class and a
 stub entry, one new RHI primitive (a host-pointer import) that only the RHI may own
-(`cargo xtask check-boundaries`, `xtask/src/check_boundaries.rs:275-307`), and the video
-half of the engine's PipeWire shim. The ADR exists; this change appends its sections.
+(`cargo xtask check-boundaries`, `xtask/src/check_boundaries.rs:275-307`), and the video half
+of the engine's PipeWire shim. The ADR exists; this change appends its sections.
 
 **Precondition.** The entries are DECIDED (#2194, merged 2026-09-06, widened here on the
-owner's rulings). §Consumers `:363-365`: a showcase in the current idiom is an ordinary
-addition. Sections flipped to `IN-FLIGHT (→ virtual-camera-sink)`: §Packages & extension
-model, §Graphics (RHI / GPU), §Media I/O, §Consumers, §Control plane & observability
-(for the CLI verb).
+owner's rulings); §Consumers `:363-365` makes a showcase in the current idiom an ordinary
+addition. Flipped to `IN-FLIGHT (→ virtual-camera-sink)`: §Packages & extension model,
+§Graphics (RHI / GPU), §Media I/O, §Consumers, §Control plane & observability (the CLI verb).
 
-**Out of scope, by the owner's word.** Nothing here touches the engine's camera source, the
-test-pattern source, or the rig's capture fixtures: the sink produces a new device and
-shares no code with a camera.
+**Out of scope, by the owner's word.** Nothing here touches the engine's camera source,
+the test pattern, or the rig's capture fixtures: the sink shares no code with a camera.
 
 **Verified against the tree 2026-09-06 (HEAD bd28d57ea)** — three read-only recon sweeps
 and one live probe.
@@ -77,12 +75,11 @@ and one live probe.
   format with a mandatory, unfixated modifier list beside a shared-memory sibling, fixate
   on the modifier that allocates, buffer data type DMA-BUF when modifiers negotiated,
   allocate in `add_buffer`, the consumer imports or takes the fallback.
-- The RHI has no host-pointer import; `VK_EXT_external_memory_host` appears only in the
-  vendored bindings (`vendor/tatolab-vulkanalia/src/vk/extensions.rs:2952-2977`,
-  `builders.rs:50066-50097`). The optional-extension pattern is probe → push → record a
-  `bool` → accessor (`runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs:809-822`,
-  `:845-849`, `:1178-1180`, `:2788`); the properties-chain precedent is `:1069-1072`. The
-  rig reports the extension with a 4 KiB alignment.
+- The RHI has no host-pointer import; `VK_EXT_external_memory_host` is only in the vendored
+  bindings (`vendor/tatolab-vulkanalia/src/vk/extensions.rs:2952-2977`, `builders.rs:50066-50097`).
+  The optional-extension pattern is probe → push → record a `bool` → accessor
+  (`vulkan/rhi/vulkan_device.rs:809-822`, `:845-849`, `:1178-1180`, `:2788`); the
+  properties-chain precedent is `:1069-1072`. The rig reports it with a 4 KiB alignment.
 - A compute kernel binds a `VkBuffer` as a storage-buffer output today
   (`core/rhi/compute_kernel.rs:145`; `vulkan/rhi/vulkan_compute_kernel.rs:773-784`,
   `:1013`). The mirror shader exists, YUYV buffer in, RGBA image out
@@ -93,21 +90,20 @@ and one live probe.
   (`:600-614`) is how `RgbToNv12Converter` wraps a kernel in its own barriers
   (`vulkan/video/rgb_to_nv12.rs:65-86`).
 - The readback staging is write-combined (`vulkan_texture_readback.rs:118-126`) and
-  `acquire_storage_buffer` lands on a sequential-write allocation
-  (`vulkan_buffer.rs:168-200`, `:260-272`); the host-cached precedent is the decode path
-  (`vulkan/video/decode/mod.rs:867-883`, `:911-921`: 37 ms a frame off write-combined
-  memory) and `new_opaque_fd_export_host_cached` (`vulkan_buffer.rs:487-508`).
+  `acquire_storage_buffer` is a sequential-write allocation (`vulkan_buffer.rs:168-200`,
+  `:260-272`); the host-cached precedents are the decode path (`vulkan/video/decode/mod.rs:867-883`,
+  `:911-921`: 37 ms a frame off write-combined memory) and `new_opaque_fd_export_host_cached`
+  (`vulkan_buffer.rs:487-508`).
 - Any published `VideoFrame` becomes a GPU image through
   `resolve_texture_registration_by_surface_id` (`core/context/gpu_context.rs:1317-1414`,
   buffer-backed fallback `:1461-1526`); the encoder built-in is the sink-shaped consumer
-  (`published_surface_to_encoded_frame_encoder.rs:223-233`). Every cross-process texture
-  carries its DRM modifier and plane layout (`python_helper_process_pixel_exchange.rs:385-434`).
+  (`published_surface_to_encoded_frame_encoder.rs:223-233`); every cross-process texture
+  carries its DRM modifier and planes (`python_helper_process_pixel_exchange.rs:385-434`).
 - Registration and the five wheel touchpoints: `register_media_builtin_processor_types`
   (`runtime/streamlib-media-builtins/src/lib.rs:107-127`); marker, `is()` arm with the
-  Linux-only refusal, `add_class`, re-export, stub
-  (`python_native_builtin_blocks.rs:86-90`, `:120-130`, `:193-197`; `src/lib.rs:42-53`;
-  `__init__.py:39-45`, `:84-110`; `_engine.pyi:28-80`, `:250-292` as the docstring model).
-  stubtest gates the stub with no allowlist (`python-wheel.yml:155-157`).
+  Linux-only refusal, `add_class`, re-export, stub (`python_native_builtin_blocks.rs:86-90`,
+  `:120-130`, `:193-197`; `src/lib.rs:42-53`; `__init__.py:39-45`, `:84-110`; `_engine.pyi:28-80`,
+  `:250-292` as the docstring model); stubtest gates the stub, no allowlist (`python-wheel.yml:155-157`).
 - Tests reach CI by name only: media-builtins at `test.yml:129` / `xtask/src/main.rs:284-294`,
   the engine-lib slice at `test.yml:214` / `:300-313`; hardware-bound wheel tests carry
   `requires_gpu` (`pyproject.toml:61-67`), rig only. Colorimetry translation exists in the
@@ -123,10 +119,13 @@ and one live probe.
   config = crate::virtual_camera_sink::VirtualCameraSinkConfig, input("video",
   delivery_profile = "newest", ...)`, no output. Reactive: neither door applies
   back-pressure, the frame's arrival is the pace, and `process()` blocks only on the GPU.
-- `VirtualCameraSinkConfig { name: String = "StreamLib Camera", door: VirtualCameraDoor =
-  Auto }` with `VirtualCameraDoor::{Auto, V4l2Loopback, PipeWire}`, serde
-  `snake_case`. `name` is what every picker shows on either door. Instances are unlimited;
-  each is one camera.
+- `VirtualCameraSinkConfig { name: Option<String>, door: VirtualCameraDoor = Auto }` with
+  `VirtualCameraDoor::{Auto, V4l2Loopback, PipeWire}`, serde `snake_case`. An absent
+  `name` becomes `StreamLib Camera <id>`, the id four characters of a hash over the app's
+  entry directory and the instance's display name (the graph's own, disambiguated) — so
+  two unnamed instances never share a label, two apps never do, and the label is the same
+  on every run, which is what reclaim keys on. `name` is what every picker shows on either
+  door. Instances are unlimited; each is one camera.
 - Door choice at `setup()`, per instance, logged once with the door and the reason:
   - `auto`: the loopback door when `/dev/v4l2loopback` opens read-write; else the PipeWire
     door, with an info line: `VirtualCameraSink "Desk cam": using the PipeWire camera
@@ -243,8 +242,8 @@ and one live probe.
   between an image barrier and the primitive's host barrier, `RgbToNv12Converter`'s wrapping
   (`rgb_to_nv12.rs:65-86`) on a buffer target; BT.601 limited range from the frame's
   `ColorInfo`, the mirror shader's table.
-- `v4l2_color.rs` gains the inverse mapping — `ColorInfo` → V4L2 `colorspace`, `ycbcr_enc`,
-  `quantization`, `xfer_func` — so `S_FMT` tells readers the colorimetry.
+- `v4l2_color.rs` gains the inverse map, `ColorInfo` → V4L2 `colorspace`, `ycbcr_enc`,
+  `quantization`, `xfer_func`, so `S_FMT` tells readers the colorimetry.
 
 ### §Media I/O — the five wheel touchpoints
 
@@ -268,7 +267,8 @@ and one live probe.
       graph needs; each is its own camera.
 
       Config keys: `name`, the camera's name in every picker, defaulting to
-      "StreamLib Camera"; `door`, "auto" (default), "v4l2loopback", or "pipewire".
+      "StreamLib Camera" plus a short id that is unique per instance and app and
+      stable across runs; `door`, "auto" (default), "v4l2loopback", or "pipewire".
       Under "auto" the sink creates a v4l2loopback device when the module's
       control node is writable — the door every application sees — and otherwise
       registers a PipeWire camera node, which needs no module and no root. The
@@ -290,6 +290,7 @@ and one live probe.
 - `cargo test -p streamlib-media-builtins --lib`:
   `the_only_port_is_one_newest_input_and_there_is_no_output`,
   `the_config_names_the_camera_and_the_door_and_nothing_else`,
+  `an_unnamed_camera_gets_a_stable_id_that_differs_between_instances`,
   `auto_takes_the_loopback_door_when_the_control_node_opens_and_pipewire_otherwise`,
   `a_forced_loopback_door_without_permission_refuses_naming_the_verb`,
   `a_device_carrying_this_sinks_label_is_reclaimed_rather_than_duplicated`,
@@ -307,10 +308,9 @@ and one live probe.
   node with the configured name exists during the run and not after),
   `test_frames_reach_the_loopback_device_and_read_back_as_yuyv` (a capture reader checks
   extent, fourcc, and the stamps), `test_without_the_control_node_a_pipewire_camera_node_appears`.
-- Rig proof, recorded in the ticket with the driver version and the tier: two sinks in one
-  graph appear as two named cameras in Chrome, OBS and `v4l2-ctl` while it runs and vanish
-  at shutdown; with the control node withheld, the PipeWire node appears in a portal-based
-  picker and in `pw-dump`.
+- Rig proof, recorded with the driver version and the tier: two sinks in one graph appear
+  as two named cameras in Chrome, OBS and `v4l2-ctl` while it runs and vanish at shutdown;
+  with the control node withheld, the PipeWire node appears in a portal picker and `pw-dump`.
 
 ### §Consumers — the showcase
 
@@ -324,12 +324,12 @@ and one live probe.
 
 ## MODIFIED
 
-- §Media I/O `:814-854` — the DECIDED entry, widened by the owner's rulings to two doors, a
+- §Media I/O `:814-857` — the DECIDED entry, widened by the owner's rulings to two doors, a
   device per processor, unlimited instances and the `name` key; its PipeWire OPEN folded in
   and removed. At fold time it gains the ship tag and the tier the rig chose.
 - §Consumers `:362` — fourteen converted beside two held; `camera-virtual-camera` joins as
   the virtual camera's showcase under the convention at `:363-365`.
-- §Control plane `:2272` — the CLI verb list gains `enable-virtual-camera`, a machine-setup
+- §Control plane `:2275` — the CLI verb list gains `enable-virtual-camera`, a machine-setup
   verb that touches no node; `docs/plan/diagrams/system.mmd:17` lists it.
 - `docs/decisions/virtual-camera-sink.md` — sections appended for the RHI primitive's
   tier, the two-door rule, and the device-per-processor ruling, with the earlier
@@ -342,9 +342,9 @@ None — this change adds a capability and deletes nothing; the ship gate has no
 ## Known limits, recorded for the tickets
 
 - A device outlives a crash and `CTL_REMOVE` returns `EBUSY` while a reader holds it, so
-  "gone at shutdown" is best-effort: the next `setup()` reclaims by label.
-- A reader's `S_PARM` overwrites the loopback's device-wide frame interval; the sink's
-  cadence is the frame's arrival regardless. Logged once when observed.
+  "gone at shutdown" is best-effort and the next `setup()` reclaims by label. A reader's
+  `S_PARM` overwrites the device-wide frame interval; the sink's cadence is the frame's
+  arrival regardless, logged once when observed.
 - Three tracer bullets: the loopback door with the control node and the import experiment
   first, the PipeWire door with the shim's video half, then the showcase — each demoable
   alone.
