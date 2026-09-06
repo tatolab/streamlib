@@ -20,13 +20,17 @@ test ships inside the wheel.
    that presents an OS-facing device to other applications on the machine, which
    `pip install streamlib` alone must make available, is a built-in. The virtual camera
    is the first case; a virtual microphone would be the same case.
-3. **v4l2loopback is the door.** The sink is a V4L2 output producer on a loopback
-   device: memory-mapped output streaming, YUYV, format from the first frame, the frame's
+3. **v4l2loopback is a door, created per processor.** The sink adds its own loopback
+   device through the module's control node at `setup()` and removes it at `teardown()`:
+   memory-mapped output streaming, YUYV, format from the first frame, the frame's
    monotonic stamp passed through. Every application that enumerates `/dev/video*` sees
-   it as a camera.
-4. **No elevation, ever.** The engine never loads the module and never asks for
-   privilege. A missing or foreign device refuses at `setup()` by name, carrying the
-   `modprobe` line, and the runtime keeps running.
+   it as a camera, and portal-based ones see it through the session manager's V4L2 mirror.
+   (Widened the same day from the original loopback-only, pre-loaded-device shape; see the
+   two later sections.)
+4. **No elevation, ever.** The engine never loads the module, never writes a udev rule,
+   and never asks for privilege. Without the one-time system step the sink takes the
+   PipeWire door; only `door = "v4l2loopback"` refuses at `setup()` by name, carrying the
+   two lines, and the runtime keeps running.
 5. **One GPU pass writes the device.** The conversion kernel targets the mapped loopback
    buffer through a host-pointer import the RHI gains. Where the driver refuses the
    import, the same kernel targets cached host staging and one copy lands it. The
@@ -116,7 +120,15 @@ floor and the plan entry records the answer at fold time.
 
 ## The modprobe line the message prescribes
 
-`sudo modprobe v4l2loopback exclusive_caps=1 max_buffers=4 card_label="StreamLib Virtual Camera"`.
+> ~~`sudo modprobe v4l2loopback exclusive_caps=1 max_buffers=4 card_label="StreamLib Virtual Camera"`.~~
+> — Superseded 2026-09-06, the same day, by the per-processor ruling: the module loads with
+> `devices=0` and each sink creates its own device with the label, capability announcement
+> and buffer count set per device through the control node; the two lines a user runs once
+> are `sudo modprobe v4l2loopback devices=0` (persisted in `modules-load.d` and
+> `modprobe.d`) and a udev rule `KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"`.
+> The reasoning below for `exclusive_caps` and four buffers still holds; both are now
+> per-device fields of the `CTL_ADD` configuration rather than module parameters.
+
 
 `exclusive_caps=1` because Chromium's V4L2 enumerator lists a node only when it reports
 `VIDEO_CAPTURE` and not `VIDEO_OUTPUT`; without the parameter a loopback node reports both
@@ -129,6 +141,13 @@ run, once, and the engine never runs it; a `modules-load.d` entry and a `modprob
 file are how it survives a reboot, and the refusal message says so.
 
 ## Two doors, one open at a time, and as many cameras as the graph adds
+
+> ~~N instances then need N loopback devices for the loopback door (`devices=N` and a
+> `card_label` list on the module line) … `name` is also how an instance finds its device
+> among several, since the module fixes each device's label at load time and the sink can
+> only choose, never rename.~~ — Superseded 2026-09-06, the same day, by the owner's
+> per-processor ruling below: the sink creates its own device, so nothing is pre-loaded,
+> selected, or listed on the module line.
 
 Owner ruling, later on 2026-09-06, widening the loopback-only decision above: the sink has
 both doors, and the graph adds as many sinks as it wants, each a camera of its own with its
@@ -145,3 +164,30 @@ module line), and any instance past the last free device takes the PipeWire door
 so. `name` is the one thing a user must be able to set: it is what every picker shows, and
 on the loopback door it is also how an instance finds its device among several, since the
 module fixes each device's label at load time and the sink can only choose, never rename.
+
+## A device per processor, created and removed by the sink
+
+Owner ruling, 2026-09-06: "This is a new device per processor every time, it gets shut down
+when the runtime ends … more like a USB camera I'm sticking in, from other applications'
+perspective." That is exactly the shape the loopback module offers through its control
+node: `/dev/v4l2loopback` takes `CTL_ADD` with a `v4l2_loopback_config` — the label, the
+capability announcement, the buffer count — and answers with the device number; `CTL_REMOVE`
+takes it away. No capability check sits behind the ioctls beyond opening the node, and the
+module loads with `devices=0` so nothing exists until a sink asks. The PipeWire door is the
+same shape by construction: a node lives exactly as long as the stream that registered it.
+
+What stands between a fresh install and the loopback door is the control node's mode. The
+module registers it as a misc device without a mode, so the kernel's default is root-only.
+The one-time step is therefore not `modprobe` with devices but two lines the user runs once:
+load the module with no devices, and a udev rule tagging the node `uaccess`, which lets the
+logged-in seat user open it through the ACL logind manages — no group membership, no
+elevation at run time. The sink never runs either line; it reports them, and it takes the
+PipeWire door in the meantime. `door = "v4l2loopback"` is for the user who wants the
+loopback door or nothing, and it refuses by name with those two lines.
+
+Persistence is the one place the model is "ideally": a device a sink created outlives a
+crash, and `CTL_REMOVE` returns `EBUSY` while any reader holds the device open, so a camera
+still open in another application at teardown stays until that application lets go. The
+sink therefore removes at teardown best-effort, and at the next `setup()` reclaims a device
+that carries its own label rather than creating a second one. Nothing about the engine's
+camera source, the test pattern, or the rig's capture devices enters this design.

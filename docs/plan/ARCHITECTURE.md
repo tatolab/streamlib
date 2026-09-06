@@ -813,37 +813,42 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
   (c): `VirtualCameraSink`, in the media built-ins crate, Linux only, as many instances
-  as the graph adds — the display's rule — each its own camera with its own `name` and
-  its own door. It takes video on an input `video` declared `newest`, the
-  display's shape, and presents the frames as a camera that any application on the machine
-  can select. Config: `name`, the camera's name in every picker, defaulting to
-  `StreamLib Camera`; `device`, optional, naming one v4l2loopback node. Two doors, one open
-  at a time, chosen at `setup()` and logged once: **v4l2loopback** when a loopback device
-  exists that no other instance or producer holds — the one every application sees,
-  `/dev/video*` readers directly and portal-based readers through the session manager's
-  V4L2 mirror — else the **PipeWire** door, a
-  `Video/Source` node with `media.role = Camera` and the configured name, which needs no
-  module and no root and is what a fresh install gets. Never both at once, since the mirror
-  would list the camera twice. Loopback door: memory-mapped output streaming, YUYV, the
-  device format set from the first frame's extent and re-negotiated when the extent
-  changes, the frame's monotonic timestamp passed through on every queued buffer; with
-  several loopback devices present the one whose label is `name` is taken, else the first
-  free. PipeWire door: the engine's DMA-BUF textures offered with their modifier beside a
-  shared-memory fallback, the consumer choosing, the frame's stamp on every buffer. A device
-  of another driver named in `device`, or a loopback device another producer holds, refuses
-  at `setup()` by name — the processor never reaches Running and the runtime keeps running,
-  the codec blocks' shape; nothing in the engine loads a module or asks for elevation, and
-  the log line naming the door carries the `modprobe` line — `devices=N` and
-  `card_label` listing each instance's `name` — for the machines that want the loopback
-  door for every camera the graph adds. The loopback door's per-frame path
+  as the graph adds — the display's rule. Each instance is one camera that exists only
+  while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
+  in and pulled out from every other application's point of view, whose frames are
+  whatever the graph writes. It takes video on an input `video` declared `newest`, the
+  display's shape. Config: `name`, the camera's name in every picker, defaulting to
+  `StreamLib Camera`; `door`, optional, `auto` by default. Two doors, one per instance,
+  chosen at `setup()` and logged once. The **v4l2loopback** door creates its own device
+  through the module's control node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to
+  `name`, capture-only capabilities announced, four buffers) and removes it with
+  `CTL_REMOVE` at teardown; it is the door every application sees — `/dev/video*`
+  readers directly and portal-based readers through the session manager's V4L2 mirror —
+  and it is taken whenever the control node is writable by the process. The **PipeWire**
+  door registers a `Video/Source` node with `media.role = Camera` and the configured name,
+  destroyed at teardown; it needs no module and no root and is what a fresh install gets
+  when the control node is absent or not writable. Never both for one instance, since the
+  mirror would list the camera twice. The one-time system step for the loopback door is
+  the user's, never the engine's: the module loaded with no devices and a udev rule that
+  grants the seat user the control node; the door log line carries both, and `door =
+  "v4l2loopback"` on a machine without them refuses at `setup()` by name with the same
+  lines — the processor never reaches Running and the runtime keeps running. A device the
+  sink cannot remove at teardown because a reader still holds it is left in place and
+  reclaimed by label at the next `setup()`; a device left behind by a crash is reclaimed
+  the same way. Loopback door: memory-mapped output streaming, YUYV, the device format set
+  from the first frame's extent and re-negotiated when the extent changes, the frame's
+  monotonic timestamp passed through on every queued buffer. PipeWire door: the engine's
+  DMA-BUF textures offered with their modifier beside a shared-memory fallback, the
+  consumer choosing, the frame's stamp on every buffer. The loopback door's per-frame path
   is one GPU pass: the RGBA→YUYV conversion kernel writes straight into the mapped loopback
   buffer through a host-pointer import the RHI gains (`VK_EXT_external_memory_host`), so no
   CPU touches a pixel; where the driver refuses that import, the same kernel writes into
   cached host staging and one copy lands it, and the import experiment on the platform
   floor settles which branch is the default. The loopback device is reached through V4L2
   ioctls alone and PipeWire through the engine's existing `dlsym` shim: no user-space
-  library is linked and the wheel's `DT_NEEDED` set does not grow. Owner ruling 2026-09-06
-  widened this from loopback-only to two doors. [virtual-camera-sink]
+  library is linked and the wheel's `DT_NEEDED` set does not grow. Owner rulings
+  2026-09-06: widened from loopback-only to two doors, then from pre-loaded devices to a
+  device per processor. [virtual-camera-sink]
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD import-export, present target,
   audio clock, color resolution, codec sessions — never against private engine guts;
