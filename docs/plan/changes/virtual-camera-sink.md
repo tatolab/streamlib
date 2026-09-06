@@ -7,7 +7,7 @@ from every other application's point of view, showing whatever the graph writes.
 instances as the graph adds, each with its own `name`. Two doors, one per instance: a
 v4l2loopback device the sink creates through the module's control node, else a PipeWire
 camera-role node. Implements §Media I/O's DECIDED entry
-(`docs/plan/ARCHITECTURE.md:814-851`) and the built-in criterion's clause (c) (`:106-119`).
+(`docs/plan/ARCHITECTURE.md:814-854`) and the built-in criterion's clause (c) (`:106-119`).
 Rationale and the rig facts are `docs/decisions/virtual-camera-sink.md` (owner rulings,
 2026-09-06, recorded in the entry by this change).
 
@@ -19,11 +19,12 @@ half of the engine's PipeWire shim. The ADR exists; this change appends its sect
 **Precondition.** The entries are DECIDED (#2194, merged 2026-09-06, widened here on the
 owner's rulings). §Consumers `:363-365`: a showcase in the current idiom is an ordinary
 addition. Sections flipped to `IN-FLIGHT (→ virtual-camera-sink)`: §Packages & extension
-model, §Graphics (RHI / GPU), §Media I/O, §Consumers.
+model, §Graphics (RHI / GPU), §Media I/O, §Consumers, §Control plane & observability
+(for the CLI verb).
 
 **Out of scope, by the owner's word.** Nothing here touches the engine's camera source, the
-test-pattern source, or the rig's capture devices and their verification fixtures. The sink
-is a producer of a new device; it reads no camera and shares no code with one.
+test-pattern source, or the rig's capture fixtures: the sink produces a new device and
+shares no code with a camera.
 
 **Verified against the tree 2026-09-06 (HEAD bd28d57ea)** — three read-only recon sweeps
 and one live probe.
@@ -44,11 +45,10 @@ and one live probe.
   buffers are allocated or another opener holds the format; `REQBUFS` accepts
   `V4L2_MEMORY_MMAP` only and clamps to the device's buffer count; `QBUF` publishes
   synchronously and `DQBUF` never blocks; a non-zero supplied timestamp is copied through
-  under `TIMESTAMP_COPY`. With capture-only capabilities announced, the writer sees OUTPUT
-  and every other opener sees CAPTURE while it streams; Chromium's V4L2 enumerator lists a
-  node only in that mode (`video_capture_device_factory_v4l2.cc:184-190`), asks for four
-  buffers and accepts YUYV; OBS requires only capture. `ENUM_FMT` reports the set format
-  alone while the sink holds it.
+  under `TIMESTAMP_COPY`. With capture-only capabilities announced, other openers see
+  CAPTURE while the writer streams; Chromium lists a node only in that mode
+  (`video_capture_device_factory_v4l2.cc:184-190`), asks for four buffers and accepts
+  YUYV; OBS requires only capture. `ENUM_FMT` reports the set format alone.
 - The media built-ins crate already depends on `v4l = "0.14"` and drops to raw
   `libc::ioctl` with the crate's constants where its safe API stops
   (`runtime/streamlib-media-builtins/Cargo.toml:31-34`; `camera_source.rs:503`, `:812-902`
@@ -109,10 +109,9 @@ and one live probe.
   `__init__.py:39-45`, `:84-110`; `_engine.pyi:28-80`, `:250-292` as the docstring model).
   stubtest gates the stub with no allowlist (`python-wheel.yml:155-157`).
 - Tests reach CI by name only: media-builtins at `test.yml:129` / `xtask/src/main.rs:284-294`,
-  the engine-lib slice at `test.yml:214` / `:300-313`. Hardware-bound wheel tests carry
-  `requires_gpu` (`sdk/streamlib-python-wheel/pyproject.toml:61-67`), rig only.
-- Colorimetry translation exists in the capture direction only (`v4l2_color.rs`); the sink
-  needs the inverse for `S_FMT`.
+  the engine-lib slice at `test.yml:214` / `:300-313`; hardware-bound wheel tests carry
+  `requires_gpu` (`pyproject.toml:61-67`), rig only. Colorimetry translation exists in the
+  capture direction only (`v4l2_color.rs`); the sink needs the inverse for `S_FMT`.
 
 ## ADDED
 
@@ -130,14 +129,41 @@ and one live probe.
   each is one camera.
 - Door choice at `setup()`, per instance, logged once with the door and the reason:
   - `auto`: the loopback door when `/dev/v4l2loopback` opens read-write; else the PipeWire
-    door, with the log line carrying the one-time step for machines that want the
-    loopback door: `sudo modprobe v4l2loopback devices=0` (persisted in `modules-load.d`
-    and `modprobe.d`) and a rule `KERNEL=="v4l2loopback", SUBSYSTEM=="misc",
-    TAG+="uaccess"` in `/etc/udev/rules.d`.
-  - `v4l2loopback`: the loopback door or a refusal by name at `setup()` carrying those two
-    lines — the processor never reaches Running, the runtime keeps running.
+    door, with an info line: `VirtualCameraSink "Desk cam": using the PipeWire camera
+    door — this machine has no permission to create v4l2loopback cameras (the door every
+    application sees). Run \`streamlib enable-virtual-camera\` once to grant it.`
+  - `v4l2loopback`: the loopback door, or a refusal by name at `setup()` —
+    `VirtualCameraSink "Desk cam": no permission to create a v4l2loopback camera:
+    /dev/v4l2loopback is <absent | not writable by this user>. Run \`streamlib
+    enable-virtual-camera\` once (it asks for your password), then re-run; or set
+    door="auto" to use the PipeWire door meanwhile.` The processor never reaches
+    Running and the runtime keeps running; `wait_until_every_processor_is_running`
+    raises with that text.
   - `pipewire`: that door, refusing by name only when no session daemon answers.
-  The engine never loads a module, never writes a rule, never asks for elevation.
+  The engine never loads a module, never writes a rule, never asks for elevation; the
+  verb is the user's to run.
+
+### §Control plane — the machine-setup verb
+
+- `streamlib enable-virtual-camera`, in `sdk/streamlib-python-wheel/python/streamlib/cli.py`
+  beside `run` / `dev` (`:601-612` registration shape, `main` dispatch `:1015-1044`). It
+  touches no node and speaks no control plane; it installs the standard grant:
+  `/etc/modules-load.d/streamlib-virtual-camera.conf` (`v4l2loopback`),
+  `/etc/modprobe.d/streamlib-virtual-camera.conf` (`options v4l2loopback devices=0`),
+  `/etc/udev/rules.d/70-streamlib-virtual-camera.rules` (`KERNEL=="v4l2loopback",
+  SUBSYSTEM=="misc", TAG+="uaccess"`), then `modprobe v4l2loopback devices=0` and
+  `udevadm control --reload` + `udevadm trigger`, all as one privileged step through
+  `pkexec` — the desktop's own password dialog, polkit — falling back to `sudo` where no
+  polkit agent runs (a headless shell), and refusing by name where neither exists. It
+  then opens `/dev/v4l2loopback` read-write as the invoking user and reports success or
+  the exact reason; `--print` writes the files' contents to stdout and does nothing, for a
+  user who wants to place them by hand. Idempotent: re-running rewrites the same files.
+  It refuses by name off Linux and where the module is not installed, naming the
+  distribution package that ships it (here `linux-modules-<release>`). Never invoked by
+  the engine or a processor.
+- Tests (`tests/test_cli.py`): `test_enable_virtual_camera_print_writes_the_three_files_and_runs_nothing`,
+  `test_enable_virtual_camera_refuses_by_name_without_pkexec_or_sudo`, and the
+  `requires_gpu`-class rig check `test_enable_virtual_camera_makes_the_control_node_writable`.
 
 ### §Media I/O — the loopback door
 
@@ -246,10 +272,11 @@ and one live probe.
       Under "auto" the sink creates a v4l2loopback device when the module's
       control node is writable — the door every application sees — and otherwise
       registers a PipeWire camera node, which needs no module and no root. The
-      door is logged at setup with the one-time lines that enable the loopback
-      door on this machine; "v4l2loopback" refuses by name at `setup()` with
-      those lines when they are missing, and the runtime keeps running. The
-      engine never loads a module or asks for elevation.
+      door is logged at setup; without permission to create a loopback camera
+      the log names `streamlib enable-virtual-camera`, the one-time command
+      that grants it behind your desktop's password prompt. "v4l2loopback"
+      refuses by name at `setup()` in that case, and the runtime keeps running.
+      The engine never loads a module or asks for elevation.
 
       A loopback device a reader still holds at teardown is left in place and
       reclaimed by name at the next setup. Frames are stamped with their
@@ -264,7 +291,7 @@ and one live probe.
   `the_only_port_is_one_newest_input_and_there_is_no_output`,
   `the_config_names_the_camera_and_the_door_and_nothing_else`,
   `auto_takes_the_loopback_door_when_the_control_node_opens_and_pipewire_otherwise`,
-  `a_forced_loopback_door_without_the_control_node_refuses_with_both_lines`,
+  `a_forced_loopback_door_without_permission_refuses_naming_the_verb`,
   `a_device_carrying_this_sinks_label_is_reclaimed_rather_than_duplicated`,
   `the_control_config_struct_matches_the_modules_layout` (layout test), over a fake
   control-node answer set. Mirrored at `test.yml:129` / `xtask/src/main.rs:284-294`.
@@ -290,17 +317,20 @@ and one live probe.
 - `examples/camera-virtual-camera`: the scaffold's shape, the scaffolded source → the
   scaffolded Python effect → `VirtualCameraSink` named from an environment variable, and a
   second sink on the effect's other output to show two cameras from one graph. README as
-  `camera-codec-roundtrip`: "Run it" is `streamlib dev`, with the two one-time lines as the
-  optional step for `/dev/video*`-only applications; "Observing it" opens the cameras in
-  another application. It links nothing locally.
+  `camera-codec-roundtrip`: "Run it" is `streamlib dev`, with `streamlib
+  enable-virtual-camera` as the optional one-time step for `/dev/video*`-only
+  applications; "Observing it" opens the cameras in another application. It links
+  nothing locally.
 
 ## MODIFIED
 
-- §Media I/O `:814-851` — the DECIDED entry, widened by the owner's rulings to two doors, a
+- §Media I/O `:814-854` — the DECIDED entry, widened by the owner's rulings to two doors, a
   device per processor, unlimited instances and the `name` key; its PipeWire OPEN folded in
   and removed. At fold time it gains the ship tag and the tier the rig chose.
 - §Consumers `:362` — fourteen converted beside two held; `camera-virtual-camera` joins as
   the virtual camera's showcase under the convention at `:363-365`.
+- §Control plane `:2272` — the CLI verb list gains `enable-virtual-camera`, a machine-setup
+  verb that touches no node; `docs/plan/diagrams/system.mmd:17` lists it.
 - `docs/decisions/virtual-camera-sink.md` — sections appended for the RHI primitive's
   tier, the two-door rule, and the device-per-processor ruling, with the earlier
   module-line and pre-loaded-device reasoning annotated superseded.

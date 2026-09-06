@@ -191,3 +191,27 @@ still open in another application at teardown stays until that application lets 
 sink therefore removes at teardown best-effort, and at the next `setup()` reclaims a device
 that carries its own label rather than creating a second one. Nothing about the engine's
 camera source, the test pattern, or the rig's capture devices enters this design.
+
+## The permission is the standard desktop grant, and the CLI installs it
+
+Owner, 2026-09-06: the concern was giving the whole runtime root. It never has it. What
+gates the loopback door is a device node's mode, and the way Linux desktops say "this user
+may open this device" is a udev rule with the `uaccess` tag: logind hands the active seat's
+user an ACL on the node, the same path that opens the GPU, the sound card and USB devices to
+a session without privilege. The engine and its processors run as the user, always; what
+root does, once, is install that rule and load the module with no devices. That is the same
+one-time shape OBS's virtual camera asks of its users on Linux, which also rides
+v4l2loopback.
+
+So the CLI gains `enable-virtual-camera`: it writes the three files and reloads udev as one
+privileged step through `pkexec`, the desktop's own password dialog, with `sudo` as the
+headless fallback and `--print` for the user who wants to place the files by hand. The verb
+is the user's action and never the runtime's, which keeps the no-elevation rule intact. The
+finer-grained alternative — a polkit-backed system service exposing "add camera" with a
+per-application prompt — needs a root-installed service of its own and buys per-app
+consent rather than per-user access; it is the later step if the udev grant ever feels too
+blunt, not v1.
+
+A sink that lacks the permission says so by name — which file is absent or not writable
+and which command grants it — and the runtime keeps running; under `auto` it takes the
+PipeWire door in the meantime and still names the command.

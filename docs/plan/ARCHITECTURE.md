@@ -828,11 +828,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   door registers a `Video/Source` node with `media.role = Camera` and the configured name,
   destroyed at teardown; it needs no module and no root and is what a fresh install gets
   when the control node is absent or not writable. Never both for one instance, since the
-  mirror would list the camera twice. The one-time system step for the loopback door is
-  the user's, never the engine's: the module loaded with no devices and a udev rule that
-  grants the seat user the control node; the door log line carries both, and `door =
-  "v4l2loopback"` on a machine without them refuses at `setup()` by name with the same
-  lines — the processor never reaches Running and the runtime keeps running. A device the
+  mirror would list the camera twice. The permission behind the loopback door is the
+  standard udev grant a desktop hands its seat user for a device node — the module loaded
+  with no devices, and a rule tagging its control node `uaccess` — installed once by the
+  user through the CLI's `enable-virtual-camera` verb behind the desktop's own password
+  prompt (polkit), never by the engine, which runs unprivileged always. Without it, `auto`
+  takes the PipeWire door and says so; `door = "v4l2loopback"` refuses at `setup()` by
+  name, saying the sink lacks permission to create a camera and naming the verb to run —
+  the processor never reaches Running and the runtime keeps running. A device the
   sink cannot remove at teardown because a reader still holds it is left in place and
   reclaimed by label at the next `setup()`; a device left behind by a crash is reclaimed
   the same way. Loopback door: memory-mapped output streaming, YUYV, the device format set
@@ -2222,7 +2225,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT
+## Control plane & observability — IN-FLIGHT (→ virtual-camera-sink)
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
@@ -2268,8 +2271,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   prerequisite of the rip-out. [control-plane-one-surface]
 - **DECIDED** — The CLI ships inside the wheel and slims to `new` / `dev` / `run` (a
   thin runner over the same engine the wheel exposes) plus the observation verbs
-  (`nodes` / `graph` / `tap` / `logs` / `exchange`); build-orchestration, packaging,
-  provisioning, and codegen verbs are deleted. `exchange` takes a surface id, or a
+  (`nodes` / `graph` / `tap` / `logs` / `exchange`) and one machine-setup verb,
+  `enable-virtual-camera`, which installs the loopback permission the virtual camera's
+  loopback door needs behind the desktop's password prompt and touches no node;
+  build-orchestration, packaging, provisioning, and codegen verbs are deleted. `exchange` takes a surface id, or a
   channel: the channel form composes tap → decode → exchange client-side in one warm
   process — one connection, the exchange fired the moment the bag lands, `--count` and
   every-Nth sampling as client flags. It is the cold-spawn latency fix and the
@@ -2280,7 +2285,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb]
+  `exchange` verb; virtual-camera-sink for the setup verb]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
