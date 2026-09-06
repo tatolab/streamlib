@@ -43,7 +43,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
 
-## Packages & extension model — IN-FLIGHT
+## Packages & extension model — IN-FLIGHT (→ virtual-camera-sink)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -323,7 +323,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
 
-## Consumers — examples & packages — SHIPPED
+## Consumers — examples & packages — IN-FLIGHT (→ virtual-camera-sink)
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
 
 - **DECIDED** — `examples/` is the in-repo showcase and living documentation of the
@@ -647,7 +647,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT
+## Graphics (RHI / GPU) — IN-FLIGHT (→ virtual-camera-sink)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
@@ -799,7 +799,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ virtual-camera-sink)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -812,25 +812,49 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_native_builtin_blocks.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
-  (c): `VirtualCameraSink`, in the media built-ins crate, Linux only, several instances
-  allowed with one device each. It takes video on an input `video` declared `newest`, the
-  display's shape, and presents the frames as a V4L2 capture device that any application
-  on the machine opens as a camera. The backend is v4l2loopback: memory-mapped output
-  streaming, YUYV, the device format set from the first frame's extent and re-negotiated
-  when the extent changes, and the frame's monotonic timestamp passed through on every
-  queued buffer so a consumer sees the capture instant. Config `device` is optional: unset
-  picks the first loopback output device found, the camera source's own rule; set names
-  one. No loopback device, a device of another driver, or a device another producer holds
-  refuses at `setup()` by name, carrying the `modprobe` line to run — the processor never
-  reaches Running and the runtime keeps running, the codec blocks' shape; nothing in the
-  engine loads a module or asks for elevation. The per-frame path is one GPU pass: the
-  RGBA→YUYV conversion kernel writes straight into the mapped loopback buffer through a
-  host-pointer import the RHI gains (`VK_EXT_external_memory_host`), so no CPU touches a
-  pixel; where the driver refuses that import, the same kernel writes into cached host
-  staging and one copy lands it, and the import experiment on the platform floor settles
-  which branch is the default. The device is reached through V4L2 ioctls alone: no
-  user-space library is linked and the wheel's `DT_NEEDED` set does not grow.
-  [virtual-camera-sink]
+  (c): `VirtualCameraSink`, in the media built-ins crate, Linux only, as many instances
+  as the graph adds — the display's rule. Each instance is one camera that exists only
+  while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
+  in and pulled out from every other application's point of view, whose frames are
+  whatever the graph writes. It takes video on an input `video` declared `newest`, the
+  display's shape. Config: `name`, the camera's name in every picker, defaulting to
+  `StreamLib Camera` followed by a four-character id derived from the app's entry
+  directory and the instance's display name — distinct across instances and apps, the
+  same on every run of the same app, so unnamed cameras never collide and a device left
+  behind is still recognised; `door`, optional, `auto` by default. Two doors, one per instance,
+  chosen at `setup()` and logged once. The **v4l2loopback** door creates its own device
+  through the module's control node (`/dev/v4l2loopback`, `CTL_ADD` with the label set to
+  `name`, capture-only capabilities announced, four buffers) and removes it with
+  `CTL_REMOVE` at teardown; it is the door every application sees — `/dev/video*`
+  readers directly and portal-based readers through the session manager's V4L2 mirror —
+  and it is taken whenever the control node is writable by the process. The **PipeWire**
+  door registers a `Video/Source` node with `media.role = Camera` and the configured name,
+  destroyed at teardown; it needs no module and no root and is what a fresh install gets
+  when the control node is absent or not writable. Never both for one instance, since the
+  mirror would list the camera twice. The permission behind the loopback door is the
+  standard udev grant a desktop hands its seat user for a device node — the module loaded
+  with no devices, and a rule tagging its control node `uaccess` — installed once by the
+  user through the CLI's `enable-virtual-camera` verb behind the desktop's own password
+  prompt (polkit), never by the engine, which runs unprivileged always. Without it, `auto`
+  takes the PipeWire door and says so; `door = "v4l2loopback"` refuses at `setup()` by
+  name, saying the sink lacks permission to create a camera and naming the verb to run —
+  the processor never reaches Running and the runtime keeps running. A device the
+  sink cannot remove at teardown because a reader still holds it is left in place and
+  reclaimed by label at the next `setup()`; a device left behind by a crash is reclaimed
+  the same way. Loopback door: memory-mapped output streaming, YUYV, the device format set
+  from the first frame's extent and re-negotiated when the extent changes, the frame's
+  monotonic timestamp passed through on every queued buffer. PipeWire door: the engine's
+  DMA-BUF textures offered with their modifier beside a shared-memory fallback, the
+  consumer choosing, the frame's stamp on every buffer. The loopback door's per-frame path
+  is one GPU pass: the RGBA→YUYV conversion kernel writes straight into the mapped loopback
+  buffer through a host-pointer import the RHI gains (`VK_EXT_external_memory_host`), so no
+  CPU touches a pixel; where the driver refuses that import, the same kernel writes into
+  cached host staging and one copy lands it, and the import experiment on the platform
+  floor settles which branch is the default. The loopback device is reached through V4L2
+  ioctls alone and PipeWire through the engine's existing `dlsym` shim: no user-space
+  library is linked and the wheel's `DT_NEEDED` set does not grow. Owner rulings
+  2026-09-06: widened from loopback-only to two doors, then from pre-loaded devices to a
+  device per processor. [virtual-camera-sink]
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
   primitives third parties get — DMA-BUF / OPAQUE_FD import-export, present target,
   audio clock, color resolution, codec sessions — never against private engine guts;
@@ -1814,13 +1838,6 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   by the app's own project, the shader precedent — never discovered from
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
-- **OPEN** — A PipeWire camera-role node as a second door for the virtual camera. A
-  `Video/Source` node with `media.role = Camera` lands in the set the desktop portal
-  exposes, beside the V4L2 cameras, and would carry the engine's DMA-BUF textures with
-  no module and no root; but on the platform floor only Firefox on distributions that
-  flipped its PipeWire-camera default and Chrome behind a flag look there, so it has no
-  consumer. Held until one appears; the loopback door is the one that ships.
-  [virtual-camera-sink]
 
 ## Networking — transport, moq, webrtc — IN-FLIGHT
 
@@ -2211,7 +2228,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT
+## Control plane & observability — IN-FLIGHT (→ virtual-camera-sink)
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
@@ -2257,8 +2274,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   prerequisite of the rip-out. [control-plane-one-surface]
 - **DECIDED** — The CLI ships inside the wheel and slims to `new` / `dev` / `run` (a
   thin runner over the same engine the wheel exposes) plus the observation verbs
-  (`nodes` / `graph` / `tap` / `logs` / `exchange`); build-orchestration, packaging,
-  provisioning, and codegen verbs are deleted. `exchange` takes a surface id, or a
+  (`nodes` / `graph` / `tap` / `logs` / `exchange`) and one machine-setup verb,
+  `enable-virtual-camera`, which installs the loopback permission the virtual camera's
+  loopback door needs behind the desktop's password prompt and touches no node;
+  build-orchestration, packaging, provisioning, and codegen verbs are deleted. `exchange` takes a surface id, or a
   channel: the channel form composes tap → decode → exchange client-side in one warm
   process — one connection, the exchange fired the moment the bag lands, `--count` and
   every-Nth sampling as client flags. It is the cold-spawn latency fix and the
@@ -2269,7 +2288,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb]
+  `exchange` verb; virtual-camera-sink for the setup verb]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
