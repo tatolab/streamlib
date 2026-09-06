@@ -11,6 +11,11 @@ pub enum ServeError {
     #[error("cancelled")]
     Cancel,
 
+    /// The writer abandoned the subgroup: nothing still buffered in it is
+    /// delivered, and a forwarder resets its data stream with this code.
+    #[error("abandoned, reset code={0:?}")]
+    Abandoned(crate::data::DataStreamResetCode),
+
     #[error("closed, code={0}")]
     Closed(u64),
 
@@ -51,7 +56,7 @@ impl ServeError {
             // Special case: 0 typically means successful completion or internal error depending on context
             Self::Done => 0,
             // Cancel/Going away - maps to various contexts
-            Self::Cancel => 1,
+            Self::Cancel | Self::Abandoned(_) => 1,
             // Pass through application-specific error codes
             Self::Closed(code) => *code,
             // TRACK_DOES_NOT_EXIST (0x4) from SUBSCRIBE_ERROR codes

@@ -14,7 +14,7 @@ use std::{cmp, ops::Deref, sync::Arc};
 
 use bytes::Bytes;
 
-use crate::data::ObjectStatus;
+use crate::data::{DataStreamResetCode, ObjectStatus};
 use crate::watch::State;
 
 use super::{ServeError, Track};
@@ -271,6 +271,10 @@ struct SubgroupState {
 
     // Set when the writer or all readers are dropped.
     closed: Result<(), ServeError>,
+
+    // Set when the writer abandons the subgroup. Unlike `closed`, readers
+    // honour it ahead of the objects still buffered above: none is delivered.
+    abandoned: Option<DataStreamResetCode>,
 }
 
 impl Default for SubgroupState {
@@ -278,6 +282,7 @@ impl Default for SubgroupState {
         Self {
             objects: Vec::new(),
             closed: Ok(()),
+            abandoned: None,
         }
     }
 }
@@ -345,6 +350,21 @@ impl SubgroupWriter {
         Ok(())
     }
 
+    /// Abandon the subgroup: no object still buffered is delivered from here
+    /// on, and a forwarder resets its data stream with `code`.
+    ///
+    /// `close` cannot do this — a reader drains every object written before it
+    /// sees the close — so a publisher that wants a stale backlog off the wire
+    /// abandons instead.
+    pub fn abandon(self, code: DataStreamResetCode) -> Result<(), ServeError> {
+        let state = self.state.lock();
+        state.closed.clone()?;
+
+        let mut state = state.into_mut().ok_or(ServeError::Cancel)?;
+        state.abandoned = Some(code);
+        Ok(())
+    }
+
     pub fn len(&self) -> usize {
         self.state.lock().objects.len()
     }
@@ -403,6 +423,12 @@ impl SubgroupReader {
             {
                 let state = self.state.lock();
 
+                // Before the buffered objects, not after them: an abandoned
+                // subgroup delivers nothing more, however much is waiting.
+                if let Some(code) = state.abandoned {
+                    return Err(ServeError::Abandoned(code));
+                }
+
                 if self.read_index < state.objects.len() {
                     let object = state.objects[self.read_index].clone();
                     self.read_index += 1;
@@ -416,6 +442,31 @@ impl SubgroupReader {
                 }
             }
             .await; // Try again when the state changes
+        }
+    }
+
+    /// The code the writer abandoned this subgroup with, if it has.
+    pub fn abandoned(&self) -> Option<DataStreamResetCode> {
+        self.state.lock().abandoned
+    }
+
+    /// Resolve once the writer abandons this subgroup.
+    ///
+    /// Never resolves for a subgroup that is finished or dropped instead, so it
+    /// can be raced against a write that must otherwise run to completion.
+    pub async fn until_abandoned(&self) -> DataStreamResetCode {
+        loop {
+            let notify = {
+                let state = self.state.lock();
+                if let Some(code) = state.abandoned {
+                    return code;
+                }
+                state.modified()
+            };
+            match notify {
+                Some(notify) => notify.await,
+                None => std::future::pending::<()>().await,
+            }
         }
     }
 
@@ -1020,5 +1071,97 @@ mod tests {
 
         assert_eq!(data1, data2);
         assert_eq!(data1.len(), 3);
+    }
+
+    // ---------------------------------------------------------------
+    // Abandon: buffered objects are never delivered, and the code travels
+    // ---------------------------------------------------------------
+    #[tokio::test]
+    async fn abandon_withholds_every_buffered_object_and_carries_its_code() {
+        let (mut writer, mut reader) = make_subgroups();
+
+        let mut sg = writer.append(0).unwrap();
+        let gid = sg.group_id;
+        for oid in 0..3u64 {
+            sg.write(payload(gid, oid)).unwrap();
+        }
+
+        let mut sub = reader.next().await.unwrap().unwrap();
+        assert_eq!(sub.len(), 3, "three objects are buffered");
+        assert_eq!(sub.abandoned(), None);
+
+        sg.abandon(DataStreamResetCode::DeliveryTimeout).unwrap();
+
+        // Not the first buffered object — the abandon, ahead of all of them.
+        assert!(matches!(
+            sub.next().await,
+            Err(ServeError::Abandoned(DataStreamResetCode::DeliveryTimeout))
+        ));
+        assert_eq!(sub.pos(), 0, "no object was handed out");
+        assert_eq!(sub.abandoned(), Some(DataStreamResetCode::DeliveryTimeout));
+        // And it stays abandoned: a later read does not fall through to them.
+        assert!(matches!(
+            sub.next().await,
+            Err(ServeError::Abandoned(DataStreamResetCode::DeliveryTimeout))
+        ));
+    }
+
+    #[tokio::test]
+    async fn abandon_wakes_a_reader_parked_on_the_next_object() {
+        let (mut writer, mut reader) = make_subgroups();
+
+        let mut sg = writer.append(0).unwrap();
+        let gid = sg.group_id;
+        sg.write(payload(gid, 0)).unwrap();
+
+        let mut sub = reader.next().await.unwrap().unwrap();
+        assert!(sub.next().await.unwrap().is_some());
+
+        let parked = tokio::spawn(async move { sub.next().await });
+        tokio::task::yield_now().await;
+        sg.abandon(DataStreamResetCode::Cancelled).unwrap();
+
+        assert!(matches!(
+            parked.await.unwrap(),
+            Err(ServeError::Abandoned(DataStreamResetCode::Cancelled))
+        ));
+    }
+
+    #[tokio::test]
+    async fn until_abandoned_resolves_on_abandon_and_never_on_a_finish() {
+        let (mut writer, mut reader) = make_subgroups();
+
+        let abandoned_sg = writer.append(0).unwrap();
+        let abandoned_sub = reader.next().await.unwrap().unwrap();
+        let waiting = tokio::spawn(async move { abandoned_sub.until_abandoned().await });
+        tokio::task::yield_now().await;
+        abandoned_sg
+            .abandon(DataStreamResetCode::DeliveryTimeout)
+            .unwrap();
+        assert_eq!(waiting.await.unwrap(), DataStreamResetCode::DeliveryTimeout);
+
+        let finished_sg = writer.append(0).unwrap();
+        let finished_sub = reader.next().await.unwrap().unwrap();
+        drop(finished_sg);
+        let never = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            finished_sub.until_abandoned(),
+        )
+        .await;
+        assert!(never.is_err(), "a finished subgroup was never abandoned");
+    }
+
+    #[tokio::test]
+    async fn abandon_after_the_reader_is_gone_is_a_cancel() {
+        let (mut writer, reader) = make_subgroups();
+        let sg = writer.append(0).unwrap();
+        drop(reader);
+        drop(writer);
+
+        assert_eq!(
+            sg.abandon(DataStreamResetCode::DeliveryTimeout)
+                .unwrap_err(),
+            ServeError::Cancel
+        );
     }
 }

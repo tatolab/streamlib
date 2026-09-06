@@ -88,8 +88,22 @@ the same wheel still carries BUSL.
 
 ## Local patches on top of the vendored release
 
-None yet beyond the verbatim copy. Each patch is recorded here as it lands:
-what it changes, which files, and where it stands upstream.
+Each patch is one commit in this repo, applies cleanly to upstream `main`
+(which still carries the 0.16.2 sources), and is recorded here with where it
+stands upstream.
+
+1. **`SubgroupWriter::abandon` — a subgroup can be abandoned ahead of its
+   buffered objects, with a draft-16 reset code.** Files: `src/serve/error.rs`,
+   `src/serve/subgroup.rs`, `src/session/subscribed.rs`. Adds
+   `ServeError::Abandoned(DataStreamResetCode)`; `SubgroupState.abandoned`;
+   `SubgroupWriter::abandon(code)`; `SubgroupReader::next` returns the abandon
+   ahead of every buffered object; `SubgroupReader::abandoned` and
+   `until_abandoned`; the forwarder races each payload chunk write against
+   `until_abandoned` and resets the QUIC stream with the abandon's own code
+   (`reset_code_for`), counted as an expected shutdown rather than a failure.
+   This is what makes `DataStreamResetCode::DeliveryTimeout` reachable: before
+   it, `close` drained every written object and only then reset, so nothing a
+   publisher could do took a stale backlog off the wire. Upstream: not filed.
 
 ## Re-vendor recipe
 

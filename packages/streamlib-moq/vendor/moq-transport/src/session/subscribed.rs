@@ -473,7 +473,9 @@ impl Subscribed {
                 RequestErrorCode::DoesNotExist as u64
             }
             ServeError::Duplicate => RequestErrorCode::DuplicateSubscription as u64,
-            ServeError::Cancel | ServeError::Done => RequestErrorCode::Uninterested as u64,
+            ServeError::Cancel | ServeError::Done | ServeError::Abandoned(_) => {
+                RequestErrorCode::Uninterested as u64
+            }
             ServeError::Mode
             | ServeError::Size
             | ServeError::NotImplemented(_)
@@ -487,7 +489,7 @@ impl Subscribed {
     fn is_expected_serve_shutdown(err: &SessionError) -> bool {
         matches!(
             err,
-            SessionError::Serve(ServeError::Cancel | ServeError::Done)
+            SessionError::Serve(ServeError::Cancel | ServeError::Done | ServeError::Abandoned(_))
         )
     }
 }
@@ -605,6 +607,9 @@ impl ObjectForwarder {
             SessionError::Serve(ServeError::Done | ServeError::Cancel) => {
                 DataStreamResetCode::Cancelled
             }
+            // The publisher abandoned the subgroup — a backlog it would rather
+            // reset than deliver late — and said with which code.
+            SessionError::Serve(ServeError::Abandoned(code)) => *code,
             // Upstream delivered fewer payload bytes than its object header
             // promised, so the track itself is malformed.
             SessionError::Serve(ServeError::Size) => DataStreamResetCode::MalformedTrack,
@@ -746,7 +751,16 @@ impl ObjectForwarder {
                     chunk.len()
                 );
                 bytes_sent += chunk.len();
-                output.write(&chunk).await?;
+                // A write parked on a full send window is where a stale backlog
+                // sits, and an abandon has to be able to pre-empt it — so the
+                // write is raced against one rather than awaited alone.
+                tokio::select! {
+                    biased;
+                    code = subgroup_reader.until_abandoned() => {
+                        return Err(ServeError::Abandoned(code).into());
+                    }
+                    written = output.write(&chunk) => written?,
+                }
                 chunks_sent += 1;
             }
 
@@ -1327,12 +1341,15 @@ mod tests {
     }
 
     #[test]
-    fn expected_serve_shutdown_is_only_cancel_or_done() {
+    fn expected_serve_shutdown_is_only_cancel_done_or_abandon() {
         assert!(Subscribed::is_expected_serve_shutdown(
             &SessionError::Serve(ServeError::Cancel)
         ));
         assert!(Subscribed::is_expected_serve_shutdown(
             &SessionError::Serve(ServeError::Done)
+        ));
+        assert!(Subscribed::is_expected_serve_shutdown(
+            &SessionError::Serve(ServeError::Abandoned(DataStreamResetCode::DeliveryTimeout))
         ));
         assert!(!Subscribed::is_expected_serve_shutdown(
             &SessionError::Serve(ServeError::NotFound)
@@ -1340,5 +1357,161 @@ mod tests {
         assert!(!Subscribed::is_expected_serve_shutdown(
             &SessionError::Internal
         ));
+    }
+
+    #[test]
+    fn an_abandon_resets_with_the_code_the_writer_chose() {
+        for code in [
+            DataStreamResetCode::DeliveryTimeout,
+            DataStreamResetCode::Cancelled,
+        ] {
+            assert_eq!(
+                ObjectForwarder::reset_code_for(&SessionError::Serve(ServeError::Abandoned(code))),
+                code
+            );
+        }
+    }
+
+    /// A subgroup abandoned before the forwarder reaches it opens no stream at
+    /// all: the abandon is honoured ahead of every object still buffered.
+    #[tokio::test]
+    async fn abandon_with_objects_buffered_forwards_none_of_them() {
+        use bytes::Bytes;
+
+        use crate::coding::TrackNamespace;
+
+        let (track_writer, track_reader) =
+            serve::Track::new(TrackNamespace::from_utf8_path("test"), "video").produce();
+        let mut subgroups_writer = track_writer.subgroups().unwrap();
+        let mut subgroup_writer = subgroups_writer
+            .create(serve::Subgroup {
+                group_id: 1,
+                subgroup_id: 0,
+                priority: 0,
+            })
+            .unwrap();
+        subgroup_writer.write(Bytes::from_static(b"stale")).unwrap();
+        subgroup_writer
+            .write(Bytes::from_static(b"staler"))
+            .unwrap();
+        subgroup_writer
+            .abandon(DataStreamResetCode::DeliveryTimeout)
+            .unwrap();
+
+        let mut subgroups = match track_reader.mode().await.unwrap() {
+            TrackReaderMode::Subgroups(subgroups) => subgroups,
+            _ => panic!("expected subgroups mode"),
+        };
+        let subgroup = subgroups.next().await.unwrap().expect("subgroup available");
+        let header = data::SubgroupHeader {
+            header_type: data::StreamHeaderType::SubgroupIdExt,
+            track_alias: 1,
+            group_id: subgroup.group_id,
+            subgroup_id: Some(subgroup.subgroup_id),
+            publisher_priority: subgroup.priority,
+        };
+        let state = State::<ObjectForwarderState>::default();
+
+        let (buffer, res, termination) = ObjectForwarder::serve_subgroup_to_parts(
+            header,
+            subgroup,
+            state.clone(),
+            all_objects(),
+        )
+        .await;
+
+        assert!(matches!(
+            res,
+            Err(SessionError::Serve(ServeError::Abandoned(
+                DataStreamResetCode::DeliveryTimeout
+            )))
+        ));
+        assert!(
+            buffer.is_empty(),
+            "nothing was written, not even the header"
+        );
+        assert_eq!(termination, None, "no stream was opened to reset");
+        assert_eq!(state.lock().stream_count, 0);
+    }
+
+    /// An abandon landing while the forwarder is parked between objects resets
+    /// the stream with the abandon's own code, at the boundary of the object it
+    /// had finished — draft-16's `DeliveryTimeout` becomes reachable here.
+    #[tokio::test]
+    async fn abandon_mid_subgroup_resets_with_delivery_timeout_at_an_object_boundary() {
+        use bytes::{Buf, Bytes};
+
+        use crate::coding::{Decode, TrackNamespace};
+
+        let (track_writer, track_reader) =
+            serve::Track::new(TrackNamespace::from_utf8_path("test"), "video").produce();
+        let mut subgroups_writer = track_writer.subgroups().unwrap();
+        let mut subgroup_writer = subgroups_writer
+            .create(serve::Subgroup {
+                group_id: 1,
+                subgroup_id: 0,
+                priority: 0,
+            })
+            .unwrap();
+        subgroup_writer.write(Bytes::from_static(b"hello")).unwrap();
+
+        let mut subgroups = match track_reader.mode().await.unwrap() {
+            TrackReaderMode::Subgroups(subgroups) => subgroups,
+            _ => panic!("expected subgroups mode"),
+        };
+        let subgroup = subgroups.next().await.unwrap().expect("subgroup available");
+        let header = data::SubgroupHeader {
+            header_type: data::StreamHeaderType::SubgroupIdExt,
+            track_alias: 1,
+            group_id: subgroup.group_id,
+            subgroup_id: Some(subgroup.subgroup_id),
+            publisher_priority: subgroup.priority,
+        };
+        let state = State::<ObjectForwarderState>::default();
+
+        let fut = ObjectForwarder::serve_subgroup_to_parts(
+            header.clone(),
+            subgroup,
+            state,
+            all_objects(),
+        );
+        tokio::pin!(fut);
+
+        // The first object goes out and the forwarder parks on the next.
+        tokio::select! {
+            _ = &mut fut => panic!("forwarder should still be awaiting the next object"),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        }
+
+        subgroup_writer
+            .abandon(DataStreamResetCode::DeliveryTimeout)
+            .unwrap();
+
+        let (buffer, res, termination) = fut.await;
+
+        assert!(matches!(
+            res,
+            Err(SessionError::Serve(ServeError::Abandoned(
+                DataStreamResetCode::DeliveryTimeout
+            )))
+        ));
+        assert_eq!(
+            termination,
+            Some(SubgroupTermination::Reset(
+                DataStreamResetCode::DeliveryTimeout
+            )),
+            "an abandoned subgroup is reset with the code the writer chose"
+        );
+
+        // The wire ends on the boundary of the one object that was delivered.
+        let mut buffer = buffer.freeze();
+        let header_type = data::StreamHeaderType::decode(&mut buffer).unwrap();
+        let decoded_header = data::SubgroupHeader::decode(header_type, &mut buffer).unwrap();
+        assert_eq!(decoded_header, header);
+        let object = data::SubgroupObjectExt::decode(&mut buffer).unwrap();
+        assert_eq!(object.payload_length, 5);
+        let payload = buffer.copy_to_bytes(object.payload_length);
+        assert_eq!(&payload[..], b"hello");
+        assert!(!buffer.has_remaining(), "no second header was ever written");
     }
 }
