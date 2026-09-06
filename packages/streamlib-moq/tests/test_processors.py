@@ -204,8 +204,36 @@ def test_the_relay_refusal_says_where_a_draft_16_token_goes():
 def test_a_subscriber_naming_no_track_at_all_is_refused_by_name():
     """Three static output ports and no track named for any would subscribe to
     nothing and produce nothing, which reads from outside as a hang."""
-    with pytest.raises(ValueError, match="video_track.*audio_track.*data_track"):
+    with pytest.raises(ValueError, match=r"video_track.*audio_track.*data_track"):
         MoqBroadcastSubscriber(relay_url=A_RELAY, broadcast=A_BROADCAST)
+
+
+@pytest.mark.parametrize("config", ["video_track", "audio_track", "data_track"])
+def test_a_track_named_as_the_empty_string_is_refused_by_name_at_construction(config):
+    """The wheel's Rust refuses it too, but on the reading thread, where a
+    refusal is retried with backoff — so said here, or a config mistake reads
+    from outside as a subscriber that never connects."""
+    with pytest.raises(ValueError, match=config):
+        MoqBroadcastSubscriber(
+            relay_url=A_RELAY,
+            broadcast=A_BROADCAST,
+            container_format="streamlib_bag",
+            **{config: ""},
+        )
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("video_track", "audio_track"), ("video_track", "data_track"), ("audio_track", "data_track")],
+)
+def test_one_name_given_to_two_tracks_is_refused_by_name_at_construction(first, second):
+    with pytest.raises(ValueError, match=rf"{first}.*{second}"):
+        MoqBroadcastSubscriber(
+            relay_url=A_RELAY,
+            broadcast=A_BROADCAST,
+            container_format="streamlib_bag",
+            **{first: "both", second: "both"},
+        )
 
 
 def test_a_subscriber_may_name_one_track_and_leave_the_other_ports_silent():
@@ -244,7 +272,7 @@ def test_a_data_track_under_cmaf_is_refused_by_name_at_construction():
     """CMAF has no packaging for a data track, and the default container is
     `cmaf` — so a subscriber that named one and nothing else must hear it
     here, not as a broadcast that never produces."""
-    with pytest.raises(ValueError, match="data_track.*cmaf"):
+    with pytest.raises(ValueError, match=r"data_track.*cmaf"):
         MoqBroadcastSubscriber(relay_url=A_RELAY, broadcast=A_BROADCAST, data_track="telemetry")
 
 

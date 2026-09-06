@@ -410,6 +410,36 @@ class DataTrackSequenceGapCount:
         return f"sequence_gaps={self.gaps} objects_missed={self.objects_missed}"
 
 
+def _refuse_track_names_no_broadcast_can_serve(
+    track_names_by_config: "Sequence[tuple[str, str | None]]",
+) -> None:
+    """Refuse an empty track name and one name given to two ports.
+
+    The wheel's Rust refuses both too, but it is constructed on the reading
+    thread, where a refusal is caught and retried with backoff — so a config
+    mistake would read from outside as a subscriber that never connects. Said
+    here, it fails the graph at `rt.add`.
+    """
+    named = [
+        (config, name) for config, name in track_names_by_config if name is not None
+    ]
+    for config, name in named:
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                f"MoqBroadcastSubscriber: `{config}` names a track on the relay, so it "
+                f"must be a non-empty str; leave it unset to subscribe to none; got "
+                f"{name!r}"
+            )
+    for index, (config, name) in enumerate(named):
+        for other_config, other_name in named[index + 1 :]:
+            if name == other_name:
+                raise ValueError(
+                    f"MoqBroadcastSubscriber: `{config}` and `{other_config}` are both "
+                    f"{name!r}, and one track is one kind, so every object on it "
+                    f"would be read twice under two different contracts."
+                )
+
+
 def _optional_track_names(track_names: Any) -> "list[str] | None":
     """The names an app chose for its tracks, or None for the links' own.
 
@@ -734,6 +764,9 @@ class MoqBroadcastSubscriber:
                 "`audio_track` and `data_track`; a subscriber naming none would "
                 "subscribe to nothing and produce nothing."
             )
+        _refuse_track_names_no_broadcast_can_serve(
+            (("video_track", video_track), ("audio_track", audio_track), ("data_track", data_track))
+        )
         self._container_format = _required_container_format(
             container_format, "MoqBroadcastSubscriber"
         )
