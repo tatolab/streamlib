@@ -500,27 +500,6 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
-    /// Record `vkCmdFillBuffer` over the whole buffer with one repeated
-    /// 32-bit word.
-    #[tracing::instrument(level = "trace", skip(self, buffer), fields(label = %self.label))]
-    pub fn record_fill_buffer(
-        &mut self,
-        buffer: &(impl VulkanBufferLike + ?Sized),
-        word: u32,
-    ) -> Result<()> {
-        self.expect_recording("record_fill_buffer")?;
-        unsafe {
-            self.device.cmd_fill_buffer(
-                self.command_buffer,
-                buffer.vk_buffer(),
-                0,
-                vk::WHOLE_SIZE,
-                word,
-            );
-        }
-        Ok(())
-    }
-
     /// Record a compute dispatch via [`VulkanComputeKernel::record`]
     /// into the recorder's command buffer.
     ///
@@ -1159,15 +1138,6 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.host_inner_mut()
             .record_copy_buffer_to_buffer(src, dst, byte_size)
-    }
-
-    /// Whole-buffer fill with one repeated 32-bit word.
-    pub fn record_fill_buffer(
-        &mut self,
-        buffer: &(impl VulkanBufferLike + ?Sized),
-        word: u32,
-    ) -> Result<()> {
-        self.host_inner_mut().record_fill_buffer(buffer, word)
     }
 
     /// Compute dispatch.

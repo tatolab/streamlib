@@ -882,8 +882,15 @@ mod image_to_yuyv_buffer_tests {
     use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
 
     /// The CPU reference: the same matrix table the kernel is pushed, one
-    /// macropixel at a time, chroma averaged across the pair.
-    fn yuyv_reference(rgba: &[u8], width: u32, height: u32, info: &ResolvedColorInfo) -> Vec<u8> {
+    /// macropixel at a time, chroma averaged across the pair, rows laid out
+    /// at `stride_bytes` with the pad left zero.
+    fn yuyv_reference(
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        stride_bytes: u32,
+        info: &ResolvedColorInfo,
+    ) -> Vec<u8> {
         let d = rgb_to_yuv_matrix(info.matrix, info.range);
         let m = d.matrix_row_major;
         let ycbcr = |x: u32, y: u32| -> [f32; 3] {
@@ -895,13 +902,13 @@ mod image_to_yuyv_buffer_tests {
                 (m[6] * r + m[7] * g + m[8] * b + d.offset[2]).clamp(0.0, 255.0),
             ]
         };
-        let mut out = vec![0u8; (width * 2 * height) as usize];
+        let mut out = vec![0u8; (stride_bytes * height) as usize];
         for y in 0..height {
             for pair in 0..width.div_ceil(2) {
                 let x0 = pair * 2;
                 let x1 = (x0 + 1).min(width - 1);
                 let (l, r) = (ycbcr(x0, y), ycbcr(x1, y));
-                let o = ((y * width * 2) + pair * 4) as usize;
+                let o = (y * stride_bytes + pair * 4) as usize;
                 out[o] = l[0].round() as u8;
                 out[o + 1] = (0.5 * (l[1] + r[1])).round() as u8;
                 out[o + 2] = r[0].round() as u8;
@@ -927,10 +934,12 @@ mod image_to_yuyv_buffer_tests {
                 return;
             }
         };
-        // A width that is not a workgroup multiple, and a stride with V4L2's
-        // rounding on top of it: the guard band past the frame stays untouched.
+        // A width that is not a workgroup multiple, and a destination stride
+        // padded past 2·width the way a driver's `bytesperline` may be: the
+        // pad inside every row and the guard band past the frame stay zero.
         let (width, height) = (34u32, 7u32);
-        let stride_bytes = width * 2;
+        let stride_bytes = (width * 2).next_multiple_of(64);
+        assert!(stride_bytes > width * 2);
         let mut rgba = vec![0u8; (width * height * 4) as usize];
         for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
             let x = (i as u32) % width;
@@ -1016,10 +1025,15 @@ mod image_to_yuyv_buffer_tests {
         recorder.submit_and_wait().expect("submit");
         mapping.publish_to_host();
 
-        let expected = yuyv_reference(&rgba, width, height, &info);
+        let expected = yuyv_reference(&rgba, width, height, stride_bytes, &info);
         let written = &range.as_slice()[..expected.len()];
         let mut worst = 0u8;
         for (i, (&got, &want)) in written.iter().zip(&expected).enumerate() {
+            let in_row_pad = (i as u32 % stride_bytes) >= width * 2;
+            if in_row_pad {
+                assert_eq!(got, 0, "byte {i} is row padding and must stay untouched");
+                continue;
+            }
             let diff = got.abs_diff(want);
             assert!(diff <= 1, "byte {i}: GPU {got} vs CPU {want}");
             worst = worst.max(diff);

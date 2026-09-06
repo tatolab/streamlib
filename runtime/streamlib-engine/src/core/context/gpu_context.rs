@@ -5352,6 +5352,49 @@ mod tests {
     /// Mental revert: collapsing both locks into one would let
     /// thread B block on the escalate gate; the assertion that
     /// Limited completes before the escalate releases would fail.
+    /// Two processors driving one format pair from their own threads must
+    /// not share a kernel's staged bindings: the cached handle is one
+    /// object, an owned converter is the caller's alone.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — needs a GPU device; see docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_owned_color_converter_shares_no_kernel_with_the_cached_one() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(gpu) => gpu,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+        let cached_once = gpu
+            .color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+            .expect("cached");
+        let cached_twice = gpu
+            .color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+            .expect("cached again");
+        let owned_first = gpu
+            .create_color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+            .expect("owned");
+        let owned_second = gpu
+            .create_color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+            .expect("owned again");
+
+        assert!(
+            std::ptr::eq(cached_once.host_inner(), cached_twice.host_inner()),
+            "the cache hands out one converter per format pair"
+        );
+        assert!(
+            !std::ptr::eq(owned_first.host_inner(), cached_once.host_inner()),
+            "an owned converter is not the cached one"
+        );
+        assert!(
+            !std::ptr::eq(owned_first.host_inner(), owned_second.host_inner()),
+            "two owners get two converters"
+        );
+    }
+
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs GPU + #[serial] discipline; \

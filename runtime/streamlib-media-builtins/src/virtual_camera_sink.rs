@@ -394,6 +394,47 @@ pub(crate) fn decide_door(
     }
 }
 
+/// Create the sink's device — or reclaim the one already carrying `label` —
+/// then run `then` with the device number and whether it was reclaimed. A
+/// device this call created is removed again if `then` fails: nothing holds
+/// it yet, and a phantom camera in every picker is worse than no camera.
+pub(crate) fn create_or_reclaim_device_then<T>(
+    node: &dyn LoopbackControlNode,
+    label: &str,
+    then: impl FnOnce(u32, bool) -> Result<T>,
+) -> Result<T> {
+    let (device_number, reclaimed) = match find_device_carrying_label(node, label) {
+        Some(number) => (number, true),
+        None => {
+            let config = V4l2LoopbackConfig::for_new_camera(label);
+            let number = node.add_device(&config).map_err(|e| {
+                Error::Runtime(format!(
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{label}\": the module refused to \
+                     create a camera (CTL_ADD on {V4L2LOOPBACK_CONTROL_NODE_PATH}): {e}"
+                ))
+            })?;
+            (number, false)
+        }
+    };
+    match then(device_number, reclaimed) {
+        Ok(value) => Ok(value),
+        Err(failure) => {
+            if !reclaimed {
+                if let Err(remove_failure) = node.remove_device(device_number) {
+                    tracing::warn!(
+                        camera = label,
+                        device_number,
+                        error = %remove_failure,
+                        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: the device created by a setup that \
+                         then failed could not be removed; the next setup reclaims it by label"
+                    );
+                }
+            }
+            Err(failure)
+        }
+    }
+}
+
 /// The loopback device already carrying `label` — left by a crash, or by
 /// a reader that held it at the last teardown — if the module has one.
 pub(crate) fn find_device_carrying_label(
@@ -507,25 +548,34 @@ impl Drop for OpenedLoopbackDevice {
     }
 }
 
-/// One of the device's output buffers, mapped once and imported once.
-struct MappedOutputBuffer {
-    index: u32,
-    mapping_ptr: *mut u8,
-    mapping_len: usize,
-    written_by_gpu: HostMappingWrittenByGpu,
-    queued: bool,
+/// A `mmap` of one of the device's output buffers, unmapped on drop.
+struct PageMappingOfDeviceBuffer {
+    ptr: *mut u8,
+    len: usize,
 }
 
-impl Drop for MappedOutputBuffer {
+impl Drop for PageMappingOfDeviceBuffer {
     fn drop(&mut self) {
-        unsafe { libc::munmap(self.mapping_ptr.cast(), self.mapping_len) };
+        unsafe { libc::munmap(self.ptr.cast(), self.len) };
     }
 }
 
 // SAFETY: the mapping is this processor's alone — created, written through
 // the RHI and unmapped on the processor's own thread — and the raw pointer
 // is held only to unmap it.
-unsafe impl Send for MappedOutputBuffer {}
+unsafe impl Send for PageMappingOfDeviceBuffer {}
+
+/// One of the device's output buffers, mapped once and imported once.
+///
+/// Field order is the drop order: the imported Vulkan memory is freed while
+/// the pages it was imported from are still mapped, as the extension
+/// requires, and the mapping goes last.
+struct MappedOutputBuffer {
+    index: u32,
+    written_by_gpu: HostMappingWrittenByGpu,
+    mapping: PageMappingOfDeviceBuffer,
+    queued: bool,
+}
 
 /// The device's streaming state for one frame extent.
 struct StreamingOutputFormat {
@@ -561,6 +611,24 @@ enum LatchedRefusal {
         height: u32,
     },
     DeviceConfiguration(String),
+}
+
+impl std::fmt::Display for LatchedRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnusableExtent { width, height } => write!(
+                f,
+                "a {width}x{height} frame cannot be a YUYV camera picture — the width must be \
+                 even and both dimensions non-zero, within a frame the device can size"
+            ),
+            Self::DeviceConfiguration(reason) => {
+                write!(
+                    f,
+                    "the device could not be configured for the frame: {reason}"
+                )
+            }
+        }
+    }
 }
 
 #[streamlib::sdk::processor(
@@ -614,86 +682,62 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
             }
         }
 
-        let (device_number, reclaimed) = match find_device_carrying_label(&node, &self.camera_name)
-        {
-            Some(number) => (number, true),
-            None => {
-                let config = V4l2LoopbackConfig::for_new_camera(&self.camera_name);
-                let number = node.add_device(&config).map_err(|e| {
+        let camera_name = self.camera_name.clone();
+        let (device, gpu_side) =
+            create_or_reclaim_device_then(&node, &camera_name, |device_number, reclaimed| {
+                let device = open_device_awaiting_udev_grant(device_number).map_err(|e| {
                     Error::Runtime(format!(
-                        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": the module refused to \
-                         create a camera (CTL_ADD on {V4L2LOOPBACK_CONTROL_NODE_PATH}): {e}",
-                        self.camera_name
+                        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": \
+                         /dev/video{device_number} was created but could not be opened within \
+                         {UDEV_GRANT_DEADLINE:?}: {e}"
                     ))
                 })?;
-                (number, false)
-            }
-        };
-        let device = match open_device_awaiting_udev_grant(device_number) {
-            Ok(device) => device,
-            Err(open_failure) => {
-                if !reclaimed {
-                    // Nothing holds a device this sink created a moment ago, so
-                    // it is removed rather than left for the next run to find.
-                    if let Err(remove_failure) = node.remove_device(device_number) {
-                        tracing::warn!(
-                            camera = %self.camera_name,
-                            device_number,
-                            error = %remove_failure,
-                            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: the device that could not be \
-                             opened could not be removed either; the next setup reclaims it by label"
-                        );
-                    }
-                }
-                return Err(Error::Runtime(format!(
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": /dev/video{device_number} was \
-                     created but could not be opened within {UDEV_GRANT_DEADLINE:?}: \
-                     {open_failure}",
-                    self.camera_name
-                )));
-            }
-        };
-        let module_version = node
-            .module_version()
-            .map(|(major, minor, bugfix)| format!("{major}.{minor}.{bugfix}"));
-        tracing::info!(
-            camera = %self.camera_name,
-            door = "v4l2loopback",
-            reason = if reclaimed {
-                "a device carrying this camera's label was left behind and is reclaimed"
-            } else {
-                "the control node is writable, so the sink created its own device"
-            },
-            device = %device.path.display(),
-            driver = device.driver_name().as_deref().unwrap_or("?"),
-            module_version = module_version.as_deref().unwrap_or("?"),
-            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: camera created"
-        );
+                let module_version = node
+                    .module_version()
+                    .map(|(major, minor, bugfix)| format!("{major}.{minor}.{bugfix}"));
+                tracing::info!(
+                    camera = %camera_name,
+                    door = "v4l2loopback",
+                    reason = if reclaimed {
+                        "a device carrying this camera's label was left behind and is reclaimed"
+                    } else {
+                        "the control node is writable, so the sink created its own device"
+                    },
+                    device = %device.path.display(),
+                    driver = device.driver_name().as_deref().unwrap_or("?"),
+                    module_version = module_version.as_deref().unwrap_or("?"),
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: camera created"
+                );
 
-        let gpu_full = ctx.gpu_full_access();
-        // This sink's own converter: two sinks in one graph must not share a
-        // kernel's staged bindings across their threads.
-        let converter = gpu_full
-            .create_color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
-            .map_err(|e| {
-                Error::Runtime(format!(
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": no RGBA→YUYV converter: {e}",
-                    self.camera_name
+                let gpu_full = ctx.gpu_full_access();
+                // This sink's own converter: two sinks in one graph must not
+                // share a kernel's staged bindings across their threads.
+                let converter = gpu_full
+                    .create_color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+                    .map_err(|e| {
+                        Error::Runtime(format!(
+                            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": no \
+                             RGBA→YUYV converter: {e}"
+                        ))
+                    })?;
+                let recorder = gpu_full
+                    .create_command_recorder("virtual_camera_sink")
+                    .map_err(|e| {
+                        Error::Runtime(format!(
+                            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": no command \
+                             recorder: {e}"
+                        ))
+                    })?;
+                Ok((
+                    device,
+                    GpuSide {
+                        gpu: ctx.gpu_limited_access().clone(),
+                        converter,
+                        recorder,
+                    },
                 ))
             })?;
-        let recorder = gpu_full
-            .create_command_recorder("virtual_camera_sink")
-            .map_err(|e| {
-                Error::Runtime(format!(
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": no command recorder: {e}",
-                    self.camera_name
-                ))
-            })?;
-        self.gpu_side = Some(GpuSide {
-            gpu: ctx.gpu_limited_access().clone(),
-            converter,
-            recorder,
-        });
+        self.gpu_side = Some(gpu_side);
         self.device = Some(device);
         Ok(())
     }
@@ -715,7 +759,7 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
             Err(refusal) => {
                 tracing::error!(
                     camera = %self.camera_name,
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: every later frame is dropped: {refusal:?}"
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: every later frame is dropped: {refusal}"
                 );
                 self.latched_refusal = Some(refusal);
                 Ok(())
@@ -1003,11 +1047,13 @@ fn negotiate_output_format_and_start_streaming(
                 std::io::Error::last_os_error()
             )));
         }
-        let mapping_ptr = mapping_ptr.cast::<u8>();
+        let mapping = PageMappingOfDeviceBuffer {
+            ptr: mapping_ptr.cast::<u8>(),
+            len: mapping_len,
+        };
         let written_by_gpu = gpu
-            .escalate(|full| full.import_host_mapping_for_gpu_writes(mapping_ptr, mapping_len))
+            .escalate(|full| full.import_host_mapping_for_gpu_writes(mapping.ptr, mapping.len))
             .map_err(|e| {
-                unsafe { libc::munmap(mapping_ptr.cast(), mapping_len) };
                 Error::Runtime(format!(
                     "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": the RHI could not \
                      take output buffer {index}: {e}"
@@ -1015,9 +1061,8 @@ fn negotiate_output_format_and_start_streaming(
             })?;
         buffers.push(MappedOutputBuffer {
             index,
-            mapping_ptr,
-            mapping_len,
             written_by_gpu,
+            mapping,
             queued: false,
         });
     }
@@ -1369,6 +1414,7 @@ mod tests {
     struct FakeControlNode {
         devices: RefCell<Vec<(u32, String)>>,
         added: RefCell<Vec<String>>,
+        removed: RefCell<Vec<u32>>,
     }
 
     impl LoopbackControlNode for FakeControlNode {
@@ -1398,7 +1444,8 @@ mod tests {
             self.added.borrow_mut().push(config.label());
             Ok(42)
         }
-        fn remove_device(&self, _: u32) -> std::io::Result<()> {
+        fn remove_device(&self, device_number: u32) -> std::io::Result<()> {
+            self.removed.borrow_mut().push(device_number);
             Ok(())
         }
         fn module_version(&self) -> Option<(u32, u32, u32)> {
@@ -1411,6 +1458,7 @@ mod tests {
         let node = FakeControlNode {
             devices: RefCell::new(vec![(10, "Other cam".into()), (11, "Desk cam".into())]),
             added: RefCell::new(Vec::new()),
+            removed: RefCell::new(Vec::new()),
         };
         assert_eq!(find_device_carrying_label(&node, "Desk cam"), Some(11));
         assert_eq!(
@@ -1419,6 +1467,53 @@ mod tests {
             "a label nothing carries is a fresh CTL_ADD"
         );
         assert!(node.added.borrow().is_empty(), "a query adds nothing");
+    }
+
+    /// A setup that fails after creating its device takes the device with
+    /// it — `teardown()` never runs for a processor whose setup failed, so
+    /// this is the only path that removes it. A reclaimed device is left,
+    /// since it was there before this setup and may be another's to hold.
+    #[test]
+    fn a_setup_that_fails_after_creating_its_device_removes_it() {
+        let node = FakeControlNode {
+            devices: RefCell::new(vec![(11, "Desk cam".into())]),
+            added: RefCell::new(Vec::new()),
+            removed: RefCell::new(Vec::new()),
+        };
+
+        let created_then_failed =
+            create_or_reclaim_device_then(&node, "New cam", |number, reclaimed| {
+                assert_eq!((number, reclaimed), (42, false));
+                Err::<(), _>(Error::Runtime("the open never got its grant".into()))
+            });
+        assert!(created_then_failed.is_err());
+        assert_eq!(node.added.borrow().as_slice(), ["New cam"]);
+        assert_eq!(
+            node.removed.borrow().as_slice(),
+            [42],
+            "the created device is removed once"
+        );
+
+        let reclaimed_then_failed =
+            create_or_reclaim_device_then(&node, "Desk cam", |number, reclaimed| {
+                assert_eq!((number, reclaimed), (11, true));
+                Err::<(), _>(Error::Runtime("failed after a reclaim".into()))
+            });
+        assert!(reclaimed_then_failed.is_err());
+        assert_eq!(
+            node.removed.borrow().as_slice(),
+            [42],
+            "a reclaimed device is left in place"
+        );
+
+        let succeeded = create_or_reclaim_device_then(&node, "Third cam", |number, _| Ok(number))
+            .expect("a setup that succeeds keeps its device");
+        assert_eq!(succeeded, 42);
+        assert_eq!(
+            node.removed.borrow().as_slice(),
+            [42],
+            "success removes nothing"
+        );
     }
 
     /// The module's ABI: the config struct's size and the four ioctl

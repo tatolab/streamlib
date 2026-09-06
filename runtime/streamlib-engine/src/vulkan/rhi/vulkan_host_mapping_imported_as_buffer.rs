@@ -149,14 +149,15 @@ impl HostMappingWrittenByGpu {
         self.host_range_byte_len
     }
 
-    /// Record the barrier that makes the kernel's writes available to the
-    /// host stage, after the dispatch and before the submit.
+    /// Record the barrier that makes the GPU's writes to the buffer — a
+    /// kernel's or a copy's — available to the host stage, after them and
+    /// before the submit.
     pub fn record_release_to_host(&self, recorder: &mut RhiCommandRecorder) -> Result<()> {
         recorder.record_buffer_barrier(
             &self.storage_buffer,
-            VulkanStage::COMPUTE_SHADER,
+            VulkanStage::ALL_COMMANDS,
             VulkanStage::HOST,
-            VulkanAccess::SHADER_WRITE,
+            VulkanAccess::MEMORY_WRITE,
             VulkanAccess::HOST_READ,
         )
     }
@@ -251,17 +252,23 @@ mod tests {
 
     /// Write the first and last byte of every page of `mapping`'s buffer to
     /// `value` on the GPU, release to host, and wait.
+    /// Fill the mapping's buffer with `value` from the GPU side: a host-
+    /// visible staging buffer written on the CPU, copied by the GPU into the
+    /// mapping's buffer, released to the host, published.
     fn fill_on_gpu(
         device: &Arc<HostVulkanDevice>,
         mapping: &mut HostMappingWrittenByGpu,
         value: u8,
     ) {
-        let word = u32::from_le_bytes([value; 4]);
+        let byte_len = mapping.host_range_byte_len();
+        let source = HostVulkanBuffer::new_storage_buffer_host_visible(device, byte_len as u64)
+            .expect("staging");
+        unsafe { std::ptr::write_bytes(source.mapped_ptr(), value, byte_len) };
         let mut recorder = RhiCommandRecorder::new(device, "host_mapping_fill").expect("recorder");
         recorder.begin().expect("begin");
         recorder
-            .record_fill_buffer(mapping.storage_buffer(), word)
-            .expect("fill");
+            .record_copy_buffer_to_buffer(&source, mapping.storage_buffer(), byte_len as u64)
+            .expect("copy");
         mapping
             .record_release_to_host(&mut recorder)
             .expect("release barrier");
