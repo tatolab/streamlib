@@ -270,9 +270,15 @@ jobs:
 
       # Run before the venv is on PATH so pyo3 resolves the system interpreter,
       # whose dev headers the apt step above installed.
+      #
+      # `--workspace`, not the root package alone: a crate vendored under the
+      # extension (`packages/streamlib-moq/vendor/moq-transport`) is an
+      # automatic member of the extension's workspace, and its own tests are
+      # where the patches it carries are pinned — a `cargo test --lib` from
+      # the root package selects that package alone and runs none of them.
       - name: Extension crate tests
         working-directory: packages/${{ matrix.extension }}
-        run: cargo test --locked --lib
+        run: cargo test --locked --workspace --lib
 
       - name: Clippy
         working-directory: packages/${{ matrix.extension }}
