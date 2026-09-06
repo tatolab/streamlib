@@ -6,6 +6,7 @@
 pub mod alsa_audio_device_backend;
 pub mod audio_clock;
 pub mod pipewire_audio_device_backend;
+pub mod pipewire_runtime_library;
 pub mod rtkit;
 pub mod surface_share;
 pub mod thread_priority;
